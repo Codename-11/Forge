@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
+import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { trpc } from "@/lib/trpc";
@@ -46,6 +47,7 @@ export default function RecurringPage() {
   const { data: rows, refetch } = trpc.recurring.list.useQuery();
   const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
   const [editing, setEditing] = useState<Form | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const create = trpc.recurring.create.useMutation({
     onSuccess: () => {
@@ -141,9 +143,7 @@ export default function RecurringPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => {
-                    if (confirm(`Delete "${r.name}"?`)) remove.mutate({ id: r.id });
-                  }}
+                  onClick={() => setDeleteTarget({ id: r.id, name: r.name })}
                 >
                   Delete
                 </Button>
@@ -292,6 +292,21 @@ export default function RecurringPage() {
           </form>
         )}
       </Dialog>
+
+      <Confirm
+        open={!!deleteTarget}
+        onOpenChange={(v) => !v && setDeleteTarget(null)}
+        variant="destructive"
+        title={`Delete "${deleteTarget?.name}"?`}
+        description="This action cannot be undone."
+        primaryLabel="Delete"
+        loading={remove.isPending}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          await remove.mutateAsync({ id: deleteTarget.id });
+          setDeleteTarget(null);
+        }}
+      />
     </>
   );
 }

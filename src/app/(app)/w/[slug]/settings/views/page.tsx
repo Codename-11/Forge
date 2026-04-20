@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
+import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { trpc } from "@/lib/trpc";
@@ -43,6 +44,7 @@ export default function ViewsPage() {
   const [name, setName] = useState("");
   const [shared, setShared] = useState(false);
   const [filters, setFilters] = useState<Filters>(emptyFilters);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const create = trpc.view.create.useMutation({
     onSuccess: () => {
@@ -108,9 +110,7 @@ export default function ViewsPage() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => {
-                      if (confirm(`Delete view "${v.name}"?`)) remove.mutate({ id: v.id });
-                    }}
+                    onClick={() => setDeleteTarget({ id: v.id, name: v.name })}
                   >
                     Delete
                   </Button>
@@ -251,6 +251,21 @@ export default function ViewsPage() {
           </div>
         </form>
       </Dialog>
+
+      <Confirm
+        open={!!deleteTarget}
+        onOpenChange={(v) => !v && setDeleteTarget(null)}
+        variant="destructive"
+        title={`Delete view "${deleteTarget?.name}"?`}
+        description="This action cannot be undone."
+        primaryLabel="Delete"
+        loading={remove.isPending}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          await remove.mutateAsync({ id: deleteTarget.id });
+          setDeleteTarget(null);
+        }}
+      />
     </>
   );
 }
