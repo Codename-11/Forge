@@ -44,7 +44,9 @@ export async function GET(req: NextRequest) {
     headers: {
       "content-type": "text/event-stream",
       "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
+      // Traefik terminates HTTP/2 in prod; `Connection` is an HTTP/1
+      // hop-by-hop header that H2 forbids — omitted intentionally.
+      "x-accel-buffering": "no",
     },
   });
 }

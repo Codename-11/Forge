@@ -28,7 +28,7 @@ const filterSchema = z.object({
    * (or no project at all).
    */
   initiativeId: z.string().cuid().nullable().optional(),
-  limit: z.number().min(1).max(100).default(50),
+  limit: z.number().min(1).max(500).default(50),
   cursor: cursorSchema,
 });
 
