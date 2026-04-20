@@ -2,6 +2,111 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-20 — Schema: cycles/initiatives/relations/time + rekey FRG -> AXI + seed PER/WRK (Agent A, Phase 1)
+
+Phase 1 of the coordinated multi-agent build. Strictly additive schema + one
+data migration (workspace rekey). App stayed up throughout.
+
+### Schema (`prisma/schema.prisma`)
+
+- New enums: `CycleStatus`, `InitiativeStatus`, `RelationKind`.
+- New models: `Cycle`, `Initiative`, `IssueRelation`, `TimeEntry` — all
+  tenant-scoped on `workspaceId`, with the indexes called out in the plan.
+  Issue relations are directed and deletion-cascaded from either endpoint.
+- Workspace: added `cycleLengthDays` (default 7), `cycleCooldownDays` (0),
+  `timeTrackingEnabled` (false), `attachmentQuotaMb` (1024) — all configurable
+  defaults surface as columns so per-workspace overrides are trivial.
+- Issue: added nullable `cycleId` (SetNull on cycle delete), `relationsFrom`
+  /`relationsTo` reverse relations, `timeEntries` reverse relation, and a
+  `(workspaceId, cycleId)` index.
+- Project: added nullable `initiativeId` (SetNull on initiative delete) +
+  reverse relation + index.
+- Attachment: made polymorphic via `targetType`/`targetId` (both **nullable**
+  — deviation from the spec's non-null ask, so `db push` wouldn't reject the
+  existing row; new writes can still set both together). Kept `issueId` for
+  backward compat. New composite index on `(workspaceId, targetType, targetId)`.
+- ApiKey: added `projectIds`, `labelIds`, `initiativeIds` string arrays with
+  `@default([])` — empty = no narrowing.
+- User: added `lastWorkspaceId` (remembered workspace), `pinnedIssueIds`
+  string array with `@default([])` (cap enforced server-side later), and the
+  `timeEntries` reverse relation.
+
+### Applied via standard flow
+
+Schema was baked into the image at build time (no bind mount). Flow:
+
+```
+docker cp prisma/schema.prisma forge:/app/prisma/schema.prisma
+docker compose exec -T forge prisma validate
+docker compose exec -T forge prisma db push --accept-data-loss --skip-generate
+docker compose exec -T forge prisma generate
+```
+
+`prisma validate` passed; `db push` completed in 605 ms; client regenerated
+without restarting the container (running app still serves fine — no existing
+router references the new types).
+
+### Rekey + seed SQL
+
+Single transaction in `/tmp/forge-rekey-seed.sql`, executed via
+`docker exec forge-postgres psql -U forge forge -v ON_ERROR_STOP=1 -f ...`.
+
+- Enabled `pgcrypto`. ID generator for raw SQL inserts:
+  `'c' || encode(gen_random_bytes(12), 'hex')` — 25-char cuid-shaped strings.
+- Renamed existing workspace: key `FRG` -> `AXI`, name `Bailey` -> `Axiom-Labs`,
+  slug `bailey` -> `axiom-labs`, `cycleLengthDays=7`.
+- Seeded `Personal` (key `PER`, slug `personal`, time tracking off) and
+  `Work` (key `WRK`, slug `work`, time tracking **on**) workspaces.
+- Seeded the same 6 statuses (Backlog/Todo/In Progress/In Review/Done/Canceled)
+  in both new workspaces, reusing the warm-earthy hex palette already in use
+  on AXI. Todo is default.
+- Seeded starter labels.
+  PER: `quick-win`, `health`, `finance`, `home`, `learning`.
+  WRK: `day-job`, `after-hours`, `billable`, `meeting`, `admin`.
+- Added Bailey as `OWNER` membership on both new workspaces.
+- Created one ACTIVE `Cycle 1` per workspace (including AXI) with
+  `lengthDays=7`, starting now, ending +7 days.
+- Set `User.lastWorkspaceId` to AXI's id so the UI lands there by default.
+
+### Verification outputs
+
+```
+ key |    name    |    slug    | cycleLengthDays | timeTrackingEnabled
+-----+------------+------------+-----------------+---------------------
+ AXI | Axiom-Labs | axiom-labs |               7 | f
+ PER | Personal   | personal   |               7 | f
+ WRK | Work       | work       |               7 | t
+
+statuses/workspace: AXI=6, PER=6, WRK=6
+active cycles/workspace: AXI=1, PER=1, WRK=1
+labels: AXI=0 (existing, untouched), PER=5, WRK=5
+Bailey memberships: OWNER in AXI, PER, WRK
+Issue count: 1 (unchanged from baseline).
+```
+
+- `https://forge.axiom-labs.dev/` -> 307 to Authelia (healthy SSO).
+- `POST /api/mcp/analytics.summary` with Bearer `$FORGE_API_KEY` returned
+  `{"data":{"openIssues":1,"doneIssues":0}}` — MCP surface is green.
+- Container logs clean since migration.
+
+### Deviations / decisions
+
+- `Attachment.targetType` and `targetId` kept **nullable** (spec said non-null).
+  Required so `prisma db push` could apply cleanly to the existing row. New
+  code should set both together; the old `issueId` path still works.
+- Existing workspace was named "Bailey" / slug "bailey" (not "Forge" / "forge"
+  as the brief implied). Rekey still proceeded as planned (FRG -> AXI).
+- Used raw `pgcrypto`-backed id generator instead of cuid (couldn't call
+  Prisma's cuid from SQL). Column shape identical, indexable, collision-safe.
+
+### Out of scope (handoff)
+
+- tRPC routers for new models — Agent B/C.
+- UI (workspace switcher, cycle/initiative/time pages) — Agent E.
+- MinIO compose — Agent C.
+- MCP tool additions — Agent D.
+- System docs (SYSTEM.md, Hermes runbook, mcporter.json, Obsidian) — Agent H.
+
 ## 2026-04-19 — Real MCP endpoint (Streamable HTTP)
 
 `/api/mcp/*` was branded as MCP but was a custom REST dispatcher. Added a
