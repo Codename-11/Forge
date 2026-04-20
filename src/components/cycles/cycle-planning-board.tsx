@@ -6,6 +6,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId } from "@/lib/utils";
+import { MOTION } from "@/lib/motion";
 import { useWorkspace } from "@/hooks/use-workspace";
 
 type DragPayload =
@@ -132,7 +133,8 @@ export function CyclePlanningBoard({
               }
             }}
             className={cn(
-              "flex w-72 shrink-0 flex-col rounded-lg border bg-card/40 transition-colors",
+              "flex w-72 shrink-0 flex-col rounded-lg border bg-card/40",
+              MOTION.base,
               isTarget ? "border-ember/60 bg-ember/5" : "border-border",
             )}
           >

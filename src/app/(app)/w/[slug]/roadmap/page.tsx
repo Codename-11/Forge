@@ -5,7 +5,7 @@ import { Map as MapIcon } from "lucide-react";
 import { InitiativeStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/settings/empty-state";
+import { EmptyState, Kbd, MOTION, Skeleton } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -135,7 +135,11 @@ export default function RoadmapPage() {
     return (
       <>
         <Topbar title="Roadmap" />
-        <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+        <div className="space-y-3 p-4">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-16 w-full" />
+        </div>
       </>
     );
   }
@@ -147,10 +151,16 @@ export default function RoadmapPage() {
         <Topbar title="Roadmap" />
         <div className="flex flex-1 items-center justify-center p-8">
           <EmptyState
-            as="div"
-            icon={MapIcon}
+            variant="page"
+            icon={<MapIcon />}
             title="Roadmap is empty"
-            hint="Create initiatives and projects with start / target dates to see them plotted here. Press ⇧C on the initiatives or projects page to add one."
+            description={
+              <span>
+                Create initiatives and projects with start / target dates
+                to see them plotted here. Press <Kbd>⇧C</Kbd> on the
+                initiatives or projects page to add one.
+              </span>
+            }
           />
         </div>
       </>
@@ -184,7 +194,7 @@ export default function RoadmapPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-auto p-4">
+      <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto p-4">
         <div className="min-w-[960px] rounded-lg border border-border bg-card/40">
           {/* Tick header */}
           <div className="relative h-8 border-b border-border">
@@ -366,7 +376,8 @@ function RoadmapRow({
               key={p.id}
               href={`/w/${ws.slug}/projects/${p.id}`}
               className={cn(
-                "mb-1.5 flex h-5 items-center overflow-hidden rounded-full text-[10px] font-medium transition-colors hover:opacity-90",
+                "mb-1.5 flex h-5 items-center overflow-hidden rounded-full text-[10px] font-medium hover:opacity-90",
+                MOTION.fast,
               )}
               style={{
                 marginLeft: `${left}%`,

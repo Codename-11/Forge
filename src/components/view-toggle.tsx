@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { MOTION } from "@/lib/motion";
 
 export type View = "list" | "board";
 
@@ -36,7 +37,8 @@ export function ViewToggle({
           key={v}
           onClick={() => onChange(v)}
           className={cn(
-            "focus-ring rounded-sm px-2 py-0.5 capitalize transition-colors",
+            "focus-ring rounded-sm px-2 py-0.5 capitalize",
+            MOTION.fast,
             value === v
               ? "bg-subtle text-foreground"
               : "text-muted-foreground hover:text-foreground",

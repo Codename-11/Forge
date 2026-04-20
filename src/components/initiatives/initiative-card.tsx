@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { InitiativeStatus } from "@prisma/client";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { MOTION } from "@/lib/motion";
 import { useWorkspace } from "@/hooks/use-workspace";
 
 /**
@@ -69,7 +70,8 @@ export function InitiativeCard({
         onDrop?.(initiative.id);
       }}
       className={cn(
-        "block rounded-lg border bg-card/40 p-4 transition-colors hover:border-ember/40",
+        "block rounded-lg border bg-card/40 p-4 hover:border-ember/40",
+        MOTION.base,
         isDragTarget ? "border-ember/60 bg-ember/5" : "border-border",
       )}
     >

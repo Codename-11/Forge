@@ -1,6 +1,8 @@
 "use client";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId } from "@/lib/utils";
+import { MOTION } from "@/lib/motion";
+import { EmptyState, Skeleton } from "@/components/ui";
 import { useWorkspace } from "@/hooks/use-workspace";
 
 /**
@@ -17,7 +19,7 @@ export function CycleBacklogPanel() {
   });
 
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-l border-border bg-card/40">
+    <aside className="hidden h-full w-72 shrink-0 flex-col border-l border-border bg-card/40 lg:flex">
       <header className="flex h-9 items-center gap-2 border-b border-border px-3">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Backlog
@@ -28,12 +30,18 @@ export function CycleBacklogPanel() {
       </header>
       <div className="flex-1 overflow-y-auto p-2">
         {isLoading && (
-          <div className="p-2 text-[11px] text-muted-foreground">Loading…</div>
+          <div className="space-y-1.5 p-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
+          </div>
         )}
         {!isLoading && (data?.items.length ?? 0) === 0 && (
-          <div className="p-3 text-center text-[11px] text-muted-foreground">
-            Backlog empty. Create issues or move some out of a cycle.
-          </div>
+          <EmptyState
+            variant="card"
+            title="Backlog empty."
+            description="Create issues or move some out of a cycle."
+          />
         )}
         <ul className="space-y-1">
           {data?.items.map((i) => (
@@ -49,6 +57,7 @@ export function CycleBacklogPanel() {
                 }}
                 className={cn(
                   "group cursor-grab rounded-md border border-border bg-background p-2 text-left hover:border-ember/40 active:cursor-grabbing",
+                  MOTION.fast,
                 )}
                 title="Drag to a column to plan into this cycle"
               >

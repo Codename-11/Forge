@@ -7,6 +7,7 @@ import { InitiativeStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { EmptyState, SkeletonList } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -105,22 +106,28 @@ export default function InitiativeDetailPage({
   );
 
   if (isLoading) {
-    return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
+    return (
+      <div className="p-4">
+        <SkeletonList rows={6} />
+      </div>
+    );
   }
   if (!initiative) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-center">
-        <div>
-          <div className="text-sm font-medium">Initiative not found</div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-4"
-            onClick={() => router.push(`/w/${ws.slug}/initiatives`)}
-          >
-            Back to initiatives
-          </Button>
-        </div>
+      <div className="flex h-full items-center justify-center p-8">
+        <EmptyState
+          variant="page"
+          title="Initiative not found"
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push(`/w/${ws.slug}/initiatives`)}
+            >
+              Back to initiatives
+            </Button>
+          }
+        />
       </div>
     );
   }

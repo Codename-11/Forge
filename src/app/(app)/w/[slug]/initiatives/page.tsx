@@ -6,7 +6,7 @@ import { Target, Plus } from "lucide-react";
 import { InitiativeStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/settings/empty-state";
+import { EmptyState, Kbd, SkeletonList } from "@/components/ui";
 import { InitiativeCard } from "@/components/initiatives/initiative-card";
 import { NewInitiativeDialog } from "@/components/initiatives/new-initiative-dialog";
 import { trpc } from "@/lib/trpc";
@@ -109,13 +109,19 @@ export default function InitiativesPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {isLoading ? (
-          <div className="p-4 text-sm text-muted-foreground">Loading…</div>
+          <SkeletonList rows={5} />
         ) : active.length === 0 && completed.length === 0 ? (
           <EmptyState
-            as="div"
-            icon={Target}
+            variant="page"
+            icon={<Target />}
             title="No initiatives yet"
-            hint="Initiatives group related projects under a strategic theme — quarterly bets, epics, or long-lived programs."
+            description={
+              <span>
+                Initiatives group related projects under a strategic theme —
+                quarterly bets, epics, or long-lived programs. Press{" "}
+                <Kbd>⇧C</Kbd> to quick-create.
+              </span>
+            }
             action={
               <Button
                 variant="ember"

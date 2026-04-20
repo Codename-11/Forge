@@ -11,9 +11,14 @@ import {
   Zap,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
-import { Card } from "@/components/settings/card";
-import { Section } from "@/components/settings/section";
-import { EmptyState } from "@/components/settings/empty-state";
+import {
+  Card,
+  EmptyState,
+  Kbd,
+  MOTION,
+  Section,
+  SkeletonList,
+} from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -98,7 +103,8 @@ export default function InboxPage() {
               type="button"
               onClick={() => setAllWorkspaces(false)}
               className={cn(
-                "focus-ring rounded px-2 py-1 transition-colors",
+                "focus-ring rounded px-2 py-1",
+                MOTION.fast,
                 !allWorkspaces
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
@@ -110,7 +116,8 @@ export default function InboxPage() {
               type="button"
               onClick={() => setAllWorkspaces(true)}
               className={cn(
-                "focus-ring rounded px-2 py-1 transition-colors",
+                "focus-ring rounded px-2 py-1",
+                MOTION.fast,
                 allWorkspaces
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
@@ -140,7 +147,10 @@ export default function InboxPage() {
           </div>
 
           {isLoading || !data ? (
-            <p className="p-6 text-xs text-muted-foreground">Loading inbox…</p>
+            <div className="space-y-4">
+              <SkeletonList rows={4} />
+              <SkeletonList rows={3} />
+            </div>
           ) : (
             <>
               <Section
@@ -155,12 +165,19 @@ export default function InboxPage() {
                 }
                 hint="Your assignments that aren't waiting on anything else."
               >
-                <Card>
+                <Card as="ul">
                   {data.assignedUnblocked.length === 0 ? (
                     <EmptyState
-                      icon={Inbox}
+                      as="li"
+                      variant="card"
+                      icon={<Inbox />}
                       title="Nothing in your queue."
-                      hint="Pick up something from Issues or press ⇧C to create one."
+                      description={
+                        <span>
+                          Pick up something from Issues or press{" "}
+                          <Kbd>⇧C</Kbd> to create one.
+                        </span>
+                      }
                     />
                   ) : (
                     data.assignedUnblocked.map((i) => (
@@ -192,11 +209,14 @@ export default function InboxPage() {
                 }
                 hint="Comments that @mention you in the last 7 days (schema placeholder — user.lastInboxVisitAt not yet persisted)."
               >
-                <Card>
+                <Card as="ul">
                   {data.mentions.length === 0 ? (
                     <EmptyState
-                      icon={MessageCircle}
+                      as="li"
+                      variant="card"
+                      icon={<MessageCircle />}
                       title="No recent mentions."
+                      description="Comments that @mention you land here."
                     />
                   ) : (
                     data.mentions.map((m) => (
@@ -247,12 +267,14 @@ export default function InboxPage() {
                 }
                 hint="Your assignments without activity for more than a week."
               >
-                <Card>
+                <Card as="ul">
                   {data.stalled.length === 0 ? (
                     <EmptyState
-                      icon={AlertTriangle}
+                      as="li"
+                      variant="card"
+                      icon={<AlertTriangle />}
                       title="Nothing stalled."
-                      hint="Work is moving. Nice."
+                      description="Work is moving. Nice."
                     />
                   ) : (
                     data.stalled.map((i) => (
@@ -317,11 +339,12 @@ export default function InboxPage() {
                       </div>
                     </div>
                   ) : (
-                    <Card as="div">
+                    <Card>
                       <EmptyState
-                        icon={Target}
+                        variant="section"
+                        icon={<Target />}
                         title="No active cycle."
-                        hint="Start one from the Cycles page."
+                        description="Start one from the Cycles page."
                       />
                     </Card>
                   )}
@@ -350,7 +373,7 @@ function FocusRollup({
 }) {
   const hasData = count !== null;
   return (
-    <div className="group relative flex items-center gap-3 overflow-hidden rounded-lg border border-border bg-card/40 p-4 transition-colors hover:border-ember/40">
+    <div className={cn("group relative flex items-center gap-3 overflow-hidden rounded-lg border border-border bg-card/40 p-4 hover:border-ember/40", MOTION.base)}>
       <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-ember/10 text-ember">
         <Zap className="h-4 w-4" />
       </div>
@@ -385,7 +408,7 @@ function FocusRollup({
       </div>
       <Link
         href={`/w/${slug}/issues?mine=1`}
-        className="ml-auto shrink-0 text-muted-foreground transition-colors group-hover:text-foreground"
+        className={cn("ml-auto shrink-0 text-muted-foreground group-hover:text-foreground", MOTION.fast)}
         title="Open my issues"
       >
         <ChevronRight className="h-4 w-4" />

@@ -6,6 +6,7 @@ import { IssueAttachmentsPanel } from "@/components/attachments/issue-attachment
 import { IssueRelationsPanel } from "@/components/relations/issue-relations-panel";
 import { IssueActivityPanel } from "@/components/issue-detail/issue-activity-panel";
 import { cn } from "@/lib/utils";
+import { MOTION } from "@/lib/motion";
 
 /**
  * Tabbed right-rail for the issue detail page. Hosts the existing
@@ -92,7 +93,8 @@ export function IssueRail({ issueId }: { issueId: string }) {
               aria-selected={selected}
               onClick={() => setTab(t.id)}
               className={cn(
-                "focus-ring relative flex h-8 items-center gap-1.5 rounded-t-md px-2.5 text-[11px] font-medium transition-colors",
+                "focus-ring relative flex h-8 items-center gap-1.5 rounded-t-md px-2.5 text-[11px] font-medium",
+                MOTION.fast,
                 selected
                   ? "text-foreground"
                   : "text-muted-foreground hover:text-foreground",

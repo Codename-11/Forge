@@ -1,9 +1,10 @@
 "use client";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Download } from "lucide-react";
+import { Clock, Download } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
+import { EmptyState, SkeletonList } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { formatIssueId } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -160,11 +161,18 @@ export default function TimeLogPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {isLoading ? (
-          <p className="p-8 text-center text-xs text-muted-foreground">Loading…</p>
+          <div className="p-4">
+            <SkeletonList rows={8} />
+          </div>
         ) : rows.length === 0 ? (
-          <p className="p-8 text-center text-xs text-muted-foreground">
-            No time entries in this range.
-          </p>
+          <div className="flex items-center justify-center p-8">
+            <EmptyState
+              variant="section"
+              icon={<Clock />}
+              title="No time entries in this range."
+              description="Try a wider date range, or start the timer from any issue detail (press T)."
+            />
+          </div>
         ) : (
           <table className="w-full text-[12px]">
             <thead className="sticky top-0 z-10 bg-card/80 text-[10px] uppercase tracking-wider text-muted-foreground backdrop-blur">

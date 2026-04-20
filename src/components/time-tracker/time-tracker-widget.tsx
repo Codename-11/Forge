@@ -8,6 +8,8 @@ import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId } from "@/lib/utils";
 import { useHotkey } from "@/lib/keyboard";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { broadcastCrossTab, useCrossTab } from "@/hooks/use-realtime";
+import { MOTION } from "@/lib/motion";
 
 /**
  * Floating pill time tracker. Hidden when `workspace.timeTrackingEnabled`
@@ -49,6 +51,7 @@ export function TimeTrackerWidget() {
       setIssueId(null);
       refetchRunning();
       utils.timeEntry.list.invalidate();
+      broadcastCrossTab({ type: "timer:started" });
     },
     onError: (e) => toast.error(e.message),
   });
@@ -65,12 +68,29 @@ export function TimeTrackerWidget() {
       toast.success(`Stopped · ${formatMinutes(minutes)}`);
       refetchRunning();
       utils.timeEntry.list.invalidate();
+      broadcastCrossTab({ type: "timer:stopped" });
     },
     onError: (e) => toast.error(e.message),
   });
   const update = trpc.timeEntry.update.useMutation({
-    onSuccess: () => refetchRunning(),
+    onSuccess: () => {
+      refetchRunning();
+      broadcastCrossTab({ type: "timer:updated" });
+    },
     onError: (e) => toast.error(e.message),
+  });
+
+  // Sibling tab started/stopped a timer — we mirror the change by
+  // re-fetching the running entry.
+  useCrossTab((msg) => {
+    if (
+      msg.type === "timer:started" ||
+      msg.type === "timer:stopped" ||
+      msg.type === "timer:updated"
+    ) {
+      refetchRunning();
+      void utils.timeEntry.list.invalidate();
+    }
   });
 
   // Tick once per second while running so the elapsed label updates live.
@@ -123,7 +143,7 @@ export function TimeTrackerWidget() {
   if (!enabled) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-40">
+    <div className={cn("fixed bottom-4 right-4 z-40", MOTION.slideUp)}>
       {running ? (
         <div className="flex items-center gap-2 rounded-full border border-border bg-card/95 px-2 py-1.5 shadow-lg backdrop-blur">
           <span className="grid h-6 w-6 place-items-center rounded-full bg-ember/10 text-ember">

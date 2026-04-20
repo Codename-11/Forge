@@ -18,6 +18,8 @@ import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { signOutAction } from "@/server/actions/auth";
 import { trpc } from "@/lib/trpc";
+import { useCrossTab, useRealtime } from "@/hooks/use-realtime";
+import { MOTION } from "@/lib/motion";
 
 /**
  * Workspace-shell top bar.
@@ -37,9 +39,31 @@ export function TopBar({
   user: { name?: string | null; image?: string | null; email: string };
 }) {
   const ws = useMaybeWorkspace();
+  const utils = trpc.useUtils();
   const { data: inboxBadge } = trpc.inbox.badge.useQuery(undefined, {
     refetchOnWindowFocus: true,
     staleTime: 60_000,
+  });
+
+  // Live-update the badge when relevant realtime events fire. Any issue
+  // mutation or new comment may change mentions / stalled / assigned
+  // counts; keep it cheap by just invalidating the query.
+  useRealtime(
+    () => {
+      void utils.inbox.badge.invalidate();
+    },
+    { subjectType: ["issue"] },
+  );
+  useRealtime(
+    () => {
+      void utils.inbox.badge.invalidate();
+    },
+    { kindPrefix: "COMMENT_" },
+  );
+  useCrossTab((msg) => {
+    if (msg.type === "inbox:refresh") {
+      void utils.inbox.badge.invalidate();
+    }
   });
 
   return (
@@ -58,7 +82,10 @@ export function TopBar({
           type="button"
           data-quick-create
           title="New issue (Shift+C)"
-          className="focus-ring inline-flex h-7 items-center gap-1.5 rounded-md bg-ember px-2 text-[11px] font-medium text-ember-foreground hover:bg-ember/90"
+          className={cn(
+            "focus-ring inline-flex h-7 items-center gap-1.5 rounded-md bg-ember px-2 text-[11px] font-medium text-ember-foreground hover:bg-ember/90",
+            MOTION.fast,
+          )}
         >
           <Plus className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">New</span>
@@ -69,7 +96,10 @@ export function TopBar({
           <Link
             href={`/w/${ws.slug}/inbox`}
             title="Inbox (g i)"
-            className="focus-ring relative inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground"
+            className={cn(
+              "focus-ring relative inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground",
+              MOTION.fast,
+            )}
           >
             <Bell className="h-3.5 w-3.5" />
             {inboxBadge && inboxBadge.count > 0 && (
@@ -84,7 +114,10 @@ export function TopBar({
           type="button"
           title="Keyboard shortcuts (?)"
           onClick={() => window.dispatchEvent(new Event("forge:open-keyboard-help"))}
-          className="focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground"
+          className={cn(
+            "focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground",
+            MOTION.fast,
+          )}
         >
           <HelpCircle className="h-3.5 w-3.5" />
         </button>

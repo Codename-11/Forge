@@ -8,10 +8,9 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
-import { Section } from "@/components/settings/section";
-import { Card } from "@/components/settings/card";
-import { EmptyState } from "@/components/settings/empty-state";
+import { Card, EmptyState, MOTION, Section, SkeletonList } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
 import { workspaceColor } from "@/lib/workspace-color";
 
 /**
@@ -53,15 +52,17 @@ export default function WorkspacesPage() {
             title="Your workspaces"
             hint="Click a workspace to resume. Role is set by the owner."
           >
-            <Card>
-              {isLoading && (
-                <li className="px-4 py-6 text-center text-xs text-muted-foreground">Loading…</li>
-              )}
-              {!isLoading && (workspaces?.length ?? 0) === 0 && (
+            {isLoading ? (
+              <SkeletonList rows={3} />
+            ) : (
+            <Card as="ul">
+              {(workspaces?.length ?? 0) === 0 && (
                 <EmptyState
-                  icon={Plus}
+                  as="li"
+                  variant="section"
+                  icon={<Plus />}
                   title="No workspaces yet"
-                  hint="Create one to get started."
+                  description="Create one to get started."
                   action={
                     <Button size="sm" variant="ember" onClick={() => setCreateOpen(true)}>
                       Create workspace
@@ -108,13 +109,14 @@ export default function WorkspacesPage() {
                         >
                           Manage
                         </Link>
-                        <ArrowRight className="h-3.5 w-3.5 text-muted-foreground transition-colors group-hover:text-ember" />
+                        <ArrowRight className={cn("h-3.5 w-3.5 text-muted-foreground group-hover:text-ember", MOTION.fast)} />
                       </div>
                     </button>
                   </li>
                 );
               })}
             </Card>
+            )}
           </Section>
         </div>
       </div>

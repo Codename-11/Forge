@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
+import { EmptyState, Skeleton } from "@/components/ui";
 import { ViewToggle, useViewPref } from "@/components/view-toggle";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
@@ -42,25 +43,33 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   if (error) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-center">
-        <div>
-          <div className="text-sm font-medium">Project not found</div>
-          <p className="mt-1 text-xs text-muted-foreground">{error.message}</p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-4"
-            onClick={() => router.push(`/w/${slug}/projects`)}
-          >
-            Back to projects
-          </Button>
-        </div>
+      <div className="flex h-full items-center justify-center p-8">
+        <EmptyState
+          variant="page"
+          title="Project not found"
+          description={error.message}
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push(`/w/${slug}/projects`)}
+            >
+              Back to projects
+            </Button>
+          }
+        />
       </div>
     );
   }
 
   if (!project)
-    return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
+    return (
+      <div className="space-y-3 p-4">
+        <Skeleton className="h-8 w-1/3" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    );
 
   return (
     <>

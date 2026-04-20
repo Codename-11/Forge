@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
+import { EmptyState, SkeletonList } from "@/components/ui";
 import { CycleSummaryCard } from "@/components/cycles/cycle-summary-card";
 import { CyclePlanningBoard } from "@/components/cycles/cycle-planning-board";
 import { CycleBacklogPanel } from "@/components/cycles/cycle-backlog-panel";
@@ -49,24 +50,30 @@ export default function CycleDetailPage({
 
   if (error) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-center">
-        <div>
-          <div className="text-sm font-medium">Cycle not found</div>
-          <p className="mt-1 text-xs text-muted-foreground">{error.message}</p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-4"
-            onClick={() => router.push(`/w/${ws.slug}/cycles`)}
-          >
-            Back to cycles
-          </Button>
-        </div>
+      <div className="flex h-full items-center justify-center p-8">
+        <EmptyState
+          variant="page"
+          title="Cycle not found"
+          description={error.message}
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push(`/w/${ws.slug}/cycles`)}
+            >
+              Back to cycles
+            </Button>
+          }
+        />
       </div>
     );
   }
   if (isLoading || !cycle)
-    return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
+    return (
+      <div className="p-4">
+        <SkeletonList rows={6} />
+      </div>
+    );
 
   return (
     <>

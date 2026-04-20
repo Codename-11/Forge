@@ -4,6 +4,8 @@ import { Pin as PinIcon } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId } from "@/lib/utils";
 import { workspaceColor } from "@/lib/workspace-color";
+import { useCrossTab } from "@/hooks/use-realtime";
+import { MOTION } from "@/lib/motion";
 
 /**
  * Cross-workspace personal pins strip, rendered in the workspace shell
@@ -15,8 +17,20 @@ const MAX_SLOTS = 3;
 
 export function PinsStrip() {
   const router = useRouter();
+  const utils = trpc.useUtils();
   const { data } = trpc.pin.list.useQuery();
   const pins = data ?? [];
+
+  // If another tab toggles a pin, refresh our cached list so the strip
+  // stays consistent across windows. Pins are user-scoped (not tied to
+  // a single workspace) so the BroadcastChannel is the right bus here;
+  // the SSE stream is per-workspace and wouldn't reach a different tab
+  // sitting on a different workspace.
+  useCrossTab((msg) => {
+    if (msg.type === "pins:updated") {
+      void utils.pin.list.invalidate();
+    }
+  });
   const slots = [...pins];
   while (slots.length < MAX_SLOTS) slots.push(null as unknown as (typeof pins)[number]);
 
@@ -46,6 +60,7 @@ export function PinsStrip() {
             title={`${idLabel} · ${pin.title}`}
             className={cn(
               "focus-ring group inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-md border border-border bg-card/60 pl-1 pr-2 text-left hover:bg-subtle",
+              MOTION.base,
             )}
           >
             <span

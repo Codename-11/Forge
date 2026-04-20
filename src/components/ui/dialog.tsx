@@ -1,6 +1,7 @@
 "use client";
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { MOTION } from "@/lib/motion";
 
 /**
  * Minimal headless dialog — intentionally plain to avoid pulling in Radix.
@@ -26,7 +27,10 @@ export function Dialog({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex animate-fade-in items-start justify-center bg-foreground/20 pt-[10vh] backdrop-blur-sm"
+      className={cn(
+        "fixed inset-0 z-50 flex items-start justify-center bg-foreground/20 pt-[10vh] backdrop-blur-sm",
+        MOTION.fadeIn,
+      )}
       onClick={onClose}
     >
       <div
@@ -34,6 +38,7 @@ export function Dialog({
         aria-modal="true"
         className={cn(
           "w-full max-w-xl overflow-hidden rounded-lg border border-border bg-card shadow-xl",
+          MOTION.slideUp,
           className,
         )}
         onClick={(e) => e.stopPropagation()}

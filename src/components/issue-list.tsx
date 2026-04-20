@@ -2,9 +2,11 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { Inbox } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { EmptyState, Kbd, SkeletonList, useDensity } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
@@ -58,6 +60,8 @@ export function IssueList({
 
   const items = useMemo(() => data?.items ?? [], [data]);
   const filtered = authorId ? items.filter((i) => i.authorId === authorId) : items;
+  const density = useDensity();
+  const compact = density === "compact";
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const selectedArray = Array.from(selected);
@@ -100,30 +104,27 @@ export function IssueList({
 
   if (isLoading) {
     return (
-      <div className="divide-y divide-border">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div key={i} className="flex h-10 animate-pulse items-center gap-3 px-5">
-            <div className="h-3 w-3 rounded-full bg-subtle" />
-            <div className="h-3 w-48 rounded bg-subtle" />
-          </div>
-        ))}
+      <div className="px-5 py-2">
+        <SkeletonList rows={8} />
       </div>
     );
   }
 
   if (filtered.length === 0) {
     return (
-      <div className="flex h-60 items-center justify-center text-center">
-        <div className="space-y-1">
-          <div className="text-sm text-muted-foreground">No active issues.</div>
-          <div className="text-xs text-muted-foreground">
-            {emptyHint ?? (
-              <>
-                Press <span className="kbd">C</span> to create one.
-              </>
-            )}
-          </div>
-        </div>
+      <div className="flex h-60 items-center justify-center">
+        <EmptyState
+          variant="section"
+          icon={<Inbox />}
+          title="No active issues."
+          description={
+            emptyHint ?? (
+              <span>
+                Press <Kbd>⇧C</Kbd> to create one.
+              </span>
+            )
+          }
+        />
       </div>
     );
   }
@@ -183,13 +184,19 @@ export function IssueList({
       <div className="divide-y divide-border">
         {filtered.map((issue) => {
           const on = selected.has(issue.id);
+          const rowCls = compact
+            ? "row gap-2 px-5 py-1.5 hover:bg-subtle/60"
+            : "row h-10 gap-3 px-5 hover:bg-subtle/60";
+          const keyCls = compact
+            ? "w-20 shrink-0 font-mono text-[11px] text-muted-foreground"
+            : "w-20 shrink-0 font-mono text-[11px] text-muted-foreground";
+          const titleCls = compact
+            ? "truncate text-[12px]"
+            : "truncate text-sm";
           return (
             <div
               key={issue.id}
-              className={cn(
-                "row h-10 gap-3 px-5 hover:bg-subtle/60",
-                on && "bg-ember/5",
-              )}
+              className={cn(rowCls, on && "bg-ember/5")}
             >
               {enableBulk && (
                 <input
@@ -202,16 +209,19 @@ export function IssueList({
               )}
               <Link
                 href={`${base}/issues/${issue.id}`}
-                className="row h-10 min-w-0 flex-1 gap-3"
+                className={cn(
+                  "row min-w-0 flex-1 gap-3",
+                  compact ? "py-0" : "h-10",
+                )}
               >
                 <span className="w-4 text-center font-mono text-[11px] text-muted-foreground">
                   {priorityGlyph[issue.priority]}
                 </span>
-                <span className="w-20 shrink-0 font-mono text-[11px] text-muted-foreground">
+                <span className={keyCls}>
                   {formatIssueId(workspaceKey, issue.number)}
                 </span>
                 <Badge color={issue.status.color}>{issue.status.name}</Badge>
-                <span className="truncate text-sm">{issue.title}</span>
+                <span className={titleCls}>{issue.title}</span>
                 {issue.project && (
                   <Badge className="ml-2 shrink-0" color={issue.project.color ?? undefined}>
                     {issue.project.key}
@@ -227,7 +237,7 @@ export function IssueList({
                         key={a.userId}
                         name={a.user.name}
                         image={a.user.image}
-                        size={18}
+                        size={compact ? 16 : 18}
                         className="ring-1 ring-background"
                       />
                     ))}
