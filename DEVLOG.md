@@ -2,6 +2,73 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-20 — Linear-parity + multi-workspace push (Phase 2)
+
+The broader push wrapping Agent A's Phase 1 migration. Same day, same
+coordinated build — schema + infra + routers land together; UI is partly
+in; Phase 3 MCP tool additions come after.
+
+### New primitives (now in schema, routers/UI landing in sibling worktrees)
+
+- **Cycle** — time-boxed iteration, tenant-scoped on `workspaceId`, length
+  defaulting to `Workspace.cycleLengthDays` (7). Issues get a nullable
+  `cycleId`; SetNull on cycle delete so history survives.
+- **Initiative** — higher-level grouping above projects. Projects get a
+  nullable `initiativeId`; SetNull on delete.
+- **IssueRelation** — directed, typed links between issues
+  (`RelationKind`). Cascade-deleted from either endpoint.
+- **TimeEntry** — per-user, per-issue duration rows. Only active when the
+  owning workspace has `timeTrackingEnabled=true`.
+
+### Polymorphic Attachments + MinIO
+
+- `Attachment.targetType` / `targetId` (nullable for migration safety)
+  replace the issue-only model. Attachments can now hang off any first-
+  class entity (issue / comment / project / initiative / …).
+- MinIO backs storage (being wired up by Agent C in the same push).
+  Per-workspace quota surfaces as `Workspace.attachmentQuotaMb` (default
+  1024). Signed URLs for read; direct PUTs for upload.
+
+### Granular ApiKey scopes
+
+`ApiKey` gets `projectIds`, `labelIds`, `initiativeIds` — string arrays,
+empty = no narrowing (unchanged semantics). A key can still have FULL
+scope *and* be narrowed to a project / label / initiative subset, so a
+sub-agent can be scoped to just one initiative without losing any
+existing capability. Victor and Mizu currently keep FULL + unnarrowed.
+
+### Multi-workspace UI
+
+- Workspace switcher in the shell; `User.lastWorkspaceId` restores the
+  last-used workspace on sign-in.
+- New default workspaces seeded: **Personal** (`PER`, time tracking off)
+  and **Work** (`WRK`, time tracking on). Bailey is `OWNER` on all three.
+- The original `FRG` workspace was rekeyed to **`AXI` / Axiom-Labs** in
+  the Phase 1 entry below; all current-state references (SYSTEM.md,
+  Hermes runbook, Obsidian, mcporter) now say AXI.
+
+### Workspace-level configurability
+
+New columns on `Workspace` expose what used to be hard-coded:
+`cycleLengthDays` (7), `cycleCooldownDays` (0), `timeTrackingEnabled`
+(false), `attachmentQuotaMb` (1024). Per-workspace overrides are just a
+row update — no redeploy.
+
+### Mizu / Lumin correction
+
+Sweep of docs: Mizu's role was described as "CEO — Lumin ops" in a few
+places. **Lumin is shelved.** Mizu now works across Axiom-Labs
+(marketing / growth / intelligence / community). Corrected in
+`SYSTEM.md`, `~/.hermes/skills/pm/forge/SKILL.md`, and the Obsidian
+vault notes that were out of date. Historical entries (prior DEVLOGs,
+archive notes) were not rewritten.
+
+### Out of scope (handoff)
+
+- Phase 3 MCP tool additions for the new primitives — Agent D.
+- Remaining UI surface (initiative pages, cycle view polish) — ongoing
+  in Agents E/F/G's worktrees.
+
 ## 2026-04-20 — Schema: cycles/initiatives/relations/time + rekey FRG -> AXI + seed PER/WRK (Agent A, Phase 1)
 
 Phase 1 of the coordinated multi-agent build. Strictly additive schema + one
