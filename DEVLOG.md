@@ -2,6 +2,70 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-20 — `issue.list` bug triage + design-sweep audit
+
+Paired session: a live failure report on `issue.list` plus a post-sweep
+bugfix audit.
+
+**`issue.list` diagnosis.** User reported 8 batched `issue.list` queries
+all returning `TRPCClientError` in the browser. Reproduced the server
+path from Docker with three independent methods:
+
+1. Raw Prisma query inside the container — 1 row, 0 blockers, clean.
+2. Crafted a NextAuth JWT against the deployed `AUTH_SECRET` and the
+   `__Secure-authjs.session-token` salt, then curl'd
+   `/api/trpc/issue.list?batch=1` — HTTP 200, correct superjson body,
+   ~100ms. Confirmed `/api/auth/session` round-trips the same token to
+   the expected user.
+3. MCP bearer-path (`/api/mcp/issues.list`) — 200, same row.
+
+Server is healthy. The most-probable root cause is a stale client-side
+session cookie that fails to decode against the current secret (→
+`auth()` returns null → `protectedProcedure` throws UNAUTHORIZED →
+client wraps as TRPCClientError). Cookie name and salt haven't changed
+since v5 was adopted, so a cross-version cookie mismatch is unlikely;
+a simple expired/rotated cookie is the Occam fit. Can't prove it from
+server logs alone until the user next hits the prod UI, so…
+
+**Fix shipped.** Switched `src/app/api/trpc/[trpc]/route.ts` `onError`
+to log every tRPC error in every env via `pino` — path, type, error
+code, cause message, stack, truncated input. Next time the user hits
+the UI, `docker logs forge | grep "trpc error"` returns the real
+`TRPCError` code with zero guesswork. If it's UNAUTHORIZED, the user
+fix is a re-login; if it's anything else, the stack gives the exact
+call site.
+
+Verified post-deploy: `pnpm typecheck` clean, `pnpm test` 64/64 green,
+rebuilt + redeployed forge (`docker compose build forge && up -d`),
+diagnostic firing confirmed by hitting an unauthenticated endpoint and
+observing the structured log row.
+
+**Audit pass over the 5 design-sweep commits.** Inspected each surface
+called out in the triage prompt. No Blocker or High-severity findings:
+
+- `issue.activity` procedure is workspace-scoped and confirms the
+  issue lives in the tenant before returning events. Safe.
+- `RealtimeProvider` subscribes per-workspace to an SSE endpoint that
+  itself re-verifies membership; invalidations are cache-only (no data
+  leak). `utils` dep on the effect is stable in tRPC v11.
+- Primitives back-compat shims (`src/components/settings/{card,
+  empty-state,section}.tsx`) preserve the pre-sweep public API. One
+  Medium spacing drift in the new `Section` header (old: `space-y-2`
+  between title-row/hint/body; new: `space-y-1` inside header, `-2`
+  between header/body) — cosmetic only.
+- Density toggle defaults gracefully when used outside
+  `DensityProvider` — returns `comfortable`, no throw.
+- Quick-create mode detection strips the `/w/<slug>` prefix before
+  matching `/issues/:id` / `/cycles` / `/initiatives` / `/projects`;
+  list-page matches require exact or `?` suffix so detail pages fall
+  through to the default issue mode cleanly.
+- Inbox `allWorkspaces` toggle only affects items 3-5; cycle rollup
+  stays single-workspace. Correct.
+- Pins strip uses `BroadcastChannel` for cross-tab sync because SSE
+  is per-workspace; pins are user-scoped. Correct.
+
+No audit-driven follow-up commits; findings recorded here only.
+
 ## 2026-04-20 — Full design sweep (4-agent Wave)
 
 With the feature set roughly doubled in the morning push, the UI was
