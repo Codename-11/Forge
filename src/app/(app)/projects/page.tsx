@@ -1,0 +1,345 @@
+"use client";
+import { useState } from "react";
+import Link from "next/link";
+import { toast } from "sonner";
+import { Topbar } from "@/components/topbar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Dialog } from "@/components/ui/dialog";
+import { trpc } from "@/lib/trpc";
+import { relativeTime } from "@/lib/utils";
+
+const DEFAULT_COLORS = [
+  "#d97706", "#ca8a04", "#65a30d", "#0ea5e9", "#7c3aed", "#be185d", "#78716c",
+];
+
+export default function ProjectsPage() {
+  const { data, refetch } = trpc.project.list.useQuery({ archived: false, limit: 50 });
+  const [starterOpen, setStarterOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const existingKeys = new Set((data?.items ?? []).map((p) => p.key));
+  const isEmpty = data?.items.length === 0;
+
+  return (
+    <>
+      <Topbar
+        title="Projects"
+        subtitle={data ? `${data.items.length} active` : undefined}
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => setStarterOpen(true)}>
+              Starter templates
+            </Button>
+            <Button variant="ember" size="sm" onClick={() => setCreateOpen(true)}>
+              New project
+            </Button>
+          </>
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {isEmpty ? (
+          <div className="mx-auto max-w-lg rounded-lg border border-dashed border-border bg-card/30 p-8 text-center">
+            <div className="text-sm font-medium">No projects yet</div>
+            <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+              Start from scratch, or pick from the suggested starter templates.
+            </p>
+            <div className="mt-4 flex justify-center gap-2">
+              <Button variant="ember" size="sm" onClick={() => setCreateOpen(true)}>
+                New project
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setStarterOpen(true)}>
+                Browse templates
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+            {(data?.items ?? []).map((p) => (
+              <li key={p.id}>
+                <Link
+                  href={`/projects/${p.id}`}
+                  className="block rounded-lg border border-border bg-card/40 p-4 hover:border-ember/40"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="inline-block h-3 w-3 rounded-sm"
+                      style={{ backgroundColor: p.color ?? "#78716c" }}
+                    />
+                    <span className="font-mono text-[10px] text-muted-foreground">{p.key}</span>
+                    <span className="ml-auto text-[11px] text-muted-foreground">
+                      {p._count.issues} issues
+                    </span>
+                  </div>
+                  <div className="mt-2 text-sm font-medium">
+                    {p.icon && <span className="mr-1">{p.icon}</span>}
+                    {p.name}
+                  </div>
+                  {p.description && (
+                    <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                      {p.description}
+                    </div>
+                  )}
+                  <div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground">
+                    <span>Updated {relativeTime(p.updatedAt)}</span>
+                    {p.archived && <Badge>archived</Badge>}
+                  </div>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <StarterDialog
+        open={starterOpen}
+        onClose={() => setStarterOpen(false)}
+        existingKeys={existingKeys}
+        onCreated={() => refetch()}
+      />
+      <CreateProjectDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={() => refetch()}
+      />
+    </>
+  );
+}
+
+function StarterDialog({
+  open,
+  onClose,
+  existingKeys,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  existingKeys: Set<string>;
+  onCreated: () => void;
+}) {
+  const { data: starters } = trpc.projectTemplate.list.useQuery(undefined, { enabled: open });
+  const create = trpc.project.create.useMutation();
+  const [pending, setPending] = useState<string | null>(null);
+
+  async function addOne(s: {
+    id: string;
+    name: string;
+    suggestedKey: string;
+    description: string | null;
+    color: string | null;
+    icon: string | null;
+  }) {
+    setPending(s.id);
+    try {
+      await create.mutateAsync({
+        key: s.suggestedKey,
+        name: s.name,
+        description: s.description ?? undefined,
+        color: s.color ?? undefined,
+        icon: s.icon ?? undefined,
+      });
+      toast.success(`Created ${s.name}.`);
+      onCreated();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to create project.");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} className="max-w-lg">
+      <div className="space-y-4 p-5">
+        <div>
+          <div className="flex items-baseline justify-between">
+            <div className="text-sm font-semibold">Starter templates</div>
+            <Link
+              href="/settings/project-templates"
+              className="text-[11px] text-muted-foreground hover:text-ember"
+            >
+              Manage templates →
+            </Link>
+          </div>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Managed in Settings. Each row below invokes the standard project.create API.
+          </p>
+        </div>
+        <ul className="space-y-2">
+          {(starters ?? []).map((s) => {
+            const already = existingKeys.has(s.suggestedKey);
+            return (
+              <li
+                key={s.id}
+                className="flex items-start gap-3 rounded-md border border-border bg-card/40 p-3"
+              >
+                <span
+                  className="mt-0.5 inline-block h-3 w-3 rounded-sm"
+                  style={{ backgroundColor: s.color ?? "#78716c" }}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    {s.icon && <span>{s.icon}</span>}
+                    <span className="text-sm font-medium">{s.name}</span>
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      {s.suggestedKey}
+                    </span>
+                  </div>
+                  {s.description && (
+                    <div className="mt-0.5 text-[11px] text-muted-foreground">{s.description}</div>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant={already ? "ghost" : "ember"}
+                  disabled={already || pending === s.id}
+                  onClick={() => addOne(s)}
+                >
+                  {already ? "Exists" : pending === s.id ? "Adding…" : "Add"}
+                </Button>
+              </li>
+            );
+          })}
+          {starters?.length === 0 && (
+            <li className="py-8 text-center text-[11px] text-muted-foreground">
+              No templates defined. Create some in Settings.
+            </li>
+          )}
+        </ul>
+        <div className="flex justify-end">
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+function CreateProjectDialog({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [key, setKey] = useState("");
+  const [description, setDescription] = useState("");
+  const [color, setColor] = useState(DEFAULT_COLORS[0]);
+  const [icon, setIcon] = useState("");
+
+  const create = trpc.project.create.useMutation({
+    onSuccess: () => {
+      toast.success("Project created.");
+      setName("");
+      setKey("");
+      setDescription("");
+      setColor(DEFAULT_COLORS[0]);
+      setIcon("");
+      onCreated();
+      onClose();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Suggest key from name (uppercase first chars).
+  function onNameChange(v: string) {
+    setName(v);
+    if (!key) {
+      const suggested = v
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 3)
+        .map((w) => w[0]?.toUpperCase() ?? "")
+        .join("");
+      if (suggested.length >= 2) setKey(suggested.slice(0, 6));
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} className="max-w-lg">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!name.trim() || !key.trim()) {
+            toast.error("Name and key are required.");
+            return;
+          }
+          create.mutate({
+            name: name.trim(),
+            key: key.trim().toUpperCase(),
+            description: description.trim() || undefined,
+            color,
+            icon: icon.trim() || undefined,
+          });
+        }}
+        className="space-y-3 p-5"
+      >
+        <div className="text-sm font-semibold">New project</div>
+        <div className="grid grid-cols-[1fr_120px] gap-2">
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground">Name</label>
+            <Input value={name} onChange={(e) => onNameChange(e.target.value)} autoFocus />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground">Key</label>
+            <Input
+              value={key}
+              onChange={(e) => setKey(e.target.value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase())}
+              placeholder="FRG"
+              maxLength={8}
+            />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs text-muted-foreground">Description</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground">Color</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                className="h-8 w-10 cursor-pointer rounded border border-input bg-background"
+              />
+              <div className="flex flex-wrap gap-1">
+                {DEFAULT_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setColor(c)}
+                    className="h-5 w-5 rounded border border-border"
+                    style={{ backgroundColor: c }}
+                    aria-label={c}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground">Icon (emoji)</label>
+            <Input value={icon} onChange={(e) => setIcon(e.target.value)} maxLength={8} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="ember" disabled={create.isPending}>
+            {create.isPending ? "Creating…" : "Create project"}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}

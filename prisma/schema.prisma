@@ -1,0 +1,653 @@
+// Forge — project management schema
+//
+// Normalized relational model:
+//   - Identity: User, Account, Session, VerificationToken (NextAuth)
+//   - Tenancy:  Workspace + Membership (role-based access control)
+//   - Work:     Project -> Issue -> (sub) Task ; Label, Status, Priority
+//   - Social:   Comment, Reaction, Attachment
+//   - Audit:    AuditLog, ActivityEvent (analytics source-of-truth)
+//   - Plugins:  Plugin, Skill, ApiKey, Webhook, WebhookDelivery
+//   - Metrics:  MetricAggregate (denormalized rollups)
+//
+// All tenant-scoped rows carry workspaceId for row-level isolation.
+// Soft-delete: `deletedAt`; hard-delete only at workspace boundary.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+// Enums
+// ----------------------------------------------------------------------------
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+  GUEST
+}
+
+enum WorkItemKind {
+  ISSUE
+  TASK
+}
+
+/// Linear-style state machine with user-extensible statuses per workspace.
+/// The enum is a *category*; the Status row holds the name, color, order.
+enum StatusCategory {
+  BACKLOG
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+  CANCELED
+}
+
+enum Priority {
+  NONE
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum PluginScope {
+  READ_ISSUES
+  WRITE_ISSUES
+  READ_PROJECTS
+  WRITE_PROJECTS
+  READ_COMMENTS
+  WRITE_COMMENTS
+  READ_USERS
+  READ_ANALYTICS
+  SUBSCRIBE_EVENTS
+  INVOKE_SKILLS
+  ADMIN
+}
+
+enum PluginStatus {
+  PENDING
+  APPROVED
+  SUSPENDED
+  REVOKED
+}
+
+enum EventKind {
+  ISSUE_CREATED
+  ISSUE_UPDATED
+  ISSUE_DELETED
+  ISSUE_STATUS_CHANGED
+  ISSUE_ASSIGNED
+  ISSUE_PRIORITY_CHANGED
+  COMMENT_CREATED
+  COMMENT_UPDATED
+  PROJECT_CREATED
+  PROJECT_UPDATED
+  SKILL_INVOKED
+  PLUGIN_ERROR
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  DEAD_LETTER
+}
+
+// ----------------------------------------------------------------------------
+// Auth (NextAuth v5)
+// ----------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  handle        String?   @unique
+  image         String?
+  /// IANA timezone, e.g. "America/New_York". Null = infer from browser.
+  timezone      String?
+  /// BCP-47 locale, e.g. "en-US". Null = infer from browser.
+  locale        String?
+  /// "12h" | "24h". Null = infer from locale.
+  timeFormat    String?
+  /// "light" | "dark" | "system". Null = "system".
+  theme         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts    Account[]
+  sessions    Session[]
+  memberships Membership[]
+
+  authoredIssues   Issue[]          @relation("IssueAuthor")
+  assignedIssues   IssueAssignee[]
+  comments         Comment[]
+  auditEntries     AuditLog[]
+  events           ActivityEvent[]
+  createdProjects  Project[]        @relation("ProjectCreator")
+  apiKeys          ApiKey[]
+  claimedIssues    Issue[]          @relation("IssueClaimedBy")
+  recurringCreated RecurringIssue[] @relation("RecurringCreator")
+  savedViews       SavedView[]
+
+  @@index([handle])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ----------------------------------------------------------------------------
+// Tenancy
+// ----------------------------------------------------------------------------
+
+model Workspace {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  /// Short key used for issue identifiers: e.g. `FRG-123`.
+  key       String   @unique
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  memberships Membership[]
+  projects    Project[]
+  issues      Issue[]
+  statuses    Status[]
+  labels      Label[]
+  comments    Comment[]
+  attachments Attachment[]
+  auditLogs   AuditLog[]
+  events      ActivityEvent[]
+  plugins     Plugin[]
+  apiKeys     ApiKey[]
+  webhooks    Webhook[]
+  metrics     MetricAggregate[]
+  skills      Skill[]
+  templates   IssueTemplate[]
+  projectTemplates ProjectTemplate[]
+  recurring   RecurringIssue[]
+  savedViews  SavedView[]
+
+  @@index([slug])
+}
+
+model Membership {
+  id          String    @id @default(cuid())
+  userId      String
+  workspaceId String
+  role        Role      @default(MEMBER)
+  createdAt   DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId, role])
+}
+
+// ----------------------------------------------------------------------------
+// Work items
+// ----------------------------------------------------------------------------
+
+model Project {
+  id          String    @id @default(cuid())
+  workspaceId String
+  key         String
+  name        String
+  description String?   @db.Text
+  icon        String?
+  color       String?
+  archived    Boolean   @default(false)
+  startDate   DateTime?
+  targetDate  DateTime?
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("ProjectCreator", fields: [createdById], references: [id])
+  issues    Issue[]
+  templates IssueTemplate[]
+  recurring RecurringIssue[]
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId, archived])
+}
+
+/// Workspace-scoped status; categories map to StatusCategory enum.
+model Status {
+  id          String         @id @default(cuid())
+  workspaceId String
+  name        String
+  category    StatusCategory
+  color       String
+  position    Int
+  isDefault   Boolean        @default(false)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issues    Issue[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, category])
+}
+
+model Label {
+  id          String @id @default(cuid())
+  workspaceId String
+  name        String
+  color       String
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issues    IssueLabel[]
+
+  @@unique([workspaceId, name])
+}
+
+model Issue {
+  id          String       @id @default(cuid())
+  workspaceId String
+  projectId   String?
+  parentId    String?
+  /// Human-readable identifier: `${workspace.key}-${number}` e.g. `FRG-42`.
+  number      Int
+  kind        WorkItemKind @default(ISSUE)
+  title       String
+  description String?      @db.Text
+  statusId    String
+  priority    Priority     @default(NONE)
+  authorId    String
+  dueDate     DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  canceledAt  DateTime?
+  estimate    Float?
+  /// SLA target, in minutes from creation. Used for breach detection.
+  slaMinutes  Int?
+  /// Agent queue — true means eligible for `issues.claim` via MCP.
+  queued      Boolean      @default(false)
+  claimedAt   DateTime?
+  claimedById String?
+  claimExpiresAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  deletedAt   DateTime?
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  parent    Issue?          @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children  Issue[]         @relation("IssueChildren")
+  status    Status          @relation(fields: [statusId], references: [id])
+  author    User            @relation("IssueAuthor", fields: [authorId], references: [id])
+  claimedBy User?           @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  assignees IssueAssignee[]
+  labels    IssueLabel[]
+  comments  Comment[]
+  attachments Attachment[]
+
+  @@unique([workspaceId, number])
+  @@index([workspaceId, statusId])
+  @@index([workspaceId, projectId])
+  @@index([workspaceId, priority])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, queued, claimedAt])
+}
+
+/// Reusable project blueprints shown in the "Starter templates" picker.
+model ProjectTemplate {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  name            String
+  /// Suggested project key. Can be overridden at create time.
+  suggestedKey    String
+  description     String?  @db.Text
+  color           String?
+  icon            String?
+  position        Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+/// Reusable issue starting-points scoped to a workspace (or project).
+model IssueTemplate {
+  id                  String   @id @default(cuid())
+  workspaceId         String
+  projectId           String?
+  name                String
+  titleTemplate       String
+  descriptionTemplate String?  @db.Text
+  defaultPriority     Priority @default(NONE)
+  /// Convenience: comma-free list of label IDs to apply. Validated server-side.
+  labelIds            String[]
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+/// Scheduled issue that the in-process ticker auto-creates on each `intervalDays`.
+model RecurringIssue {
+  id                  String    @id @default(cuid())
+  workspaceId         String
+  projectId           String?
+  name                String
+  titleTemplate       String
+  descriptionTemplate String?   @db.Text
+  defaultPriority     Priority  @default(NONE)
+  intervalDays        Int
+  nextRunAt           DateTime
+  lastRunAt           DateTime?
+  active              Boolean   @default(true)
+  createdById         String
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy User      @relation("RecurringCreator", fields: [createdById], references: [id])
+
+  @@index([nextRunAt, active])
+  @@index([workspaceId])
+}
+
+/// Bookmarked filter preset. userId null = shared workspace view.
+model SavedView {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String?
+  name        String
+  /// Payload: {projectId?, statusId?, assigneeId?, priority?, query?, view: "list"|"board"}
+  filters     Json
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, userId])
+}
+
+model IssueAssignee {
+  issueId   String
+  userId    String
+  createdAt DateTime @default(now())
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([issueId, userId])
+  @@index([userId])
+}
+
+model IssueLabel {
+  issueId String
+  labelId String
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  label Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([issueId, labelId])
+}
+
+// ----------------------------------------------------------------------------
+// Social / content
+// ----------------------------------------------------------------------------
+
+model Comment {
+  id          String   @id @default(cuid())
+  workspaceId String
+  issueId     String
+  authorId    String
+  body        String   @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue     Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id])
+
+  @@index([issueId])
+  @@index([workspaceId, createdAt])
+}
+
+model Attachment {
+  id          String   @id @default(cuid())
+  workspaceId String
+  issueId     String?
+  filename    String
+  mimeType    String
+  size        Int
+  url         String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue     Issue?    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([issueId])
+}
+
+// ----------------------------------------------------------------------------
+// Audit + analytics
+// ----------------------------------------------------------------------------
+
+/// Immutable audit log — row-level change tracking for compliance.
+model AuditLog {
+  id          String   @id @default(cuid())
+  workspaceId String
+  actorId     String?
+  entity      String
+  entityId    String
+  action      String
+  before      Json?
+  after       Json?
+  ip          String?
+  userAgent   String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, entity, entityId])
+  @@index([workspaceId, createdAt])
+}
+
+/// Business-facing event stream. Plugins subscribe to these.
+/// Separate from AuditLog — audit is for compliance, events for product.
+model ActivityEvent {
+  id          String    @id @default(cuid())
+  workspaceId String
+  kind        EventKind
+  actorId     String?
+  /// Primary subject reference, e.g. issueId.
+  subjectType String
+  subjectId   String
+  payload     Json
+  createdAt   DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  deliveries WebhookDelivery[]
+
+  @@index([workspaceId, kind, createdAt])
+  @@index([workspaceId, subjectType, subjectId])
+}
+
+/// Denormalized metric rollups computed by scheduled jobs.
+/// Granularity: day | week | month. Dimensions stored as JSON for flexibility.
+model MetricAggregate {
+  id          String   @id @default(cuid())
+  workspaceId String
+  metric      String
+  granularity String
+  bucket      DateTime
+  dimensions  Json
+  value       Float
+  computedAt  DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, metric, granularity, bucket, dimensions])
+  @@index([workspaceId, metric, bucket])
+}
+
+// ----------------------------------------------------------------------------
+// Plugins + agents (MCP / Skills)
+// ----------------------------------------------------------------------------
+
+model Plugin {
+  id          String        @id @default(cuid())
+  workspaceId String
+  slug        String
+  name        String
+  description String?       @db.Text
+  version     String
+  /// Manifest as JSON (validated against PluginManifest zod schema).
+  manifest    Json
+  scopes      PluginScope[]
+  status      PluginStatus  @default(PENDING)
+  /// Outbound HTTP endpoint for webhook delivery (optional).
+  webhookUrl  String?
+  /// Shared secret for HMAC signing (stored encrypted in column by app layer).
+  secret      String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  skills    Skill[]
+  apiKeys   ApiKey[]
+  webhooks  Webhook[]
+
+  @@unique([workspaceId, slug])
+  @@index([status])
+}
+
+model Skill {
+  id          String   @id @default(cuid())
+  workspaceId String
+  pluginId    String
+  name        String
+  description String?  @db.Text
+  /// JSON Schema for invocation input.
+  inputSchema Json
+  /// JSON Schema for invocation output.
+  outputSchema Json?
+  /// Where this skill executes: "plugin" (delegated via webhook) or "local" (server-side handler).
+  runtime     String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plugin    Plugin    @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+
+  @@unique([pluginId, name])
+  @@index([workspaceId])
+}
+
+model ApiKey {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  /// Either userId (personal key) OR pluginId (plugin key) must be set.
+  userId        String?
+  pluginId      String?
+  name          String
+  /// SHA-256 of the raw key. Raw key shown once at creation.
+  hashedKey     String    @unique
+  prefix        String
+  scopes        PluginScope[]
+  lastUsedAt    DateTime?
+  expiresAt     DateTime?
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plugin    Plugin?   @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([prefix])
+}
+
+model Webhook {
+  id          String   @id @default(cuid())
+  workspaceId String
+  pluginId    String?
+  url         String
+  secret      String
+  events      EventKind[]
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plugin    Plugin?   @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([workspaceId, active])
+}
+
+model WebhookDelivery {
+  id         String                @id @default(cuid())
+  webhookId  String
+  eventId    String
+  status     WebhookDeliveryStatus @default(PENDING)
+  attempt    Int                   @default(0)
+  responseStatus Int?
+  responseBody   String?           @db.Text
+  scheduledAt DateTime             @default(now())
+  deliveredAt DateTime?
+
+  webhook Webhook       @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event   ActivityEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledAt])
+  @@index([webhookId])
+}

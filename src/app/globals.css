@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ */
+/* Forge design tokens
+ *
+ * Palette: warm, earthy stones + a single ember accent.
+ * Nothing-inspired: high-contrast, zero ornament, generous whitespace,
+ * small precise type, monospace for identifiers.
+ *
+ * Light theme leans "warm paper"; dark leans "graphite" — never pure
+ * black or pure white.
+ * ------------------------------------------------------------------ */
+
+@layer base {
+  :root {
+    --font-sans: ui-sans-serif, "Inter", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+    --radius: 0.5rem;
+
+    /* Warm paper neutrals (HSL components) */
+    --background: 38 20% 97%;
+    --foreground: 30 10% 12%;
+    --card: 36 24% 98%;
+    --card-foreground: 30 10% 12%;
+    --popover: 36 24% 98%;
+    --popover-foreground: 30 10% 12%;
+    --muted: 34 16% 92%;
+    --muted-foreground: 30 8% 36%;
+    --subtle: 34 20% 90%;
+    --border: 30 10% 86%;
+    --input: 30 10% 86%;
+    --ring: 25 70% 48%;
+
+    /* Ember — single accent, warm amber */
+    --ember: 25 80% 50%;
+    --ember-foreground: 40 40% 98%;
+
+    --success: 120 45% 34%;
+    --warning: 38 90% 45%;
+    --danger: 0 60% 44%;
+  }
+
+  .dark {
+    --background: 30 6% 8%;
+    --foreground: 36 16% 92%;
+    --card: 30 6% 10%;
+    --card-foreground: 36 16% 92%;
+    --popover: 30 6% 10%;
+    --popover-foreground: 36 16% 92%;
+    --muted: 30 6% 14%;
+    --muted-foreground: 30 10% 62%;
+    --subtle: 30 6% 16%;
+    --border: 30 6% 18%;
+    --input: 30 6% 18%;
+    --ring: 25 80% 58%;
+
+    --ember: 25 90% 58%;
+    --ember-foreground: 30 6% 8%;
+
+    --success: 120 45% 48%;
+    --warning: 38 90% 56%;
+    --danger: 0 60% 60%;
+  }
+
+  * {
+    @apply border-border;
+  }
+  html,
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: hsl(var(--ember) / 0.25);
+  }
+}
+
+@layer components {
+  .kbd {
+    @apply inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground;
+  }
+  .divider-dot::before {
+    content: "·";
+    @apply mx-2 text-muted-foreground;
+  }
+  .stack {
+    @apply flex flex-col;
+  }
+  .row {
+    @apply flex items-center;
+  }
+  .focus-ring {
+    @apply outline-none ring-0 transition-shadow focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+}
+
+@layer utilities {
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .grid-striped {
+    background-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 39px,
+      hsl(var(--border) / 0.5) 39px,
+      hsl(var(--border) / 0.5) 40px
+    );
+    background-size: 100% 40px;
+  }
+}
