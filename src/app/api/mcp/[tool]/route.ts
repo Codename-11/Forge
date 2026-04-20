@@ -58,6 +58,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ tool: stri
       workspaceId: principal.workspaceId,
       userId: principal.userId,
       pluginId: principal.pluginId,
+      apiKey: principal,
     });
     return NextResponse.json({ data: result });
   } catch (err) {
