@@ -1,5 +1,10 @@
 import { defineConfig } from "vitest/config";
 import { resolve } from "node:path";
+import { config as loadDotenv } from "dotenv";
+
+// Ensure tests pick up the project's .env (if present) so Prisma's schema
+// parser, Redis client, and friends see DATABASE_URL/REDIS_URL.
+loadDotenv({ path: resolve(__dirname, ".env") });
 
 export default defineConfig({
   test: {
@@ -14,6 +19,10 @@ export default defineConfig({
     // generous timeout for the first connection handshake.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    env: {
+      ...(process.env.DATABASE_URL ? { DATABASE_URL: process.env.DATABASE_URL } : {}),
+      ...(process.env.REDIS_URL ? { REDIS_URL: process.env.REDIS_URL } : {}),
+    },
   },
   resolve: {
     alias: [
