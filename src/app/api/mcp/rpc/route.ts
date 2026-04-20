@@ -118,6 +118,7 @@ async function handleRpc(
           workspaceId: auth.workspaceId,
           userId: auth.userId,
           pluginId: auth.pluginId,
+          apiKey: auth,
         });
         return ok(id, {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
