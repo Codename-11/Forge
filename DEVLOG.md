@@ -2,6 +2,35 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-20 — Big push wrap-up (Phase 3 landed)
+
+All eight work packages from the coordinated multi-agent build are in.
+Final state on `master`:
+
+| # | Commit | Phase | What |
+|---|---|---|---|
+| 1 | `ec94cb9` | — | Pre-migration snapshot (first-ever git commit in this repo). |
+| 2 | `f96557f` | 1A | Schema additions (cycles/initiatives/relations/time/polymorphic attachments/granular ApiKey scopes/workspace settings) + FRG→AXI rekey + PER/WRK seed. |
+| 3 | `af45433` | 2B | Routers: cycle, initiative, relation, timeEntry (+ 23 tests). |
+| 4 | `cf2adec` | 2H | Docs sweep — SYSTEM.md, CLAUDE.md, Hermes skill runbook, Obsidian vault, memory files. Mizu/Lumin correction. |
+| 5 | `b3555bf` | 2E | UI shell — workspace switcher, `/w/[slug]/*` URL scheme, workspace settings pages. |
+| 6 | `bae90b9` | 2C | MinIO service + attachment router + granular ApiKey scopes enforcement + blocker-aware claim. |
+| 7 | `6650e07` | 3F | Cycles / initiatives / roadmap / relations panel UI + list-view filter chips. |
+| 8 | `22fb3cb` | 3G.wip | Salvaged inbox + pin routers from a stalled agent run. |
+| 9 | `271eedc` | 3D | MCP surface: 38 tools (10 existing + 28 new), narrowing-aware. 14 new tests. |
+| 10 | `3dcb589` | 3G | Attachments drag/drop + paste, inbox page, pins strip, time tracker widget. |
+
+**Totals:** 10 commits, 64 tests passing, typecheck clean, 3 active workspaces (AXI/PER/WRK), 38 MCP tools, MinIO healthy with three buckets (`forge-axiom-labs` / `forge-personal` / `forge-work`).
+
+Two stall events happened during Phase 3 — both caused by a `dotenv` import that sneaked into `vitest.config.ts` without the dep being installed. Recovered by installing the dep, preserving the partial work as a wip commit, and re-dispatching the affected agents with explicit anti-stall guidance. No data loss.
+
+### Still on the punch list (not done yet)
+
+- **Deploy.** The running container at `forge.axiom-labs.dev` is still on the pre-push image. A rebuild + restart is required to put all this in front of users. That's a deliberate next step, not part of this entry.
+- **Prisma migrations folder is out of sync.** `prisma/migrations/0000_init` predates the schema additions; the live DB is correct because Phase 1 used `db push`. Next time someone runs `prisma migrate deploy` they'll want a fresh baseline. Generate with `prisma migrate diff --from-migrations ... --to-schema-datamodel prisma/schema.prisma`.
+- **Lint polish.** Pre-existing `@eslint/eslintrc` missing-dep was fixed in the wrap-up commit; one residual unused-var warning in `src/server/services/recurring.ts:63` remains (trivial: prefix with `_`).
+- **Key rotation / narrowing review.** Victor + Mizu still hold FULL-scope Hermes keys. Should narrow future sub-agent keys via the new `projectIds` / `labelIds` / `initiativeIds` arrays when those agents come online.
+
 ## 2026-04-20 — Linear-parity + multi-workspace push (Phase 2)
 
 The broader push wrapping Agent A's Phase 1 migration. Same day, same
