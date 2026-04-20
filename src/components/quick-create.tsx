@@ -1,14 +1,14 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { toast } from "sonner";
-import { Dialog } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+import { MOTION } from "@/lib/motion";
+import { Kbd } from "@/components/ui/kbd";
 import { useHotkey } from "@/lib/keyboard";
 import { trpc } from "@/lib/trpc";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
 import { NewCycleDialog } from "@/components/cycles/new-cycle-dialog";
 import { NewInitiativeDialog } from "@/components/initiatives/new-initiative-dialog";
 import { NewProjectDialog } from "@/components/projects/new-project-dialog";
@@ -21,62 +21,66 @@ type Mode =
   | { kind: "cycle" }
   | { kind: "initiative" }
   | { kind: "project" }
-  | { kind: "issue-context"; issueId: string; allowSubIssue: boolean };
+  | { kind: "issue-context"; issueId: string; intent: "comment" | "sub-issue" };
+
+const DRAFT_KEY = "quickCreate";
+
+type DraftShape = {
+  text: string;
+  mode?: Mode["kind"];
+};
 
 /**
- * Context-aware quick-create. `⇧C` opens a dialog whose behavior depends
- * on the current pathname:
+ * Context-aware quick-create. `⇧C` opens a Linear-style floating input at
+ * the top of the viewport — single line, fast, keyboard-first. The
+ * container is NOT a modal: it doesn't dim the page, and clicking outside
+ * simply closes.
  *
- *   /w/*\/cycles*        → New cycle
- *   /w/*\/initiatives*   → New initiative
- *   /w/*\/projects*      → New project
- *   /w/*\/issues/:id     → New comment (default) or sub-issue
- *   anywhere else        → New issue (the default behavior this file had)
+ * Pathname determines the mode (set once at open time):
  *
- * The decision is made when the dialog opens, not reactively — so tapping
- * `⇧C` while looking at an issue detail and navigating mid-form doesn't
- * swap the dialog contents out from under you.
+ *   /w/*\/cycles           → "cycle"       (⏎ create · ⌘⏎ full form)
+ *   /w/*\/initiatives      → "initiative"  (⏎ create · ⌘⏎ full form)
+ *   /w/*\/projects         → "project"     (⏎ create · ⌘⏎ full form)
+ *   /w/*\/issues/:id       → "issue-context" (comment | sub-issue tabs)
+ *   anywhere else          → "issue"       (⏎ create · ⌘⏎ create + open)
  *
- * Legacy hooks are preserved: clicking any `[data-quick-create]` element
- * and dispatching `forge:quick-create` both still open the default issue
- * form; callers that want a specific project can set
- * `data-quick-create-project=<id>` or pass `{ projectId }` in the event.
+ * Draft behavior: if the user has typed anything and dismisses with `⎋`,
+ * the text is persisted under `forge.draft.quickCreate` for 24h. The next
+ * `⇧C` open restores it with a small "Restored" pill.
+ *
+ * For modes where a single line isn't enough (initiative wants slug +
+ * description + color, project wants key + color), `⌘⏎` escalates to the
+ * existing full-form dialog with the typed value pre-filled as the name.
  */
 export function QuickCreate() {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<Mode>({ kind: "issue" });
-
-  // Issue-form state.
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [projectId, setProjectId] = useState<string>("");
-  const [parentId, setParentId] = useState<string>("");
+  const [text, setText] = useState("");
   const [priority, setPriority] = useState<Priority>("NONE");
-  const [labelIds, setLabelIds] = useState<string[]>([]);
-  const [templateId, setTemplateId] = useState<string>("");
+  const [projectId, setProjectId] = useState<string>("");
+  const [restored, setRestored] = useState(false);
 
-  // Issue-context state (comment vs sub-issue on an issue detail).
-  const [issueContextIntent, setIssueContextIntent] =
-    useState<"comment" | "sub-issue">("comment");
-  const [commentBody, setCommentBody] = useState("");
+  // Escalation: when ⌘⏎ is hit on a mode that has a richer full form,
+  // we route to the matching NewXDialog with a seeded name.
+  const [fullForm, setFullForm] =
+    useState<null | { kind: "cycle" | "initiative" | "project"; name: string }>(null);
+
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   const router = useRouter();
   const pathname = usePathname();
   const ws = useMaybeWorkspace();
   const utils = trpc.useUtils();
 
-  // Pull templates + projects lazily — only when the issue flavor is open.
-  const issueish = mode.kind === "issue" || mode.kind === "issue-context";
+  // Only fetch projects for issue mode — the chip picker in the secondary
+  // row uses it.
   const { data: projects } = trpc.project.list.useQuery(
     { archived: false, limit: 100 },
-    { enabled: open && issueish },
+    { enabled: open && mode.kind === "issue" },
   );
-  const { data: templates } = trpc.template.list.useQuery(undefined, {
-    enabled: open && mode.kind === "issue",
-  });
 
-  // Pick up the parent issue's details so sub-issue inherits its project
-  // (a reasonable default — user can still override).
+  // Parent issue context (for inheriting its project on sub-issue).
   const contextIssueId =
     mode.kind === "issue-context" ? mode.issueId : undefined;
   const { data: contextIssue } = trpc.issue.byId.useQuery(
@@ -84,334 +88,557 @@ export function QuickCreate() {
     { enabled: open && !!contextIssueId },
   );
 
+  // ----- mutations --------------------------------------------------
+
   const createIssue = trpc.issue.create.useMutation({
-    onSuccess: async (issue) => {
-      toast.success(`Created #${issue.number}`);
-      close();
-      await utils.issue.list.invalidate();
-      const base = ws ? `/w/${ws.slug}` : "";
-      router.push(`${base}/issues/${issue.id}`);
-    },
     onError: (err) => toast.error(err.message),
   });
-
   const createComment = trpc.comment.create.useMutation({
-    onSuccess: async (_, input) => {
-      toast.success("Comment added.");
-      close();
-      await utils.issue.byId.invalidate({ id: input.issueId });
-      await utils.issue.activity.invalidate({ issueId: input.issueId });
-    },
+    onError: (err) => toast.error(err.message),
+  });
+  const createCycle = trpc.cycle.create.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+  const createInitiative = trpc.initiative.create.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+  const createProject = trpc.project.create.useMutation({
     onError: (err) => toast.error(err.message),
   });
 
-  function close() {
-    setOpen(false);
-    setTitle("");
-    setDescription("");
-    setProjectId("");
-    setParentId("");
-    setPriority("NONE");
-    setLabelIds([]);
-    setTemplateId("");
-    setIssueContextIntent("comment");
-    setCommentBody("");
-  }
+  const busy =
+    createIssue.isPending ||
+    createComment.isPending ||
+    createCycle.isPending ||
+    createInitiative.isPending ||
+    createProject.isPending;
 
-  function applyTemplate(tid: string) {
-    setTemplateId(tid);
-    const t = templates?.find((x) => x.id === tid);
-    if (!t) return;
-    setTitle(t.titleTemplate);
-    setDescription(t.descriptionTemplate ?? "");
-    setProjectId(t.projectId ?? "");
-    setPriority(t.defaultPriority as Priority);
-    setLabelIds(t.labelIds);
-  }
+  // ----- open/close lifecycle --------------------------------------
 
-  // Decide the mode based on the current URL. Purely a lookup over the
-  // pathname — no async lookups, so safe to call synchronously.
-  //
-  // Note: we match the list pages (`/cycles`, `/initiatives`, `/projects`)
-  // with and without a trailing `?…`, but *not* their detail pages. On a
-  // project detail (`/projects/<id>`) the intuitive next action is "new
-  // issue in this project", not "new project". The project detail page
-  // carries `data-quick-create-project=<id>` on its button, which our
-  // click handler funnels back through the issue form.
-  function modeForPath(path: string | null): Mode {
+  const modeForPath = useCallback((path: string | null): Mode => {
     if (!path) return { kind: "issue" };
-    // Tolerate the /w/<slug>/... prefix and bare paths alike.
     const tail = path.replace(/^\/w\/[^/]+/, "");
     const issueMatch = tail.match(/^\/issues\/([^/?#]+)/);
     if (issueMatch) {
-      return { kind: "issue-context", issueId: issueMatch[1], allowSubIssue: true };
+      return {
+        kind: "issue-context",
+        issueId: issueMatch[1],
+        intent: "comment",
+      };
     }
-    // List-page exact matches. `/cycles/<id>` falls through to issue mode.
     if (tail === "/cycles" || tail.startsWith("/cycles?")) return { kind: "cycle" };
     if (tail === "/initiatives" || tail.startsWith("/initiatives?"))
       return { kind: "initiative" };
     if (tail === "/projects" || tail.startsWith("/projects?"))
       return { kind: "project" };
     return { kind: "issue" };
-  }
+  }, []);
 
-  function openQuickCreate(override?: { projectId?: string }) {
-    const next = modeForPath(pathname);
-    setMode(next);
-    if (override?.projectId) setProjectId(override.projectId);
-    setOpen(true);
-  }
+  const close = useCallback(
+    (persistDraft: boolean) => {
+      if (persistDraft && text.trim().length > 0) {
+        saveDraft<DraftShape>(DRAFT_KEY, { text, mode: mode.kind });
+      }
+      setOpen(false);
+      setText("");
+      setPriority("NONE");
+      setProjectId("");
+      setRestored(false);
+    },
+    [text, mode.kind],
+  );
 
-  // `c` is reserved for "open current cycle" (Phase 3 planning primitives).
-  // Quick-create binds to Shift+C and remains clickable from the sidebar.
-  useHotkey("shift+c", () => openQuickCreate());
+  const openFor = useCallback(
+    (override?: { projectId?: string }) => {
+      const next = modeForPath(pathname);
+      setMode(next);
+      if (override?.projectId) setProjectId(override.projectId);
+      // Hydrate a draft if present + mode matches.
+      const draft = readDraft<DraftShape>(DRAFT_KEY);
+      if (draft && draft.text) {
+        // Only carry text across if the mode flavor matches (keeps an
+        // issue draft from surfacing on the cycles page).
+        if (!draft.mode || draft.mode === next.kind) {
+          setText(draft.text);
+          setRestored(true);
+        } else {
+          setRestored(false);
+        }
+      } else {
+        setRestored(false);
+      }
+      setOpen(true);
+    },
+    [modeForPath, pathname],
+  );
 
+  // Hotkey: ⇧C (does not fire inside editable fields unless the leader
+  // modifier matches — which it doesn't here, so typing ⇧C in a textarea
+  // naturally inserts a capital C).
+  useHotkey("shift+c", () => openFor(), [pathname]);
+
+  // Legacy hooks: [data-quick-create] clicks + window event.
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
+    const clickHandler = (e: MouseEvent) => {
       const el = (e.target as HTMLElement).closest(
         "[data-quick-create]",
       ) as HTMLElement | null;
       if (!el) return;
       const pid = el.dataset.quickCreateProject;
-      openQuickCreate(pid ? { projectId: pid } : undefined);
+      openFor(pid ? { projectId: pid } : undefined);
     };
-    document.addEventListener("click", handler);
-
-    const evt = (e: Event) => {
+    document.addEventListener("click", clickHandler);
+    const evtHandler = (e: Event) => {
       const detail =
-        (e as CustomEvent<{ projectId?: string; templateId?: string }>).detail ??
-        {};
-      openQuickCreate(detail);
+        (e as CustomEvent<{ projectId?: string }>).detail ?? {};
+      openFor(detail);
     };
-    window.addEventListener("forge:quick-create", evt);
-
+    window.addEventListener("forge:quick-create", evtHandler);
     return () => {
-      document.removeEventListener("click", handler);
-      window.removeEventListener("forge:quick-create", evt);
+      document.removeEventListener("click", clickHandler);
+      window.removeEventListener("forge:quick-create", evtHandler);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
-  // Render the right dialog per mode. Cycle/initiative/project each have
-  // a dedicated shared component — we just forward `open` / `onClose`.
-  if (mode.kind === "cycle") {
-    return <NewCycleDialog open={open} onClose={close} />;
-  }
-  if (mode.kind === "initiative") {
-    return <NewInitiativeDialog open={open} onClose={close} />;
-  }
-  if (mode.kind === "project") {
-    return <NewProjectDialog open={open} onClose={close} />;
+  // Global Escape: close the floating input. Clicks outside also close.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(true);
+      }
+    };
+    const onDocClick = (e: MouseEvent) => {
+      if (!containerRef.current) return;
+      if (!containerRef.current.contains(e.target as Node)) {
+        close(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDocClick);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDocClick);
+    };
+  }, [open, close]);
+
+  // Autofocus input when we open.
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open, mode.kind]);
+
+  // ----- mode metadata ---------------------------------------------
+
+  const modeLabel = useMemo(() => {
+    switch (mode.kind) {
+      case "issue":
+        return "Issue";
+      case "cycle":
+        return "Cycle";
+      case "initiative":
+        return "Initiative";
+      case "project":
+        return "Project";
+      case "issue-context":
+        return mode.intent === "comment" ? "Comment" : "Sub-issue";
+    }
+  }, [mode]);
+
+  const placeholder = useMemo(() => {
+    switch (mode.kind) {
+      case "issue":
+        return "Issue title… (⌘⏎ create + open)";
+      case "cycle":
+        return "Cycle name… (⌘⏎ more options)";
+      case "initiative":
+        return "Initiative name… (⌘⏎ more options)";
+      case "project":
+        return "Project name… (⌘⏎ more options)";
+      case "issue-context":
+        return mode.intent === "comment"
+          ? "Write a comment… (⏎ post)"
+          : "Sub-issue title… (⏎ create)";
+    }
+  }, [mode]);
+
+  // Some modes escalate on ⌘⏎; others have a real secondary action.
+  const hasEscalation =
+    mode.kind === "cycle" ||
+    mode.kind === "initiative" ||
+    mode.kind === "project";
+  const secondaryHint = hasEscalation
+    ? "⌘⏎ more options"
+    : mode.kind === "issue"
+    ? "⌘⏎ create + open"
+    : null;
+
+  // ----- submit ----------------------------------------------------
+
+  async function submit(secondary: boolean) {
+    const value = text.trim();
+    if (!value) return;
+    if (busy) return;
+
+    // Shared success: toast + close + clear draft + invalidate.
+    const done = (msg: string) => {
+      toast.success(msg);
+      clearDraft(DRAFT_KEY);
+      close(false);
+    };
+
+    try {
+      switch (mode.kind) {
+        case "issue": {
+          if (secondary) {
+            // Create + open: same as primary but route to the new issue.
+            const issue = await createIssue.mutateAsync({
+              title: value,
+              projectId: projectId || undefined,
+              priority,
+              labelIds: [],
+            });
+            await utils.issue.list.invalidate();
+            done(`Created #${issue.number}`);
+            const base = ws ? `/w/${ws.slug}` : "";
+            router.push(`${base}/issues/${issue.id}`);
+          } else {
+            const issue = await createIssue.mutateAsync({
+              title: value,
+              projectId: projectId || undefined,
+              priority,
+              labelIds: [],
+            });
+            await utils.issue.list.invalidate();
+            done(`Created #${issue.number}`);
+          }
+          return;
+        }
+        case "cycle": {
+          if (secondary) {
+            // Escalate: open full form with name seeded.
+            setFullForm({ kind: "cycle", name: value });
+            setOpen(false);
+            return;
+          }
+          await createCycle.mutateAsync({ name: value });
+          await utils.cycle.list.invalidate();
+          done("Cycle created.");
+          return;
+        }
+        case "initiative": {
+          if (secondary) {
+            setFullForm({ kind: "initiative", name: value });
+            setOpen(false);
+            return;
+          }
+          await createInitiative.mutateAsync({ name: value });
+          await utils.initiative.list.invalidate();
+          done("Initiative created.");
+          return;
+        }
+        case "project": {
+          if (secondary) {
+            setFullForm({ kind: "project", name: value });
+            setOpen(false);
+            return;
+          }
+          // Derive a reasonable project key from the name (same logic as
+          // NewProjectDialog's suggestion).
+          const suggestedKey = value
+            .split(/\s+/)
+            .filter(Boolean)
+            .slice(0, 3)
+            .map((w) => w[0]?.toUpperCase() ?? "")
+            .join("")
+            .slice(0, 6);
+          const key = suggestedKey.length >= 2 ? suggestedKey : value
+            .toUpperCase()
+            .replace(/[^A-Z0-9]/g, "")
+            .slice(0, 4) || "PRJ";
+          await createProject.mutateAsync({ name: value, key });
+          await utils.project.list.invalidate();
+          done("Project created.");
+          return;
+        }
+        case "issue-context": {
+          if (mode.intent === "comment") {
+            await createComment.mutateAsync({
+              issueId: mode.issueId,
+              body: value,
+            });
+            await utils.issue.byId.invalidate({ id: mode.issueId });
+            await utils.issue.activity.invalidate({ issueId: mode.issueId });
+            done("Comment added.");
+          } else {
+            const issue = await createIssue.mutateAsync({
+              title: value,
+              projectId: contextIssue?.projectId ?? undefined,
+              parentId: mode.issueId,
+              priority,
+              labelIds: [],
+            });
+            await utils.issue.list.invalidate();
+            done(`Created sub-issue #${issue.number}`);
+          }
+          return;
+        }
+      }
+    } catch {
+      // mutation's onError already surfaced a toast
+    }
   }
 
-  // Issue + issue-context flows share one dialog with mode-swapped body.
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const secondary = e.metaKey || e.ctrlKey;
+      void submit(secondary);
+    }
+  }
+
+  // ----- render ----------------------------------------------------
+
+  // Full-form escalation takes over when open.
+  if (fullForm) {
+    if (fullForm.kind === "cycle") {
+      return (
+        <NewCycleDialog
+          open={true}
+          onClose={() => setFullForm(null)}
+        />
+      );
+    }
+    if (fullForm.kind === "initiative") {
+      return (
+        <NewInitiativeDialog
+          open={true}
+          onClose={() => setFullForm(null)}
+        />
+      );
+    }
+    if (fullForm.kind === "project") {
+      return (
+        <NewProjectDialog
+          open={true}
+          onClose={() => setFullForm(null)}
+        />
+      );
+    }
+  }
+
+  if (!open) return null;
+
   return (
-    <Dialog open={open} onClose={close} className="max-w-lg">
-      <div className="space-y-3 p-5">
-        <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
-          <span>
-            {mode.kind === "issue-context"
-              ? issueContextIntent === "comment"
-                ? "New comment"
-                : "New sub-issue"
-              : "New issue"}
-          </span>
-          <span className="ml-auto kbd">⏎ to create</span>
+    <div
+      // Wrap the floating bar so it anchors to the top of the viewport
+      // without capturing clicks on the surrounding page (the bar itself
+      // handles outside-click close via the mousedown listener above).
+      className="pointer-events-none fixed inset-x-0 top-[18vh] z-40 flex justify-center px-4"
+    >
+      <div
+        ref={containerRef}
+        role="dialog"
+        aria-label={`Quick-create ${modeLabel}`}
+        className={cn(
+          "pointer-events-auto w-full max-w-2xl overflow-hidden rounded-lg border border-border bg-card/95 shadow-xl backdrop-blur",
+          MOTION.slideInTop,
+        )}
+      >
+        {/* Top row: mode chip + input + hint */}
+        <div className="flex items-center gap-2 px-3 py-2">
+          <ModeChip
+            mode={mode}
+            onToggleIntent={() => {
+              if (mode.kind !== "issue-context") return;
+              setMode({
+                ...mode,
+                intent: mode.intent === "comment" ? "sub-issue" : "comment",
+              });
+            }}
+          />
+          <input
+            ref={inputRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={placeholder}
+            aria-label={`Quick-create ${modeLabel}`}
+            autoComplete="off"
+            className="focus-ring min-w-0 flex-1 bg-transparent px-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+          />
+          {restored && (
+            <span className="hidden shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ember sm:inline">
+              Restored
+            </span>
+          )}
+          {secondaryHint && (
+            <span className="hidden shrink-0 items-center gap-1 text-[11px] text-muted-foreground sm:inline-flex">
+              <Kbd>⌘⏎</Kbd>
+              <span>{secondaryHint.replace("⌘⏎ ", "")}</span>
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => submit(false)}
+            disabled={!text.trim() || busy}
+            className={cn(
+              "focus-ring inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-ember px-2.5 py-1 text-xs font-medium text-ember-foreground hover:bg-ember/90 disabled:pointer-events-none disabled:opacity-40",
+              MOTION.fast,
+            )}
+          >
+            {busy ? "…" : "Create"}
+            <Kbd className="border-ember-foreground/30 bg-ember-foreground/10 text-ember-foreground/80">
+              ⏎
+            </Kbd>
+          </button>
         </div>
 
-        {mode.kind === "issue-context" && (
-          <div
-            role="tablist"
-            aria-label="Quick-create intent"
-            className="flex items-center gap-1 rounded-md bg-subtle p-0.5 text-[11px]"
-          >
-            <IntentTab
-              selected={issueContextIntent === "comment"}
-              onClick={() => setIssueContextIntent("comment")}
-              label="Comment"
-            />
-            <IntentTab
-              selected={issueContextIntent === "sub-issue"}
-              onClick={() => setIssueContextIntent("sub-issue")}
-              label="Sub-issue"
-            />
+        {/* Secondary row: priority chips (issue) / intent tabs (issue-context) */}
+        {(mode.kind === "issue" ||
+          mode.kind === "issue-context") && (
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 bg-card/50 px-3 py-1.5 text-[11px]">
+            {mode.kind === "issue-context" && (
+              <>
+                <IntentChip
+                  selected={mode.intent === "comment"}
+                  onClick={() =>
+                    setMode({ ...mode, intent: "comment" })
+                  }
+                  label="Comment"
+                />
+                <IntentChip
+                  selected={mode.intent === "sub-issue"}
+                  onClick={() =>
+                    setMode({ ...mode, intent: "sub-issue" })
+                  }
+                  label="Sub-issue"
+                />
+                {mode.intent === "sub-issue" && contextIssue && (
+                  <span className="ml-1 truncate text-muted-foreground">
+                    parent:{" "}
+                    <span className="font-mono text-foreground">
+                      {contextIssue.title}
+                    </span>
+                  </span>
+                )}
+              </>
+            )}
+
+            {mode.kind === "issue" && (
+              <>
+                {PRIORITIES.map((p) => (
+                  <PriorityChip
+                    key={p}
+                    selected={priority === p}
+                    label={p}
+                    onClick={() => setPriority(p)}
+                  />
+                ))}
+                {projects && projects.items.length > 0 && (
+                  <>
+                    <span className="mx-1 h-3 w-px bg-border" aria-hidden />
+                    <select
+                      value={projectId}
+                      onChange={(e) => setProjectId(e.target.value)}
+                      aria-label="Project"
+                      className="focus-ring h-6 max-w-[180px] truncate rounded-md border border-border bg-background px-1.5 text-[11px] text-foreground"
+                    >
+                      <option value="">No project</option>
+                      {projects.items.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
+              </>
+            )}
+
+            <span className="ml-auto inline-flex items-center gap-1 text-muted-foreground">
+              <Kbd>⎋</Kbd> close
+            </span>
           </div>
         )}
-
-        {mode.kind === "issue-context" && issueContextIntent === "comment" ? (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!commentBody.trim()) return;
-              createComment.mutate({
-                issueId: mode.issueId,
-                body: commentBody.trim(),
-              });
-            }}
-            className="space-y-3"
-          >
-            <textarea
-              autoFocus
-              value={commentBody}
-              onChange={(e) => setCommentBody(e.target.value)}
-              rows={5}
-              placeholder="Write a comment… (Markdown-flavored)"
-              className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
-            />
-            <div className="flex items-center gap-2">
-              <Button type="button" variant="ghost" size="sm" onClick={close}>
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="ember"
-                size="sm"
-                disabled={!commentBody.trim() || createComment.isPending}
-              >
-                {createComment.isPending ? "Posting…" : "Post comment"}
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (title.trim().length < 1) return;
-              const isSubIssue = mode.kind === "issue-context";
-              createIssue.mutate({
-                title: title.trim(),
-                description: description.trim() || undefined,
-                projectId:
-                  (isSubIssue ? contextIssue?.projectId ?? undefined : undefined) ??
-                  (projectId || undefined),
-                parentId: isSubIssue ? mode.issueId : parentId || undefined,
-                priority,
-                labelIds,
-              });
-            }}
-            className="space-y-3"
-          >
-            {mode.kind === "issue-context" && contextIssue && (
-              <div className="rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-                Parent:{" "}
-                <span className="font-mono text-foreground">
-                  {contextIssue.title}
-                </span>
-              </div>
-            )}
-
-            {mode.kind === "issue" && templates && templates.length > 0 && (
-              <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">
-                  Start from template
-                </label>
-                <select
-                  value={templateId}
-                  onChange={(e) => applyTemplate(e.target.value)}
-                  className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-                >
-                  <option value="">Blank</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <Input
-              autoFocus
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder={
-                mode.kind === "issue-context" ? "Sub-issue title" : "Issue title"
-              }
-            />
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Description (optional)…"
-              rows={3}
-              className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm text-foreground placeholder:text-muted-foreground"
-            />
-            {mode.kind === "issue" && (
-              <div className="grid grid-cols-2 gap-2">
-                <select
-                  value={projectId}
-                  onChange={(e) => setProjectId(e.target.value)}
-                  className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-                >
-                  <option value="">No project</option>
-                  {projects?.items.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={priority}
-                  onChange={(e) => setPriority(e.target.value as Priority)}
-                  className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-                >
-                  {PRIORITIES.map((p) => (
-                    <option key={p}>{p}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {mode.kind === "issue-context" && (
-              <div className="grid grid-cols-1 gap-2">
-                <select
-                  value={priority}
-                  onChange={(e) => setPriority(e.target.value as Priority)}
-                  className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-                >
-                  {PRIORITIES.map((p) => (
-                    <option key={p}>{p}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {labelIds.length > 0 && (
-              <div className="flex flex-wrap gap-1 text-[11px]">
-                {labelIds.map((lid) => (
-                  <Badge key={lid}>{lid.slice(0, 8)}</Badge>
-                ))}
-              </div>
-            )}
-            <div className="flex items-center gap-2">
-              <Button type="button" variant="ghost" size="sm" onClick={close}>
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="ember"
-                size="sm"
-                disabled={!title.trim() || createIssue.isPending}
-              >
-                {createIssue.isPending
-                  ? "Creating…"
-                  : mode.kind === "issue-context"
-                  ? "Create sub-issue"
-                  : "Create issue"}
-              </Button>
-            </div>
-          </form>
-        )}
       </div>
-    </Dialog>
+    </div>
   );
 }
 
-function IntentTab({
+function ModeChip({
+  mode,
+  onToggleIntent,
+}: {
+  mode: Mode;
+  onToggleIntent: () => void;
+}) {
+  const label =
+    mode.kind === "issue"
+      ? "Issue"
+      : mode.kind === "cycle"
+      ? "Cycle"
+      : mode.kind === "initiative"
+      ? "Initiative"
+      : mode.kind === "project"
+      ? "Project"
+      : mode.intent === "comment"
+      ? "Comment"
+      : "Sub-issue";
+
+  const isToggleable = mode.kind === "issue-context";
+
+  return (
+    <button
+      type="button"
+      onClick={isToggleable ? onToggleIntent : undefined}
+      tabIndex={isToggleable ? 0 : -1}
+      aria-label={isToggleable ? "Toggle comment / sub-issue" : undefined}
+      className={cn(
+        "focus-ring shrink-0 rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground",
+        isToggleable && "cursor-pointer hover:bg-subtle",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+function PriorityChip({
   selected,
-  onClick,
   label,
+  onClick,
 }: {
   selected: boolean;
-  onClick: () => void;
   label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={cn(
+        "focus-ring rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
+        selected
+          ? "bg-ember/15 text-ember"
+          : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+function IntentChip({
+  selected,
+  label,
+  onClick,
+}: {
+  selected: boolean;
+  label: string;
+  onClick: () => void;
 }) {
   return (
     <button
@@ -419,12 +646,12 @@ function IntentTab({
       role="tab"
       aria-selected={selected}
       onClick={onClick}
-      className={
-        "focus-ring rounded px-2 py-1 transition-all duration-100 ease-out " +
-        (selected
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground")
-      }
+      className={cn(
+        "focus-ring rounded px-2 py-0.5 transition-colors",
+        selected
+          ? "bg-subtle text-foreground"
+          : "text-muted-foreground hover:text-foreground",
+      )}
     >
       {label}
     </button>
