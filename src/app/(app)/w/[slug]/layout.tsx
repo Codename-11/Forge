@@ -8,6 +8,8 @@ import { RealtimeProvider } from "@/components/realtime-provider";
 import { TrpcProvider } from "@/lib/trpc-provider";
 import { WorkspaceProvider } from "@/components/workspace-provider";
 import { WorkspaceCookieSync } from "@/components/workspace-cookie-sync";
+import { PinsStrip } from "@/components/pins/pins-strip";
+import { TimeTrackerWidget } from "@/components/time-tracker/time-tracker-widget";
 import type { WorkspaceContextValue } from "@/hooks/use-workspace";
 
 /**
@@ -110,10 +112,16 @@ export default async function WorkspaceShellLayout({
               email: session.user.email,
             }}
           />
-          <main className="flex min-w-0 flex-1 flex-col bg-background">{children}</main>
+          <main className="flex min-w-0 flex-1 flex-col bg-background">
+            <div className="flex h-8 shrink-0 items-center justify-end gap-2 border-b border-border bg-card/20 px-3">
+              <PinsStrip />
+            </div>
+            {children}
+          </main>
         </div>
         <CommandPalette />
         <QuickCreate />
+        <TimeTrackerWidget />
         <RealtimeProvider workspaceId={workspace.id} />
         <WorkspaceCookieSync slug={workspace.slug} />
       </WorkspaceProvider>

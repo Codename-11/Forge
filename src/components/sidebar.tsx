@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Inbox,
   CircleDot,
+  Clock,
   FolderKanban,
   LayoutDashboard,
   LineChart,
@@ -20,6 +21,7 @@ import {
   Compass,
   Map as MapIcon,
 } from "lucide-react";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { useModKeyLabel } from "@/lib/platform";
 import { useChord, useHotkey } from "@/lib/keyboard";
@@ -27,15 +29,25 @@ import { signOutAction } from "@/server/actions/auth";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { trpc } from "@/lib/trpc";
 
-const NAV = [
+type NavItem = {
+  path: string;
+  label: string;
+  icon: typeof Inbox;
+  chord: string;
+  badge?: "inbox";
+  onlyWhenTimeTracking?: true;
+};
+
+const NAV: readonly NavItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
-  { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i" },
+  { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
   { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
   { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
   { path: "/cycles", label: "Cycles", icon: CalendarRange, chord: "c" },
   { path: "/initiatives", label: "Initiatives", icon: Compass, chord: "n" },
   { path: "/roadmap", label: "Roadmap", icon: MapIcon, chord: "r" },
   { path: "/standup", label: "Standup", icon: Target, chord: "u" },
+  { path: "/time", label: "Time", icon: Clock, chord: "t", onlyWhenTimeTracking: true },
   { path: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
   { path: "/settings/plugins", label: "Plugins", icon: Plug, chord: "l" },
   { path: "/settings", label: "Settings", icon: Settings, chord: "," },
@@ -51,10 +63,15 @@ export function Sidebar({
   const pathname = usePathname();
   const router = useRouter();
   const mod = useModKeyLabel();
+  const workspace = useMaybeWorkspace();
+  const timeTrackingEnabled = workspace?.timeTrackingEnabled ?? false;
 
   const nav = useMemo(
-    () => NAV.map((n) => ({ ...n, href: `/w/${slug}${n.path}` })),
-    [slug],
+    () =>
+      NAV.filter((n) => (n.onlyWhenTimeTracking ? timeTrackingEnabled : true)).map(
+        (n) => ({ ...n, href: `/w/${slug}${n.path}` }),
+      ),
+    [slug, timeTrackingEnabled],
   );
 
   const chordMap = useMemo(() => {
@@ -63,9 +80,17 @@ export function Sidebar({
     // `g n` is documented as "new initiative" in Phase 3 — overrides the
     // plain nav entry to auto-open the dialog via ?new.
     m["n"] = () => router.push(`/w/${slug}/initiatives?new`);
+    // `g b` — "browse inbox" — spec-documented alias for `g i`.
+    m["b"] = () => router.push(`/w/${slug}/inbox`);
     return m;
   }, [nav, router, slug]);
   useChord("g", chordMap);
+
+  // Inbox badge — shows a count for unread mentions + stalled + unblocked.
+  const { data: inboxBadge } = trpc.inbox.badge.useQuery(undefined, {
+    refetchOnWindowFocus: true,
+    staleTime: 60_000,
+  });
 
   // `c` → jump to the current cycle's detail page, falling back to /cycles
   // if no ACTIVE cycle exists. The query stays cached by tRPC so pressing
@@ -105,8 +130,10 @@ export function Sidebar({
       </button>
 
       <nav className="mt-4 flex flex-col gap-px px-2">
-        {nav.map(({ href, path, label, icon: Icon, chord }) => {
+        {nav.map(({ href, path, label, icon: Icon, chord, badge }) => {
           const active = pathname === href || pathname?.startsWith(`${href}/`);
+          const badgeCount =
+            badge === "inbox" ? inboxBadge?.count ?? 0 : 0;
           return (
             <Link
               key={path}
@@ -121,6 +148,11 @@ export function Sidebar({
             >
               <Icon className="mr-2 h-3.5 w-3.5" />
               <span>{label}</span>
+              {badgeCount > 0 && (
+                <span className="ml-2 rounded-full bg-ember/15 px-1.5 py-0 font-mono text-[10px] text-ember">
+                  {badgeCount > 99 ? "99+" : badgeCount}
+                </span>
+              )}
               <span className="ml-auto flex items-center gap-px text-[10px] text-muted-foreground/70">
                 <span className="kbd !px-1 !text-[9px]">G</span>
                 <span className="kbd !px-1 !text-[9px]">{chord.toUpperCase()}</span>
