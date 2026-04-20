@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "slug": "issue-triage",
+  "name": "Issue Triage",
+  "description": "Auto-labels and prioritizes newly created issues using keyword heuristics.",
+  "version": "0.1.0",
+  "author": { "name": "Forge Labs" },
+  "scopes": ["READ_ISSUES", "WRITE_ISSUES"],
+  "events": ["ISSUE_CREATED"],
+  "skills": [
+    {
+      "name": "triage",
+      "description": "Classify an issue and suggest a priority + labels.",
+      "runtime": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueId": { "type": "string" },
+          "title": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "required": ["issueId", "title"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "priority": { "type": "string", "enum": ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] },
+          "labels": { "type": "array", "items": { "type": "string" } },
+          "confidence": { "type": "number" }
+        }
+      }
+    }
+  ],
+  "rateLimit": { "perMinute": 60 }
+}

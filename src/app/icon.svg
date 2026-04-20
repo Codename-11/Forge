@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Forge">
+  <rect width="256" height="256" rx="48" fill="#d97706"/>
+  <path
+    d="M 12 114 L 32 90 L 196 90 L 220 74 L 220 116 L 200 116 L 200 104 L 160 104 L 160 176 L 196 176 L 220 198 L 36 198 L 60 176 L 96 176 L 96 104 L 32 104 Z"
+    fill="#fef3e6"
+  />
+</svg>
