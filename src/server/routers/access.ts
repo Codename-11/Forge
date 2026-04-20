@@ -11,6 +11,77 @@ function generateApiKey(prefix = "forge_sk"): { raw: string; hashed: string; pre
   return { raw, hashed, prefix: raw.slice(0, prefix.length + 9) };
 }
 
+type NarrowIds = {
+  projectIds?: string[];
+  labelIds?: string[];
+  initiativeIds?: string[];
+};
+
+/**
+ * Confirm every id in `ids` belongs to `workspaceId` for the given entity.
+ * Used when creating/updating API keys with narrowing — we don't want a
+ * caller scoping a key to a project that isn't in their workspace.
+ */
+async function assertIdsInWorkspace(
+  db: import("@prisma/client").PrismaClient,
+  workspaceId: string,
+  ids: NarrowIds,
+): Promise<void> {
+  const checks: Array<Promise<void>> = [];
+  if (ids.projectIds?.length) {
+    const unique = Array.from(new Set(ids.projectIds));
+    checks.push(
+      db.project
+        .count({ where: { id: { in: unique }, workspaceId } })
+        .then((n) => {
+          if (n !== unique.length) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "One or more projectIds not in this workspace.",
+            });
+          }
+        }),
+    );
+  }
+  if (ids.labelIds?.length) {
+    const unique = Array.from(new Set(ids.labelIds));
+    checks.push(
+      db.label
+        .count({ where: { id: { in: unique }, workspaceId } })
+        .then((n) => {
+          if (n !== unique.length) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "One or more labelIds not in this workspace.",
+            });
+          }
+        }),
+    );
+  }
+  if (ids.initiativeIds?.length) {
+    const unique = Array.from(new Set(ids.initiativeIds));
+    checks.push(
+      db.initiative
+        .count({ where: { id: { in: unique }, workspaceId } })
+        .then((n) => {
+          if (n !== unique.length) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "One or more initiativeIds not in this workspace.",
+            });
+          }
+        }),
+    );
+  }
+  await Promise.all(checks);
+}
+
+const narrowingInput = {
+  projectIds: z.array(z.string().cuid()).default([]),
+  labelIds: z.array(z.string().cuid()).default([]),
+  initiativeIds: z.array(z.string().cuid()).default([]),
+};
+
 /**
  * Workspace-level API keys — not tied to a plugin. Scoped to the user who
  * creates them so they can drive MCP + webhook integrations from external
@@ -27,6 +98,9 @@ export const accessRouter = router({
         name: true,
         prefix: true,
         scopes: true,
+        projectIds: true,
+        labelIds: true,
+        initiativeIds: true,
         createdAt: true,
         lastUsedAt: true,
         expiresAt: true,
@@ -42,9 +116,15 @@ export const accessRouter = router({
         name: z.string().min(1).max(80),
         scopes: z.array(z.nativeEnum(PluginScope)).min(1),
         expiresInDays: z.number().int().min(1).max(365).optional(),
+        ...narrowingInput,
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertIdsInWorkspace(ctx.db, ctx.workspaceId, {
+        projectIds: input.projectIds,
+        labelIds: input.labelIds,
+        initiativeIds: input.initiativeIds,
+      });
       const { raw, hashed, prefix } = generateApiKey();
       const row = await ctx.db.apiKey.create({
         data: {
@@ -54,6 +134,9 @@ export const accessRouter = router({
           hashedKey: hashed,
           prefix,
           scopes: input.scopes,
+          projectIds: input.projectIds,
+          labelIds: input.labelIds,
+          initiativeIds: input.initiativeIds,
           expiresAt: input.expiresInDays
             ? new Date(Date.now() + input.expiresInDays * 86_400_000)
             : undefined,
@@ -65,10 +148,63 @@ export const accessRouter = router({
         name: row.name,
         prefix: row.prefix,
         scopes: row.scopes,
+        projectIds: row.projectIds,
+        labelIds: row.labelIds,
+        initiativeIds: row.initiativeIds,
         createdAt: row.createdAt,
         expiresAt: row.expiresAt,
         rawKey: raw,
       };
+    }),
+
+  /**
+   * Edit a key's name or narrowing metadata. Hash and prefix are immutable —
+   * for a new secret, call `rotate`. Scope array is also immutable here;
+   * shrinking/expanding scopes means issuing a new key.
+   */
+  update: adminProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        name: z.string().min(1).max(80).optional(),
+        projectIds: z.array(z.string().cuid()).optional(),
+        labelIds: z.array(z.string().cuid()).optional(),
+        initiativeIds: z.array(z.string().cuid()).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const prior = await ctx.db.apiKey.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId, pluginId: null },
+      });
+      if (!prior) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertIdsInWorkspace(ctx.db, ctx.workspaceId, {
+        projectIds: input.projectIds,
+        labelIds: input.labelIds,
+        initiativeIds: input.initiativeIds,
+      });
+      return ctx.db.apiKey.update({
+        where: { id: prior.id },
+        data: {
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.projectIds !== undefined ? { projectIds: input.projectIds } : {}),
+          ...(input.labelIds !== undefined ? { labelIds: input.labelIds } : {}),
+          ...(input.initiativeIds !== undefined
+            ? { initiativeIds: input.initiativeIds }
+            : {}),
+        },
+        select: {
+          id: true,
+          name: true,
+          prefix: true,
+          scopes: true,
+          projectIds: true,
+          labelIds: true,
+          initiativeIds: true,
+          createdAt: true,
+          expiresAt: true,
+          revokedAt: true,
+        },
+      });
     }),
 
   revoke: adminProcedure
@@ -119,6 +255,11 @@ export const accessRouter = router({
             hashedKey: hashed,
             prefix,
             scopes: prior.scopes,
+            // Preserve narrowing on rotation — ops don't want to re-scope
+            // an agent's key just because the secret changed.
+            projectIds: prior.projectIds,
+            labelIds: prior.labelIds,
+            initiativeIds: prior.initiativeIds,
             expiresAt: prior.expiresAt
               ? new Date(
                   Date.now() +
@@ -133,6 +274,9 @@ export const accessRouter = router({
         name: next.name,
         prefix: next.prefix,
         scopes: next.scopes,
+        projectIds: next.projectIds,
+        labelIds: next.labelIds,
+        initiativeIds: next.initiativeIds,
         createdAt: next.createdAt,
         expiresAt: next.expiresAt,
         rawKey: raw,

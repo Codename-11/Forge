@@ -1,8 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, Priority, WorkItemKind } from "@prisma/client";
+import { EventKind, Priority, RelationKind, WorkItemKind } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import {
+  assertKeyScope,
+  buildKeyScopeWhere,
+} from "@/server/services/api-key-auth";
 
 const cursorSchema = z.string().optional();
 
@@ -21,10 +25,12 @@ export const issueRouter = router({
   list: workspaceProcedure
     .input(filterSchema.default({ includeDone: true, limit: 50 }))
     .query(async ({ ctx, input }) => {
+      const keyWhere = buildKeyScopeWhere(ctx, "issue");
       const rows = await ctx.db.issue.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           deletedAt: null,
+          ...keyWhere,
           ...(input.projectId ? { projectId: input.projectId } : {}),
           ...(input.statusId ? { statusId: input.statusId } : {}),
           ...(input.assigneeId ? { assignees: { some: { userId: input.assigneeId } } } : {}),
@@ -54,7 +60,8 @@ export const issueRouter = router({
       });
       let nextCursor: string | undefined;
       if (rows.length > input.limit) nextCursor = rows.pop()!.id;
-      return { items: rows, nextCursor };
+      const withFlags = await annotateUnblocked(ctx, rows);
+      return { items: withFlags, nextCursor };
     }),
 
   byId: workspaceProcedure
@@ -308,12 +315,14 @@ export const issueRouter = router({
         limit: z.number().int().min(1).max(100).default(50),
       }),
     )
-    .query(({ ctx, input }) =>
-      ctx.db.issue.findMany({
+    .query(async ({ ctx, input }) => {
+      const keyWhere = buildKeyScopeWhere(ctx, "issue");
+      const rows = await ctx.db.issue.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           deletedAt: null,
           queued: true,
+          ...keyWhere,
           ...(input.includeClaimed ? {} : { claimedAt: null }),
         },
         orderBy: [{ claimedAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
@@ -323,6 +332,149 @@ export const issueRouter = router({
           project: { select: { id: true, name: true, key: true, color: true } },
           claimedBy: { select: { id: true, name: true, email: true, image: true } },
         },
-      }),
-    ),
+      });
+      return annotateUnblocked(ctx, rows);
+    }),
+
+  /**
+   * Claim an issue for this user (or for the API key's linked user).
+   *
+   * - If `issueId` is omitted, pick the highest-priority, oldest-queued,
+   *   unclaimed, unblocked issue that respects any active ApiKey narrowing.
+   * - If `issueId` is provided, validate the key scope and claim it.
+   * An issue is "blocked" when any incoming BLOCKED_BY (or outgoing BLOCKS
+   * where it's the `fromIssue`) relation points to another issue whose
+   * status category is not DONE or CANCELED.
+   */
+  claim: workspaceProcedure
+    .input(
+      z
+        .object({
+          issueId: z.string().cuid().optional(),
+          claimTtlMinutes: z.number().int().min(1).max(1440).default(60),
+        })
+        .default({}),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      const expiresAt = new Date(Date.now() + input.claimTtlMinutes * 60_000);
+
+      if (input.issueId) {
+        await assertKeyScope(ctx, { entity: "issue", id: input.issueId });
+        return ctx.db.$transaction(async (tx) => {
+          const issue = await tx.issue.findFirstOrThrow({
+            where: {
+              id: input.issueId,
+              workspaceId: ctx.workspaceId,
+              deletedAt: null,
+            },
+          });
+          if (issue.claimedAt && issue.claimedById !== userId) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "Issue already claimed by another agent.",
+            });
+          }
+          return tx.issue.update({
+            where: { id: issue.id },
+            data: {
+              claimedById: userId,
+              claimedAt: new Date(),
+              claimExpiresAt: expiresAt,
+            },
+            include: { status: true },
+          });
+        });
+      }
+
+      // Agent "give me something to work on" flow — scan the queue for an
+      // unclaimed, unblocked candidate.
+      const keyWhere = buildKeyScopeWhere(ctx, "issue");
+      const blockedIds = await findBlockedIssueIds(ctx);
+      const candidate = await ctx.db.issue.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+          queued: true,
+          claimedAt: null,
+          status: { category: { notIn: ["DONE", "CANCELED"] } },
+          ...keyWhere,
+          ...(blockedIds.size ? { id: { notIn: [...blockedIds] } } : {}),
+        },
+        orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
+      });
+      if (!candidate) return { claimed: null } as const;
+      const updated = await ctx.db.issue.update({
+        where: { id: candidate.id },
+        data: {
+          claimedById: userId,
+          claimedAt: new Date(),
+          claimExpiresAt: expiresAt,
+        },
+        include: { status: true, project: true },
+      });
+      return { claimed: updated };
+    }),
 });
+
+// -- Helpers ----------------------------------------------------------------
+
+type IssueRow = { id: string };
+
+/**
+ * Return the set of issue ids in `ctx.workspaceId` that are blocked by at
+ * least one non-completed dependency. Computed in one query so callers can
+ * exclude via `id: { notIn: [...] }` without iterating.
+ */
+async function findBlockedIssueIds(ctx: {
+  db: typeof import("@/server/db").db;
+  workspaceId: string;
+}): Promise<Set<string>> {
+  const blockers = await ctx.db.issueRelation.findMany({
+    where: {
+      workspaceId: ctx.workspaceId,
+      OR: [
+        {
+          kind: RelationKind.BLOCKED_BY,
+          fromIssue: {
+            status: { category: { notIn: ["DONE", "CANCELED"] } },
+            deletedAt: null,
+          },
+        },
+        {
+          kind: RelationKind.BLOCKS,
+          toIssue: {
+            status: { category: { notIn: ["DONE", "CANCELED"] } },
+            deletedAt: null,
+          },
+        },
+      ],
+    },
+    select: { fromIssueId: true, toIssueId: true, kind: true },
+  });
+  const ids = new Set<string>();
+  for (const r of blockers) {
+    // BLOCKED_BY: fromIssue is the blocker, toIssue is blocked.
+    if (r.kind === RelationKind.BLOCKED_BY) ids.add(r.toIssueId);
+    // BLOCKS: fromIssue is blocked by toIssue -> wait, semantics: BLOCKS
+    // says fromIssue blocks toIssue, so toIssue is the blocked one.
+    // We select rows where the *blocker* side is still open, so toIssueId
+    // is the issue that can't start yet.
+    if (r.kind === RelationKind.BLOCKS) ids.add(r.fromIssueId);
+  }
+  return ids;
+}
+
+/**
+ * Attach an `unblocked` boolean to a batch of issues. Used in agent-facing
+ * surfaces (queue, list) so the UI can render a shield indicator without
+ * re-fetching the relation graph.
+ */
+async function annotateUnblocked<T extends IssueRow>(
+  ctx: { db: typeof import("@/server/db").db; workspaceId: string },
+  rows: T[],
+): Promise<Array<T & { unblocked: boolean }>> {
+  if (!rows.length) return [];
+  const blocked = await findBlockedIssueIds(ctx);
+  return rows.map((r) => ({ ...r, unblocked: !blocked.has(r.id) }));
+}

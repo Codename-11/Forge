@@ -14,3 +14,5 @@ test-results
 *.log
 prisma/migrations/dev.db*
 next-env.d.ts
+tsconfig.tsbuildinfo
+pnpm-workspace.yaml

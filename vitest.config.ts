@@ -7,6 +7,7 @@ export default defineConfig({
     include: [
       "tests/unit/**/*.test.ts",
       "src/server/routers/__tests__/**/*.test.ts",
+      "src/server/services/__tests__/**/*.test.ts",
     ],
     globals: false,
     // Router integration tests hit the real Postgres + Redis and need a
