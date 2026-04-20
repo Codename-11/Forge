@@ -13,7 +13,7 @@ export const projectRouter = router({
       z
         .object({
           archived: z.boolean().default(false),
-          limit: z.number().min(1).max(100).default(50),
+          limit: z.number().min(1).max(500).default(50),
           cursor: cursorSchema,
         })
         .default({ archived: false, limit: 50 }),
