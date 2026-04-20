@@ -1,7 +1,8 @@
 # Forge
 
 A minimalist, keyboard-driven project management platform with a pluggable agent surface.
-Linear-style issues and projects. Nothing-inspired, warm-earthy UI. First-class MCP.
+Linear-style issues, projects, cycles, initiatives, and time tracking across any number of
+workspaces. Nothing-inspired, warm-earthy UI. First-class MCP.
 
 ## Stack
 
