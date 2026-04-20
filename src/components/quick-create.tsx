@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useHotkey } from "@/lib/keyboard";
 import { trpc } from "@/lib/trpc";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 type Priority = (typeof PRIORITIES)[number];
@@ -21,6 +22,7 @@ export function QuickCreate() {
   const [labelIds, setLabelIds] = useState<string[]>([]);
   const [templateId, setTemplateId] = useState<string>("");
   const router = useRouter();
+  const ws = useMaybeWorkspace();
   const utils = trpc.useUtils();
   const { data: projects } = trpc.project.list.useQuery(
     { archived: false, limit: 100 },
@@ -33,7 +35,8 @@ export function QuickCreate() {
       toast.success(`Created #${issue.number}`);
       close();
       await utils.issue.list.invalidate();
-      router.push(`/issues/${issue.id}`);
+      const base = ws ? `/w/${ws.slug}` : "";
+      router.push(`${base}/issues/${issue.id}`);
     },
     onError: (err) => toast.error(err.message),
   });

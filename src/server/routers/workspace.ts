@@ -23,9 +23,43 @@ export const workspaceRouter = router({
         memberships: { some: { userId: ctx.session.user.id } },
       },
       orderBy: { createdAt: "asc" },
-      select: { id: true, slug: true, name: true, key: true, avatarUrl: true },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        key: true,
+        avatarUrl: true,
+        memberships: {
+          where: { userId: ctx.session.user.id },
+          select: { role: true },
+          take: 1,
+        },
+      },
     });
   }),
+
+  // Minimal mutation used by the workspace switcher + shell layout to
+  // remember the last-visited workspace across sign-ins. Agent C will
+  // extend the workspace router with update/archive/delete; this safe
+  // one-liner stays in Agent E's lane per the migration plan.
+  setLastWorkspace: protectedProcedure
+    .input(z.object({ workspaceId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const membership = await ctx.db.membership.findUnique({
+        where: {
+          userId_workspaceId: {
+            userId: ctx.session.user.id,
+            workspaceId: input.workspaceId,
+          },
+        },
+      });
+      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+      return ctx.db.user.update({
+        where: { id: ctx.session.user.id },
+        data: { lastWorkspaceId: input.workspaceId },
+        select: { id: true, lastWorkspaceId: true },
+      });
+    }),
 
   current: workspaceProcedure.query(async ({ ctx }) => {
     return ctx.db.workspace.findUniqueOrThrow({
@@ -38,16 +72,30 @@ export const workspaceRouter = router({
   }),
 
   create: protectedProcedure
-    .input(z.object({ slug: slugSchema, name: z.string().min(1).max(80), key: keySchema }))
+    .input(
+      z.object({
+        slug: slugSchema,
+        name: z.string().min(1).max(80),
+        key: keySchema,
+        cycleLengthDays: z.number().int().min(1).max(90).optional(),
+        timeTrackingEnabled: z.boolean().optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.db.workspace.findFirst({
         where: { OR: [{ slug: input.slug }, { key: input.key }] },
       });
       if (existing) throw new TRPCError({ code: "CONFLICT", message: "Slug or key in use." });
 
+      // NOTE: Agent C will extend this with bucket seeding + richer
+      // onboarding (default statuses come from a seed helper later).
       return ctx.db.workspace.create({
         data: {
-          ...input,
+          slug: input.slug,
+          name: input.name,
+          key: input.key,
+          cycleLengthDays: input.cycleLengthDays ?? 7,
+          timeTrackingEnabled: input.timeTrackingEnabled ?? false,
           memberships: { create: { userId: ctx.session.user.id, role: Role.OWNER } },
           statuses: {
             create: [
@@ -61,6 +109,56 @@ export const workspaceRouter = router({
           },
         },
       });
+    }),
+
+  // Mutations below are the minimum surface required by the workspace
+  // settings UI shipped in Phase 2E. Agent C owns the fuller workspace
+  // router overhaul — keep any extensions here tight and additive.
+  update: adminProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(80).optional(),
+        avatarUrl: z.string().url().max(512).nullable().optional(),
+        cycleLengthDays: z.number().int().min(1).max(90).optional(),
+        cycleCooldownDays: z.number().int().min(0).max(30).optional(),
+        timeTrackingEnabled: z.boolean().optional(),
+        attachmentQuotaMb: z.number().int().min(0).max(1_024_000).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.workspace.update({
+        where: { id: ctx.workspaceId },
+        data: input,
+      });
+    }),
+
+  archive: adminProcedure.mutation(async ({ ctx }) => {
+    if (ctx.membership.role !== Role.OWNER) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only owners can archive a workspace." });
+    }
+    return ctx.db.workspace.update({
+      where: { id: ctx.workspaceId },
+      data: { deletedAt: new Date() },
+    });
+  }),
+
+  delete: adminProcedure
+    .input(z.object({ confirmName: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.membership.role !== Role.OWNER) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only owners can delete a workspace." });
+      }
+      const ws = await ctx.db.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { id: true, name: true },
+      });
+      if (input.confirmName !== ws.name) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Confirmation name does not match workspace name.",
+        });
+      }
+      return ctx.db.workspace.delete({ where: { id: ctx.workspaceId } });
     }),
 
   me: workspaceProcedure.query(async ({ ctx }) => {

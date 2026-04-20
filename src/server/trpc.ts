@@ -11,18 +11,24 @@ import type { NextRequest } from "next/server";
 /**
  * tRPC context — carries session + db + request metadata.
  *
- * `workspaceId` is resolved from the `x-workspace-id` header (client sets it)
- * OR from path params in route handlers that need explicit scoping. Procedures
- * that require workspace scope go through `workspaceProcedure` which validates
- * membership and role.
+ * Workspace scoping is resolved in priority order:
+ *   1. `x-workspace-slug` header (preferred — set by the tRPC link that reads
+ *      the `/w/[slug]` segment from window.location).
+ *   2. `x-workspace-id` header (legacy callers / focus bootstrap).
+ *
+ * Procedures that require workspace scope go through `workspaceProcedure`
+ * which validates membership and role. The header → id lookup happens there
+ * so the context stays cheap for public + protected routes.
  */
 export async function createContext(req: NextRequest) {
   const session = (await auth()) as Session | null;
   const workspaceId = req.headers.get("x-workspace-id");
+  const workspaceSlug = req.headers.get("x-workspace-slug");
   return {
     db,
     session,
     workspaceId,
+    workspaceSlug,
     ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
     userAgent: req.headers.get("user-agent"),
   };
@@ -54,17 +60,32 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
 });
 
 export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-  if (!ctx.workspaceId) {
+  // Resolve slug → id if the caller only sent a slug. The URL segment
+  // `/w/[slug]` is the source of truth for the client shell, so most
+  // modern calls arrive via `x-workspace-slug`. Legacy callers (focus
+  // bootstrap, external tooling) may still send `x-workspace-id`.
+  let workspaceId = ctx.workspaceId;
+  if (!workspaceId && ctx.workspaceSlug) {
+    const ws = await ctx.db.workspace.findUnique({
+      where: { slug: ctx.workspaceSlug },
+      select: { id: true },
+    });
+    if (!ws) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found." });
+    }
+    workspaceId = ws.id;
+  }
+  if (!workspaceId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Missing x-workspace-id header.",
+      message: "Missing x-workspace-slug or x-workspace-id header.",
     });
   }
   const membership = await ctx.db.membership.findUnique({
-    where: { userId_workspaceId: { userId: ctx.session.user.id, workspaceId: ctx.workspaceId } },
+    where: { userId_workspaceId: { userId: ctx.session.user.id, workspaceId } },
   });
   if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
-  return next({ ctx: { ...ctx, workspaceId: ctx.workspaceId, membership } });
+  return next({ ctx: { ...ctx, workspaceId, membership } });
 });
 
 export const adminProcedure = workspaceProcedure.use(async ({ ctx, next }) => {

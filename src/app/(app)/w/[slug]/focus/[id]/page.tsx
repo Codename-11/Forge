@@ -7,60 +7,21 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
-import { TrpcProvider } from "@/lib/trpc-provider";
 import { formatIssueId } from "@/lib/utils";
+import { useWorkspace } from "@/hooks/use-workspace";
 
 /**
- * Stripped fullscreen view for deep work on a single issue.
- * Outside the (app) layout — no sidebar, no topbar, just the work.
+ * Fullscreen deep-work surface for a single issue. Rendered under
+ * `/w/[slug]/focus/[id]`, so workspace context + tRPC are seeded by the
+ * workspace shell layout. To still feel chromeless the view overlays the
+ * sidebar via `fixed inset-0 z-40`; pressing "Exit focus" just navigates
+ * back to the issue detail which re-renders the normal shell.
  */
 export default function FocusPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  return (
-    <FocusBoot id={id}>
-      <FocusInner id={id} />
-    </FocusBoot>
-  );
-}
-
-// The TrpcProvider needs a workspaceId; we fetch it from a thin server-fetch
-// via `workspace.current` — so wrap with a bootstrap that does `workspace.list`.
-function FocusBoot({ id, children }: { id: string; children: React.ReactNode }) {
-  // The provider needs a workspaceId header; without it calls fail.
-  // Use the standard client: do a lightweight fetch to an unauthenticated
-  // endpoint? Simpler — reuse the existing auth session to hit a small
-  // `/api/focus-bootstrap` OR require the user to already be signed in and
-  // pull from local storage. Quick approach: hit our existing tRPC from
-  // TrpcProvider with no header, which returns the first membership via
-  // `workspace.list`. TrpcProvider requires the header to be known, so we
-  // bootstrap by fetching workspace.list via plain fetch.
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const res = await fetch(
-        "/api/trpc/workspace.list?batch=1&input=" +
-          encodeURIComponent(JSON.stringify({ "0": { json: null, meta: { values: { "0": ["undefined"] } } } })),
-      );
-      const data = await res.json();
-      const row = data?.[0]?.result?.data?.json?.[0];
-      if (!cancelled && row?.id) setWorkspaceId(row.id);
-    })().catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  if (!workspaceId)
-    return (
-      <div className="grid h-svh place-items-center bg-background text-sm text-muted-foreground">
-        Loading focus…
-      </div>
-    );
-  return <TrpcProvider workspaceId={workspaceId}>{children}</TrpcProvider>;
-}
-
-function FocusInner({ id }: { id: string }) {
   const router = useRouter();
+  const workspace = useWorkspace();
+  const slug = workspace.slug;
   const { data: issue, isLoading } = trpc.issue.byId.useQuery({ id });
   const { data: statuses } = trpc.status.list.useQuery();
   const { data: ws } = trpc.workspace.current.useQuery();
@@ -90,7 +51,7 @@ function FocusInner({ id }: { id: string }) {
 
   if (isLoading || !issue)
     return (
-      <div className="grid h-svh place-items-center bg-background text-sm text-muted-foreground">
+      <div className="fixed inset-0 z-40 grid place-items-center bg-background text-sm text-muted-foreground">
         Loading…
       </div>
     );
@@ -103,11 +64,11 @@ function FocusInner({ id }: { id: string }) {
     if (!done) return toast.error("No 'Done' status defined.");
     update.mutate({ id: issue!.id, statusId: done.id });
     toast.success("Marked done.");
-    setTimeout(() => router.push("/dashboard"), 400);
+    setTimeout(() => router.push(`/w/${slug}/dashboard`), 400);
   }
 
   return (
-    <main className="flex h-svh flex-col bg-background">
+    <main className="fixed inset-0 z-40 flex h-svh flex-col bg-background">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-6 text-xs">
         <Button variant="ghost" size="sm" onClick={() => router.back()} className="gap-1.5">
           <ArrowLeft className="h-3.5 w-3.5" /> Exit focus

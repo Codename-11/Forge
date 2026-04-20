@@ -7,6 +7,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
 const priorityGlyph: Record<string, string> = {
   URGENT: "!!!",
@@ -44,6 +45,8 @@ export function IssueList({
   });
   const { data: statuses } = trpc.status.list.useQuery();
   const utils = trpc.useUtils();
+  const ws = useMaybeWorkspace();
+  const base = ws ? `/w/${ws.slug}` : "";
 
   const items = useMemo(() => data?.items ?? [], [data]);
   const filtered = authorId ? items.filter((i) => i.authorId === authorId) : items;
@@ -190,7 +193,7 @@ export function IssueList({
                 />
               )}
               <Link
-                href={`/issues/${issue.id}`}
+                href={`${base}/issues/${issue.id}`}
                 className="row h-10 min-w-0 flex-1 gap-3"
               >
                 <span className="w-4 text-center font-mono text-[11px] text-muted-foreground">

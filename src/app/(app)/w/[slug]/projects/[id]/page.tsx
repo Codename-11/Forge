@@ -12,10 +12,13 @@ import { Dialog } from "@/components/ui/dialog";
 import { ViewToggle, useViewPref } from "@/components/view-toggle";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
+import { useWorkspace } from "@/hooks/use-workspace";
 
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const workspace = useWorkspace();
+  const slug = workspace.slug;
   const { data: project, error, refetch } = trpc.project.byId.useQuery({ id });
   const { data: ws } = trpc.workspace.current.useQuery();
   const [view, setView] = useViewPref(`project:${id}`, "board");
@@ -24,7 +27,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const archive = trpc.project.archive.useMutation({
     onSuccess: () => {
       toast.success("Project archived.");
-      router.push("/projects");
+      router.push(`/w/${slug}/projects`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -32,7 +35,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const del = trpc.project.softDelete.useMutation({
     onSuccess: () => {
       toast.success("Project deleted.");
-      router.push("/projects");
+      router.push(`/w/${slug}/projects`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -47,7 +50,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             variant="outline"
             size="sm"
             className="mt-4"
-            onClick={() => router.push("/projects")}
+            onClick={() => router.push(`/w/${slug}/projects`)}
           >
             Back to projects
           </Button>

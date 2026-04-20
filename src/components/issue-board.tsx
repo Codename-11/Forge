@@ -4,6 +4,7 @@ import Link from "next/link";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
 /**
  * Status-column kanban board. Drag-and-drop is intentionally left as a
@@ -26,6 +27,8 @@ export function IssueBoard({
     projectId,
     assigneeId,
   });
+  const ws = useMaybeWorkspace();
+  const base = ws ? `/w/${ws.slug}` : "";
 
   const byStatus = useMemo(() => {
     const map = new Map<string, typeof issues extends { items: infer U } ? U : never>();
@@ -60,7 +63,7 @@ export function IssueBoard({
               {column.map((i) => (
                 <Link
                   key={i.id}
-                  href={`/issues/${i.id}`}
+                  href={`${base}/issues/${i.id}`}
                   className="block rounded-md border border-border bg-background p-2 text-left hover:border-ember/40"
                 >
                   <div className="flex items-center gap-2">
