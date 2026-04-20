@@ -15,52 +15,57 @@ import {
   LogOut,
   User as UserIcon,
   ChevronUp,
+  Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Avatar } from "@/components/ui/avatar";
 import { useModKeyLabel } from "@/lib/platform";
 import { useChord } from "@/lib/keyboard";
 import { signOutAction } from "@/server/actions/auth";
+import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 
-const nav = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
-  { href: "/inbox", label: "Inbox", icon: Inbox, chord: "i" },
-  { href: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
-  { href: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
-  { href: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
-  { href: "/settings/plugins", label: "Plugins", icon: Plug, chord: "l" },
-  { href: "/settings", label: "Settings", icon: Settings, chord: "," },
-];
+const NAV = [
+  { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
+  { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i" },
+  { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
+  { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
+  { path: "/standup", label: "Standup", icon: Target, chord: "u" },
+  { path: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
+  { path: "/settings/plugins", label: "Plugins", icon: Plug, chord: "l" },
+  { path: "/settings", label: "Settings", icon: Settings, chord: "," },
+] as const;
 
 export function Sidebar({
-  workspace,
+  slug,
   user,
 }: {
-  workspace: { name: string; key: string; avatarUrl?: string | null };
+  slug: string;
   user: { name?: string | null; image?: string | null; email: string };
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const mod = useModKeyLabel();
 
+  const nav = useMemo(
+    () => NAV.map((n) => ({ ...n, href: `/w/${slug}${n.path}` })),
+    [slug],
+  );
+
   const chordMap = useMemo(() => {
     const m: Record<string, () => void> = {};
     for (const n of nav) m[n.chord] = () => router.push(n.href);
     return m;
-  }, [router]);
+  }, [nav, router]);
   useChord("g", chordMap);
 
   return (
     <aside className="flex h-svh w-56 flex-col border-r border-border bg-card/40">
-      <div className="flex h-12 items-center gap-2 px-4">
-        <Avatar name={workspace.name} image={workspace.avatarUrl} size={20} />
-        <span className="truncate text-[13px] font-semibold tracking-tight">{workspace.name}</span>
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground">{workspace.key}</span>
+      <div className="px-3 pt-3">
+        <WorkspaceSwitcher />
       </div>
 
       <button
         data-command-palette
-        className="mx-3 mt-1 flex h-7 items-center gap-2 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground hover:bg-subtle"
+        className="mx-3 mt-3 flex h-7 items-center gap-2 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground hover:bg-subtle"
       >
         <Search className="h-3.5 w-3.5" />
         <span>Search or jump</span>
@@ -77,11 +82,11 @@ export function Sidebar({
       </button>
 
       <nav className="mt-4 flex flex-col gap-px px-2">
-        {nav.map(({ href, label, icon: Icon, chord }) => {
+        {nav.map(({ href, path, label, icon: Icon, chord }) => {
           const active = pathname === href || pathname?.startsWith(`${href}/`);
           return (
             <Link
-              key={href}
+              key={path}
               href={href}
               className={cn(
                 "row h-7 rounded-md px-2 text-[13px]",
@@ -102,14 +107,16 @@ export function Sidebar({
         })}
       </nav>
 
-      <UserMenu user={user} />
+      <UserMenu slug={slug} user={user} />
     </aside>
   );
 }
 
 function UserMenu({
+  slug,
   user,
 }: {
+  slug: string;
   user: { name?: string | null; image?: string | null; email: string };
 }) {
   const [open, setOpen] = useState(false);
@@ -141,7 +148,7 @@ function UserMenu({
           open && "bg-subtle/60",
         )}
       >
-        <Avatar name={user.name} image={user.image} size={22} />
+        <AvatarFallback user={user} />
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-medium">{user.name ?? user.email}</div>
           <div className="truncate text-[10px] text-muted-foreground">{user.email}</div>
@@ -169,13 +176,22 @@ function UserMenu({
             Account settings
           </Link>
           <Link
-            href="/settings"
+            href={`/w/${slug}/settings/workspace`}
             onClick={() => setOpen(false)}
             className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-subtle"
             role="menuitem"
           >
             <Settings className="h-3.5 w-3.5 text-muted-foreground" />
             Workspace settings
+          </Link>
+          <Link
+            href="/settings/workspaces"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-subtle"
+            role="menuitem"
+          >
+            <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+            Manage workspaces
           </Link>
           <form action={signOutAction} className="border-t border-border">
             <button
@@ -190,5 +206,35 @@ function UserMenu({
         </div>
       )}
     </div>
+  );
+}
+
+function AvatarFallback({
+  user,
+}: {
+  user: { name?: string | null; image?: string | null; email: string };
+}) {
+  if (user.image) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return (
+      <img
+        src={user.image}
+        alt=""
+        width={22}
+        height={22}
+        className="rounded-full object-cover"
+      />
+    );
+  }
+  const source = user.name ?? user.email;
+  const initials = source
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? "")
+    .join("");
+  return (
+    <span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-subtle font-mono text-[10px] text-muted-foreground">
+      {initials || "·"}
+    </span>
   );
 }

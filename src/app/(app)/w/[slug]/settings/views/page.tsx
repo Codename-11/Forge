@@ -11,6 +11,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { trpc } from "@/lib/trpc";
+import { useWorkspace } from "@/hooks/use-workspace";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 type Priority = (typeof PRIORITIES)[number];
@@ -34,6 +35,7 @@ const emptyFilters: Filters = {
 };
 
 export default function ViewsPage() {
+  const { slug } = useWorkspace();
   const { data: views, refetch } = trpc.view.list.useQuery();
   const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
   const { data: statuses } = trpc.status.list.useQuery();
@@ -91,7 +93,10 @@ export default function ViewsPage() {
                 <li key={v.id} className="flex items-center gap-3 px-4 py-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <Link href={`/issues${qs ? `?${qs}` : ""}`} className="font-medium hover:text-ember">
+                      <Link
+                        href={`/w/${slug}/issues${qs ? `?${qs}` : ""}`}
+                        className="font-medium hover:text-ember"
+                      >
                         {v.name}
                       </Link>
                       {v.userId ? <Badge>personal</Badge> : <Badge color="#7c3aed">shared</Badge>}

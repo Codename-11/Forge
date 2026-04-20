@@ -12,11 +12,14 @@ import {
   Inbox,
   Settings,
   Shield,
+  Target,
+  Users,
 } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { useHotkey } from "@/lib/keyboard";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
 type NavAction = {
   id: string;
@@ -38,6 +41,7 @@ type Item = NavAction | IssueResult;
 
 export function CommandPalette() {
   const router = useRouter();
+  const ws = useMaybeWorkspace();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [i, setI] = useState(0);
@@ -61,55 +65,89 @@ export function CommandPalette() {
     }
   }, [open]);
 
+  const wsPath = (p: string) => (ws ? `/w/${ws.slug}${p}` : p);
+
   const nav: NavAction[] = useMemo(
     () => [
       {
         id: "nav:dashboard",
         label: "Go to Dashboard",
         icon: LayoutDashboard,
-        run: () => router.push("/dashboard"),
+        run: () => router.push(wsPath("/dashboard")),
       },
-      { id: "nav:inbox", label: "Go to Inbox", icon: Inbox, run: () => router.push("/inbox") },
-      { id: "nav:issues", label: "Go to Issues", icon: CircleDot, run: () => router.push("/issues") },
+      {
+        id: "nav:inbox",
+        label: "Go to Inbox",
+        icon: Inbox,
+        run: () => router.push(wsPath("/inbox")),
+      },
+      {
+        id: "nav:issues",
+        label: "Go to Issues",
+        icon: CircleDot,
+        run: () => router.push(wsPath("/issues")),
+      },
       {
         id: "nav:projects",
         label: "Go to Projects",
         icon: FolderKanban,
-        run: () => router.push("/projects"),
+        run: () => router.push(wsPath("/projects")),
+      },
+      {
+        id: "nav:standup",
+        label: "Go to Standup",
+        icon: Target,
+        run: () => router.push(wsPath("/standup")),
       },
       {
         id: "nav:analytics",
         label: "Go to Analytics",
         icon: LineChart,
-        run: () => router.push("/analytics"),
+        run: () => router.push(wsPath("/analytics")),
       },
       {
         id: "nav:settings",
-        label: "Go to Settings",
+        label: "Go to Workspace settings",
         icon: Settings,
-        run: () => router.push("/settings"),
+        run: () => router.push(wsPath("/settings")),
       },
       {
         id: "nav:plugins",
         label: "Go to Plugins",
         icon: Plug,
-        run: () => router.push("/settings/plugins"),
+        run: () => router.push(wsPath("/settings/plugins")),
       },
       {
         id: "nav:admin",
         label: "Go to Admin portal",
         icon: Shield,
-        run: () => router.push("/settings/admin"),
+        run: () => router.push(wsPath("/settings/admin")),
+      },
+      {
+        id: "nav:account",
+        label: "Go to Account settings",
+        icon: Settings,
+        run: () => router.push("/settings/account"),
+      },
+      {
+        id: "nav:workspaces",
+        label: "Manage workspaces",
+        icon: Users,
+        run: () => router.push("/settings/workspaces"),
       },
     ],
-    [router],
+    // `wsPath` closes over `ws`; including `ws` is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [router, ws?.slug],
   );
 
   const query = q.trim();
-  const { data: ws } = trpc.workspace.current.useQuery(undefined, { enabled: open });
+  const { data: wsCurrent } = trpc.workspace.current.useQuery(undefined, {
+    enabled: open && !!ws,
+  });
   const { data: issues } = trpc.issue.list.useQuery(
     { query, limit: 8, includeDone: true },
-    { enabled: open && query.length > 0 },
+    { enabled: open && !!ws && query.length > 0 },
   );
 
   const issueItems: IssueResult[] = useMemo(
@@ -117,11 +155,12 @@ export function CommandPalette() {
       (issues?.items ?? []).map((it) => ({
         id: `issue:${it.id}`,
         label: it.title,
-        hint: ws ? `${ws.key}-${it.number}` : `#${it.number}`,
-        run: () => router.push(`/issues/${it.id}`),
+        hint: wsCurrent ? `${wsCurrent.key}-${it.number}` : `#${it.number}`,
+        run: () => router.push(wsPath(`/issues/${it.id}`)),
         isIssue: true,
       })),
-    [issues, router, ws],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [issues, router, wsCurrent, ws?.slug],
   );
 
   const filteredNav = query

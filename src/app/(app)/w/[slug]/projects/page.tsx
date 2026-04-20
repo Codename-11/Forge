@@ -9,12 +9,15 @@ import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
+import { useWorkspace } from "@/hooks/use-workspace";
 
 const DEFAULT_COLORS = [
   "#d97706", "#ca8a04", "#65a30d", "#0ea5e9", "#7c3aed", "#be185d", "#78716c",
 ];
 
 export default function ProjectsPage() {
+  const workspace = useWorkspace();
+  const slug = workspace.slug;
   const { data, refetch } = trpc.project.list.useQuery({ archived: false, limit: 50 });
   const [starterOpen, setStarterOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -58,7 +61,7 @@ export default function ProjectsPage() {
             {(data?.items ?? []).map((p) => (
               <li key={p.id}>
                 <Link
-                  href={`/projects/${p.id}`}
+                  href={`/w/${slug}/projects/${p.id}`}
                   className="block rounded-lg border border-border bg-card/40 p-4 hover:border-ember/40"
                 >
                   <div className="flex items-center gap-2">
@@ -117,6 +120,7 @@ function StarterDialog({
   existingKeys: Set<string>;
   onCreated: () => void;
 }) {
+  const { slug } = useWorkspace();
   const { data: starters } = trpc.projectTemplate.list.useQuery(undefined, { enabled: open });
   const create = trpc.project.create.useMutation();
   const [pending, setPending] = useState<string | null>(null);
@@ -154,7 +158,7 @@ function StarterDialog({
           <div className="flex items-baseline justify-between">
             <div className="text-sm font-semibold">Starter templates</div>
             <Link
-              href="/settings/project-templates"
+              href={`/w/${slug}/settings/project-templates`}
               className="text-[11px] text-muted-foreground hover:text-ember"
             >
               Manage templates →

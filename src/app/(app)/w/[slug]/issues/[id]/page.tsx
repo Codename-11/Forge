@@ -10,12 +10,15 @@ import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
+import { useWorkspace } from "@/hooks/use-workspace";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
 export default function IssueDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const workspace = useWorkspace();
+  const slug = workspace.slug;
   const { data: ws } = trpc.workspace.current.useQuery();
   const { data: issue, isLoading, error } = trpc.issue.byId.useQuery({ id });
   const { data: statuses } = trpc.status.list.useQuery();
@@ -69,7 +72,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     onSuccess: () => {
       toast.success("Issue deleted.");
       utils.issue.list.invalidate();
-      router.push("/issues");
+      router.push(`/w/${slug}/issues`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -111,7 +114,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             <Button
               variant="outline"
               size="sm"
-              onClick={() => router.push(`/focus/${id}`)}
+              onClick={() => router.push(`/w/${slug}/focus/${id}`)}
               title="Fullscreen, distraction-free"
             >
               Focus

@@ -1,56 +1,65 @@
+"use client";
 import Link from "next/link";
 import { Topbar } from "@/components/topbar";
 import { Section } from "@/components/settings/section";
 import { Card } from "@/components/settings/card";
+import { useWorkspace } from "@/hooks/use-workspace";
 
 type Entry = {
-  href: string;
+  path: string;
   title: string;
   description: string;
   badge?: string;
+  scope: "workspace" | "account";
 };
 
-const GENERAL: Entry[] = [
+const ENTRIES: Entry[] = [
   {
-    href: "/settings/account",
-    title: "Account",
-    description: "Profile, timezone, locale, time format, theme.",
+    scope: "workspace",
+    path: "/settings/workspace",
+    title: "Workspace",
+    description:
+      "Name, avatar, cycle length, time tracking, attachment quota, and danger zone.",
   },
-];
-
-const WORKSPACE: Entry[] = [
   {
-    href: "/settings/members",
+    scope: "workspace",
+    path: "/settings/members",
     title: "Members",
     description: "Invite teammates and manage their workspace role.",
   },
   {
-    href: "/settings/statuses",
+    scope: "workspace",
+    path: "/settings/statuses",
     title: "Statuses & workflow",
     description: "Customize the issue pipeline columns and their categories.",
   },
   {
-    href: "/settings/labels",
+    scope: "workspace",
+    path: "/settings/labels",
     title: "Labels",
     description: "Colored tags for issues. Create, recolor, rename.",
   },
   {
-    href: "/settings/templates",
+    scope: "workspace",
+    path: "/settings/templates",
     title: "Issue templates",
     description: "Reusable starting points. Stop hitting the blank page.",
   },
   {
-    href: "/settings/project-templates",
+    scope: "workspace",
+    path: "/settings/project-templates",
     title: "Project templates",
     description: "Starter suggestions shown on the Projects page.",
   },
   {
-    href: "/settings/recurring",
+    scope: "workspace",
+    path: "/settings/recurring",
     title: "Recurring issues",
     description: "Auto-created on a cadence — weekly reviews, retros, standups.",
   },
   {
-    href: "/settings/views",
+    scope: "workspace",
+    path: "/settings/views",
     title: "Saved views",
     description: "Bookmark filter combos. Personal or shared.",
   },
@@ -58,20 +67,15 @@ const WORKSPACE: Entry[] = [
 
 const DEVELOPER: Entry[] = [
   {
-    href: "/settings/access",
-    title: "Developer access",
-    description:
-      "API keys + MCP endpoints. Copy-paste blocks for Claude Desktop, Claude Code, curl, and env vars.",
-    badge: "external agents",
-  },
-  {
-    href: "/settings/plugins",
+    scope: "workspace",
+    path: "/settings/plugins",
     title: "Plugins & integrations",
     description:
       "Manifest-based extensions with scoped access. Register, approve, or suspend installed plugins.",
   },
   {
-    href: "/settings/admin",
+    scope: "workspace",
+    path: "/settings/admin",
     title: "Admin portal",
     description:
       "Workspace-wide observability — audit log, activity events, webhook delivery status.",
@@ -79,11 +83,34 @@ const DEVELOPER: Entry[] = [
   },
 ];
 
-function EntryRow({ s }: { s: Entry }) {
+const ACCOUNT: Entry[] = [
+  {
+    scope: "account",
+    path: "/settings/account",
+    title: "Account",
+    description: "Profile, timezone, locale, time format, theme.",
+  },
+  {
+    scope: "account",
+    path: "/settings/access",
+    title: "Developer access",
+    description:
+      "API keys + MCP endpoints. Copy-paste blocks for Claude Desktop, Claude Code, curl, and env vars.",
+    badge: "external agents",
+  },
+  {
+    scope: "account",
+    path: "/settings/workspaces",
+    title: "Workspaces",
+    description: "Create, rename, archive, or switch workspaces you belong to.",
+  },
+];
+
+function EntryRow({ href, s }: { href: string; s: Entry }) {
   return (
     <li>
       <Link
-        href={s.href}
+        href={href}
         className="group flex items-start gap-4 px-4 py-3 hover:bg-subtle/60"
       >
         <div className="min-w-0 flex-1">
@@ -106,23 +133,19 @@ function EntryRow({ s }: { s: Entry }) {
 }
 
 export default function SettingsPage() {
+  const ws = useWorkspace();
+  const w = (p: string) => `/w/${ws.slug}${p}`;
+  const resolve = (s: Entry) => (s.scope === "workspace" ? w(s.path) : s.path);
+
   return (
     <>
-      <Topbar title="Settings" subtitle="Workspace and personal settings" />
+      <Topbar title="Settings" subtitle={`${ws.name} · workspace configuration`} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-6 p-6">
-          <Section title="General">
+          <Section title="Workspace" hint="Applies to everyone in this workspace.">
             <Card>
-              {GENERAL.map((s) => (
-                <EntryRow key={s.href} s={s} />
-              ))}
-            </Card>
-          </Section>
-
-          <Section title="Workspace">
-            <Card>
-              {WORKSPACE.map((s) => (
-                <EntryRow key={s.href} s={s} />
+              {ENTRIES.map((s) => (
+                <EntryRow key={s.path} href={resolve(s)} s={s} />
               ))}
             </Card>
           </Section>
@@ -130,7 +153,15 @@ export default function SettingsPage() {
           <Section title="Developer">
             <Card>
               {DEVELOPER.map((s) => (
-                <EntryRow key={s.href} s={s} />
+                <EntryRow key={s.path} href={resolve(s)} s={s} />
+              ))}
+            </Card>
+          </Section>
+
+          <Section title="Account" hint="Tied to your login, shared across all workspaces.">
+            <Card>
+              {ACCOUNT.map((s) => (
+                <EntryRow key={s.path} href={resolve(s)} s={s} />
               ))}
             </Card>
           </Section>

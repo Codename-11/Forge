@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
+import { useWorkspace } from "@/hooks/use-workspace";
 
 const PRIORITY_GLYPH: Record<string, string> = {
   URGENT: "!!!",
@@ -40,6 +41,9 @@ const ONBOARDING_KEY = "forge:onboarding:dismissed";
 const ONBOARDING_DONE_TOAST = "forge:onboarding:done-toast";
 
 export default function DashboardPage() {
+  const workspace = useWorkspace();
+  const slug = workspace.slug;
+  const w = (p: string) => `/w/${slug}${p}`;
   const { data: me } = trpc.workspace.me.useQuery();
   const { data: ws } = trpc.workspace.current.useQuery();
   const { data: members } = trpc.workspace.members.useQuery();
@@ -103,7 +107,7 @@ export default function DashboardPage() {
       <Topbar title="Dashboard" subtitle="A clear place to start the day." />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-6 p-6">
-          <GreetingBar greeting={greeting} name={firstName} />
+          <GreetingBar greeting={greeting} name={firstName} slug={slug} />
 
           <OnboardingCard
             projectsCount={projects?.items.length ?? 0}
@@ -112,6 +116,7 @@ export default function DashboardPage() {
             apiKeysCount={access?.length ?? 0}
             hasTimezone={!!me?.user.timezone}
             ready={!!me && !!projects && !!access && !!members}
+            slug={slug}
           />
 
           <section>
@@ -121,6 +126,7 @@ export default function DashboardPage() {
               isLoading={active.isLoading || !me}
               workspaceKey={workspaceKey}
               tz={prefs.timezone ?? null}
+              slug={slug}
             />
           </section>
 
@@ -152,6 +158,7 @@ export default function DashboardPage() {
                       priority={i.priority}
                       trailing={relativeTime(i.updatedAt)}
                       workspaceKey={workspaceKey}
+                      slug={slug}
                     />
                   ))}
                 </Rows>
@@ -163,7 +170,7 @@ export default function DashboardPage() {
                 {statusRows.map(({ status, count }) => (
                   <li key={status.id}>
                     <Link
-                      href="/issues"
+                      href={w("/issues")}
                       className="flex items-center gap-2 text-xs hover:text-foreground"
                     >
                       <span
@@ -191,6 +198,7 @@ export default function DashboardPage() {
                     trailing={relativeTime(i.updatedAt)}
                     trailingTone="warn"
                     workspaceKey={workspaceKey}
+                    slug={slug}
                   />
                 ))}
               </Rows>
@@ -206,7 +214,15 @@ export default function DashboardPage() {
 // Greeting
 // ---------------------------------------------------------------------------
 
-function GreetingBar({ greeting, name }: { greeting: string; name: string }) {
+function GreetingBar({
+  greeting,
+  name,
+  slug,
+}: {
+  greeting: string;
+  name: string;
+  slug: string;
+}) {
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-card/40 p-5 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1">
@@ -222,13 +238,13 @@ function GreetingBar({ greeting, name }: { greeting: string; name: string }) {
           <Plus className="h-3.5 w-3.5" />
           New issue
         </Button>
-        <Link href="/projects">
+        <Link href={`/w/${slug}/projects`}>
           <Button variant="outline" size="sm" className="gap-1.5">
             <Rocket className="h-3.5 w-3.5" />
             Browse templates
           </Button>
         </Link>
-        <Link href="/settings/members">
+        <Link href={`/w/${slug}/settings/members`}>
           <Button variant="outline" size="sm" className="gap-1.5">
             <UserPlus className="h-3.5 w-3.5" />
             Invite member
@@ -258,11 +274,13 @@ function FocusGrid({
   isLoading,
   workspaceKey,
   tz,
+  slug,
 }: {
   issues: FocusIssue[];
   isLoading: boolean;
   workspaceKey: string;
   tz: string | null;
+  slug: string;
 }) {
   if (isLoading) {
     return (
@@ -282,7 +300,7 @@ function FocusGrid({
           or open a new issue.
         </p>
         <div className="mt-4 flex justify-center gap-2">
-          <Link href="/issues">
+          <Link href={`/w/${slug}/issues`}>
             <Button variant="outline" size="sm">
               Browse open issues
             </Button>
@@ -299,7 +317,7 @@ function FocusGrid({
       {issues.map((issue) => (
         <li key={issue.id}>
           <Link
-            href={`/issues/${issue.id}`}
+            href={`/w/${slug}/issues/${issue.id}`}
             className="group flex h-full flex-col rounded-lg border border-border bg-card/40 p-3 transition-colors hover:border-ember/40"
           >
             <div className="flex items-center gap-2">
@@ -354,6 +372,7 @@ function OnboardingCard({
   apiKeysCount,
   hasTimezone,
   ready,
+  slug,
 }: {
   projectsCount: number;
   issuesCount: number;
@@ -361,6 +380,7 @@ function OnboardingCard({
   apiKeysCount: number;
   hasTimezone: boolean;
   ready: boolean;
+  slug: string;
 }) {
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
@@ -373,13 +393,13 @@ function OnboardingCard({
 
   const steps: OnboardingStep[] = useMemo(
     () => [
-      { id: "project", label: "Create your first project", hint: "Group related issues.", done: projectsCount > 0, href: "/projects", icon: Rocket },
+      { id: "project", label: "Create your first project", hint: "Group related issues.", done: projectsCount > 0, href: `/w/${slug}/projects`, icon: Rocket },
       { id: "issue", label: "Create an issue", hint: "Capture work. Press C anywhere.", done: issuesCount > 0, action: "quick-create", icon: Plus },
-      { id: "member", label: "Invite a teammate", hint: "Work is better with others.", done: membersCount > 1, href: "/settings/members", icon: Mail },
+      { id: "member", label: "Invite a teammate", hint: "Work is better with others.", done: membersCount > 1, href: `/w/${slug}/settings/members`, icon: Mail },
       { id: "api", label: "Create an API key", hint: "Wire Forge into Claude or Hermes.", done: apiKeysCount > 0, href: "/settings/access", icon: KeyRound },
       { id: "tz", label: "Set your timezone", hint: "Makes due dates sane.", done: hasTimezone, href: "/settings/account", icon: Globe },
     ],
-    [projectsCount, issuesCount, membersCount, apiKeysCount, hasTimezone],
+    [projectsCount, issuesCount, membersCount, apiKeysCount, hasTimezone, slug],
   );
 
   const total = steps.length;
@@ -553,6 +573,7 @@ function IssueRow({
   trailing,
   trailingTone,
   workspaceKey,
+  slug,
 }: {
   id: string;
   number: number;
@@ -561,10 +582,14 @@ function IssueRow({
   trailing: string;
   trailingTone?: "warn";
   workspaceKey: string;
+  slug: string;
 }) {
   return (
     <li>
-      <Link href={`/issues/${id}`} className="flex items-center gap-2 text-xs hover:text-foreground">
+      <Link
+        href={`/w/${slug}/issues/${id}`}
+        className="flex items-center gap-2 text-xs hover:text-foreground"
+      >
         {priority && (
           <span className="w-5 text-center font-mono text-[10px] text-muted-foreground">
             {PRIORITY_GLYPH[priority]}
