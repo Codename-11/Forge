@@ -1,8 +1,7 @@
 "use client";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
+import { QuickForm } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 
@@ -10,6 +9,9 @@ import { trpc } from "@/lib/trpc";
  * Shared "New cycle" dialog. Extracted so the cycles page and the
  * context-aware quick-create (`⇧C` on `/cycles`) can reach it without
  * duplicating the create-form fields or mutation wiring.
+ *
+ * Uses the <QuickForm> primitive — inherits ⏎/⎋ keyboard contract, draft
+ * persistence (24h TTL via `draftKey`), and inline error banner.
  */
 export function NewCycleDialog({
   open,
@@ -33,68 +35,64 @@ export function NewCycleDialog({
       setLengthDays("");
       utils.cycle.list.invalidate();
       onCreated?.();
-      onClose();
     },
-    onError: (e) => toast.error(e.message),
   });
 
   return (
-    <Dialog open={open} onClose={onClose} className="max-w-md">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!name.trim()) {
-            toast.error("Name required.");
-            return;
-          }
-          create.mutate({
+    <QuickForm
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+      title="New cycle"
+      primaryLabel={create.isPending ? "Creating…" : "Create"}
+      loading={create.isPending}
+      draftKey="cycle.create"
+      onSubmit={async () => {
+        if (!name.trim()) {
+          return { error: "Name required." };
+        }
+        try {
+          await create.mutateAsync({
             name: name.trim(),
             startsAt: startsAt ? new Date(startsAt) : undefined,
             lengthDays: lengthDays ? Number(lengthDays) : undefined,
           });
-        }}
-        className="space-y-3 p-5"
-      >
-        <div className="text-sm font-semibold">New cycle</div>
-        <div className="space-y-1.5">
-          <label className="text-xs text-muted-foreground">Name</label>
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : "Failed to create cycle." };
+        }
+      }}
+    >
+      <QuickForm.Field label="Name">
+        <Input
+          name="name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Sprint 12 · Q2 Launch · …"
+          autoFocus
+        />
+      </QuickForm.Field>
+      <div className="grid grid-cols-2 gap-2">
+        <QuickForm.Field label="Starts">
           <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Sprint 12 · Q2 Launch · …"
-            autoFocus
+            name="startsAt"
+            type="date"
+            value={startsAt}
+            onChange={(e) => setStartsAt(e.target.value)}
           />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Starts</label>
-            <Input
-              type="date"
-              value={startsAt}
-              onChange={(e) => setStartsAt(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Length (days)</label>
-            <Input
-              type="number"
-              min={1}
-              max={365}
-              value={lengthDays}
-              onChange={(e) => setLengthDays(e.target.value)}
-              placeholder="7"
-            />
-          </div>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="ember" disabled={create.isPending}>
-            {create.isPending ? "Creating…" : "Create"}
-          </Button>
-        </div>
-      </form>
-    </Dialog>
+        </QuickForm.Field>
+        <QuickForm.Field label="Length (days)">
+          <Input
+            name="lengthDays"
+            type="number"
+            min={1}
+            max={365}
+            value={lengthDays}
+            onChange={(e) => setLengthDays(e.target.value)}
+            placeholder="7"
+          />
+        </QuickForm.Field>
+      </div>
+    </QuickForm>
   );
 }

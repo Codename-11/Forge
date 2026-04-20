@@ -8,7 +8,7 @@ import { IssueBoard } from "@/components/issue-board";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog } from "@/components/ui/dialog";
+import { Confirm, QuickForm } from "@/components/ui/modal";
 import { EmptyState, Skeleton } from "@/components/ui";
 import { ViewToggle, useViewPref } from "@/components/view-toggle";
 import { trpc } from "@/lib/trpc";
@@ -24,6 +24,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const { data: ws } = trpc.workspace.current.useQuery();
   const [view, setView] = useViewPref(`project:${id}`, "board");
   const [editOpen, setEditOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const archive = trpc.project.archive.useMutation({
     onSuccess: () => {
@@ -103,10 +105,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               variant="ghost"
               size="sm"
               disabled={archive.isPending || project.archived}
-              onClick={() => {
-                if (confirm(`Archive "${project.name}"? Its issues stay intact.`))
-                  archive.mutate({ id: project.id });
-              }}
+              onClick={() => setArchiveOpen(true)}
             >
               {project.archived ? "Archived" : "Archive"}
             </Button>
@@ -114,14 +113,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               variant="ghost"
               size="sm"
               disabled={del.isPending}
-              onClick={() => {
-                if (
-                  confirm(
-                    `Delete "${project.name}"? Issues are preserved but unlinked from this project.`,
-                  )
-                )
-                  del.mutate({ id: project.id });
-              }}
+              onClick={() => setDeleteOpen(true)}
             >
               Delete
             </Button>
@@ -161,6 +153,24 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         project={project}
         onSaved={() => refetch()}
       />
+      <Confirm
+        open={archiveOpen}
+        onOpenChange={setArchiveOpen}
+        title={`Archive ${project.name}?`}
+        description="Hides the project. Its issues stay intact; you can restore later."
+        primaryLabel="Archive"
+        loading={archive.isPending}
+        onConfirm={() => archive.mutate({ id: project.id })}
+      />
+      <Confirm
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`Delete ${project.name}?`}
+        description="Issues are preserved but unlinked from this project. Soft-delete — audit trail retained."
+        primaryLabel="Delete project"
+        loading={del.isPending}
+        onConfirm={() => del.mutate({ id: project.id })}
+      />
     </>
   );
 }
@@ -191,67 +201,69 @@ function EditProjectDialog({
     onSuccess: () => {
       toast.success("Saved.");
       onSaved();
-      onClose();
     },
-    onError: (e) => toast.error(e.message),
   });
 
   return (
-    <Dialog open={open} onClose={onClose} className="max-w-lg">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          update.mutate({
+    <QuickForm
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+      title="Edit project"
+      primaryLabel={update.isPending ? "Saving…" : "Save"}
+      loading={update.isPending}
+      onSubmit={async () => {
+        try {
+          await update.mutateAsync({
             id: project.id,
             name: name.trim(),
             description: description.trim() || null,
             color,
             icon: icon.trim() || undefined,
           });
-        }}
-        className="space-y-3 p-5"
-      >
-        <div className="text-sm font-semibold">Edit project</div>
-        <div className="space-y-1.5">
-          <label className="text-xs text-muted-foreground">Name</label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-xs text-muted-foreground">Description</label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={4}
-            className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : "Failed to save." };
+        }
+      }}
+    >
+      <QuickForm.Field label="Name">
+        <Input name="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+      </QuickForm.Field>
+      <QuickForm.Field label="Description">
+        <textarea
+          name="description"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={4}
+          className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
+        />
+      </QuickForm.Field>
+      <div className="grid grid-cols-2 gap-3">
+        <QuickForm.Field label="Color">
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              className="h-8 w-10 cursor-pointer rounded border border-input bg-background"
+            />
+            <Input
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              className="flex-1"
+            />
+          </div>
+        </QuickForm.Field>
+        <QuickForm.Field label="Icon (emoji)">
+          <Input
+            name="icon"
+            value={icon}
+            onChange={(e) => setIcon(e.target.value)}
+            maxLength={8}
           />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Color</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                className="h-8 w-10 cursor-pointer rounded border border-input bg-background"
-              />
-              <Input value={color} onChange={(e) => setColor(e.target.value)} className="flex-1" />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Icon (emoji)</label>
-            <Input value={icon} onChange={(e) => setIcon(e.target.value)} maxLength={8} />
-          </div>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="ember" disabled={update.isPending}>
-            {update.isPending ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      </form>
-    </Dialog>
+        </QuickForm.Field>
+      </div>
+    </QuickForm>
   );
 }

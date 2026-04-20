@@ -1,8 +1,7 @@
 "use client";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
+import { QuickForm } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 
@@ -19,6 +18,9 @@ const DEFAULT_COLORS = [
 /**
  * Shared "New initiative" dialog. Same form used on the initiatives page
  * and via the context-aware quick-create trigger (`⇧C` on `/initiatives`).
+ *
+ * Uses the <QuickForm> primitive — inherits ⏎/⎋ keyboard contract, draft
+ * persistence (24h TTL via `draftKey`), and inline error banner.
  */
 export function NewInitiativeDialog({
   open,
@@ -46,9 +48,7 @@ export function NewInitiativeDialog({
       setColor(DEFAULT_COLORS[0]);
       utils.initiative.list.invalidate();
       onCreated?.();
-      onClose();
     },
-    onError: (e) => toast.error(e.message),
   });
 
   function onNameChange(v: string) {
@@ -66,102 +66,99 @@ export function NewInitiativeDialog({
   }
 
   return (
-    <Dialog open={open} onClose={onClose} className="max-w-lg">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!name.trim()) {
-            toast.error("Name required.");
-            return;
-          }
-          create.mutate({
+    <QuickForm
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+      title="New initiative"
+      primaryLabel={create.isPending ? "Creating…" : "Create"}
+      loading={create.isPending}
+      draftKey="initiative.create"
+      onSubmit={async () => {
+        if (!name.trim()) {
+          return { error: "Name required." };
+        }
+        try {
+          await create.mutateAsync({
             name: name.trim(),
             slug: slug.trim() || undefined,
             description: description.trim() || undefined,
             targetDate: targetDate ? new Date(targetDate) : undefined,
             color,
           });
-        }}
-        className="space-y-3 p-5"
-      >
-        <div className="text-sm font-semibold">New initiative</div>
-        <div className="grid grid-cols-[1fr_200px] gap-2">
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Name</label>
-            <Input
-              value={name}
-              onChange={(e) => onNameChange(e.target.value)}
-              autoFocus
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Slug</label>
-            <Input
-              value={slug}
-              onChange={(e) =>
-                setSlug(
-                  e.target.value
-                    .toLowerCase()
-                    .replace(/[^a-z0-9-]/g, "-")
-                    .replace(/-+/g, "-")
-                    .slice(0, 48),
-                )
-              }
-              placeholder="q2-launch"
-            />
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-xs text-muted-foreground">Description</label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={3}
-            className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : "Failed to create initiative." };
+        }
+      }}
+    >
+      <div className="grid grid-cols-[1fr_200px] gap-2">
+        <QuickForm.Field label="Name">
+          <Input
+            name="name"
+            value={name}
+            onChange={(e) => onNameChange(e.target.value)}
+            autoFocus
           />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Target date</label>
-            <Input
-              type="date"
-              value={targetDate}
-              onChange={(e) => setTargetDate(e.target.value)}
+        </QuickForm.Field>
+        <QuickForm.Field label="Slug">
+          <Input
+            name="slug"
+            value={slug}
+            onChange={(e) =>
+              setSlug(
+                e.target.value
+                  .toLowerCase()
+                  .replace(/[^a-z0-9-]/g, "-")
+                  .replace(/-+/g, "-")
+                  .slice(0, 48),
+              )
+            }
+            placeholder="q2-launch"
+          />
+        </QuickForm.Field>
+      </div>
+      <QuickForm.Field label="Description">
+        <textarea
+          name="description"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={3}
+          className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
+        />
+      </QuickForm.Field>
+      <div className="grid grid-cols-2 gap-2">
+        <QuickForm.Field label="Target date">
+          <Input
+            name="targetDate"
+            type="date"
+            value={targetDate}
+            onChange={(e) => setTargetDate(e.target.value)}
+          />
+        </QuickForm.Field>
+        <QuickForm.Field label="Color">
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              className="h-8 w-10 cursor-pointer rounded border border-input bg-background"
             />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Color</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                className="h-8 w-10 cursor-pointer rounded border border-input bg-background"
-              />
-              <div className="flex flex-wrap gap-1">
-                {DEFAULT_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => setColor(c)}
-                    className="h-5 w-5 rounded border border-border"
-                    style={{ backgroundColor: c }}
-                    aria-label={c}
-                  />
-                ))}
-              </div>
+            <div className="flex flex-wrap gap-1">
+              {DEFAULT_COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setColor(c)}
+                  className="h-5 w-5 rounded border border-border"
+                  style={{ backgroundColor: c }}
+                  aria-label={c}
+                />
+              ))}
             </div>
           </div>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="ember" disabled={create.isPending}>
-            {create.isPending ? "Creating…" : "Create"}
-          </Button>
-        </div>
-      </form>
-    </Dialog>
+        </QuickForm.Field>
+      </div>
+    </QuickForm>
   );
 }

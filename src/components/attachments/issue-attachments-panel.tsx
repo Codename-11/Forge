@@ -10,6 +10,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Confirm } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -283,6 +284,7 @@ function AttachmentTile({
   canDelete: boolean;
   onDelete: () => void;
 }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const isImage = isImageMime(attachment.mimeType);
   const { data } = trpc.attachment.getDownloadUrl.useQuery(
     { attachmentId: attachment.id },
@@ -345,13 +347,23 @@ function AttachmentTile({
           className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-md bg-background/90 text-muted-foreground opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
           onClick={(e) => {
             e.preventDefault();
-            if (confirm(`Remove ${attachment.filename}?`)) onDelete();
+            setConfirmOpen(true);
           }}
           title="Delete attachment"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       )}
+      <Confirm
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        variant="destructive"
+        title="Delete attachment?"
+        description="Permanently removes the file from the issue and object storage."
+        primaryLabel="Delete attachment"
+        typeToConfirm={attachment.filename}
+        onConfirm={() => onDelete()}
+      />
     </li>
   );
 }
