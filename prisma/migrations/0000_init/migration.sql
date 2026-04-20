@@ -25,6 +25,15 @@ CREATE TYPE "EventKind" AS ENUM ('ISSUE_CREATED', 'ISSUE_UPDATED', 'ISSUE_DELETE
 -- CreateEnum
 CREATE TYPE "WebhookDeliveryStatus" AS ENUM ('PENDING', 'SUCCESS', 'FAILED', 'DEAD_LETTER');
 
+-- CreateEnum
+CREATE TYPE "CycleStatus" AS ENUM ('PLANNED', 'ACTIVE', 'COMPLETED', 'CANCELED');
+
+-- CreateEnum
+CREATE TYPE "InitiativeStatus" AS ENUM ('PLANNED', 'ACTIVE', 'COMPLETED', 'CANCELED');
+
+-- CreateEnum
+CREATE TYPE "RelationKind" AS ENUM ('BLOCKS', 'BLOCKED_BY', 'DUPLICATES', 'RELATES_TO');
+
 -- CreateTable
 CREATE TABLE "User" (
     "id" TEXT NOT NULL,
@@ -37,6 +46,8 @@ CREATE TABLE "User" (
     "locale" TEXT,
     "timeFormat" TEXT,
     "theme" TEXT,
+    "lastWorkspaceId" TEXT,
+    "pinnedIssueIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -85,6 +96,10 @@ CREATE TABLE "Workspace" (
     "name" TEXT NOT NULL,
     "key" TEXT NOT NULL,
     "avatarUrl" TEXT,
+    "cycleLengthDays" INTEGER NOT NULL DEFAULT 7,
+    "cycleCooldownDays" INTEGER NOT NULL DEFAULT 0,
+    "timeTrackingEnabled" BOOLEAN NOT NULL DEFAULT false,
+    "attachmentQuotaMb" INTEGER NOT NULL DEFAULT 1024,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     "deletedAt" TIMESTAMP(3),
@@ -115,6 +130,7 @@ CREATE TABLE "Project" (
     "archived" BOOLEAN NOT NULL DEFAULT false,
     "startDate" TIMESTAMP(3),
     "targetDate" TIMESTAMP(3),
+    "initiativeId" TEXT,
     "createdById" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -152,6 +168,7 @@ CREATE TABLE "Issue" (
     "workspaceId" TEXT NOT NULL,
     "projectId" TEXT,
     "parentId" TEXT,
+    "cycleId" TEXT,
     "number" INTEGER NOT NULL,
     "kind" "WorkItemKind" NOT NULL DEFAULT 'ISSUE',
     "title" TEXT NOT NULL,
@@ -165,11 +182,80 @@ CREATE TABLE "Issue" (
     "canceledAt" TIMESTAMP(3),
     "estimate" DOUBLE PRECISION,
     "slaMinutes" INTEGER,
+    "queued" BOOLEAN NOT NULL DEFAULT false,
+    "claimedAt" TIMESTAMP(3),
+    "claimedById" TEXT,
+    "claimExpiresAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     "deletedAt" TIMESTAMP(3),
 
     CONSTRAINT "Issue_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ProjectTemplate" (
+    "id" TEXT NOT NULL,
+    "workspaceId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "suggestedKey" TEXT NOT NULL,
+    "description" TEXT,
+    "color" TEXT,
+    "icon" TEXT,
+    "position" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ProjectTemplate_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "IssueTemplate" (
+    "id" TEXT NOT NULL,
+    "workspaceId" TEXT NOT NULL,
+    "projectId" TEXT,
+    "name" TEXT NOT NULL,
+    "titleTemplate" TEXT NOT NULL,
+    "descriptionTemplate" TEXT,
+    "defaultPriority" "Priority" NOT NULL DEFAULT 'NONE',
+    "labelIds" TEXT[],
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "IssueTemplate_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "RecurringIssue" (
+    "id" TEXT NOT NULL,
+    "workspaceId" TEXT NOT NULL,
+    "projectId" TEXT,
+    "name" TEXT NOT NULL,
+    "titleTemplate" TEXT NOT NULL,
+    "descriptionTemplate" TEXT,
+    "defaultPriority" "Priority" NOT NULL DEFAULT 'NONE',
+    "intervalDays" INTEGER NOT NULL,
+    "nextRunAt" TIMESTAMP(3) NOT NULL,
+    "lastRunAt" TIMESTAMP(3),
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdById" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "RecurringIssue_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "SavedView" (
+    "id" TEXT NOT NULL,
+    "workspaceId" TEXT NOT NULL,
+    "userId" TEXT,
+    "name" TEXT NOT NULL,
+    "filters" JSONB NOT NULL,
+    "position" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "SavedView_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -208,6 +294,8 @@ CREATE TABLE "Attachment" (
     "id" TEXT NOT NULL,
     "workspaceId" TEXT NOT NULL,
     "issueId" TEXT,
+    "targetType" TEXT,
+    "targetId" TEXT,
     "filename" TEXT NOT NULL,
     "mimeType" TEXT NOT NULL,
     "size" INTEGER NOT NULL,
@@ -306,6 +394,9 @@ CREATE TABLE "ApiKey" (
     "hashedKey" TEXT NOT NULL,
     "prefix" TEXT NOT NULL,
     "scopes" "PluginScope"[],
+    "projectIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "labelIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "initiativeIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "lastUsedAt" TIMESTAMP(3),
     "expiresAt" TIMESTAMP(3),
     "revokedAt" TIMESTAMP(3),
@@ -341,6 +432,69 @@ CREATE TABLE "WebhookDelivery" (
     "deliveredAt" TIMESTAMP(3),
 
     CONSTRAINT "WebhookDelivery_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Cycle" (
+    "id" TEXT NOT NULL,
+    "workspaceId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "startsAt" TIMESTAMP(3) NOT NULL,
+    "endsAt" TIMESTAMP(3) NOT NULL,
+    "lengthDays" INTEGER NOT NULL,
+    "cooldownDays" INTEGER NOT NULL DEFAULT 0,
+    "status" "CycleStatus" NOT NULL DEFAULT 'PLANNED',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Cycle_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Initiative" (
+    "id" TEXT NOT NULL,
+    "workspaceId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "slug" TEXT NOT NULL,
+    "description" TEXT,
+    "targetDate" TIMESTAMP(3),
+    "color" TEXT,
+    "status" "InitiativeStatus" NOT NULL DEFAULT 'PLANNED',
+    "position" INTEGER NOT NULL DEFAULT 0,
+    "createdById" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Initiative_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "IssueRelation" (
+    "id" TEXT NOT NULL,
+    "workspaceId" TEXT NOT NULL,
+    "fromIssueId" TEXT NOT NULL,
+    "toIssueId" TEXT NOT NULL,
+    "kind" "RelationKind" NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "IssueRelation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TimeEntry" (
+    "id" TEXT NOT NULL,
+    "workspaceId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "issueId" TEXT,
+    "description" TEXT,
+    "startedAt" TIMESTAMP(3) NOT NULL,
+    "endedAt" TIMESTAMP(3),
+    "billable" BOOLEAN NOT NULL DEFAULT false,
+    "hourlyRate" DOUBLE PRECISION,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TimeEntry_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -383,6 +537,9 @@ CREATE UNIQUE INDEX "Membership_userId_workspaceId_key" ON "Membership"("userId"
 CREATE INDEX "Project_workspaceId_archived_idx" ON "Project"("workspaceId", "archived");
 
 -- CreateIndex
+CREATE INDEX "Project_initiativeId_idx" ON "Project"("initiativeId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "Project_workspaceId_key_key" ON "Project"("workspaceId", "key");
 
 -- CreateIndex
@@ -407,7 +564,34 @@ CREATE INDEX "Issue_workspaceId_priority_idx" ON "Issue"("workspaceId", "priorit
 CREATE INDEX "Issue_workspaceId_createdAt_idx" ON "Issue"("workspaceId", "createdAt");
 
 -- CreateIndex
+CREATE INDEX "Issue_workspaceId_queued_claimedAt_idx" ON "Issue"("workspaceId", "queued", "claimedAt");
+
+-- CreateIndex
+CREATE INDEX "Issue_workspaceId_cycleId_idx" ON "Issue"("workspaceId", "cycleId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "Issue_workspaceId_number_key" ON "Issue"("workspaceId", "number");
+
+-- CreateIndex
+CREATE INDEX "ProjectTemplate_workspaceId_idx" ON "ProjectTemplate"("workspaceId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ProjectTemplate_workspaceId_name_key" ON "ProjectTemplate"("workspaceId", "name");
+
+-- CreateIndex
+CREATE INDEX "IssueTemplate_workspaceId_idx" ON "IssueTemplate"("workspaceId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "IssueTemplate_workspaceId_name_key" ON "IssueTemplate"("workspaceId", "name");
+
+-- CreateIndex
+CREATE INDEX "RecurringIssue_nextRunAt_active_idx" ON "RecurringIssue"("nextRunAt", "active");
+
+-- CreateIndex
+CREATE INDEX "RecurringIssue_workspaceId_idx" ON "RecurringIssue"("workspaceId");
+
+-- CreateIndex
+CREATE INDEX "SavedView_workspaceId_userId_idx" ON "SavedView"("workspaceId", "userId");
 
 -- CreateIndex
 CREATE INDEX "IssueAssignee_userId_idx" ON "IssueAssignee"("userId");
@@ -420,6 +604,9 @@ CREATE INDEX "Comment_workspaceId_createdAt_idx" ON "Comment"("workspaceId", "cr
 
 -- CreateIndex
 CREATE INDEX "Attachment_issueId_idx" ON "Attachment"("issueId");
+
+-- CreateIndex
+CREATE INDEX "Attachment_workspaceId_targetType_targetId_idx" ON "Attachment"("workspaceId", "targetType", "targetId");
 
 -- CreateIndex
 CREATE INDEX "AuditLog_workspaceId_entity_entityId_idx" ON "AuditLog"("workspaceId", "entity", "entityId");
@@ -469,6 +656,36 @@ CREATE INDEX "WebhookDelivery_status_scheduledAt_idx" ON "WebhookDelivery"("stat
 -- CreateIndex
 CREATE INDEX "WebhookDelivery_webhookId_idx" ON "WebhookDelivery"("webhookId");
 
+-- CreateIndex
+CREATE INDEX "Cycle_workspaceId_status_startsAt_idx" ON "Cycle"("workspaceId", "status", "startsAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Cycle_workspaceId_name_key" ON "Cycle"("workspaceId", "name");
+
+-- CreateIndex
+CREATE INDEX "Initiative_workspaceId_status_position_idx" ON "Initiative"("workspaceId", "status", "position");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Initiative_workspaceId_slug_key" ON "Initiative"("workspaceId", "slug");
+
+-- CreateIndex
+CREATE INDEX "IssueRelation_fromIssueId_idx" ON "IssueRelation"("fromIssueId");
+
+-- CreateIndex
+CREATE INDEX "IssueRelation_toIssueId_idx" ON "IssueRelation"("toIssueId");
+
+-- CreateIndex
+CREATE INDEX "IssueRelation_workspaceId_kind_idx" ON "IssueRelation"("workspaceId", "kind");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "IssueRelation_fromIssueId_toIssueId_kind_key" ON "IssueRelation"("fromIssueId", "toIssueId", "kind");
+
+-- CreateIndex
+CREATE INDEX "TimeEntry_workspaceId_userId_startedAt_idx" ON "TimeEntry"("workspaceId", "userId", "startedAt");
+
+-- CreateIndex
+CREATE INDEX "TimeEntry_issueId_idx" ON "TimeEntry"("issueId");
+
 -- AddForeignKey
 ALTER TABLE "Account" ADD CONSTRAINT "Account_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
@@ -488,6 +705,9 @@ ALTER TABLE "Project" ADD CONSTRAINT "Project_workspaceId_fkey" FOREIGN KEY ("wo
 ALTER TABLE "Project" ADD CONSTRAINT "Project_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "Project" ADD CONSTRAINT "Project_initiativeId_fkey" FOREIGN KEY ("initiativeId") REFERENCES "Initiative"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Status" ADD CONSTRAINT "Status_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -503,10 +723,40 @@ ALTER TABLE "Issue" ADD CONSTRAINT "Issue_projectId_fkey" FOREIGN KEY ("projectI
 ALTER TABLE "Issue" ADD CONSTRAINT "Issue_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "Issue"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "Issue" ADD CONSTRAINT "Issue_cycleId_fkey" FOREIGN KEY ("cycleId") REFERENCES "Cycle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Issue" ADD CONSTRAINT "Issue_statusId_fkey" FOREIGN KEY ("statusId") REFERENCES "Status"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Issue" ADD CONSTRAINT "Issue_authorId_fkey" FOREIGN KEY ("authorId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Issue" ADD CONSTRAINT "Issue_claimedById_fkey" FOREIGN KEY ("claimedById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ProjectTemplate" ADD CONSTRAINT "ProjectTemplate_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "IssueTemplate" ADD CONSTRAINT "IssueTemplate_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "IssueTemplate" ADD CONSTRAINT "IssueTemplate_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "RecurringIssue" ADD CONSTRAINT "RecurringIssue_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "RecurringIssue" ADD CONSTRAINT "RecurringIssue_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "RecurringIssue" ADD CONSTRAINT "RecurringIssue_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SavedView" ADD CONSTRAINT "SavedView_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SavedView" ADD CONSTRAINT "SavedView_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "IssueAssignee" ADD CONSTRAINT "IssueAssignee_issueId_fkey" FOREIGN KEY ("issueId") REFERENCES "Issue"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -579,4 +829,28 @@ ALTER TABLE "WebhookDelivery" ADD CONSTRAINT "WebhookDelivery_webhookId_fkey" FO
 
 -- AddForeignKey
 ALTER TABLE "WebhookDelivery" ADD CONSTRAINT "WebhookDelivery_eventId_fkey" FOREIGN KEY ("eventId") REFERENCES "ActivityEvent"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Cycle" ADD CONSTRAINT "Cycle_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Initiative" ADD CONSTRAINT "Initiative_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "IssueRelation" ADD CONSTRAINT "IssueRelation_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "IssueRelation" ADD CONSTRAINT "IssueRelation_fromIssueId_fkey" FOREIGN KEY ("fromIssueId") REFERENCES "Issue"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "IssueRelation" ADD CONSTRAINT "IssueRelation_toIssueId_fkey" FOREIGN KEY ("toIssueId") REFERENCES "Issue"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TimeEntry" ADD CONSTRAINT "TimeEntry_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TimeEntry" ADD CONSTRAINT "TimeEntry_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TimeEntry" ADD CONSTRAINT "TimeEntry_issueId_fkey" FOREIGN KEY ("issueId") REFERENCES "Issue"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 

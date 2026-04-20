@@ -246,19 +246,21 @@ async function findBlockedIssueIds(
   workspaceIds: string[],
 ): Promise<Set<string>> {
   if (workspaceIds.length === 0) return new Set();
+  // BLOCKS     : from = blocker, to = blocked.
+  // BLOCKED_BY : from = blocked, to = blocker.
   const blockers = await db.issueRelation.findMany({
     where: {
       workspaceId: { in: workspaceIds },
       OR: [
         {
-          kind: "BLOCKED_BY",
+          kind: "BLOCKS",
           fromIssue: {
             status: { category: { notIn: ["DONE", "CANCELED"] } },
             deletedAt: null,
           },
         },
         {
-          kind: "BLOCKS",
+          kind: "BLOCKED_BY",
           toIssue: {
             status: { category: { notIn: ["DONE", "CANCELED"] } },
             deletedAt: null,
@@ -270,8 +272,8 @@ async function findBlockedIssueIds(
   });
   const blocked = new Set<string>();
   for (const r of blockers) {
-    if (r.kind === "BLOCKED_BY") blocked.add(r.toIssueId);
-    if (r.kind === "BLOCKS") blocked.add(r.fromIssueId);
+    if (r.kind === "BLOCKS") blocked.add(r.toIssueId);
+    if (r.kind === "BLOCKED_BY") blocked.add(r.fromIssueId);
   }
   return blocked;
 }

@@ -423,12 +423,15 @@ describe("mcp — issues.claim honors blocker skip + narrowing", () => {
       where: { id: { in: [blocked.id, free.id] }, workspaceId: fixture.workspace.id },
       data: { queued: true },
     });
+    // Mirrors `relation.add({kind: BLOCKS, from: blocker, to: blocked})`:
+    //   BLOCKS     : from = blocker, to = blocked
+    //   BLOCKED_BY : from = blocked, to = blocker
     await prisma.issueRelation.create({
       data: {
         workspaceId: fixture.workspace.id,
         fromIssueId: blocker.id,
         toIssueId: blocked.id,
-        kind: RelationKind.BLOCKED_BY,
+        kind: RelationKind.BLOCKS,
       },
     });
     await prisma.issueRelation.create({
@@ -436,7 +439,7 @@ describe("mcp — issues.claim honors blocker skip + narrowing", () => {
         workspaceId: fixture.workspace.id,
         fromIssueId: blocked.id,
         toIssueId: blocker.id,
-        kind: RelationKind.BLOCKS,
+        kind: RelationKind.BLOCKED_BY,
       },
     });
 

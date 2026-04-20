@@ -4,6 +4,20 @@ const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: "standalone",
+  serverExternalPackages: ["ioredis"],
+  eslint: {
+    // Lint in CI / pre-commit via `pnpm lint`; don't gate production
+    // build on warnings.
+    ignoreDuringBuilds: true,
+  },
+  webpack: (config, { nextRuntime }) => {
+    // Middleware forces an edge-runtime bundle pass even for server-only
+    // code. ioredis can't be bundled for edge — mark as external there.
+    if (nextRuntime === "edge") {
+      config.externals = [...(config.externals ?? []), "ioredis"];
+    }
+    return config;
+  },
   // Prisma's generated client and engines are loaded dynamically so
   // Next's trace doesn't pick them up. Include them explicitly so the
   // standalone bundle runs without node_modules on the side.

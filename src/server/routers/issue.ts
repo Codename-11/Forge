@@ -216,10 +216,39 @@ export const issueRouter = router({
           include: { status: true },
         });
 
+        // Cross-tenant guard: if the caller tries to move the issue to a
+        // project or status in a different workspace, reject.
+        if (patch.projectId) {
+          const proj = await tx.project.findFirst({
+            where: { id: patch.projectId, workspaceId: ctx.workspaceId },
+            select: { id: true },
+          });
+          if (!proj) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Project not found in this workspace.",
+            });
+          }
+        }
+        if (patch.statusId) {
+          const st = await tx.status.findFirst({
+            where: { id: patch.statusId, workspaceId: ctx.workspaceId },
+            select: { id: true, category: true },
+          });
+          if (!st) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Status not found in this workspace.",
+            });
+          }
+        }
+
         // Mark lifecycle timestamps based on status category transitions.
         let extra: { startedAt?: Date; completedAt?: Date | null; canceledAt?: Date | null } = {};
         if (patch.statusId && patch.statusId !== before.statusId) {
-          const next = await tx.status.findFirstOrThrow({ where: { id: patch.statusId } });
+          const next = await tx.status.findFirstOrThrow({
+            where: { id: patch.statusId, workspaceId: ctx.workspaceId },
+          });
           if (next.category === "IN_PROGRESS" && !before.startedAt) extra.startedAt = new Date();
           if (next.category === "DONE") extra.completedAt = new Date();
           if (next.category === "CANCELED") extra.canceledAt = new Date();
@@ -227,9 +256,15 @@ export const issueRouter = router({
           if (next.category !== "CANCELED") extra.canceledAt = null;
         }
 
-        const after = await tx.issue.update({
-          where: { id },
+        const updateRes = await tx.issue.updateMany({
+          where: { id, workspaceId: ctx.workspaceId },
           data: { ...patch, ...extra },
+        });
+        if (updateRes.count === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found in this workspace." });
+        }
+        const after = await tx.issue.findUniqueOrThrow({
+          where: { id },
           include: { status: true },
         });
 
@@ -293,9 +328,16 @@ export const issueRouter = router({
 
   softDelete: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.issue.update({ where: { id: input.id }, data: { deletedAt: new Date() } }),
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const res = await ctx.db.issue.updateMany({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        data: { deletedAt: new Date() },
+      });
+      if (res.count === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found in this workspace." });
+      }
+      return { ok: true };
+    }),
 
   bulkStatus: workspaceProcedure
     .input(z.object({ ids: z.array(z.string().cuid()).max(200), statusId: z.string().cuid() }))
@@ -458,19 +500,24 @@ async function findBlockedIssueIds(ctx: {
   db: typeof import("@/server/db").db;
   workspaceId: string;
 }): Promise<Set<string>> {
+  // Row shape written by `relation.add`:
+  //   BLOCKS     : from = blocker, to = blocked
+  //   BLOCKED_BY : from = blocked, to = blocker
+  // An issue is blocked iff at least one of its blockers is still open
+  // (status category not in DONE/CANCELED).
   const blockers = await ctx.db.issueRelation.findMany({
     where: {
       workspaceId: ctx.workspaceId,
       OR: [
         {
-          kind: RelationKind.BLOCKED_BY,
+          kind: RelationKind.BLOCKS,
           fromIssue: {
             status: { category: { notIn: ["DONE", "CANCELED"] } },
             deletedAt: null,
           },
         },
         {
-          kind: RelationKind.BLOCKS,
+          kind: RelationKind.BLOCKED_BY,
           toIssue: {
             status: { category: { notIn: ["DONE", "CANCELED"] } },
             deletedAt: null,
@@ -482,13 +529,8 @@ async function findBlockedIssueIds(ctx: {
   });
   const ids = new Set<string>();
   for (const r of blockers) {
-    // BLOCKED_BY: fromIssue is the blocker, toIssue is blocked.
-    if (r.kind === RelationKind.BLOCKED_BY) ids.add(r.toIssueId);
-    // BLOCKS: fromIssue is blocked by toIssue -> wait, semantics: BLOCKS
-    // says fromIssue blocks toIssue, so toIssue is the blocked one.
-    // We select rows where the *blocker* side is still open, so toIssueId
-    // is the issue that can't start yet.
-    if (r.kind === RelationKind.BLOCKS) ids.add(r.fromIssueId);
+    if (r.kind === RelationKind.BLOCKS) ids.add(r.toIssueId);
+    if (r.kind === RelationKind.BLOCKED_BY) ids.add(r.fromIssueId);
   }
   return ids;
 }

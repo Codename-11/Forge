@@ -56,21 +56,23 @@ describe("issueRouter — blocker-aware claim + narrowing + unblocked flag", () 
       where: { id: { in: [blocked.id, free.id] }, workspaceId: fixture.workspace.id },
       data: { queued: true },
     });
+    // Mirrors `relation.add({kind: BLOCKS, from: blocker, to: blocked})`:
+    //   BLOCKS     : from = blocker, to = blocked
+    //   BLOCKED_BY : from = blocked, to = blocker
     await prisma.issueRelation.create({
       data: {
         workspaceId: fixture.workspace.id,
         fromIssueId: blocker.id,
         toIssueId: blocked.id,
-        kind: RelationKind.BLOCKED_BY, // blocked -> blocker
+        kind: RelationKind.BLOCKS,
       },
     });
-    // Also create the reciprocal BLOCKS relation (as the relation router does).
     await prisma.issueRelation.create({
       data: {
         workspaceId: fixture.workspace.id,
         fromIssueId: blocked.id,
         toIssueId: blocker.id,
-        kind: RelationKind.BLOCKS,
+        kind: RelationKind.BLOCKED_BY,
       },
     });
 
