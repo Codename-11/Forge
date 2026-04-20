@@ -14,23 +14,31 @@ import { projectTemplateRouter } from "./project-template";
 import { recurringRouter } from "./recurring";
 import { viewRouter } from "./view";
 import { standupRouter } from "./standup";
+import { cycleRouter } from "./cycle";
+import { initiativeRouter } from "./initiative";
+import { relationRouter } from "./relation";
+import { timeEntryRouter } from "./timeEntry";
 
 export const appRouter = router({
-  workspace: workspaceRouter,
-  project: projectRouter,
-  issue: issueRouter,
-  comment: commentRouter,
-  analytics: analyticsRouter,
-  plugin: pluginRouter,
-  status: statusRouter,
   access: accessRouter,
   admin: adminRouter,
+  analytics: analyticsRouter,
+  comment: commentRouter,
+  cycle: cycleRouter,
+  initiative: initiativeRouter,
+  issue: issueRouter,
   label: labelRouter,
-  template: issueTemplateRouter,
+  plugin: pluginRouter,
+  project: projectRouter,
   projectTemplate: projectTemplateRouter,
   recurring: recurringRouter,
-  view: viewRouter,
+  relation: relationRouter,
   standup: standupRouter,
+  status: statusRouter,
+  template: issueTemplateRouter,
+  timeEntry: timeEntryRouter,
+  view: viewRouter,
+  workspace: workspaceRouter,
 });
 
 export type AppRouter = typeof appRouter;
