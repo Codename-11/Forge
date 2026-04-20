@@ -6,6 +6,7 @@ import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Confirm } from "@/components/ui/modal";
 import { EmptyState, Skeleton, SkeletonText } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
@@ -95,6 +96,8 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
   const [titleDraft, setTitleDraft] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [releaseOpen, setReleaseOpen] = useState(false);
 
   useEffect(() => {
     if (issue && !editingTitle) setTitleDraft(issue.title);
@@ -142,9 +145,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
-                if (confirm("Delete this issue?")) softDelete.mutate({ id });
-              }}
+              onClick={() => setDeleteOpen(true)}
             >
               Delete
             </Button>
@@ -326,7 +327,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                       size="sm"
                       variant="ghost"
                       className="mt-1 w-full"
-                      onClick={() => releaseClaim.mutate({ id: issue.id })}
+                      onClick={() => setReleaseOpen(true)}
                     >
                       Release claim
                     </Button>
@@ -346,6 +347,27 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
           </aside>
         </div>
       </div>
+
+      <Confirm
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        variant="destructive"
+        title={`Delete ${issueKey}?`}
+        description="Soft-deletes the issue. History is retained but the issue is removed from lists, boards, and relations."
+        primaryLabel="Delete issue"
+        typeToConfirm={issueKey}
+        loading={softDelete.isPending}
+        onConfirm={() => softDelete.mutate({ id })}
+      />
+      <Confirm
+        open={releaseOpen}
+        onOpenChange={setReleaseOpen}
+        title="Release claim?"
+        description="The current agent loses its exclusive hold and the issue returns to the queue."
+        primaryLabel="Release claim"
+        loading={releaseClaim.isPending}
+        onConfirm={() => releaseClaim.mutate({ id: issue.id })}
+      />
     </>
   );
 }

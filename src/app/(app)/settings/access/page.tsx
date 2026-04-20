@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
+import { Confirm, SidePanel } from "@/components/ui/modal";
 import { Section } from "@/components/settings/section";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
@@ -96,6 +97,9 @@ export default function AccessPage() {
   const [scopes, setScopes] = useState<Scope[]>(FULL_ACCESS);
   const [preset, setPreset] = useState<Preset>("full");
   const [expiresInDays, setExpiresInDays] = useState<string>("");
+  const [rotateTarget, setRotateTarget] = useState<{ id: string; name: string } | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<{ id: string; name: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const baseUrl =
     typeof window !== "undefined"
@@ -237,24 +241,14 @@ export default function AccessPage() {
                             variant="outline"
                             size="sm"
                             disabled={rotate.isPending}
-                            onClick={() => {
-                              if (
-                                confirm(
-                                  `Rotate "${k.name}"? The old key is revoked immediately — update your agent before closing the reveal.`,
-                                )
-                              )
-                                rotate.mutate({ id: k.id });
-                            }}
+                            onClick={() => setRotateTarget({ id: k.id, name: k.name })}
                           >
                             Rotate
                           </Button>
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => {
-                              if (confirm(`Revoke "${k.name}"? This cannot be undone.`))
-                                revoke.mutate({ id: k.id });
-                            }}
+                            onClick={() => setRevokeTarget({ id: k.id, name: k.name })}
                           >
                             Revoke
                           </Button>
@@ -263,14 +257,7 @@ export default function AccessPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => {
-                          if (
-                            confirm(
-                              `Permanently delete "${k.name}"? This removes the row entirely — use Revoke if you need to keep the audit trail.`,
-                            )
-                          )
-                            remove.mutate({ id: k.id });
-                        }}
+                        onClick={() => setDeleteTarget({ id: k.id, name: k.name })}
                       >
                         Delete
                       </Button>
@@ -290,24 +277,28 @@ export default function AccessPage() {
         </div>
       </div>
 
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} className="max-w-lg">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!name.trim()) return toast.error("Name is required.");
-            if (scopes.length === 0) return toast.error("Select at least one scope.");
-            const days = expiresInDays ? Number(expiresInDays) : undefined;
-            create.mutate({ name: name.trim(), scopes, expiresInDays: days });
-          }}
-          className="space-y-4 p-5"
-        >
-          <div>
-            <div className="text-sm font-semibold">New API key</div>
-            <div className="mt-0.5 text-xs text-muted-foreground">
-              Scoped token for an external agent (MCP, webhooks, or bare HTTP).
-            </div>
-          </div>
-
+      <SidePanel
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        size="wide"
+        title="New API key"
+        description="Scoped token for an external agent (MCP, webhooks, or bare HTTP)."
+        primaryLabel={create.isPending ? "Creating…" : "Create key"}
+        loading={create.isPending}
+        onPrimary={() => {
+          if (!name.trim()) {
+            toast.error("Name is required.");
+            return;
+          }
+          if (scopes.length === 0) {
+            toast.error("Select at least one scope.");
+            return;
+          }
+          const days = expiresInDays ? Number(expiresInDays) : undefined;
+          create.mutate({ name: name.trim(), scopes, expiresInDays: days });
+        }}
+      >
+        <div className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-xs text-muted-foreground">Name</label>
             <Input
@@ -383,17 +374,50 @@ export default function AccessPage() {
               placeholder="blank for no expiry"
             />
           </div>
+        </div>
+      </SidePanel>
 
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="ember" disabled={create.isPending}>
-              {create.isPending ? "Creating…" : "Create key"}
-            </Button>
-          </div>
-        </form>
-      </Dialog>
+      <Confirm
+        open={!!rotateTarget}
+        onOpenChange={(o) => !o && setRotateTarget(null)}
+        title={rotateTarget ? `Rotate ${rotateTarget.name}?` : "Rotate key?"}
+        description="The old key is revoked immediately — update your agent before closing the reveal."
+        primaryLabel="Rotate"
+        loading={rotate.isPending}
+        onConfirm={() => {
+          if (rotateTarget) rotate.mutate({ id: rotateTarget.id });
+          setRotateTarget(null);
+        }}
+      />
+
+      <Confirm
+        open={!!revokeTarget}
+        onOpenChange={(o) => !o && setRevokeTarget(null)}
+        variant="destructive"
+        title={revokeTarget ? `Revoke ${revokeTarget.name}?` : "Revoke key?"}
+        description="Disables the key immediately. The row is retained for audit."
+        primaryLabel="Revoke"
+        loading={revoke.isPending}
+        onConfirm={() => {
+          if (revokeTarget) revoke.mutate({ id: revokeTarget.id });
+          setRevokeTarget(null);
+        }}
+      />
+
+      <Confirm
+        open={!!deleteTarget}
+        onOpenChange={(o) => !o && setDeleteTarget(null)}
+        variant="destructive"
+        title={deleteTarget ? `Delete ${deleteTarget.name}?` : "Delete key?"}
+        description="Removes the row entirely — use Revoke if you need to keep the audit trail."
+        primaryLabel="Delete key"
+        typeToConfirm={deleteTarget?.name}
+        loading={remove.isPending}
+        onConfirm={() => {
+          if (deleteTarget) remove.mutate({ id: deleteTarget.id });
+          setDeleteTarget(null);
+        }}
+      />
 
       <Dialog open={!!revealKey} onClose={() => setRevealKey(null)} className="max-w-2xl">
         {revealKey && (

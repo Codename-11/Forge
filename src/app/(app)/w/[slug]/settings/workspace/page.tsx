@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog } from "@/components/ui/dialog";
+import { Confirm } from "@/components/ui/modal";
 import { Section } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -237,19 +237,25 @@ export default function WorkspaceSettingsPage() {
         </div>
       </div>
 
-      <ConfirmArchive
+      <Confirm
         open={archiveOpen}
-        onClose={() => setArchiveOpen(false)}
-        name={ws.name}
+        onOpenChange={setArchiveOpen}
+        title={`Archive ${ws.name}?`}
+        description="Members lose access until the workspace is restored. Data is retained."
+        primaryLabel="Archive"
+        loading={archive.isPending}
         onConfirm={() => archive.mutate()}
-        pending={archive.isPending}
       />
-      <ConfirmDelete
+      <Confirm
         open={deleteOpen}
-        onClose={() => setDeleteOpen(false)}
-        name={ws.name}
-        onConfirm={(confirmName) => del.mutate({ confirmName })}
-        pending={del.isPending}
+        onOpenChange={setDeleteOpen}
+        variant="destructive"
+        title={`Delete ${ws.name}?`}
+        description="This permanently removes all issues, projects, cycles, attachments, and events."
+        primaryLabel="Delete workspace"
+        typeToConfirm={ws.name}
+        loading={del.isPending}
+        onConfirm={() => del.mutate({ confirmName: ws.name })}
       />
     </>
   );
@@ -275,94 +281,3 @@ function Field({
   );
 }
 
-function ConfirmArchive({
-  open,
-  onClose,
-  name,
-  onConfirm,
-  pending,
-}: {
-  open: boolean;
-  onClose: () => void;
-  name: string;
-  onConfirm: () => void;
-  pending: boolean;
-}) {
-  return (
-    <Dialog open={open} onClose={onClose} className="max-w-md">
-      <div className="space-y-3 p-5">
-        <div className="text-sm font-semibold">Archive {name}?</div>
-        <p className="text-xs text-muted-foreground">
-          Members lose access until the workspace is restored. Data is retained.
-        </p>
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={pending}
-            onClick={() => {
-              onConfirm();
-              onClose();
-            }}
-          >
-            {pending ? "Archiving…" : "Archive"}
-          </Button>
-        </div>
-      </div>
-    </Dialog>
-  );
-}
-
-function ConfirmDelete({
-  open,
-  onClose,
-  name,
-  onConfirm,
-  pending,
-}: {
-  open: boolean;
-  onClose: () => void;
-  name: string;
-  onConfirm: (confirmName: string) => void;
-  pending: boolean;
-}) {
-  const [confirm, setConfirm] = useState("");
-  useEffect(() => {
-    if (!open) setConfirm("");
-  }, [open]);
-  return (
-    <Dialog open={open} onClose={onClose} className="max-w-md">
-      <div className="space-y-3 p-5">
-        <div className="text-sm font-semibold text-danger">Delete {name}?</div>
-        <p className="text-xs text-muted-foreground">
-          This permanently removes all issues, projects, cycles, attachments, and
-          events. Type the workspace name to confirm.
-        </p>
-        <Input
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          placeholder={name}
-          autoFocus
-        />
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            size="sm"
-            disabled={pending || confirm !== name}
-            onClick={() => {
-              onConfirm(confirm);
-            }}
-          >
-            {pending ? "Deleting…" : "Delete permanently"}
-          </Button>
-        </div>
-      </div>
-    </Dialog>
-  );
-}
