@@ -87,19 +87,22 @@ const addDays = (date: Date, days: number): Date => {
  * "what should I work on next."
  */
 async function findBlockedIssueIds(workspaceId: string): Promise<Set<string>> {
+  // BLOCKS     : from = blocker, to = blocked.
+  // BLOCKED_BY : from = blocked, to = blocker.
+  // Blocked iff any blocker is still open (not DONE/CANCELED).
   const blockers = await db.issueRelation.findMany({
     where: {
       workspaceId,
       OR: [
         {
-          kind: RelationKind.BLOCKED_BY,
+          kind: RelationKind.BLOCKS,
           fromIssue: {
             status: { category: { notIn: ["DONE", "CANCELED"] } },
             deletedAt: null,
           },
         },
         {
-          kind: RelationKind.BLOCKS,
+          kind: RelationKind.BLOCKED_BY,
           toIssue: {
             status: { category: { notIn: ["DONE", "CANCELED"] } },
             deletedAt: null,
@@ -111,8 +114,8 @@ async function findBlockedIssueIds(workspaceId: string): Promise<Set<string>> {
   });
   const ids = new Set<string>();
   for (const r of blockers) {
-    if (r.kind === RelationKind.BLOCKED_BY) ids.add(r.toIssueId);
-    if (r.kind === RelationKind.BLOCKS) ids.add(r.fromIssueId);
+    if (r.kind === RelationKind.BLOCKS) ids.add(r.toIssueId);
+    if (r.kind === RelationKind.BLOCKED_BY) ids.add(r.fromIssueId);
   }
   return ids;
 }
@@ -222,14 +225,22 @@ export const mcpTools = {
     }),
     async run(input: { id: string; statusId: string }, ctx: McpContext) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.id });
-      // Ensure workspace isolation — don't let an issue id from another ws slip through.
-      const issue = await db.issue.findFirstOrThrow({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: { id: true },
-      });
+      // Ensure both the issue and the target status belong to this workspace.
+      const [issue, status] = await Promise.all([
+        db.issue.findFirst({
+          where: { id: input.id, workspaceId: ctx.workspaceId },
+          select: { id: true },
+        }),
+        db.status.findFirst({
+          where: { id: input.statusId, workspaceId: ctx.workspaceId },
+          select: { id: true },
+        }),
+      ]);
+      if (!issue) throw new Error("Issue not found in this workspace.");
+      if (!status) throw new Error("Status not found in this workspace.");
       return db.issue.update({
         where: { id: issue.id },
-        data: { statusId: input.statusId },
+        data: { statusId: status.id },
       });
     },
   },
