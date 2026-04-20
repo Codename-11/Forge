@@ -99,6 +99,27 @@ enum WebhookDeliveryStatus {
   DEAD_LETTER
 }
 
+enum CycleStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+  CANCELED
+}
+
+enum InitiativeStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+  CANCELED
+}
+
+enum RelationKind {
+  BLOCKS
+  BLOCKED_BY
+  DUPLICATES
+  RELATES_TO
+}
+
 // ----------------------------------------------------------------------------
 // Auth (NextAuth v5)
 // ----------------------------------------------------------------------------
@@ -118,6 +139,10 @@ model User {
   timeFormat    String?
   /// "light" | "dark" | "system". Null = "system".
   theme         String?
+  /// Workspace id remembered across logins; UI loads this one by default.
+  lastWorkspaceId String?
+  /// Ordered list of pinned issue ids (max 3 enforced server-side).
+  pinnedIssueIds String[] @default([])
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -135,6 +160,7 @@ model User {
   claimedIssues    Issue[]          @relation("IssueClaimedBy")
   recurringCreated RecurringIssue[] @relation("RecurringCreator")
   savedViews       SavedView[]
+  timeEntries      TimeEntry[]
 
   @@index([handle])
 }
@@ -186,6 +212,14 @@ model Workspace {
   /// Short key used for issue identifiers: e.g. `FRG-123`.
   key       String   @unique
   avatarUrl String?
+  /// Default cycle length (days). Overridable per cycle at create time.
+  cycleLengthDays Int @default(7)
+  /// Default rest/cooldown days between cycles (0 = back-to-back).
+  cycleCooldownDays Int @default(0)
+  /// When true, the time-tracking surface is enabled for this workspace.
+  timeTrackingEnabled Boolean @default(false)
+  /// Soft cap on total attachment storage (MB) for this workspace.
+  attachmentQuotaMb Int @default(1024)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   deletedAt DateTime?
@@ -208,6 +242,10 @@ model Workspace {
   projectTemplates ProjectTemplate[]
   recurring   RecurringIssue[]
   savedViews  SavedView[]
+  cycles      Cycle[]
+  initiatives Initiative[]
+  issueRelations IssueRelation[]
+  timeEntries TimeEntry[]
 
   @@index([slug])
 }
@@ -241,6 +279,8 @@ model Project {
   archived    Boolean   @default(false)
   startDate   DateTime?
   targetDate  DateTime?
+  /// Optional parent initiative that groups related projects.
+  initiativeId String?
   createdById String
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -248,12 +288,14 @@ model Project {
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdBy User      @relation("ProjectCreator", fields: [createdById], references: [id])
+  initiative Initiative? @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
   issues    Issue[]
   templates IssueTemplate[]
   recurring RecurringIssue[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId, archived])
+  @@index([initiativeId])
 }
 
 /// Workspace-scoped status; categories map to StatusCategory enum.
@@ -290,6 +332,8 @@ model Issue {
   workspaceId String
   projectId   String?
   parentId    String?
+  /// Optional cycle membership. SetNull on cycle delete so issues survive.
+  cycleId     String?
   /// Human-readable identifier: `${workspace.key}-${number}` e.g. `FRG-42`.
   number      Int
   kind        WorkItemKind @default(ISSUE)
@@ -318,6 +362,7 @@ model Issue {
   project   Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
   parent    Issue?          @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
   children  Issue[]         @relation("IssueChildren")
+  cycle     Cycle?          @relation(fields: [cycleId], references: [id], onDelete: SetNull)
   status    Status          @relation(fields: [statusId], references: [id])
   author    User            @relation("IssueAuthor", fields: [authorId], references: [id])
   claimedBy User?           @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
@@ -325,6 +370,9 @@ model Issue {
   labels    IssueLabel[]
   comments  Comment[]
   attachments Attachment[]
+  relationsFrom IssueRelation[] @relation("IssueRelationFrom")
+  relationsTo   IssueRelation[] @relation("IssueRelationTo")
+  timeEntries   TimeEntry[]
 
   @@unique([workspaceId, number])
   @@index([workspaceId, statusId])
@@ -332,6 +380,7 @@ model Issue {
   @@index([workspaceId, priority])
   @@index([workspaceId, createdAt])
   @@index([workspaceId, queued, claimedAt])
+  @@index([workspaceId, cycleId])
 }
 
 /// Reusable project blueprints shown in the "Starter templates" picker.
@@ -461,10 +510,16 @@ model Comment {
   @@index([workspaceId, createdAt])
 }
 
+/// Polymorphic attachment: `targetType` is one of "issue" | "initiative" |
+/// "cycle" | "comment"; `targetId` references the owning row.
+/// `issueId` is preserved as a nullable FK for backward compatibility while
+/// new code migrates to the targetType/targetId pair.
 model Attachment {
   id          String   @id @default(cuid())
   workspaceId String
   issueId     String?
+  targetType  String?
+  targetId    String?
   filename    String
   mimeType    String
   size        Int
@@ -475,6 +530,7 @@ model Attachment {
   issue     Issue?    @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
   @@index([issueId])
+  @@index([workspaceId, targetType, targetId])
 }
 
 // ----------------------------------------------------------------------------
@@ -604,6 +660,13 @@ model ApiKey {
   hashedKey     String    @unique
   prefix        String
   scopes        PluginScope[]
+  /// Optional narrowing: restrict this key to specific project ids.
+  /// Empty array = no restriction.
+  projectIds    String[]  @default([])
+  /// Optional narrowing: restrict this key to specific label ids.
+  labelIds      String[]  @default([])
+  /// Optional narrowing: restrict this key to specific initiative ids.
+  initiativeIds String[]  @default([])
   lastUsedAt    DateTime?
   expiresAt     DateTime?
   revokedAt     DateTime?
@@ -650,4 +713,93 @@ model WebhookDelivery {
 
   @@index([status, scheduledAt])
   @@index([webhookId])
+}
+
+// ----------------------------------------------------------------------------
+// Cycles / initiatives / relations / time
+// ----------------------------------------------------------------------------
+
+/// Time-boxed iteration that groups in-flight issues. Length defaults to
+/// the workspace `cycleLengthDays`, but each cycle stores its own.
+model Cycle {
+  id            String      @id @default(cuid())
+  workspaceId   String
+  name          String
+  startsAt      DateTime
+  endsAt        DateTime
+  lengthDays    Int
+  cooldownDays  Int         @default(0)
+  status        CycleStatus @default(PLANNED)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issues    Issue[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, status, startsAt])
+}
+
+/// Umbrella for related projects. Strategic container above Project.
+model Initiative {
+  id          String           @id @default(cuid())
+  workspaceId String
+  name        String
+  slug        String
+  description String?          @db.Text
+  targetDate  DateTime?
+  color       String?
+  status      InitiativeStatus @default(PLANNED)
+  position    Int              @default(0)
+  createdById String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  projects  Project[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status, position])
+}
+
+/// Directed relation between two issues. `kind` captures the semantics.
+/// Deleting either endpoint cascades the relation row.
+model IssueRelation {
+  id           String       @id @default(cuid())
+  workspaceId  String
+  fromIssueId  String
+  toIssueId    String
+  kind         RelationKind
+  createdAt    DateTime     @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  fromIssue Issue     @relation("IssueRelationFrom", fields: [fromIssueId], references: [id], onDelete: Cascade)
+  toIssue   Issue     @relation("IssueRelationTo",   fields: [toIssueId],   references: [id], onDelete: Cascade)
+
+  @@unique([fromIssueId, toIssueId, kind])
+  @@index([fromIssueId])
+  @@index([toIssueId])
+  @@index([workspaceId, kind])
+}
+
+/// Time tracking entry. Open entries have `endedAt = null`.
+model TimeEntry {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  issueId     String?
+  description String?
+  startedAt   DateTime
+  endedAt     DateTime?
+  billable    Boolean  @default(false)
+  hourlyRate  Float?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issue     Issue?    @relation(fields: [issueId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, userId, startedAt])
+  @@index([issueId])
 }
