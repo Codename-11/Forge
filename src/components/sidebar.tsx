@@ -16,18 +16,25 @@ import {
   User as UserIcon,
   ChevronUp,
   Target,
+  CalendarRange,
+  Compass,
+  Map as MapIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useModKeyLabel } from "@/lib/platform";
-import { useChord } from "@/lib/keyboard";
+import { useChord, useHotkey } from "@/lib/keyboard";
 import { signOutAction } from "@/server/actions/auth";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
+import { trpc } from "@/lib/trpc";
 
 const NAV = [
   { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
   { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i" },
   { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
   { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
+  { path: "/cycles", label: "Cycles", icon: CalendarRange, chord: "c" },
+  { path: "/initiatives", label: "Initiatives", icon: Compass, chord: "n" },
+  { path: "/roadmap", label: "Roadmap", icon: MapIcon, chord: "r" },
   { path: "/standup", label: "Standup", icon: Target, chord: "u" },
   { path: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
   { path: "/settings/plugins", label: "Plugins", icon: Plug, chord: "l" },
@@ -53,9 +60,25 @@ export function Sidebar({
   const chordMap = useMemo(() => {
     const m: Record<string, () => void> = {};
     for (const n of nav) m[n.chord] = () => router.push(n.href);
+    // `g n` is documented as "new initiative" in Phase 3 — overrides the
+    // plain nav entry to auto-open the dialog via ?new.
+    m["n"] = () => router.push(`/w/${slug}/initiatives?new`);
     return m;
-  }, [nav, router]);
+  }, [nav, router, slug]);
   useChord("g", chordMap);
+
+  // `c` → jump to the current cycle's detail page, falling back to /cycles
+  // if no ACTIVE cycle exists. The query stays cached by tRPC so pressing
+  // `c` repeatedly is instant.
+  const { data: currentCycle } = trpc.cycle.current.useQuery();
+  useHotkey(
+    "c",
+    () => {
+      if (currentCycle) router.push(`/w/${slug}/cycles/${currentCycle.id}`);
+      else router.push(`/w/${slug}/cycles`);
+    },
+    [currentCycle, router, slug],
+  );
 
   return (
     <aside className="flex h-svh w-56 flex-col border-r border-border bg-card/40">
@@ -78,7 +101,7 @@ export function Sidebar({
       >
         <Plus className="h-3.5 w-3.5" />
         New issue
-        <span className="ml-auto kbd bg-ember/20 text-ember-foreground">C</span>
+        <span className="ml-auto kbd bg-ember/20 text-ember-foreground">⇧C</span>
       </button>
 
       <nav className="mt-4 flex flex-col gap-px px-2">

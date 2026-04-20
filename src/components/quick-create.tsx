@@ -62,7 +62,9 @@ export function QuickCreate() {
     setLabelIds(t.labelIds);
   }
 
-  useHotkey("c", () => setOpen(true));
+  // `c` is reserved for "open current cycle" (Phase 3 planning primitives).
+  // Quick-create binds to Shift+C and remains clickable from the sidebar.
+  useHotkey("shift+c", () => setOpen(true));
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {

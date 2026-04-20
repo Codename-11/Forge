@@ -17,6 +17,17 @@ const filterSchema = z.object({
   priority: z.nativeEnum(Priority).optional(),
   query: z.string().max(200).optional(),
   includeDone: z.boolean().default(true),
+  /**
+   * Cycle filter. `undefined` = any cycle (no filter). Pass a cycle id to
+   * pin. Pass `null` to match "backlog" — issues with no cycle.
+   */
+  cycleId: z.string().cuid().nullable().optional(),
+  /**
+   * Initiative filter — joins through `project.initiativeId`. `undefined`
+   * for no filter; `null` matches issues whose project has no initiative
+   * (or no project at all).
+   */
+  initiativeId: z.string().cuid().nullable().optional(),
   limit: z.number().min(1).max(100).default(50),
   cursor: cursorSchema,
 });
@@ -26,6 +37,22 @@ export const issueRouter = router({
     .input(filterSchema.default({ includeDone: true, limit: 50 }))
     .query(async ({ ctx, input }) => {
       const keyWhere = buildKeyScopeWhere(ctx, "issue");
+      // Compose optional OR clauses under AND so multiple predicates that
+      // each need OR (query, initiativeId=null) don't clobber each other.
+      const andClauses: Array<Record<string, unknown>> = [];
+      if (input.initiativeId === null) {
+        andClauses.push({
+          OR: [{ projectId: null }, { project: { initiativeId: null } }],
+        });
+      }
+      if (input.query) {
+        andClauses.push({
+          OR: [
+            { title: { contains: input.query, mode: "insensitive" } },
+            { description: { contains: input.query, mode: "insensitive" } },
+          ],
+        });
+      }
       const rows = await ctx.db.issue.findMany({
         where: {
           workspaceId: ctx.workspaceId,
@@ -35,17 +62,18 @@ export const issueRouter = router({
           ...(input.statusId ? { statusId: input.statusId } : {}),
           ...(input.assigneeId ? { assignees: { some: { userId: input.assigneeId } } } : {}),
           ...(input.priority ? { priority: input.priority } : {}),
-          ...(input.query
-            ? {
-                OR: [
-                  { title: { contains: input.query, mode: "insensitive" } },
-                  { description: { contains: input.query, mode: "insensitive" } },
-                ],
-              }
+          ...(input.cycleId === null
+            ? { cycleId: null }
+            : input.cycleId
+              ? { cycleId: input.cycleId }
+              : {}),
+          ...(typeof input.initiativeId === "string"
+            ? { project: { initiativeId: input.initiativeId } }
             : {}),
           ...(input.includeDone
             ? {}
             : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
+          ...(andClauses.length ? { AND: andClauses } : {}),
         },
         take: input.limit + 1,
         cursor: input.cursor ? { id: input.cursor } : undefined,

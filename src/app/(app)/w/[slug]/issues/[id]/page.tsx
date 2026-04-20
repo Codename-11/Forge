@@ -11,6 +11,7 @@ import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { IssueRelationsPanel } from "@/components/relations/issue-relations-panel";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
@@ -228,6 +229,9 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               </article>
             )}
           </section>
+
+          {/* attachment-panel-slot */}
+          <IssueRelationsPanel issueId={issue.id} />
 
           <section className="mt-10">
             <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
