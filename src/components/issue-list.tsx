@@ -24,6 +24,8 @@ export function IssueList({
   authorId,
   includeDone = false,
   query,
+  cycleId,
+  initiativeId,
   emptyHint,
   enableBulk = true,
 }: {
@@ -33,6 +35,10 @@ export function IssueList({
   authorId?: string;
   includeDone?: boolean;
   query?: string;
+  /** Tri-state: `undefined` = any; `null` = backlog; string = specific id. */
+  cycleId?: string | null;
+  /** Tri-state: `undefined` = any; `null` = no initiative; string = id. */
+  initiativeId?: string | null;
   emptyHint?: React.ReactNode;
   enableBulk?: boolean;
 }) {
@@ -42,6 +48,8 @@ export function IssueList({
     projectId,
     assigneeId,
     query,
+    cycleId,
+    initiativeId,
   });
   const { data: statuses } = trpc.status.list.useQuery();
   const utils = trpc.useUtils();

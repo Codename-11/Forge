@@ -15,10 +15,16 @@ export function IssueBoard({
   workspaceKey,
   projectId,
   assigneeId,
+  cycleId,
+  initiativeId,
 }: {
   workspaceKey: string;
   projectId?: string;
   assigneeId?: string;
+  /** Tri-state: `undefined` = any; `null` = backlog; string = specific id. */
+  cycleId?: string | null;
+  /** Tri-state: `undefined` = any; `null` = no initiative; string = id. */
+  initiativeId?: string | null;
 }) {
   const { data: statuses } = trpc.status.list.useQuery();
   const { data: issues } = trpc.issue.list.useQuery({
@@ -26,6 +32,8 @@ export function IssueBoard({
     limit: 100,
     projectId,
     assigneeId,
+    cycleId,
+    initiativeId,
   });
   const ws = useMaybeWorkspace();
   const base = ws ? `/w/${ws.slug}` : "";

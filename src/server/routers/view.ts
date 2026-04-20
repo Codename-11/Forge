@@ -3,12 +3,21 @@ import { TRPCError } from "@trpc/server";
 import { Prisma } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 
+/**
+ * `cycleId` / `initiativeId` use a tri-state convention:
+ *   undefined → filter not applied
+ *   null      → match "no cycle / no initiative" explicitly
+ *   string    → specific id
+ * Saved views round-trip all three states verbatim.
+ */
 const filtersSchema = z.object({
   projectId: z.string().cuid().nullable().optional(),
   statusId: z.string().cuid().nullable().optional(),
   assigneeId: z.string().cuid().nullable().optional(),
   priority: z.enum(["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"]).nullable().optional(),
   query: z.string().max(200).nullable().optional(),
+  cycleId: z.string().cuid().nullable().optional(),
+  initiativeId: z.string().cuid().nullable().optional(),
   view: z.enum(["list", "board"]).default("list"),
   includeDone: z.boolean().default(false),
 });
