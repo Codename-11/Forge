@@ -10,14 +10,25 @@ import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
 import { useWorkspace } from "@/hooks/use-workspace";
-import { IssueRelationsPanel } from "@/components/relations/issue-relations-panel";
-import { IssueAttachmentsPanel } from "@/components/attachments/issue-attachments-panel";
-import { usePasteUpload } from "@/components/attachments/use-paste-upload";
-import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { PinToggleButton } from "@/components/pins/pin-toggle-button";
+import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
+import { IssueMain } from "@/components/issue-detail/issue-main";
+import { IssueRail } from "@/components/issue-detail/issue-rail";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
+/**
+ * Issue detail page. Two-column layout above `md`:
+ *
+ *   [ main column (flex-1 max-w-3xl) | right rail (sticky, w-96) ]
+ *     description + comments           tabs: Attachments / Relations / Activity
+ *
+ * Below `md` it stacks and the rail's tab strip lives above the main
+ * column. The rail owns its own tab state in `?tab=…` so deep-links work.
+ * A secondary header ("IssueDetailTopbar") below the shell <Topbar /> hosts
+ * the inline editors (title, status, priority, assignees) — keeps the
+ * description above the fold without a separate metadata column below it.
+ */
 export default function IssueDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -81,39 +92,12 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     onError: (e) => toast.error(e.message),
   });
 
-  const createComment = trpc.comment.create.useMutation({
-    onSuccess: () => {
-      utils.issue.byId.invalidate({ id });
-      setCommentDraft("");
-    },
-  });
-
-  const [commentDraft, setCommentDraft] = useState("");
   const [titleDraft, setTitleDraft] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
-  const [descDraft, setDescDraft] = useState("");
-  const [editingDesc, setEditingDesc] = useState(false);
-
-  // Paste-to-upload handlers for the description and comment textareas.
-  // Both target the issue so pasted screenshots hang off the issue itself
-  // (no standalone comment attachment rows needed).
-  const descPaste = usePasteUpload({
-    targetType: "issue",
-    targetId: id,
-    value: descDraft,
-    onChange: setDescDraft,
-  });
-  const commentPaste = usePasteUpload({
-    targetType: "issue",
-    targetId: id,
-    value: commentDraft,
-    onChange: setCommentDraft,
-  });
 
   useEffect(() => {
     if (issue && !editingTitle) setTitleDraft(issue.title);
-    if (issue && !editingDesc) setDescDraft(issue.description ?? "");
-  }, [issue, editingTitle, editingDesc]);
+  }, [issue, editingTitle]);
 
   if (error)
     return (
@@ -124,11 +108,15 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   if (isLoading || !issue)
     return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
 
+  const issueKey = ws ? formatIssueId(ws.key, issue.number) : "Issue";
+
   return (
     <>
       <Topbar
-        title={ws ? formatIssueId(ws.key, issue.number) : "Issue"}
-        subtitle={<span className="font-mono text-[10px]">{issue.status.name}</span>}
+        title={issueKey}
+        subtitle={
+          <span className="font-mono text-[10px]">{issue.status.name}</span>
+        }
         actions={
           <>
             <PinToggleButton issueId={issue.id} />
@@ -152,297 +140,287 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
           </>
         }
       />
-      <div className="grid min-h-0 flex-1 grid-cols-[1fr_300px] overflow-hidden">
-        <div className="min-w-0 overflow-y-auto px-8 py-6">
-          {editingTitle ? (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (titleDraft.trim() && titleDraft !== issue.title)
-                  update.mutate({ id: issue.id, title: titleDraft.trim() });
-                setEditingTitle(false);
-              }}
-            >
-              <input
-                autoFocus
-                value={titleDraft}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onBlur={() => {
+
+      <IssueDetailTopbar
+        left={
+          <>
+            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+              {issueKey}
+            </span>
+            {editingTitle ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
                   if (titleDraft.trim() && titleDraft !== issue.title)
                     update.mutate({ id: issue.id, title: titleDraft.trim() });
                   setEditingTitle(false);
                 }}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setTitleDraft(issue.title);
-                    setEditingTitle(false);
-                  }
-                }}
-                className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-xl font-semibold tracking-tight"
-              />
-            </form>
-          ) : (
-            <h1
-              className="cursor-text rounded-md px-1 py-0.5 text-xl font-semibold tracking-tight hover:bg-subtle/60"
-              onClick={() => setEditingTitle(true)}
-              title="Click to edit"
-            >
-              {issue.title}
-            </h1>
-          )}
-
-          <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <Avatar name={issue.author.name} image={issue.author.image} size={16} />
-            <span>{issue.author.name ?? "Unknown"}</span>
-            <span>·</span>
-            <span title={formatDate(issue.createdAt, timePrefs)}>
-              {relativeTime(issue.createdAt)}
-            </span>
-          </div>
-
-          <section className="mt-6">
-            {editingDesc ? (
-              <div className="space-y-2">
-                <textarea
+                className="min-w-0 flex-1"
+              >
+                <input
                   autoFocus
-                  value={descDraft}
-                  onChange={(e) => setDescDraft(e.target.value)}
-                  onPaste={descPaste.onPaste}
-                  rows={8}
-                  placeholder="Description (Markdown-flavored). Paste screenshots to attach."
-                  className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onBlur={() => {
+                    if (titleDraft.trim() && titleDraft !== issue.title)
+                      update.mutate({ id: issue.id, title: titleDraft.trim() });
+                    setEditingTitle(false);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setTitleDraft(issue.title);
+                      setEditingTitle(false);
+                    }
+                  }}
+                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-sm font-semibold"
                 />
-                <div className="flex gap-2">
-                  <Button
-                    variant="ember"
-                    size="sm"
-                    onClick={() => {
-                      update.mutate({
-                        id: issue.id,
-                        description: descDraft.trim() || null,
-                      });
-                      setEditingDesc(false);
-                    }}
-                  >
-                    Save
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setDescDraft(issue.description ?? "");
-                      setEditingDesc(false);
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
+              </form>
             ) : (
-              <article
-                className="prose prose-sm max-w-none cursor-text rounded-md px-1 py-0.5 text-[13px] leading-relaxed text-foreground/90 hover:bg-subtle/40"
-                onClick={() => setEditingDesc(true)}
+              <h1
+                className="min-w-0 cursor-text truncate rounded-md px-1 py-0.5 text-sm font-semibold tracking-tight hover:bg-subtle/60"
+                onClick={() => setEditingTitle(true)}
                 title="Click to edit"
               >
-                {issue.description ? (
-                  <MarkdownWithAttachments body={issue.description} />
-                ) : (
-                  <span className="text-muted-foreground">No description. Click to add.</span>
-                )}
-              </article>
+                {issue.title}
+              </h1>
             )}
-          </section>
-
-          <IssueAttachmentsPanel issueId={issue.id} />
-          <IssueRelationsPanel issueId={issue.id} />
-
-          <section className="mt-10">
-            <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Activity
-            </h2>
-            <div className="space-y-3">
-              {issue.comments.length === 0 && (
-                <p className="text-xs text-muted-foreground">No comments yet.</p>
-              )}
-              {issue.comments.map((c) => (
-                <div key={c.id} className="flex gap-2.5">
-                  <Avatar name={c.author.name} image={c.author.image} size={22} />
-                  <div className="min-w-0 flex-1 rounded-md border border-border bg-card/40 p-2.5">
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <span className="font-medium">{c.author.name}</span>
-                      <span className="text-muted-foreground">{relativeTime(c.createdAt)}</span>
-                    </div>
-                    <MarkdownWithAttachments
-                      body={c.body}
-                      className="mt-1 text-[13px]"
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!commentDraft.trim()) return;
-                createComment.mutate({ issueId: id, body: commentDraft.trim() });
-              }}
-              className="mt-4 space-y-2"
-            >
-              <textarea
-                placeholder="Leave a comment… (paste screenshots to attach)"
-                value={commentDraft}
-                onChange={(e) => setCommentDraft(e.target.value)}
-                onPaste={commentPaste.onPaste}
-                rows={2}
-                className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[13px]"
-              />
-              <div className="flex justify-end">
-                <Button
-                  type="submit"
-                  size="sm"
-                  disabled={!commentDraft.trim() || createComment.isPending}
-                >
-                  Comment
-                </Button>
-              </div>
-            </form>
-          </section>
-        </div>
-
-        <aside className="overflow-y-auto border-l border-border p-5 text-xs">
-          <div className="space-y-4">
-            <Field label="Status">
-              <select
-                value={issue.statusId}
-                onChange={(e) => update.mutate({ id: issue.id, statusId: e.target.value })}
-                className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1"
-              >
-                {statuses?.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Priority">
-              <select
-                value={issue.priority}
-                onChange={(e) =>
-                  update.mutate({ id: issue.id, priority: e.target.value as typeof issue.priority })
-                }
-                className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1"
-              >
-                {PRIORITIES.map((p) => (
-                  <option key={p}>{p}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Project">
-              <select
-                value={issue.projectId ?? ""}
-                onChange={(e) =>
-                  update.mutate({
-                    id: issue.id,
-                    projectId: e.target.value || null,
-                  })
-                }
-                className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1"
-              >
-                <option value="">— none —</option>
-                {projects?.items.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Assignees">
-              <AssigneePicker
-                current={issue.assignees.map((a) => ({
-                  userId: a.userId,
-                  name: a.user.name,
-                  image: a.user.image,
-                }))}
-                members={(members ?? []).map((m) => ({
-                  userId: m.user.id,
-                  name: m.user.name ?? m.user.email,
-                  image: m.user.image,
-                }))}
-                onChange={(userIds) => assign.mutate({ id: issue.id, userIds })}
-              />
-            </Field>
-            <Field label="Labels">
-              <LabelPicker
-                current={issue.labels.map((l) => ({
-                  id: l.labelId,
-                  name: l.label.name,
-                  color: l.label.color,
-                }))}
-                all={allLabels ?? []}
-                onChange={(labelIds) => setLabels.mutate({ issueId: issue.id, labelIds })}
-              />
-            </Field>
-            <Field label="Due">
-              <input
-                type="date"
-                value={issue.dueDate ? new Date(issue.dueDate).toISOString().slice(0, 10) : ""}
-                onChange={(e) =>
-                  update.mutate({
-                    id: issue.id,
-                    dueDate: e.target.value ? new Date(e.target.value) : null,
-                  })
-                }
-                className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 font-mono"
-              />
-            </Field>
-
-            <Field label="Agent queue">
-              <label className="flex items-center gap-2 rounded-md border border-input bg-background px-2 py-1">
-                <input
-                  type="checkbox"
-                  checked={issue.queued}
-                  onChange={(e) =>
-                    setQueued.mutate({ id: issue.id, queued: e.target.checked })
-                  }
-                  className="h-3.5 w-3.5"
-                />
-                <span className="text-[11px] text-muted-foreground">
-                  Available to claim via MCP
-                </span>
-              </label>
-              {issue.claimedAt && (
-                <div className="mt-2 rounded-md border border-border bg-card/60 p-2 text-[11px]">
-                  <div className="text-muted-foreground">Claimed</div>
-                  <div className="mt-0.5">
-                    by <span className="font-mono">{issue.claimedById?.slice(0, 8)}</span>
-                    {issue.claimExpiresAt && (
-                      <>
-                        {" "}· expires {relativeTime(issue.claimExpiresAt)}
-                      </>
-                    )}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="mt-1 w-full"
-                    onClick={() => releaseClaim.mutate({ id: issue.id })}
-                  >
-                    Release claim
-                  </Button>
-                </div>
-              )}
-            </Field>
+          </>
+        }
+        middle={
+          <div className="flex flex-wrap items-center gap-1.5">
+            <InlineStatus
+              value={issue.statusId}
+              options={statuses ?? []}
+              onChange={(statusId) => update.mutate({ id: issue.id, statusId })}
+            />
+            <InlinePriority
+              value={issue.priority}
+              onChange={(priority) =>
+                update.mutate({ id: issue.id, priority })
+              }
+            />
+            <AssigneePicker
+              current={issue.assignees.map((a) => ({
+                userId: a.userId,
+                name: a.user.name,
+                image: a.user.image,
+              }))}
+              members={(members ?? []).map((m) => ({
+                userId: m.user.id,
+                name: m.user.name ?? m.user.email,
+                image: m.user.image,
+              }))}
+              onChange={(userIds) => assign.mutate({ id: issue.id, userIds })}
+            />
           </div>
-        </aside>
+        }
+      />
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="flex min-h-full flex-col gap-6 p-5 md:flex-row md:gap-8 md:p-6">
+          <div className="min-w-0 flex-1 md:max-w-3xl">
+            <div className="mb-5 flex items-center gap-2 text-xs text-muted-foreground">
+              <Avatar name={issue.author.name} image={issue.author.image} size={16} />
+              <span>{issue.author.name ?? "Unknown"}</span>
+              <span>·</span>
+              <span title={formatDate(issue.createdAt, timePrefs)}>
+                {relativeTime(issue.createdAt)}
+              </span>
+              <span>·</span>
+              <span title={formatDate(issue.updatedAt, timePrefs)}>
+                updated {relativeTime(issue.updatedAt)}
+              </span>
+            </div>
+
+            <IssueMain
+              issueId={issue.id}
+              description={issue.description}
+              comments={issue.comments}
+              onDescriptionSave={(next) =>
+                update.mutate({ id: issue.id, description: next })
+              }
+            />
+
+            <div className="mt-10 space-y-4 border-t border-border/60 pt-6">
+              <SidebarField label="Project">
+                <select
+                  value={issue.projectId ?? ""}
+                  onChange={(e) =>
+                    update.mutate({
+                      id: issue.id,
+                      projectId: e.target.value || null,
+                    })
+                  }
+                  className="focus-ring w-full max-w-xs rounded-md border border-input bg-background px-2 py-1 text-xs"
+                >
+                  <option value="">— none —</option>
+                  {projects?.items.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </SidebarField>
+              <SidebarField label="Labels">
+                <LabelPicker
+                  current={issue.labels.map((l) => ({
+                    id: l.labelId,
+                    name: l.label.name,
+                    color: l.label.color,
+                  }))}
+                  all={allLabels ?? []}
+                  onChange={(labelIds) => setLabels.mutate({ issueId: issue.id, labelIds })}
+                />
+              </SidebarField>
+              <SidebarField label="Due">
+                <input
+                  type="date"
+                  value={issue.dueDate ? new Date(issue.dueDate).toISOString().slice(0, 10) : ""}
+                  onChange={(e) =>
+                    update.mutate({
+                      id: issue.id,
+                      dueDate: e.target.value ? new Date(e.target.value) : null,
+                    })
+                  }
+                  className="focus-ring w-full max-w-xs rounded-md border border-input bg-background px-2 py-1 font-mono text-xs"
+                />
+              </SidebarField>
+              <SidebarField label="Agent queue">
+                <label className="flex w-full max-w-xs items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[11px]">
+                  <input
+                    type="checkbox"
+                    checked={issue.queued}
+                    onChange={(e) =>
+                      setQueued.mutate({ id: issue.id, queued: e.target.checked })
+                    }
+                    className="h-3.5 w-3.5"
+                  />
+                  <span className="text-muted-foreground">
+                    Available to claim via MCP
+                  </span>
+                </label>
+                {issue.claimedAt && (
+                  <div className="mt-2 max-w-xs rounded-md border border-border bg-card/60 p-2 text-[11px]">
+                    <div className="text-muted-foreground">Claimed</div>
+                    <div className="mt-0.5">
+                      by{" "}
+                      <span className="font-mono">
+                        {issue.claimedById?.slice(0, 8)}
+                      </span>
+                      {issue.claimExpiresAt && (
+                        <> · expires {relativeTime(issue.claimExpiresAt)}</>
+                      )}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="mt-1 w-full"
+                      onClick={() => releaseClaim.mutate({ id: issue.id })}
+                    >
+                      Release claim
+                    </Button>
+                  </div>
+                )}
+              </SidebarField>
+            </div>
+          </div>
+
+          <aside
+            aria-label="Issue detail rail"
+            className="shrink-0 md:sticky md:top-4 md:w-96 md:self-start"
+          >
+            <div className="rounded-lg border border-border bg-card/30 md:max-h-[calc(100svh-7rem)]">
+              <IssueRail issueId={issue.id} />
+            </div>
+          </aside>
+        </div>
       </div>
     </>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+// ---------------------------------------------------------------------------
+// Inline selectors for the issue-topbar strip
+// ---------------------------------------------------------------------------
+
+function InlineStatus({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: { id: string; name: string; color: string }[];
+  onChange: (id: string) => void;
+}) {
+  const current = options.find((o) => o.id === value);
   return (
-    <div>
-      <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+    <label className="relative flex items-center">
+      <span
+        className="pointer-events-none inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[11px]"
+      >
+        {current && (
+          <span
+            aria-hidden
+            className="inline-block h-2 w-2 rounded-full"
+            style={{ backgroundColor: current.color }}
+          />
+        )}
+        <span>{current?.name ?? "Status"}</span>
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="absolute inset-0 cursor-pointer opacity-0"
+        aria-label="Status"
+      >
+        {options.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function InlinePriority({
+  value,
+  onChange,
+}: {
+  value: (typeof PRIORITIES)[number];
+  onChange: (p: (typeof PRIORITIES)[number]) => void;
+}) {
+  return (
+    <label className="relative flex items-center">
+      <span className="pointer-events-none inline-flex items-center rounded-md border border-border bg-background px-2 py-1 font-mono text-[11px]">
+        {value}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as (typeof PRIORITIES)[number])}
+        className="absolute inset-0 cursor-pointer opacity-0"
+        aria-label="Priority"
+      >
+        {PRIORITIES.map((p) => (
+          <option key={p}>{p}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function SidebarField({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
       {children}
     </div>
   );
@@ -468,11 +446,11 @@ function LabelPicker({
   }
 
   return (
-    <div className="relative">
+    <div className="relative w-full max-w-xs">
       <button
         type="button"
         onClick={() => setOpen((x) => !x)}
-        className="focus-ring flex w-full flex-wrap items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-left hover:bg-subtle"
+        className="focus-ring flex w-full flex-wrap items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-left text-xs hover:bg-subtle"
       >
         {current.length === 0 ? (
           <span className="text-muted-foreground">None</span>
@@ -501,7 +479,9 @@ function LabelPicker({
                   <span
                     className={
                       "inline-block h-3 w-3 rounded-sm border " +
-                      (selected.has(l.id) ? "border-ember bg-ember" : "border-border bg-background")
+                      (selected.has(l.id)
+                        ? "border-ember bg-ember"
+                        : "border-border bg-background")
                     }
                   />
                   <Badge color={l.color}>{l.name}</Badge>
@@ -544,7 +524,7 @@ function AssigneePicker({
       <button
         type="button"
         onClick={() => setOpen((x) => !x)}
-        className="focus-ring flex w-full items-center gap-1.5 rounded-md border border-input bg-background px-2 py-1 text-left hover:bg-subtle"
+        className="focus-ring flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-left text-[11px] hover:bg-subtle"
       >
         {current.length === 0 ? (
           <span className="text-muted-foreground">Unassigned</span>
@@ -552,7 +532,7 @@ function AssigneePicker({
           <>
             <div className="flex -space-x-1.5">
               {current.slice(0, 3).map((a) => (
-                <Avatar key={a.userId} name={a.name} image={a.image} size={18} />
+                <Avatar key={a.userId} name={a.name} image={a.image} size={16} />
               ))}
             </div>
             <span className="ml-1 text-muted-foreground">{current.length}</span>
@@ -562,7 +542,7 @@ function AssigneePicker({
       </button>
       {open && (
         <div
-          className="absolute z-20 mt-1 w-full rounded-md border border-border bg-card shadow-lg"
+          className="absolute z-20 mt-1 w-56 rounded-md border border-border bg-card shadow-lg"
           onMouseLeave={() => setOpen(false)}
         >
           <ul className="max-h-64 overflow-y-auto py-1">

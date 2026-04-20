@@ -44,8 +44,7 @@ export type Shortcut = {
 
 export const SHORTCUTS: readonly Shortcut[] = [
   // --- Navigate ------------------------------------------------------------
-  { chord: "g d", label: "Go to Dashboard", category: "Navigate" },
-  { chord: "g i", label: "Go to Inbox", category: "Navigate" },
+  { chord: "g i", label: "Go to Inbox (workspace landing)", category: "Navigate" },
   { chord: "g b", label: "Browse Inbox (alias)", category: "Navigate" },
   { chord: "g s", label: "Go to Issues", category: "Navigate" },
   { chord: "g p", label: "Go to Projects", category: "Navigate" },

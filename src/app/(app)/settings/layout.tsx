@@ -49,7 +49,7 @@ export default async function AccountSettingsLayout({
       <aside className="flex h-svh w-56 flex-col border-r border-border bg-card/40">
         <div className="flex h-12 items-center gap-2 px-4">
           <Link
-            href={backSlug ? `/w/${backSlug}/dashboard` : "/"}
+            href={backSlug ? `/w/${backSlug}/inbox` : "/"}
             className="focus-ring flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[12px] text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft className="h-3.5 w-3.5" />

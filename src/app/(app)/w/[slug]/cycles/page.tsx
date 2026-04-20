@@ -1,23 +1,24 @@
 "use client";
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "sonner";
 import { ChevronLeft, ChevronRight, CalendarRange, Plus } from "lucide-react";
 import { CycleStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/settings/empty-state";
 import { CycleSummaryCard } from "@/components/cycles/cycle-summary-card";
 import { CyclePlanningBoard } from "@/components/cycles/cycle-planning-board";
 import { CycleBacklogPanel } from "@/components/cycles/cycle-backlog-panel";
+import { NewCycleDialog } from "@/components/cycles/new-cycle-dialog";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
 export default function CyclesPage() {
   const ws = useWorkspace();
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const utils = trpc.useUtils();
 
   const { data: allCycles, isLoading: cyclesLoading } =
@@ -72,6 +73,18 @@ export default function CyclesPage() {
   });
 
   const [createOpen, setCreateOpen] = useState(false);
+
+  // Support `/cycles?new` so the sidebar chord / quick-create can deep-link
+  // directly into the create dialog.
+  useEffect(() => {
+    if (searchParams?.has("new")) {
+      setCreateOpen(true);
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("new");
+      const q = params.toString();
+      router.replace(q ? `${pathname}?${q}` : pathname);
+    }
+  }, [searchParams, pathname, router]);
 
   return (
     <>
@@ -165,99 +178,10 @@ export default function CyclesPage() {
         ) : null}
       </div>
 
-      <CreateCycleDialog
+      <NewCycleDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={() => {
-          utils.cycle.list.invalidate();
-          setCreateOpen(false);
-        }}
       />
     </>
-  );
-}
-
-function CreateCycleDialog({
-  open,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [startsAt, setStartsAt] = useState("");
-  const [lengthDays, setLengthDays] = useState("");
-
-  const create = trpc.cycle.create.useMutation({
-    onSuccess: () => {
-      toast.success("Cycle created.");
-      setName("");
-      setStartsAt("");
-      setLengthDays("");
-      onCreated();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  return (
-    <Dialog open={open} onClose={onClose} className="max-w-md">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!name.trim()) {
-            toast.error("Name required.");
-            return;
-          }
-          create.mutate({
-            name: name.trim(),
-            startsAt: startsAt ? new Date(startsAt) : undefined,
-            lengthDays: lengthDays ? Number(lengthDays) : undefined,
-          });
-        }}
-        className="space-y-3 p-5"
-      >
-        <div className="text-sm font-semibold">New cycle</div>
-        <div className="space-y-1.5">
-          <label className="text-xs text-muted-foreground">Name</label>
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Sprint 12 · Q2 Launch · …"
-            autoFocus
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Starts</label>
-            <Input
-              type="date"
-              value={startsAt}
-              onChange={(e) => setStartsAt(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Length (days)</label>
-            <Input
-              type="number"
-              min={1}
-              max={365}
-              value={lengthDays}
-              onChange={(e) => setLengthDays(e.target.value)}
-              placeholder="7"
-            />
-          </div>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="ember" disabled={create.isPending}>
-            {create.isPending ? "Creating…" : "Create"}
-          </Button>
-        </div>
-      </form>
-    </Dialog>
   );
 }

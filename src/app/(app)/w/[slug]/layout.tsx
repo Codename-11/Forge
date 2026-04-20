@@ -65,7 +65,7 @@ export default async function WorkspaceShellLayout({
       select: { workspace: { select: { slug: true } } },
       orderBy: { createdAt: "asc" },
     });
-    redirect(fallback ? `/w/${fallback.workspace.slug}/dashboard` : "/settings/workspaces");
+    redirect(fallback ? `/w/${fallback.workspace.slug}/inbox` : "/settings/workspaces");
   }
 
   const membershipCount = await db.membership.count({

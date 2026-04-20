@@ -32,7 +32,7 @@ export default function WorkspacesPage() {
 
   function open(w: { id: string; slug: string }) {
     setLast.mutate({ workspaceId: w.id });
-    router.push(`/w/${w.slug}/dashboard`);
+    router.push(`/w/${w.slug}/inbox`);
   }
 
   return (
@@ -124,7 +124,7 @@ export default function WorkspacesPage() {
         onClose={() => setCreateOpen(false)}
         onCreated={(slug) => {
           refetch();
-          router.push(`/w/${slug}/dashboard`);
+          router.push(`/w/${slug}/inbox`);
         }}
         existingKeys={new Set(workspaces?.map((w) => w.key) ?? [])}
         existingSlugs={new Set(workspaces?.map((w) => w.slug) ?? [])}
