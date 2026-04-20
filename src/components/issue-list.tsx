@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, Kbd, SkeletonList, useDensity } from "@/components/ui";
+import { Confirm } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
@@ -64,6 +65,7 @@ export function IssueList({
   const compact = density === "compact";
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const selectedArray = Array.from(selected);
 
   const bulkStatus = trpc.issue.bulkStatus.useMutation({
@@ -95,11 +97,11 @@ export function IssueList({
     else setSelected(new Set(filtered.map((i) => i.id)));
   }
 
-  async function bulkDelete() {
-    if (!confirm(`Delete ${selectedArray.length} issue(s)?`)) return;
+  async function performBulkDelete() {
     await Promise.all(selectedArray.map((id) => softDelete.mutateAsync({ id })));
     toast.success(`Deleted ${selectedArray.length} issue(s).`);
     setSelected(new Set());
+    setBulkDeleteOpen(false);
   }
 
   if (isLoading) {
@@ -166,7 +168,7 @@ export function IssueList({
                   </option>
                 ))}
               </select>
-              <Button size="sm" variant="ghost" onClick={bulkDelete}>
+              <Button size="sm" variant="ghost" onClick={() => setBulkDeleteOpen(true)}>
                 Delete
               </Button>
               <Button
@@ -248,6 +250,18 @@ export function IssueList({
           );
         })}
       </div>
+
+      <Confirm
+        open={bulkDeleteOpen}
+        onOpenChange={setBulkDeleteOpen}
+        variant="destructive"
+        title={`Delete ${selectedArray.length} issue${selectedArray.length === 1 ? "" : "s"}?`}
+        description="The selected issues are soft-deleted and can be recovered by an admin. Type the count to confirm."
+        primaryLabel="Delete"
+        typeToConfirm={String(selectedArray.length)}
+        loading={softDelete.isPending}
+        onConfirm={performBulkDelete}
+      />
     </div>
   );
 }

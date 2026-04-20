@@ -7,12 +7,13 @@ import {
   CircleDot,
   Clock,
   FolderKanban,
+  LayoutDashboard,
   LineChart,
   Plug,
   Settings,
   Search,
   Plus,
-  Target,
+  FileText,
   CalendarRange,
   Compass,
   Map as MapIcon,
@@ -74,10 +75,10 @@ const SECTIONS: readonly NavSection[] = [
   {
     id: "work",
     label: "Work",
-    // Agent 3 (dashboard/inbox merge): Dashboard removed — the primary
-    // landing is now the Inbox (Personal group). The old `/dashboard`
-    // route still exists but hard-redirects to `/inbox`.
+    // Inbox (Personal) is the primary "what's next" landing; Dashboard is
+    // the workspace overview (rollups + onboarding) reachable via `g d`.
     items: [
+      { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
       { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
       { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
     ],
@@ -96,8 +97,7 @@ const SECTIONS: readonly NavSection[] = [
     label: "Personal",
     items: [
       { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
-      // Route is `/standup`; label is "Focus" per the Personal group spec.
-      { path: "/standup", label: "Focus", icon: Target, chord: "u" },
+      { path: "/standup", label: "Standup", icon: FileText, chord: "u" },
       { path: "/time", label: "Time", icon: Clock, chord: "t", onlyWhenTimeTracking: true },
     ],
   },

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
+import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { trpc } from "@/lib/trpc";
@@ -38,6 +39,7 @@ export default function TemplatesPage() {
   const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
   const { data: labels } = trpc.label.list.useQuery();
   const [editing, setEditing] = useState<Form | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const create = trpc.template.create.useMutation({
     onSuccess: () => {
@@ -111,9 +113,7 @@ export default function TemplatesPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => {
-                    if (confirm(`Delete template "${t.name}"?`)) remove.mutate({ id: t.id });
-                  }}
+                  onClick={() => setDeleteTarget({ id: t.id, name: t.name })}
                 >
                   Delete
                 </Button>
@@ -257,6 +257,21 @@ export default function TemplatesPage() {
           </form>
         )}
       </Dialog>
+
+      <Confirm
+        open={!!deleteTarget}
+        onOpenChange={(v) => !v && setDeleteTarget(null)}
+        variant="destructive"
+        title={`Delete template "${deleteTarget?.name}"?`}
+        description="This action cannot be undone."
+        primaryLabel="Delete"
+        loading={remove.isPending}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          await remove.mutateAsync({ id: deleteTarget.id });
+          setDeleteTarget(null);
+        }}
+      />
     </>
   );
 }

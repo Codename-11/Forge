@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
+import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { trpc } from "@/lib/trpc";
@@ -21,6 +22,10 @@ export default function MembersPage() {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("MEMBER");
+  const [removeTarget, setRemoveTarget] = useState<{
+    membershipId: string;
+    email: string;
+  } | null>(null);
 
   const invite = trpc.workspace.invite.useMutation({
     onSuccess: () => {
@@ -110,10 +115,9 @@ export default function MembersPage() {
                       size="sm"
                       variant="ghost"
                       disabled={removeMember.isPending}
-                      onClick={() => {
-                        if (confirm(`Remove ${m.user.email}?`))
-                          removeMember.mutate({ membershipId: m.id });
-                      }}
+                      onClick={() =>
+                        setRemoveTarget({ membershipId: m.id, email: m.user.email })
+                      }
                     >
                       Remove
                     </Button>
@@ -179,6 +183,21 @@ export default function MembersPage() {
           </p>
         </form>
       </Dialog>
+
+      <Confirm
+        open={!!removeTarget}
+        onOpenChange={(v) => !v && setRemoveTarget(null)}
+        variant="destructive"
+        title={`Remove ${removeTarget?.email}?`}
+        description="They lose access to this workspace immediately."
+        primaryLabel="Remove"
+        loading={removeMember.isPending}
+        onConfirm={async () => {
+          if (!removeTarget) return;
+          await removeMember.mutateAsync({ membershipId: removeTarget.membershipId });
+          setRemoveTarget(null);
+        }}
+      />
     </>
   );
 }

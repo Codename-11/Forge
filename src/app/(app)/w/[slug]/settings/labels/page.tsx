@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
+import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { trpc } from "@/lib/trpc";
@@ -20,6 +21,11 @@ type Editing = { id?: string; name: string; color: string } | null;
 export default function LabelsPage() {
   const { data: labels, refetch } = trpc.label.list.useQuery();
   const [editing, setEditing] = useState<Editing>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string;
+    name: string;
+    attached: number;
+  } | null>(null);
 
   const create = trpc.label.create.useMutation({
     onSuccess: () => {
@@ -79,10 +85,13 @@ export default function LabelsPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => {
-                    if (confirm(`Delete label "${l.name}"? It's removed from ${l._count.issues} issue(s).`))
-                      remove.mutate({ id: l.id });
-                  }}
+                  onClick={() =>
+                    setDeleteTarget({
+                      id: l.id,
+                      name: l.name,
+                      attached: l._count.issues,
+                    })
+                  }
                 >
                   Delete
                 </Button>
@@ -156,6 +165,30 @@ export default function LabelsPage() {
           </form>
         )}
       </Dialog>
+
+      <Confirm
+        open={!!deleteTarget}
+        onOpenChange={(v) => !v && setDeleteTarget(null)}
+        variant="destructive"
+        title={`Delete label "${deleteTarget?.name}"?`}
+        description={
+          deleteTarget && deleteTarget.attached > 0
+            ? `This label will be removed from ${deleteTarget.attached} issue${
+                deleteTarget.attached === 1 ? "" : "s"
+              }. This action cannot be undone.`
+            : "This action cannot be undone."
+        }
+        primaryLabel="Delete"
+        typeToConfirm={
+          deleteTarget && deleteTarget.attached > 0 ? deleteTarget.name : undefined
+        }
+        loading={remove.isPending}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          await remove.mutateAsync({ id: deleteTarget.id });
+          setDeleteTarget(null);
+        }}
+      />
     </>
   );
 }

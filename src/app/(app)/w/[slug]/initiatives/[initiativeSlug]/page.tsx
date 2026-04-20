@@ -8,6 +8,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { Confirm } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -83,6 +84,7 @@ export default function InitiativeDetailPage({
   const [nameDraft, setNameDraft] = useState("");
   const [editingDesc, setEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState("");
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const stats = useMemo(() => {
     const items = rolledIssues?.items ?? [];
@@ -156,10 +158,7 @@ export default function InitiativeDetailPage({
               variant="ghost"
               size="sm"
               disabled={initiative.status === InitiativeStatus.COMPLETED}
-              onClick={() => {
-                if (confirm("Archive this initiative?"))
-                  archive.mutate({ id: initiative.id });
-              }}
+              onClick={() => setArchiveOpen(true)}
             >
               Archive
             </Button>
@@ -363,6 +362,19 @@ export default function InitiativeDetailPage({
           )}
         </div>
       </div>
+
+      <Confirm
+        open={archiveOpen}
+        onOpenChange={setArchiveOpen}
+        title={`Archive "${initiative.name}"?`}
+        description="It's moved out of the active list. You can restore it later from Settings."
+        primaryLabel="Archive"
+        loading={archive.isPending}
+        onConfirm={async () => {
+          await archive.mutateAsync({ id: initiative.id });
+          setArchiveOpen(false);
+        }}
+      />
     </>
   );
 }
