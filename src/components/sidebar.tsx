@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Inbox,
   CircleDot,
@@ -13,51 +13,140 @@ import {
   Settings,
   Search,
   Plus,
-  LogOut,
-  User as UserIcon,
-  ChevronUp,
   Target,
   CalendarRange,
   Compass,
   Map as MapIcon,
+  Shield,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { useModKeyLabel } from "@/lib/platform";
 import { useChord, useHotkey } from "@/lib/keyboard";
-import { signOutAction } from "@/server/actions/auth";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { trpc } from "@/lib/trpc";
+
+/**
+ * Grouped, collapsible workspace sidebar.
+ *
+ * The nav is driven by a `NavSection[]` table (see `sections()` below) so
+ * pages can be added or re-ordered without touching the shell layout. Each
+ * section has a small-caps header (hidden in collapsed mode) and a list of
+ * leaf items with icons + optional `g <chord>` shortcuts.
+ *
+ * Collapse:
+ *   - `⌘\` toggles expanded (`w-56`) ↔ icon rail (`w-14`).
+ *   - State persists per-user in `localStorage[forge.sidebarCollapsed]`.
+ *   - Below the `md` breakpoint, the sidebar auto-collapses via CSS (the
+ *     content is the same either way; only width + label visibility change).
+ *
+ * What moved OUT of the sidebar:
+ *   - Pins strip → top bar (`src/components/top-bar.tsx`).
+ *   - User menu → top bar (avatar dropdown).
+ *   - Sign out / theme toggle → inside the user menu.
+ */
 
 type NavItem = {
   path: string;
   label: string;
   icon: typeof Inbox;
-  chord: string;
+  /** Second key of the `g <x>` leader chord. */
+  chord?: string;
+  /** Renders an unread-inbox badge when set to `"inbox"`. */
   badge?: "inbox";
+  /** Only show when `Workspace.timeTrackingEnabled`. */
   onlyWhenTimeTracking?: true;
 };
 
-const NAV: readonly NavItem[] = [
-  { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
-  { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
-  { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
-  { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
-  { path: "/cycles", label: "Cycles", icon: CalendarRange, chord: "c" },
-  { path: "/initiatives", label: "Initiatives", icon: Compass, chord: "n" },
-  { path: "/roadmap", label: "Roadmap", icon: MapIcon, chord: "r" },
-  { path: "/standup", label: "Standup", icon: Target, chord: "u" },
-  { path: "/time", label: "Time", icon: Clock, chord: "t", onlyWhenTimeTracking: true },
-  { path: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
-  { path: "/settings/plugins", label: "Plugins", icon: Plug, chord: "l" },
-  { path: "/settings", label: "Settings", icon: Settings, chord: "," },
+type NavSection = {
+  id: string;
+  label: string;
+  items: readonly NavItem[];
+};
+
+/**
+ * Single source of truth for sidebar nav. Agent 3 (dashboard/inbox merge) may
+ * flip entries in the `Work` and `Personal` groups; keep this structure data-
+ * driven so those edits don't require touching the rendering code.
+ */
+const SECTIONS: readonly NavSection[] = [
+  {
+    id: "work",
+    label: "Work",
+    items: [
+      { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
+      { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
+      { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
+    ],
+  },
+  {
+    id: "planning",
+    label: "Planning",
+    items: [
+      { path: "/cycles", label: "Cycles", icon: CalendarRange, chord: "c" },
+      { path: "/initiatives", label: "Initiatives", icon: Compass, chord: "n" },
+      { path: "/roadmap", label: "Roadmap", icon: MapIcon, chord: "r" },
+    ],
+  },
+  {
+    id: "personal",
+    label: "Personal",
+    items: [
+      { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
+      // Route is `/standup`; label is "Focus" per the Personal group spec.
+      { path: "/standup", label: "Focus", icon: Target, chord: "u" },
+      { path: "/time", label: "Time", icon: Clock, chord: "t", onlyWhenTimeTracking: true },
+    ],
+  },
+  {
+    id: "admin",
+    label: "Admin",
+    items: [
+      { path: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
+      { path: "/settings/plugins", label: "Plugins", icon: Plug, chord: "l" },
+      { path: "/settings/admin", label: "Admin portal", icon: Shield },
+      { path: "/settings", label: "Settings", icon: Settings, chord: "," },
+    ],
+  },
 ] as const;
+
+const COLLAPSED_STORAGE_KEY = "forge.sidebarCollapsed";
+
+function useSidebarCollapsed(): [boolean, (next: boolean) => void] {
+  // Default to expanded; read from localStorage on mount so SSR output stays
+  // stable. A brief flash (~1 frame) is acceptable and avoids layout-shift
+  // from cookie reads on every request.
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
+      if (raw === "1") setCollapsed(true);
+    } catch {
+      // localStorage unavailable — fall back to expanded (safe default).
+    }
+  }, []);
+
+  const set = (next: boolean) => {
+    setCollapsed(next);
+    try {
+      window.localStorage.setItem(COLLAPSED_STORAGE_KEY, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return [collapsed, set];
+}
 
 export function Sidebar({
   slug,
-  user,
+  user: _user,
 }: {
   slug: string;
+  /** Kept in the API for backwards compat; the user menu moved to the top bar. */
   user: { name?: string | null; image?: string | null; email: string };
 }) {
   const pathname = usePathname();
@@ -66,35 +155,44 @@ export function Sidebar({
   const workspace = useMaybeWorkspace();
   const timeTrackingEnabled = workspace?.timeTrackingEnabled ?? false;
 
-  const nav = useMemo(
+  const [collapsed, setCollapsed] = useSidebarCollapsed();
+
+  // `⌘\` toggles collapse globally. Backslash is an unclaimed key and plays
+  // well with the rest of the cmd-prefixed shortcuts (`⌘K` command palette).
+  useHotkey("cmd+\\", () => setCollapsed(!collapsed), [collapsed]);
+
+  const sections = useMemo(
     () =>
-      NAV.filter((n) => (n.onlyWhenTimeTracking ? timeTrackingEnabled : true)).map(
-        (n) => ({ ...n, href: `/w/${slug}${n.path}` }),
-      ),
+      SECTIONS.map((sec) => ({
+        ...sec,
+        items: sec.items
+          .filter((it) => (it.onlyWhenTimeTracking ? timeTrackingEnabled : true))
+          .map((it) => ({ ...it, href: `/w/${slug}${it.path}` })),
+      })).filter((sec) => sec.items.length > 0),
     [slug, timeTrackingEnabled],
   );
 
   const chordMap = useMemo(() => {
     const m: Record<string, () => void> = {};
-    for (const n of nav) m[n.chord] = () => router.push(n.href);
-    // `g n` is documented as "new initiative" in Phase 3 — overrides the
-    // plain nav entry to auto-open the dialog via ?new.
+    for (const sec of sections) {
+      for (const it of sec.items) {
+        if (it.chord) m[it.chord] = () => router.push(it.href);
+      }
+    }
+    // Spec overrides (preserved from the previous shell):
+    //   `g n` opens the new-initiative dialog via ?new.
+    //   `g b` = "browse inbox" alias for `g i`.
     m["n"] = () => router.push(`/w/${slug}/initiatives?new`);
-    // `g b` — "browse inbox" — spec-documented alias for `g i`.
     m["b"] = () => router.push(`/w/${slug}/inbox`);
     return m;
-  }, [nav, router, slug]);
+  }, [sections, router, slug]);
   useChord("g", chordMap);
 
-  // Inbox badge — shows a count for unread mentions + stalled + unblocked.
   const { data: inboxBadge } = trpc.inbox.badge.useQuery(undefined, {
     refetchOnWindowFocus: true,
     staleTime: 60_000,
   });
 
-  // `c` → jump to the current cycle's detail page, falling back to /cycles
-  // if no ACTIVE cycle exists. The query stays cached by tRPC so pressing
-  // `c` repeatedly is instant.
   const { data: currentCycle } = trpc.cycle.current.useQuery();
   useHotkey(
     "c",
@@ -106,190 +204,174 @@ export function Sidebar({
   );
 
   return (
-    <aside className="flex h-svh w-56 flex-col border-r border-border bg-card/40">
-      <div className="px-3 pt-3">
-        <WorkspaceSwitcher />
+    <aside
+      data-collapsed={collapsed || undefined}
+      className={cn(
+        "group/sidebar flex h-svh shrink-0 flex-col border-r border-border bg-card/40 transition-[width] duration-150",
+        // Below `md`, force icon rail regardless of user preference. This
+        // keeps the `w-` utility class applied so Tailwind purges correctly.
+        collapsed ? "w-14" : "w-56 max-md:w-14",
+      )}
+    >
+      {/* Workspace switcher — always visible at the top. Hides its label in
+          collapsed mode via the data-collapsed CSS variant below. */}
+      <div className="px-2 pt-3">
+        <div
+          className={cn(
+            "flex items-center",
+            collapsed ? "justify-center max-md:justify-center" : "max-md:justify-center",
+          )}
+        >
+          <WorkspaceSwitcher />
+        </div>
       </div>
 
       <button
         data-command-palette
-        className="mx-3 mt-3 flex h-7 items-center gap-2 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground hover:bg-subtle"
+        title={`Search or jump (${mod}+K)`}
+        className={cn(
+          "mx-2 mt-3 flex h-7 items-center gap-2 rounded-md border border-border bg-background text-xs text-muted-foreground hover:bg-subtle",
+          collapsed
+            ? "justify-center px-0"
+            : "px-2 max-md:justify-center max-md:px-0",
+        )}
       >
-        <Search className="h-3.5 w-3.5" />
-        <span>Search or jump</span>
-        <span className="ml-auto kbd">{mod}+K</span>
+        <Search className="h-3.5 w-3.5 shrink-0" />
+        <span
+          className={cn(
+            "flex flex-1 items-center gap-2 truncate",
+            collapsed ? "hidden" : "max-md:hidden",
+          )}
+        >
+          <span className="truncate">Search or jump</span>
+          <span className="ml-auto kbd">{mod}+K</span>
+        </span>
       </button>
 
       <button
         data-quick-create
-        className="mx-3 mt-1 flex h-7 items-center gap-2 rounded-md bg-ember px-2 text-xs font-medium text-ember-foreground hover:bg-ember/90"
-      >
-        <Plus className="h-3.5 w-3.5" />
-        New issue
-        <span className="ml-auto kbd bg-ember/20 text-ember-foreground">⇧C</span>
-      </button>
-
-      <nav className="mt-4 flex flex-col gap-px px-2">
-        {nav.map(({ href, path, label, icon: Icon, chord, badge }) => {
-          const active = pathname === href || pathname?.startsWith(`${href}/`);
-          const badgeCount =
-            badge === "inbox" ? inboxBadge?.count ?? 0 : 0;
-          return (
-            <Link
-              key={path}
-              href={href}
-              className={cn(
-                "row h-7 rounded-md px-2 text-[13px]",
-                active
-                  ? "bg-subtle text-foreground"
-                  : "text-muted-foreground hover:bg-subtle hover:text-foreground",
-              )}
-              title={`g then ${chord}`}
-            >
-              <Icon className="mr-2 h-3.5 w-3.5" />
-              <span>{label}</span>
-              {badgeCount > 0 && (
-                <span className="ml-2 rounded-full bg-ember/15 px-1.5 py-0 font-mono text-[10px] text-ember">
-                  {badgeCount > 99 ? "99+" : badgeCount}
-                </span>
-              )}
-              <span className="ml-auto flex items-center gap-px text-[10px] text-muted-foreground/70">
-                <span className="kbd !px-1 !text-[9px]">G</span>
-                <span className="kbd !px-1 !text-[9px]">{chord.toUpperCase()}</span>
-              </span>
-            </Link>
-          );
-        })}
-      </nav>
-
-      <UserMenu slug={slug} user={user} />
-    </aside>
-  );
-}
-
-function UserMenu({
-  slug,
-  user,
-}: {
-  slug: string;
-  user: { name?: string | null; image?: string | null; email: string };
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  return (
-    <div ref={ref} className="relative mt-auto border-t border-border">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
+        title="New issue (Shift+C)"
         className={cn(
-          "flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-subtle/60",
-          open && "bg-subtle/60",
+          "mx-2 mt-1 flex h-7 items-center gap-2 rounded-md bg-ember text-xs font-medium text-ember-foreground hover:bg-ember/90",
+          collapsed
+            ? "justify-center px-0"
+            : "px-2 max-md:justify-center max-md:px-0",
         )}
       >
-        <AvatarFallback user={user} />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-medium">{user.name ?? user.email}</div>
-          <div className="truncate text-[10px] text-muted-foreground">{user.email}</div>
-        </div>
-        <ChevronUp
+        <Plus className="h-3.5 w-3.5 shrink-0" />
+        <span
           className={cn(
-            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
-            open ? "" : "rotate-180",
+            "flex flex-1 items-center gap-2 truncate",
+            collapsed ? "hidden" : "max-md:hidden",
           )}
-        />
+        >
+          <span className="truncate">New issue</span>
+          <span className="ml-auto kbd bg-ember/20 text-ember-foreground">⇧C</span>
+        </span>
       </button>
 
-      {open && (
-        <div
-          role="menu"
-          className="absolute bottom-[calc(100%+6px)] left-2 right-2 overflow-hidden rounded-md border border-border bg-card shadow-lg"
-        >
-          <Link
-            href="/settings/account"
-            onClick={() => setOpen(false)}
-            className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-subtle"
-            role="menuitem"
-          >
-            <UserIcon className="h-3.5 w-3.5 text-muted-foreground" />
-            Account settings
-          </Link>
-          <Link
-            href={`/w/${slug}/settings/workspace`}
-            onClick={() => setOpen(false)}
-            className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-subtle"
-            role="menuitem"
-          >
-            <Settings className="h-3.5 w-3.5 text-muted-foreground" />
-            Workspace settings
-          </Link>
-          <Link
-            href="/settings/workspaces"
-            onClick={() => setOpen(false)}
-            className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-subtle"
-            role="menuitem"
-          >
-            <Plus className="h-3.5 w-3.5 text-muted-foreground" />
-            Manage workspaces
-          </Link>
-          <form action={signOutAction} className="border-t border-border">
-            <button
-              type="submit"
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-danger hover:bg-subtle"
-              role="menuitem"
+      <nav className="mt-3 flex flex-1 flex-col gap-3 overflow-y-auto px-2 pb-2">
+        {sections.map((sec) => (
+          <div key={sec.id} className="flex flex-col gap-px">
+            <div
+              className={cn(
+                "px-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70",
+                collapsed ? "hidden" : "max-md:hidden",
+              )}
             >
-              <LogOut className="h-3.5 w-3.5" />
-              Sign out
-            </button>
-          </form>
-        </div>
-      )}
-    </div>
-  );
-}
+              {sec.label}
+            </div>
+            {sec.items.map(({ href, path, label, icon: Icon, chord, badge }) => {
+              const active =
+                pathname === href || pathname?.startsWith(`${href}/`);
+              const badgeCount =
+                badge === "inbox" ? inboxBadge?.count ?? 0 : 0;
+              const chordHint = chord ? `g then ${chord}` : label;
+              return (
+                <Link
+                  key={path}
+                  href={href}
+                  title={chordHint}
+                  className={cn(
+                    "row relative h-7 rounded-md text-[13px]",
+                    active
+                      ? "bg-subtle text-foreground"
+                      : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+                    collapsed
+                      ? "justify-center px-0"
+                      : "px-2 max-md:justify-center max-md:px-0",
+                  )}
+                >
+                  <Icon
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0",
+                      !collapsed && "mr-2 max-md:mr-0",
+                    )}
+                  />
+                  {/* Collapsed-mode unread dot — overlays the icon so the
+                      rail signals unread without swelling the row height. */}
+                  {collapsed && badgeCount > 0 && (
+                    <span
+                      aria-label={`${badgeCount} unread`}
+                      className="absolute right-3 top-1 h-1.5 w-1.5 rounded-full bg-ember ring-2 ring-card"
+                    />
+                  )}
+                  <span
+                    className={cn(
+                      "flex flex-1 items-center",
+                      collapsed ? "hidden" : "max-md:hidden",
+                    )}
+                  >
+                    <span className="truncate">{label}</span>
+                    {badgeCount > 0 && (
+                      <span className="ml-2 rounded-full bg-ember/15 px-1.5 py-0 font-mono text-[10px] text-ember">
+                        {badgeCount > 99 ? "99+" : badgeCount}
+                      </span>
+                    )}
+                    {chord && (
+                      <span className="ml-auto flex items-center gap-px text-[10px] text-muted-foreground/70">
+                        <span className="kbd !px-1 !text-[9px]">G</span>
+                        <span className="kbd !px-1 !text-[9px]">
+                          {chord.toUpperCase()}
+                        </span>
+                      </span>
+                    )}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
 
-function AvatarFallback({
-  user,
-}: {
-  user: { name?: string | null; image?: string | null; email: string };
-}) {
-  if (user.image) {
-    // eslint-disable-next-line @next/next/no-img-element
-    return (
-      <img
-        src={user.image}
-        alt=""
-        width={22}
-        height={22}
-        className="rounded-full object-cover"
-      />
-    );
-  }
-  const source = user.name ?? user.email;
-  const initials = source
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase() ?? "")
-    .join("");
-  return (
-    <span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-subtle font-mono text-[10px] text-muted-foreground">
-      {initials || "·"}
-    </span>
+      {/* Collapse toggle lives at the bottom — primary affordance is `⌘\`,
+          the button is the visual backup for mouse users. */}
+      <button
+        type="button"
+        onClick={() => setCollapsed(!collapsed)}
+        title={`${collapsed ? "Expand" : "Collapse"} sidebar (${mod}+\\)`}
+        className={cn(
+          "mx-2 mb-2 flex h-7 items-center gap-2 rounded-md border border-border/70 bg-transparent text-[11px] text-muted-foreground hover:bg-subtle hover:text-foreground",
+          collapsed
+            ? "justify-center px-0"
+            : "px-2 max-md:justify-center max-md:px-0",
+        )}
+      >
+        {collapsed ? (
+          <PanelLeftOpen className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <PanelLeftClose className="h-3.5 w-3.5 shrink-0" />
+        )}
+        <span
+          className={cn(
+            "flex flex-1 items-center gap-2 truncate",
+            collapsed ? "hidden" : "max-md:hidden",
+          )}
+        >
+          <span className="truncate">Collapse</span>
+          <span className="ml-auto kbd">{mod}+\</span>
+        </span>
+      </button>
+    </aside>
   );
 }
