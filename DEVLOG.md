@@ -2,6 +2,27 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-20 — Full design sweep (4-agent Wave)
+
+With the feature set roughly doubled in the morning push, the UI was
+visibly a bundle of ten different authors. This sweep reconciles it.
+
+| Commit | Scope | What |
+|---|---|---|
+| `9af539b` | Primitives | `src/components/ui/*` — EmptyState (page/section/card variants), Skeleton family, Card+Section, Spinner, Kbd/Chord, Density context, motion tokens. Toast = thin wrapper over existing sonner. Back-compat shims keep `src/components/settings/*` imports working. |
+| `86f275e` | Shell / IA | Sidebar reshaped into Work/Planning/Personal/Admin groups with `⌘\` collapse to icon rail (persisted). New top bar hosts pins, quick-create, inbox badge, user menu. `?` keyboard help overlay driven by a single-source `src/lib/shortcuts.ts`. Below-`sm` "use on tablet or larger" banner. |
+| `fdafb72` | Flow | Issue detail restructured to two columns ≥md — description + comments left, sticky tabbed rail right (Attachments / Relations / Activity), with `1/2/3` tab keys and `?tab=` deep links. Quick-create (⇧C) is pathname-aware: new cycle / initiative / project / comment / sub-issue / default issue. Dashboard merged into Inbox as the primary landing; Inbox got Today's focus + Workspace pulse rollups. New `issue.activity` tRPC procedure feeds the Activity tab. |
+| `43e0a11` | Retrofit + realtime + responsive + density | 13 pages retrofitted to the new primitives with `⇧C` Kbd hints on empty states. Compact / Comfortable density toggle on Issues list (persisted via DensityProvider). SSE propagation wired for inbox badge, pins strip (BroadcastChannel), running timer (BroadcastChannel), cycles board, Activity tab, Relations panel, initiatives + roadmap. Responsive ≥md verified; roadmap gets explicit horizontal scroll; backlog panel hides below lg to keep the board breathable. ~15 motion call-sites migrated from ad-hoc classes to `MOTION.*` tokens. |
+
+**Totals:** 4 commits, 13 pages retrofitted, ~25 new primitives, 7 realtime surfaces wired, 64/64 tests still green, production rebuild + redeploy verified (38 MCP tools, analytics + cycles.current smoke-passed).
+
+Notable calls:
+- Toast backend stayed on sonner — extending beat replacing since there are 30+ call-sites across the app.
+- Dashboard `/dashboard` now redirects to `/inbox`. The nav item disappeared; deep links survive.
+- Top bar pins strip hides below md (power-user affordance). Sidebar auto-collapses below md; workspace-is-keyboard banner below sm.
+- Activity tab rides on `ActivityEvent` rows. Older issues show "No activity yet" because `recordChange()` wasn't universal pre-sweep — no backfill attempted.
+- Realtime cache invalidation on cycles is coarse (any issue event → all cycles); fine-grained per-cycle is a follow-up.
+
 ## 2026-04-20 — Big push wrap-up (Phase 3 landed)
 
 All eight work packages from the coordinated multi-agent build are in.
