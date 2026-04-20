@@ -95,6 +95,37 @@
   .focus-ring {
     @apply outline-none ring-0 transition-shadow focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
   }
+
+  /* ------------------------------------------------------------------ */
+  /* UI primitive classes (src/components/ui/*)
+   * Namespaced `.ui-*` to avoid collisions. All animations are gated
+   * on `prefers-reduced-motion: no-preference` so they become static
+   * when users opt out.
+   * ------------------------------------------------------------------ */
+  .ui-shimmer {
+    position: relative;
+    overflow: hidden;
+    background-color: hsl(var(--subtle));
+  }
+  .ui-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      hsl(var(--muted) / 0.6) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    background-repeat: no-repeat;
+    background-position: -200% 0;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .ui-shimmer::after {
+      animation: shimmer 1.8s linear infinite;
+    }
+  }
 }
 
 @layer utilities {
