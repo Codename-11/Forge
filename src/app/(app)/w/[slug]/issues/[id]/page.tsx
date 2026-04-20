@@ -6,6 +6,7 @@ import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { EmptyState, Skeleton, SkeletonText } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
@@ -101,12 +102,22 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
   if (error)
     return (
-      <div className="p-8 text-center text-sm text-muted-foreground">
-        {error.message}
+      <div className="flex flex-1 items-center justify-center p-8">
+        <EmptyState
+          variant="page"
+          title="Unable to load issue"
+          description={error.message}
+        />
       </div>
     );
   if (isLoading || !issue)
-    return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
+    return (
+      <div className="mx-auto max-w-3xl space-y-4 p-6">
+        <Skeleton className="h-6 w-3/5" />
+        <SkeletonText lines={4} />
+        <Skeleton className="h-32 w-full" />
+      </div>
+    );
 
   const issueKey = ws ? formatIssueId(ws.key, issue.number) : "Issue";
 

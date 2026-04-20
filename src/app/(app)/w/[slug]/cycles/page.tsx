@@ -6,7 +6,7 @@ import { ChevronLeft, ChevronRight, CalendarRange, Plus } from "lucide-react";
 import { CycleStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/settings/empty-state";
+import { EmptyState, Kbd, SkeletonList } from "@/components/ui";
 import { CycleSummaryCard } from "@/components/cycles/cycle-summary-card";
 import { CyclePlanningBoard } from "@/components/cycles/cycle-planning-board";
 import { CycleBacklogPanel } from "@/components/cycles/cycle-backlog-panel";
@@ -133,14 +133,22 @@ export default function CyclesPage() {
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {cyclesLoading ? (
-          <div className="p-8 text-sm text-muted-foreground">Loading cycles…</div>
+          <div className="p-4">
+            <SkeletonList rows={5} />
+          </div>
         ) : ordered.length === 0 ? (
           <div className="flex flex-1 items-center justify-center p-8">
             <EmptyState
-              as="div"
-              icon={CalendarRange}
+              variant="page"
+              icon={<CalendarRange />}
               title="Your first cycle"
-              hint="A cycle is a time-boxed iteration. Work lands in cycles and rolls over to the next one if unfinished."
+              description={
+                <span>
+                  A cycle is a time-boxed iteration. Work lands in cycles
+                  and rolls over to the next one if unfinished. Press{" "}
+                  <Kbd>⇧C</Kbd> anywhere to quick-create.
+                </span>
+              }
               action={
                 <Button
                   variant="ember"

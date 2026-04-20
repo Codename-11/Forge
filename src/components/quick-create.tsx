@@ -420,7 +420,7 @@ function IntentTab({
       aria-selected={selected}
       onClick={onClick}
       className={
-        "focus-ring rounded px-2 py-1 transition-colors " +
+        "focus-ring rounded px-2 py-1 transition-all duration-100 ease-out " +
         (selected
           ? "bg-background text-foreground shadow-sm"
           : "text-muted-foreground hover:text-foreground")

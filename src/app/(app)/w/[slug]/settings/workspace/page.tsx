@@ -6,7 +6,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
-import { Section } from "@/components/settings/section";
+import { Section } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { workspaceColor } from "@/lib/workspace-color";

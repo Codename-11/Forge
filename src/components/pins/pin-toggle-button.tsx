@@ -4,6 +4,8 @@ import { Star } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { broadcastCrossTab } from "@/hooks/use-realtime";
+import { MOTION } from "@/lib/motion";
 
 /**
  * Pin/unpin button for an issue — rendered in the issue detail topbar.
@@ -42,6 +44,9 @@ export function PinToggleButton({ issueId }: { issueId: string }) {
     },
     onSuccess: () => {
       utils.pin.list.invalidate();
+      // Tell every other tab to refresh their pins strip — pins are
+      // user-scoped and the SSE stream is per-workspace.
+      broadcastCrossTab({ type: "pins:updated" });
     },
   });
 
@@ -70,6 +75,7 @@ export function PinToggleButton({ issueId }: { issueId: string }) {
       onClick={() => toggle.mutate({ issueId })}
       className={cn(
         "focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md hover:bg-subtle",
+        MOTION.fast,
         pinned ? "text-ember" : "text-muted-foreground",
       )}
       title={pinned ? "Unpin (p)" : "Pin (p)"}

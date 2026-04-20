@@ -3,13 +3,15 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "sonner";
+import { Folder, Plus } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { EmptyState, Kbd, MOTION, SkeletonCard } from "@/components/ui";
 import { NewProjectDialog } from "@/components/projects/new-project-dialog";
 import { trpc } from "@/lib/trpc";
-import { relativeTime } from "@/lib/utils";
+import { cn, relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 
 export default function ProjectsPage() {
@@ -18,7 +20,7 @@ export default function ProjectsPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { data, refetch } = trpc.project.list.useQuery({ archived: false, limit: 50 });
+  const { data, isLoading, refetch } = trpc.project.list.useQuery({ archived: false, limit: 50 });
   const [starterOpen, setStarterOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const existingKeys = new Set((data?.items ?? []).map((p) => p.key));
@@ -52,28 +54,46 @@ export default function ProjectsPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {isEmpty ? (
-          <div className="mx-auto max-w-lg rounded-lg border border-dashed border-border bg-card/30 p-8 text-center">
-            <div className="text-sm font-medium">No projects yet</div>
-            <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
-              Start from scratch, or pick from the suggested starter templates.
-            </p>
-            <div className="mt-4 flex justify-center gap-2">
-              <Button variant="ember" size="sm" onClick={() => setCreateOpen(true)}>
-                New project
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setStarterOpen(true)}>
-                Browse templates
-              </Button>
-            </div>
-          </div>
+        {isLoading ? (
+          <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <li key={i}>
+                <SkeletonCard />
+              </li>
+            ))}
+          </ul>
+        ) : isEmpty ? (
+          <EmptyState
+            variant="page"
+            icon={<Folder />}
+            title="No projects yet"
+            description={
+              <span>
+                Start from scratch, or pick from the suggested starter
+                templates. Press <Kbd>⇧C</Kbd> from anywhere to quick-create.
+              </span>
+            }
+            action={
+              <>
+                <Button variant="ember" size="sm" onClick={() => setCreateOpen(true)}>
+                  <Plus className="h-3.5 w-3.5" /> New project
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setStarterOpen(true)}>
+                  Browse templates
+                </Button>
+              </>
+            }
+          />
         ) : (
           <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
             {(data?.items ?? []).map((p) => (
               <li key={p.id}>
                 <Link
                   href={`/w/${slug}/projects/${p.id}`}
-                  className="block rounded-lg border border-border bg-card/40 p-4 hover:border-ember/40"
+                  className={cn(
+                    "block rounded-lg border border-border bg-card/40 p-4 hover:border-ember/40",
+                    MOTION.base,
+                  )}
                 >
                   <div className="flex items-center gap-2">
                     <span
