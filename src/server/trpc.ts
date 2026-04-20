@@ -7,6 +7,7 @@ import { auth } from "@/server/auth";
 import { db } from "@/server/db";
 import { rateLimit } from "@/server/rate-limit";
 import type { NextRequest } from "next/server";
+import type { ApiKeyContext } from "@/server/services/api-key-auth";
 
 /**
  * tRPC context — carries session + db + request metadata.
@@ -20,21 +21,41 @@ import type { NextRequest } from "next/server";
  * which validates membership and role. The header → id lookup happens there
  * so the context stays cheap for public + protected routes.
  */
-export async function createContext(req: NextRequest) {
+export async function createContext(req: NextRequest): Promise<BaseContext> {
   const session = (await auth()) as Session | null;
   const workspaceId = req.headers.get("x-workspace-id");
   const workspaceSlug = req.headers.get("x-workspace-slug");
+  // `apiKey` is null on session-authenticated requests. It gets populated
+  // on MCP-layer callers that construct contexts manually with an
+  // authenticated key. Procedures that care about narrowing read this via
+  // `assertKeyScope` / `buildKeyScopeWhere` from api-key-auth.ts.
   return {
     db,
     session,
     workspaceId,
     workspaceSlug,
+    apiKey: null,
     ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
     userAgent: req.headers.get("user-agent"),
   };
 }
 
-export type Context = Awaited<ReturnType<typeof createContext>>;
+/**
+ * The shape of `ctx` before `workspaceProcedure`/`adminProcedure` inject
+ * extra fields. `apiKey` is widened to `ApiKeyContext | null` so caller
+ * shims (MCP handlers, tests) can populate it.
+ */
+export interface BaseContext {
+  db: typeof db;
+  session: Session | null;
+  workspaceId: string | null;
+  workspaceSlug: string | null;
+  apiKey: ApiKeyContext | null;
+  ip: string | null;
+  userAgent: string | null;
+}
+
+export type Context = BaseContext;
 
 const t = initTRPC.context<Context>().create({
   transformer: superjson,

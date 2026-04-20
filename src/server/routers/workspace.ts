@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { Role } from "@prisma/client";
+import { CycleStatus, Role } from "@prisma/client";
 import { router, protectedProcedure, workspaceProcedure, adminProcedure } from "@/server/trpc";
+import {
+  deleteWorkspaceBucket,
+  ensureWorkspaceBucket,
+  workspaceQuotaStats,
+} from "@/server/services/storage";
 
 const slugSchema = z
   .string()
@@ -87,28 +92,65 @@ export const workspaceRouter = router({
       });
       if (existing) throw new TRPCError({ code: "CONFLICT", message: "Slug or key in use." });
 
-      // NOTE: Agent C will extend this with bucket seeding + richer
-      // onboarding (default statuses come from a seed helper later).
-      return ctx.db.workspace.create({
+      const cycleLengthDays = input.cycleLengthDays ?? 7;
+      const now = new Date();
+      const cycleEndsAt = new Date(now.getTime());
+      cycleEndsAt.setUTCDate(cycleEndsAt.getUTCDate() + cycleLengthDays);
+
+      // Seed statuses (warm-earthy colors), starter labels, and an ACTIVE
+      // Cycle 1. Bucket creation happens after the row is written, since
+      // the slug is needed to name the bucket.
+      const workspace = await ctx.db.workspace.create({
         data: {
           slug: input.slug,
           name: input.name,
           key: input.key,
-          cycleLengthDays: input.cycleLengthDays ?? 7,
+          cycleLengthDays,
           timeTrackingEnabled: input.timeTrackingEnabled ?? false,
           memberships: { create: { userId: ctx.session.user.id, role: Role.OWNER } },
           statuses: {
             create: [
-              { name: "Backlog", category: "BACKLOG", color: "#78716c", position: 0, isDefault: true },
-              { name: "Todo", category: "TODO", color: "#a8a29e", position: 1 },
+              { name: "Backlog", category: "BACKLOG", color: "#78716c", position: 0 },
+              { name: "Todo", category: "TODO", color: "#a8a29e", position: 1, isDefault: true },
               { name: "In Progress", category: "IN_PROGRESS", color: "#d97706", position: 2 },
               { name: "In Review", category: "IN_REVIEW", color: "#ca8a04", position: 3 },
               { name: "Done", category: "DONE", color: "#65a30d", position: 4 },
               { name: "Canceled", category: "CANCELED", color: "#57534e", position: 5 },
             ],
           },
+          labels: {
+            create: [
+              { name: "bug", color: "#b45309" },
+              { name: "feature", color: "#d97706" },
+              { name: "chore", color: "#78716c" },
+              { name: "docs", color: "#0d9488" },
+              { name: "quick-win", color: "#65a30d" },
+            ],
+          },
+          cycles: {
+            create: [
+              {
+                name: "Cycle 1",
+                startsAt: now,
+                endsAt: cycleEndsAt,
+                lengthDays: cycleLengthDays,
+                status: CycleStatus.ACTIVE,
+              },
+            ],
+          },
         },
       });
+
+      // Best-effort bucket create. If MinIO is unavailable we still return
+      // the workspace — attachments simply won't work until ops fixes it.
+      await ensureWorkspaceBucket(workspace.id).catch((err) => {
+        console.warn(
+          `[workspace.create] ensureWorkspaceBucket failed for ${workspace.slug}:`,
+          (err as Error).message,
+        );
+      });
+
+      return workspace;
     }),
 
   // Mutations below are the minimum surface required by the workspace
@@ -158,8 +200,46 @@ export const workspaceRouter = router({
           message: "Confirmation name does not match workspace name.",
         });
       }
+      // Drop the bucket + objects first while we still have the slug.
+      // Swallow failures so a dead MinIO doesn't block a workspace delete.
+      await deleteWorkspaceBucket(ctx.workspaceId).catch((err) => {
+        console.warn(
+          `[workspace.delete] bucket cleanup failed for ${ctx.workspaceId}:`,
+          (err as Error).message,
+        );
+      });
       return ctx.db.workspace.delete({ where: { id: ctx.workspaceId } });
     }),
+
+  /**
+   * Roll-up stats for the workspace dashboard. Counts live rows + storage
+   * quota snapshot. Everything scoped by `workspaceId`.
+   */
+  stats: workspaceProcedure.query(async ({ ctx }) => {
+    const [issueCount, projectCount, cycleCount, memberCount, storage] =
+      await Promise.all([
+        ctx.db.issue.count({
+          where: { workspaceId: ctx.workspaceId, deletedAt: null },
+        }),
+        ctx.db.project.count({
+          where: { workspaceId: ctx.workspaceId, deletedAt: null },
+        }),
+        ctx.db.cycle.count({ where: { workspaceId: ctx.workspaceId } }),
+        ctx.db.membership.count({ where: { workspaceId: ctx.workspaceId } }),
+        workspaceQuotaStats(ctx.workspaceId).catch(() => ({
+          usedBytes: 0,
+          quotaBytes: 0,
+        })),
+      ]);
+    return {
+      issueCount,
+      projectCount,
+      cycleCount,
+      memberCount,
+      storageUsedBytes: storage.usedBytes,
+      storageQuotaBytes: storage.quotaBytes,
+    };
+  }),
 
   me: workspaceProcedure.query(async ({ ctx }) => {
     const membership = await ctx.db.membership.findUniqueOrThrow({

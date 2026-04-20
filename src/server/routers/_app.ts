@@ -8,6 +8,7 @@ import { pluginRouter } from "./plugin";
 import { statusRouter } from "./status";
 import { accessRouter } from "./access";
 import { adminRouter } from "./admin";
+import { attachmentRouter } from "./attachment";
 import { labelRouter } from "./label";
 import { issueTemplateRouter } from "./issue-template";
 import { projectTemplateRouter } from "./project-template";
@@ -23,6 +24,7 @@ export const appRouter = router({
   access: accessRouter,
   admin: adminRouter,
   analytics: analyticsRouter,
+  attachment: attachmentRouter,
   comment: commentRouter,
   cycle: cycleRouter,
   initiative: initiativeRouter,
