@@ -2,13 +2,14 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/server/auth";
 import { db } from "@/server/db";
 import { Sidebar } from "@/components/sidebar";
+import { TopBar } from "@/components/top-bar";
 import { CommandPalette } from "@/components/command-palette";
 import { QuickCreate } from "@/components/quick-create";
+import { KeyboardHelp } from "@/components/keyboard-help";
 import { RealtimeProvider } from "@/components/realtime-provider";
 import { TrpcProvider } from "@/lib/trpc-provider";
 import { WorkspaceProvider } from "@/components/workspace-provider";
 import { WorkspaceCookieSync } from "@/components/workspace-cookie-sync";
-import { PinsStrip } from "@/components/pins/pins-strip";
 import { TimeTrackerWidget } from "@/components/time-tracker/time-tracker-widget";
 import type { WorkspaceContextValue } from "@/hooks/use-workspace";
 
@@ -103,6 +104,16 @@ export default async function WorkspaceShellLayout({
   return (
     <TrpcProvider workspaceSlug={workspace.slug} workspaceId={workspace.id}>
       <WorkspaceProvider value={contextValue}>
+        {/* Below-sm banner: Forge is keyboard-driven and expects tablet+.
+            Full phone layout is explicitly out of scope for this design
+            sweep; users on narrower screens get a hint and a degraded
+            (but still functional) icon-rail + center-pins experience. */}
+        <div className="sticky top-0 z-40 flex items-center gap-2 border-b border-border bg-ember/10 px-3 py-1.5 text-[11px] text-foreground sm:hidden">
+          <span className="font-medium">Forge is keyboard-driven.</span>
+          <span className="text-muted-foreground">
+            Use on tablet or larger for the full experience.
+          </span>
+        </div>
         <div className="flex h-svh overflow-hidden">
           <Sidebar
             slug={workspace.slug}
@@ -113,14 +124,19 @@ export default async function WorkspaceShellLayout({
             }}
           />
           <main className="flex min-w-0 flex-1 flex-col bg-background">
-            <div className="flex h-8 shrink-0 items-center justify-end gap-2 border-b border-border bg-card/20 px-3">
-              <PinsStrip />
-            </div>
+            <TopBar
+              user={{
+                name: session.user.name,
+                image: session.user.image,
+                email: session.user.email,
+              }}
+            />
             {children}
           </main>
         </div>
         <CommandPalette />
         <QuickCreate />
+        <KeyboardHelp />
         <TimeTrackerWidget />
         <RealtimeProvider workspaceId={workspace.id} />
         <WorkspaceCookieSync slug={workspace.slug} />
