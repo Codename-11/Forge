@@ -119,6 +119,40 @@ export const issueRouter = router({
       return issue;
     }),
 
+  /**
+   * Activity stream for a single issue — the audit-backed `ActivityEvent`
+   * rows that share the issue's id as `subjectId`. Workspace-scoped so
+   * any member can view (unlike `admin.events` which is OWNER/ADMIN only).
+   * Feeds the Activity tab on the issue detail right-rail.
+   */
+  activity: workspaceProcedure
+    .input(
+      z.object({
+        issueId: z.string().cuid(),
+        limit: z.number().int().min(1).max(100).default(30),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      // Confirm the issue exists and lives in this tenant before reading
+      // its events — avoids leaking cross-tenant subjectIds through guesses.
+      const issue = await ctx.db.issue.findFirst({
+        where: { id: input.issueId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+      const rows = await ctx.db.activityEvent.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          subjectType: "issue",
+          subjectId: input.issueId,
+        },
+        orderBy: { createdAt: "desc" },
+        take: input.limit,
+        include: { actor: { select: { id: true, name: true, image: true } } },
+      });
+      return rows;
+    }),
+
   create: workspaceProcedure
     .input(
       z.object({

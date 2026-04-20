@@ -7,7 +7,6 @@ import {
   CircleDot,
   Clock,
   FolderKanban,
-  LayoutDashboard,
   LineChart,
   Plug,
   Settings,
@@ -75,8 +74,10 @@ const SECTIONS: readonly NavSection[] = [
   {
     id: "work",
     label: "Work",
+    // Agent 3 (dashboard/inbox merge): Dashboard removed — the primary
+    // landing is now the Inbox (Personal group). The old `/dashboard`
+    // route still exists but hard-redirects to `/inbox`.
     items: [
-      { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
       { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
       { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
     ],

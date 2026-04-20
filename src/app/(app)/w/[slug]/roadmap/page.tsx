@@ -150,7 +150,7 @@ export default function RoadmapPage() {
             as="div"
             icon={MapIcon}
             title="Roadmap is empty"
-            hint="Create initiatives and projects with start / target dates to see them plotted here."
+            hint="Create initiatives and projects with start / target dates to see them plotted here. Press ⇧C on the initiatives or projects page to add one."
           />
         </div>
       </>

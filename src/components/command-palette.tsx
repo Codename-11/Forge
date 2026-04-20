@@ -6,7 +6,6 @@ import {
   ArrowRight,
   CircleDot,
   FolderKanban,
-  LayoutDashboard,
   LineChart,
   Plug,
   Inbox,
@@ -69,12 +68,6 @@ export function CommandPalette() {
 
   const nav: NavAction[] = useMemo(
     () => [
-      {
-        id: "nav:dashboard",
-        label: "Go to Dashboard",
-        icon: LayoutDashboard,
-        run: () => router.push(wsPath("/dashboard")),
-      },
       {
         id: "nav:inbox",
         label: "Go to Inbox",

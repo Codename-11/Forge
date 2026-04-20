@@ -64,7 +64,7 @@ export default function FocusPage({ params }: { params: Promise<{ id: string }> 
     if (!done) return toast.error("No 'Done' status defined.");
     update.mutate({ id: issue!.id, statusId: done.id });
     toast.success("Marked done.");
-    setTimeout(() => router.push(`/w/${slug}/dashboard`), 400);
+    setTimeout(() => router.push(`/w/${slug}/inbox`), 400);
   }
 
   return (

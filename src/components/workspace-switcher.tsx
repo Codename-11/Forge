@@ -14,7 +14,8 @@ import { useWorkspace } from "@/hooks/use-workspace";
  *
  * Click or press `g w` (leader chord) to open a Linear-style picker. The
  * switcher persists the selection via `workspace.setLastWorkspace` and then
- * routes to `/w/<slug>/dashboard`. `cmd+k` remains bound to the command
+ * routes to `/w/<slug>/inbox` (the unified workspace landing, née
+ * Dashboard). `cmd+k` remains bound to the command
  * palette; `g w` is the dedicated chord for this picker so it doesn't
  * conflict with the broader command surface.
  */
@@ -57,7 +58,7 @@ export function WorkspaceSwitcher() {
     if (w.slug === ws.slug) return;
     // Fire-and-forget — UX doesn't block on persistence.
     setLast.mutate({ workspaceId: w.id });
-    router.push(`/w/${w.slug}/dashboard`);
+    router.push(`/w/${w.slug}/inbox`);
   }
 
   const badge = workspaceColor(ws.key);
