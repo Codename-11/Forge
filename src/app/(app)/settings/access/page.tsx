@@ -501,24 +501,12 @@ function IntegrationBlocks({ baseUrl, rawKey }: { baseUrl: string; rawKey: strin
     [baseUrl, rpcUrl, rawKey],
   );
 
+  // Hermes native-MCP config (`~/.hermes/config.yaml` under `mcp_servers`).
+  // The older `~/.openclaw/workspace/daemon/config/mcporter.json` entry is
+  // legacy — OpenClaw is dormant; Hermes has a first-class MCP client now.
   const hermes = useMemo(
     () =>
-      JSON.stringify(
-        {
-          mcpServers: {
-            forge: {
-              description:
-                "Forge — project management (issues, projects, agent queue, analytics).",
-              baseUrl: rpcUrl,
-              headers: {
-                Authorization: `Bearer ${rawKey}`,
-              },
-            },
-          },
-        },
-        null,
-        2,
-      ),
+      `mcp_servers:\n  forge:\n    url: "${rpcUrl}"\n    headers:\n      Authorization: "Bearer ${rawKey}"\n    timeout: 120\n    connect_timeout: 60\n`,
     [rpcUrl, rawKey],
   );
 
@@ -547,7 +535,7 @@ function IntegrationBlocks({ baseUrl, rawKey }: { baseUrl: string; rawKey: strin
       : tab === "claude-code"
         ? "add Forge as an MCP server"
         : tab === "hermes"
-          ? "~/.openclaw/workspace/daemon/config/mcporter.json — merge into mcpServers"
+          ? "~/.hermes/config.yaml — merge into mcp_servers (HTTP transport)"
           : tab === "curl"
             ? "HTTP — works from any runtime"
             : "environment variables";
