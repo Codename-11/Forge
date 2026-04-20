@@ -36,3 +36,18 @@ export {
 // Motion tokens live in `src/lib/motion.ts` but are re-exported here
 // for convenience — the whole design-language surface in one import.
 export { MOTION, type MotionToken } from "@/lib/motion";
+
+// Typed modal primitives (Confirm / QuickForm / SidePanel / Picker / Drawer)
+// plus the shared behavior hook and draft-state helpers. Sits *above* the
+// legacy `<Dialog>` primitive — call-sites should migrate to these.
+export {
+  Confirm,
+  QuickForm,
+  SidePanel,
+  Picker,
+  Drawer,
+  useModalBehavior,
+  saveDraft,
+  readDraft,
+  clearDraft,
+} from "@/components/ui/modal";

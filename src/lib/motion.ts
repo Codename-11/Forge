@@ -27,6 +27,15 @@ export const MOTION = {
   fadeIn: "motion-safe:animate-in motion-safe:fade-in duration-100",
   /** Simple fade out. For overlay dismissals. */
   fadeOut: "motion-safe:animate-out motion-safe:fade-out duration-100",
+  /** Slide in from the right edge. For side panels + drawers. */
+  slideInRight:
+    "motion-safe:animate-in motion-safe:slide-in-from-right-4 motion-safe:fade-in duration-150 ease-out",
+  /** Slide in from the bottom edge. For bottom-sheet drawers. */
+  slideInBottom:
+    "motion-safe:animate-in motion-safe:slide-in-from-bottom-4 motion-safe:fade-in duration-150 ease-out",
+  /** Slide in from the top edge. For top-aligned floating bars. */
+  slideInTop:
+    "motion-safe:animate-in motion-safe:slide-in-from-top-4 motion-safe:fade-in duration-150 ease-out",
 } as const;
 
 export type MotionToken = keyof typeof MOTION;
