@@ -6,12 +6,15 @@ import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { IssueRelationsPanel } from "@/components/relations/issue-relations-panel";
+import { IssueAttachmentsPanel } from "@/components/attachments/issue-attachments-panel";
+import { usePasteUpload } from "@/components/attachments/use-paste-upload";
+import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
+import { PinToggleButton } from "@/components/pins/pin-toggle-button";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
@@ -91,6 +94,22 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const [descDraft, setDescDraft] = useState("");
   const [editingDesc, setEditingDesc] = useState(false);
 
+  // Paste-to-upload handlers for the description and comment textareas.
+  // Both target the issue so pasted screenshots hang off the issue itself
+  // (no standalone comment attachment rows needed).
+  const descPaste = usePasteUpload({
+    targetType: "issue",
+    targetId: id,
+    value: descDraft,
+    onChange: setDescDraft,
+  });
+  const commentPaste = usePasteUpload({
+    targetType: "issue",
+    targetId: id,
+    value: commentDraft,
+    onChange: setCommentDraft,
+  });
+
   useEffect(() => {
     if (issue && !editingTitle) setTitleDraft(issue.title);
     if (issue && !editingDesc) setDescDraft(issue.description ?? "");
@@ -112,6 +131,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         subtitle={<span className="font-mono text-[10px]">{issue.status.name}</span>}
         actions={
           <>
+            <PinToggleButton issueId={issue.id} />
             <Button
               variant="outline"
               size="sm"
@@ -187,8 +207,9 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                   autoFocus
                   value={descDraft}
                   onChange={(e) => setDescDraft(e.target.value)}
+                  onPaste={descPaste.onPaste}
                   rows={8}
-                  placeholder="Description (Markdown-flavored)"
+                  placeholder="Description (Markdown-flavored). Paste screenshots to attach."
                   className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
                 />
                 <div className="flex gap-2">
@@ -219,18 +240,20 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               </div>
             ) : (
               <article
-                className="prose prose-sm max-w-none cursor-text whitespace-pre-wrap rounded-md px-1 py-0.5 text-[13px] leading-relaxed text-foreground/90 hover:bg-subtle/40"
+                className="prose prose-sm max-w-none cursor-text rounded-md px-1 py-0.5 text-[13px] leading-relaxed text-foreground/90 hover:bg-subtle/40"
                 onClick={() => setEditingDesc(true)}
                 title="Click to edit"
               >
-                {issue.description || (
+                {issue.description ? (
+                  <MarkdownWithAttachments body={issue.description} />
+                ) : (
                   <span className="text-muted-foreground">No description. Click to add.</span>
                 )}
               </article>
             )}
           </section>
 
-          {/* attachment-panel-slot */}
+          <IssueAttachmentsPanel issueId={issue.id} />
           <IssueRelationsPanel issueId={issue.id} />
 
           <section className="mt-10">
@@ -249,7 +272,10 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                       <span className="font-medium">{c.author.name}</span>
                       <span className="text-muted-foreground">{relativeTime(c.createdAt)}</span>
                     </div>
-                    <div className="mt-1 whitespace-pre-wrap text-[13px]">{c.body}</div>
+                    <MarkdownWithAttachments
+                      body={c.body}
+                      className="mt-1 text-[13px]"
+                    />
                   </div>
                 </div>
               ))}
@@ -260,16 +286,25 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 if (!commentDraft.trim()) return;
                 createComment.mutate({ issueId: id, body: commentDraft.trim() });
               }}
-              className="mt-4 flex gap-2"
+              className="mt-4 space-y-2"
             >
-              <Input
-                placeholder="Leave a comment…"
+              <textarea
+                placeholder="Leave a comment… (paste screenshots to attach)"
                 value={commentDraft}
                 onChange={(e) => setCommentDraft(e.target.value)}
+                onPaste={commentPaste.onPaste}
+                rows={2}
+                className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[13px]"
               />
-              <Button type="submit" size="sm" disabled={!commentDraft.trim() || createComment.isPending}>
-                Comment
-              </Button>
+              <div className="flex justify-end">
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={!commentDraft.trim() || createComment.isPending}
+                >
+                  Comment
+                </Button>
+              </div>
             </form>
           </section>
         </div>
