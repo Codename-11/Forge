@@ -1,4 +1,5 @@
 import { router } from "@/server/trpc";
+import { agentRouter } from "./agent";
 import { workspaceRouter } from "./workspace";
 import { projectRouter } from "./project";
 import { issueRouter } from "./issue";
@@ -25,6 +26,7 @@ import { timeEntryRouter } from "./timeEntry";
 export const appRouter = router({
   access: accessRouter,
   admin: adminRouter,
+  agent: agentRouter,
   analytics: analyticsRouter,
   attachment: attachmentRouter,
   comment: commentRouter,

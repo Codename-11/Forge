@@ -1,7 +1,13 @@
 import "server-only";
 import { z } from "zod";
-import { CycleStatus, InitiativeStatus, RelationKind } from "@prisma/client";
+import {
+  CycleStatus,
+  EventKind,
+  InitiativeStatus,
+  RelationKind,
+} from "@prisma/client";
 import { db } from "@/server/db";
+import { recordChange } from "@/server/audit";
 import {
   assertKeyScope,
   buildKeyScopeWhere,
@@ -374,6 +380,174 @@ export const mcpTools = {
     },
   },
 
+  /**
+   * Assign (or unassign) an agent to an issue. Agents are identified by id
+   * or by `profileKey` (stable cross-system handle). Pass `agentId: null`
+   * to clear the current assignment. Emits AGENT_ASSIGNED on transitions.
+   */
+  "issues.assign": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z
+      .object({
+        issueId: z.string().describe("Issue id (cuid)"),
+        agentId: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("Agent id (cuid). Pass null to unassign. Optional if profileKey given."),
+        profileKey: z
+          .string()
+          .optional()
+          .describe("Resolve agent by profileKey instead of id."),
+      })
+      .refine((v) => v.agentId !== undefined || v.profileKey !== undefined, {
+        message: "Provide agentId (or null) or profileKey.",
+      }),
+    async run(
+      input: { issueId: string; agentId?: string | null; profileKey?: string },
+      ctx: McpContext,
+    ) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+
+      // Resolve target agent id:
+      //   agentId === null           → unassign
+      //   agentId === string         → direct
+      //   profileKey === string      → lookup in this workspace
+      let targetAgentId: string | null = null;
+      if (input.agentId === null) {
+        targetAgentId = null;
+      } else if (typeof input.agentId === "string") {
+        targetAgentId = input.agentId;
+      } else if (input.profileKey) {
+        const agent = await db.agent.findUnique({
+          where: {
+            workspaceId_profileKey: {
+              workspaceId: ctx.workspaceId,
+              profileKey: input.profileKey,
+            },
+          },
+          select: { id: true },
+        });
+        if (!agent) throw new Error("Agent not found in this workspace.");
+        targetAgentId = agent.id;
+      }
+
+      return db.$transaction(async (tx) => {
+        const before = await tx.issue.findFirst({
+          where: {
+            id: input.issueId,
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true, assignedAgentId: true },
+        });
+        if (!before) throw new Error("Issue not found in this workspace.");
+
+        if (targetAgentId) {
+          const agent = await tx.agent.findFirst({
+            where: { id: targetAgentId, workspaceId: ctx.workspaceId },
+            select: { id: true },
+          });
+          if (!agent) throw new Error("Agent not found in this workspace.");
+        }
+
+        const updated = await tx.issue.update({
+          where: { id: before.id },
+          data: { assignedAgentId: targetAgentId },
+          include: {
+            status: true,
+            assignedAgent: {
+              select: {
+                id: true,
+                name: true,
+                profileKey: true,
+                avatar: true,
+                status: true,
+              },
+            },
+          },
+        });
+
+        if ((before.assignedAgentId ?? null) !== (targetAgentId ?? null)) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.userId,
+            entity: "Issue",
+            entityId: before.id,
+            action: "assign-agent",
+            before: { assignedAgentId: before.assignedAgentId },
+            after: { assignedAgentId: targetAgentId },
+            eventKind: EventKind.AGENT_ASSIGNED,
+            subjectType: "issue",
+            subjectId: before.id,
+            payload: {
+              agentId: targetAgentId,
+              previousAgentId: before.assignedAgentId,
+            },
+          });
+        }
+        return updated;
+      });
+    },
+  },
+
+  /**
+   * List issues assigned to a specific agent.
+   *
+   * NOTE: ApiKey currently has no `linkedAgentId` column, so callers MUST
+   * pass `profileKey` to resolve the target agent. Once ApiKey→Agent linkage
+   * ships, this tool will default to the calling key's linked agent when
+   * `profileKey` is omitted.
+   */
+  "issues.assigned": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      limit: z.number().int().min(1).max(100).default(50),
+      includeDone: z.boolean().default(false),
+      profileKey: z
+        .string()
+        .optional()
+        .describe("Agent profileKey to filter by. Required until ApiKey links to Agent."),
+    }),
+    async run(
+      input: { limit: number; includeDone: boolean; profileKey?: string },
+      ctx: McpContext,
+    ) {
+      if (!input.profileKey) {
+        // ApiKey→Agent linkage not yet modeled; require explicit profileKey.
+        throw new Error(
+          "profileKey is required until ApiKey has a linked agent.",
+        );
+      }
+      const agent = await db.agent.findUnique({
+        where: {
+          workspaceId_profileKey: {
+            workspaceId: ctx.workspaceId,
+            profileKey: input.profileKey,
+          },
+        },
+        select: { id: true },
+      });
+      if (!agent) throw new Error("Agent not found in this workspace.");
+
+      const keyWhere = buildKeyScopeWhere(scopeCtx(ctx), "issue");
+      return db.issue.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+          assignedAgentId: agent.id,
+          ...keyWhere,
+          ...(input.includeDone
+            ? {}
+            : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
+        },
+        take: input.limit,
+        orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
+        include: { status: true, project: true },
+      });
+    },
+  },
+
   // ------------------------------------------------------------------- Comments
   "comments.create": {
     scopes: ["WRITE_COMMENTS"] as const,
@@ -595,6 +769,70 @@ export const mcpTools = {
         data: { cycleId: cycle.id },
       });
       return { planned: issues.length, cycleId: cycle.id };
+    },
+  },
+
+  /**
+   * Attach a single issue to a cycle. Both entities must live in the same
+   * workspace and the caller's key scope must include the issue.
+   */
+  "cycles.addIssue": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      cycleId: z.string().describe("Cycle id (cuid)"),
+      issueId: z.string().describe("Issue id (cuid)"),
+    }),
+    async run(input: { cycleId: string; issueId: string }, ctx: McpContext) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      const [cycle, issue] = await Promise.all([
+        db.cycle.findFirst({
+          where: { id: input.cycleId, workspaceId: ctx.workspaceId },
+          select: { id: true },
+        }),
+        db.issue.findFirst({
+          where: {
+            id: input.issueId,
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true },
+        }),
+      ]);
+      if (!cycle) throw new Error("Cycle not found in this workspace.");
+      if (!issue) throw new Error("Issue not found in this workspace.");
+      return db.issue.update({
+        where: { id: issue.id },
+        data: { cycleId: cycle.id },
+        include: { status: true, project: true },
+      });
+    },
+  },
+
+  /**
+   * Detach an issue from its current cycle. No-op if the issue has no cycle.
+   * No `cycleId` param — removing is per-issue.
+   */
+  "cycles.removeIssue": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().describe("Issue id (cuid)"),
+    }),
+    async run(input: { issueId: string }, ctx: McpContext) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      const issue = await db.issue.findFirst({
+        where: {
+          id: input.issueId,
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!issue) throw new Error("Issue not found in this workspace.");
+      return db.issue.update({
+        where: { id: issue.id },
+        data: { cycleId: null },
+        include: { status: true, project: true },
+      });
     },
   },
 
@@ -1067,6 +1305,66 @@ export const mcpTools = {
       return db.timeEntry.update({
         where: { id: entry.id },
         data: { endedAt: new Date() },
+      });
+    },
+  },
+
+  /**
+   * Direct time-entry backfill — writes a completed entry without spinning
+   * a timer. Use when reconciling external tools or logging retroactively.
+   * `endedAt` must be strictly after `startedAt`.
+   */
+  "time.log": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().optional(),
+      description: z.string().max(1000).optional(),
+      startedAt: z.coerce.date(),
+      endedAt: z.coerce.date(),
+      billable: z.boolean().default(false),
+      hourlyRate: z.number().min(0).max(10_000).optional(),
+    }),
+    async run(
+      input: {
+        issueId?: string;
+        description?: string;
+        startedAt: Date;
+        endedAt: Date;
+        billable: boolean;
+        hourlyRate?: number;
+      },
+      ctx: McpContext,
+    ) {
+      if (input.endedAt.getTime() <= input.startedAt.getTime()) {
+        throw new Error("`endedAt` must be after `startedAt`.");
+      }
+      const userId = await resolveActorId(ctx);
+      if (input.issueId) {
+        await assertKeyScope(scopeCtx(ctx), {
+          entity: "issue",
+          id: input.issueId,
+        });
+        const issue = await db.issue.findFirst({
+          where: {
+            id: input.issueId,
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true },
+        });
+        if (!issue) throw new Error("Issue not found in workspace.");
+      }
+      return db.timeEntry.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          userId,
+          issueId: input.issueId,
+          description: input.description,
+          startedAt: input.startedAt,
+          endedAt: input.endedAt,
+          billable: input.billable,
+          hourlyRate: input.hourlyRate,
+        },
       });
     },
   },

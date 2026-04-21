@@ -475,3 +475,158 @@ describe("mcp — issues.claim honors blocker skip + narrowing", () => {
     expect(res.claimed?.id).toBe(onlyMine.id);
   });
 });
+
+describe("mcp — new agent / cycles / time tools", () => {
+  it("issues.assign sets, clears, and looks up by profileKey", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCD" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "assignable" });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: "victor",
+      },
+    });
+
+    // Assign by profileKey.
+    const byKey = (await call(
+      "issues.assign",
+      { issueId: issue.id, profileKey: "victor" },
+      ctx,
+    )) as { assignedAgentId: string | null };
+    expect(byKey.assignedAgentId).toBe(agent.id);
+
+    // Unassign.
+    const cleared = (await call(
+      "issues.assign",
+      { issueId: issue.id, agentId: null },
+      ctx,
+    )) as { assignedAgentId: string | null };
+    expect(cleared.assignedAgentId).toBeNull();
+
+    // Assign by agentId.
+    const byId = (await call(
+      "issues.assign",
+      { issueId: issue.id, agentId: agent.id },
+      ctx,
+    )) as { assignedAgentId: string | null };
+    expect(byId.assignedAgentId).toBe(agent.id);
+
+    // AGENT_ASSIGNED event was emitted.
+    const events = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        kind: "AGENT_ASSIGNED",
+      },
+    });
+    expect(events.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("issues.assigned filters by agent profileKey", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCE" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Mizu",
+        profileKey: "mizu",
+      },
+    });
+    const mine = await createIssue(fixture, { title: "mine" });
+    const theirs = await createIssue(fixture, { title: "theirs" });
+    await prisma.issue.update({
+      where: { id: mine.id },
+      data: { assignedAgentId: agent.id },
+    });
+
+    const rows = (await call(
+      "issues.assigned",
+      { profileKey: "mizu" },
+      ctx,
+    )) as Array<{ id: string }>;
+    expect(rows.map((r) => r.id)).toEqual([mine.id]);
+    expect(rows.map((r) => r.id)).not.toContain(theirs.id);
+  });
+
+  it("issues.assigned requires profileKey until ApiKey links agent", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCF" });
+    fixtures.push(fixture);
+    const { ctx } = buildMcpCtx(fixture);
+    await expect(call("issues.assigned", {}, ctx)).rejects.toThrow(/profileKey/i);
+  });
+
+  it("cycles.addIssue + cycles.removeIssue round-trip", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCG" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "cycle-able" });
+    const cycle = (await call(
+      "cycles.create",
+      { name: "Sprint X" },
+      ctx,
+    )) as { id: string };
+
+    const added = (await call(
+      "cycles.addIssue",
+      { cycleId: cycle.id, issueId: issue.id },
+      ctx,
+    )) as { id: string; cycleId: string | null };
+    expect(added.cycleId).toBe(cycle.id);
+
+    const afterAdd = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+    });
+    expect(afterAdd.cycleId).toBe(cycle.id);
+
+    const removed = (await call(
+      "cycles.removeIssue",
+      { issueId: issue.id },
+      ctx,
+    )) as { cycleId: string | null };
+    expect(removed.cycleId).toBeNull();
+  });
+
+  it("time.log backfills a completed entry and rejects bad bounds", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCH" });
+    fixtures.push(fixture);
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "billable" });
+    const started = new Date(Date.now() - 60 * 60 * 1000);
+    const ended = new Date(Date.now() - 30 * 60 * 1000);
+
+    const entry = (await call(
+      "time.log",
+      {
+        issueId: issue.id,
+        startedAt: started.toISOString(),
+        endedAt: ended.toISOString(),
+        billable: true,
+        hourlyRate: 75,
+        description: "Retroactive",
+      },
+      ctx,
+    )) as { id: string; endedAt: Date | null };
+    expect(entry.id).toBeTruthy();
+    expect(entry.endedAt).not.toBeNull();
+
+    await expect(
+      call(
+        "time.log",
+        {
+          issueId: issue.id,
+          startedAt: ended.toISOString(),
+          endedAt: started.toISOString(),
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/endedAt/i);
+  });
+});

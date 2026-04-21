@@ -84,12 +84,17 @@ enum EventKind {
   ISSUE_STATUS_CHANGED
   ISSUE_ASSIGNED
   ISSUE_PRIORITY_CHANGED
+  ISSUE_QUEUED
   COMMENT_CREATED
   COMMENT_UPDATED
   PROJECT_CREATED
   PROJECT_UPDATED
   SKILL_INVOKED
   PLUGIN_ERROR
+  AGENT_CREATED
+  AGENT_UPDATED
+  AGENT_DELETED
+  AGENT_ASSIGNED
 }
 
 enum WebhookDeliveryStatus {
@@ -118,6 +123,20 @@ enum RelationKind {
   BLOCKED_BY
   DUPLICATES
   RELATES_TO
+}
+
+enum AgentStatus {
+  ONLINE
+  OFFLINE
+  BUSY
+}
+
+/// How the auto-dispatcher picks an agent for an unassigned queued issue.
+enum AutoDispatchMode {
+  MANUAL_ONLY
+  ROUND_ROBIN
+  PRIORITY_MATCH
+  CAPABILITY_MATCH
 }
 
 // ----------------------------------------------------------------------------
@@ -220,6 +239,19 @@ model Workspace {
   timeTrackingEnabled Boolean @default(false)
   /// Soft cap on total attachment storage (MB) for this workspace.
   attachmentQuotaMb Int @default(1024)
+  /// Master toggle for auto-dispatching queued issues to agents.
+  autoDispatch Boolean @default(false)
+  /// Strategy used when autoDispatch is on. MANUAL_ONLY disables picking.
+  autoDispatchMode AutoDispatchMode @default(MANUAL_ONLY)
+  /// When true, assigning (manually or auto) immediately pushes the agent
+  /// webhook to start work; when false, the issue sits in the agent queue.
+  autoStartOnAssign Boolean @default(false)
+  /// If a claimed issue sees no activity (comments/transitions) within this
+  /// window, it is auto-released back to the pool. 0 = disabled.
+  agentIdleTimeoutMinutes Int @default(0)
+  /// Gated dispatch — assignment lands in queue but agent does not start
+  /// work until a human approves.
+  requireApprovalBeforeStart Boolean @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   deletedAt DateTime?
@@ -246,6 +278,7 @@ model Workspace {
   initiatives Initiative[]
   issueRelations IssueRelation[]
   timeEntries TimeEntry[]
+  agents      Agent[]
 
   @@index([slug])
 }
@@ -354,6 +387,9 @@ model Issue {
   claimedAt   DateTime?
   claimedById String?
   claimExpiresAt DateTime?
+  /// Explicit agent assignment. Independent of `claimedById` (human claim).
+  /// Set by users or the auto-dispatcher; cleared on unassign.
+  assignedAgentId String?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   deletedAt   DateTime?
@@ -366,6 +402,7 @@ model Issue {
   status    Status          @relation(fields: [statusId], references: [id])
   author    User            @relation("IssueAuthor", fields: [authorId], references: [id])
   claimedBy User?           @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  assignedAgent Agent?      @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
   assignees IssueAssignee[]
   labels    IssueLabel[]
   comments  Comment[]
@@ -381,6 +418,7 @@ model Issue {
   @@index([workspaceId, createdAt])
   @@index([workspaceId, queued, claimedAt])
   @@index([workspaceId, cycleId])
+  @@index([workspaceId, assignedAgentId])
 }
 
 /// Reusable project blueprints shown in the "Starter templates" picker.
@@ -802,4 +840,41 @@ model TimeEntry {
 
   @@index([workspaceId, userId, startedAt])
   @@index([issueId])
+}
+
+// ----------------------------------------------------------------------------
+// Agents (MCP-first actors)
+// ----------------------------------------------------------------------------
+
+/// Registered agent identity. Distinct from User (humans) — agents may be
+/// LLM profiles (e.g. `victor`, `mizu`) that authenticate via ApiKey and
+/// receive work via webhook push. `profileKey` is the stable, human-memorable
+/// handle used across Hermes and Forge (matches Hermes profile directory name).
+model Agent {
+  id               String      @id @default(cuid())
+  workspaceId      String
+  name             String
+  /// Stable handle for cross-system lookup. Unique per workspace.
+  profileKey       String
+  description      String?     @db.Text
+  /// Avatar/emoji or URL — freeform. UI decides.
+  avatar           String?
+  /// Outbound webhook for push dispatch (issue.assigned etc).
+  webhookUrl       String?
+  /// Free-form capability tags (e.g. "ops", "research", "code-review").
+  /// Consumed by `autoDispatchMode = CAPABILITY_MATCH`.
+  capabilities     String[]    @default([])
+  status           AgentStatus @default(OFFLINE)
+  lastHeartbeatAt  DateTime?
+  /// Cap on simultaneously-claimed issues. 0 = unlimited.
+  maxConcurrent    Int         @default(1)
+  archivedAt       DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignedIssues Issue[]   @relation("IssueAssignedAgent")
+
+  @@unique([workspaceId, profileKey])
+  @@index([workspaceId, status])
 }

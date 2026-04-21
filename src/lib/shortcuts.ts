@@ -54,6 +54,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { chord: "g u", label: "Go to Standup", category: "Navigate" },
   { chord: "g t", label: "Go to Time", category: "Navigate", scope: "time tracking enabled" },
   { chord: "g a", label: "Go to Analytics", category: "Navigate" },
+  { chord: "g e", label: "Go to Agents", category: "Navigate" },
   { chord: "g l", label: "Go to Plugins", category: "Navigate" },
   { chord: "g ,", label: "Go to Settings", category: "Navigate" },
   { chord: "g w", label: "Switch workspace", category: "Navigate" },
@@ -70,6 +71,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
 
   // --- Work ----------------------------------------------------------------
   { chord: "c", label: "Open current cycle", category: "Work" },
+  { chord: "⇧A", label: "Assign agent", category: "Work", scope: "issue detail" },
 
   // --- Pins ----------------------------------------------------------------
   { chord: "p", label: "Toggle pin on issue", category: "Pins", scope: "issue detail" },
