@@ -705,17 +705,23 @@ model ApiKey {
   labelIds      String[]  @default([])
   /// Optional narrowing: restrict this key to specific initiative ids.
   initiativeIds String[]  @default([])
+  /// When set, this key acts as a specific agent. MCP tools like
+  /// `issues.assigned` infer the agent from the key; webhook payloads can
+  /// reverse-route by agent without a separate lookup.
+  linkedAgentId String?
   lastUsedAt    DateTime?
   expiresAt     DateTime?
   revokedAt     DateTime?
   createdAt     DateTime  @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plugin    Plugin?   @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plugin      Plugin?   @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  linkedAgent Agent?    @relation("AgentApiKeys", fields: [linkedAgentId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId])
   @@index([prefix])
+  @@index([linkedAgentId])
 }
 
 model Webhook {
@@ -861,6 +867,9 @@ model Agent {
   avatar           String?
   /// Outbound webhook for push dispatch (issue.assigned etc).
   webhookUrl       String?
+  /// Optional HMAC secret for webhook signing; falls back to the
+  /// workspace-level synthetic webhook secret when unset.
+  webhookSecret    String?
   /// Free-form capability tags (e.g. "ops", "research", "code-review").
   /// Consumed by `autoDispatchMode = CAPABILITY_MATCH`.
   capabilities     String[]    @default([])
@@ -868,12 +877,16 @@ model Agent {
   lastHeartbeatAt  DateTime?
   /// Cap on simultaneously-claimed issues. 0 = unlimited.
   maxConcurrent    Int         @default(1)
+  /// Timestamp of the last auto-dispatch assignment to this agent. Used by
+  /// `AutoDispatchMode.ROUND_ROBIN` to pick the least-recent pick.
+  lastDispatchedAt DateTime?
   archivedAt       DateTime?
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
   workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   assignedIssues Issue[]   @relation("IssueAssignedAgent")
+  apiKeys        ApiKey[]  @relation("AgentApiKeys")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])

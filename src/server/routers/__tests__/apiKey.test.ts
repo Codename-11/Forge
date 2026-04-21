@@ -141,6 +141,7 @@ describe("apiKey (access) router — narrowing", () => {
       projectIds: ["p1", "p2"],
       labelIds: ["l1"],
       initiativeIds: [],
+      linkedAgentId: null,
     };
     const issueWhere = buildKeyScopeWhere({ apiKey }, "issue");
     expect(issueWhere).toHaveProperty("OR");
@@ -186,6 +187,7 @@ describe("apiKey (access) router — narrowing", () => {
       projectIds: [],
       labelIds: [redLabel.id],
       initiativeIds: [],
+      linkedAgentId: null,
     };
 
     // Scoped issue passes.
@@ -221,6 +223,7 @@ describe("apiKey (access) router — narrowing", () => {
         projectIds: [],
         labelIds: [label.id],
         initiativeIds: [],
+        linkedAgentId: null,
       } satisfies ApiKeyContext,
     };
     const caller = issueRouter.createCaller(narrowedCtx);

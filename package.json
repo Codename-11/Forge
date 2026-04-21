@@ -13,6 +13,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
+    "seed:agents": "tsx scripts/seed-agents.ts",
     "prisma:studio": "prisma studio",
     "test": "vitest run",
     "test:watch": "vitest",

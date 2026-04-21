@@ -1,82 +1,120 @@
 # Forge — TODO & Gaps
 
-> Living backlog of identified gaps. Triage order: P0 → P3.
+> Living backlog. Triage order: P0 → P3. Strikethrough = shipped.
 
-## P0 — Agent Integration (Hermes first-class)
+## P0 — Agent Integration (shipped 2026-04-20)
 
-### Agent identity & assignment
+### Agent identity & assignment — ✅ done
 
-The MCP surface currently only supports anonymous pool-based `issues.claim`. There's no concept of targeted assignment or agent-aware routing.
+- [x] `Agent` model (`profileKey`, `webhookUrl`, `webhookSecret`,
+  `capabilities[]`, `status`, `lastHeartbeatAt`, `maxConcurrent`,
+  `lastDispatchedAt`)
+- [x] `Issue.assignedAgentId` — explicit assignment vs pool claim
+- [x] `ApiKey.linkedAgentId` — key identity reverse-lookup
+- [x] MCP tool: `issues.assigned` — "what's assigned to me?" (infers
+  agent from `linkedAgentId` or accepts explicit `profileKey`)
+- [x] MCP tool: `issues.assign` — assign issue to a specific agent
+  (WRITE_ISSUES)
+- [x] Agent view in UI at `/settings/agents` — list, create, edit,
+  archive, delete with typeToConfirm
+- [x] Assignee picker on issue detail (`⇧A` chord)
+- [x] Sidebar nav (`g e`)
 
-**Needs:**
-- [ ] `Agent` model (or role on `User`) — `name`, `profileKey` (e.g. `victor`, `mizu`), `webhookUrl`, `capabilities[]`, `status` (online/offline/busy)
-- [ ] `assignedAgentId` on `Issue` — explicit assignment vs pool claim
-- [ ] MCP tool: `issues.assigned` — "what's assigned to me?" (filters by the calling key's agent identity)
-- [ ] MCP tool: `issues.assign` — assign issue to a specific agent (requires WRITE_ISSUES)
-- [ ] Agent view in UI — see which agents are registered, their current load, claimed issues, last heartbeat
+### Webhook push dispatch — ✅ done
 
-### Webhook push dispatch
+- [x] `WebhookDelivery` fan-out in `recordChange` — batched insert of
+  one row per subscribed `Webhook`, in the same transaction as the
+  `ActivityEvent`
+- [x] Agent-targeted dispatch via synthetic per-workspace webhook
+  (url `agent:dispatch`) + synthetic per-agent webhook
+  (`agent:dispatch:{agentId}`) for comment mentions
+- [x] Worker resolves real URL from `Issue.assignedAgent.webhookUrl`;
+  HMAC with `Agent.webhookSecret` when present
+- [x] Events fired on: `ISSUE_QUEUED` (queue transition),
+  `AGENT_ASSIGNED` (assignment delta), `COMMENT_CREATED` (with
+  `mentions[]` payload), `ISSUE_PRIORITY_CHANGED` (with from/to)
 
-Currently no way to push work to agents. Requires AXI-4 (BullMQ worker container) plus:
+### Auto-dispatch — ✅ done
 
-- [ ] Wire `WebhookDelivery` to fire on: issue queued, issue assigned, issue commented (@mention), issue priority escalated
-- [ ] Hermes webhook receiver endpoint (already exists at `/api/webhooks` in Hermes API server — needs Forge-specific handler)
-- [ ] Delivery payload includes enough context for the agent to act without round-tripping (title, description, priority, project, status)
+- [x] `Workspace.autoDispatch` — master toggle (default off)
+- [x] `Workspace.autoDispatchMode` — `MANUAL_ONLY | ROUND_ROBIN |
+  PRIORITY_MATCH | CAPABILITY_MATCH`
+- [x] `Workspace.autoStartOnAssign` / `agentIdleTimeoutMinutes` /
+  `requireApprovalBeforeStart` columns
+- [x] `src/server/services/dispatcher.ts::maybeAutoDispatch` —
+  invoked from `issue.create` and `issue.setQueued` inside tx
+- [x] Dispatcher tests: 8 cases covering all modes + `maxConcurrent`
+  ceiling + idempotency
 
-### Auto-dispatch system
+### Hermes-side integration — consumer work, not Forge
 
-Configurable per-workspace (settings-driven, not hardcoded):
-
-- [ ] `Workspace.autoDispatch` — master toggle (default: off)
-- [ ] `Workspace.autoDispatchMode` — `round_robin` | `priority_match` | `capability_match` | `manual_only`
-- [ ] `Workspace.autoStartOnAssign` — when an issue is assigned (manually or auto-dispatched), immediately push webhook to start work (default: off)
-- [ ] `Workspace.agentIdleTimeoutMinutes` — if a claimed issue sees no activity (comments, transitions) within this window, auto-release back to pool
-- [ ] `Workspace.requireApprovalBeforeStart` — gated dispatch: issue lands in agent's queue but doesn't start until human approves (default: off)
-- [ ] Dispatch rules engine (phase 2): labels/priorities/projects → specific agents. E.g., `priority=URGENT → victor`, `label=ops → mizu`
-
-### Hermes-side integration (consumer)
-
-Hermes needs a first-class "tasks" surface so agents see their work without manual polling:
-
-- [ ] **Task inbox** — agent-facing view of assigned/claimed issues. Shows in session greeting or on-demand via command. Structured like: "You have 3 tasks: AXI-5 [HIGH, In Progress], AXI-8 [MEDIUM, Todo], AXI-21 [HIGH, Backlog]"
-- [ ] **Webhook handler** — receives Forge dispatch events, routes to correct profile, optionally auto-starts work
-- [ ] **Config flags** in Hermes `config.yaml`:
-  ```yaml
-  forge:
-    auto_claim: false          # Poll queue and auto-claim when idle
-    auto_start: false          # Start working immediately on assignment/claim
-    poll_interval: 0           # Minutes between queue checks (0 = disabled, webhook-only)
-    show_inbox_on_greeting: true  # Show task count in session greeting
-    max_concurrent_claims: 1   # How many issues agent can hold at once
-  ```
-- [ ] **Session awareness** — if agent is mid-task on AXI-X, new assignments queue locally rather than interrupting
-- [ ] **Completion flow** — when agent finishes work, auto-transition issue to Done/In Review, drop summary comment, release claim
+- [ ] Hermes `forge.auto_claim` / `auto_start` / `poll_interval` /
+  `show_inbox_on_greeting` / `max_concurrent_claims` config
+- [ ] Hermes webhook receiver that routes by `agent:dispatch:{agentId}`
+  back to the correct profile
+- [ ] Hermes task-inbox surface on session greeting
+- [ ] Completion flow — agent auto-transitions issue to Done/In Review,
+  drops summary comment, releases claim
 
 ---
 
-## P1 — Phase 3 MCP tools
+## P1 — Phase 3 MCP tools (shipped 2026-04-20)
 
-New primitives from 2026-04-20 push need MCP surface:
+- [x] `cycles.list` / `cycles.get` / `cycles.create` / `cycles.plan` /
+  `cycles.addIssue` / `cycles.removeIssue`
+- [x] `initiatives.list` / `initiatives.get`
+- [x] `relations.add` / `relations.remove`
+- [x] `time.start` / `time.stop` / `time.log`
+- [x] `attachments.initUpload` / `attachments.finalize` /
+  `attachments.list`
 
-- [ ] `cycles.list` / `cycles.get` / `cycles.create` / `cycles.addIssue` / `cycles.removeIssue`
-- [ ] `initiatives.list` / `initiatives.get`
-- [ ] `issues.relate` / `issues.unrelate` (typed: blocks, duplicates, related)
-- [ ] `time.start` / `time.stop` / `time.log` (manual entry)
-- [ ] `attachments.upload` / `attachments.list` (MinIO-backed)
+---
+
+## P1 — High-value follow-ups (discovered during dogfooding)
+
+- [ ] **Dead-letter inspection UI** — admin page listing recent
+  `WebhookDelivery.status === DEAD_LETTER` rows with response body +
+  "retry" button. Webhook failures are currently only visible via DB.
+- [ ] **Agent identity in comments** — add `Comment.authoringAgentId`
+  or an actor discriminator on `recordChange` so an agent-authored
+  comment renders as "Victor (agent)" rather than the human key owner.
+- [ ] **Heartbeat-driven auto-offline** — scheduled job that flips
+  `Agent.status → OFFLINE` when `lastHeartbeatAt` is older than a
+  workspace-configurable window (default 10 min).
+- [ ] **Observability for dispatch decisions** — persist `{mode,
+  candidates, chosen, reason}` on the `AGENT_ASSIGNED` payload (or a
+  new `DispatchLog` table) so "why Victor and not Mizu" is queryable.
+- [ ] **Handoff flow** — `issues.reassign` MCP tool that takes a
+  rationale, forces a comment, and swaps `assignedAgentId`. Cheaper
+  than each caller stitching `issues.assign` + `comments.create`.
+- [ ] **Bulk label / bulk assign on issues** (already in P2, bumped)
 
 ---
 
 ## P2 — Existing deferred
 
 - [ ] Email invite flow
-- [ ] Bulk label / bulk assign on issues
-- [ ] BullMQ webhook delivery worker — separate container (AXI-4, prerequisite for dispatch)
+- [ ] BullMQ webhook delivery worker — separate container (AXI-4)
+  currently co-located with forge main process
+- [ ] Per-agent permission lattice (beyond ApiKey scopes) — e.g.
+  "Victor can only touch issues he's assigned" without needing
+  workspace-wide WRITE_ISSUES
 
 ---
 
 ## P3 — Nice to have
 
-- [ ] Agent heartbeat / presence (agents ping every N minutes, UI shows online/offline)
-- [ ] Issue templates per agent (when agent claims, auto-populate description with structured checklist)
-- [ ] Dispatch analytics — mean time to claim, mean time to complete, agent throughput
-- [ ] Slack/Discord notification bridge (Forge → channel on assignment/completion)
+- [ ] Agent heartbeat / presence (agents ping every N minutes, UI
+  shows online/offline) — partial: we have the column but no UI
+  indicator beyond the status dot on the agents list
+- [ ] Issue templates per agent (when agent claims, auto-populate
+  description with structured checklist)
+- [ ] Dispatch analytics — mean time to claim, mean time to complete,
+  agent throughput
+- [ ] Slack/Discord notification bridge (Forge → channel on
+  assignment/completion)
+- [ ] Dispatch rules engine (phase 2) — labels/priorities/projects →
+  specific agents. E.g., `priority=URGENT → victor`,
+  `label=ops → mizu`. Current auto-dispatch covers this via
+  `CAPABILITY_MATCH` but a rules surface in UI would beat freeform
+  capability strings.

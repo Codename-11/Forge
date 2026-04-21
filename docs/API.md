@@ -38,18 +38,41 @@ fixed-window limits. Default is none — add explicitly on hot paths.
 
 ## MCP REST
 
-Base: `POST /api/mcp/:tool`, JSON body, `Authorization: Bearer <key>`.
+Two transports, same tool surface (43 tools):
 
-| Tool                 | Required scope       | Input (zod)                        |
-|----------------------|----------------------|------------------------------------|
-| `describe`           | (public)             | —                                  |
-| `issues.list`        | READ_ISSUES          | `{ query?, limit?, includeDone? }` |
-| `issues.get`         | READ_ISSUES          | `{ id }`                           |
-| `issues.create`      | WRITE_ISSUES         | `{ title, description?, priority?, projectId? }` |
-| `issues.transition`  | WRITE_ISSUES         | `{ id, statusId }`                 |
-| `comments.create`    | WRITE_COMMENTS       | `{ issueId, body }`                |
-| `projects.list`      | READ_PROJECTS        | `{ includeArchived? }`             |
-| `analytics.summary`  | READ_ANALYTICS       | `{}`                               |
+- **JSON-RPC 2.0** — `POST /api/mcp/rpc` with standard MCP envelopes
+  (`tools/list`, `tools/call`). Preferred for agent clients.
+- **REST alias** — `POST /api/mcp/:tool` with a plain JSON body.
+
+Both accept `Authorization: Bearer <key>` (ApiKey) or a short-lived JWT.
+
+### Tool catalog (by namespace)
+
+| Namespace       | Tools                                                       |
+|-----------------|-------------------------------------------------------------|
+| `issues`        | `list`, `get`, `create`, `update`, `transition`, `claim`, `assign`, `assigned` |
+| `comments`      | `create`                                                    |
+| `projects`      | `list`, `get`, `create`                                     |
+| `cycles`        | `list`, `get`, `current`, `create`, `plan`, `addIssue`, `removeIssue` |
+| `initiatives`   | `list`, `get`                                               |
+| `relations`     | `add`, `remove`                                             |
+| `time`          | `start`, `stop`, `log`                                      |
+| `attachments`   | `initUpload`, `finalize`, `list`                            |
+| `pins`          | `list`, `toggle`                                            |
+| `analytics`     | `summary`, `statusDistribution`, `throughput`, `slaBreaches` |
+
+`issues.assign` / `issues.assigned` identify agents by `agentId` or
+`profileKey`. `issues.assigned` falls back to the calling key's
+`linkedAgentId` when neither is supplied, so a key linked to Victor
+returns Victor's queue automatically.
+
+### Scopes
+
+Keys carry a coarse `PluginScope[]` ceiling — a subset of the owning
+plugin manifest — plus optional narrowing arrays `projectIds` /
+`labelIds` / `initiativeIds`. Non-empty means "this key can only see
+these ids". A key with `projectIds: ["X"]` is invisible to every tool
+called against an issue outside project X.
 
 ## Events (plugin SSE)
 
@@ -59,8 +82,9 @@ key's workspace.
 
 `EventKind` values: `ISSUE_CREATED | ISSUE_UPDATED | ISSUE_DELETED |
 ISSUE_STATUS_CHANGED | ISSUE_ASSIGNED | ISSUE_PRIORITY_CHANGED |
-COMMENT_CREATED | COMMENT_UPDATED | PROJECT_CREATED | PROJECT_UPDATED |
-SKILL_INVOKED | PLUGIN_ERROR`.
+ISSUE_QUEUED | COMMENT_CREATED | COMMENT_UPDATED | PROJECT_CREATED |
+PROJECT_UPDATED | SKILL_INVOKED | PLUGIN_ERROR | AGENT_CREATED |
+AGENT_UPDATED | AGENT_DELETED | AGENT_ASSIGNED`.
 
 ## Webhooks (outbound)
 

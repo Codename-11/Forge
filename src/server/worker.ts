@@ -14,7 +14,10 @@
 import "server-only";
 import { Queue, Worker, QueueEvents } from "bullmq";
 import { db } from "@/server/db";
-import { AGENT_DISPATCH_WEBHOOK_URL } from "@/server/audit";
+import {
+  AGENT_DISPATCH_WEBHOOK_URL,
+  AGENT_DISPATCH_WEBHOOK_URL_PREFIX,
+} from "@/server/audit";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { logger } from "@/server/logger";
 
@@ -34,43 +37,73 @@ export const webhookWorker = new Worker(
     if (!delivery || !delivery.webhook.active) return;
 
     // Agent-dispatch pseudo-webhook — resolve the real target URL from
-    // the subject issue's assigned agent. The per-agent webhookUrl is
-    // the source of truth; the Webhook row is a queue shim.
+    // either the subject issue's assignee (generic `agent:dispatch` shim)
+    // or the explicit agent id embedded in the url suffix
+    // (`agent:dispatch:{agentId}`; used for comment @mentions + priority
+    // escalations). The per-agent `webhookUrl` is the source of truth.
     let targetUrl = delivery.webhook.url;
-    const targetSecret = delivery.webhook.secret;
-    if (targetUrl === AGENT_DISPATCH_WEBHOOK_URL) {
-      if (delivery.event.subjectType !== "issue") {
+    let targetSecret = delivery.webhook.secret;
+    if (
+      targetUrl === AGENT_DISPATCH_WEBHOOK_URL ||
+      targetUrl.startsWith(AGENT_DISPATCH_WEBHOOK_URL_PREFIX)
+    ) {
+      // Resolve the target agent id. For the per-agent shim, the suffix
+      // is the source of truth; for the generic shim, walk the subject
+      // issue's `assignedAgentId`.
+      let agentId: string | null = null;
+      if (targetUrl.startsWith(AGENT_DISPATCH_WEBHOOK_URL_PREFIX)) {
+        agentId = targetUrl.slice(AGENT_DISPATCH_WEBHOOK_URL_PREFIX.length) || null;
+      } else {
+        if (delivery.event.subjectType !== "issue") {
+          await db.webhookDelivery.update({
+            where: { id: deliveryId },
+            data: {
+              attempt: { increment: 1 },
+              status: "DEAD_LETTER",
+              responseBody: "agent-dispatch: non-issue subject",
+            },
+          });
+          return;
+        }
+        const issue = await db.issue.findUnique({
+          where: { id: delivery.event.subjectId },
+          select: { assignedAgentId: true },
+        });
+        agentId = issue?.assignedAgentId ?? null;
+      }
+
+      if (!agentId) {
         await db.webhookDelivery.update({
           where: { id: deliveryId },
           data: {
             attempt: { increment: 1 },
             status: "DEAD_LETTER",
-            responseBody: "agent-dispatch: non-issue subject",
+            responseBody: "agent-dispatch: no agent resolved",
           },
         });
         return;
       }
-      const issue = await db.issue.findUnique({
-        where: { id: delivery.event.subjectId },
-        select: {
-          assignedAgent: { select: { webhookUrl: true } },
-        },
+
+      const agent = await db.agent.findUnique({
+        where: { id: agentId },
+        select: { webhookUrl: true, webhookSecret: true },
       });
-      const agentUrl = issue?.assignedAgent?.webhookUrl ?? null;
-      if (!agentUrl) {
+      if (!agent?.webhookUrl) {
         await db.webhookDelivery.update({
           where: { id: deliveryId },
           data: {
             attempt: { increment: 1 },
             status: "DEAD_LETTER",
-            responseBody: "agent-dispatch: assigned agent has no webhookUrl",
+            responseBody: "agent-dispatch: target agent has no webhookUrl",
           },
         });
         return;
       }
-      targetUrl = agentUrl;
-      // Reuse the synthetic workspace-level secret for HMAC. Future work
-      // can promote this to a per-agent secret column on Agent.
+      targetUrl = agent.webhookUrl;
+      // Prefer the per-agent HMAC secret when present; fall back to the
+      // synthetic workspace-level secret so deliveries still sign against
+      // something stable if the agent hasn't been rotated yet.
+      targetSecret = agent.webhookSecret ?? delivery.webhook.secret;
     }
 
     const res = await deliverWebhook({

@@ -2,6 +2,86 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-20 — P0 follow-up wave (agent loop closure + docs + repo rename)
+
+Three-lane follow-up closes the gaps the primary P0 wave deferred.
+Migration `0002_agent_links` adds `ApiKey.linkedAgentId`, `Agent.
+webhookSecret`, and `Agent.lastDispatchedAt`.
+
+**Lane A — key link + comment mentions + priority webhooks.**
+`api-key-auth` now carries `linkedAgentId` through the context;
+`issues.assigned` falls back to the calling key's linked agent when
+`profileKey` is omitted. `access` router + UI expose a "Link to agent"
+selector (populated from `trpc.agent.list`) and render the linked
+agent as an indigo chip on each key row. Comment create parses
+`/@([a-z0-9][a-z0-9-_]*)/g` tokens via a new `extractMentions` helper,
+resolves matched agents in the workspace, and enriches the existing
+COMMENT_CREATED payload with `{commentId, issueId, preview,
+mentions[]}`. No double-emit. Audit.ts gains
+`AGENT_DISPATCH_WEBHOOK_URL_PREFIX` + an `agentDispatchUrlFor(id)`
+helper + an `upsertAgentDispatchWebhook` that lazy-creates a per-agent
+synthetic Webhook row. Three independent fan-out paths now coexist:
+generic `agent:dispatch` for AGENT_ASSIGNED / ISSUE_QUEUED, per-agent
+`agent:dispatch:{id}` for ISSUE_PRIORITY_CHANGED where `to ∈ {HIGH,
+URGENT}` on an assigned issue, and per-agent shim for COMMENT_CREATED
+mentions — one delivery per mentioned agent, filtered by
+`webhookUrl != null`. Worker parses the `agent:dispatch:{id}` suffix
+and uses `Agent.webhookSecret ?? webhook.secret` for the HMAC key.
+
+**Lane B — auto-dispatcher runtime.** New
+`src/server/services/dispatcher.ts::maybeAutoDispatch(tx, issueId)` —
+short-circuits when the issue is already assigned, not queued, or the
+workspace isn't set for auto-dispatch. Loads eligible agents
+(`archivedAt null`, `status != OFFLINE`, under `maxConcurrent`). Pick
+rules:
+- `ROUND_ROBIN` — oldest `lastDispatchedAt` NULLS FIRST.
+- `PRIORITY_MATCH` — prefer agents with the priority name in
+  `capabilities`; tie-break round-robin.
+- `CAPABILITY_MATCH` — intersect issue label names with agent
+  capabilities; most matches wins; zero-matches falls through to
+  round-robin rather than stalling.
+Writes `assignedAgentId` + bumps agent `lastDispatchedAt` + fires
+AGENT_ASSIGNED with `payload.auto = true` and the picking mode.
+Invoked from `issue.create` and `issue.setQueued` inside the existing
+`$transaction`. 8 new tests cover all modes + maxConcurrent + idempotency.
+
+**Lane C — Victor + Mizu bootstrap.** `scripts/seed-agents.ts` +
+`pnpm seed:agents` — idempotent upsert on `(workspaceId, profileKey)`,
+reads `FORGE_AGENT_VICTOR_WEBHOOK_URL` / `_MIZU_` from env, best-effort
+links any active ApiKey whose name matches `%victor%`/`%mizu%` (case-
+insensitive) to the new agent. Script couldn't run end-to-end locally
+(no AXI in dev DB); seeded prod via raw SQL against `forge-postgres`
+inside the container. Agents inserted with ids `6ea973a4...` (Victor)
+and `b4f8cf5f...` (Mizu); existing "Hermes · Victor" and "Hermes · Mizu"
+ApiKeys linked.
+
+**Docs + repo rename.** Repo renamed `Codename-11/forge` →
+`Codename-11/Forge` via `gh api -X PATCH`. Description + homepage +
+eight topics set. Local origin updated. Rewrote README to match the
+ARC style (centered header, badge row, doc-link row, Agents & MCP
+section with curl examples, auto-dispatch callout, keyboard table
+rebuilt). CLAUDE.md gains the Agent primitive + Auto-dispatch section
+and the ApiKey-linkedAgentId note. TODO.md reorganised: P0 items
+struck through with ✅, P1 MCP-tools section marked done, new "P1 —
+High-value follow-ups" section captures the dogfooding gaps (DLQ UI,
+agent identity in comments, heartbeat auto-offline, dispatch
+observability, handoff flow). docs/API.md refreshed with the 43-tool
+namespace table + full EventKind list.
+
+**Validation + deploy.**
+- `pnpm typecheck` clean.
+- `pnpm test` 82/82 (8 new dispatcher, 5 new mention parser).
+- Image `forge:local e0c5f6b430ef`; entrypoint applied
+  `0002_agent_links` cleanly on boot.
+- Prod smoke: `tools/list` 43 tools; `analytics.summary` 200;
+  `issues.assigned` called with no args against the Victor-linked key
+  returns `[]` (correct — no issues assigned yet).
+
+Remaining follow-ups live in TODO.md under "P1 — High-value
+follow-ups". Hermes-side consumer work (auto_claim, poll_interval,
+task-inbox on greeting, completion flow) is tracked in the TODO and
+will land in the Hermes repo, not here.
+
 ## 2026-04-20 — P0 agent integration (3-lane wave)
 
 Executing `TODO.md` P0 — first-class agent identity + push dispatch. Three

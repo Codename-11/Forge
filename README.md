@@ -1,128 +1,182 @@
-# Forge
+<h1 align="center">Forge — Project Management for Humans and Agents</h1>
 
-A minimalist, keyboard-driven project management platform with a pluggable agent surface.
-Linear-style issues, projects, cycles, initiatives, and time tracking across any number of
-workspaces. Nothing-inspired, warm-earthy UI. First-class MCP.
+<p align="center">
+  Linear-style issues, cycles, initiatives, and time tracking — with a<br>
+  first-class MCP surface so LLM agents are real actors, not afterthoughts.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Codename-11/Forge/actions"><img src="https://img.shields.io/github/actions/workflow/status/Codename-11/Forge/ci.yml?branch=master&label=CI" alt="CI"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E=20-brightgreen" alt="Node ≥20"></a>
+  <a href="https://www.postgresql.org"><img src="https://img.shields.io/badge/postgres-16-336791" alt="Postgres 16"></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-43+ tools-8a63d2" alt="MCP"></a>
+</p>
+
+<p align="center">
+  <a href="./docs/">Docs</a> ·
+  <a href="#quick-start">Install</a> ·
+  <a href="#agents--mcp">Agents &amp; MCP</a> ·
+  <a href="#keyboard">Shortcuts</a> ·
+  <a href="./DEVLOG.md">DevLog</a> ·
+  <a href="./TODO.md">Roadmap</a>
+</p>
+
+---
+
+## Why Forge
+
+Most PM tools treat automation as a plugin. Forge was built around the idea
+that agents — LLM profiles like `victor`, `mizu` — are **first-class actors**:
+they hold ApiKeys with scoped narrowing, get work pushed via webhook, claim
+issues from a queue, emit comments, and run time entries like anyone else.
+Everything humans can do in the UI, agents can do over MCP.
+
+The result is a minimalist, keyboard-driven surface (warm-earthy tokens,
+Anthropic-inspired) that feels like Linear, and a plugin plane underneath
+that lets you compose agents, automations, and LLM loops with real
+primitives instead of webhook-config stitching.
 
 ## Stack
 
 - **Next.js 15** (App Router, server components, typed routes) + **TypeScript**
-- **PostgreSQL** + **Prisma 6** (normalized schema with audit log, event stream, metric rollups)
-- **tRPC 11** with **Zod** validation (end-to-end type-safe API)
-- **NextAuth v5** (GitHub/Google/email magic link, Prisma adapter, DB sessions)
-- **Redis** (pub/sub for realtime, rate limiting, BullMQ queues)
-- **SSE** for browser realtime; **HMAC-signed webhooks** for plugin delivery
-- **Tailwind CSS** with a warm-earthy design token system
-- **Vitest** + **Playwright** for unit + E2E; **GitHub Actions** for CI
+- **PostgreSQL 16** + **Prisma 6** — normalized schema with audit log, event
+  stream, metric rollups, and migrations.
+- **tRPC 11** with **Zod** — end-to-end type-safe API for the web UI.
+- **NextAuth v5** — Credentials + OAuth (GitHub / Google), Prisma adapter.
+- **Redis** — pub/sub for realtime, BullMQ queues, rate limit.
+- **MinIO** (S3-compatible) — polymorphic attachment storage.
+- **SSE** for browser realtime + **HMAC-signed webhooks** for agent push.
+- **Tailwind CSS** with a warm-earthy design-token system.
+- **Vitest** + **Playwright**; GitHub Actions for CI.
 
-## Architecture
+## Primitives
 
+All tenant-scoped on `workspaceId`.
+
+| Primitive | What it is |
+|---|---|
+| **Workspace** | Tenant. Short `key` (e.g. `AXI`, `PER`, `WRK`) is the issue prefix and is immutable after create. Slug/name can change freely. |
+| **Project** | Groups issues. Optionally nests under an Initiative. |
+| **Issue** | The unit of work. Optional `projectId`, optional `cycleId`, optional human assignees, optional **agent** assignee. |
+| **Cycle** | Time-boxed iteration. Default length from `Workspace.cycleLengthDays`. Issues move in/out freely. |
+| **Initiative** | Umbrella above projects — quarterly bets, themes. |
+| **IssueRelation** | Directed, typed link (`BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `RELATES_TO`). |
+| **TimeEntry** | Per-user duration rows against issues, gated by `Workspace.timeTrackingEnabled`. |
+| **Attachment** | Polymorphic via `targetType` + `targetId`; MinIO-backed. |
+| **Agent** | First-class non-human actor. `profileKey` (stable handle), `capabilities[]`, `webhookUrl`, `status`, `maxConcurrent`. Receives dispatch via webhook; authenticates via linked ApiKey. |
+
+## Agents &amp; MCP
+
+Forge exposes a dual MCP endpoint at `/api/mcp/rpc` (JSON-RPC 2.0) and
+`/api/mcp/:tool` (REST alias). 43 tools cover every primitive:
+
+```bash
+# List all tools
+curl -s https://forge.example.com/api/mcp/rpc \
+  -H "Authorization: Bearer $FORGE_KEY" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+# Claim the next queued issue as this agent
+curl -s https://forge.example.com/api/mcp/rpc \
+  -H "Authorization: Bearer $FORGE_KEY" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
+       "params":{"name":"issues.claim","arguments":{}}}'
+
+# See what's currently assigned to me
+curl -s https://forge.example.com/api/mcp/rpc \
+  -H "Authorization: Bearer $FORGE_KEY" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
+       "params":{"name":"issues.assigned","arguments":{}}}'
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  Next.js App Router                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
-│  │ Server comps │  │ Client comps │  │ API route handlers│   │
-│  │ (RSC data)   │  │ (tRPC react) │  │ (tRPC/mcp/auth)  │   │
-│  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘   │
-│         │                 │                    │             │
-│         └────────┬────────┴────────────────────┘             │
-│                  ▼                                            │
-│           tRPC routers (Zod-validated)                        │
-│                  │                                            │
-│   ┌──────────────┼────────────────┬─────────────────────┐    │
-│   ▼              ▼                ▼                     ▼    │
-│ Prisma       Audit+Event        Realtime        Plugin       │
-│ (Postgres)   recorder           pub/sub         runtime      │
-│                  │                 │                 │       │
-│                  ▼                 ▼                 ▼       │
-│            ActivityEvent        Redis         Webhook queue  │
-│              table              channels      (BullMQ)       │
-└──────────────────────────────────────────────────────────────┘
-```
 
-- **Audit vs events**: `AuditLog` is immutable compliance; `ActivityEvent` is
-  the product event stream plugins consume.
-- **Multi-tenancy**: every tenant-scoped row carries `workspaceId`. Procedures
-  enforce membership via the `workspaceProcedure` middleware in `src/server/trpc.ts`.
-- **Plugins** come in two flavors: `runtime: "local"` (in-process handler)
-  and `runtime: "plugin"` (HTTP webhook delivery with HMAC + JWT).
+Keys are narrowable: `scopes` (coarse, a subset of the owning plugin's
+manifest) plus optional `projectIds` / `labelIds` / `initiativeIds` arrays
+that restrict what the key can see or act on. A per-initiative bot gets
+only that initiative; a full-trust agent gets no narrowing.
+
+**Auto-dispatch.** A workspace can toggle `autoDispatch` and pick a mode
+(`ROUND_ROBIN` / `PRIORITY_MATCH` / `CAPABILITY_MATCH`). Queued issues are
+then routed to the best-fit agent automatically, with `maxConcurrent`
+respected and `AGENT_ASSIGNED` events firing into the webhook stream.
+
+Hermes integration — agents configured via a single YAML block:
+
+```yaml
+mcp_servers:
+  forge:
+    url: "https://forge.example.com/api/mcp/rpc"
+    headers:
+      Authorization: "Bearer forge_sk_..."
+    timeout: 120
+    connect_timeout: 60
+```
 
 ## Quick start
 
 ```bash
-# 1. Services
+# 1. Services (Postgres + Redis + MinIO)
 cd docker && docker compose up -d
 
 # 2. Install + bootstrap DB
 cp .env.example .env            # fill in values
 pnpm install
 pnpm prisma:generate
-pnpm prisma:migrate             # creates tables
-pnpm prisma:seed                # seeds a workspace + issues
+pnpm prisma:migrate             # applies migrations 0000+0001+0002
+pnpm prisma:seed                # seeds workspaces + issues + labels
 
-# 3. Run
+# 3. Seed agents (optional — creates Victor + Mizu in AXI)
+pnpm seed:agents
+
+# 4. Run
 pnpm dev                        # http://localhost:3000
-pnpm worker                     # separate process: webhook + metrics workers
+pnpm worker                     # separate process: webhook + metric workers
 ```
 
-## Keyboard shortcuts
+## Keyboard
 
-| Shortcut     | Action            |
-|--------------|-------------------|
-| `⌘K` / `/`   | Command palette   |
-| `C`          | Quick create issue|
-| `G` then `I` | Go to Inbox       |
-| `G` then `S` | Go to Issues      |
-| `G` then `P` | Go to Projects    |
-| `G` then `A` | Go to Analytics   |
+| Shortcut       | Action                      |
+|----------------|-----------------------------|
+| `⌘K` / `/`     | Command palette             |
+| `⇧C`           | Quick-create (pathname-aware) |
+| `?`            | Keyboard help overlay       |
+| `⌘\`           | Collapse sidebar            |
+| `G` `I`        | Go to Inbox                 |
+| `G` `D`        | Go to Dashboard             |
+| `G` `S`        | Go to Issues                |
+| `G` `P`        | Go to Projects              |
+| `G` `C`        | Go to Cycles                |
+| `G` `A`        | Go to Analytics             |
+| `G` `E`        | Go to Agents                |
+| `⇧A`           | Assign agent (issue detail) |
 
-## MCP
-
-Forge exposes a small MCP-style tool catalog at `/api/mcp`:
-
-```bash
-# Describe tools
-curl -s -H "Authorization: Bearer $FORGE_KEY" http://localhost:3000/api/mcp/describe
-
-# Create an issue
-curl -s -X POST http://localhost:3000/api/mcp/issues.create \
-  -H "Authorization: Bearer $FORGE_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Investigate 5xx from billing","priority":"HIGH"}'
-```
-
-API keys are scoped — a key only exposes the `PluginScope`s declared at
-issue time, which must be a subset of the owning plugin's manifest scopes.
-
-## Plugin manifest
-
-See `plugins/issue-triage/manifest.json` for a complete example. The key
-idea: declare scopes once in the manifest, and Forge enforces them
-everywhere (MCP, webhook delivery, skill invocation).
+Full table lives in `src/lib/shortcuts.ts` and is rendered by the `?`
+overlay.
 
 ## Project layout
 
 ```
 src/
   app/              # App Router pages + API route handlers
-  components/       # UI (sidebar, topbar, palette, issue list/board/detail)
+  components/       # UI (sidebar, topbar, modal primitives, palette)
   lib/              # utils, trpc client, keyboard, providers
   server/           # db, redis, auth, trpc routers, services
-    routers/        # workspace, project, issue, comment, analytics, plugin, status
-    services/       # plugin-manifest, plugin-runtime, api-key-auth, mcp
-prisma/             # schema + seed
-plugins/            # local-runtime plugin handlers
-docker/             # dev postgres + redis
+    routers/        # workspace, project, issue, cycle, agent, …
+    services/       # mcp, dispatcher, api-key-auth, storage (MinIO)
+prisma/             # schema + migrations + seed
+plugins/            # local-runtime plugin handlers (sample)
+scripts/            # seed-agents, etc.
+docker/             # dev compose (pg + redis + minio)
 tests/              # unit (vitest) + e2e (playwright)
 ```
 
 ## Deployment
 
-- **Vercel**: tRPC, auth, SSE, and MCP routes are all Node-runtime compatible.
-  Provide `DATABASE_URL`, `REDIS_URL`, `AUTH_SECRET`, `PLUGIN_JWT_SECRET`.
-- **Self-host**: `pnpm build && pnpm start` behind Traefik/Caddy. Run
-  `pnpm worker` as a separate process. Postgres + Redis as managed services
-  or containers.
+- **Self-host** (recommended): `docker compose up -d` behind Traefik/Caddy.
+  Entrypoint runs `prisma migrate deploy` on boot. Provide `DATABASE_URL`,
+  `REDIS_URL`, `AUTH_SECRET`, `PLUGIN_JWT_SECRET`, S3/MinIO creds.
+- **Vercel**: tRPC, auth, SSE, and MCP routes are Node-runtime compatible;
+  external Postgres + Redis + S3 required.
 
 ## License
 

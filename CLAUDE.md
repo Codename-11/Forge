@@ -46,6 +46,30 @@ All tenant-scoped on `workspaceId`.
   `Workspace.timeTrackingEnabled`.
 - **Attachment** — polymorphic via `targetType` + `targetId`. Can hang
   off any entity (issue/comment/project/initiative/…). Backed by MinIO.
+- **Agent** — first-class non-human actor. `profileKey` is the stable
+  cross-system handle (e.g. `victor`, `mizu`) and matches the Hermes
+  profile directory name. Has `capabilities[]`, `webhookUrl` +
+  `webhookSecret` for push dispatch, `status` (ONLINE/OFFLINE/BUSY),
+  `lastHeartbeatAt`, `maxConcurrent`. Issues point at an assigned agent
+  via `assignedAgentId` (independent of the human `claimedById`). ApiKeys
+  can point at an agent via `linkedAgentId` — so `issues.assigned` can
+  infer "my work" without the caller passing `profileKey`.
+
+## Auto-dispatch
+
+`Workspace.autoDispatch` + `autoDispatchMode` drive automatic agent
+selection when an issue hits the queue unassigned. Modes:
+- `MANUAL_ONLY` — dispatcher is a no-op; assignment is human-only.
+- `ROUND_ROBIN` — pick the least-recently-dispatched eligible agent.
+- `PRIORITY_MATCH` — prefer agents whose `capabilities` contain the
+  lowercase priority name (`urgent`, `high`, …); round-robin tie-break.
+- `CAPABILITY_MATCH` — intersect the issue's label names with agent
+  capabilities; most matches wins; round-robin tie-break; zero-match
+  falls through to round-robin rather than stalling dispatch.
+`maxConcurrent` caps active assignments per agent (0 = unlimited).
+`requireApprovalBeforeStart` gates push until a human approves.
+`autoStartOnAssign` determines whether AGENT_ASSIGNED fires a webhook on
+assignment (vs just filling the agent's queue).
 
 ## Configurability
 
@@ -59,11 +83,14 @@ baked into handlers. Current knobs: `cycleLengthDays` (7),
 ## Granular ApiKey scopes
 
 `ApiKey` has the usual coarse `PluginScope[]` ceiling *plus* three
-narrowing arrays: `projectIds`, `labelIds`, `initiativeIds`. Empty =
-unrestricted within the declared scopes. Non-empty = key only sees/acts
-on rows matching those ids. Currently Victor and Mizu hold FULL scope
-and no narrowing; future sub-agents should be narrowed where possible
-(e.g., a per-initiative bot gets only that `initiativeId`).
+narrowing arrays: `projectIds`, `labelIds`, `initiativeIds`, plus an
+optional `linkedAgentId` pointing at the `Agent` row the key belongs
+to. Empty arrays = unrestricted within the declared scopes. Non-empty =
+key only sees/acts on rows matching those ids. Currently Victor and
+Mizu hold FULL scope and no narrowing; future sub-agents should be
+narrowed where possible (e.g., a per-initiative bot gets only that
+`initiativeId`). Set `linkedAgentId` on the key so `issues.assigned`
+can infer the agent without the caller supplying `profileKey`.
 
 ## Conventions
 

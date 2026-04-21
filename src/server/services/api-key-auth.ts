@@ -27,6 +27,12 @@ export interface ApiKeyContext {
   projectIds: string[];
   labelIds: string[];
   initiativeIds: string[];
+  /**
+   * If set, this key acts as a specific agent. MCP tools that take an
+   * optional `profileKey` (e.g. `issues.assigned`) infer the agent from
+   * this column when the caller omits an explicit handle.
+   */
+  linkedAgentId: string | null;
 }
 
 export type NarrowEntity = "issue" | "project" | "initiative";
@@ -70,6 +76,7 @@ export async function authenticateApiKey(
     projectIds: key.projectIds,
     labelIds: key.labelIds,
     initiativeIds: key.initiativeIds,
+    linkedAgentId: key.linkedAgentId,
   };
 }
 

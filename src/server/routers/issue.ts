@@ -7,6 +7,7 @@ import {
   assertKeyScope,
   buildKeyScopeWhere,
 } from "@/server/services/api-key-auth";
+import { maybeAutoDispatch } from "@/server/services/dispatcher";
 
 const cursorSchema = z.string().optional();
 
@@ -288,6 +289,7 @@ export const issueRouter = router({
             userAgent: ctx.userAgent,
           });
         }
+        await maybeAutoDispatch(tx, issue.id);
         return issue;
       });
     }),
@@ -379,12 +381,15 @@ export const issueRouter = router({
           include: { status: true },
         });
 
+        // Generic update event — status changes re-label this so existing
+        // ISSUE_STATUS_CHANGED subscribers keep working. Priority changes
+        // additionally emit ISSUE_PRIORITY_CHANGED below so the webhook bus
+        // + agent-dispatch escalation path can route on the specific kind
+        // without walking the generic payload.
         const kind =
           patch.statusId && patch.statusId !== before.statusId
             ? EventKind.ISSUE_STATUS_CHANGED
-            : patch.priority && patch.priority !== before.priority
-              ? EventKind.ISSUE_PRIORITY_CHANGED
-              : EventKind.ISSUE_UPDATED;
+            : EventKind.ISSUE_UPDATED;
 
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
@@ -401,6 +406,27 @@ export const issueRouter = router({
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
+
+        // Priority transitions get a dedicated event so downstream webhook
+        // subscribers + the agent-dispatch escalation path (HIGH/URGENT)
+        // can route precisely without parsing patch diffs.
+        if (patch.priority && patch.priority !== before.priority) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            entity: "Issue",
+            entityId: id,
+            action: "change-priority",
+            before: { priority: before.priority },
+            after: { priority: patch.priority },
+            eventKind: EventKind.ISSUE_PRIORITY_CHANGED,
+            subjectType: "issue",
+            subjectId: id,
+            payload: { from: before.priority, to: patch.priority },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
 
         // Agent-assignment changes get a dedicated event so the activity
         // stream / webhook bus can route on `AGENT_ASSIGNED` without
@@ -530,6 +556,7 @@ export const issueRouter = router({
             userAgent: ctx.userAgent,
           });
         }
+        await maybeAutoDispatch(tx, issue.id);
         return updated;
       });
     }),
