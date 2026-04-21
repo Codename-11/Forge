@@ -6,7 +6,7 @@ import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Confirm } from "@/components/ui/modal";
+import { Confirm, Picker } from "@/components/ui/modal";
 import { EmptyState, Skeleton, SkeletonText } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
@@ -16,6 +16,13 @@ import { PinToggleButton } from "@/components/pins/pin-toggle-button";
 import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
+import { useHotkey } from "@/lib/keyboard";
+
+const AGENT_STATUS_TONE: Record<string, string> = {
+  ONLINE: "#65a30d",
+  BUSY: "#ca8a04",
+  OFFLINE: "#78716c",
+};
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
@@ -98,10 +105,19 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const [editingTitle, setEditingTitle] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
 
   useEffect(() => {
     if (issue && !editingTitle) setTitleDraft(issue.title);
   }, [issue, editingTitle]);
+
+  // Capital A opens the agent picker. Lowercase `a` is intentionally left
+  // free for the user-assignee picker + as the `g a` nav leader second key.
+  useHotkey(
+    "shift+a",
+    () => setAgentPickerOpen(true),
+    [],
+  );
 
   if (error)
     return (
@@ -223,6 +239,10 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 image: m.user.image,
               }))}
               onChange={(userIds) => assign.mutate({ id: issue.id, userIds })}
+            />
+            <AgentChip
+              current={issue.assignedAgent}
+              onOpen={() => setAgentPickerOpen(true)}
             />
           </div>
         }
@@ -367,6 +387,16 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         primaryLabel="Release claim"
         loading={releaseClaim.isPending}
         onConfirm={() => releaseClaim.mutate({ id: issue.id })}
+      />
+
+      <AgentPickerModal
+        open={agentPickerOpen}
+        onOpenChange={setAgentPickerOpen}
+        currentAgentId={issue.assignedAgent?.id ?? null}
+        onSelect={(agentId) => {
+          update.mutate({ id: issue.id, assignedAgentId: agentId });
+          setAgentPickerOpen(false);
+        }}
       />
     </>
   );
@@ -608,5 +638,188 @@ function AssigneePicker({
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agent assignment — sibling to the user assignee picker
+// ---------------------------------------------------------------------------
+
+type AssignedAgent = {
+  id: string;
+  name: string;
+  profileKey: string;
+  avatar: string | null;
+  status: string;
+} | null;
+
+function AgentChip({
+  current,
+  onOpen,
+}: {
+  current: AssignedAgent;
+  onOpen: () => void;
+}) {
+  const statusColor = current
+    ? AGENT_STATUS_TONE[current.status] ?? AGENT_STATUS_TONE.OFFLINE
+    : null;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title="Assign agent (shift+a)"
+      className="focus-ring flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-left text-[11px] hover:bg-subtle"
+    >
+      {current ? (
+        <>
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-subtle text-[10px]">
+            {current.avatar ? (
+              <span aria-hidden>{current.avatar}</span>
+            ) : (
+              <span className="font-medium text-muted-foreground">
+                {current.name.slice(0, 1).toUpperCase()}
+              </span>
+            )}
+          </span>
+          {statusColor && (
+            <span
+              aria-hidden
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ backgroundColor: statusColor }}
+            />
+          )}
+          <span className="truncate">{current.name}</span>
+          <span className="font-mono text-[10px] text-muted-foreground">
+            @{current.profileKey}
+          </span>
+        </>
+      ) : (
+        <span className="text-muted-foreground">Assign agent</span>
+      )}
+      <span className="ml-auto text-muted-foreground">▾</span>
+    </button>
+  );
+}
+
+type PickerRow =
+  | { kind: "unassign"; key: string }
+  | {
+      kind: "agent";
+      key: string;
+      id: string;
+      name: string;
+      profileKey: string;
+      avatar: string | null;
+      status: string;
+      capabilities: string[];
+    };
+
+function AgentPickerModal({
+  open,
+  onOpenChange,
+  currentAgentId,
+  onSelect,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  currentAgentId: string | null;
+  onSelect: (agentId: string | null) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const { data: agents, isLoading } = trpc.agent.list.useQuery(
+    { includeArchived: false },
+    { enabled: open },
+  );
+
+  const q = query.trim().toLowerCase();
+  const filteredAgents = (agents ?? []).filter((a) => {
+    if (!q) return true;
+    return (
+      a.name.toLowerCase().includes(q) ||
+      a.profileKey.toLowerCase().includes(q) ||
+      a.capabilities.some((c) => c.toLowerCase().includes(q))
+    );
+  });
+
+  const items: PickerRow[] = [
+    { kind: "unassign", key: "__unassign" },
+    ...filteredAgents.map((a) => ({
+      kind: "agent" as const,
+      key: a.id,
+      id: a.id,
+      name: a.name,
+      profileKey: a.profileKey,
+      avatar: a.avatar,
+      status: a.status,
+      capabilities: a.capabilities,
+    })),
+  ];
+
+  return (
+    <Picker<PickerRow>
+      open={open}
+      onOpenChange={onOpenChange}
+      placeholder="Assign agent… (name, @profileKey, capability)"
+      items={items}
+      getKey={(it) => it.key}
+      onQueryChange={setQuery}
+      loading={isLoading}
+      emptyLabel="No active agents match."
+      onSelect={(it) => {
+        if (it.kind === "unassign") onSelect(null);
+        else onSelect(it.id);
+      }}
+      renderItem={(it) => {
+        if (it.kind === "unassign") {
+          const active = currentAgentId === null;
+          return (
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-muted" />
+              <span className="text-muted-foreground">Unassign</span>
+              {active && (
+                <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                  current
+                </span>
+              )}
+            </div>
+          );
+        }
+        const active = currentAgentId === it.id;
+        const tone = AGENT_STATUS_TONE[it.status] ?? AGENT_STATUS_TONE.OFFLINE;
+        return (
+          <div className="flex items-center gap-2">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-subtle text-[11px]">
+              {it.avatar ? (
+                <span aria-hidden>{it.avatar}</span>
+              ) : (
+                <span className="font-medium text-muted-foreground">
+                  {it.name.slice(0, 1).toUpperCase()}
+                </span>
+              )}
+            </span>
+            <span
+              aria-hidden
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: tone }}
+              title={it.status}
+            />
+            <span className="truncate">{it.name}</span>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              @{it.profileKey}
+            </span>
+            {it.capabilities.length > 0 && (
+              <span className="ml-2 hidden min-w-0 truncate text-[10px] text-muted-foreground/80 sm:inline">
+                {it.capabilities.slice(0, 3).join(" · ")}
+              </span>
+            )}
+            {active && (
+              <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">
+                current
+              </span>
+            )}
+          </div>
+        );
+      }}
+    />
   );
 }

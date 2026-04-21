@@ -68,6 +68,13 @@ const ENTRIES: Entry[] = [
 const DEVELOPER: Entry[] = [
   {
     scope: "workspace",
+    path: "/settings/agents",
+    title: "Agents",
+    description:
+      "MCP-first actors that hold keys and receive work. Register profiles, declare capabilities, and wire webhooks.",
+  },
+  {
+    scope: "workspace",
     path: "/settings/plugins",
     title: "Plugins & integrations",
     description:

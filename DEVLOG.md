@@ -2,6 +2,83 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-20 — P0 agent integration (3-lane wave)
+
+Executing `TODO.md` P0 — first-class agent identity + push dispatch. Three
+parallel agents coordinated against a pre-landed schema/routing baseline.
+
+**Foundation (coordinator).** New Prisma enums `AgentStatus`
+(ONLINE/OFFLINE/BUSY) and `AutoDispatchMode`
+(MANUAL_ONLY/ROUND_ROBIN/PRIORITY_MATCH/CAPABILITY_MATCH). New `Agent`
+model (`profileKey` unique per workspace — matches Hermes profile dir),
+`capabilities String[]`, `webhookUrl`, `lastHeartbeatAt`, `maxConcurrent`,
+`archivedAt`. `Issue.assignedAgentId` (SetNull) + relation. `Workspace`
+gained five dispatch knobs (`autoDispatch`, `autoDispatchMode`,
+`autoStartOnAssign`, `agentIdleTimeoutMinutes`,
+`requireApprovalBeforeStart`) — all settings-driven, per project rule.
+`EventKind` enum extended with `ISSUE_QUEUED`, `AGENT_CREATED`,
+`AGENT_UPDATED`, `AGENT_DELETED`, `AGENT_ASSIGNED`. Migration baselined
+into `0001_agents_and_dispatch/` (the previous `db push` flow required a
+`migration_lock.toml`; added). New `agent` tRPC router (list/byId/
+byProfileKey/create/update/archive/unarchive/delete/heartbeat), admin-only
+for mutations, audited via `recordChange`.
+
+**Lane A — issue router + MCP.** `issue.list/byId` include `assignedAgent`
+(select fields for picker render without a second round-trip). `issue.
+list` filter, `issue.create`/`issue.update` accept `assignedAgentId` with
+a cross-tenant guard on the agent FK. Transition emits a dedicated
+`AGENT_ASSIGNED` event in addition to `ISSUE_UPDATED` — mirrors the
+human-assignee pattern. Five MCP tools added: `issues.assign`,
+`issues.assigned`, `time.log`, `cycles.addIssue`, `cycles.removeIssue`.
+`issues.assigned` currently requires `profileKey` because `ApiKey` has no
+`linkedAgentId` column yet — a ~5-line follow-up once the column lands.
+Happy-path tests mirror existing MCP test style (69/69 green).
+
+**Lane B — UI.** New `/settings/agents` page: SidePanel create/edit form
+(profileKey regex-validated, disabled on edit), status-dot table, last-
+heartbeat relative time, capability chips, `_count.assignedIssues` badge,
+`<Confirm>` with `typeToConfirm=profileKey` on destructive delete when
+the agent has assigned issues. Sidebar got "Agents" under Admin (`g e`
+chord — `g a` was taken by Analytics). Agent picker chip on issue detail
+sits next to the user assignee chip; `⇧A` opens it. "Unassign" pinned at
+the top of the picker list.
+
+**Lane C — webhook fan-out.** `recordChange` now enqueues `WebhookDelivery`
+rows in the same transaction that inserts the `ActivityEvent` — single
+batched `findMany` → `createMany` keyed on `{workspaceId, active,
+events.has(kind)}`. For `AGENT_ASSIGNED` / `ISSUE_QUEUED` on an issue,
+the fan-out also lazy-upserts a per-workspace synthetic webhook with url
+`agent:dispatch` and queues a delivery against it. The worker recognises
+the sentinel and resolves the real URL from `Issue.assignedAgent.webhookUrl`
+at delivery time, DEAD_LETTERing when the agent has no webhook. No
+schema change — `ApiKey`/`Agent` per-agent secret column deferred.
+`issue.setQueued` now emits `ISSUE_QUEUED` on the false→true transition
+(idempotent on true→true).
+
+**Validation + deploy.**
+- `pnpm typecheck` clean.
+- `pnpm test` 69/69 green (5 new tests from Lane A).
+- Lint: two introduced `prefer-const` errors fixed (`issue.ts:358`
+  `worker.ts:40`); pre-existing `any` errors elsewhere left alone (build
+  has `eslint.ignoreDuringBuilds: true`).
+- Local dev DB baselined via `prisma migrate resolve --applied` for both
+  migrations (previously on `db push`).
+- Prod container `forge-postgres` already had `0000_init` in
+  `_prisma_migrations`; entrypoint's `prisma migrate deploy` cleanly
+  applied `0001_agents_and_dispatch` on first boot.
+- MCP smoke: `tools/list` shows 43 tools (5 new names present);
+  `analytics.summary` 200; `cycles.current` 200; `issues.assigned
+  {profileKey:"victor"}` 200-shaped error (Agent not found) — correct
+  because no agents exist yet.
+
+Follow-ups before TODO P0 closes:
+- Bootstrap Victor/Mizu Agent rows in AXI (UI or `db seed`).
+- `ApiKey.linkedAgentId` column + wire `issues.assigned` fallback.
+- Hermes config-yaml additions (`forge.auto_claim`, `auto_start`,
+  `poll_interval`, `show_inbox_on_greeting`) — Hermes-side work.
+- Phase-2: per-agent `webhookSecret` column on `Agent` so delivery HMAC
+  doesn't reuse the synthetic workspace webhook secret.
+
 ## 2026-04-20 — `issue.list` bug triage + design-sweep audit
 
 Paired session: a live failure report on `issue.list` plus a post-sweep

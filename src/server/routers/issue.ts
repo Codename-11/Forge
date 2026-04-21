@@ -28,6 +28,11 @@ const filterSchema = z.object({
    * (or no project at all).
    */
   initiativeId: z.string().cuid().nullable().optional(),
+  /**
+   * Agent-assignment filter. `undefined` = no filter. Pass an agent id
+   * to pin; pass `null` to match issues with no agent assigned.
+   */
+  assignedAgentId: z.string().cuid().nullable().optional(),
   limit: z.number().min(1).max(500).default(50),
   cursor: cursorSchema,
 });
@@ -70,6 +75,11 @@ export const issueRouter = router({
           ...(typeof input.initiativeId === "string"
             ? { project: { initiativeId: input.initiativeId } }
             : {}),
+          ...(input.assignedAgentId === null
+            ? { assignedAgentId: null }
+            : input.assignedAgentId
+              ? { assignedAgentId: input.assignedAgentId }
+              : {}),
           ...(input.includeDone
             ? {}
             : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
@@ -82,6 +92,15 @@ export const issueRouter = router({
           status: true,
           project: { select: { id: true, key: true, name: true, color: true, icon: true } },
           assignees: { include: { user: { select: { id: true, name: true, image: true } } } },
+          assignedAgent: {
+            select: {
+              id: true,
+              name: true,
+              profileKey: true,
+              avatar: true,
+              status: true,
+            },
+          },
           labels: { include: { label: true } },
           _count: { select: { comments: true } },
         },
@@ -102,6 +121,15 @@ export const issueRouter = router({
           project: true,
           author: { select: { id: true, name: true, image: true } },
           assignees: { include: { user: { select: { id: true, name: true, image: true } } } },
+          assignedAgent: {
+            select: {
+              id: true,
+              name: true,
+              profileKey: true,
+              avatar: true,
+              status: true,
+            },
+          },
           labels: { include: { label: true } },
           comments: {
             orderBy: { createdAt: "asc" },
@@ -164,6 +192,7 @@ export const issueRouter = router({
         priority: z.nativeEnum(Priority).default(Priority.NONE),
         kind: z.nativeEnum(WorkItemKind).default(WorkItemKind.ISSUE),
         assigneeIds: z.array(z.string().cuid()).default([]),
+        assignedAgentId: z.string().cuid().optional(),
         labelIds: z.array(z.string().cuid()).default([]),
         dueDate: z.date().optional(),
         estimate: z.number().min(0).optional(),
@@ -179,6 +208,20 @@ export const issueRouter = router({
           : await tx.status.findFirstOrThrow({
               where: { workspaceId: ctx.workspaceId, isDefault: true },
             });
+
+        // Cross-tenant guard: agent must live in this workspace.
+        if (input.assignedAgentId) {
+          const agent = await tx.agent.findFirst({
+            where: { id: input.assignedAgentId, workspaceId: ctx.workspaceId },
+            select: { id: true },
+          });
+          if (!agent) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Agent not found in this workspace.",
+            });
+          }
+        }
 
         const last = await tx.issue.findFirst({
           where: { workspaceId: ctx.workspaceId },
@@ -199,6 +242,7 @@ export const issueRouter = router({
             statusId: status.id,
             priority: input.priority,
             authorId: ctx.session.user.id,
+            assignedAgentId: input.assignedAgentId,
             dueDate: input.dueDate,
             estimate: input.estimate,
             slaMinutes: input.slaMinutes,
@@ -225,6 +269,25 @@ export const issueRouter = router({
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
+        if (input.assignedAgentId) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            entity: "Issue",
+            entityId: issue.id,
+            action: "assign-agent",
+            after: { assignedAgentId: input.assignedAgentId },
+            eventKind: EventKind.AGENT_ASSIGNED,
+            subjectType: "issue",
+            subjectId: issue.id,
+            payload: {
+              agentId: input.assignedAgentId,
+              previousAgentId: null,
+            },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
         return issue;
       });
     }),
@@ -238,6 +301,7 @@ export const issueRouter = router({
         statusId: z.string().cuid().optional(),
         priority: z.nativeEnum(Priority).optional(),
         projectId: z.string().cuid().nullable().optional(),
+        assignedAgentId: z.string().cuid().nullable().optional(),
         dueDate: z.date().nullable().optional(),
         estimate: z.number().min(0).nullable().optional(),
       }),
@@ -276,9 +340,22 @@ export const issueRouter = router({
             });
           }
         }
+        // Cross-tenant guard: agent must live in this workspace when set.
+        if (patch.assignedAgentId) {
+          const agent = await tx.agent.findFirst({
+            where: { id: patch.assignedAgentId, workspaceId: ctx.workspaceId },
+            select: { id: true },
+          });
+          if (!agent) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Agent not found in this workspace.",
+            });
+          }
+        }
 
         // Mark lifecycle timestamps based on status category transitions.
-        let extra: { startedAt?: Date; completedAt?: Date | null; canceledAt?: Date | null } = {};
+        const extra: { startedAt?: Date; completedAt?: Date | null; canceledAt?: Date | null } = {};
         if (patch.statusId && patch.statusId !== before.statusId) {
           const next = await tx.status.findFirstOrThrow({
             where: { id: patch.statusId, workspaceId: ctx.workspaceId },
@@ -324,6 +401,37 @@ export const issueRouter = router({
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
+
+        // Agent-assignment changes get a dedicated event so the activity
+        // stream / webhook bus can route on `AGENT_ASSIGNED` without
+        // parsing `payload` for every generic ISSUE_UPDATED.
+        const agentProvided = Object.prototype.hasOwnProperty.call(
+          patch,
+          "assignedAgentId",
+        );
+        if (
+          agentProvided &&
+          (patch.assignedAgentId ?? null) !== (before.assignedAgentId ?? null)
+        ) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            entity: "Issue",
+            entityId: id,
+            action: "assign-agent",
+            before: { assignedAgentId: before.assignedAgentId },
+            after: { assignedAgentId: patch.assignedAgentId ?? null },
+            eventKind: EventKind.AGENT_ASSIGNED,
+            subjectType: "issue",
+            subjectId: id,
+            payload: {
+              agentId: patch.assignedAgentId ?? null,
+              previousAgentId: before.assignedAgentId,
+            },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
 
         return after;
       });
@@ -385,18 +493,44 @@ export const issueRouter = router({
   setQueued: workspaceProcedure
     .input(z.object({ id: z.string().cuid(), queued: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      const issue = await ctx.db.issue.findFirstOrThrow({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-      });
-      return ctx.db.issue.update({
-        where: { id: issue.id },
-        data: {
-          queued: input.queued,
-          // Releasing from queue while claimed leaves the claim intact (agent still owns it).
-          ...(!input.queued && issue.claimedAt == null
-            ? { claimedAt: null, claimedById: null, claimExpiresAt: null }
-            : {}),
-        },
+      return ctx.db.$transaction(async (tx) => {
+        const issue = await tx.issue.findFirstOrThrow({
+          where: { id: input.id, workspaceId: ctx.workspaceId },
+        });
+        const updated = await tx.issue.update({
+          where: { id: issue.id },
+          data: {
+            queued: input.queued,
+            // Releasing from queue while claimed leaves the claim intact (agent still owns it).
+            ...(!input.queued && issue.claimedAt == null
+              ? { claimedAt: null, claimedById: null, claimExpiresAt: null }
+              : {}),
+          },
+        });
+        // Emit ISSUE_QUEUED only on the off -> on transition so repeated
+        // setQueued(true) calls don't spam agent webhooks. This event is
+        // domain-specific; generic ISSUE_UPDATED subscribers are unaffected.
+        if (input.queued && !issue.queued) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            entity: "Issue",
+            entityId: issue.id,
+            action: "queue",
+            before: { queued: issue.queued },
+            after: { queued: true },
+            eventKind: EventKind.ISSUE_QUEUED,
+            subjectType: "issue",
+            subjectId: issue.id,
+            payload: {
+              number: issue.number,
+              assignedAgentId: issue.assignedAgentId,
+            },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
+        return updated;
       });
     }),
 
