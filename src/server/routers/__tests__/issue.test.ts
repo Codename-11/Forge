@@ -132,6 +132,7 @@ describe("issueRouter — blocker-aware claim + narrowing + unblocked flag", () 
         projectIds: [],
         labelIds: [label.id],
         initiativeIds: [],
+        linkedAgentId: null,
       } satisfies ApiKeyContext,
     };
     const caller = issueRouter.createCaller(narrowedCtx);

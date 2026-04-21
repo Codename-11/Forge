@@ -80,7 +80,34 @@ const narrowingInput = {
   projectIds: z.array(z.string().cuid()).default([]),
   labelIds: z.array(z.string().cuid()).default([]),
   initiativeIds: z.array(z.string().cuid()).default([]),
+  /**
+   * Optional — bind this key to a specific Agent so MCP tools that key off
+   * `ApiKeyContext.linkedAgentId` (e.g. `issues.assigned` default agent) can
+   * resolve without a `profileKey` on every call. Must be an agent in the
+   * same workspace.
+   */
+  linkedAgentId: z.string().cuid().nullable().optional(),
 };
+
+/**
+ * Confirm `agentId` (if provided) belongs to `workspaceId`. Mirrors
+ * `assertIdsInWorkspace` but for a single nullable agent reference — we
+ * don't want a caller linking a key to an agent in a different tenant.
+ */
+async function assertAgentInWorkspace(
+  db: import("@prisma/client").PrismaClient,
+  workspaceId: string,
+  agentId: string | null | undefined,
+): Promise<void> {
+  if (!agentId) return;
+  const count = await db.agent.count({ where: { id: agentId, workspaceId } });
+  if (count === 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "linkedAgentId not in this workspace.",
+    });
+  }
+}
 
 /**
  * Workspace-level API keys — not tied to a plugin. Scoped to the user who
@@ -101,6 +128,10 @@ export const accessRouter = router({
         projectIds: true,
         labelIds: true,
         initiativeIds: true,
+        linkedAgentId: true,
+        linkedAgent: {
+          select: { id: true, name: true, profileKey: true, avatar: true },
+        },
         createdAt: true,
         lastUsedAt: true,
         expiresAt: true,
@@ -125,6 +156,11 @@ export const accessRouter = router({
         labelIds: input.labelIds,
         initiativeIds: input.initiativeIds,
       });
+      await assertAgentInWorkspace(
+        ctx.db,
+        ctx.workspaceId,
+        input.linkedAgentId,
+      );
       const { raw, hashed, prefix } = generateApiKey();
       const row = await ctx.db.apiKey.create({
         data: {
@@ -137,6 +173,7 @@ export const accessRouter = router({
           projectIds: input.projectIds,
           labelIds: input.labelIds,
           initiativeIds: input.initiativeIds,
+          linkedAgentId: input.linkedAgentId ?? null,
           expiresAt: input.expiresInDays
             ? new Date(Date.now() + input.expiresInDays * 86_400_000)
             : undefined,
@@ -151,6 +188,7 @@ export const accessRouter = router({
         projectIds: row.projectIds,
         labelIds: row.labelIds,
         initiativeIds: row.initiativeIds,
+        linkedAgentId: row.linkedAgentId,
         createdAt: row.createdAt,
         expiresAt: row.expiresAt,
         rawKey: raw,
@@ -170,6 +208,7 @@ export const accessRouter = router({
         projectIds: z.array(z.string().cuid()).optional(),
         labelIds: z.array(z.string().cuid()).optional(),
         initiativeIds: z.array(z.string().cuid()).optional(),
+        linkedAgentId: z.string().cuid().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -182,6 +221,13 @@ export const accessRouter = router({
         labelIds: input.labelIds,
         initiativeIds: input.initiativeIds,
       });
+      if (input.linkedAgentId !== undefined) {
+        await assertAgentInWorkspace(
+          ctx.db,
+          ctx.workspaceId,
+          input.linkedAgentId,
+        );
+      }
       return ctx.db.apiKey.update({
         where: { id: prior.id },
         data: {
@@ -190,6 +236,9 @@ export const accessRouter = router({
           ...(input.labelIds !== undefined ? { labelIds: input.labelIds } : {}),
           ...(input.initiativeIds !== undefined
             ? { initiativeIds: input.initiativeIds }
+            : {}),
+          ...(input.linkedAgentId !== undefined
+            ? { linkedAgentId: input.linkedAgentId }
             : {}),
         },
         select: {
@@ -200,6 +249,7 @@ export const accessRouter = router({
           projectIds: true,
           labelIds: true,
           initiativeIds: true,
+          linkedAgentId: true,
           createdAt: true,
           expiresAt: true,
           revokedAt: true,
@@ -260,6 +310,7 @@ export const accessRouter = router({
             projectIds: prior.projectIds,
             labelIds: prior.labelIds,
             initiativeIds: prior.initiativeIds,
+            linkedAgentId: prior.linkedAgentId,
             expiresAt: prior.expiresAt
               ? new Date(
                   Date.now() +
@@ -277,6 +328,7 @@ export const accessRouter = router({
         projectIds: next.projectIds,
         labelIds: next.labelIds,
         initiativeIds: next.initiativeIds,
+        linkedAgentId: next.linkedAgentId,
         createdAt: next.createdAt,
         expiresAt: next.expiresAt,
         rawKey: raw,

@@ -494,10 +494,11 @@ export const mcpTools = {
   /**
    * List issues assigned to a specific agent.
    *
-   * NOTE: ApiKey currently has no `linkedAgentId` column, so callers MUST
-   * pass `profileKey` to resolve the target agent. Once ApiKey→Agent linkage
-   * ships, this tool will default to the calling key's linked agent when
-   * `profileKey` is omitted.
+   * Resolution order:
+   *   1. Explicit `profileKey` → look up `{workspaceId, profileKey}`.
+   *   2. Otherwise, fall back to `ctx.apiKey.linkedAgentId` — the common
+   *      case for agent-scoped API keys that don't want to repeat their
+   *      handle on every call.
    */
   "issues.assigned": {
     scopes: ["READ_ISSUES"] as const,
@@ -507,35 +508,55 @@ export const mcpTools = {
       profileKey: z
         .string()
         .optional()
-        .describe("Agent profileKey to filter by. Required until ApiKey links to Agent."),
+        .describe(
+          "Agent profileKey to filter by. Optional when the calling API key has a linkedAgentId.",
+        ),
     }),
     async run(
       input: { limit: number; includeDone: boolean; profileKey?: string },
       ctx: McpContext,
     ) {
-      if (!input.profileKey) {
-        // ApiKey→Agent linkage not yet modeled; require explicit profileKey.
+      let agentId: string | null = null;
+      if (input.profileKey) {
+        const agent = await db.agent.findUnique({
+          where: {
+            workspaceId_profileKey: {
+              workspaceId: ctx.workspaceId,
+              profileKey: input.profileKey,
+            },
+          },
+          select: { id: true },
+        });
+        if (!agent) throw new Error("Agent not found in this workspace.");
+        agentId = agent.id;
+      } else if (ctx.apiKey?.linkedAgentId) {
+        const agent = await db.agent.findUnique({
+          where: { id: ctx.apiKey.linkedAgentId },
+          select: { id: true, workspaceId: true },
+        });
+        // Defensive cross-tenant check — linkedAgentId is scoped by SetNull
+        // on Agent delete, but the Agent itself must belong to this key's
+        // workspace.
+        if (!agent || agent.workspaceId !== ctx.workspaceId) {
+          throw new Error(
+            "No agent inferred; supply profileKey or use an API key with linkedAgentId set.",
+          );
+        }
+        agentId = agent.id;
+      }
+
+      if (!agentId) {
         throw new Error(
-          "profileKey is required until ApiKey has a linked agent.",
+          "No agent inferred; supply profileKey or use an API key with linkedAgentId set.",
         );
       }
-      const agent = await db.agent.findUnique({
-        where: {
-          workspaceId_profileKey: {
-            workspaceId: ctx.workspaceId,
-            profileKey: input.profileKey,
-          },
-        },
-        select: { id: true },
-      });
-      if (!agent) throw new Error("Agent not found in this workspace.");
 
       const keyWhere = buildKeyScopeWhere(scopeCtx(ctx), "issue");
       return db.issue.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           deletedAt: null,
-          assignedAgentId: agent.id,
+          assignedAgentId: agentId,
           ...keyWhere,
           ...(input.includeDone
             ? {}

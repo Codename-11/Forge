@@ -97,9 +97,15 @@ export default function AccessPage() {
   const [scopes, setScopes] = useState<Scope[]>(FULL_ACCESS);
   const [preset, setPreset] = useState<Preset>("full");
   const [expiresInDays, setExpiresInDays] = useState<string>("");
+  const [linkedAgentId, setLinkedAgentId] = useState<string>("");
   const [rotateTarget, setRotateTarget] = useState<{ id: string; name: string } | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+
+  // Agent picker source — active agents in the current workspace. Shown as
+  // an optional dropdown on the create form; kept admin-only implicitly
+  // because the whole page is admin-only.
+  const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false });
 
   const baseUrl =
     typeof window !== "undefined"
@@ -131,6 +137,7 @@ export default function AccessPage() {
     setScopes(FULL_ACCESS);
     setPreset("full");
     setExpiresInDays("");
+    setLinkedAgentId("");
     setCreateOpen(true);
   }
 
@@ -218,6 +225,11 @@ export default function AccessPage() {
                         <span className="font-mono text-[11px] text-muted-foreground">
                           {k.prefix}…
                         </span>
+                        {k.linkedAgent && (
+                          <Badge color="#6366f1">
+                            {k.linkedAgent.name} · @{k.linkedAgent.profileKey}
+                          </Badge>
+                        )}
                         {k.revokedAt && <Badge color="#be185d">revoked</Badge>}
                         {expired && <Badge color="#d97706">expired</Badge>}
                       </div>
@@ -295,7 +307,12 @@ export default function AccessPage() {
             return;
           }
           const days = expiresInDays ? Number(expiresInDays) : undefined;
-          create.mutate({ name: name.trim(), scopes, expiresInDays: days });
+          create.mutate({
+            name: name.trim(),
+            scopes,
+            expiresInDays: days,
+            linkedAgentId: linkedAgentId || undefined,
+          });
         }}
       >
         <div className="space-y-4">
@@ -364,6 +381,27 @@ export default function AccessPage() {
                 );
               })}
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground">Link to agent (optional)</label>
+            <select
+              className="focus-ring w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              value={linkedAgentId}
+              onChange={(e) => setLinkedAgentId(e.target.value)}
+            >
+              <option value="">— No linked agent —</option>
+              {(agents ?? []).map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} · @{a.profileKey}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground">
+              Binds this key to an Agent. MCP tools like{" "}
+              <code className="font-mono">issues.assigned</code> will then infer the
+              agent when <code className="font-mono">profileKey</code> is omitted.
+            </p>
           </div>
 
           <div className="space-y-1.5">

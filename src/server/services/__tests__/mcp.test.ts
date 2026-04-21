@@ -55,6 +55,7 @@ function buildMcpCtx(
     projectIds: [],
     labelIds: [],
     initiativeIds: [],
+    linkedAgentId: null,
     ...overrides,
   };
   return {
