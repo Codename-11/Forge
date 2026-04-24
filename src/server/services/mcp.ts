@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import {
+  AgentStatus,
   CycleStatus,
   EventKind,
   InitiativeStatus,
@@ -1887,6 +1888,84 @@ export const mcpTools = {
         data: { pinnedIssueIds: ids },
       });
       return { pinnedIssueIds: ids };
+    },
+  },
+
+  // --------------------------------------------------------------------- Agents
+  // Self-management for a linked agent. Both tools resolve the caller to its
+  // Agent row via `ctx.apiKey.linkedAgentId`; keys without a linked agent
+  // have no identity to act on and are rejected.
+  "agents.me": {
+    scopes: ["READ_USERS"] as const,
+    input: z.object({}).describe(
+      "Returns the Agent row linked to the calling API key (via linkedAgentId).",
+    ),
+    async run(_input: Record<string, never>, ctx: McpContext) {
+      const agentId = ctx.apiKey?.linkedAgentId;
+      if (!agentId) {
+        throw new Error(
+          "No agent inferred; use an API key with linkedAgentId set.",
+        );
+      }
+      const agent = await db.agent.findUnique({
+        where: { id: agentId },
+        select: {
+          id: true,
+          profileKey: true,
+          name: true,
+          status: true,
+          capabilities: true,
+          webhookUrl: true,
+          maxConcurrent: true,
+          templateMarkdown: true,
+          lastHeartbeatAt: true,
+          lastDispatchedAt: true,
+          workspaceId: true,
+          archivedAt: true,
+        },
+      });
+      if (!agent || agent.workspaceId !== ctx.workspaceId) {
+        throw new Error("Agent not found in this workspace.");
+      }
+      return agent;
+    },
+  },
+
+  "agents.heartbeat": {
+    scopes: ["READ_USERS"] as const,
+    input: z.object({
+      status: z
+        .nativeEnum(AgentStatus)
+        .default(AgentStatus.ONLINE)
+        .describe("Presence to set — ONLINE | BUSY | OFFLINE."),
+    }),
+    async run(input: { status: AgentStatus }, ctx: McpContext) {
+      const agentId = ctx.apiKey?.linkedAgentId;
+      if (!agentId) {
+        throw new Error(
+          "No agent inferred; use an API key with linkedAgentId set.",
+        );
+      }
+      const existing = await db.agent.findUnique({
+        where: { id: agentId },
+        select: { workspaceId: true, archivedAt: true },
+      });
+      if (!existing || existing.workspaceId !== ctx.workspaceId) {
+        throw new Error("Agent not found in this workspace.");
+      }
+      if (existing.archivedAt) {
+        throw new Error("Agent is archived; cannot heartbeat.");
+      }
+      return db.agent.update({
+        where: { id: agentId },
+        data: { status: input.status, lastHeartbeatAt: new Date() },
+        select: {
+          id: true,
+          profileKey: true,
+          status: true,
+          lastHeartbeatAt: true,
+        },
+      });
     },
   },
 } as const;
