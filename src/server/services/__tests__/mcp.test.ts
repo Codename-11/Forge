@@ -872,3 +872,97 @@ describe("mcp — issues.reassign handoff flow", () => {
     ).rejects.toThrow(/Issue not found/i);
   });
 });
+
+describe("mcp — agents.me + agents.heartbeat", () => {
+  it("agents.me returns the linked agent's row", async () => {
+    const f = await createWorkspaceFixture();
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        profileKey: "victor",
+        name: "Victor",
+        capabilities: ["ops"],
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+    const res = (await call("agents.me", {}, ctx)) as {
+      id: string;
+      profileKey: string;
+      status: string;
+    };
+    expect(res.id).toBe(agent.id);
+    expect(res.profileKey).toBe("victor");
+    expect(res.status).toBe(agent.status);
+  });
+
+  it("agents.me rejects a key with no linkedAgentId", async () => {
+    const f = await createWorkspaceFixture();
+    fixtures.push(f);
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: null });
+    await expect(call("agents.me", {}, ctx)).rejects.toThrow(
+      /No agent inferred/,
+    );
+  });
+
+  it("agents.heartbeat bumps lastHeartbeatAt and sets status", async () => {
+    const f = await createWorkspaceFixture();
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        profileKey: "mizu",
+        name: "Mizu",
+        status: "OFFLINE",
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+    const before = Date.now();
+    const res = (await call(
+      "agents.heartbeat",
+      { status: "ONLINE" },
+      ctx,
+    )) as { status: string; lastHeartbeatAt: Date };
+    expect(res.status).toBe("ONLINE");
+    expect(res.lastHeartbeatAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("agents.heartbeat rejects an archived agent", async () => {
+    const f = await createWorkspaceFixture();
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        profileKey: "ghost",
+        name: "Ghost",
+        archivedAt: new Date(),
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+    await expect(
+      call("agents.heartbeat", { status: "ONLINE" }, ctx),
+    ).rejects.toThrow(/archived/);
+  });
+
+  it("agents.heartbeat rejects cross-workspace linked agent", async () => {
+    const f = await createWorkspaceFixture();
+    fixtures.push(f);
+    const other = await createWorkspaceFixture();
+    fixtures.push(other);
+    const prisma = getPrisma();
+    const foreignAgent = await prisma.agent.create({
+      data: {
+        workspaceId: other.workspace.id,
+        profileKey: "foreigner",
+        name: "Foreigner",
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: foreignAgent.id });
+    await expect(
+      call("agents.heartbeat", { status: "ONLINE" }, ctx),
+    ).rejects.toThrow(/not found/);
+  });
+});
