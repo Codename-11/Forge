@@ -99,7 +99,10 @@
 
 ## P2 — Existing deferred
 
-- [ ] Email invite flow
+- [x] ~~Email invite flow~~ — **superseded 2026-04-23**. Authelia
+  is the identity source; self-service invites don't fit. Replaced
+  with admin-gated `/settings/members` (listMembers, addMember,
+  setMemberRole, removeMember). Migration `0007_membership_events`.
 - [ ] BullMQ webhook delivery worker — separate container (AXI-4)
   currently co-located with forge main process
 - [ ] Per-agent permission lattice (beyond ApiKey scopes) — e.g.
@@ -108,19 +111,26 @@
 
 ---
 
-## P3 — Nice to have
+## P3 — Nice to have (shipped 2026-04-23)
 
-- [ ] Agent heartbeat / presence (agents ping every N minutes, UI
-  shows online/offline) — partial: we have the column but no UI
-  indicator beyond the status dot on the agents list
-- [ ] Issue templates per agent (when agent claims, auto-populate
-  description with structured checklist)
-- [ ] Dispatch analytics — mean time to claim, mean time to complete,
-  agent throughput
-- [ ] Slack/Discord notification bridge (Forge → channel on
-  assignment/completion)
-- [ ] Dispatch rules engine (phase 2) — labels/priorities/projects →
-  specific agents. E.g., `priority=URGENT → victor`,
-  `label=ops → mizu`. Current auto-dispatch covers this via
-  `CAPABILITY_MATCH` but a rules surface in UI would beat freeform
-  capability strings.
+- [x] **Agent presence indicators** — new `AgentPresenceDot`
+  primitive (tokens only, motion-safe pulse, heartbeat title).
+  Placed on issue list, board cards, detail assignee chip + picker,
+  bulk assignee picker, agents settings list. RealtimeProvider
+  invalidates on AGENT_* events.
+- [x] **Per-agent issue templates** — `Agent.templateMarkdown`
+  (migration `0005`). Applied via `maybeApplyAgentTemplate` at all
+  4 assignment paths, guarded by empty-description check. Audit-only
+  (`ISSUE_UPDATED` with `fromAgentTemplate: true`).
+- [x] **Dispatch analytics** — `analytics.dispatch.summary` +
+  `.timeseries`. TTFA uses LATERAL join bounded by next AGENT_ASSIGNED
+  to isolate re-assignments. UI tab, SVG line chart, stacked-bar mode
+  distribution. No schema, no new deps.
+- [x] **Notification bridge plugin** —
+  `plugins/notification-bridge/` with pure `formatEvent` + Slack/Discord
+  webhook POSTs. Config in `Plugin.manifest.config`. `mentionsOnly`
+  filter + blocklist for noisy kinds.
+- [x] **Dispatch rules engine** — `DispatchRule` table (migration
+  `0006`). Rules consulted before mode switch, ordered + ANDed,
+  wildcards on null. Target-ineligible falls through; reason string
+  preserves provenance. Drag-n-drop UI reusing Statuses pattern.
