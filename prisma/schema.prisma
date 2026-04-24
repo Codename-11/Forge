@@ -885,6 +885,10 @@ model Agent {
   /// Free-form capability tags (e.g. "ops", "research", "code-review").
   /// Consumed by `autoDispatchMode = CAPABILITY_MATCH`.
   capabilities     String[]    @default([])
+  /// Optional markdown template auto-applied to an issue's description on
+  /// assignment, when the description is empty. Freeform (no length cap).
+  /// See `src/server/services/agent-template.ts`.
+  templateMarkdown String?     @db.Text
   status           AgentStatus @default(OFFLINE)
   lastHeartbeatAt  DateTime?
   /// Cap on simultaneously-claimed issues. 0 = unlimited.

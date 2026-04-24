@@ -8,6 +8,7 @@ import {
   buildKeyScopeWhere,
 } from "@/server/services/api-key-auth";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
+import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 
 const cursorSchema = z.string().optional();
 
@@ -293,7 +294,13 @@ export const issueRouter = router({
             ip: ctx.ip,
             userAgent: ctx.userAgent,
           });
+          // Apply the agent's template if the description is empty. No-op
+          // when the caller supplied a description or the agent has no
+          // template configured.
+          await maybeApplyAgentTemplate(tx, issue.id, input.assignedAgentId);
         }
+        // `maybeAutoDispatch` handles its own template application when it
+        // picks an agent — no need to double-call from here.
         await maybeAutoDispatch(tx, issue.id);
         return issue;
       });
@@ -462,6 +469,14 @@ export const issueRouter = router({
             ip: ctx.ip,
             userAgent: ctx.userAgent,
           });
+          // Apply template on assignment (or re-assignment) when the
+          // new agent has one and the current description is empty.
+          // The helper itself no-ops on both missing template and non-
+          // empty description, so re-assignment to a different agent on
+          // an already-populated issue won't clobber prior content.
+          if (patch.assignedAgentId) {
+            await maybeApplyAgentTemplate(tx, id, patch.assignedAgentId);
+          }
         }
 
         return after;

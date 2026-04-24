@@ -8,6 +8,7 @@ import {
 } from "@prisma/client";
 import { db } from "@/server/db";
 import { recordChange } from "@/server/audit";
+import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import {
   assertKeyScope,
   buildKeyScopeWhere,
@@ -485,6 +486,14 @@ export const mcpTools = {
               previousAgentId: before.assignedAgentId,
             },
           });
+          // Apply the new agent's template if the description is empty.
+          // No-op on unassign (targetAgentId === null) and on non-empty
+          // descriptions — including re-assignment to a different agent
+          // on an issue whose description was templated by the previous
+          // agent.
+          if (targetAgentId) {
+            await maybeApplyAgentTemplate(tx, before.id, targetAgentId);
+          }
         }
         return updated;
       });
@@ -603,6 +612,13 @@ export const mcpTools = {
             commentId: comment.id,
           },
         });
+
+        // Apply the receiving agent's template if the description is
+        // empty — in practice this rarely fires on a handoff (an issue
+        // mid-flight almost always has content), but it keeps parity
+        // with `issues.assign` and covers the "empty stub handed off
+        // immediately" edge.
+        await maybeApplyAgentTemplate(tx, issue.id, newAgent.id);
 
         return {
           issueId: issue.id,

@@ -34,6 +34,7 @@ type EditingState = {
   webhookUrl: string;
   capabilitiesRaw: string;
   maxConcurrent: number;
+  templateMarkdown: string;
 };
 
 const EMPTY_EDITING: EditingState = {
@@ -44,7 +45,15 @@ const EMPTY_EDITING: EditingState = {
   webhookUrl: "",
   capabilitiesRaw: "",
   maxConcurrent: 1,
+  templateMarkdown: "",
 };
+
+const TEMPLATE_PLACEHOLDER = `### Context
+
+### Acceptance criteria
+
+### Constraints`;
+
 
 export default function AgentsPage() {
   const utils = trpc.useUtils();
@@ -149,6 +158,11 @@ export default function AgentsPage() {
     const webhookUrl = editing.webhookUrl.trim() || undefined;
     const description = editing.description.trim() || undefined;
     const avatar = editing.avatar.trim() || undefined;
+    // Intentionally keep the raw value — trailing newlines are part of
+    // the template shape. Only an all-whitespace string collapses to
+    // "unset" so the null path clears the column.
+    const templateRaw = editing.templateMarkdown;
+    const templateMarkdown = templateRaw.trim().length > 0 ? templateRaw : undefined;
     if (editing.id) {
       update.mutate({
         id: editing.id,
@@ -158,6 +172,7 @@ export default function AgentsPage() {
         webhookUrl: webhookUrl ?? null,
         capabilities,
         maxConcurrent: Math.floor(editing.maxConcurrent),
+        templateMarkdown: templateMarkdown ?? null,
       });
     } else {
       create.mutate({
@@ -168,6 +183,7 @@ export default function AgentsPage() {
         webhookUrl,
         capabilities,
         maxConcurrent: Math.floor(editing.maxConcurrent),
+        templateMarkdown,
       });
     }
   }
@@ -276,6 +292,7 @@ export default function AgentsPage() {
                           webhookUrl: a.webhookUrl ?? "",
                           capabilitiesRaw: a.capabilities.join(", "),
                           maxConcurrent: a.maxConcurrent,
+                          templateMarkdown: a.templateMarkdown ?? "",
                         })
                       }
                     >
@@ -458,6 +475,20 @@ export default function AgentsPage() {
                   })
                 }
                 className="w-28"
+              />
+            </Field>
+            <Field
+              label="Issue template"
+              hint="Markdown auto-applied to an issue's description on assignment, only when the description is empty."
+            >
+              <textarea
+                value={editing.templateMarkdown}
+                onChange={(e) =>
+                  setEditing({ ...editing, templateMarkdown: e.target.value })
+                }
+                rows={8}
+                placeholder={TEMPLATE_PLACEHOLDER}
+                className="focus-ring w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-xs"
               />
             </Field>
             {/* Submit via Enter anywhere in the form. */}
