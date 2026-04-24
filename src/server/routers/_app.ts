@@ -17,6 +17,7 @@ import { recurringRouter } from "./recurring";
 import { viewRouter } from "./view";
 import { standupRouter } from "./standup";
 import { cycleRouter } from "./cycle";
+import { dispatchRuleRouter } from "./dispatch-rule";
 import { inboxRouter } from "./inbox";
 import { initiativeRouter } from "./initiative";
 import { pinRouter } from "./pin";
@@ -31,6 +32,7 @@ export const appRouter = router({
   attachment: attachmentRouter,
   comment: commentRouter,
   cycle: cycleRouter,
+  dispatchRule: dispatchRuleRouter,
   inbox: inboxRouter,
   initiative: initiativeRouter,
   issue: issueRouter,
