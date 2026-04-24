@@ -95,6 +95,7 @@ enum EventKind {
   AGENT_UPDATED
   AGENT_DELETED
   AGENT_ASSIGNED
+  AGENT_STATUS_CHANGED
 }
 
 enum WebhookDeliveryStatus {
