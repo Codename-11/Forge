@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "slug": "notification-bridge",
+  "name": "Notification Bridge",
+  "description": "Forwards workspace activity events to Slack and Discord channel webhooks. Per-workspace config picks event kinds + channel URLs.",
+  "version": "0.1.0",
+  "author": { "name": "Forge Labs" },
+  "scopes": ["READ_ISSUES", "READ_PROJECTS"],
+  "events": [
+    "ISSUE_CREATED",
+    "ISSUE_STATUS_CHANGED",
+    "ISSUE_PRIORITY_CHANGED",
+    "AGENT_ASSIGNED",
+    "COMMENT_CREATED"
+  ],
+  "skills": [
+    {
+      "name": "deliver",
+      "description": "Fan out an ActivityEvent to configured Slack / Discord channel webhooks.",
+      "runtime": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "kind": { "type": "string" },
+              "subjectType": { "type": "string" },
+              "subjectId": { "type": "string" },
+              "payload": { "type": "object" },
+              "createdAt": { "type": "string" }
+            },
+            "required": ["kind", "subjectType", "subjectId"]
+          },
+          "workspace": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "slug": { "type": "string" },
+              "key": { "type": "string" },
+              "name": { "type": "string" }
+            },
+            "required": ["slug", "key"]
+          },
+          "config": {
+            "type": "object",
+            "properties": {
+              "slack": {
+                "type": "object",
+                "properties": {
+                  "webhookUrl": { "type": "string" },
+                  "eventKinds": { "type": "array", "items": { "type": "string" } }
+                }
+              },
+              "discord": {
+                "type": "object",
+                "properties": {
+                  "webhookUrl": { "type": "string" },
+                  "eventKinds": { "type": "array", "items": { "type": "string" } }
+                }
+              },
+              "mentionsOnly": { "type": "boolean" }
+            }
+          }
+        },
+        "required": ["event", "workspace", "config"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sent": {
+            "type": "array",
+            "items": { "type": "string", "enum": ["slack", "discord"] }
+          },
+          "skipped": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "rateLimit": { "perMinute": 240 }
+}
