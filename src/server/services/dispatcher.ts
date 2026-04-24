@@ -245,7 +245,7 @@ export async function maybeAutoDispatch(
   const modeLabel = mode.toLowerCase().replace(/_/g, "-");
   const finalReason = ruleFallthroughReason
     ? `${ruleFallthroughReason},${modeLabel} pick`
-    : reasonTag;
+    : `${modeLabel} pick`;
 
   const candidates = agents.map((a) => {
     const eligibleFlag = isEligible(a);
