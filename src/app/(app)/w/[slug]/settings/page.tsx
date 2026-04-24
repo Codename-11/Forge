@@ -75,6 +75,13 @@ const DEVELOPER: Entry[] = [
   },
   {
     scope: "workspace",
+    path: "/settings/dispatch-rules",
+    title: "Dispatch rules",
+    description:
+      "Declarative routing layer: pin issues matching priority / label / project to a specific agent before the mode-based picker runs.",
+  },
+  {
+    scope: "workspace",
     path: "/settings/plugins",
     title: "Plugins & integrations",
     description:

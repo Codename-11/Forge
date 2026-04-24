@@ -280,6 +280,7 @@ model Workspace {
   issueRelations IssueRelation[]
   timeEntries TimeEntry[]
   agents      Agent[]
+  dispatchRules DispatchRule[]
 
   @@index([slug])
 }
@@ -326,6 +327,7 @@ model Project {
   issues    Issue[]
   templates IssueTemplate[]
   recurring RecurringIssue[]
+  dispatchRules DispatchRule[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId, archived])
@@ -357,6 +359,7 @@ model Label {
 
   workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issues    IssueLabel[]
+  dispatchRules DispatchRule[]
 
   @@unique([workspaceId, name])
 }
@@ -897,7 +900,45 @@ model Agent {
   assignedIssues Issue[]   @relation("IssueAssignedAgent")
   apiKeys        ApiKey[]  @relation("AgentApiKeys")
   authoredComments Comment[] @relation("AgentAuthoredComments")
+  dispatchRules    DispatchRule[]
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
+}
+
+/// Declarative routing layer consulted before the `AutoDispatchMode` logic
+/// when a queued, unassigned issue enters the dispatcher. Each rule pins
+/// an arbitrary (priority, labelId, projectId) combination to a single
+/// target agent; null condition columns are wildcards (match anything).
+/// Rules are evaluated in `order ASC, createdAt ASC` and the first match
+/// wins. If the target is not eligible (archived / OFFLINE / at cap) the
+/// dispatcher falls through to mode-based selection rather than stalling.
+model DispatchRule {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  /// Human-readable label. Surfaced verbatim in the admin UI.
+  name          String
+  enabled       Boolean   @default(true)
+  /// Lower values evaluate first. Stable tiebreak on `createdAt ASC`.
+  order         Int
+
+  // Conditions — all non-null columns must match the incoming issue. A
+  // row with every condition null matches every issue (catch-all).
+  priority      Priority?
+  labelId       String?
+  projectId     String?
+
+  /// Agent to assign when the rule fires. Restrict so that you can't
+  /// accidentally delete an agent that still has rules pointing at it.
+  targetAgentId String
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  label       Label?    @relation(fields: [labelId], references: [id], onDelete: SetNull)
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  targetAgent Agent     @relation(fields: [targetAgentId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, enabled, order])
 }
