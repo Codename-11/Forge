@@ -2,6 +2,7 @@ import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { AgentStatus, AutoDispatchMode, EventKind } from "@prisma/client";
 import { recordChange } from "@/server/audit";
+import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 
 /**
  * Auto-dispatcher for queued issues.
@@ -332,6 +333,8 @@ async function assignAndEmit(
       ...(meta.dispatch ? { dispatch: meta.dispatch } : {}),
     },
   });
+
+  await maybeApplyAgentTemplate(tx, issueId, agentId);
 
   return { agentId, reason: meta.reason };
 }
