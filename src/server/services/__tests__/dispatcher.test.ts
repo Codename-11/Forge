@@ -218,6 +218,40 @@ describe("dispatcher — maybeAutoDispatch", () => {
     expect(after.lastDispatchedAt!.getTime()).toBeGreaterThan(
       newer.getTime(),
     );
+
+    // Dispatch provenance is persisted on the AGENT_ASSIGNED payload so
+    // operators can replay the decision without joining agent state.
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        kind: "AGENT_ASSIGNED",
+      },
+    });
+    const dispatch = (
+      event.payload as {
+        dispatch: {
+          mode: AutoDispatchMode;
+          candidates: Array<{
+            agentId: string;
+            profileKey: string;
+            eligible: boolean;
+          }>;
+          chosen: { agentId: string; profileKey: string } | null;
+          reason: string;
+        };
+      }
+    ).dispatch;
+    expect(dispatch.mode).toBe(AutoDispatchMode.ROUND_ROBIN);
+    expect(dispatch.reason).toBe("round-robin");
+    expect(dispatch.candidates.length).toBeGreaterThan(0);
+    expect(dispatch.candidates.length).toBe(2);
+    expect(dispatch.chosen?.agentId).toBe(stale.id);
+    expect(dispatch.chosen?.profileKey).toBe("e-stale");
+    expect(
+      dispatch.candidates.every((c) => c.eligible === true),
+    ).toBe(true);
   });
 
   it("PRIORITY_MATCH prefers a capability-matched agent over a generalist", async () => {
@@ -287,6 +321,50 @@ describe("dispatcher — maybeAutoDispatch", () => {
 
     const res = await maybeAutoDispatch(prisma, issue.id);
     expect(res.agentId).toBe(ops.id);
+
+    // CAPABILITY_MATCH should record per-candidate matchCount and a
+    // reason string that surfaces the winning score.
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        kind: "AGENT_ASSIGNED",
+      },
+    });
+    const dispatch = (
+      event.payload as {
+        dispatch: {
+          mode: AutoDispatchMode;
+          candidates: Array<{
+            agentId: string;
+            profileKey: string;
+            matchCount?: number;
+            eligible: boolean;
+          }>;
+          chosen: {
+            agentId: string;
+            profileKey: string;
+            matchCount?: number;
+          } | null;
+          reason: string;
+        };
+      }
+    ).dispatch;
+    expect(dispatch.mode).toBe(AutoDispatchMode.CAPABILITY_MATCH);
+    expect(dispatch.reason).toBe("capability-match:1");
+    expect(dispatch.candidates.length).toBeGreaterThan(0);
+    expect(dispatch.chosen?.agentId).toBe(ops.id);
+    expect(dispatch.chosen?.profileKey).toBe("g-ops");
+    expect(dispatch.chosen?.matchCount).toBe(1);
+    const opsCandidate = dispatch.candidates.find(
+      (c) => c.agentId === ops.id,
+    );
+    expect(opsCandidate?.matchCount).toBe(1);
+    const otherCandidate = dispatch.candidates.find(
+      (c) => c.profileKey === "g-other",
+    );
+    expect(otherCandidate?.matchCount).toBe(0);
   });
 
   it("emits AGENT_ASSIGNED with auto=true and writes the assignment", async () => {
