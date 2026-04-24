@@ -12,7 +12,7 @@
  * the shape of the system is visible without pulling in too much.
  */
 import "server-only";
-import { Queue, Worker, QueueEvents } from "bullmq";
+import { Worker, QueueEvents } from "bullmq";
 import { db } from "@/server/db";
 import {
   AGENT_DISPATCH_WEBHOOK_URL,
@@ -21,25 +21,14 @@ import {
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { sweepIdleAgents } from "@/server/services/heartbeat";
 import { logger } from "@/server/logger";
+import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
 const connection = { url: process.env.REDIS_URL ?? "redis://localhost:6379" };
 
-/**
- * Interval (ms) between heartbeat sweeps. Fixed at 60s — the dispatcher
- * only consults `Agent.status` at pick time so we can be aggressive here
- * without hammering the DB; one workspace query + one candidate query per
- * ws per minute is negligible at realistic workspace counts.
- */
 const HEARTBEAT_SWEEP_INTERVAL_MS = 60_000;
-
-/**
- * Fixed jobId for the repeatable heartbeat sweep. Registering with a
- * stable id means every worker restart upserts the same schedule instead
- * of stacking duplicate repeat entries — see the BullMQ "repeat" docs.
- */
 const HEARTBEAT_SWEEP_JOB_ID = "heartbeat-sweep";
 
-export const webhookQueue = new Queue("webhooks", { connection });
+export { webhookQueue, maintenanceQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
 
 export const webhookWorker = new Worker(
@@ -162,8 +151,6 @@ webhookWorker.on("failed", (job, err) => {
 // webhook fan-out; this queue is low-volume (one job per minute) and the
 // handlers touch different tables so a stuck webhook won't delay a sweep.
 // ---------------------------------------------------------------------------
-
-export const maintenanceQueue = new Queue("maintenance", { connection });
 
 export const maintenanceWorker = new Worker(
   "maintenance",
