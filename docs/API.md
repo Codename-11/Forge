@@ -38,7 +38,7 @@ fixed-window limits. Default is none — add explicitly on hot paths.
 
 ## MCP REST
 
-Two transports, same tool surface (43 tools):
+Two transports, same tool surface (44 tools):
 
 - **JSON-RPC 2.0** — `POST /api/mcp/rpc` with standard MCP envelopes
   (`tools/list`, `tools/call`). Preferred for agent clients.
@@ -50,7 +50,7 @@ Both accept `Authorization: Bearer <key>` (ApiKey) or a short-lived JWT.
 
 | Namespace       | Tools                                                       |
 |-----------------|-------------------------------------------------------------|
-| `issues`        | `list`, `get`, `create`, `update`, `transition`, `claim`, `assign`, `assigned` |
+| `issues`        | `list`, `get`, `create`, `update`, `transition`, `claim`, `assign`, `reassign`, `assigned` |
 | `comments`      | `create`                                                    |
 | `projects`      | `list`, `get`, `create`                                     |
 | `cycles`        | `list`, `get`, `current`, `create`, `plan`, `addIssue`, `removeIssue` |
@@ -65,6 +65,14 @@ Both accept `Authorization: Bearer <key>` (ApiKey) or a short-lived JWT.
 `profileKey`. `issues.assigned` falls back to the calling key's
 `linkedAgentId` when neither is supplied, so a key linked to Victor
 returns Victor's queue automatically.
+
+`issues.reassign` is the atomic handoff flow: given `{ issueId,
+toProfileKey, rationale }` (rationale ≥10 chars), it posts a
+`"Handoff → @{toProfileKey}: {rationale}"` comment, swaps
+`assignedAgentId`, and emits `AGENT_ASSIGNED` with
+`{ auto: false, from, to, reason: "handoff", rationale, commentId }`.
+Rejects archived agents and same-agent "handoffs" — use
+`comments.create` for plain notes.
 
 ### Scopes
 
