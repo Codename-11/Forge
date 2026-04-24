@@ -88,6 +88,14 @@ const DEVELOPER: Entry[] = [
       "Workspace-wide observability — audit log, activity events, webhook delivery status.",
     badge: "admin only",
   },
+  {
+    scope: "workspace",
+    path: "/settings/integrations/deliveries",
+    title: "Webhook deliveries",
+    description:
+      "Inspect the webhook delivery queue. Drill into failures and requeue dead-lettered rows.",
+    badge: "admin only",
+  },
 ];
 
 const ACCOUNT: Entry[] = [
