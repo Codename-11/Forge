@@ -25,7 +25,8 @@ const ENTRIES: Entry[] = [
     scope: "workspace",
     path: "/settings/members",
     title: "Members",
-    description: "Invite teammates and manage their workspace role.",
+    description: "Admin-gated: add teammates by email, change roles, remove access.",
+    badge: "admin only",
   },
   {
     scope: "workspace",

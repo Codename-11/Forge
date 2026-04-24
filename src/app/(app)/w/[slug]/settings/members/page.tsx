@@ -6,39 +6,47 @@ import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog } from "@/components/ui/dialog";
-import { Confirm } from "@/components/ui/modal";
+import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { trpc } from "@/lib/trpc";
 import { initials, relativeTime } from "@/lib/utils";
 
+/**
+ * Workspace members settings — admin-gated.
+ *
+ * Authelia owns identity; email-based self-service invites don't make
+ * sense behind SSO. This page is the one place to grant access by email
+ * (creates a `Membership` that will bind whenever Authelia lets that
+ * email through), flip roles inline, or remove members. All mutations
+ * route through `adminProcedure` so non-admins hit a FORBIDDEN even if
+ * they guess the URL.
+ */
 const ROLES = ["OWNER", "ADMIN", "MEMBER", "GUEST"] as const;
 type Role = (typeof ROLES)[number];
 
 export default function MembersPage() {
-  const { data: members, refetch } = trpc.workspace.members.useQuery();
+  const { data: members, refetch, isLoading } =
+    trpc.workspace.listMembers.useQuery();
   const { data: me } = trpc.workspace.me.useQuery();
-  const [open, setOpen] = useState(false);
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState<Role>("MEMBER");
+  const [addOpen, setAddOpen] = useState(false);
+  const [addRole, setAddRole] = useState<Role>("MEMBER");
   const [removeTarget, setRemoveTarget] = useState<{
-    membershipId: string;
+    userId: string;
     email: string;
   } | null>(null);
 
-  const invite = trpc.workspace.invite.useMutation({
-    onSuccess: () => {
-      toast.success("Member added.");
-      setOpen(false);
-      setEmail("");
-      setRole("MEMBER");
+  const addMember = trpc.workspace.addMember.useMutation({
+    onSuccess: (res) => {
+      toast.success(res.created ? "Member added." : "Already a member — no change.");
+      setAddOpen(false);
+      setAddRole("MEMBER");
       refetch();
     },
     onError: (e) => toast.error(e.message),
   });
 
-  const updateMember = trpc.workspace.updateMember.useMutation({
+  const setMemberRole = trpc.workspace.setMemberRole.useMutation({
     onSuccess: () => {
       toast.success("Role updated.");
       refetch();
@@ -58,10 +66,10 @@ export default function MembersPage() {
     <>
       <Topbar
         title="Members"
-        subtitle="Teammates with access to this workspace."
+        subtitle="Admin-gated access for this workspace."
         actions={
-          <Button variant="ember" size="sm" onClick={() => setOpen(true)}>
-            Invite
+          <Button variant="ember" size="sm" onClick={() => setAddOpen(true)}>
+            Add member
           </Button>
         }
       />
@@ -69,132 +77,131 @@ export default function MembersPage() {
         <div className="mx-auto max-w-3xl space-y-6 p-6">
           <Card>
             {(members ?? []).map((m) => {
-              const isSelf = me?.id === m.id;
+              const isSelf = me?.user.id === m.userId;
               return (
-                <li key={m.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-subtle text-xs font-medium">
-                    {initials(m.user.name ?? m.user.email)}
+                <li
+                  key={m.membershipId}
+                  className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-subtle/40"
+                >
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-subtle text-xs font-medium text-muted-foreground">
+                    {initials(m.name ?? m.email)}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <div className="truncate text-sm font-medium">
-                        {m.user.name ?? m.user.email}
+                      <div className="truncate text-sm font-medium text-foreground">
+                        {m.name ?? m.email}
                       </div>
                       {isSelf && <Badge>you</Badge>}
                     </div>
                     <div className="truncate text-[11px] text-muted-foreground">
-                      {m.user.email}
-                      {m.user.handle && (
+                      <span className="font-mono">{m.email}</span>
+                      {m.handle && (
                         <>
                           {" "}
-                          · <span className="font-mono">@{m.user.handle}</span>
+                          · <span className="font-mono">@{m.handle}</span>
                         </>
                       )}
                     </div>
                   </div>
                   <select
                     value={m.role}
-                    disabled={isSelf || updateMember.isPending}
+                    disabled={setMemberRole.isPending}
                     onChange={(e) =>
-                      updateMember.mutate({
-                        membershipId: m.id,
+                      setMemberRole.mutate({
+                        userId: m.userId,
                         role: e.target.value as Role,
                       })
                     }
-                    className="focus-ring h-7 rounded-md border border-input bg-background px-2 text-xs disabled:opacity-50"
+                    className="focus-ring h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground disabled:opacity-50"
+                    aria-label={`Role for ${m.email}`}
                   >
                     {ROLES.map((r) => (
                       <option key={r}>{r}</option>
                     ))}
                   </select>
                   <span className="text-[11px] text-muted-foreground">
-                    {relativeTime(m.createdAt)}
+                    joined {relativeTime(m.joinedAt)}
                   </span>
-                  {!isSelf && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={removeMember.isPending}
-                      onClick={() =>
-                        setRemoveTarget({ membershipId: m.id, email: m.user.email })
-                      }
-                    >
-                      Remove
-                    </Button>
-                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={removeMember.isPending}
+                    onClick={() =>
+                      setRemoveTarget({ userId: m.userId, email: m.email })
+                    }
+                  >
+                    Remove
+                  </Button>
                 </li>
               );
             })}
-            {members?.length === 0 && (
+            {!isLoading && members?.length === 0 && (
               <EmptyState
                 icon={Users}
                 title="No members yet"
-                hint="Invite teammates to collaborate on this workspace."
+                hint="Add teammates by email — they bind on first SSO login."
               />
             )}
           </Card>
         </div>
       </div>
 
-      <Dialog open={open} onClose={() => setOpen(false)} className="max-w-md">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!email.includes("@")) return toast.error("Enter a valid email.");
-            invite.mutate({ email: email.trim(), role });
-          }}
-          className="space-y-3 p-5"
-        >
-          <div className="text-sm font-semibold">Invite member</div>
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Email</label>
-            <Input
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="teammate@example.com"
-              type="email"
-              autoFocus
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Role</label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-              className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="ember" disabled={invite.isPending}>
-              {invite.isPending ? "Adding…" : "Add"}
-            </Button>
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            Invites currently attach the user directly. Email-based invitations ship later.
-          </p>
-        </form>
-      </Dialog>
+      <QuickForm
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        title="Add member"
+        description="They'll get access once Authelia lets this email through. Role can be changed later."
+        primaryLabel={addMember.isPending ? "Adding…" : "Add"}
+        loading={addMember.isPending}
+        onSubmit={(e) => {
+          const fd = new FormData(e.currentTarget);
+          const email = String(fd.get("email") ?? "").trim();
+          const role = String(fd.get("role") ?? "MEMBER") as Role;
+          if (!email.includes("@")) {
+            return { error: "Enter a valid email." };
+          }
+          addMember.mutate({ email, role });
+        }}
+      >
+        <QuickForm.Field label="Email" htmlFor="add-member-email" required>
+          <Input
+            id="add-member-email"
+            name="email"
+            type="email"
+            placeholder="teammate@example.com"
+            autoFocus
+            required
+          />
+        </QuickForm.Field>
+        <QuickForm.Field label="Role" htmlFor="add-member-role">
+          <select
+            id="add-member-role"
+            name="role"
+            value={addRole}
+            onChange={(e) => setAddRole(e.target.value as Role)}
+            className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+          >
+            {ROLES.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </QuickForm.Field>
+      </QuickForm>
 
       <Confirm
         open={!!removeTarget}
         onOpenChange={(v) => !v && setRemoveTarget(null)}
         variant="destructive"
+        typeToConfirm={removeTarget?.email}
         title={`Remove ${removeTarget?.email}?`}
-        description="They lose access to this workspace immediately."
-        primaryLabel="Remove"
+        description="They lose access to this workspace immediately. Their user record stays intact for other workspaces."
+        primaryLabel="Remove member"
         loading={removeMember.isPending}
         onConfirm={async () => {
           if (!removeTarget) return;
-          await removeMember.mutateAsync({ membershipId: removeTarget.membershipId });
+          await removeMember.mutateAsync({ userId: removeTarget.userId });
           setRemoveTarget(null);
         }}
       />
