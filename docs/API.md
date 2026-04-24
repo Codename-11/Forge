@@ -15,15 +15,21 @@ be consumed via the typed client.
 
 ### Routers
 
-| Namespace     | Procedures                                                              |
-|---------------|-------------------------------------------------------------------------|
-| `workspace`   | `list`, `current`, `create`, `members`, `invite`                        |
-| `project`     | `list`, `byId`, `create`, `update`, `archive`                           |
-| `issue`       | `list`, `byId`, `create`, `update`, `assign`, `softDelete`, `bulkStatus`|
-| `comment`     | `create`, `update`, `softDelete`                                        |
-| `analytics`   | `summary`, `statusDistribution`, `throughput`, `cycleTime`, `slaBreaches`|
-| `plugin`      | `list`, `register`, `approve`, `suspend`, `issueApiKey`, `revokeApiKey` |
-| `status`      | `list`, `create`, `reorder`                                             |
+| Namespace      | Procedures                                                                                       |
+|----------------|--------------------------------------------------------------------------------------------------|
+| `workspace`    | `list`, `current`, `create`, `listMembers`, `addMember`, `setMemberRole`, `removeMember` (admin) |
+| `project`      | `list`, `byId`, `create`, `update`, `archive`                                                    |
+| `issue`        | `list`, `byId`, `create`, `update`, `assign`, `softDelete`, `bulkStatus`, `bulkSetLabels`, `bulkAssign`, `bulkAssignAgent` |
+| `comment`      | `create`, `update`, `softDelete`                                                                 |
+| `analytics`    | `summary`, `statusDistribution`, `throughput`, `cycleTime`, `slaBreaches`, `dispatch.summary`, `dispatch.timeseries` |
+| `plugin`       | `list`, `register`, `approve`, `suspend`, `issueApiKey`, `revokeApiKey`                          |
+| `status`       | `list`, `create`, `reorder`                                                                      |
+| `agent`        | `list`, `byId`, `create`, `update`, `archive`, `delete`, `heartbeat`                             |
+| `dispatchRule` | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                |
+| `admin`        | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                      |
+
+Self-service email invite is **disabled**. `workspace.invite` is a stub
+that throws `PRECONDITION_FAILED`; use `workspace.addMember` (admin-gated).
 
 All write procedures:
 - Validate input with Zod.
@@ -50,16 +56,26 @@ Both accept `Authorization: Bearer <key>` (ApiKey) or a short-lived JWT.
 
 | Namespace       | Tools                                                       |
 |-----------------|-------------------------------------------------------------|
-| `issues`        | `list`, `get`, `create`, `update`, `transition`, `claim`, `assign`, `reassign`, `assigned` |
+| `issues`        | `list`, `get`, `create`, `queue`, `transition`, `claim`, `release`, `assign`, `reassign`, `assigned` |
 | `comments`      | `create`                                                    |
-| `projects`      | `list`, `get`, `create`                                     |
-| `cycles`        | `list`, `get`, `current`, `create`, `plan`, `addIssue`, `removeIssue` |
-| `initiatives`   | `list`, `get`                                               |
-| `relations`     | `add`, `remove`                                             |
-| `time`          | `start`, `stop`, `log`                                      |
-| `attachments`   | `initUpload`, `finalize`, `list`                            |
-| `pins`          | `list`, `toggle`                                            |
-| `analytics`     | `summary`, `statusDistribution`, `throughput`, `slaBreaches` |
+| `projects`      | `list`                                                      |
+| `cycles`        | `list`, `get`, `current`, `create`, `update`, `plan`, `rollover`, `addIssue`, `removeIssue` |
+| `initiatives`   | `list`, `get`, `create`, `update`, `linkProject`, `unlinkProject` |
+| `relations`     | `add`, `remove`, `listForIssue`                             |
+| `time`          | `start`, `stop`, `log`, `list`, `summary`, `running`        |
+| `attachments`   | `initUpload`, `finalize`, `list`, `getDownloadUrl`, `delete` |
+| `pins`          | `list`, `set`                                               |
+| `analytics`     | `summary`                                                   |
+
+**Not currently on the MCP surface** (tRPC-only, admin/UI path): agent
+self-management (`agent.heartbeat` / `.create` / `.update`), dispatch rules
+(`dispatchRule.*`), member management (`workspace.addMember` etc.),
+webhook DLQ retry (`admin.webhookDeliveries.retry`), dispatch analytics
+(`analytics.dispatch.*`). If an agent needs to heartbeat without using
+the in-app session, it currently does so indirectly via normal tool
+calls (every call bumps its effective "last activity" through the event
+stream, though not `Agent.lastHeartbeatAt`). Candidates for MCP
+promotion if Hermes-side polling becomes load-bearing.
 
 `issues.assign` / `issues.assigned` identify agents by `agentId` or
 `profileKey`. `issues.assigned` falls back to the calling key's
@@ -92,7 +108,14 @@ key's workspace.
 ISSUE_STATUS_CHANGED | ISSUE_ASSIGNED | ISSUE_PRIORITY_CHANGED |
 ISSUE_QUEUED | COMMENT_CREATED | COMMENT_UPDATED | PROJECT_CREATED |
 PROJECT_UPDATED | SKILL_INVOKED | PLUGIN_ERROR | AGENT_CREATED |
-AGENT_UPDATED | AGENT_DELETED | AGENT_ASSIGNED`.
+AGENT_UPDATED | AGENT_DELETED | AGENT_ASSIGNED | AGENT_STATUS_CHANGED |
+MEMBERSHIP_CREATED | MEMBERSHIP_ROLE_CHANGED | MEMBERSHIP_REMOVED`.
+
+`AGENT_ASSIGNED.payload.dispatch` carries decision provenance:
+`{ mode, candidates[], chosen, reason }`. Rule-fired dispatches set
+`mode: "RULE"` and include `ruleId`. Rule targets that were ineligible
+at decision time prefix the mode reason as
+`"rule:{id}:target-ineligible,{mode}-slug pick"`.
 
 ## Webhooks (outbound)
 
