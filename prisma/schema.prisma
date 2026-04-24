@@ -535,6 +535,12 @@ model Comment {
   workspaceId String
   issueId     String
   authorId    String
+  /// When the comment was created via an API key whose `linkedAgentId`
+  /// pointed at an Agent, we record that Agent here so the UI can
+  /// render it as "Victor (agent)" rather than the human key owner.
+  /// Null for human-session comments. SetNull on agent delete so the
+  /// comment survives agent lifecycle churn.
+  authoringAgentId String?
   body        String   @db.Text
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -543,9 +549,11 @@ model Comment {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue     Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
   author    User      @relation(fields: [authorId], references: [id])
+  authoringAgent Agent? @relation("AgentAuthoredComments", fields: [authoringAgentId], references: [id], onDelete: SetNull)
 
   @@index([issueId])
   @@index([workspaceId, createdAt])
+  @@index([authoringAgentId])
 }
 
 /// Polymorphic attachment: `targetType` is one of "issue" | "initiative" |
@@ -887,6 +895,7 @@ model Agent {
   workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   assignedIssues Issue[]   @relation("IssueAssignedAgent")
   apiKeys        ApiKey[]  @relation("AgentApiKeys")
+  authoredComments Comment[] @relation("AgentAuthoredComments")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])

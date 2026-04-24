@@ -579,12 +579,17 @@ export const mcpTools = {
     async run(input: { issueId: string; body: string }, ctx: McpContext) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       const authorId = await resolveActorId(ctx);
+      // When the API key is linked to an Agent, record it on the comment so
+      // the issue detail UI can render it as agent-authored instead of
+      // attributing the write to the human key owner.
+      const authoringAgentId = ctx.apiKey?.linkedAgentId ?? null;
       return db.comment.create({
         data: {
           workspaceId: ctx.workspaceId,
           issueId: input.issueId,
           authorId,
           body: input.body,
+          authoringAgentId,
         },
       });
     },
