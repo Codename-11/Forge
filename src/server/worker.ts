@@ -12,7 +12,7 @@
  * the shape of the system is visible without pulling in too much.
  */
 import "server-only";
-import { Queue, Worker, QueueEvents } from "bullmq";
+import { Worker, QueueEvents } from "bullmq";
 import { db } from "@/server/db";
 import {
   AGENT_DISPATCH_WEBHOOK_URL,
@@ -20,10 +20,11 @@ import {
 } from "@/server/audit";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { logger } from "@/server/logger";
+import { webhookQueue } from "@/server/queues";
 
 const connection = { url: process.env.REDIS_URL ?? "redis://localhost:6379" };
 
-export const webhookQueue = new Queue("webhooks", { connection });
+export { webhookQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
 
 export const webhookWorker = new Worker(
