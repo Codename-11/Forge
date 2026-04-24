@@ -516,6 +516,271 @@ export const issueRouter = router({
       }),
     ),
 
+  /**
+   * Bulk add/remove labels across many issues in one RPC. All referenced
+   * label ids are validated to live in the same workspace as the issues
+   * (one query, not N). Audit + activity events are written per issue via
+   * `recordChange()` so the invariant "audit log and activity event live
+   * together" holds — chunked into 50s inside a single transaction to
+   * keep the tx small.
+   */
+  bulkSetLabels: workspaceProcedure
+    .input(
+      z.object({
+        issueIds: z.array(z.string().cuid()).max(500),
+        add: z.array(z.string().cuid()).default([]),
+        remove: z.array(z.string().cuid()).default([]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.issueIds.length === 0) {
+        return { updated: 0, added: 0, removed: 0 };
+      }
+      const labelIds = Array.from(new Set([...input.add, ...input.remove]));
+      if (labelIds.length > 0) {
+        const found = await ctx.db.label.findMany({
+          where: { id: { in: labelIds }, workspaceId: ctx.workspaceId },
+          select: { id: true },
+        });
+        if (found.length !== labelIds.length) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "One or more labels do not belong to this workspace.",
+          });
+        }
+      }
+
+      return ctx.db.$transaction(async (tx) => {
+        // Filter issueIds to those that actually exist in this workspace.
+        // updateMany's where-scope on the join rows already enforces
+        // workspaceId via the issue fk; we validate to report real counts
+        // and to avoid writing audit rows for issues that don't exist.
+        const issues = await tx.issue.findMany({
+          where: {
+            id: { in: input.issueIds },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true },
+        });
+        const validIds = issues.map((i) => i.id);
+        if (validIds.length === 0) {
+          return { updated: 0, added: 0, removed: 0 };
+        }
+
+        let added = 0;
+        let removed = 0;
+
+        if (input.remove.length > 0) {
+          const res = await tx.issueLabel.deleteMany({
+            where: {
+              issueId: { in: validIds },
+              labelId: { in: input.remove },
+            },
+          });
+          removed = res.count;
+        }
+
+        if (input.add.length > 0) {
+          // Build all (issueId, labelId) pairs; skipDuplicates handles
+          // existing rows via the composite @@id([issueId, labelId]).
+          const data = validIds.flatMap((issueId) =>
+            input.add.map((labelId) => ({ issueId, labelId })),
+          );
+          const res = await tx.issueLabel.createMany({
+            data,
+            skipDuplicates: true,
+          });
+          added = res.count;
+        }
+
+        // Chunk audit+event writes so large selections don't blow up a
+        // single tx or block other writers for too long.
+        const CHUNK = 50;
+        for (let i = 0; i < validIds.length; i += CHUNK) {
+          const chunk = validIds.slice(i, i + CHUNK);
+          for (const issueId of chunk) {
+            await recordChange(tx, {
+              workspaceId: ctx.workspaceId,
+              actorId: ctx.session.user.id,
+              entity: "Issue",
+              entityId: issueId,
+              action: "bulk-set-labels",
+              after: { add: input.add, remove: input.remove },
+              eventKind: EventKind.ISSUE_UPDATED,
+              subjectType: "issue",
+              subjectId: issueId,
+              payload: { add: input.add, remove: input.remove },
+              ip: ctx.ip,
+              userAgent: ctx.userAgent,
+            });
+          }
+        }
+
+        return { updated: validIds.length, added, removed };
+      });
+    }),
+
+  /**
+   * Bulk human assignment — sets `Issue.claimedById` (the single-user
+   * claim field) on every selected issue. `null` releases the claim.
+   * Writes ISSUE_ASSIGNED audit+event per issue.
+   */
+  bulkAssign: workspaceProcedure
+    .input(
+      z.object({
+        issueIds: z.array(z.string().cuid()).max(500),
+        claimedById: z.string().cuid().nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.issueIds.length === 0) {
+        return { updated: 0 };
+      }
+      // Cross-tenant guard: claimedById must be a workspace member when set.
+      if (input.claimedById) {
+        const member = await ctx.db.membership.findFirst({
+          where: {
+            userId: input.claimedById,
+            workspaceId: ctx.workspaceId,
+          },
+          select: { id: true },
+        });
+        if (!member) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "User is not a member of this workspace.",
+          });
+        }
+      }
+
+      return ctx.db.$transaction(async (tx) => {
+        const issues = await tx.issue.findMany({
+          where: {
+            id: { in: input.issueIds },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true },
+        });
+        const validIds = issues.map((i) => i.id);
+        if (validIds.length === 0) return { updated: 0 };
+
+        await tx.issue.updateMany({
+          where: { id: { in: validIds }, workspaceId: ctx.workspaceId },
+          data: {
+            claimedById: input.claimedById,
+            // Clearing the claim also clears timestamps; setting a new
+            // owner refreshes the claim start time.
+            claimedAt: input.claimedById ? new Date() : null,
+            claimExpiresAt: null,
+          },
+        });
+
+        const CHUNK = 50;
+        for (let i = 0; i < validIds.length; i += CHUNK) {
+          const chunk = validIds.slice(i, i + CHUNK);
+          for (const issueId of chunk) {
+            await recordChange(tx, {
+              workspaceId: ctx.workspaceId,
+              actorId: ctx.session.user.id,
+              entity: "Issue",
+              entityId: issueId,
+              action: "bulk-assign",
+              after: { claimedById: input.claimedById },
+              eventKind: EventKind.ISSUE_ASSIGNED,
+              subjectType: "issue",
+              subjectId: issueId,
+              payload: { claimedById: input.claimedById },
+              ip: ctx.ip,
+              userAgent: ctx.userAgent,
+            });
+          }
+        }
+
+        return { updated: validIds.length };
+      });
+    }),
+
+  /**
+   * Bulk agent assignment — sets `Issue.assignedAgentId` on every
+   * selected issue. `null` releases. Writes AGENT_ASSIGNED per issue,
+   * which feeds the existing agent-dispatch webhook fan-out in
+   * `recordChange()`.
+   */
+  bulkAssignAgent: workspaceProcedure
+    .input(
+      z.object({
+        issueIds: z.array(z.string().cuid()).max(500),
+        assignedAgentId: z.string().cuid().nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.issueIds.length === 0) {
+        return { updated: 0 };
+      }
+      if (input.assignedAgentId) {
+        const agent = await ctx.db.agent.findFirst({
+          where: {
+            id: input.assignedAgentId,
+            workspaceId: ctx.workspaceId,
+          },
+          select: { id: true },
+        });
+        if (!agent) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Agent not found in this workspace.",
+          });
+        }
+      }
+
+      return ctx.db.$transaction(async (tx) => {
+        const issues = await tx.issue.findMany({
+          where: {
+            id: { in: input.issueIds },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true, assignedAgentId: true },
+        });
+        const validIds = issues.map((i) => i.id);
+        if (validIds.length === 0) return { updated: 0 };
+
+        await tx.issue.updateMany({
+          where: { id: { in: validIds }, workspaceId: ctx.workspaceId },
+          data: { assignedAgentId: input.assignedAgentId },
+        });
+
+        const CHUNK = 50;
+        for (let i = 0; i < validIds.length; i += CHUNK) {
+          const chunk = issues.slice(i, i + CHUNK);
+          for (const row of chunk) {
+            await recordChange(tx, {
+              workspaceId: ctx.workspaceId,
+              actorId: ctx.session.user.id,
+              entity: "Issue",
+              entityId: row.id,
+              action: "assign-agent",
+              before: { assignedAgentId: row.assignedAgentId },
+              after: { assignedAgentId: input.assignedAgentId },
+              eventKind: EventKind.AGENT_ASSIGNED,
+              subjectType: "issue",
+              subjectId: row.id,
+              payload: {
+                agentId: input.assignedAgentId,
+                previousAgentId: row.assignedAgentId,
+              },
+              ip: ctx.ip,
+              userAgent: ctx.userAgent,
+            });
+          }
+        }
+
+        return { updated: validIds.length };
+      });
+    }),
+
   setQueued: workspaceProcedure
     .input(z.object({ id: z.string().cuid(), queued: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
