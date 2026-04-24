@@ -12,6 +12,12 @@ import { recordChange } from "@/server/audit";
  * against the Prisma client passed in — callers embed the call inside an
  * existing transaction (matching `recordChange`'s contract).
  *
+ * Selection precedence:
+ *   1. DispatchRule rows (ordered by `order ASC, createdAt ASC`). First
+ *      rule whose conditions match wins. If the rule's target isn't
+ *      eligible, fall through to mode-based selection rather than stall.
+ *   2. `autoDispatchMode` — ROUND_ROBIN / PRIORITY_MATCH / CAPABILITY_MATCH.
+ *
  * When `autoStartOnAssign && !requireApprovalBeforeStart`, no extra work is
  * needed on the Forge side — the webhook fan-out in `audit.ts` already
  * delivers `AGENT_ASSIGNED` to the agent's webhookUrl via the synthetic
@@ -31,8 +37,14 @@ export async function maybeAutoDispatch(
       workspaceId: true,
       queued: true,
       priority: true,
+      projectId: true,
       assignedAgentId: true,
-      labels: { select: { label: { select: { name: true } } } },
+      labels: {
+        select: {
+          labelId: true,
+          label: { select: { name: true } },
+        },
+      },
       workspace: {
         select: {
           autoDispatch: true,
@@ -94,8 +106,77 @@ export async function maybeAutoDispatch(
     return a._count.assignedIssues < a.maxConcurrent;
   };
   const eligible = agents.filter(isEligible);
+
+  // --- Rules layer ------------------------------------------------------
+  // Rules run before mode-based selection. A rule's conditions are ANDed;
+  // null columns are wildcards. First match (by order asc, createdAt asc)
+  // wins, but only if its target is currently eligible — otherwise we fall
+  // through to the mode-based picker rather than stalling dispatch.
+  const rules = await tx.dispatchRule.findMany({
+    where: { workspaceId: issue.workspaceId, enabled: true },
+    orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      priority: true,
+      labelId: true,
+      projectId: true,
+      targetAgentId: true,
+    },
+  });
+
+  const issueLabelIds = new Set(issue.labels.map((l) => l.labelId));
+  const eligibleById = new Map(eligible.map((a) => [a.id, a]));
+
+  // Records the miss-reason when the first matching rule has an
+  // ineligible target. Surfaced as a prefix on the mode-based reason so
+  // callers can see "we *would* have picked via rule X, but fell through
+  // to round-robin because X's target was OFFLINE".
+  let ruleFallthroughReason: string | null = null;
+
+  for (const rule of rules) {
+    if (rule.priority !== null && rule.priority !== issue.priority) continue;
+    if (rule.labelId !== null && !issueLabelIds.has(rule.labelId)) continue;
+    if (rule.projectId !== null && rule.projectId !== issue.projectId) {
+      continue;
+    }
+
+    const target = eligibleById.get(rule.targetAgentId);
+    if (!target) {
+      ruleFallthroughReason = `rule:${rule.id}:target-ineligible`;
+      break;
+    }
+
+    const ruleCandidate = {
+      agentId: target.id,
+      profileKey: target.profileKey,
+      capabilities: target.capabilities,
+      activeCount: target._count.assignedIssues,
+      maxConcurrent: target.maxConcurrent,
+      lastDispatchedAt: target.lastDispatchedAt
+        ? target.lastDispatchedAt.toISOString()
+        : null,
+      eligible: true,
+    };
+    return await assignAndEmit(tx, issue.workspaceId, issue.id, target.id, {
+      reason: `rule:${rule.id}`,
+      mode: "RULE",
+      ruleId: rule.id,
+      dispatch: {
+        mode: "RULE",
+        candidates: [ruleCandidate],
+        chosen: { agentId: target.id, profileKey: target.profileKey },
+        reason: `rule:${rule.id}`,
+      },
+    });
+  }
+
   if (eligible.length === 0) {
-    return { agentId: null, reason: "no-candidates" };
+    return {
+      agentId: null,
+      reason: ruleFallthroughReason
+        ? `${ruleFallthroughReason},no-candidates`
+        : "no-candidates",
+    };
   }
 
   // Round-robin tie-break: oldest `lastDispatchedAt` wins. Null sorts first
@@ -160,21 +241,11 @@ export async function maybeAutoDispatch(
     reasonTag = `capability-match:${topScore}`;
   }
 
-  const now = new Date();
+  const modeLabel = mode.toLowerCase().replace(/_/g, "-");
+  const finalReason = ruleFallthroughReason
+    ? `${ruleFallthroughReason},${modeLabel} pick`
+    : reasonTag;
 
-  await tx.agent.update({
-    where: { id: picked.id },
-    data: { lastDispatchedAt: now },
-  });
-  await tx.issue.update({
-    where: { id: issue.id },
-    data: { assignedAgentId: picked.id },
-  });
-
-  // Build the dispatch-decision provenance payload. We include every
-  // considered agent (eligible or not) so operators can replay the
-  // decision from the event alone — no join against agent state at
-  // read time, no schema migration for a dedicated DispatchLog table.
   const candidates = agents.map((a) => {
     const eligibleFlag = isEligible(a);
     const matchCount = matchCountByAgent.get(a.id);
@@ -200,53 +271,67 @@ export async function maybeAutoDispatch(
       : {}),
   };
 
-  /**
-   * AGENT_ASSIGNED payload shape (auto path):
-   * {
-   *   agentId: string,
-   *   previousAgentId: string | null,
-   *   auto: true,
-   *   mode: AutoDispatchMode,
-   *   dispatch: {
-   *     mode: AutoDispatchMode,
-   *     candidates: Array<{
-   *       agentId, profileKey, capabilities[], activeCount,
-   *       maxConcurrent, lastDispatchedAt (ISO|null),
-   *       matchCount? (CAPABILITY_MATCH only), eligible,
-   *     }>,
-   *     chosen: { agentId, profileKey, matchCount? } | null,
-   *     reason: string,  // e.g. "round-robin", "priority-match-urgent+cap",
-   *                      //       "capability-match:2"
-   *   },
-   * }
-   * The manual-assignment path in `issue.ts` / `mcp.ts` uses the same
-   * outer keys but omits `dispatch` (there's no dispatcher decision to
-   * record). Readers should treat `dispatch` as optional.
-   */
+  return await assignAndEmit(tx, issue.workspaceId, issue.id, picked.id, {
+    reason: finalReason,
+    mode,
+    dispatch: {
+      mode,
+      candidates,
+      chosen,
+      reason: reasonTag,
+    },
+  });
+}
+
+/**
+ * Persist the assignment, bump agent round-robin bookkeeping, emit the
+ * `AGENT_ASSIGNED` event, and return the caller-shaped result.
+ *
+ * `dispatch.mode` goes into the event payload alongside the rule id when
+ * a rule fired — kept as a string literal so we don't have to extend the
+ * `AutoDispatchMode` enum just to mark rule-driven dispatches.
+ */
+async function assignAndEmit(
+  tx: PrismaClient | Prisma.TransactionClient,
+  workspaceId: string,
+  issueId: string,
+  agentId: string,
+  meta: {
+    reason: string;
+    mode: string;
+    ruleId?: string;
+    dispatch?: Prisma.InputJsonObject;
+  },
+): Promise<{ agentId: string; reason: string }> {
+  await tx.agent.update({
+    where: { id: agentId },
+    data: { lastDispatchedAt: new Date() },
+  });
+  await tx.issue.update({
+    where: { id: issueId },
+    data: { assignedAgentId: agentId },
+  });
+
   await recordChange(tx, {
-    workspaceId: issue.workspaceId,
+    workspaceId,
     actorId: null,
     entity: "Issue",
-    entityId: issue.id,
+    entityId: issueId,
     action: "auto-dispatch",
-    after: { assignedAgentId: picked.id },
+    after: { assignedAgentId: agentId },
     eventKind: EventKind.AGENT_ASSIGNED,
     subjectType: "issue",
-    subjectId: issue.id,
+    subjectId: issueId,
     payload: {
-      agentId: picked.id,
+      agentId,
       previousAgentId: null,
       auto: true,
-      mode,
-      dispatch: {
-        mode,
-        candidates,
-        chosen,
-        reason: reasonTag,
-      },
+      mode: meta.mode,
+      reason: meta.reason,
+      ...(meta.ruleId ? { ruleId: meta.ruleId } : {}),
+      ...(meta.dispatch ? { dispatch: meta.dispatch } : {}),
     },
   });
 
-  const modeLabel = mode.toLowerCase().replace(/_/g, "-");
-  return { agentId: picked.id, reason: `${modeLabel} pick` };
+  return { agentId, reason: meta.reason };
 }
