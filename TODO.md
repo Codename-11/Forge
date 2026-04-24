@@ -70,24 +70,30 @@
 
 ---
 
-## P1 — High-value follow-ups (discovered during dogfooding)
+## P1 — High-value follow-ups (shipped 2026-04-23)
 
-- [ ] **Dead-letter inspection UI** — admin page listing recent
-  `WebhookDelivery.status === DEAD_LETTER` rows with response body +
-  "retry" button. Webhook failures are currently only visible via DB.
-- [ ] **Agent identity in comments** — add `Comment.authoringAgentId`
-  or an actor discriminator on `recordChange` so an agent-authored
-  comment renders as "Victor (agent)" rather than the human key owner.
-- [ ] **Heartbeat-driven auto-offline** — scheduled job that flips
-  `Agent.status → OFFLINE` when `lastHeartbeatAt` is older than a
-  workspace-configurable window (default 10 min).
-- [ ] **Observability for dispatch decisions** — persist `{mode,
-  candidates, chosen, reason}` on the `AGENT_ASSIGNED` payload (or a
-  new `DispatchLog` table) so "why Victor and not Mizu" is queryable.
-- [ ] **Handoff flow** — `issues.reassign` MCP tool that takes a
-  rationale, forces a comment, and swaps `assignedAgentId`. Cheaper
-  than each caller stitching `issues.assign` + `comments.create`.
-- [ ] **Bulk label / bulk assign on issues** (already in P2, bumped)
+- [x] **Dead-letter inspection UI** — `admin.webhookDeliveries.list` +
+  `.retry` + page at `settings/integrations/deliveries`. Retry writes
+  `AuditLog` directly (no fitting `EventKind`).
+- [x] **Agent identity in comments** — `Comment.authoringAgentId`
+  (migration `0003`). `comment.create` stamps from
+  `ctx.apiKey.linkedAgentId`. Renderer shows agent name + indigo
+  `AGENT` chip.
+- [x] **Heartbeat-driven auto-offline** — `maintenance` BullMQ queue +
+  `sweepIdleAgents` runs every 60s, per-workspace
+  `agentIdleTimeoutMinutes`. Emits new `AGENT_STATUS_CHANGED`
+  `EventKind` (migration `0004`).
+- [x] **Observability for dispatch decisions** —
+  `AGENT_ASSIGNED.payload.dispatch = { mode, candidates[], chosen,
+  reason }`. Ineligible candidates included with `eligible: false`.
+  No table — JSON enrichment.
+- [x] **Handoff flow** — `issues.reassign` MCP tool (tool 44).
+  `rationale.min(10)`, rejects same-agent, forces comment, fires
+  `AGENT_ASSIGNED` with `reason: "handoff"`.
+- [x] **Bulk label / bulk assign on issues** — `issue.bulkSetLabels`,
+  `bulkAssign`, `bulkAssignAgent`. `max(500)` per call, per-issue
+  `recordChange`. UI: `BulkLabelPicker` (mixed-state add/remove) +
+  `BulkAssigneePicker` (Humans/Agents tabs).
 
 ---
 

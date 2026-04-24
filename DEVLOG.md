@@ -2,6 +2,121 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-23 — P1 high-value follow-ups (6-agent parallel wave)
+
+All six P1 high-value follow-ups landed in a single integration pass. Each
+item was dispatched to an isolated worktree agent; six branches merged
+sequentially onto master with one real conflict on `worker.ts`.
+
+Migrations added:
+- `0003_comment_agent_authorship` — `Comment.authoringAgentId` nullable FK
+  → `Agent.id` (ON DELETE SET NULL), index on the column, back-relation
+  `Agent.authoredComments`. FK type is plain `String` (not `@db.Uuid`) to
+  match `Agent.id`'s cuid shape; SQL column is `TEXT`.
+- `0004_agent_status_changed_event` — adds `AGENT_STATUS_CHANGED` to the
+  `EventKind` enum (idempotent `ADD VALUE IF NOT EXISTS`).
+
+**P1-1 — DLQ inspection UI.** New nested admin router
+`admin.webhookDeliveries.list` + `.retry` (workspace-scoped, admin-gated).
+List truncates `responseBody` to 2KB server-side and derives a
+presentation-only `kind` (`agent`/`plugin`/`workspace`) from
+`webhook.pluginId` + the `agent:dispatch` URL prefix. Retry resets
+`status→PENDING`, `attempt→0`, `scheduledAt→now` and writes an `AuditLog`
+row directly — not via `recordChange()` — because no existing `EventKind`
+fits admin-infra retries and emitting one would itself fan out webhooks.
+New page at `settings/integrations/deliveries/` renders the list in the
+existing warm-earthy styling, opens the delivery row in a `<SidePanel>`
+with full payload + response body + a `<Confirm>`-gated Retry button.
+Sidebar entry added under Settings → Developer. Real field names
+(`attempt` / `responseBody` / `scheduledAt`) were kept instead of the
+spec's `attemptCount` / `lastError` / `nextAttemptAt` — a richer rename
+migration felt out of scope for a UI follow-up.
+
+**Refactor (shipped with P1-1).** `webhookQueue` extracted from
+`worker.ts` into a new `src/server/queues.ts` so producer-side code
+(tRPC mutations, admin retry) can enqueue without pulling `Worker` into
+the Next.js web process. At integration I promoted P1-3's
+`maintenanceQueue` into the same file for consistency —
+`maintenanceWorker` and `registerHeartbeatSweepJob` stay in
+`worker.ts`. This was the one conflict resolution needed across the
+whole merge.
+
+**P1-2 — Agent authorship on comments.** `comment.create` (tRPC +
+`comments.create` MCP tool) reads `ctx.apiKey?.linkedAgentId` and
+stamps it on new `Comment` rows. Null for human sessions. Issue detail
+pulls `authoringAgent` eagerly in `issue.byId` so the comment list
+doesn't make a second roundtrip. Renderer replaces the human byline
+with the agent's name when `authoringAgent` is set and appends an
+indigo `AGENT` chip (matches the `linkedAgent` pill used on ApiKey
+rows in `settings/access`). Existing `mentions[]` payload on
+`COMMENT_CREATED` is untouched.
+
+**P1-3 — Heartbeat auto-offline.** New `src/server/services/heartbeat.ts`
+with `sweepIdleAgents()` — iterates workspaces, applies each
+workspace's `agentIdleTimeoutMinutes` independently, guarded
+`updateMany({ where: { status: { not: OFFLINE } } })` so heartbeats
+landing mid-sweep don't get clobbered, `AGENT_STATUS_CHANGED` audit
+only fires when `count > 0`. Dedicated `maintenance` BullMQ queue
+(concurrency 1) with `registerHeartbeatSweepJob()` using a stable
+`jobId: "heartbeat-sweep"` + `repeat: { every: 60_000 }` — idempotent
+across restarts per BullMQ upsert semantics. Registration is
+fire-and-forget so a Redis outage at boot doesn't crash the worker.
+8 integration tests cover stale/fresh/null heartbeats, archived
+agents, BUSY→OFFLINE transitions, and the 0-minute "skip" case.
+
+**P1-4 — Dispatch observability.** Dispatcher enriches
+`AGENT_ASSIGNED.payload.dispatch` with `{ mode, candidates[], chosen,
+reason }`. Candidate rows include `{ agentId, profileKey, capabilities,
+activeCount, maxConcurrent, lastDispatchedAt, matchCount?, eligible }`
+— ineligible agents (over `maxConcurrent`) appear with
+`eligible: false` so "why not them" is queryable too. `matchCount`
+only set on `CAPABILITY_MATCH`. No table, no migration — pure JSON
+enrichment. `reason` follows `<mode>[:detail]` convention
+(`"round-robin"`, `"capability-match:1"`, `"priority-match-urgent"`).
+Manual-path emit sites (`issue.ts`, `mcp.ts`) deliberately untouched;
+`dispatch` is documented as optional on the payload.
+
+**P1-5 — `issues.reassign` MCP tool.** 44th tool (bumped from 43).
+Single transaction: resolves `toProfileKey` → `Agent`, captures
+`fromAgentId`, creates a comment `"Handoff → @{profileKey}: {rationale}"`,
+swaps `assignedAgentId`, fires `AGENT_ASSIGNED` with
+`{ auto: false, from, to, reason: "handoff", rationale, commentId }`.
+Requires `WRITE_ISSUES`. Rationale is Zod-validated `min(10)`.
+Same-agent reassignment rejects (a handoff implies a transition; use
+`comments.create` for a note-to-self). 7 new tests. Comment stamping
+with `authoringAgentId` falls through naturally via P1-2's
+`comment.create` path — no explicit wiring needed.
+
+**P1-6 — Bulk label + bulk assign.** Three new mutations on `issue`
+router: `bulkSetLabels`, `bulkAssign`, `bulkAssignAgent`. All
+workspace-scoped, `max(500)` issue cap matching the existing
+`bulkStatus` ceiling. Per-issue `recordChange()` preserved so the
+audit+event invariant holds for bulk ops — including agent
+`AGENT_ASSIGNED` fan-out through the existing webhook path. UI on
+`issue-list.tsx` toolbar: new `<Picker>`-based `BulkLabelPicker`
+(add/remove semantics with mixed-state indicators for labels present
+on some-but-not-all selected issues) + `BulkAssigneePicker` (Humans
+/ Agents tabs, single-pick per tab, explicit "Unassign" row).
+Did not collapse into the single-issue pickers — their data shape is
+too different to retrofit without muddling them.
+
+**Validation.**
+- `pnpm prisma generate` clean against merged schema.
+- `pnpm prisma migrate deploy` applied `0003` + `0004` cleanly to the
+  test DB.
+- `pnpm typecheck` clean.
+- `pnpm test` — **17 files, 112/112 tests passing** (up from 82 in the
+  last wave; 30 new across dispatcher, heartbeat, comment,
+  reassign, admin DLQ, and bulk-issue suites).
+- `pnpm lint` — no new warnings from this wave. Pre-existing
+  `issue-board.tsx` `any` errors untouched (last modified in
+  `6650e07`, before this wave).
+- Did not run `pnpm test:e2e`. Not pushed; no prod deploy yet — flagging
+  for explicit approval.
+
+Tool count 43 → 44. Migration count 0002 → 0004. Remaining P1 items:
+none. Next wave candidates live in TODO.md under P2 / P3.
+
 ## 2026-04-20 — P0 follow-up wave (agent loop closure + docs + repo rename)
 
 Three-lane follow-up closes the gaps the primary P0 wave deferred.
