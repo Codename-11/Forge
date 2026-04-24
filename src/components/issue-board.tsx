@@ -4,6 +4,7 @@ import Link from "next/link";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
 /**
@@ -85,7 +86,7 @@ export function IssueBoard({
                     )}
                   </div>
                   <div className="mt-1 text-sm leading-snug">{i.title}</div>
-                  <div className="mt-2 flex items-center gap-1">
+                  <div className="mt-2 flex items-center gap-2">
                     <div className="flex -space-x-1.5">
                       {i.assignees.slice(0, 3).map((a) => (
                         <Avatar
@@ -97,6 +98,20 @@ export function IssueBoard({
                         />
                       ))}
                     </div>
+                    {i.assignedAgent && (
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+                        title={`Agent: ${i.assignedAgent.name}`}
+                      >
+                        <AgentPresenceDot
+                          status={i.assignedAgent.status}
+                          size="sm"
+                        />
+                        <span className="font-mono">
+                          @{i.assignedAgent.profileKey}
+                        </span>
+                      </span>
+                    )}
                   </div>
                 </Link>
               ))}
