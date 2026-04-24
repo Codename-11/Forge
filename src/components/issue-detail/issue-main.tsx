@@ -2,6 +2,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { usePasteUpload } from "@/components/attachments/use-paste-upload";
@@ -20,6 +21,16 @@ type Comment = {
   body: string;
   createdAt: Date | string;
   author: { id: string; name: string | null; image: string | null };
+  /**
+   * When set, the comment was authored via an API key linked to this agent
+   * (e.g. Victor / Mizu). Overrides the human author in the byline.
+   */
+  authoringAgent?: {
+    id: string;
+    name: string;
+    profileKey: string;
+    avatar: string | null;
+  } | null;
 };
 
 export function IssueMain({
@@ -159,23 +170,45 @@ function Comments({
         {comments.length === 0 && (
           <p className="text-xs text-muted-foreground">No comments yet.</p>
         )}
-        {comments.map((c) => (
-          <div key={c.id} className="flex gap-2.5">
-            <Avatar name={c.author.name} image={c.author.image} size={22} />
-            <div className="min-w-0 flex-1 rounded-md border border-border bg-card/40 p-2.5">
-              <div className="flex items-center gap-2 text-[11px]">
-                <span className="font-medium">{c.author.name}</span>
-                <span className="text-muted-foreground">
-                  {relativeTime(c.createdAt)}
-                </span>
-              </div>
-              <MarkdownWithAttachments
-                body={c.body}
-                className="mt-1 text-[13px]"
+        {comments.map((c) => {
+          // Agent-authored comments show the agent name in the byline and a
+          // small indigo "agent" chip. Human comments render as before.
+          const isAgent = Boolean(c.authoringAgent);
+          const displayName = c.authoringAgent?.name ?? c.author.name;
+          return (
+            <div key={c.id} className="flex gap-2.5">
+              <Avatar
+                name={displayName}
+                image={isAgent ? null : c.author.image}
+                size={22}
               />
+              <div className="min-w-0 flex-1 rounded-md border border-border bg-card/40 p-2.5">
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span className="font-medium">{displayName}</span>
+                  {isAgent && (
+                    // Indigo `agent` chip mirrors the `linkedAgent` badge on
+                    // the ApiKey row in settings/access so the visual
+                    // language for "this action was an agent" stays
+                    // consistent across the app.
+                    <Badge
+                      color="#6366f1"
+                      className="font-mono text-[9px] uppercase tracking-wider"
+                    >
+                      agent
+                    </Badge>
+                  )}
+                  <span className="text-muted-foreground">
+                    {relativeTime(c.createdAt)}
+                  </span>
+                </div>
+                <MarkdownWithAttachments
+                  body={c.body}
+                  className="mt-1 text-[13px]"
+                />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <form
         onSubmit={(e) => {
