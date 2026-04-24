@@ -97,8 +97,34 @@ only that initiative; a full-trust agent gets no narrowing.
 
 **Auto-dispatch.** A workspace can toggle `autoDispatch` and pick a mode
 (`ROUND_ROBIN` / `PRIORITY_MATCH` / `CAPABILITY_MATCH`). Queued issues are
-then routed to the best-fit agent automatically, with `maxConcurrent`
-respected and `AGENT_ASSIGNED` events firing into the webhook stream.
+routed to the best-fit agent automatically, with `maxConcurrent` respected
+and `AGENT_ASSIGNED` events firing into the webhook stream carrying full
+decision provenance (`payload.dispatch.{mode, candidates, chosen, reason}`
+— operators can replay *why* an agent was picked, and which agents were
+ineligible, from the event alone).
+
+**Dispatch rules** run *before* mode-based selection. Admins configure
+`(priority, labelId, projectId) → targetAgent` rules at
+`/settings/dispatch-rules`; conditions are ANDed with null = wildcard,
+first match wins (order-sortable). A matched rule with an ineligible
+target falls through to mode-based selection rather than stalling, and
+the fallthrough is preserved on the event reason.
+
+**Per-agent issue templates.** If `Agent.templateMarkdown` is set, it is
+applied to the issue description on assign *only when the description is
+empty* — agents never overwrite human content. Runs in the same
+transaction as the assignment for all four assignment paths (auto, manual,
+reassign, initial-create-with-assignee).
+
+**Heartbeat + auto-offline.** Agents ping `agent.heartbeat` to keep
+`lastHeartbeatAt` fresh. A BullMQ-scheduled sweep (`maintenance` queue,
+every 60s) flips agents to `OFFLINE` when their heartbeat is older than
+`Workspace.agentIdleTimeoutMinutes`, emitting `AGENT_STATUS_CHANGED`.
+
+**Notification bridge.** Built-in plugin at `plugins/notification-bridge/`
+forwards configurable `EventKind`s to Slack + Discord webhooks with
+formatted payloads. Configure per-workspace via `Plugin.manifest.config`;
+supports `mentionsOnly` filtering and block-lists noisy internal kinds.
 
 Hermes integration — agents configured via a single YAML block:
 
