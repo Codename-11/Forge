@@ -8,6 +8,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, Kbd, SkeletonList, useDensity } from "@/components/ui";
 import { Confirm } from "@/components/ui/modal";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
@@ -233,6 +234,20 @@ export function IssueList({
                   <span className="text-[11px] text-muted-foreground">
                     {relativeTime(issue.createdAt)}
                   </span>
+                  {issue.assignedAgent && (
+                    <span
+                      className="flex items-center gap-1 text-[11px] text-muted-foreground"
+                      title={`Agent: ${issue.assignedAgent.name}`}
+                    >
+                      <AgentPresenceDot
+                        status={issue.assignedAgent.status}
+                        size="sm"
+                      />
+                      <span className="font-mono text-[10px]">
+                        @{issue.assignedAgent.profileKey}
+                      </span>
+                    </span>
+                  )}
                   <div className="flex -space-x-1.5">
                     {issue.assignees.slice(0, 3).map((a) => (
                       <Avatar

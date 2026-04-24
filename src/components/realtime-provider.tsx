@@ -57,6 +57,19 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
         void utils.initiative.list.invalidate();
         void utils.initiative.get.invalidate();
       }
+      // Agent presence + metadata changes. The agent router publishes with
+      // `subjectType: "agent"` on create/update/archive/heartbeat paths;
+      // a future AGENT_STATUS_CHANGED event fires here too. We also need
+      // to refresh any issue surface that renders the assignee chip, so
+      // the list query and any open issue page pick up the new status.
+      if (evt.subjectType === "agent" || evt.kind?.startsWith("AGENT_")) {
+        void utils.agent.list.invalidate();
+        if (evt.subjectId) {
+          void utils.agent.byId.invalidate({ id: evt.subjectId });
+        }
+        void utils.issue.list.invalidate();
+        void utils.issue.byId.invalidate();
+      }
       if (evt.kind?.startsWith("COMMENT_")) {
         void utils.issue.byId.invalidate();
         void utils.inbox.badge.invalidate();
