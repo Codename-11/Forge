@@ -1,5 +1,6 @@
 import "server-only";
 import { skills as issueTriageSkills } from "@forge/plugins/issue-triage/handler";
+import { skills as notificationBridgeSkills } from "@forge/plugins/notification-bridge/handler";
 
 /**
  * Static registry of `runtime: "local"` plugins.
@@ -23,6 +24,7 @@ type SkillHandler = (
 // dispatch, so this is safe.
 export const localPlugins: Record<string, Record<string, SkillHandler>> = {
   "issue-triage": issueTriageSkills as unknown as Record<string, SkillHandler>,
+  "notification-bridge": notificationBridgeSkills as unknown as Record<string, SkillHandler>,
 };
 
 export function getLocalSkill(slug: string, name: string): SkillHandler | undefined {
