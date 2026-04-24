@@ -10,7 +10,7 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E=20-brightgreen" alt="Node ≥20"></a>
   <a href="https://www.postgresql.org"><img src="https://img.shields.io/badge/postgres-16-336791" alt="Postgres 16"></a>
-  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-43+ tools-8a63d2" alt="MCP"></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-44+ tools-8a63d2" alt="MCP"></a>
 </p>
 
 <p align="center">
@@ -69,7 +69,7 @@ All tenant-scoped on `workspaceId`.
 ## Agents &amp; MCP
 
 Forge exposes a dual MCP endpoint at `/api/mcp/rpc` (JSON-RPC 2.0) and
-`/api/mcp/:tool` (REST alias). 43 tools cover every primitive:
+`/api/mcp/:tool` (REST alias). 44 tools cover every primitive:
 
 ```bash
 # List all tools
