@@ -9,14 +9,26 @@ export const commentRouter = router({
     .input(z.object({ issueId: z.string().cuid(), body: z.string().min(1).max(50_000) }))
     .mutation(async ({ ctx, input }) => {
       return ctx.db.$transaction(async (tx) => {
+        // If the caller authenticated via an API key that is linked to an
+        // Agent (the common case for Victor/Mizu automations), stamp the
+        // comment with that agent so the UI can render "<Agent> (agent)"
+        // instead of the human key owner. Human sessions leave it null.
+        const authoringAgentId = ctx.apiKey?.linkedAgentId ?? null;
+
         const comment = await tx.comment.create({
           data: {
             workspaceId: ctx.workspaceId,
             issueId: input.issueId,
             authorId: ctx.session.user.id,
             body: input.body,
+            authoringAgentId,
           },
-          include: { author: { select: { id: true, name: true, image: true } } },
+          include: {
+            author: { select: { id: true, name: true, image: true } },
+            authoringAgent: {
+              select: { id: true, name: true, profileKey: true, avatar: true },
+            },
+          },
         });
 
         // Resolve @profileKey tokens to Agents in this workspace so the
