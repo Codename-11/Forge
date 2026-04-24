@@ -2,6 +2,163 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-23 — P3 wave + admin user management (6-agent parallel)
+
+Second big parallel wave the same day. All P3 items landed, plus the P2
+email-invite item was reshaped into admin-gated workspace membership
+(Authelia is the identity source — self-service invites never fit).
+P2 BullMQ-as-separate-container and per-agent permission lattice were
+held for a design pass.
+
+Migrations added this wave:
+- `0005_agent_templates` — `Agent.templateMarkdown String? @db.Text`
+- `0006_dispatch_rules` — `DispatchRule` table (conditions + targetAgentId,
+  workspace FK CASCADE, label/project FK SET NULL, agent FK RESTRICT,
+  index on `(workspaceId, enabled, order)`)
+- `0007_membership_events` — three new `EventKind` values
+  (`MEMBERSHIP_CREATED`, `MEMBERSHIP_ROLE_CHANGED`, `MEMBERSHIP_REMOVED`)
+
+Migration count 0004 → 0007. Total tests 112 → **153** (+41 new).
+
+**Admin-gated user management (replaces email invite).**
+`workspace.invite` stubbed to throw `PRECONDITION_FAILED` pointing at
+the new member-management surface. New admin-only procedures on
+`workspace` router: `listMembers`, `addMember` (finds-or-creates User
+by email; idempotent on existing membership — returns
+`created: boolean` without mutating role), `setMemberRole`,
+`removeMember`. Last-admin guards on both mutations, keyed to
+ADMIN+OWNER roles collectively. Each mutation records audit + event
+via `recordChange()`. New admin page at `/settings/members` using
+`<QuickForm>` for add, inline role select, `<Confirm
+typeToConfirm={email} variant="destructive">` for remove. Sidebar
+settings entry carries the `admin only` badge. 13 new tests —
+membership lifecycle + guard cases + non-admin rejection.
+
+**P3-1 — Agent presence indicators.** New primitive
+`src/components/agent-presence-dot.tsx` using tokens
+(`bg-success` / `bg-warning` / `bg-muted-foreground/70`). `pulse`
+option adds `motion-safe:animate-ping` with reduced-motion respect,
+enabled only where presence is the focus (agents list). Title attribute
+carries `"{Status} · heartbeat {relativeTime}"` when
+`lastHeartbeatAt` passed. Dot now appears on: issue list agent chips,
+issue board cards, issue detail `AgentChip` + `AgentPickerModal`,
+bulk assignee picker's Agents tab, and the agents settings list
+(migrated from the legacy hex-tone swatch). `RealtimeProvider` now
+invalidates on any `AGENT_*` event OR `subjectType === "agent"`,
+picking up the new `AGENT_STATUS_CHANGED` event from the heartbeat
+sweeper without a dedicated subscription. Skipped the command palette
+(no agent-assignment surface there today) and the topbar (no agent
+chrome) per "don't invent new UI".
+
+**P3-2 — Per-agent issue templates.**
+`Agent.templateMarkdown` (nullable, `@db.Text`). New helper
+`src/server/services/agent-template.ts::maybeApplyAgentTemplate(tx,
+issueId, agentId)`. Contract: loads template, no-ops on null/empty
+template or non-empty issue description (NEVER overwrites human
+content). When applied, writes an `ISSUE_UPDATED` audit with
+`payload.fromAgentTemplate = true` — chose audit-only over a system
+comment because `Comment.authorId` is a non-null FK to `User` and
+synthesizing one felt fragile. Called from all four assignment paths:
+auto-dispatch (inside `assignAndEmit`), `issues.assign` MCP,
+`issues.reassign` MCP, and both `issue.create` + `issue.update`
+tRPC mutations. Template textarea added to the agent edit form with
+the canonical `### Context / ### Acceptance criteria / ### Constraints`
+placeholder. 6 new tests.
+
+**P3-3 — Dispatch analytics.** New `analytics.dispatch.{summary,
+timeseries}` procedures. `summary` returns per-agent rollup
+(`assignments`, `meanTimeToFirstAction`,
+`meanTimeToCompletion`, `throughputLast7d`, `modeDistribution`).
+TTFA SQL uses a LATERAL join bounding each assignment window by the
+NEXT AGENT_ASSIGNED on the same issue — so re-assignments don't leak
+each other's "first action" into the wrong agent's mean. First-action
+is `ISSUE_STATUS_CHANGED | COMMENT_CREATED | ISSUE_UPDATED with
+payload.event = 'time.start'` (there's no `TIME_STARTED` kind — time
+starts are written via `ISSUE_UPDATED`; pattern confirmed in
+`timeEntry.ts:143`). Assignments with zero in-window follow-up are
+excluded from the mean and surfaced separately as
+`assignmentsWithoutAction`; still-open issues likewise excluded from
+TTC and surfaced as `openAssignments`. UI: new `?tab=dispatch` on the
+analytics page — top cards + sortable per-agent table with exclusion
+count tooltip + SVG line chart + stacked-bar mode distribution.
+Zero new deps — reused the existing hand-rolled CSS/SVG chart
+convention. 3 new integration tests seed deterministic event
+sequences and assert counts/means/throughput.
+
+**P3-4 — Notification bridge plugin.** New first-party plugin at
+`plugins/notification-bridge/` (manifest/handler/format/README).
+`format.ts` is a pure `formatEvent(event, workspace) → { slack,
+discord }` so tests don't touch the network. Slack output uses
+`{ blocks: [...] }` incoming-webhook shape; Discord uses
+`{ embeds: [...] }`. Issue identifier (`AXI-42` style) + Forge link
+built from the event's workspace slug. `mentionsOnly` config key
+suppresses non-mention events. Hardcoded block-list prevents noisy
+kinds (`HEARTBEAT` etc) from being forwarded even if a caller
+configures them. Registered in `src/server/services/local-plugins.ts`
+alongside `issue-triage`. Config lives in `Plugin.manifest.config`
+(no dedicated `PluginInstallation.config` column exists; fallback to
+manifest config when skill input doesn't carry config inline).
+9 new unit tests.
+
+**P3-5 — Dispatch rules engine.**
+New `DispatchRule` model + admin router at
+`src/server/routers/dispatch-rule.ts` with
+`list/create/update/reorder/toggle/delete`. Dispatcher consults rules
+BEFORE the mode switch — ordered by `order ASC, createdAt ASC`, first
+match wins. Conditions are ANDed with null = wildcard
+(`priority`, `labelId`, `projectId`). When a matched rule's target is
+ineligible (offline / archived / over cap), we record
+`rule:{id}:target-ineligible` and fall through to mode-based selection
+rather than stalling — the reason string carries the provenance:
+e.g. `rule:abc123:target-ineligible,round-robin pick`. Rule fires
+emit `dispatch.mode = "RULE"` on the payload with
+`candidates: [target]` + `chosen: target`. Reorder UI uses the
+existing drag-n-drop pattern from the Statuses page (no new dep).
+10 new tests — priority/label/project wildcards, combined conditions,
+disabled skip, target-ineligible fallthrough, no-match fallthrough.
+
+**Integration notes (the interesting merge).**
+Wave-2 worktrees were cut from `origin/master` (still at wave-0's
+870f7a3 — wave 1 hadn't been pushed), so each branch had a stale
+schema/codebase view. The `ort` merge handled most of this cleanly
+but botched `dispatcher.ts`: P1-4 (wave 1) extracted `isEligible`;
+P3-5 (wave 2) added a rules layer + refactored assignment into
+`assignAndEmit`; the merge placed P1-4's provenance-building code
+*inside* `assignAndEmit` where its free variables (`agents`, `picked`,
+`matchCountByAgent`) weren't in scope. Rewrote `assignAndEmit` as a
+thin helper that takes `meta.dispatch?: Prisma.InputJsonObject`; call
+sites now build candidates/chosen locally (mode path has the full
+shape; rule path synthesizes a single-entry `[target]`). P3-2's
+template call moved into `assignAndEmit` so all three selection
+strategies apply templates uniformly. The two `dispatch.reason`
+conventions between P1-4 tests (`"round-robin"`, `"capability-match:1"`)
+and P3-5 tests (`"round-robin pick"`) were reconciled by keeping
+`dispatch.reason` (inside the payload) as the terse tag and the
+returned `reason` string as the verbose `${modeLabel} pick` form —
+both test suites pass.
+
+Small schema enum conflict: wave 1 added `AGENT_STATUS_CHANGED` to
+`EventKind`; admin branch added three `MEMBERSHIP_*` values — both
+appended cleanly when reconciled.
+
+**Validation.**
+- `pnpm prisma generate` clean against merged schema.
+- All 8 migrations already applied to the test DB by sub-agents; no
+  pending deploys needed on local.
+- `pnpm typecheck` clean.
+- `pnpm test` — **22 files, 153/153 tests passing**.
+- Did not run `pnpm test:e2e` — holding for post-deploy verification.
+
+Tool count unchanged (no new MCP tools this wave; `issues.reassign`
+already counted from wave 1). `DispatchRule` is the first new top-level
+model since wave 1's schema additions. `notification-bridge` is the
+second first-party plugin (joins `issue-triage`).
+
+Next candidates (P2 holdouts): BullMQ-as-separate-container
+(pulls webhook worker into its own service), per-agent permission
+lattice (narrow `WRITE_ISSUES` to "only on my assigned issues" without
+inventing a new scope). Both architectural, warranting design pass.
+
 ## 2026-04-23 — P1 high-value follow-ups (6-agent parallel wave)
 
 All six P1 high-value follow-ups landed in a single integration pass. Each
