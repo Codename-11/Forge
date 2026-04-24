@@ -492,6 +492,129 @@ export const mcpTools = {
   },
 
   /**
+   * Handoff an issue from its current agent to a new one in a single
+   * transaction. Posts a rationale comment, swaps `assignedAgentId`, and
+   * emits AGENT_ASSIGNED with handoff context so downstream listeners
+   * (dashboards, webhooks) can distinguish a deliberate handoff from
+   * raw reassignment.
+   *
+   * Rejects when the target agent is missing, archived, or identical to
+   * the current assignee — same-agent "handoffs" would create noise
+   * (comment + event) without changing ownership; callers should use
+   * `comments.create` instead. Rationale is required (>=10 chars) to
+   * enforce that this tool's output is actually informative.
+   */
+  "issues.reassign": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().describe("Issue id (cuid)"),
+      toProfileKey: z
+        .string()
+        .min(1)
+        .describe("profileKey of the agent receiving the handoff."),
+      rationale: z
+        .string()
+        .min(10, "Rationale must be at least 10 characters.")
+        .describe("Why the work is changing hands; surfaced in the handoff comment."),
+    }),
+    async run(
+      input: { issueId: string; toProfileKey: string; rationale: string },
+      ctx: McpContext,
+    ) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      const authorId = await resolveActorId(ctx);
+
+      return db.$transaction(async (tx) => {
+        const issue = await tx.issue.findFirst({
+          where: {
+            id: input.issueId,
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true, assignedAgentId: true },
+        });
+        if (!issue) throw new Error("Issue not found in this workspace.");
+
+        const newAgent = await tx.agent.findUnique({
+          where: {
+            workspaceId_profileKey: {
+              workspaceId: ctx.workspaceId,
+              profileKey: input.toProfileKey,
+            },
+          },
+          select: { id: true, profileKey: true, archivedAt: true },
+        });
+        if (!newAgent) throw new Error("Agent not found in this workspace.");
+        if (newAgent.archivedAt) {
+          throw new Error("Agent is archived; cannot receive handoff.");
+        }
+
+        const fromAgentId = issue.assignedAgentId;
+        if (fromAgentId === newAgent.id) {
+          // Rejecting same-agent handoff: a handoff implies a transition.
+          // Callers wanting to leave a note should use `comments.create`.
+          throw new Error("Issue is already assigned to that agent.");
+        }
+
+        let fromProfileKey: string | null = null;
+        if (fromAgentId) {
+          const fromAgent = await tx.agent.findUnique({
+            where: { id: fromAgentId },
+            select: { profileKey: true },
+          });
+          fromProfileKey = fromAgent?.profileKey ?? null;
+        }
+
+        // Note: Comment has no `authoringAgentId` column in this worktree's
+        // schema, so we skip that field. If a sibling branch lands the
+        // column, wire it up from `ctx.apiKey?.linkedAgentId`.
+        const comment = await tx.comment.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            issueId: issue.id,
+            authorId,
+            body: `Handoff → @${newAgent.profileKey}: ${input.rationale}`,
+          },
+          select: { id: true },
+        });
+
+        await tx.issue.update({
+          where: { id: issue.id },
+          data: { assignedAgentId: newAgent.id },
+        });
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId,
+          entity: "Issue",
+          entityId: issue.id,
+          action: "assign-agent",
+          before: { assignedAgentId: fromAgentId },
+          after: { assignedAgentId: newAgent.id },
+          eventKind: EventKind.AGENT_ASSIGNED,
+          subjectType: "issue",
+          subjectId: issue.id,
+          payload: {
+            auto: false,
+            from: fromAgentId,
+            to: newAgent.id,
+            reason: "handoff",
+            rationale: input.rationale,
+            commentId: comment.id,
+          },
+        });
+
+        return {
+          issueId: issue.id,
+          from: fromProfileKey,
+          to: newAgent.profileKey,
+          commentId: comment.id,
+        };
+      });
+    },
+  },
+
+  /**
    * List issues assigned to a specific agent.
    *
    * Resolution order:
