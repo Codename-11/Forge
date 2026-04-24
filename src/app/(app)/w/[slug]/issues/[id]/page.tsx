@@ -2,12 +2,14 @@
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import type { AgentStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Confirm, Picker } from "@/components/ui/modal";
 import { EmptyState, Skeleton, SkeletonText } from "@/components/ui";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
@@ -17,12 +19,6 @@ import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
 import { useHotkey } from "@/lib/keyboard";
-
-const AGENT_STATUS_TONE: Record<string, string> = {
-  ONLINE: "#65a30d",
-  BUSY: "#ca8a04",
-  OFFLINE: "#78716c",
-};
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
@@ -650,7 +646,7 @@ type AssignedAgent = {
   name: string;
   profileKey: string;
   avatar: string | null;
-  status: string;
+  status: AgentStatus;
 } | null;
 
 function AgentChip({
@@ -660,9 +656,6 @@ function AgentChip({
   current: AssignedAgent;
   onOpen: () => void;
 }) {
-  const statusColor = current
-    ? AGENT_STATUS_TONE[current.status] ?? AGENT_STATUS_TONE.OFFLINE
-    : null;
   return (
     <button
       type="button"
@@ -681,13 +674,7 @@ function AgentChip({
               </span>
             )}
           </span>
-          {statusColor && (
-            <span
-              aria-hidden
-              className="h-1.5 w-1.5 rounded-full"
-              style={{ backgroundColor: statusColor }}
-            />
-          )}
+          <AgentPresenceDot status={current.status} size="sm" />
           <span className="truncate">{current.name}</span>
           <span className="font-mono text-[10px] text-muted-foreground">
             @{current.profileKey}
@@ -710,7 +697,8 @@ type PickerRow =
       name: string;
       profileKey: string;
       avatar: string | null;
-      status: string;
+      status: AgentStatus;
+      lastHeartbeatAt: Date | null;
       capabilities: string[];
     };
 
@@ -751,6 +739,7 @@ function AgentPickerModal({
       profileKey: a.profileKey,
       avatar: a.avatar,
       status: a.status,
+      lastHeartbeatAt: a.lastHeartbeatAt,
       capabilities: a.capabilities,
     })),
   ];
@@ -785,7 +774,6 @@ function AgentPickerModal({
           );
         }
         const active = currentAgentId === it.id;
-        const tone = AGENT_STATUS_TONE[it.status] ?? AGENT_STATUS_TONE.OFFLINE;
         return (
           <div className="flex items-center gap-2">
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-subtle text-[11px]">
@@ -797,11 +785,10 @@ function AgentPickerModal({
                 </span>
               )}
             </span>
-            <span
-              aria-hidden
-              className="h-2 w-2 rounded-full"
-              style={{ backgroundColor: tone }}
-              title={it.status}
+            <AgentPresenceDot
+              status={it.status}
+              size="md"
+              lastHeartbeatAt={it.lastHeartbeatAt}
             />
             <span className="truncate">{it.name}</span>
             <span className="font-mono text-[10px] text-muted-foreground">

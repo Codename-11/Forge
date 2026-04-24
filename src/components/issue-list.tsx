@@ -8,15 +8,10 @@ import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, Kbd, SkeletonList, useDensity } from "@/components/ui";
 import { Confirm, Picker } from "@/components/ui/modal";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
-
-const AGENT_STATUS_TONE: Record<string, string> = {
-  ONLINE: "#65a30d",
-  BUSY: "#ca8a04",
-  OFFLINE: "#78716c",
-};
 
 const priorityGlyph: Record<string, string> = {
   URGENT: "!!!",
@@ -299,6 +294,20 @@ export function IssueList({
                   <span className="text-[11px] text-muted-foreground">
                     {relativeTime(issue.createdAt)}
                   </span>
+                  {issue.assignedAgent && (
+                    <span
+                      className="flex items-center gap-1 text-[11px] text-muted-foreground"
+                      title={`Agent: ${issue.assignedAgent.name}`}
+                    >
+                      <AgentPresenceDot
+                        status={issue.assignedAgent.status}
+                        size="sm"
+                      />
+                      <span className="font-mono text-[10px]">
+                        @{issue.assignedAgent.profileKey}
+                      </span>
+                    </span>
+                  )}
                   <div className="flex -space-x-1.5">
                     {issue.assignees.slice(0, 3).map((a) => (
                       <Avatar
@@ -669,7 +678,6 @@ function BulkAssigneePicker({
             </div>
           );
         }
-        const tone = AGENT_STATUS_TONE[r.status] ?? AGENT_STATUS_TONE.OFFLINE;
         return (
           <div className="flex items-center gap-2">
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-subtle text-[11px]">
@@ -681,12 +689,7 @@ function BulkAssigneePicker({
                 </span>
               )}
             </span>
-            <span
-              aria-hidden
-              className="h-2 w-2 rounded-full"
-              style={{ backgroundColor: tone }}
-              title={r.status}
-            />
+            <AgentPresenceDot status={r.status as "ONLINE" | "BUSY" | "OFFLINE"} />
             <span className="truncate">{r.name}</span>
             <span className="ml-auto font-mono text-[10px] text-muted-foreground">
               @{r.profileKey}

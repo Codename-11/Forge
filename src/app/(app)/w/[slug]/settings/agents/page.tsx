@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Confirm, SidePanel } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 
@@ -43,12 +44,6 @@ const EMPTY_EDITING: EditingState = {
   webhookUrl: "",
   capabilitiesRaw: "",
   maxConcurrent: 1,
-};
-
-const STATUS_TONE: Record<string, string> = {
-  ONLINE: "#65a30d",
-  BUSY: "#ca8a04",
-  OFFLINE: "#78716c",
 };
 
 export default function AgentsPage() {
@@ -197,7 +192,6 @@ export default function AgentsPage() {
           <Card>
             {rows.map((a) => {
               const isArchived = !!a.archivedAt;
-              const statusColor = STATUS_TONE[a.status] ?? STATUS_TONE.OFFLINE;
               const assignedCount = a._count?.assignedIssues ?? 0;
               return (
                 <li
@@ -221,7 +215,15 @@ export default function AgentsPage() {
                       <span className="font-mono text-[11px] text-muted-foreground">
                         @{a.profileKey}
                       </span>
-                      <Badge color={statusColor}>{a.status}</Badge>
+                      <span className="inline-flex items-center gap-1.5 rounded-sm bg-subtle px-1.5 py-0.5 text-[11px] font-medium">
+                        <AgentPresenceDot
+                          status={a.status}
+                          size="sm"
+                          pulse
+                          lastHeartbeatAt={a.lastHeartbeatAt}
+                        />
+                        {a.status}
+                      </span>
                       {isArchived && <Badge>archived</Badge>}
                     </div>
                     {a.description && (
