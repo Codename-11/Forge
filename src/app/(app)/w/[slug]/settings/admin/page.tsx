@@ -202,14 +202,16 @@ function EventsTab() {
 }
 
 function DeliveriesTab() {
-  const { data, isLoading } = trpc.admin.deliveries.useQuery({ limit: 100 });
+  const { data, isLoading } = trpc.admin.webhookDeliveries.list.useQuery({
+    limit: 100,
+  });
   if (isLoading)
     return (
       <Card>
         <li className="px-4 py-3 text-xs text-muted-foreground">Loading…</li>
       </Card>
     );
-  const items = data ?? [];
+  const items = data?.items ?? [];
   if (items.length === 0)
     return (
       <Card>
