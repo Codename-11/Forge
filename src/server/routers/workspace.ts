@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { CycleStatus, Role } from "@prisma/client";
+import { CycleStatus, EventKind, Role } from "@prisma/client";
 import { router, protectedProcedure, workspaceProcedure, adminProcedure } from "@/server/trpc";
+import { recordChange } from "@/server/audit";
 import {
   deleteWorkspaceBucket,
   ensureWorkspaceBucket,
@@ -308,62 +309,283 @@ export const workspaceRouter = router({
     });
   }),
 
+  /**
+   * Self-service email invites are disabled in this deployment — Authelia
+   * owns identity and the `/api/auth/authelia-bridge` upserts the `User`
+   * row on first login. Admin-gated member management replaces the flow:
+   * use `workspace.addMember` / `workspace.setMemberRole` / `workspace.removeMember`.
+   *
+   * Kept as a stub (rather than deleted) so old clients get a crisp error
+   * instead of `NOT_FOUND`. Safe to delete once no callers remain.
+   */
   invite: adminProcedure
     .input(z.object({ email: z.string().email(), role: z.nativeEnum(Role) }))
-    .mutation(async ({ ctx, input }) => {
-      // Invites are a separate lifecycle in production — for now, attach by
-      // upserting user + membership directly. Swap for email invite flow later.
-      const user = await ctx.db.user.upsert({
-        where: { email: input.email },
-        update: {},
-        create: { email: input.email },
-      });
-      return ctx.db.membership.upsert({
-        where: { userId_workspaceId: { userId: user.id, workspaceId: ctx.workspaceId } },
-        update: { role: input.role },
-        create: { userId: user.id, workspaceId: ctx.workspaceId, role: input.role },
+    .mutation(() => {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "Self-service invites are disabled — use admin member management (workspace.addMember).",
       });
     }),
 
-  updateMember: adminProcedure
-    .input(z.object({ membershipId: z.string().cuid(), role: z.nativeEnum(Role) }))
+  /**
+   * Admin-only member roster for the workspace settings UI. Returns one
+   * row per membership; every field maps 1:1 to a table cell. The caller's
+   * own row is included so the UI can show "you" + disable self-demote.
+   *
+   * `lastActiveAt` is nullable — we don't currently track per-user
+   * last-activity timestamps, so it's returned as null. Left in the shape
+   * so we can backfill once the audit stream is tailed into a `User.lastActiveAt`
+   * column without a client-side breaking change.
+   */
+  listMembers: adminProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db.membership.findMany({
+      where: { workspaceId: ctx.workspaceId },
+      orderBy: { createdAt: "asc" },
+      include: {
+        user: {
+          select: { id: true, email: true, name: true, handle: true, image: true },
+        },
+      },
+    });
+    return rows.map((m) => ({
+      membershipId: m.id,
+      userId: m.user.id,
+      email: m.user.email,
+      name: m.user.name,
+      handle: m.user.handle,
+      image: m.user.image,
+      role: m.role,
+      joinedAt: m.createdAt,
+      lastActiveAt: null as Date | null,
+    }));
+  }),
+
+  /**
+   * Bind a user to this workspace by email. The email is the Authelia
+   * binding key — on first login the bridge upserts a `User` row keyed by
+   * this same email, so creating the `User` up-front (or reusing an
+   * existing one) is safe.
+   *
+   * Idempotent: if a `Membership` already exists for this email, returns
+   * the existing row unchanged (`created: false`, no role change). Use
+   * `setMemberRole` to modify an existing member's role explicitly.
+   */
+  addMember: adminProcedure
+    .input(z.object({ email: z.string().email(), role: z.nativeEnum(Role) }))
     .mutation(async ({ ctx, input }) => {
-      const target = await ctx.db.membership.findFirstOrThrow({
-        where: { id: input.membershipId, workspaceId: ctx.workspaceId },
-      });
-      if (target.userId === ctx.session.user.id) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Change your own role via transfer." });
-      }
-      // Can't demote the last owner.
-      if (target.role === Role.OWNER && input.role !== Role.OWNER) {
-        const owners = await ctx.db.membership.count({
-          where: { workspaceId: ctx.workspaceId, role: Role.OWNER },
+      const email = input.email.trim().toLowerCase();
+      return ctx.db.$transaction(async (tx) => {
+        // Find-or-create the user. Authelia owns identity at the edge, but
+        // we can pre-create the shell so the membership exists the moment
+        // admin adds them — first login will match on `email` and bind.
+        const user = await tx.user.upsert({
+          where: { email },
+          update: {},
+          create: { email },
+          select: { id: true, email: true, name: true },
         });
-        if (owners <= 1)
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Promote another owner first." });
-      }
-      return ctx.db.membership.update({
-        where: { id: input.membershipId },
-        data: { role: input.role },
+
+        const existing = await tx.membership.findUnique({
+          where: {
+            userId_workspaceId: { userId: user.id, workspaceId: ctx.workspaceId },
+          },
+        });
+        if (existing) {
+          return {
+            membershipId: existing.id,
+            userId: user.id,
+            email: user.email,
+            role: existing.role,
+            created: false,
+          };
+        }
+
+        const membership = await tx.membership.create({
+          data: {
+            userId: user.id,
+            workspaceId: ctx.workspaceId,
+            role: input.role,
+          },
+        });
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Membership",
+          entityId: membership.id,
+          action: "create",
+          after: { userId: user.id, role: membership.role, email: user.email },
+          eventKind: EventKind.MEMBERSHIP_CREATED,
+          subjectType: "membership",
+          subjectId: membership.id,
+          payload: { userId: user.id, email: user.email, role: membership.role },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        return {
+          membershipId: membership.id,
+          userId: user.id,
+          email: user.email,
+          role: membership.role,
+          created: true,
+        };
       });
     }),
 
+  /**
+   * Change an existing member's role. Keyed on `userId` so the UI doesn't
+   * need to thread opaque membership ids — admins think in people.
+   *
+   * Guards:
+   *   - last-admin: cannot demote the only ADMIN/OWNER to a non-admin role.
+   *     "Admin" here means OWNER ∪ ADMIN — either counts toward the last-admin
+   *     quorum so you can't accidentally strand the workspace without
+   *     management access.
+   *   - self-demote: allowed only if another admin exists.
+   */
+  setMemberRole: adminProcedure
+    .input(z.object({ userId: z.string().cuid(), role: z.nativeEnum(Role) }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        const target = await tx.membership.findUnique({
+          where: {
+            userId_workspaceId: {
+              userId: input.userId,
+              workspaceId: ctx.workspaceId,
+            },
+          },
+        });
+        if (!target) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "That user is not a member of this workspace.",
+          });
+        }
+        if (target.role === input.role) {
+          return { membershipId: target.id, userId: target.userId, role: target.role };
+        }
+
+        const wasAdmin = target.role === Role.OWNER || target.role === Role.ADMIN;
+        const willBeAdmin = input.role === Role.OWNER || input.role === Role.ADMIN;
+
+        if (wasAdmin && !willBeAdmin) {
+          const adminCount = await tx.membership.count({
+            where: {
+              workspaceId: ctx.workspaceId,
+              role: { in: [Role.OWNER, Role.ADMIN] },
+            },
+          });
+          if (adminCount <= 1) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "Can't demote the last admin — promote another member to admin first.",
+            });
+          }
+        }
+
+        const updated = await tx.membership.update({
+          where: { id: target.id },
+          data: { role: input.role },
+        });
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Membership",
+          entityId: target.id,
+          action: "role_change",
+          before: { role: target.role },
+          after: { role: updated.role },
+          eventKind: EventKind.MEMBERSHIP_ROLE_CHANGED,
+          subjectType: "membership",
+          subjectId: target.id,
+          payload: { userId: target.userId, from: target.role, to: updated.role },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        return {
+          membershipId: updated.id,
+          userId: updated.userId,
+          role: updated.role,
+        };
+      });
+    }),
+
+  /**
+   * Remove a member from the workspace. Same last-admin guard as role
+   * changes, plus an explicit self-removal block when the caller is the
+   * last admin. The `User` row itself is preserved — they may still be a
+   * member of other workspaces and Authelia may re-admit them elsewhere.
+   */
   removeMember: adminProcedure
-    .input(z.object({ membershipId: z.string().cuid() }))
+    .input(z.object({ userId: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
-      const target = await ctx.db.membership.findFirstOrThrow({
-        where: { id: input.membershipId, workspaceId: ctx.workspaceId },
-      });
-      if (target.userId === ctx.session.user.id) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "You can't remove yourself." });
-      }
-      if (target.role === Role.OWNER) {
-        const owners = await ctx.db.membership.count({
-          where: { workspaceId: ctx.workspaceId, role: Role.OWNER },
+      return ctx.db.$transaction(async (tx) => {
+        const target = await tx.membership.findUnique({
+          where: {
+            userId_workspaceId: {
+              userId: input.userId,
+              workspaceId: ctx.workspaceId,
+            },
+          },
+          include: { user: { select: { email: true } } },
         });
-        if (owners <= 1)
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Can't remove the last owner." });
-      }
-      return ctx.db.membership.delete({ where: { id: input.membershipId } });
+        if (!target) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "That user is not a member of this workspace.",
+          });
+        }
+
+        const isAdmin = target.role === Role.OWNER || target.role === Role.ADMIN;
+        if (isAdmin) {
+          const adminCount = await tx.membership.count({
+            where: {
+              workspaceId: ctx.workspaceId,
+              role: { in: [Role.OWNER, Role.ADMIN] },
+            },
+          });
+          if (adminCount <= 1) {
+            const selfLast = target.userId === ctx.session.user.id;
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: selfLast
+                ? "You're the last admin — promote another member before removing yourself."
+                : "Can't remove the last admin — promote another member to admin first.",
+            });
+          }
+        }
+
+        await tx.membership.delete({ where: { id: target.id } });
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Membership",
+          entityId: target.id,
+          action: "delete",
+          before: { userId: target.userId, role: target.role, email: target.user.email },
+          eventKind: EventKind.MEMBERSHIP_REMOVED,
+          subjectType: "membership",
+          subjectId: target.id,
+          payload: {
+            userId: target.userId,
+            email: target.user.email,
+            role: target.role,
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        return {
+          membershipId: target.id,
+          userId: target.userId,
+          removed: true,
+        };
+      });
     }),
 });
