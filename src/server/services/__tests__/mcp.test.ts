@@ -631,3 +631,244 @@ describe("mcp — new agent / cycles / time tools", () => {
     ).rejects.toThrow(/endedAt/i);
   });
 });
+
+describe("mcp — issues.reassign handoff flow", () => {
+  it("swaps assignment, posts handoff comment, emits AGENT_ASSIGNED", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCR1" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "to hand off" });
+    const victor = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: "victor",
+      },
+    });
+    const mizu = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Mizu",
+        profileKey: "mizu",
+      },
+    });
+
+    // Seed the issue as already assigned to Victor.
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: victor.id },
+    });
+
+    const result = (await call(
+      "issues.reassign",
+      {
+        issueId: issue.id,
+        toProfileKey: "mizu",
+        rationale: "Victor is heads-down on the migration; Mizu owns ops.",
+      },
+      ctx,
+    )) as { issueId: string; from: string | null; to: string; commentId: string };
+
+    expect(result.issueId).toBe(issue.id);
+    expect(result.from).toBe("victor");
+    expect(result.to).toBe("mizu");
+    expect(result.commentId).toBeTruthy();
+
+    const after = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+      select: { assignedAgentId: true },
+    });
+    expect(after.assignedAgentId).toBe(mizu.id);
+
+    const comment = await prisma.comment.findUniqueOrThrow({
+      where: { id: result.commentId },
+    });
+    expect(comment.body).toContain("Handoff → @mizu:");
+    expect(comment.body).toContain("Victor is heads-down");
+    expect(comment.issueId).toBe(issue.id);
+
+    const events = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        kind: "AGENT_ASSIGNED",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    const payload = events[0].payload as Record<string, unknown>;
+    expect(payload.auto).toBe(false);
+    expect(payload.reason).toBe("handoff");
+    expect(payload.from).toBe(victor.id);
+    expect(payload.to).toBe(mizu.id);
+    expect(payload.rationale).toContain("Victor is heads-down");
+    expect(payload.commentId).toBe(result.commentId);
+  });
+
+  it("handles handoff from unassigned (from: null)", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCR2" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "fresh" });
+    await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: "victor",
+      },
+    });
+
+    const result = (await call(
+      "issues.reassign",
+      {
+        issueId: issue.id,
+        toProfileKey: "victor",
+        rationale: "Picking this one up off the queue.",
+      },
+      ctx,
+    )) as { from: string | null; to: string };
+    expect(result.from).toBeNull();
+    expect(result.to).toBe("victor");
+  });
+
+  it("rejects rationale shorter than 10 characters", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCR3" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "nope" });
+    await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Mizu",
+        profileKey: "mizu",
+      },
+    });
+
+    await expect(
+      call(
+        "issues.reassign",
+        { issueId: issue.id, toProfileKey: "mizu", rationale: "short" },
+        ctx,
+      ),
+    ).rejects.toThrow(/10 characters/i);
+  });
+
+  it("rejects unknown profileKey", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCR4" });
+    fixtures.push(fixture);
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "ghost" });
+
+    await expect(
+      call(
+        "issues.reassign",
+        {
+          issueId: issue.id,
+          toProfileKey: "no-such-agent",
+          rationale: "Will never land because the agent does not exist.",
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/Agent not found/i);
+  });
+
+  it("rejects archived agent", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCR5" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "archived target" });
+    await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Retired",
+        profileKey: "retired",
+        archivedAt: new Date(),
+      },
+    });
+
+    await expect(
+      call(
+        "issues.reassign",
+        {
+          issueId: issue.id,
+          toProfileKey: "retired",
+          rationale: "Should not route work to an archived agent.",
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/archived/i);
+  });
+
+  it("rejects reassigning to the same agent (handoff requires a transition)", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCR6" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "already mine" });
+    const victor = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: "victor",
+      },
+    });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: victor.id },
+    });
+
+    await expect(
+      call(
+        "issues.reassign",
+        {
+          issueId: issue.id,
+          toProfileKey: "victor",
+          rationale: "This is already Victor's issue but let us pretend.",
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/already assigned/i);
+
+    // Confirm no noisy comment or event landed.
+    const comments = await prisma.comment.findMany({
+      where: { issueId: issue.id },
+    });
+    expect(comments.length).toBe(0);
+  });
+
+  it("rejects when issue is soft-deleted", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCR7" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "ghosted" });
+    await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Mizu",
+        profileKey: "mizu",
+      },
+    });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { deletedAt: new Date() },
+    });
+
+    await expect(
+      call(
+        "issues.reassign",
+        {
+          issueId: issue.id,
+          toProfileKey: "mizu",
+          rationale: "Can't reassign a deleted issue.",
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/Issue not found/i);
+  });
+});
