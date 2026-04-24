@@ -2,6 +2,7 @@ import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { AgentStatus, AutoDispatchMode, EventKind } from "@prisma/client";
 import { recordChange } from "@/server/audit";
+import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 
 /**
  * Auto-dispatcher for queued issues.
@@ -246,6 +247,11 @@ export async function maybeAutoDispatch(
       },
     },
   });
+
+  // Auto-populate the description from the agent's template if one is
+  // configured and the description is empty. Runs inside the same tx so
+  // the template write rolls back with the rest of the dispatch on error.
+  await maybeApplyAgentTemplate(tx, issue.id, picked.id);
 
   const modeLabel = mode.toLowerCase().replace(/_/g, "-");
   return { agentId: picked.id, reason: `${modeLabel} pick` };

@@ -27,6 +27,9 @@ const upsertInput = z.object({
   webhookUrl: z.string().url().max(500).optional().or(z.literal("")),
   capabilities: z.array(z.string().min(1).max(40)).max(32).default([]),
   maxConcurrent: z.number().int().min(0).max(100).default(1),
+  /// Freeform markdown applied to the issue description when this agent
+  /// is assigned to an issue whose description is empty. No length cap.
+  templateMarkdown: z.string().optional(),
 });
 
 export const agentRouter = router({
@@ -96,6 +99,7 @@ export const agentRouter = router({
           webhookUrl: input.webhookUrl || null,
           capabilities: input.capabilities,
           maxConcurrent: input.maxConcurrent,
+          templateMarkdown: input.templateMarkdown || null,
         },
       });
       await recordChange(tx, {
@@ -126,6 +130,8 @@ export const agentRouter = router({
         webhookUrl: z.string().url().max(500).nullable().optional(),
         capabilities: z.array(z.string().min(1).max(40)).max(32).optional(),
         maxConcurrent: z.number().int().min(0).max(100).optional(),
+        /// Freeform markdown template. Null clears. No length cap.
+        templateMarkdown: z.string().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
