@@ -67,6 +67,7 @@ export async function maybeAutoDispatch(
     },
     select: {
       id: true,
+      profileKey: true,
       capabilities: true,
       maxConcurrent: true,
       lastDispatchedAt: true,
@@ -86,10 +87,13 @@ export async function maybeAutoDispatch(
   });
 
   // Respect maxConcurrent: 0 means unlimited; otherwise active < cap.
-  const eligible = agents.filter((a) => {
+  // Track eligibility per-agent so we can surface filtered-out agents in
+  // the dispatch provenance payload (not just the winners).
+  const isEligible = (a: (typeof agents)[number]): boolean => {
     if (a.maxConcurrent === 0) return true;
     return a._count.assignedIssues < a.maxConcurrent;
-  });
+  };
+  const eligible = agents.filter(isEligible);
   if (eligible.length === 0) {
     return { agentId: null, reason: "no-candidates" };
   }
@@ -109,15 +113,28 @@ export async function maybeAutoDispatch(
 
   const mode = issue.workspace.autoDispatchMode;
   let picked: (typeof eligible)[number];
+  // `matchCount` is only meaningful under CAPABILITY_MATCH — for the
+  // other modes we leave it per-agent `undefined` so the payload shape
+  // stays consistent without lying about a score we didn't compute.
+  const matchCountByAgent = new Map<string, number>();
+  // Reason string surfaced on the event. Shape: `<mode-slug>[:detail]`.
+  let reasonTag: string;
 
   if (mode === AutoDispatchMode.ROUND_ROBIN) {
     picked = byRoundRobin(eligible);
+    reasonTag = "round-robin";
   } else if (mode === AutoDispatchMode.PRIORITY_MATCH) {
     const tag = issue.priority.toLowerCase();
     const matches = eligible.filter((a) =>
       a.capabilities.some((c) => c.toLowerCase() === tag),
     );
-    picked = matches.length ? byRoundRobin(matches) : byRoundRobin(eligible);
+    if (matches.length) {
+      picked = byRoundRobin(matches);
+      reasonTag = `priority-match-${tag}+cap`;
+    } else {
+      picked = byRoundRobin(eligible);
+      reasonTag = `priority-match-${tag}+fallback`;
+    }
   } else {
     // CAPABILITY_MATCH — score by label-capability intersection, highest
     // wins; tie-break via round-robin.
@@ -130,6 +147,7 @@ export async function maybeAutoDispatch(
         (acc, c) => acc + (labelNames.has(c) ? 1 : 0),
         0,
       );
+      matchCountByAgent.set(a.id, score);
       return { agent: a, score };
     });
     const topScore = Math.max(...scored.map((s) => s.score));
@@ -139,6 +157,7 @@ export async function maybeAutoDispatch(
       .filter((s) => s.score === topScore)
       .map((s) => s.agent);
     picked = byRoundRobin(top);
+    reasonTag = `capability-match:${topScore}`;
   }
 
   const now = new Date();
@@ -152,6 +171,58 @@ export async function maybeAutoDispatch(
     data: { assignedAgentId: picked.id },
   });
 
+  // Build the dispatch-decision provenance payload. We include every
+  // considered agent (eligible or not) so operators can replay the
+  // decision from the event alone — no join against agent state at
+  // read time, no schema migration for a dedicated DispatchLog table.
+  const candidates = agents.map((a) => {
+    const eligibleFlag = isEligible(a);
+    const matchCount = matchCountByAgent.get(a.id);
+    return {
+      agentId: a.id,
+      profileKey: a.profileKey,
+      capabilities: a.capabilities,
+      activeCount: a._count.assignedIssues,
+      maxConcurrent: a.maxConcurrent,
+      lastDispatchedAt: a.lastDispatchedAt
+        ? a.lastDispatchedAt.toISOString()
+        : null,
+      ...(matchCount !== undefined ? { matchCount } : {}),
+      eligible: eligibleFlag,
+    };
+  });
+  const chosenMatchCount = matchCountByAgent.get(picked.id);
+  const chosen = {
+    agentId: picked.id,
+    profileKey: picked.profileKey,
+    ...(chosenMatchCount !== undefined
+      ? { matchCount: chosenMatchCount }
+      : {}),
+  };
+
+  /**
+   * AGENT_ASSIGNED payload shape (auto path):
+   * {
+   *   agentId: string,
+   *   previousAgentId: string | null,
+   *   auto: true,
+   *   mode: AutoDispatchMode,
+   *   dispatch: {
+   *     mode: AutoDispatchMode,
+   *     candidates: Array<{
+   *       agentId, profileKey, capabilities[], activeCount,
+   *       maxConcurrent, lastDispatchedAt (ISO|null),
+   *       matchCount? (CAPABILITY_MATCH only), eligible,
+   *     }>,
+   *     chosen: { agentId, profileKey, matchCount? } | null,
+   *     reason: string,  // e.g. "round-robin", "priority-match-urgent+cap",
+   *                      //       "capability-match:2"
+   *   },
+   * }
+   * The manual-assignment path in `issue.ts` / `mcp.ts` uses the same
+   * outer keys but omits `dispatch` (there's no dispatcher decision to
+   * record). Readers should treat `dispatch` as optional.
+   */
   await recordChange(tx, {
     workspaceId: issue.workspaceId,
     actorId: null,
@@ -167,6 +238,12 @@ export async function maybeAutoDispatch(
       previousAgentId: null,
       auto: true,
       mode,
+      dispatch: {
+        mode,
+        candidates,
+        chosen,
+        reason: reasonTag,
+      },
     },
   });
 
