@@ -44,7 +44,7 @@ fixed-window limits. Default is none — add explicitly on hot paths.
 
 ## MCP REST
 
-Two transports, same tool surface (44 tools):
+Two transports, same tool surface (46 tools):
 
 - **JSON-RPC 2.0** — `POST /api/mcp/rpc` with standard MCP envelopes
   (`tools/list`, `tools/call`). Preferred for agent clients.
@@ -66,16 +66,22 @@ Both accept `Authorization: Bearer <key>` (ApiKey) or a short-lived JWT.
 | `attachments`   | `initUpload`, `finalize`, `list`, `getDownloadUrl`, `delete` |
 | `pins`          | `list`, `set`                                               |
 | `analytics`     | `summary`                                                   |
+| `agents`        | `me`, `heartbeat`                                           |
 
-**Not currently on the MCP surface** (tRPC-only, admin/UI path): agent
-self-management (`agent.heartbeat` / `.create` / `.update`), dispatch rules
-(`dispatchRule.*`), member management (`workspace.addMember` etc.),
-webhook DLQ retry (`admin.webhookDeliveries.retry`), dispatch analytics
-(`analytics.dispatch.*`). If an agent needs to heartbeat without using
-the in-app session, it currently does so indirectly via normal tool
-calls (every call bumps its effective "last activity" through the event
-stream, though not `Agent.lastHeartbeatAt`). Candidates for MCP
-promotion if Hermes-side polling becomes load-bearing.
+`agents.me` and `agents.heartbeat` infer the caller's Agent row from
+`ApiKey.linkedAgentId`. Keys without a linked agent are rejected.
+`heartbeat` accepts `{ status?: ONLINE | BUSY | OFFLINE }` (defaults to
+ONLINE) and bumps `lastHeartbeatAt` atomically. Archived and
+cross-tenant linked agents are rejected.
+
+**Not currently on the MCP surface** (tRPC-only, admin/UI path):
+agent CRUD (`agent.create`, `.update`, `.archive`, `.delete`),
+dispatch rules (`dispatchRule.*`), member management
+(`workspace.addMember` etc.), webhook DLQ retry
+(`admin.webhookDeliveries.retry`), dispatch analytics
+(`analytics.dispatch.*`). All of these are admin/workspace-owner
+surfaces — agents don't need them. Candidates for MCP promotion
+if use cases materialize.
 
 `issues.assign` / `issues.assigned` identify agents by `agentId` or
 `profileKey`. `issues.assigned` falls back to the calling key's
