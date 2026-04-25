@@ -1,6 +1,6 @@
-# Forge — Claude Code Context
+# Forge — Codex Context
 
-> Read before working on this repo. Project-specific; inherits from `~/CLAUDE.md`.
+> Read before working on this repo. Project-specific; inherits from `~/AGENTS.md`.
 
 ## What Forge is
 

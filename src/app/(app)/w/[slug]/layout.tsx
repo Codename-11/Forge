@@ -10,6 +10,7 @@ import { RealtimeProvider } from "@/components/realtime-provider";
 import { TrpcProvider } from "@/lib/trpc-provider";
 import { WorkspaceProvider } from "@/components/workspace-provider";
 import { WorkspaceCookieSync } from "@/components/workspace-cookie-sync";
+import { AppearanceProvider } from "@/components/appearance-provider";
 import { TimeTrackerWidget } from "@/components/time-tracker/time-tracker-widget";
 import type { WorkspaceContextValue } from "@/hooks/use-workspace";
 
@@ -104,6 +105,7 @@ export default async function WorkspaceShellLayout({
   return (
     <TrpcProvider workspaceSlug={workspace.slug} workspaceId={workspace.id}>
       <WorkspaceProvider value={contextValue}>
+        <AppearanceProvider>
         {/* Below-sm banner: Forge is keyboard-driven and expects tablet+.
             Full phone layout is explicitly out of scope for this design
             sweep; users on narrower screens get a hint and a degraded
@@ -140,6 +142,7 @@ export default async function WorkspaceShellLayout({
         <TimeTrackerWidget />
         <RealtimeProvider workspaceId={workspace.id} />
         <WorkspaceCookieSync slug={workspace.slug} />
+        </AppearanceProvider>
       </WorkspaceProvider>
     </TrpcProvider>
   );

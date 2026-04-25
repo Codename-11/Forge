@@ -48,7 +48,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { chord: "g b", label: "Browse Inbox (alias)", category: "Navigate" },
   { chord: "g s", label: "Go to Issues", category: "Navigate" },
   { chord: "g p", label: "Go to Projects", category: "Navigate" },
-  { chord: "g c", label: "Go to Cycles", category: "Navigate" },
+  { chord: "g c", label: "Go to Sprints", category: "Navigate" },
   { chord: "g n", label: "New Initiative", category: "Navigate" },
   { chord: "g r", label: "Go to Roadmap", category: "Navigate" },
   { chord: "g u", label: "Go to Standup", category: "Navigate" },
@@ -70,7 +70,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { chord: "⇧C", label: "Quick-create issue", category: "Create" },
 
   // --- Work ----------------------------------------------------------------
-  { chord: "c", label: "Open current cycle", category: "Work" },
+  { chord: "c", label: "Open current sprint", category: "Work" },
   { chord: "⇧A", label: "Assign agent", category: "Work", scope: "issue detail" },
 
   // --- Pins ----------------------------------------------------------------

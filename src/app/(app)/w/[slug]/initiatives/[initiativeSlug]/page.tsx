@@ -303,7 +303,7 @@ export default function InitiativeDetailPage({
                       href={`/w/${ws.slug}/projects/${p.id}`}
                       className="min-w-0 flex-1 truncate hover:text-ember"
                     >
-                      <span className="font-mono text-[10px] text-muted-foreground">
+                      <span className="text-id text-muted-foreground">
                         {p.key}
                       </span>{" "}
                       {p.name}
@@ -333,7 +333,7 @@ export default function InitiativeDetailPage({
             <section>
               <div className="mb-2 flex items-baseline justify-between">
                 <h2 className="text-sm font-semibold">
-                  In current cycle ({currentCycle.name})
+                  In current sprint ({currentCycle.name})
                 </h2>
                 <span className="text-[11px] text-muted-foreground">
                   {upcomingInCycle?.items.length ?? 0} issue
@@ -347,11 +347,11 @@ export default function InitiativeDetailPage({
                       href={`/w/${ws.slug}/issues/${i.id}`}
                       className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-subtle/60"
                     >
-                      <span className="font-mono text-[10px] text-muted-foreground">
+                      <span className="text-id text-muted-foreground">
                         {ws.key}-{i.number}
                       </span>
                       <span className="truncate">{i.title}</span>
-                      <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                      <span className="ml-auto text-id text-muted-foreground">
                         {i.status.name}
                       </span>
                     </Link>
@@ -433,7 +433,7 @@ function LinkProjectPicker({
                   className="inline-block h-3 w-3 rounded-sm"
                   style={{ backgroundColor: p.color ?? "#78716c" }}
                 />
-                <span className="font-mono text-[10px] text-muted-foreground">
+                <span className="text-id text-muted-foreground">
                   {p.key}
                 </span>
                 <span className="truncate">{p.name}</span>

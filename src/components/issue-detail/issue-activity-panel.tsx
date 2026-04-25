@@ -87,7 +87,7 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
                     {KIND_LABEL[e.kind] ?? e.kind.replace(/_/g, " ").toLowerCase()}
                   </span>
                 </div>
-                <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                <div className="mt-0.5 text-meta text-muted-foreground">
                   {relativeTime(e.createdAt)}
                 </div>
               </div>

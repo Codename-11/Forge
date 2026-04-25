@@ -1,9 +1,11 @@
 "use client";
 import { useState } from "react";
 import { toast } from "sonner";
+import { Moon } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 
 export default function StandupPage() {
@@ -58,6 +60,19 @@ export default function StandupPage() {
           {isLoading || !data ? (
             <div className="rounded-lg border border-border bg-card/40 p-6 text-sm text-muted-foreground">
               Composing draft…
+            </div>
+          ) : data.counts.closed === 0 &&
+            data.counts.opened === 0 &&
+            data.counts.inProgress === 0 &&
+            data.counts.blocked === 0 &&
+            data.counts.moved === 0 ? (
+            <div className="rounded-lg border border-border bg-card/30">
+              <EmptyState
+                variant="page"
+                icon={<Moon />}
+                title="Quiet day"
+                description="When you log activity — close issues, leave comments, log time — your standup writes itself. Come back tomorrow."
+              />
             </div>
           ) : (
             <>

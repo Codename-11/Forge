@@ -15,27 +15,40 @@ be consumed via the typed client.
 
 ### Routers
 
-| Namespace      | Procedures                                                                                       |
-|----------------|--------------------------------------------------------------------------------------------------|
-| `workspace`    | `list`, `current`, `create`, `listMembers`, `addMember`, `setMemberRole`, `removeMember` (admin) |
-| `project`      | `list`, `byId`, `create`, `update`, `archive`                                                    |
-| `issue`        | `list`, `byId`, `create`, `update`, `assign`, `softDelete`, `bulkStatus`, `bulkSetLabels`, `bulkAssign`, `bulkAssignAgent` |
-| `comment`      | `create`, `update`, `softDelete`                                                                 |
-| `analytics`    | `summary`, `statusDistribution`, `throughput`, `cycleTime`, `slaBreaches`, `dispatch.summary`, `dispatch.timeseries` |
-| `plugin`       | `list`, `register`, `approve`, `suspend`, `issueApiKey`, `revokeApiKey`                          |
-| `status`       | `list`, `create`, `reorder`                                                                      |
-| `agent`        | `list`, `byId`, `create`, `update`, `archive`, `delete`, `heartbeat`                             |
-| `dispatchRule` | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                |
-| `admin`        | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                      |
+| Namespace         | Procedures                                                                                                                 |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `workspace`       | `list`, `current`, `create`, `listMembers`, `addMember`, `setMemberRole`, `removeMember` (admin)                           |
+| `project`         | `list`, `byId`, `create`, `update`, `archive`                                                                              |
+| `issue`           | `list`, `byId`, `create`, `update`, `assign`, `softDelete`, `bulkStatus`, `bulkSetLabels`, `bulkAssign`, `bulkAssignAgent` |
+| `comment`         | `create`, `update`, `softDelete`                                                                                           |
+| `analytics`       | `summary`, `statusDistribution`, `throughput`, `cycleTime`, `slaBreaches`, `dispatch.summary`, `dispatch.timeseries`       |
+| `plugin`          | `list`, `register`, `approve`, `suspend`, `issueApiKey`, `revokeApiKey`                                                    |
+| `status`          | `list`, `create`, `reorder`                                                                                                |
+| `template`        | `list`, `byId`, `create`, `update`, `delete` — issue templates                                                             |
+| `projectTemplate` | `list`, `create`, `update`, `delete` — project starter templates                                                           |
+| `agent`           | `list`, `byId`, `create`, `update`, `archive`, `delete`, `heartbeat`                                                       |
+| `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                          |
+| `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                                |
+| `user`            | `me`, `updateAppearance` — current user + per-user prefs (theme, density, textSize)                                        |
 
 Self-service email invite is **disabled**. `workspace.invite` is a stub
 that throws `PRECONDITION_FAILED`; use `workspace.addMember` (admin-gated).
 
 All write procedures:
+
 - Validate input with Zod.
 - Run inside a Prisma `$transaction`.
 - Call `recordChange()` which writes to `AuditLog` + `ActivityEvent` and
   publishes to Redis for SSE fan-out.
+
+Product language is **Sprint**. The database model, tRPC router, route path,
+and MCP tools still use `cycle` / `cycles.*` for compatibility.
+
+`template.list` seeds generic issue templates on first use: dev task,
+agent-ready task, home/personal task, finance follow-up, side quest, and
+review item. These are generic intake helpers; Forge does not auto-promote
+captured ideas into an active sprint, and no household/couple-specific workflow
+is implemented.
 
 ### Rate limits
 
@@ -54,19 +67,19 @@ Both accept `Authorization: Bearer <key>` (ApiKey) or a short-lived JWT.
 
 ### Tool catalog (by namespace)
 
-| Namespace       | Tools                                                       |
-|-----------------|-------------------------------------------------------------|
-| `issues`        | `list`, `get`, `create`, `queue`, `transition`, `claim`, `release`, `assign`, `reassign`, `assigned` |
-| `comments`      | `create`                                                    |
-| `projects`      | `list`                                                      |
-| `cycles`        | `list`, `get`, `current`, `create`, `update`, `plan`, `rollover`, `addIssue`, `removeIssue` |
-| `initiatives`   | `list`, `get`, `create`, `update`, `linkProject`, `unlinkProject` |
-| `relations`     | `add`, `remove`, `listForIssue`                             |
-| `time`          | `start`, `stop`, `log`, `list`, `summary`, `running`        |
-| `attachments`   | `initUpload`, `finalize`, `list`, `getDownloadUrl`, `delete` |
-| `pins`          | `list`, `set`                                               |
-| `analytics`     | `summary`                                                   |
-| `agents`        | `me`, `heartbeat`                                           |
+| Namespace     | Tools                                                                                                                                                             |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `issues`      | `list`, `get`, `create`, `queue`, `transition`, `claim`, `release`, `assign`, `reassign`, `assigned`                                                              |
+| `comments`    | `create`                                                                                                                                                          |
+| `projects`    | `list`                                                                                                                                                            |
+| `cycles`      | `list`, `get`, `current`, `create`, `update`, `plan`, `rollover`, `addIssue`, `removeIssue` (product label: "Sprints"; data model + tool namespace stay `cycle*`) |
+| `initiatives` | `list`, `get`, `create`, `update`, `linkProject`, `unlinkProject`                                                                                                 |
+| `relations`   | `add`, `remove`, `listForIssue`                                                                                                                                   |
+| `time`        | `start`, `stop`, `log`, `list`, `summary`, `running`                                                                                                              |
+| `attachments` | `initUpload`, `finalize`, `list`, `getDownloadUrl`, `delete`                                                                                                      |
+| `pins`        | `list`, `set`                                                                                                                                                     |
+| `analytics`   | `summary`                                                                                                                                                         |
+| `agents`      | `me`, `heartbeat`                                                                                                                                                 |
 
 `agents.me` and `agents.heartbeat` infer the caller's Agent row from
 `ApiKey.linkedAgentId`. Keys without a linked agent are rejected.

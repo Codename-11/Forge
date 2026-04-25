@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MOTION } from "@/lib/motion";
@@ -36,7 +37,10 @@ type DraftShape = {
  * container is NOT a modal: it doesn't dim the page, and clicking outside
  * simply closes.
  *
- * Pathname determines the mode (set once at open time):
+ * Pathname determines the *initial* mode (set when the overlay opens). On
+ * pages that aren't issue-context, the mode chip becomes a dropdown so the
+ * user can switch to issue / sprint / project / initiative without
+ * navigating first.
  *
  *   /w/*\/cycles           → "cycle"       (⏎ create · ⌘⏎ full form)
  *   /w/*\/initiatives      → "initiative"  (⏎ create · ⌘⏎ full form)
@@ -236,7 +240,7 @@ export function QuickCreate() {
       case "issue":
         return "Issue";
       case "cycle":
-        return "Cycle";
+        return "Sprint";
       case "initiative":
         return "Initiative";
       case "project":
@@ -251,7 +255,7 @@ export function QuickCreate() {
       case "issue":
         return "Issue title… (⌘⏎ create + open)";
       case "cycle":
-        return "Cycle name… (⌘⏎ more options)";
+        return "Sprint name… (⌘⏎ more options)";
       case "initiative":
         return "Initiative name… (⌘⏎ more options)";
       case "project":
@@ -324,7 +328,7 @@ export function QuickCreate() {
           }
           await createCycle.mutateAsync({ name: value });
           await utils.cycle.list.invalidate();
-          done("Cycle created.");
+          done("Sprint created.");
           return;
         }
         case "initiative": {
@@ -442,12 +446,12 @@ export function QuickCreate() {
         role="dialog"
         aria-label={`Quick-create ${modeLabel}`}
         className={cn(
-          "pointer-events-auto w-full max-w-2xl overflow-hidden rounded-lg border border-border bg-card/95 shadow-xl backdrop-blur",
+          "pointer-events-auto w-full max-w-3xl overflow-hidden rounded-lg border border-border bg-card/95 shadow-xl backdrop-blur",
           MOTION.slideInTop,
         )}
       >
         {/* Top row: mode chip + input + hint */}
-        <div className="flex items-center gap-2 px-3 py-2">
+        <div className="flex items-center gap-2 px-3 py-3">
           <ModeChip
             mode={mode}
             onToggleIntent={() => {
@@ -456,6 +460,14 @@ export function QuickCreate() {
                 ...mode,
                 intent: mode.intent === "comment" ? "sub-issue" : "comment",
               });
+            }}
+            onSwitch={(kind) => {
+              // Switching modes resets per-mode pickers (priority + project)
+              // so a stale priority chip doesn't follow you from issue → sprint.
+              if (mode.kind === "issue-context") return;
+              setMode({ kind } as Mode);
+              setPriority("NONE");
+              setProjectId("");
             }}
           />
           <input
@@ -466,7 +478,7 @@ export function QuickCreate() {
             placeholder={placeholder}
             aria-label={`Quick-create ${modeLabel}`}
             autoComplete="off"
-            className="focus-ring min-w-0 flex-1 bg-transparent px-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+            className="focus-ring min-w-0 flex-1 bg-transparent px-1 text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
           />
           {restored && (
             <span className="hidden shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ember sm:inline">
@@ -498,7 +510,7 @@ export function QuickCreate() {
         {/* Secondary row: priority chips (issue) / intent tabs (issue-context) */}
         {(mode.kind === "issue" ||
           mode.kind === "issue-context") && (
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 bg-card/50 px-3 py-1.5 text-[11px]">
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 bg-card/50 px-3 py-2 text-[11px]">
             {mode.kind === "issue-context" && (
               <>
                 <IntentChip
@@ -567,18 +579,29 @@ export function QuickCreate() {
   );
 }
 
+type SwitchableMode = "issue" | "cycle" | "project" | "initiative";
+
+const SWITCHABLE_MODES: { kind: SwitchableMode; label: string }[] = [
+  { kind: "issue", label: "Issue" },
+  { kind: "cycle", label: "Sprint" },
+  { kind: "project", label: "Project" },
+  { kind: "initiative", label: "Initiative" },
+];
+
 function ModeChip({
   mode,
   onToggleIntent,
+  onSwitch,
 }: {
   mode: Mode;
   onToggleIntent: () => void;
+  onSwitch: (kind: SwitchableMode) => void;
 }) {
   const label =
     mode.kind === "issue"
       ? "Issue"
       : mode.kind === "cycle"
-      ? "Cycle"
+      ? "Sprint"
       : mode.kind === "initiative"
       ? "Initiative"
       : mode.kind === "project"
@@ -587,21 +610,89 @@ function ModeChip({
       ? "Comment"
       : "Sub-issue";
 
-  const isToggleable = mode.kind === "issue-context";
+  const isIssueContext = mode.kind === "issue-context";
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
+  // Close on outside click. The parent's outside-click handler closes the
+  // overlay entirely; stopping propagation on dropdown clicks keeps that
+  // behavior from firing while the dropdown is open.
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  // Issue-context mode: chip toggles comment ↔ sub-issue (legacy behavior).
+  if (isIssueContext) {
+    return (
+      <button
+        type="button"
+        onClick={onToggleIntent}
+        aria-label="Toggle comment / sub-issue"
+        className="focus-ring shrink-0 cursor-pointer rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-subtle"
+      >
+        {label}
+      </button>
+    );
+  }
+
+  // Switchable: real dropdown listing the four creation modes.
   return (
-    <button
-      type="button"
-      onClick={isToggleable ? onToggleIntent : undefined}
-      tabIndex={isToggleable ? 0 : -1}
-      aria-label={isToggleable ? "Toggle comment / sub-issue" : undefined}
-      className={cn(
-        "focus-ring shrink-0 rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground",
-        isToggleable && "cursor-pointer hover:bg-subtle",
+    <div ref={wrapRef} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title="Switch what to create"
+        className="focus-ring inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-subtle"
+      >
+        <span>{label}</span>
+        <ChevronDown className="h-2.5 w-2.5 opacity-70" aria-hidden />
+      </button>
+      {open && (
+        <div
+          // Stop the parent's mousedown-outside from closing the overlay
+          // when the user clicks an item in the popover.
+          onMouseDown={(e) => e.stopPropagation()}
+          className="absolute left-0 top-[calc(100%+4px)] z-50 min-w-[160px] overflow-hidden rounded-md border border-border bg-popover shadow-sm"
+        >
+          <ul role="listbox" className="py-1">
+            {SWITCHABLE_MODES.map((opt) => {
+              const selected = mode.kind === opt.kind;
+              return (
+                <li key={opt.kind}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => {
+                      setOpen(false);
+                      if (!selected) onSwitch(opt.kind);
+                    }}
+                    className={cn(
+                      "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-subtle",
+                      selected && "bg-subtle/60 text-foreground",
+                    )}
+                  >
+                    <span className="flex-1 truncate">{opt.label}</span>
+                    {selected && <span className="text-ember">✓</span>}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
-    >
-      {label}
-    </button>
+    </div>
   );
 }
 

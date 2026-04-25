@@ -19,7 +19,7 @@ const ENTRIES: Entry[] = [
     path: "/settings/workspace",
     title: "Workspace",
     description:
-      "Name, avatar, cycle length, time tracking, attachment quota, and danger zone.",
+      "Name, avatar, sprint length (iteration cadence), time tracking on/off, per-workspace attachment storage cap, and the archive/delete danger zone.",
   },
   {
     scope: "workspace",
@@ -112,6 +112,12 @@ const ACCOUNT: Entry[] = [
     path: "/settings/account",
     title: "Account",
     description: "Profile, timezone, locale, time format, theme.",
+  },
+  {
+    scope: "account",
+    path: "/settings/appearance",
+    title: "Appearance",
+    description: "Density and text size. Saved per user.",
   },
   {
     scope: "account",

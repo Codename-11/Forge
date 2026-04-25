@@ -7,12 +7,34 @@ import {
   ALLOWED_MIME_TYPES,
   ALLOWED_TARGET_TYPES,
   MAX_FILE_SIZE_BYTES,
+  StorageNotConfiguredError,
   deleteAttachment,
   finalizeAttachment,
   presignDownloadUrl,
   presignUploadUrl,
   workspaceQuotaStats,
 } from "@/server/services/storage";
+
+/**
+ * Map an exception from the storage layer onto a tRPC error. We use a
+ * dedicated `PRECONDITION_FAILED` code for `StorageNotConfiguredError`
+ * so callers (UI banner, MCP clients) can detect the misconfiguration
+ * and surface an admin-friendly hint, rather than confusing it with a
+ * one-off bad request. Anything else stays a `BAD_REQUEST` to preserve
+ * existing behaviour.
+ */
+function mapStorageError(err: unknown): TRPCError {
+  if (err instanceof StorageNotConfiguredError) {
+    return new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: err.message,
+    });
+  }
+  return new TRPCError({
+    code: "BAD_REQUEST",
+    message: (err as Error).message,
+  });
+}
 
 /**
  * Attachment router — polymorphic `targetType`/`targetId` refs, backed by
@@ -72,10 +94,7 @@ export const attachmentRouter = router({
         });
         return result;
       } catch (err) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: (err as Error).message,
-        });
+        throw mapStorageError(err);
       }
     }),
 
@@ -87,10 +106,15 @@ export const attachmentRouter = router({
   finalize: workspaceProcedure
     .input(finalizeInput)
     .mutation(async ({ ctx, input }) => {
-      const finalized = await finalizeAttachment({
-        attachmentId: input.attachmentId,
-        workspaceId: ctx.workspaceId,
-      });
+      let finalized: Awaited<ReturnType<typeof finalizeAttachment>>;
+      try {
+        finalized = await finalizeAttachment({
+          attachmentId: input.attachmentId,
+          workspaceId: ctx.workspaceId,
+        });
+      } catch (err) {
+        throw mapStorageError(err);
+      }
       if (finalized.targetType === "issue") {
         await ctx.db.$transaction(async (tx) => {
           await recordChange(tx, {
@@ -173,10 +197,7 @@ export const attachmentRouter = router({
       try {
         return await presignDownloadUrl(input.attachmentId);
       } catch (err) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: (err as Error).message,
-        });
+        throw mapStorageError(err);
       }
     }),
 
@@ -197,7 +218,11 @@ export const attachmentRouter = router({
           message: "Admin role required to remove attachments.",
         });
       }
-      await deleteAttachment(input.attachmentId);
+      try {
+        await deleteAttachment(input.attachmentId);
+      } catch (err) {
+        throw mapStorageError(err);
+      }
       const subjectId = row.targetId;
       if (row.targetType === "issue" && subjectId) {
         await ctx.db.$transaction(async (tx) => {

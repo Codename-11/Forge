@@ -27,6 +27,28 @@ services:
       interval: 5s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    container_name: forge-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: forgeminio
+      MINIO_ROOT_PASSWORD: forgeminio-dev-password
+    ports:
+      # 59xxx host ports to avoid colliding with anything else on the box.
+      # Match the convention used elsewhere in dev configs.
+      - "59000:9000" # S3 API
+      - "59001:9001" # Web console
+    volumes:
+      - forge-minio:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
 volumes:
   forge-pg:
   forge-redis:
+  forge-minio:

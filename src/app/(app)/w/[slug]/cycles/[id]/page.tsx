@@ -12,15 +12,11 @@ import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
 /**
- * Cycle detail — same surface as /cycles but pinned to a specific cycle.
- * Past cycles render in read-mostly mode (the board is still draggable,
+ * Sprint detail — same surface as /cycles but pinned to a specific internal
+ * cycle row. Past sprints render in read-mostly mode (the board is still draggable,
  * but the prominent rollover CTA only appears on the final day).
  */
-export default function CycleDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default function CycleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
   const ws = useWorkspace();
@@ -32,7 +28,7 @@ export default function CycleDetailPage({
     onSuccess: () => {
       utils.issue.list.invalidate();
       utils.cycle.get.invalidate({ id });
-      toast.success("Planned into cycle.");
+      toast.success("Planned into sprint.");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -53,15 +49,11 @@ export default function CycleDetailPage({
       <div className="flex h-full items-center justify-center p-8">
         <EmptyState
           variant="page"
-          title="Cycle not found"
+          title="Sprint not found"
           description={error.message}
           action={
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => router.push(`/w/${ws.slug}/cycles`)}
-            >
-              Back to cycles
+            <Button variant="outline" size="sm" onClick={() => router.push(`/w/${ws.slug}/cycles`)}>
+              Back to sprints
             </Button>
           }
         />
@@ -81,12 +73,8 @@ export default function CycleDetailPage({
         title={cycle.name}
         subtitle={cycle.status}
         actions={
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => router.push(`/w/${ws.slug}/cycles`)}
-          >
-            All cycles
+          <Button variant="ghost" size="sm" onClick={() => router.push(`/w/${ws.slug}/cycles`)}>
+            All sprints
           </Button>
         }
       />
@@ -103,6 +91,12 @@ export default function CycleDetailPage({
           <div className="min-w-0 flex-1">
             <CyclePlanningBoard
               cycleId={cycle.id}
+              onPlanCurrentSprint={() => {
+                document
+                  .querySelector("[data-cycle-backlog-panel]")
+                  ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+                toast.message("Drag backlog issues into any sprint column.");
+              }}
               onDropFromBacklog={(issueId) =>
                 plan.mutate({ cycleId: cycle.id, issueIds: [issueId] })
               }

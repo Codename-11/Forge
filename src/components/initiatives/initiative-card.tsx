@@ -84,7 +84,7 @@ export function InitiativeCard({
           {initiative.name}
         </div>
         {initiative.status !== InitiativeStatus.PLANNED && (
-          <span className="font-mono text-[10px] text-muted-foreground">
+          <span className="text-id text-muted-foreground">
             {initiative.status}
           </span>
         )}

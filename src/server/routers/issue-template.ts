@@ -12,14 +12,80 @@ const inputShape = {
   labelIds: z.array(z.string().cuid()).default([]),
 };
 
+const DEFAULTS = [
+  {
+    name: "Dev task",
+    titleTemplate: "Dev: ",
+    descriptionTemplate:
+      "## Objective\n\n## Scope\n\n## Acceptance criteria\n- [ ] \n\n## Verification\n- [ ] ",
+    defaultPriority: Priority.MEDIUM,
+  },
+  {
+    name: "Agent-ready task",
+    titleTemplate: "Agent-ready: ",
+    descriptionTemplate:
+      "## Objective\n\n## Project / repo / system area\n\n## Acceptance criteria\n- [ ] \n\n## Safety / approval boundaries\n\n## Verification path\n- [ ] ",
+    defaultPriority: Priority.MEDIUM,
+  },
+  {
+    name: "Home/personal task",
+    titleTemplate: "Personal: ",
+    descriptionTemplate: "## Outcome\n\n## Context\n\n## Next action\n- [ ] \n\n## Due / cadence\n",
+    defaultPriority: Priority.LOW,
+  },
+  {
+    name: "Finance follow-up",
+    titleTemplate: "Finance: ",
+    descriptionTemplate:
+      "## Objective\n\n## Account / vendor / area\n\n## Documents or links\n\n## Questions to resolve\n- [ ] \n\n## Verification\n- [ ] ",
+    defaultPriority: Priority.MEDIUM,
+  },
+  {
+    name: "Side quest",
+    titleTemplate: "Side quest: ",
+    descriptionTemplate:
+      "## Why this is interesting\n\n## Definition of done\n- [ ] \n\n## Timebox\n\n## Parking lot\n",
+    defaultPriority: Priority.LOW,
+  },
+  {
+    name: "Review item",
+    titleTemplate: "Review: ",
+    descriptionTemplate:
+      "## What needs review\n\n## Decision needed\n\n## Materials\n\n## Recommendation\n\n## Follow-up\n- [ ] ",
+    defaultPriority: Priority.MEDIUM,
+  },
+] as const;
+
 export const issueTemplateRouter = router({
-  list: workspaceProcedure.query(({ ctx }) =>
-    ctx.db.issueTemplate.findMany({
+  /**
+   * List issue templates. On first use, seed a generic OSS-friendly set that
+   * covers software work, agent handoffs, and personal ops without assuming a
+   * specific household, company, or private workflow.
+   */
+  list: workspaceProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db.issueTemplate.findMany({
       where: { workspaceId: ctx.workspaceId },
       orderBy: { name: "asc" },
       include: { project: { select: { id: true, name: true, key: true, color: true } } },
-    }),
-  ),
+    });
+    if (rows.length === 0) {
+      await ctx.db.issueTemplate.createMany({
+        data: DEFAULTS.map((d) => ({
+          ...d,
+          workspaceId: ctx.workspaceId,
+          projectId: null,
+          labelIds: [],
+        })),
+        skipDuplicates: true,
+      });
+      return ctx.db.issueTemplate.findMany({
+        where: { workspaceId: ctx.workspaceId },
+        orderBy: { name: "asc" },
+        include: { project: { select: { id: true, name: true, key: true, color: true } } },
+      });
+    }
+    return rows;
+  }),
 
   byId: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))

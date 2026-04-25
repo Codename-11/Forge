@@ -4,9 +4,9 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
 /**
- * Cycle + Initiative filter chips for the issue list / board / saved-view
+ * Sprint + Initiative filter chips for the issue list / board / saved-view
  * payload. Tri-state semantics:
- *   undefined → no filter (chip label: "Any cycle" / "Any initiative")
+ *   undefined → no filter (chip label: "Any sprint" / "Any initiative")
  *   null      → explicitly match "none" (backlog / no initiative)
  *   string    → specific id
  */
@@ -25,11 +25,11 @@ export function CycleFilterChip({
   const { data: currentCycle } = trpc.cycle.current.useQuery();
 
   const label = (() => {
-    if (value === undefined) return "Any cycle";
-    if (value === null) return "Backlog (no cycle)";
+    if (value === undefined) return "Any sprint";
+    if (value === null) return "Backlog (no sprint)";
     if (value === currentCycle?.id) return `Current: ${currentCycle.name}`;
     const match = cycles?.find((c) => c.id === value);
-    return match ? match.name : "Cycle";
+    return match ? match.name : "Sprint";
   })();
 
   return (
@@ -37,7 +37,7 @@ export function CycleFilterChip({
       {(close) => (
         <ul className="min-w-[220px] py-1">
           <Option
-            label="Any cycle"
+            label="Any sprint"
             selected={value === undefined}
             onClick={() => {
               onChange(undefined);
@@ -46,7 +46,7 @@ export function CycleFilterChip({
           />
           {currentCycle && (
             <Option
-              label={`Current cycle (${currentCycle.name})`}
+              label={`Current sprint (${currentCycle.name})`}
               selected={value === currentCycle.id}
               onClick={() => {
                 onChange(currentCycle.id);
@@ -55,7 +55,7 @@ export function CycleFilterChip({
             />
           )}
           <Option
-            label="Backlog (no cycle)"
+            label="Backlog (no sprint)"
             selected={value === null}
             onClick={() => {
               onChange(null);

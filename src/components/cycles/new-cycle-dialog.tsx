@@ -6,8 +6,9 @@ import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 
 /**
- * Shared "New cycle" dialog. Extracted so the cycles page and the
- * context-aware quick-create (`⇧C` on `/cycles`) can reach it without
+ * Shared "New sprint" dialog. Internally this still calls the cycle router;
+ * product language stays Sprint while the data model remains Cycle.
+ * Extracted so the sprints page and context-aware quick-create (`⇧C` on `/cycles`) can reach it without
  * duplicating the create-form fields or mutation wiring.
  *
  * Uses the <QuickForm> primitive — inherits ⏎/⎋ keyboard contract, draft
@@ -29,7 +30,7 @@ export function NewCycleDialog({
 
   const create = trpc.cycle.create.useMutation({
     onSuccess: () => {
-      toast.success("Cycle created.");
+      toast.success("Sprint created.");
       setName("");
       setStartsAt("");
       setLengthDays("");
@@ -44,7 +45,7 @@ export function NewCycleDialog({
       onOpenChange={(o) => {
         if (!o) onClose();
       }}
-      title="New cycle"
+      title="New sprint"
       primaryLabel={create.isPending ? "Creating…" : "Create"}
       loading={create.isPending}
       draftKey="cycle.create"
@@ -59,7 +60,7 @@ export function NewCycleDialog({
             lengthDays: lengthDays ? Number(lengthDays) : undefined,
           });
         } catch (e) {
-          return { error: e instanceof Error ? e.message : "Failed to create cycle." };
+          return { error: e instanceof Error ? e.message : "Failed to create sprint." };
         }
       }}
     >

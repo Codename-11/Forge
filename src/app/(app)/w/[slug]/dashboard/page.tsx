@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useMemo, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { toast } from "sonner";
 import {
   ArrowRight,
@@ -104,7 +104,20 @@ export default function DashboardPage() {
 
   return (
     <>
-      <Topbar title="Dashboard" subtitle="A clear place to start the day." />
+      <Topbar
+        title="Dashboard"
+        subtitle="A clear place to start the day."
+        actions={
+          <ResumeSetupPill
+            projectsCount={projects?.items.length ?? 0}
+            issuesCount={anyIssue.data?.items.length ?? 0}
+            membersCount={members?.length ?? 0}
+            apiKeysCount={access?.length ?? 0}
+            hasTimezone={!!me?.user.timezone}
+            ready={!!me && !!projects && !!access && !!members}
+          />
+        }
+      />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-6 p-6">
           <GreetingBar greeting={greeting} name={firstName} slug={slug} />
@@ -136,10 +149,10 @@ export default function DashboardPage() {
                 <Rows loading={events.isLoading} empty="No activity yet.">
                   {(events.data?.items ?? []).slice(0, 8).map((e) => (
                     <li key={e.id} className="flex items-center gap-2 text-xs">
-                      <span className="truncate font-mono text-[10px] text-muted-foreground">
+                      <span className="truncate text-id text-muted-foreground">
                         {e.kind.replace(/_/g, " ").toLowerCase()}
                       </span>
-                      <span className="ml-auto text-[10px] text-muted-foreground">
+                      <span className="ml-auto text-meta text-muted-foreground">
                         {relativeTime(e.createdAt)}
                       </span>
                     </li>
@@ -324,7 +337,7 @@ function FocusGrid({
               <span className="w-5 text-center font-mono text-[11px] text-muted-foreground">
                 {PRIORITY_GLYPH[issue.priority]}
               </span>
-              <span className="font-mono text-[10px] text-muted-foreground">
+              <span className="text-id text-muted-foreground">
                 {formatIssueId(workspaceKey, issue.number)}
               </span>
               <Badge className="ml-auto" color={issue.status.color}>
@@ -365,6 +378,44 @@ type OnboardingStep = {
   action?: "quick-create";
 };
 
+/**
+ * Subscribe to the dismissed-flag in localStorage. The `forge:onboarding-dismissed`
+ * window event lets the OnboardingCard and the Topbar pill stay in sync without
+ * lifting state up to the page (which would force a re-render of every section).
+ */
+function useOnboardingDismissed(): [boolean, (next: boolean) => void] {
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    try {
+      setDismissed(localStorage.getItem(ONBOARDING_KEY) === "1");
+    } catch {
+      /* ignore */
+    }
+    const onChange = (e: Event) => {
+      const detail = (e as CustomEvent<boolean>).detail;
+      setDismissed(!!detail);
+    };
+    window.addEventListener("forge:onboarding-dismissed", onChange);
+    return () => window.removeEventListener("forge:onboarding-dismissed", onChange);
+  }, []);
+
+  const update = useCallback((next: boolean) => {
+    setDismissed(next);
+    try {
+      if (next) localStorage.setItem(ONBOARDING_KEY, "1");
+      else localStorage.removeItem(ONBOARDING_KEY);
+    } catch {
+      /* ignore */
+    }
+    window.dispatchEvent(
+      new CustomEvent("forge:onboarding-dismissed", { detail: next }),
+    );
+  }, []);
+
+  return [dismissed, update];
+}
+
 function OnboardingCard({
   projectsCount,
   issuesCount,
@@ -382,14 +433,7 @@ function OnboardingCard({
   ready: boolean;
   slug: string;
 }) {
-  const [dismissed, setDismissed] = useState(false);
-  useEffect(() => {
-    try {
-      setDismissed(localStorage.getItem(ONBOARDING_KEY) === "1");
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  const [dismissed, setDismissed] = useOnboardingDismissed();
 
   const steps: OnboardingStep[] = useMemo(
     () => [
@@ -430,16 +474,9 @@ function OnboardingCard({
         </div>
         <button
           className="text-muted-foreground hover:text-foreground"
-          onClick={() => {
-            try {
-              localStorage.setItem(ONBOARDING_KEY, "1");
-            } catch {
-              /* ignore */
-            }
-            setDismissed(true);
-          }}
+          onClick={() => setDismissed(true)}
           aria-label="Dismiss onboarding"
-          title="Dismiss"
+          title="Dismiss — you can resume from the pill in the topbar."
         >
           <X className="h-4 w-4" />
         </button>
@@ -458,6 +495,49 @@ function OnboardingCard({
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * Tiny pill rendered in the dashboard topbar when the user has dismissed
+ * the OnboardingCard but onboarding isn't actually complete. Clicking it
+ * clears the dismissed flag so the full card re-appears on the same page
+ * load.
+ */
+function ResumeSetupPill({
+  projectsCount,
+  issuesCount,
+  membersCount,
+  apiKeysCount,
+  hasTimezone,
+  ready,
+}: {
+  projectsCount: number;
+  issuesCount: number;
+  membersCount: number;
+  apiKeysCount: number;
+  hasTimezone: boolean;
+  ready: boolean;
+}) {
+  const [dismissed, setDismissed] = useOnboardingDismissed();
+  const allDone =
+    ready &&
+    projectsCount > 0 &&
+    issuesCount > 0 &&
+    membersCount > 1 &&
+    apiKeysCount > 0 &&
+    hasTimezone;
+  if (!ready || !dismissed || allDone) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => setDismissed(false)}
+      title="Re-open the getting-started checklist"
+      className="text-meta inline-flex items-center gap-1 rounded-full border border-ember/30 bg-ember/10 px-2 py-0.5 text-[11px] uppercase tracking-wider text-ember hover:bg-ember/15"
+    >
+      <ArrowRight className="h-3 w-3" />
+      <span>Resume setup</span>
+    </button>
   );
 }
 
@@ -595,7 +675,7 @@ function IssueRow({
             {PRIORITY_GLYPH[priority]}
           </span>
         )}
-        <span className="font-mono text-[10px] text-muted-foreground">
+        <span className="text-id text-muted-foreground">
           {formatIssueId(workspaceKey, number)}
         </span>
         <span className="truncate">{title}</span>

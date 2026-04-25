@@ -79,12 +79,20 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   });
 
   const setQueued = trpc.issue.setQueued.useMutation({
-    onSuccess: () => utils.issue.byId.invalidate({ id }),
+    onSuccess: (_data, vars) => {
+      toast.success(vars.queued ? "Queued for agent." : "Removed from agent queue.");
+      utils.issue.byId.invalidate({ id });
+      utils.issue.queue.invalidate();
+    },
     onError: (e) => toast.error(e.message),
   });
 
   const releaseClaim = trpc.issue.release.useMutation({
-    onSuccess: () => utils.issue.byId.invalidate({ id }),
+    onSuccess: () => {
+      toast.success("Claim released.");
+      utils.issue.byId.invalidate({ id });
+      utils.issue.queue.invalidate();
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -109,20 +117,12 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
   // Capital A opens the agent picker. Lowercase `a` is intentionally left
   // free for the user-assignee picker + as the `g a` nav leader second key.
-  useHotkey(
-    "shift+a",
-    () => setAgentPickerOpen(true),
-    [],
-  );
+  useHotkey("shift+a", () => setAgentPickerOpen(true), []);
 
   if (error)
     return (
       <div className="flex flex-1 items-center justify-center p-8">
-        <EmptyState
-          variant="page"
-          title="Unable to load issue"
-          description={error.message}
-        />
+        <EmptyState variant="page" title="Unable to load issue" description={error.message} />
       </div>
     );
   if (isLoading || !issue)
@@ -140,9 +140,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     <>
       <Topbar
         title={issueKey}
-        subtitle={
-          <span className="font-mono text-[10px]">{issue.status.name}</span>
-        }
+        subtitle={<span className="font-mono text-[10px]">{issue.status.name}</span>}
         actions={
           <>
             <PinToggleButton issueId={issue.id} />
@@ -154,11 +152,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             >
               Focus
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setDeleteOpen(true)}
-            >
+            <Button variant="ghost" size="sm" onClick={() => setDeleteOpen(true)}>
               Delete
             </Button>
           </>
@@ -168,9 +162,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
       <IssueDetailTopbar
         left={
           <>
-            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-              {issueKey}
-            </span>
+            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{issueKey}</span>
             {editingTitle ? (
               <form
                 onSubmit={(e) => {
@@ -219,9 +211,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             />
             <InlinePriority
               value={issue.priority}
-              onChange={(priority) =>
-                update.mutate({ id: issue.id, priority })
-              }
+              onChange={(priority) => update.mutate({ id: issue.id, priority })}
             />
             <AssigneePicker
               current={issue.assignees.map((a) => ({
@@ -236,10 +226,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               }))}
               onChange={(userIds) => assign.mutate({ id: issue.id, userIds })}
             />
-            <AgentChip
-              current={issue.assignedAgent}
-              onOpen={() => setAgentPickerOpen(true)}
-            />
+            <AgentChip current={issue.assignedAgent} onOpen={() => setAgentPickerOpen(true)} />
           </div>
         }
       />
@@ -264,9 +251,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               issueId={issue.id}
               description={issue.description}
               comments={issue.comments}
-              onDescriptionSave={(next) =>
-                update.mutate({ id: issue.id, description: next })
-              }
+              onDescriptionSave={(next) => update.mutate({ id: issue.id, description: next })}
             />
 
             <div className="mt-10 space-y-4 border-t border-border/60 pt-6">
@@ -318,26 +303,27 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                   <input
                     type="checkbox"
                     checked={issue.queued}
-                    onChange={(e) =>
-                      setQueued.mutate({ id: issue.id, queued: e.target.checked })
-                    }
+                    onChange={(e) => setQueued.mutate({ id: issue.id, queued: e.target.checked })}
                     className="h-3.5 w-3.5"
                   />
-                  <span className="text-muted-foreground">
-                    Available to claim via MCP
+                  <span className="text-muted-foreground">Queue for agent</span>
+                  <span className="ml-auto">
+                    <Badge className={issue.queued ? "bg-success/10 text-success" : undefined}>
+                      {issue.queued ? "Queued" : "Not queued"}
+                    </Badge>
                   </span>
                 </label>
+                <div className="max-w-xs text-[11px] text-muted-foreground">
+                  Queued issues are available to{" "}
+                  <span className="font-mono text-foreground">issues.claim</span>; assigned issues
+                  can still sit unclaimed until an agent starts.
+                </div>
                 {issue.claimedAt && (
                   <div className="mt-2 max-w-xs rounded-md border border-border bg-card/60 p-2 text-[11px]">
                     <div className="text-muted-foreground">Claimed</div>
                     <div className="mt-0.5">
-                      by{" "}
-                      <span className="font-mono">
-                        {issue.claimedById?.slice(0, 8)}
-                      </span>
-                      {issue.claimExpiresAt && (
-                        <> · expires {relativeTime(issue.claimExpiresAt)}</>
-                      )}
+                      by <span className="font-mono">{issue.claimedById?.slice(0, 8)}</span>
+                      {issue.claimExpiresAt && <> · expires {relativeTime(issue.claimExpiresAt)}</>}
                     </div>
                     <Button
                       size="sm"
@@ -414,9 +400,7 @@ function InlineStatus({
   const current = options.find((o) => o.id === value);
   return (
     <label className="relative flex items-center">
-      <span
-        className="pointer-events-none inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[11px]"
-      >
+      <span className="pointer-events-none inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[11px]">
         {current && (
           <span
             aria-hidden
@@ -468,18 +452,10 @@ function InlinePriority({
   );
 }
 
-function SidebarField({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function SidebarField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
       {children}
     </div>
   );
@@ -538,9 +514,7 @@ function LabelPicker({
                   <span
                     className={
                       "inline-block h-3 w-3 rounded-sm border " +
-                      (selected.has(l.id)
-                        ? "border-ember bg-ember"
-                        : "border-border bg-background")
+                      (selected.has(l.id) ? "border-ember bg-ember" : "border-border bg-background")
                     }
                   />
                   <Badge color={l.color}>{l.name}</Badge>
@@ -649,13 +623,7 @@ type AssignedAgent = {
   status: AgentStatus;
 } | null;
 
-function AgentChip({
-  current,
-  onOpen,
-}: {
-  current: AssignedAgent;
-  onOpen: () => void;
-}) {
+function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => void }) {
   return (
     <button
       type="button"
@@ -676,9 +644,7 @@ function AgentChip({
           </span>
           <AgentPresenceDot status={current.status} size="sm" />
           <span className="truncate">{current.name}</span>
-          <span className="font-mono text-[10px] text-muted-foreground">
-            @{current.profileKey}
-          </span>
+          <span className="font-mono text-[10px] text-muted-foreground">@{current.profileKey}</span>
         </>
       ) : (
         <span className="text-muted-foreground">Assign agent</span>
@@ -766,9 +732,7 @@ function AgentPickerModal({
               <span className="inline-block h-2 w-2 rounded-full bg-muted" />
               <span className="text-muted-foreground">Unassign</span>
               {active && (
-                <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-                  current
-                </span>
+                <span className="ml-auto font-mono text-[10px] text-muted-foreground">current</span>
               )}
             </div>
           );
@@ -785,15 +749,9 @@ function AgentPickerModal({
                 </span>
               )}
             </span>
-            <AgentPresenceDot
-              status={it.status}
-              size="md"
-              lastHeartbeatAt={it.lastHeartbeatAt}
-            />
+            <AgentPresenceDot status={it.status} size="md" lastHeartbeatAt={it.lastHeartbeatAt} />
             <span className="truncate">{it.name}</span>
-            <span className="font-mono text-[10px] text-muted-foreground">
-              @{it.profileKey}
-            </span>
+            <span className="font-mono text-[10px] text-muted-foreground">@{it.profileKey}</span>
             {it.capabilities.length > 0 && (
               <span className="ml-2 hidden min-w-0 truncate text-[10px] text-muted-foreground/80 sm:inline">
                 {it.capabilities.slice(0, 3).join(" · ")}

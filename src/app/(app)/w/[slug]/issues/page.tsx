@@ -1,10 +1,12 @@
 "use client";
 import { useState } from "react";
+import { Sparkles } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { IssueList } from "@/components/issue-list";
 import { IssueBoard } from "@/components/issue-board";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DensityProvider, useDensity, useSetDensity } from "@/components/ui";
+import { DensityProvider, EmptyState, Kbd, useDensity, useSetDensity } from "@/components/ui";
 import { ViewToggle, useViewPref } from "@/components/view-toggle";
 import {
   CycleFilterChip,
@@ -20,8 +22,12 @@ export default function IssuesPage() {
   const [query, setQuery] = useState("");
   const [cycleId, setCycleId] = useState<CycleFilter>(undefined);
   const [initiativeId, setInitiativeId] = useState<InitiativeFilter>(undefined);
-  const { data: ws } = trpc.workspace.current.useQuery();
+  const { data: ws, isLoading: wsLoading } = trpc.workspace.current.useQuery();
   const key = ws?.key ?? "—";
+
+  const noFilters =
+    !query && cycleId === undefined && initiativeId === undefined;
+  const isWorkspaceEmpty = !!ws && ws._count.issues === 0 && noFilters;
 
   return (
     <DensityProvider>
@@ -30,7 +36,7 @@ export default function IssuesPage() {
         subtitle={ws ? `${ws._count.issues} total` : undefined}
         actions={
           <div className="flex items-center gap-2">
-            {view === "list" && (
+            {view === "list" && !isWorkspaceEmpty && (
               <>
                 <Input
                   value={query}
@@ -41,28 +47,51 @@ export default function IssuesPage() {
                 <DensityToggle />
               </>
             )}
-            <ViewToggle value={view} onChange={setView} />
+            {!isWorkspaceEmpty && (
+              <ViewToggle value={view} onChange={setView} />
+            )}
           </div>
         }
       />
-      <div className="flex items-center gap-2 border-b border-border bg-card/20 px-5 py-2">
-        <CycleFilterChip value={cycleId} onChange={setCycleId} />
-        <InitiativeFilterChip value={initiativeId} onChange={setInitiativeId} />
-        {(cycleId !== undefined || initiativeId !== undefined) && (
-          <button
-            type="button"
-            onClick={() => {
-              setCycleId(undefined);
-              setInitiativeId(undefined);
-            }}
-            className="text-[11px] text-muted-foreground hover:text-foreground"
-          >
-            Clear filters
-          </button>
-        )}
-      </div>
+      {!isWorkspaceEmpty && (
+        <div className="flex items-center gap-2 border-b border-border bg-card/20 px-5 py-2">
+          <CycleFilterChip value={cycleId} onChange={setCycleId} />
+          <InitiativeFilterChip value={initiativeId} onChange={setInitiativeId} />
+          {(cycleId !== undefined || initiativeId !== undefined) && (
+            <button
+              type="button"
+              onClick={() => {
+                setCycleId(undefined);
+                setInitiativeId(undefined);
+              }}
+              className="text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-hidden">
-        {view === "list" ? (
+        {wsLoading ? null : isWorkspaceEmpty ? (
+          <div className="flex h-full items-center justify-center px-6">
+            <EmptyState
+              variant="page"
+              icon={<Sparkles />}
+              title="No issues yet"
+              description={
+                <span>
+                  Create your first issue with <Kbd>⇧C</Kbd> or pick a
+                  starter template.
+                </span>
+              }
+              action={
+                <Button data-quick-create variant="ember" size="sm">
+                  New issue
+                </Button>
+              }
+            />
+          </div>
+        ) : view === "list" ? (
           <div className="h-full overflow-y-auto">
             <IssueList
               workspaceKey={key}

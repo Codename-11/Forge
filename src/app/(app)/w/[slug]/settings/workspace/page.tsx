@@ -126,11 +126,14 @@ export default function WorkspaceSettingsPage() {
           </Section>
 
           <Section
-            title="Cycles"
-            hint="Default iteration cadence. Each cycle can still override on create."
+            title="Sprints"
+            hint="Default iteration cadence. Each sprint can still override on create."
           >
             <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-card/40 p-4">
-              <Field label="Cycle length (days)">
+              <Field
+                label="Sprint length (days)"
+                hint="How long a sprint runs by default. Used when rollover creates the next sprint."
+              >
                 <Input
                   type="number"
                   min={1}
@@ -140,7 +143,10 @@ export default function WorkspaceSettingsPage() {
                   disabled={!canEdit}
                 />
               </Field>
-              <Field label="Cooldown (days)">
+              <Field
+                label="Cooldown (days)"
+                hint="Gap between sprints. 0 means a new sprint starts the day the previous one ends."
+              >
                 <Input
                   type="number"
                   min={0}
@@ -173,7 +179,10 @@ export default function WorkspaceSettingsPage() {
                   className="h-4 w-4"
                 />
               </label>
-              <Field label="Attachment quota (MB)">
+              <Field
+                label="Attachment quota (MB)"
+                hint="MB per workspace. Counts file size of finalized attachments only — drafts and aborted uploads don't count."
+              >
                 <Input
                   type="number"
                   min={0}
@@ -251,7 +260,7 @@ export default function WorkspaceSettingsPage() {
         onOpenChange={setDeleteOpen}
         variant="destructive"
         title={`Delete ${ws.name}?`}
-        description="This permanently removes all issues, projects, cycles, attachments, and events."
+        description="This permanently removes all issues, projects, sprints, attachments, and events."
         primaryLabel="Delete workspace"
         typeToConfirm={ws.name}
         loading={del.isPending}

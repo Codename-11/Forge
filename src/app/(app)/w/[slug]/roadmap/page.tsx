@@ -5,7 +5,7 @@ import { Map as MapIcon } from "lucide-react";
 import { InitiativeStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
-import { EmptyState, Kbd, MOTION, Skeleton } from "@/components/ui";
+import { EmptyState, MOTION, Skeleton } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -154,12 +154,13 @@ export default function RoadmapPage() {
             variant="page"
             icon={<MapIcon />}
             title="Roadmap is empty"
-            description={
-              <span>
-                Create initiatives and projects with start / target dates
-                to see them plotted here. Press <Kbd>⇧C</Kbd> on the
-                initiatives or projects page to add one.
-              </span>
+            description="Add target dates to projects or initiatives, and they'll plot here as horizontal bars across upcoming weeks."
+            action={
+              <Link href={`/w/${ws.slug}/projects`}>
+                <Button variant="ember" size="sm">
+                  Go to projects
+                </Button>
+              </Link>
             }
           />
         </div>

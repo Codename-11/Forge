@@ -145,4 +145,70 @@
     );
     background-size: 100% 40px;
   }
+
+  /* ------------------------------------------------------------------ */
+  /* Density + text-size utilities
+   *
+   * Driven by `data-density` ("compact" | "comfortable") and
+   * `data-textsize` ("default" | "larger") attributes set on the <html>
+   * element by `<AppearanceProvider />`. Compact + default match the
+   * pre-existing pixel sizes used across the app; comfortable bumps
+   * each by ~1px, larger stacks another +1px on top.
+   *
+   * Use these classes in place of ad-hoc `text-[10px]` etc. so a single
+   * preference toggle re-flows the whole product. The four names below
+   * are stable contracts — the `apply-density` agent retrofits specific
+   * components against them.
+   * ------------------------------------------------------------------ */
+  .text-id {
+    @apply font-mono text-[10px];
+  }
+  [data-density="comfortable"] .text-id {
+    @apply text-[11px];
+  }
+  [data-textsize="larger"] .text-id {
+    @apply text-[11px];
+  }
+  [data-density="comfortable"][data-textsize="larger"] .text-id {
+    @apply text-xs;
+  }
+
+  .text-meta {
+    @apply text-[11px];
+  }
+  [data-density="comfortable"] .text-meta {
+    @apply text-xs;
+  }
+  [data-textsize="larger"] .text-meta {
+    @apply text-xs;
+  }
+  [data-density="comfortable"][data-textsize="larger"] .text-meta {
+    @apply text-[13px];
+  }
+
+  .text-filename {
+    @apply text-[10px];
+  }
+  [data-density="comfortable"] .text-filename {
+    @apply text-[11px];
+  }
+  [data-textsize="larger"] .text-filename {
+    @apply text-[11px];
+  }
+  [data-density="comfortable"][data-textsize="larger"] .text-filename {
+    @apply text-xs;
+  }
+
+  .text-subtitle {
+    @apply text-[11px];
+  }
+  [data-density="comfortable"] .text-subtitle {
+    @apply text-xs;
+  }
+  [data-textsize="larger"] .text-subtitle {
+    @apply text-xs;
+  }
+  [data-density="comfortable"][data-textsize="larger"] .text-subtitle {
+    @apply text-[13px];
+  }
 }

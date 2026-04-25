@@ -10,6 +10,7 @@ playwright-report
 test-results
 .turbo
 .vercel
+.claude/
 .DS_Store
 *.log
 prisma/migrations/dev.db*

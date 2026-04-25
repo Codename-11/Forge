@@ -1,4 +1,5 @@
 "use client";
+import type { AgentStatus } from "@prisma/client";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
@@ -6,19 +7,15 @@ import {
   Inbox,
   Clock,
   MessageCircle,
+  Sun,
   Target,
   ChevronRight,
   Zap,
+  Bot,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
-import {
-  Card,
-  EmptyState,
-  Kbd,
-  MOTION,
-  Section,
-  SkeletonList,
-} from "@/components/ui";
+import { Badge, Card, EmptyState, Kbd, MOTION, Section, SkeletonList } from "@/components/ui";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -29,13 +26,13 @@ import { workspaceColor } from "@/lib/workspace-color";
  *
  * Stack (top → bottom):
  *   1. Today's focus — one-line prompt with the count of unblocked,
- *      assigned issues in the current cycle.
+ *      assigned issues in the current sprint.
  *   2. Workspace pulse — compact stat strip (open / in progress / done
- *      this week / active cycle).
+ *      this week / active sprint).
  *   3. Assigned & unblocked list.
  *   4. Mentions list.
  *   5. Stalled > 7d list.
- *   6. Current cycle burn (single-workspace only).
+ *   6. Current sprint burn (single-workspace only).
  *
  * The cross-workspace toggle in the topbar aggregates items 3-5 across
  * every workspace the caller belongs to. Items 1-2 and 6 stay scoped to
@@ -47,6 +44,14 @@ export default function InboxPage() {
   const [allWorkspaces, setAllWorkspaces] = useState(false);
 
   const { data, isLoading } = trpc.inbox.get.useQuery({ allWorkspaces });
+  const { data: agentQueue, isLoading: queueLoading } = trpc.issue.queue.useQuery(
+    { includeClaimed: true, limit: 25 },
+    { enabled: !allWorkspaces },
+  );
+  const { data: agents } = trpc.agent.list.useQuery(
+    { includeArchived: false },
+    { enabled: !allWorkspaces },
+  );
   // Pulse numbers come from the standard issue list + status list —
   // cheaper than adding a dedicated router for numbers we already have.
   const { data: active } = trpc.issue.list.useQuery({
@@ -60,23 +65,19 @@ export default function InboxPage() {
 
   const pulse = useMemo(() => {
     const openCount = active?.items.length ?? 0;
-    const inProgress =
-      active?.items.filter((i) => i.status.category === "IN_PROGRESS")
-        .length ?? 0;
+    const inProgress = active?.items.filter((i) => i.status.category === "IN_PROGRESS").length ?? 0;
     const weekAgo = Date.now() - 7 * 86_400_000;
     const doneThisWeek =
       recentDone?.items.filter(
-        (i) =>
-          i.status.category === "DONE" &&
-          new Date(i.updatedAt).getTime() >= weekAgo,
+        (i) => i.status.category === "DONE" && new Date(i.updatedAt).getTime() >= weekAgo,
       ).length ?? 0;
-    const activeCycle = data?.cycle?.name ?? "None";
-    return { openCount, inProgress, doneThisWeek, activeCycle };
+    const activeSprint = data?.cycle?.name ?? "None";
+    return { openCount, inProgress, doneThisWeek, activeSprint };
   }, [active, recentDone, data?.cycle]);
 
   const focusInCycle = useMemo(() => {
     if (!data) return 0;
-    // Only count "in cycle" when we have a cycle to compare against.
+    // Only count "in sprint" when we have a cycle row to compare against.
     // Without one, fall back to the total unblocked count.
     if (!data.cycle) return data.counts.assignedUnblocked;
     const cycleIssueIds = new Set<string>();
@@ -91,6 +92,13 @@ export default function InboxPage() {
     }
     return cycleIssueIds.size;
   }, [data]);
+
+  const queueRows = !allWorkspaces ? (agentQueue ?? []) : [];
+  const readyAgentIssues = queueRows.filter((i) => i.unblocked && !i.claimedAt).length;
+  const claimedAgentIssues = queueRows.filter((i) => !!i.claimedAt).length;
+  const assignedAgentIssues = queueRows.filter((i) => !!i.assignedAgent).length;
+  const onlineAgents =
+    agents?.filter((a) => a.status === "ONLINE" || a.status === "BUSY").length ?? 0;
 
   return (
     <>
@@ -141,15 +149,39 @@ export default function InboxPage() {
               openCount={pulse.openCount}
               inProgress={pulse.inProgress}
               doneThisWeek={pulse.doneThisWeek}
-              activeCycle={pulse.activeCycle}
+              activeSprint={pulse.activeSprint}
               slug={workspace.slug}
             />
           </div>
+
+          {!allWorkspaces && (
+            <AgentQueueSection
+              rows={queueRows}
+              loading={queueLoading}
+              workspaceKey={workspace.key}
+              slug={workspace.slug}
+              ready={readyAgentIssues}
+              claimed={claimedAgentIssues}
+              assigned={assignedAgentIssues}
+              onlineAgents={onlineAgents}
+            />
+          )}
 
           {isLoading || !data ? (
             <div className="space-y-4">
               <SkeletonList rows={4} />
               <SkeletonList rows={3} />
+            </div>
+          ) : data.assignedUnblocked.length === 0 &&
+            data.mentions.length === 0 &&
+            data.stalled.length === 0 ? (
+            <div className="rounded-lg border border-border bg-card/30 px-6 py-16">
+              <EmptyState
+                variant="page"
+                icon={<Sun />}
+                title="Inbox zero"
+                description="When someone @mentions you, assigns work, or replies to a thread you're following, it lands here."
+              />
             </div>
           ) : (
             <>
@@ -174,8 +206,7 @@ export default function InboxPage() {
                       title="Nothing in your queue."
                       description={
                         <span>
-                          Pick up something from Issues or press{" "}
-                          <Kbd>⇧C</Kbd> to create one.
+                          Pick up something from Issues or press <Kbd>⇧C</Kbd> to create one.
                         </span>
                       }
                     />
@@ -220,10 +251,7 @@ export default function InboxPage() {
                     />
                   ) : (
                     data.mentions.map((m) => (
-                      <li
-                        key={m.id}
-                        className="flex items-start gap-3 px-3 py-2 text-[12px]"
-                      >
+                      <li key={m.id} className="flex items-start gap-3 px-3 py-2 text-[12px]">
                         <WorkspaceBadge
                           slug={m.issue.workspace.slug}
                           wsKey={m.issue.workspace.key}
@@ -300,10 +328,10 @@ export default function InboxPage() {
                   title={
                     <span className="flex items-center gap-2">
                       <Target className="h-3.5 w-3.5 text-muted-foreground" />
-                      Current cycle burn
+                      Current sprint burn
                     </span>
                   }
-                  hint="Progress on the active cycle in this workspace."
+                  hint="Progress on the active sprint in this workspace."
                 >
                   {data.cycle ? (
                     <div className="rounded-lg border border-border bg-card/40 p-4">
@@ -316,7 +344,8 @@ export default function InboxPage() {
                             {data.cycle.name}
                           </Link>
                           <div className="font-mono text-[11px] text-muted-foreground">
-                            {data.cycle.done}/{data.cycle.total} done · {data.cycle.remaining} remaining
+                            {data.cycle.done}/{data.cycle.total} done · {data.cycle.remaining}{" "}
+                            remaining
                           </div>
                         </div>
                         <div className="text-right font-mono text-2xl tabular-nums">
@@ -343,8 +372,8 @@ export default function InboxPage() {
                       <EmptyState
                         variant="section"
                         icon={<Target />}
-                        title="No active cycle."
-                        description="Start one from the Cycles page."
+                        title="No active sprint."
+                        description="Start one from the Sprints page."
                       />
                     </Card>
                   )}
@@ -373,7 +402,12 @@ function FocusRollup({
 }) {
   const hasData = count !== null;
   return (
-    <div className={cn("group relative flex items-center gap-3 overflow-hidden rounded-lg border border-border bg-card/40 p-4 hover:border-ember/40", MOTION.base)}>
+    <div
+      className={cn(
+        "group relative flex items-center gap-3 overflow-hidden rounded-lg border border-border bg-card/40 p-4 hover:border-ember/40",
+        MOTION.base,
+      )}
+    >
       <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-ember/10 text-ember">
         <Zap className="h-4 w-4" />
       </div>
@@ -389,13 +423,12 @@ function FocusRollup({
               </span>
             ) : (
               <>
-                <span className="font-mono tabular-nums">{count}</span>{" "}
-                unblocked{" "}
+                <span className="font-mono tabular-nums">{count}</span> unblocked{" "}
                 {count === 1 ? "issue" : "issues"} waiting on you
                 {cycleName && (
                   <>
-                    {" "}· cycle{" "}
-                    <span className="font-medium">{cycleName}</span>
+                    {" "}
+                    · sprint <span className="font-medium">{cycleName}</span>
                   </>
                 )}
                 .
@@ -408,7 +441,10 @@ function FocusRollup({
       </div>
       <Link
         href={`/w/${slug}/issues?mine=1`}
-        className={cn("ml-auto shrink-0 text-muted-foreground group-hover:text-foreground", MOTION.fast)}
+        className={cn(
+          "ml-auto shrink-0 text-muted-foreground group-hover:text-foreground",
+          MOTION.fast,
+        )}
         title="Open my issues"
       >
         <ChevronRight className="h-4 w-4" />
@@ -421,13 +457,13 @@ function PulseRollup({
   openCount,
   inProgress,
   doneThisWeek,
-  activeCycle,
+  activeSprint,
   slug,
 }: {
   openCount: number;
   inProgress: number;
   doneThisWeek: number;
-  activeCycle: string;
+  activeSprint: string;
   slug: string;
 }) {
   return (
@@ -437,25 +473,132 @@ function PulseRollup({
       </div>
       <div className="mt-2 grid grid-cols-4 gap-2 text-[11px]">
         <Stat label="Open" value={openCount} href={`/w/${slug}/issues`} />
-        <Stat
-          label="In progress"
-          value={inProgress}
-          href={`/w/${slug}/issues`}
-        />
-        <Stat
-          label="Done / 7d"
-          value={doneThisWeek}
-          href={`/w/${slug}/issues?status=done`}
-        />
-        <Stat
-          label="Cycle"
-          value={activeCycle}
-          href={`/w/${slug}/cycles`}
-          mono={false}
-        />
+        <Stat label="In progress" value={inProgress} href={`/w/${slug}/issues`} />
+        <Stat label="Done / 7d" value={doneThisWeek} href={`/w/${slug}/issues?status=done`} />
+        <Stat label="Sprint" value={activeSprint} href={`/w/${slug}/cycles`} mono={false} />
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Agent queue
+// ---------------------------------------------------------------------------
+
+type AgentQueueIssue = {
+  id: string;
+  number: number;
+  title: string;
+  priority: string;
+  claimedAt: Date | string | null;
+  claimExpiresAt: Date | string | null;
+  unblocked: boolean;
+  status: { name: string; color: string };
+  project: { key: string; color: string | null } | null;
+  claimedBy: { name: string | null; email: string | null } | null;
+  assignedAgent: {
+    id: string;
+    name: string;
+    profileKey: string;
+    status: AgentStatus;
+  } | null;
+};
+
+function AgentQueueSection({
+  rows,
+  loading,
+  workspaceKey,
+  slug,
+  ready,
+  claimed,
+  assigned,
+  onlineAgents,
+}: {
+  rows: AgentQueueIssue[];
+  loading: boolean;
+  workspaceKey: string;
+  slug: string;
+  ready: number;
+  claimed: number;
+  assigned: number;
+  onlineAgents: number;
+}) {
+  return (
+    <Section
+      title={
+        <span className="flex items-center gap-2">
+          <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+          Agent queue
+          <span className="font-mono text-[10px] text-muted-foreground">{rows.length}</span>
+        </span>
+      }
+      hint={`${ready} ready now · ${assigned} assigned · ${claimed} claimed · ${onlineAgents} online/busy agents`}
+    >
+      <Card as="ul">
+        {loading ? (
+          <li className="px-3 py-3">
+            <SkeletonList rows={3} />
+          </li>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            as="li"
+            variant="card"
+            icon={<Bot />}
+            title="No queued agent work."
+            description="Queue an issue from its detail page when it is ready for an agent to claim."
+          />
+        ) : (
+          rows.map((issue) => (
+            <li key={issue.id} className="px-3 py-2 hover:bg-subtle/40">
+              <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                <Link
+                  href={`/w/${slug}/issues/${issue.id}`}
+                  className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
+                >
+                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                    {formatIssueId(workspaceKey, issue.number)}
+                  </span>
+                  <span className="truncate">{issue.title}</span>
+                </Link>
+                <Badge color={issue.status.color}>{issue.status.name}</Badge>
+                {issue.project && (
+                  <Badge color={issue.project.color ?? undefined}>{issue.project.key}</Badge>
+                )}
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                <QueueStateBadge issue={issue} />
+                {issue.assignedAgent ? (
+                  <span
+                    className="inline-flex items-center gap-1"
+                    title={`Assigned to ${issue.assignedAgent.name}`}
+                  >
+                    <AgentPresenceDot status={issue.assignedAgent.status} size="sm" />
+                    <span className="font-mono">@{issue.assignedAgent.profileKey}</span>
+                  </span>
+                ) : (
+                  <span>unassigned</span>
+                )}
+                {issue.claimExpiresAt && (
+                  <span>claim expires {relativeTime(issue.claimExpiresAt)}</span>
+                )}
+              </div>
+            </li>
+          ))
+        )}
+      </Card>
+    </Section>
+  );
+}
+
+function QueueStateBadge({ issue }: { issue: AgentQueueIssue }) {
+  if (issue.claimedAt) {
+    const by = issue.claimedBy?.name ?? issue.claimedBy?.email ?? "agent";
+    return <Badge className="bg-ember/10 text-ember">Claimed by {by}</Badge>;
+  }
+  if (!issue.unblocked) {
+    return <Badge className="bg-danger/10 text-danger">Blocked</Badge>;
+  }
+  return <Badge className="bg-success/10 text-success">Ready to claim</Badge>;
 }
 
 function Stat({
@@ -484,10 +627,7 @@ function Stat({
   );
   if (!href) return body;
   return (
-    <Link
-      href={href}
-      className="min-w-0 rounded-md px-1 py-0.5 hover:bg-subtle/60"
-    >
+    <Link href={href} className="min-w-0 rounded-md px-1 py-0.5 hover:bg-subtle/60">
       {body}
     </Link>
   );
