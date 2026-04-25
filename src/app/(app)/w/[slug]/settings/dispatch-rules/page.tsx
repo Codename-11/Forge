@@ -223,7 +223,7 @@ export default function DispatchRulesPage() {
     <>
       <Topbar
         title="Dispatch rules"
-        subtitle="Declarative routing. First match wins; drag to reorder. Ineligible targets fall through to the dispatch mode."
+        subtitle="Pin agents by priority, label, or project. Rules run before auto-dispatch — first match wins, drag to reorder. Ineligible targets fall through to the workspace dispatch mode."
         actions={
           <Button
             variant="ember"

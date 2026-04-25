@@ -1,6 +1,11 @@
 "use client";
 import { Fragment, useMemo } from "react";
-import { FileText, File as FileIcon, Paperclip } from "lucide-react";
+import {
+  FileText,
+  File as FileIcon,
+  Paperclip,
+  AlertTriangle,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
 
 /**
@@ -92,6 +97,33 @@ export function MarkdownWithAttachments({
   );
 }
 
+/**
+ * Distinct "unavailable" pill used by both inline image + link variants.
+ * Surfaces the concrete error message via `title` so admins can hover to
+ * see *why* the attachment failed (storage misconfig, expired URL, etc.)
+ * instead of the previous vague "attachment missing" text.
+ */
+function UnavailablePill({
+  label,
+  errorMessage,
+}: {
+  label?: string;
+  errorMessage?: string;
+}) {
+  const tooltip = errorMessage
+    ? `${label ? `${label} — ` : ""}${errorMessage}`
+    : label || "Storage error";
+  return (
+    <span
+      title={tooltip}
+      className="inline-flex items-center gap-1 rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[10.5px] text-warning"
+    >
+      <AlertTriangle className="h-3 w-3" />
+      Attachment unavailable — storage error
+    </span>
+  );
+}
+
 function InlineAttachmentImage({
   attachmentId,
   alt,
@@ -99,9 +131,9 @@ function InlineAttachmentImage({
   attachmentId: string;
   alt: string;
 }) {
-  const { data, isLoading } = trpc.attachment.getDownloadUrl.useQuery(
+  const { data, isLoading, error } = trpc.attachment.getDownloadUrl.useQuery(
     { attachmentId },
-    { staleTime: 5 * 60_000 },
+    { staleTime: 5 * 60_000, retry: false },
   );
   if (isLoading) {
     return (
@@ -110,12 +142,14 @@ function InlineAttachmentImage({
       </span>
     );
   }
+  // Any error from getDownloadUrl (misconfig, not-found, expired) gets
+  // the same loud-but-useful pill — better than silently rendering a
+  // broken image or a vague "missing" tag.
+  if (error) {
+    return <UnavailablePill label={alt} errorMessage={error.message} />;
+  }
   if (!data?.url) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-md bg-subtle px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
-        <Paperclip className="h-3 w-3" /> {alt || "attachment missing"}
-      </span>
-    );
+    return <UnavailablePill label={alt} />;
   }
   return (
     <span className="my-2 block">
@@ -137,10 +171,13 @@ function InlineAttachmentLink({
   attachmentId: string;
   label: string;
 }) {
-  const { data } = trpc.attachment.getDownloadUrl.useQuery(
+  const { data, error } = trpc.attachment.getDownloadUrl.useQuery(
     { attachmentId },
-    { staleTime: 5 * 60_000 },
+    { staleTime: 5 * 60_000, retry: false },
   );
+  if (error) {
+    return <UnavailablePill label={label} errorMessage={error.message} />;
+  }
   const isPdf = label.toLowerCase().endsWith(".pdf");
   const Icon = isPdf ? FileText : FileIcon;
   return (

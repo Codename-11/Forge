@@ -1,0 +1,254 @@
+"use client";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Topbar } from "@/components/topbar";
+import { Section } from "@/components/settings/section";
+import { trpc } from "@/lib/trpc";
+
+type Density = "compact" | "comfortable";
+type TextSize = "default" | "larger";
+
+/**
+ * Appearance settings — per-user, server-saved.
+ *
+ * Two knobs that re-flow the entire product without a page reload:
+ *   - Density:   compact (current) | comfortable (more breathing room)
+ *   - Text size: default (current) | larger (+1px)
+ *
+ * The provider on the workspace shell mirrors the saved values onto
+ * `<html>` via `data-density` / `data-textsize`; the four utility
+ * classes in `globals.css` (`.text-id`, `.text-meta`, `.text-filename`,
+ * `.text-subtitle`) cascade off those attributes.
+ *
+ * UX choices worth flagging:
+ *   - Auto-save on click. No "Save preferences" button — every toggle
+ *     mutates immediately and the live preview row at the top reflects
+ *     the change before the network round-trip resolves (optimistic
+ *     `data-*` writes on the html element).
+ *   - The previews aren't decorative — they use the actual utility
+ *     classes the rest of the app will use, so what you see is exactly
+ *     what every issue ID / timestamp will look like.
+ *   - Cards are big, deliberate radio targets. Forge is keyboard-driven
+ *     elsewhere; the personality knob is a place to slow down.
+ */
+export default function AppearancePage() {
+  const utils = trpc.useUtils();
+  const { data: me } = trpc.user.me.useQuery();
+
+  const [density, setDensity] = useState<Density>("compact");
+  const [textSize, setTextSize] = useState<TextSize>("default");
+
+  useEffect(() => {
+    if (!me) return;
+    setDensity(me.density === "comfortable" ? "comfortable" : "compact");
+    setTextSize(me.textSize === "larger" ? "larger" : "default");
+  }, [me]);
+
+  const update = trpc.user.updateAppearance.useMutation({
+    onSuccess: () => {
+      utils.user.me.invalidate();
+      toast.success("Appearance saved.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  function chooseDensity(next: Density) {
+    if (next === density) return;
+    setDensity(next);
+    // Optimistic DOM update so the preview row + the rest of the app
+    // re-flow before the round-trip resolves.
+    document.documentElement.setAttribute("data-density", next);
+    update.mutate({ density: next });
+  }
+
+  function chooseTextSize(next: TextSize) {
+    if (next === textSize) return;
+    setTextSize(next);
+    document.documentElement.setAttribute("data-textsize", next);
+    update.mutate({ textSize: next });
+  }
+
+  return (
+    <>
+      <Topbar
+        title="Appearance"
+        subtitle="Tune the rhythm of the interface — saved to your account."
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-2xl space-y-10 p-8">
+          {/* Hero / live preview ------------------------------------- */}
+          <section className="rounded-2xl border border-border bg-card/40 p-6">
+            <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              Live preview
+            </div>
+            <div className="mb-5 text-sm text-muted-foreground">
+              The two rows below are the actual utility classes used across
+              Forge. They will reshape across the whole app the moment you
+              pick a different option.
+            </div>
+
+            <div className="space-y-3 rounded-xl border border-border/80 bg-background/60 p-4">
+              <div className="flex items-center gap-3">
+                <span className="text-id rounded border border-border bg-subtle/60 px-1.5 py-0.5 text-muted-foreground">
+                  AXI-1024
+                </span>
+                <span className="text-sm font-medium text-foreground">
+                  Tighten the dispatcher&apos;s idle release window
+                </span>
+                <span className="text-meta ml-auto text-muted-foreground">
+                  updated 4m ago
+                </span>
+              </div>
+              <div className="flex items-center gap-3 border-t border-border/60 pt-3">
+                <span className="text-id rounded border border-border bg-subtle/60 px-1.5 py-0.5 text-muted-foreground">
+                  PER-71
+                </span>
+                <span className="text-sm font-medium text-foreground">
+                  Re-style the inbox empty state
+                </span>
+                <span className="text-meta ml-auto text-muted-foreground">
+                  updated yesterday
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="inline-block h-1 w-1 rounded-full bg-ember" />
+              <span>
+                {density === "compact" ? "Compact" : "Comfortable"} ·{" "}
+                {textSize === "larger" ? "Larger text" : "Default text"}
+              </span>
+            </div>
+          </section>
+
+          {/* Density -------------------------------------------------- */}
+          <Section
+            title="Density"
+            hint="Spacing and identifier sizes across lists, tables, and overlays."
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <ChoiceCard
+                active={density === "compact"}
+                onClick={() => chooseDensity("compact")}
+                title="Compact"
+                blurb="Tighter spacing, smaller identifiers. Pack more on screen."
+                sample={<DensitySample tight />}
+              />
+              <ChoiceCard
+                active={density === "comfortable"}
+                onClick={() => chooseDensity("comfortable")}
+                title="Comfortable"
+                blurb="More breathing room, slightly larger labels. Easier to scan."
+                sample={<DensitySample />}
+              />
+            </div>
+          </Section>
+
+          {/* Text size ------------------------------------------------ */}
+          <Section
+            title="Text size"
+            hint="Bumps the smallest type in the UI by ~1px. Body copy stays the same."
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <ChoiceCard
+                active={textSize === "default"}
+                onClick={() => chooseTextSize("default")}
+                title="Default"
+                blurb="The standard sizes Forge ships with."
+                sample={
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    AXI-1024 · 11px meta
+                  </span>
+                }
+              />
+              <ChoiceCard
+                active={textSize === "larger"}
+                onClick={() => chooseTextSize("larger")}
+                title="Larger"
+                blurb="One step up across IDs, timestamps, and overlays."
+                sample={
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    AXI-1024 · 12px meta
+                  </span>
+                }
+              />
+            </div>
+          </Section>
+
+          <p className="pb-4 text-center text-[11px] text-muted-foreground">
+            Saved automatically. Changes apply across every workspace.
+          </p>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function ChoiceCard({
+  active,
+  onClick,
+  title,
+  blurb,
+  sample,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  blurb: string;
+  sample: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={
+        "focus-ring group flex flex-col items-stretch gap-3 rounded-xl border p-4 text-left transition-colors " +
+        (active
+          ? "border-ember/60 bg-ember/5 shadow-[0_0_0_1px_hsl(var(--ember)/0.4)]"
+          : "border-border bg-card/40 hover:bg-subtle/40")
+      }
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold tracking-tight text-foreground">
+          {title}
+        </span>
+        <span
+          className={
+            "h-3 w-3 rounded-full border transition-colors " +
+            (active
+              ? "border-ember bg-ember"
+              : "border-border bg-background group-hover:border-foreground/30")
+          }
+          aria-hidden="true"
+        />
+      </div>
+      <div className="text-xs leading-relaxed text-muted-foreground">{blurb}</div>
+      <div className="mt-1 flex items-center justify-center rounded-md border border-border/70 bg-background/60 px-3 py-3">
+        {sample}
+      </div>
+    </button>
+  );
+}
+
+function DensitySample({ tight = false }: { tight?: boolean }) {
+  // Hard-coded sizes here (rather than the .text-id class) so the
+  // preview honestly demonstrates each option regardless of what the
+  // user currently has selected at the html level.
+  const idCls = tight ? "text-[10px]" : "text-[11px]";
+  const metaCls = tight ? "text-[11px]" : "text-xs";
+  return (
+    <div className="flex w-full items-center gap-2">
+      <span
+        className={
+          "rounded border border-border bg-subtle/60 px-1.5 py-0.5 font-mono text-muted-foreground " +
+          idCls
+        }
+      >
+        AXI-12
+      </span>
+      <span className="truncate text-[12px] text-foreground">Sample issue title</span>
+      <span className={"ml-auto text-muted-foreground " + metaCls}>4m ago</span>
+    </div>
+  );
+}

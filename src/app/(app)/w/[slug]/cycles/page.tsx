@@ -6,7 +6,7 @@ import { ChevronLeft, ChevronRight, CalendarRange, Plus } from "lucide-react";
 import { CycleStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
-import { EmptyState, Kbd, SkeletonList } from "@/components/ui";
+import { EmptyState, SkeletonList } from "@/components/ui";
 import { CycleSummaryCard } from "@/components/cycles/cycle-summary-card";
 import { CyclePlanningBoard } from "@/components/cycles/cycle-planning-board";
 import { CycleBacklogPanel } from "@/components/cycles/cycle-backlog-panel";
@@ -21,8 +21,7 @@ export default function CyclesPage() {
   const searchParams = useSearchParams();
   const utils = trpc.useUtils();
 
-  const { data: allCycles, isLoading: cyclesLoading } =
-    trpc.cycle.list.useQuery({});
+  const { data: allCycles, isLoading: cyclesLoading } = trpc.cycle.list.useQuery({});
 
   // Order by startsAt desc matches the router; we want ascending traversal.
   const ordered = useMemo(
@@ -33,11 +32,9 @@ export default function CyclesPage() {
     [allCycles],
   );
 
-  // Pick the active cycle by default; fall back to the most recent.
+  // Pick the active sprint by default; internally this is still a cycle row.
   const defaultIndex = useMemo(() => {
-    const activeIdx = ordered.findIndex(
-      (c) => c.status === CycleStatus.ACTIVE,
-    );
+    const activeIdx = ordered.findIndex((c) => c.status === CycleStatus.ACTIVE);
     if (activeIdx !== -1) return activeIdx;
     return Math.max(0, ordered.length - 1);
   }, [ordered]);
@@ -46,16 +43,13 @@ export default function CyclesPage() {
   const activeIdx = selectedIdx ?? defaultIndex;
   const cycle = ordered[activeIdx] ?? null;
 
-  const { data: detail } = trpc.cycle.get.useQuery(
-    { id: cycle?.id ?? "" },
-    { enabled: !!cycle },
-  );
+  const { data: detail } = trpc.cycle.get.useQuery({ id: cycle?.id ?? "" }, { enabled: !!cycle });
 
   const plan = trpc.cycle.plan.useMutation({
     onSuccess: () => {
       utils.issue.list.invalidate();
       utils.cycle.get.invalidate({ id: cycle?.id });
-      toast.success("Planned into cycle.");
+      toast.success("Planned into sprint.");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -89,7 +83,7 @@ export default function CyclesPage() {
   return (
     <>
       <Topbar
-        title="Cycles"
+        title="Sprints"
         subtitle={
           ordered.length === 0
             ? undefined
@@ -102,8 +96,8 @@ export default function CyclesPage() {
               size="sm"
               disabled={activeIdx <= 0}
               onClick={() => setSelectedIdx(Math.max(0, activeIdx - 1))}
-              aria-label="Previous cycle"
-              title="Previous cycle"
+              aria-label="Previous sprint"
+              title="Previous sprint"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </Button>
@@ -111,21 +105,15 @@ export default function CyclesPage() {
               variant="ghost"
               size="sm"
               disabled={activeIdx >= ordered.length - 1}
-              onClick={() =>
-                setSelectedIdx(Math.min(ordered.length - 1, activeIdx + 1))
-              }
-              aria-label="Next cycle"
-              title="Next cycle"
+              onClick={() => setSelectedIdx(Math.min(ordered.length - 1, activeIdx + 1))}
+              aria-label="Next sprint"
+              title="Next sprint"
             >
               <ChevronRight className="h-3.5 w-3.5" />
             </Button>
-            <Button
-              variant="ember"
-              size="sm"
-              onClick={() => setCreateOpen(true)}
-            >
+            <Button variant="ember" size="sm" onClick={() => setCreateOpen(true)}>
               <Plus className="h-3.5 w-3.5" />
-              New cycle
+              New sprint
             </Button>
           </>
         }
@@ -141,21 +129,11 @@ export default function CyclesPage() {
             <EmptyState
               variant="page"
               icon={<CalendarRange />}
-              title="Your first cycle"
-              description={
-                <span>
-                  A cycle is a time-boxed iteration. Work lands in cycles
-                  and rolls over to the next one if unfinished. Press{" "}
-                  <Kbd>⇧C</Kbd> anywhere to quick-create.
-                </span>
-              }
+              title="No sprints yet"
+              description="Sprints are time-boxed iterations — usually a week or two — for moving a focused batch of issues. Create one to start planning."
               action={
-                <Button
-                  variant="ember"
-                  size="sm"
-                  onClick={() => setCreateOpen(true)}
-                >
-                  Start first cycle
+                <Button variant="ember" size="sm" onClick={() => setCreateOpen(true)}>
+                  New sprint
                 </Button>
               }
             />
@@ -175,6 +153,12 @@ export default function CyclesPage() {
               <div className="min-w-0 flex-1">
                 <CyclePlanningBoard
                   cycleId={cycle.id}
+                  onPlanCurrentSprint={() => {
+                    document
+                      .querySelector("[data-cycle-backlog-panel]")
+                      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+                    toast.message("Drag backlog issues into any sprint column.");
+                  }}
                   onDropFromBacklog={(issueId) =>
                     plan.mutate({ cycleId: cycle.id, issueIds: [issueId] })
                   }
@@ -186,10 +170,7 @@ export default function CyclesPage() {
         ) : null}
       </div>
 
-      <NewCycleDialog
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-      />
+      <NewCycleDialog open={createOpen} onClose={() => setCreateOpen(false)} />
     </>
   );
 }

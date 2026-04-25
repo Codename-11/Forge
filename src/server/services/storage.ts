@@ -67,6 +67,34 @@ export const ALLOWED_TARGET_TYPES: ReadonlySet<string> = new Set<string>([
 
 // -- Client ------------------------------------------------------------------
 
+/**
+ * Thrown when the runtime cannot find S3 credentials in the environment.
+ * Distinct from generic Error so the tRPC layer can map it to a precise
+ * `PRECONDITION_FAILED` response (vs. a generic 400) and the UI can
+ * detect the case and render an admin-friendly banner.
+ */
+export class StorageNotConfiguredError extends Error {
+  constructor(
+    message = "Object storage is not configured. Ask an admin to set S3_ENDPOINT/S3_ACCESS_KEY/S3_SECRET_KEY.",
+  ) {
+    super(message);
+    this.name = "StorageNotConfiguredError";
+  }
+}
+
+/**
+ * Cheap, side-effect-free check used by routers / UI to decide whether
+ * to even attempt a storage call. Mirrors the credential check inside
+ * `getS3Client()` but never throws and never instantiates the client.
+ */
+export function isStorageConfigured(): boolean {
+  return Boolean(
+    process.env.S3_ENDPOINT &&
+      process.env.S3_ACCESS_KEY &&
+      process.env.S3_SECRET_KEY,
+  );
+}
+
 let _client: S3Client | null = null;
 
 export function getS3Client(): S3Client {
@@ -78,9 +106,7 @@ export function getS3Client(): S3Client {
   const forcePathStyle =
     (process.env.S3_FORCE_PATH_STYLE ?? "true").toLowerCase() !== "false";
   if (!endpoint || !accessKeyId || !secretAccessKey) {
-    throw new Error(
-      "S3 storage not configured: set S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY.",
-    );
+    throw new StorageNotConfiguredError();
   }
   _client = new S3Client({
     endpoint,
@@ -212,6 +238,10 @@ export interface PresignUploadResult {
 export async function presignUploadUrl(
   input: PresignUploadInput,
 ): Promise<PresignUploadResult> {
+  // Bail before any DB work / bucket-create attempt if S3 isn't wired up.
+  if (!isStorageConfigured()) {
+    throw new StorageNotConfiguredError();
+  }
   const { targetType, targetId } = assertTargetShape(input.targetType, input.targetId);
   if (!ALLOWED_MIME_TYPES.has(input.mimeType)) {
     throw new Error(`Mime type not allowed: ${input.mimeType}`);

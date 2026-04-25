@@ -100,7 +100,7 @@ export function CycleSummaryCard({
             onClick={onRollover}
             disabled={rolloverPending}
           >
-            {rolloverPending ? "Rolling over…" : "Rollover to next cycle"}
+            {rolloverPending ? "Rolling over…" : "Rollover to next sprint"}
           </Button>
         )}
       </div>

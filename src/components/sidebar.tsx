@@ -88,7 +88,7 @@ const SECTIONS: readonly NavSection[] = [
     id: "planning",
     label: "Planning",
     items: [
-      { path: "/cycles", label: "Cycles", icon: CalendarRange, chord: "c" },
+      { path: "/cycles", label: "Sprints", icon: CalendarRange, chord: "c" },
       { path: "/initiatives", label: "Initiatives", icon: Compass, chord: "n" },
       { path: "/roadmap", label: "Roadmap", icon: MapIcon, chord: "r" },
     ],
@@ -163,6 +163,17 @@ export function Sidebar({
   // `⌘\` toggles collapse globally. Backslash is an unclaimed key and plays
   // well with the rest of the cmd-prefixed shortcuts (`⌘K` command palette).
   useHotkey("cmd+\\", () => setCollapsed(!collapsed), [collapsed]);
+
+  // Pathname-aware quick-create label. The button itself doesn't change which
+  // mode the overlay opens — that's keyed off the pathname inside the
+  // overlay — but matching the visible label here keeps the surface honest.
+  const quickCreateLabel = useMemo(() => {
+    const tail = pathname?.replace(/^\/w\/[^/]+/, "") ?? "";
+    if (tail.startsWith("/projects")) return "New project";
+    if (tail.startsWith("/cycles")) return "New sprint";
+    if (tail.startsWith("/initiatives")) return "New initiative";
+    return "New issue";
+  }, [pathname]);
 
   const sections = useMemo(
     () =>
@@ -253,7 +264,7 @@ export function Sidebar({
 
       <button
         data-quick-create
-        title="New issue (Shift+C)"
+        title={`${quickCreateLabel} (Shift+C)`}
         className={cn(
           "mx-2 mt-1 flex h-7 items-center gap-2 rounded-md bg-ember text-xs font-medium text-ember-foreground hover:bg-ember/90",
           collapsed
@@ -268,7 +279,7 @@ export function Sidebar({
             collapsed ? "hidden" : "max-md:hidden",
           )}
         >
-          <span className="truncate">New issue</span>
+          <span className="truncate">{quickCreateLabel}</span>
           <span className="ml-auto kbd bg-ember/20 text-ember-foreground">⇧C</span>
         </span>
       </button>

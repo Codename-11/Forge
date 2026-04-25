@@ -16,7 +16,7 @@ import { workspaceColor } from "@/lib/workspace-color";
 /**
  * Account-level workspaces page. Lives at `/settings/workspaces` (not
  * under any `/w/[slug]`) so it remains reachable when the user has no
- * active workspace. Workspace-scoped settings (rename, cycle length, danger
+ * active workspace. Workspace-scoped settings (rename, sprint length, danger
  * zone) live under `/w/[slug]/settings/workspace`; this page is about
  * moving *between* workspaces plus creating new ones.
  *
@@ -204,7 +204,7 @@ function CreateDialog({
       errs.push("Slug must be 2–48 lowercase alphanumeric chars or dashes.");
     else if (existingSlugs.has(slug)) errs.push(`Slug ${slug} is already in use.`);
     if (cycleLengthDays < 1 || cycleLengthDays > 90)
-      errs.push("Cycle length must be between 1 and 90 days.");
+      errs.push("Sprint length must be between 1 and 90 days.");
     return errs;
   }, [name, key, slug, cycleLengthDays, existingKeys, existingSlugs]);
 
@@ -262,7 +262,7 @@ function CreateDialog({
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Cycle length (days)">
+          <Field label="Sprint length (days)">
             <Input
               type="number"
               min={1}

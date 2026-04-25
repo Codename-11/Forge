@@ -3,10 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { EventKind, Priority, RelationKind, WorkItemKind } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
-import {
-  assertKeyScope,
-  buildKeyScopeWhere,
-} from "@/server/services/api-key-auth";
+import { assertKeyScope, buildKeyScopeWhere } from "@/server/services/api-key-auth";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 
@@ -82,9 +79,7 @@ export const issueRouter = router({
             : input.assignedAgentId
               ? { assignedAgentId: input.assignedAgentId }
               : {}),
-          ...(input.includeDone
-            ? {}
-            : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
+          ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
           ...(andClauses.length ? { AND: andClauses } : {}),
         },
         take: input.limit + 1,
@@ -443,14 +438,8 @@ export const issueRouter = router({
         // Agent-assignment changes get a dedicated event so the activity
         // stream / webhook bus can route on `AGENT_ASSIGNED` without
         // parsing `payload` for every generic ISSUE_UPDATED.
-        const agentProvided = Object.prototype.hasOwnProperty.call(
-          patch,
-          "assignedAgentId",
-        );
-        if (
-          agentProvided &&
-          (patch.assignedAgentId ?? null) !== (before.assignedAgentId ?? null)
-        ) {
+        const agentProvided = Object.prototype.hasOwnProperty.call(patch, "assignedAgentId");
+        if (agentProvided && (patch.assignedAgentId ?? null) !== (before.assignedAgentId ?? null)) {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
@@ -881,6 +870,14 @@ export const issueRouter = router({
           status: true,
           project: { select: { id: true, name: true, key: true, color: true } },
           claimedBy: { select: { id: true, name: true, email: true, image: true } },
+          assignedAgent: {
+            select: {
+              id: true,
+              name: true,
+              profileKey: true,
+              status: true,
+            },
+          },
         },
       });
       return annotateUnblocked(ctx, rows);

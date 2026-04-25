@@ -172,10 +172,10 @@ export default function InitiativesPage() {
                     aria-hidden
                   />
                   Completed
-                  <span className="ml-auto font-mono text-[10px]">
+                  <span className="ml-auto text-id">
                     {completed.length}
                   </span>
-                  <span className="font-mono text-[10px]">
+                  <span className="text-id">
                     {showCompleted ? "▾" : "▸"}
                   </span>
                 </button>

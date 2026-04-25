@@ -23,6 +23,7 @@ import { initiativeRouter } from "./initiative";
 import { pinRouter } from "./pin";
 import { relationRouter } from "./relation";
 import { timeEntryRouter } from "./timeEntry";
+import { userRouter } from "./user";
 
 export const appRouter = router({
   access: accessRouter,
@@ -47,6 +48,7 @@ export const appRouter = router({
   status: statusRouter,
   template: issueTemplateRouter,
   timeEntry: timeEntryRouter,
+  user: userRouter,
   view: viewRouter,
   workspace: workspaceRouter,
 });

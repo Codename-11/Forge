@@ -100,7 +100,7 @@ export default function ProjectsPage() {
                       className="inline-block h-3 w-3 rounded-sm"
                       style={{ backgroundColor: p.color ?? "#78716c" }}
                     />
-                    <span className="font-mono text-[10px] text-muted-foreground">{p.key}</span>
+                    <span className="text-id text-muted-foreground">{p.key}</span>
                     <span className="ml-auto text-[11px] text-muted-foreground">
                       {p._count.issues} issues
                     </span>
@@ -215,7 +215,7 @@ function StarterDialog({
                   <div className="flex items-center gap-2">
                     {s.icon && <span>{s.icon}</span>}
                     <span className="text-sm font-medium">{s.name}</span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
+                    <span className="text-id text-muted-foreground">
                       {s.suggestedKey}
                     </span>
                   </div>

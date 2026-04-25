@@ -228,7 +228,10 @@ export default function AgentsPage() {
                       <span className="truncate text-sm font-medium">
                         {a.name}
                       </span>
-                      <span className="font-mono text-[11px] text-muted-foreground">
+                      <span
+                        className="font-mono text-[11px] text-muted-foreground"
+                        title="Profile key — the stable cross-system handle. Matches the Hermes profile directory."
+                      >
                         @{a.profileKey}
                       </span>
                       <span className="inline-flex items-center gap-1.5 rounded-sm bg-subtle px-1.5 py-0.5 text-[11px] font-medium">
@@ -247,7 +250,10 @@ export default function AgentsPage() {
                         {a.description}
                       </div>
                     )}
-                    <div className="mt-2 flex flex-wrap items-center gap-1">
+                    <div
+                      className="mt-2 flex flex-wrap items-center gap-1"
+                      title="Capabilities are tags used by the dispatcher (CAPABILITY_MATCH mode) and PRIORITY_MATCH (a tag like 'urgent' qualifies for that priority)."
+                    >
                       {a.capabilities.map((c) => (
                         <Badge key={c}>{c}</Badge>
                       ))}
@@ -434,7 +440,7 @@ export default function AgentsPage() {
             </Field>
             <Field
               label="Webhook URL"
-              hint="Posted to for push dispatches. Optional — leave blank for pull-only."
+              hint="POSTed to on assignment / start when auto-dispatch is on. Optional — leave blank for pull-only agents that poll via MCP."
             >
               <Input
                 type="url"
@@ -448,7 +454,7 @@ export default function AgentsPage() {
             </Field>
             <Field
               label="Capabilities"
-              hint="Comma-separated tags (e.g. `triage, architecture`). Max 32."
+              hint="Comma-separated tags (e.g. `triage, architecture`). Used by CAPABILITY_MATCH dispatch (intersect with issue labels) and PRIORITY_MATCH (e.g. 'urgent' tag → eligible for URGENT). Max 32."
             >
               <Input
                 value={editing.capabilitiesRaw}
@@ -460,7 +466,7 @@ export default function AgentsPage() {
             </Field>
             <Field
               label="Max concurrent"
-              hint="Upper bound on simultaneously-claimed issues. 0 disables claims."
+              hint="Upper bound on simultaneously-assigned active issues. 0 disables new assignments entirely (existing ones unchanged)."
             >
               <Input
                 type="number"

@@ -2,6 +2,187 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-25 — Life Ops execution layer polish
+
+Follow-up on the Sprint/Life Ops handoff. Kept backend/database names as
+`Cycle` and `cycle.*`; tightened the operator-facing product language and
+added small execution-layer affordances without a migration.
+
+### What landed
+
+**Sprint UX**
+
+- Finished remaining visible Sprint copy on the `/cycles` surface: page title,
+  previous/next tooltips, create CTA, and planning toast now say Sprint.
+- Added a current-sprint empty callout in `CyclePlanningBoard`:
+  "No issues planned for this sprint." It explains that Backlog stays separate
+  and includes a "Plan current sprint" action that points the operator at the
+  Backlog drag source.
+- Kept the existing summary card date range, issue count, completion count, and
+  burndown. Internal `cycleId` comments now explicitly call out the Sprint UI
+  alias.
+- Renamed visible Inbox sprint rollups and Analytics "cycle time" language to
+  Sprint / flow time.
+
+**Agent queue clarity**
+
+- Inbox now has an Agent queue section for the current workspace, backed by
+  `issue.queue`.
+- Queue rows show issue id/title/status/project, ready vs blocked vs claimed,
+  assigned-agent presence, claim expiry, and queue-level counts
+  (`ready now`, `assigned`, `claimed`, online/busy agents).
+- `issue.queue` now includes `assignedAgent` in its return payload so the UI can
+  distinguish queued-unassigned from queued-assigned work.
+- Issue detail queue control now says "Queue for agent", shows Queued / Not
+  queued state, and invalidates the queue after queue/release changes.
+
+**Issue templates + intake stance**
+
+- `template.list` now seeds six generic default issue templates on first use:
+  Dev task, Agent-ready task, Home/personal task, Finance follow-up, Side quest,
+  and Review item.
+- Agent-ready template requires Objective, Project / repo / system area,
+  Acceptance criteria, Safety / approval boundaries, and Verification path.
+- README and API docs now state that Forge is the execution layer, Sprint is the
+  product term, `Cycle` remains internal for compatibility, captured ideas are
+  not auto-promoted into active sprints, and shared household/couple workflows
+  are deferred.
+
+### Verification
+
+- `pnpm typecheck` clean.
+- `pnpm build` clean. Build emitted existing Redis `ECONNREFUSED` noise during
+  page data/static generation because local Redis was not running, but exited 0.
+- `pnpm lint` still fails on pre-existing `src/components/issue-board.tsx`
+  `no-explicit-any` errors; this patch added no new lint errors.
+- `pnpm test` failed before exercising behavior because Postgres
+  `localhost:55432` and Redis were not reachable in this environment.
+- `pnpm test:e2e` not run because the required Postgres/Redis services were not
+  available.
+- `git diff --check` clean.
+
+### Follow-ups
+
+- Mission Control can deep-link into `/w/:slug/inbox` for agent queue status and
+  `/w/:slug/cycles` for current Sprint planning.
+- A future template picker in Quick Create would make seeded issue templates
+  faster to apply; today they are managed in Settings and available through the
+  existing template surfaces.
+
+## 2026-04-24 — UX audit + 5-agent parallel polish wave
+
+Audit-driven polish session. User asked for a UX-from-the-user-perspective
+review; we found and fixed a real upload bug along the way and shipped a
+broad polish wave.
+
+### What landed
+
+**Storage / uploads (was broken)**
+
+- README advertised MinIO but neither `docker/docker-compose.yml` nor `.env*`
+  configured it. `getS3Client()` was throwing on every attachment call,
+  surfacing as vague "not found" pills and "BAD_REQUEST" toasts.
+- Added `minio` service to compose (`forge-minio`, ports 59000/59001 on
+  host, root creds `forgeminio` / `forgeminio-dev-password`).
+- Added `S3_*` vars to `.env` and `.env.example` with a comment block.
+- New `StorageNotConfiguredError` typed exception + `isStorageConfigured()`
+  helper. `attachment` router maps the typed error to `PRECONDITION_FAILED`.
+- `IssueAttachmentsPanel` now shows a single inline `StorageNotConfiguredBanner`
+  (with the exact env vars to set) instead of letting the failure surface as
+  noisy per-tile toasts. `MarkdownWithAttachments` shows a clear
+  "Attachment unavailable — storage error" pill with the error in the title.
+- **Operator note:** there's an existing `forge-minio` container on the box
+  bound to host ports 9000/9001 from a previous compose. To pick up the new
+  ports, run `docker compose -f docker/docker-compose.yml down minio &&
+docker compose -f docker/docker-compose.yml up -d minio` (container name
+  is reused).
+
+**Appearance preferences (new feature)**
+
+- New `User.density` and `User.textSize` columns, both nullable, defaults
+  read as `compact` / `default` (current behavior). Migration `0008`.
+- New `userRouter` with `me` and `updateAppearance` (also covers `theme`).
+- `AppearanceProvider` mounted in workspace shell mirrors the prefs onto
+  `<html data-density data-textsize>`.
+- `/settings/appearance` page (account-scoped) — auto-saves on click, shows
+  a live preview row that uses the actual utility classes.
+- Four density-aware utility classes added to `globals.css`:
+  `text-id`, `text-meta`, `text-filename`, `text-subtitle`. Each cascades
+  on `[data-density]` and `[data-textsize]`.
+
+**Cycles → Sprints (UI rename only)**
+
+- All user-facing labels, buttons, tooltips, page subtitles renamed.
+- DB models, tRPC routers (`cycle*`), routes (`/cycles`), folder names,
+  `Workspace.cycleLengthDays`, and procedure names left **unchanged** —
+  this is a display-string-only rename. A future migration can rename the
+  data layer if desired.
+
+**Empty states**
+
+- Added `EmptyState` blocks to Issues (gated on `_count.issues===0` AND
+  no filters), Inbox ("Inbox zero" hero), Analytics tabs, Cycles ("No
+  sprints yet" with new-sprint CTA), Roadmap (refreshed copy + projects
+  link), Standup ("Quiet day").
+- Each has its own voice — none feel templated.
+
+**Quick-create overlay polish**
+
+- Container widened `max-w-2xl` → `max-w-3xl`, vertical rhythm bumped.
+- Input upgraded from `text-sm` to `text-base`.
+- ModeChip is now a real popover dropdown for non-issue-context modes —
+  user can switch Issue/Sprint/Project/Initiative without navigating first.
+  Outside-click closes the popover, not the overlay.
+
+**Sidebar "New X" button**
+
+- Pathname-aware label: `/projects` → "New project", `/cycles` →
+  "New sprint", `/initiatives` → "New initiative", else "New issue".
+
+**Onboarding re-entry**
+
+- `useOnboardingDismissed` hook (localStorage + cross-component window
+  event). When the OnboardingCard is dismissed but the checklist isn't
+  complete, a `<ResumeSetupPill>` appears in the dashboard topbar; clicking
+  it clears the flag and the card re-mounts in place.
+
+**Tooltip / subtext sweep**
+
+- Workspace settings: hints on Sprint length, Cooldown, Attachment quota.
+- Agents page: `title=` tooltips on profileKey, capabilities chip group,
+  webhookUrl, maxConcurrent.
+- Dispatch rules: page subtitle expanded to a one-paragraph plain-language
+  explanation of how rules relate to auto-dispatch.
+
+**Density class application (text bumps)**
+
+- Issue IDs: dashboard focus grid, projects list, initiatives list +
+  detail page, initiative cards.
+- Activity timestamps in `IssueActivityPanel`.
+- Filename overlay on attachment thumbs.
+- Topbar subtitle.
+- Pending-tile metadata (file size + status) in attachment uploads.
+
+### Verification
+
+- `pnpm typecheck` clean.
+- `pnpm lint` — all errors are pre-existing in `issue-board.tsx` (untouched
+  by this session). New files lint clean.
+- `pnpm test` not run — local test DB not reachable on this host. The
+  integration suite runs against Postgres at `localhost:55432` per CLAUDE.md
+  convention; bring it up to verify.
+
+### Files touched (high-level)
+
+- New: `src/server/routers/user.ts`, `src/components/appearance-provider.tsx`,
+  `src/app/(app)/settings/appearance/page.tsx`,
+  `prisma/migrations/0008_add_user_appearance_prefs/`.
+- Modified: schema.prisma, globals.css, compose, env files, sidebar,
+  quick-create, topbar(s), 6 page-level files for empty states, cycles
+  components for Sprints rename, attachment panel + renderer for storage
+  errors, dashboard for onboarding re-entry, settings sub-pages for
+  tooltips.
+
 ## 2026-04-23 — P3 wave + admin user management (6-agent parallel)
 
 Second big parallel wave the same day. All P3 items landed, plus the P2
@@ -11,6 +192,7 @@ P2 BullMQ-as-separate-container and per-agent permission lattice were
 held for a design pass.
 
 Migrations added this wave:
+
 - `0005_agent_templates` — `Agent.templateMarkdown String? @db.Text`
 - `0006_dispatch_rules` — `DispatchRule` table (conditions + targetAgentId,
   workspace FK CASCADE, label/project FK SET NULL, agent FK RESTRICT,
@@ -124,7 +306,7 @@ schema/codebase view. The `ort` merge handled most of this cleanly
 but botched `dispatcher.ts`: P1-4 (wave 1) extracted `isEligible`;
 P3-5 (wave 2) added a rules layer + refactored assignment into
 `assignAndEmit`; the merge placed P1-4's provenance-building code
-*inside* `assignAndEmit` where its free variables (`agents`, `picked`,
+_inside_ `assignAndEmit` where its free variables (`agents`, `picked`,
 `matchCountByAgent`) weren't in scope. Rewrote `assignAndEmit` as a
 thin helper that takes `meta.dispatch?: Prisma.InputJsonObject`; call
 sites now build candidates/chosen locally (mode path has the full
@@ -142,6 +324,7 @@ Small schema enum conflict: wave 1 added `AGENT_STATUS_CHANGED` to
 appended cleanly when reconciled.
 
 **Validation.**
+
 - `pnpm prisma generate` clean against merged schema.
 - All 8 migrations already applied to the test DB by sub-agents; no
   pending deploys needed on local.
@@ -166,6 +349,7 @@ item was dispatched to an isolated worktree agent; six branches merged
 sequentially onto master with one real conflict on `worker.ts`.
 
 Migrations added:
+
 - `0003_comment_agent_authorship` — `Comment.authoringAgentId` nullable FK
   → `Agent.id` (ON DELETE SET NULL), index on the column, back-relation
   `Agent.authoredComments`. FK type is plain `String` (not `@db.Uuid`) to
@@ -258,6 +442,7 @@ Did not collapse into the single-issue pickers — their data shape is
 too different to retrofit without muddling them.
 
 **Validation.**
+
 - `pnpm prisma generate` clean against merged schema.
 - `pnpm prisma migrate deploy` applied `0003` + `0004` cleanly to the
   test DB.
@@ -306,16 +491,17 @@ short-circuits when the issue is already assigned, not queued, or the
 workspace isn't set for auto-dispatch. Loads eligible agents
 (`archivedAt null`, `status != OFFLINE`, under `maxConcurrent`). Pick
 rules:
+
 - `ROUND_ROBIN` — oldest `lastDispatchedAt` NULLS FIRST.
 - `PRIORITY_MATCH` — prefer agents with the priority name in
   `capabilities`; tie-break round-robin.
 - `CAPABILITY_MATCH` — intersect issue label names with agent
   capabilities; most matches wins; zero-matches falls through to
   round-robin rather than stalling.
-Writes `assignedAgentId` + bumps agent `lastDispatchedAt` + fires
-AGENT_ASSIGNED with `payload.auto = true` and the picking mode.
-Invoked from `issue.create` and `issue.setQueued` inside the existing
-`$transaction`. 8 new tests cover all modes + maxConcurrent + idempotency.
+  Writes `assignedAgentId` + bumps agent `lastDispatchedAt` + fires
+  AGENT_ASSIGNED with `payload.auto = true` and the picking mode.
+  Invoked from `issue.create` and `issue.setQueued` inside the existing
+  `$transaction`. 8 new tests cover all modes + maxConcurrent + idempotency.
 
 **Lane C — Victor + Mizu bootstrap.** `scripts/seed-agents.ts` +
 `pnpm seed:agents` — idempotent upsert on `(workspaceId, profileKey)`,
@@ -341,6 +527,7 @@ observability, handoff flow). docs/API.md refreshed with the 43-tool
 namespace table + full EventKind list.
 
 **Validation + deploy.**
+
 - `pnpm typecheck` clean.
 - `pnpm test` 82/82 (8 new dispatcher, 5 new mention parser).
 - Image `forge:local e0c5f6b430ef`; entrypoint applied
@@ -408,6 +595,7 @@ schema change — `ApiKey`/`Agent` per-agent secret column deferred.
 (idempotent on true→true).
 
 **Validation + deploy.**
+
 - `pnpm typecheck` clean.
 - `pnpm test` 69/69 green (5 new tests from Lane A).
 - Lint: two introduced `prefer-const` errors fixed (`issue.ts:358`
@@ -420,10 +608,11 @@ schema change — `ApiKey`/`Agent` per-agent secret column deferred.
   applied `0001_agents_and_dispatch` on first boot.
 - MCP smoke: `tools/list` shows 43 tools (5 new names present);
   `analytics.summary` 200; `cycles.current` 200; `issues.assigned
-  {profileKey:"victor"}` 200-shaped error (Agent not found) — correct
+{profileKey:"victor"}` 200-shaped error (Agent not found) — correct
   because no agents exist yet.
 
 Follow-ups before TODO P0 closes:
+
 - Bootstrap Victor/Mizu Agent rows in AXI (UI or `db seed`).
 - `ApiKey.linkedAgentId` column + wire `issues.assigned` fallback.
 - Hermes config-yaml additions (`forge.auto_claim`, `auto_start`,
@@ -478,7 +667,7 @@ called out in the triage prompt. No Blocker or High-severity findings:
   itself re-verifies membership; invalidations are cache-only (no data
   leak). `utils` dep on the effect is stable in tRPC v11.
 - Primitives back-compat shims (`src/components/settings/{card,
-  empty-state,section}.tsx`) preserve the pre-sweep public API. One
+empty-state,section}.tsx`) preserve the pre-sweep public API. One
   Medium spacing drift in the new `Section` header (old: `space-y-2`
   between title-row/hint/body; new: `space-y-1` inside header, `-2`
   between header/body) — cosmetic only.
@@ -500,16 +689,17 @@ No audit-driven follow-up commits; findings recorded here only.
 With the feature set roughly doubled in the morning push, the UI was
 visibly a bundle of ten different authors. This sweep reconciles it.
 
-| Commit | Scope | What |
-|---|---|---|
-| `9af539b` | Primitives | `src/components/ui/*` — EmptyState (page/section/card variants), Skeleton family, Card+Section, Spinner, Kbd/Chord, Density context, motion tokens. Toast = thin wrapper over existing sonner. Back-compat shims keep `src/components/settings/*` imports working. |
-| `86f275e` | Shell / IA | Sidebar reshaped into Work/Planning/Personal/Admin groups with `⌘\` collapse to icon rail (persisted). New top bar hosts pins, quick-create, inbox badge, user menu. `?` keyboard help overlay driven by a single-source `src/lib/shortcuts.ts`. Below-`sm` "use on tablet or larger" banner. |
-| `fdafb72` | Flow | Issue detail restructured to two columns ≥md — description + comments left, sticky tabbed rail right (Attachments / Relations / Activity), with `1/2/3` tab keys and `?tab=` deep links. Quick-create (⇧C) is pathname-aware: new cycle / initiative / project / comment / sub-issue / default issue. Dashboard merged into Inbox as the primary landing; Inbox got Today's focus + Workspace pulse rollups. New `issue.activity` tRPC procedure feeds the Activity tab. |
+| Commit    | Scope                                      | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `9af539b` | Primitives                                 | `src/components/ui/*` — EmptyState (page/section/card variants), Skeleton family, Card+Section, Spinner, Kbd/Chord, Density context, motion tokens. Toast = thin wrapper over existing sonner. Back-compat shims keep `src/components/settings/*` imports working.                                                                                                                                                                                                                                                                                     |
+| `86f275e` | Shell / IA                                 | Sidebar reshaped into Work/Planning/Personal/Admin groups with `⌘\` collapse to icon rail (persisted). New top bar hosts pins, quick-create, inbox badge, user menu. `?` keyboard help overlay driven by a single-source `src/lib/shortcuts.ts`. Below-`sm` "use on tablet or larger" banner.                                                                                                                                                                                                                                                          |
+| `fdafb72` | Flow                                       | Issue detail restructured to two columns ≥md — description + comments left, sticky tabbed rail right (Attachments / Relations / Activity), with `1/2/3` tab keys and `?tab=` deep links. Quick-create (⇧C) is pathname-aware: new cycle / initiative / project / comment / sub-issue / default issue. Dashboard merged into Inbox as the primary landing; Inbox got Today's focus + Workspace pulse rollups. New `issue.activity` tRPC procedure feeds the Activity tab.                                                                               |
 | `43e0a11` | Retrofit + realtime + responsive + density | 13 pages retrofitted to the new primitives with `⇧C` Kbd hints on empty states. Compact / Comfortable density toggle on Issues list (persisted via DensityProvider). SSE propagation wired for inbox badge, pins strip (BroadcastChannel), running timer (BroadcastChannel), cycles board, Activity tab, Relations panel, initiatives + roadmap. Responsive ≥md verified; roadmap gets explicit horizontal scroll; backlog panel hides below lg to keep the board breathable. ~15 motion call-sites migrated from ad-hoc classes to `MOTION.*` tokens. |
 
 **Totals:** 4 commits, 13 pages retrofitted, ~25 new primitives, 7 realtime surfaces wired, 64/64 tests still green, production rebuild + redeploy verified (38 MCP tools, analytics + cycles.current smoke-passed).
 
 Notable calls:
+
 - Toast backend stayed on sonner — extending beat replacing since there are 30+ call-sites across the app.
 - Dashboard `/dashboard` now redirects to `/inbox`. The nav item disappeared; deep links survive.
 - Top bar pins strip hides below md (power-user affordance). Sidebar auto-collapses below md; workspace-is-keyboard banner below sm.
@@ -521,18 +711,18 @@ Notable calls:
 All eight work packages from the coordinated multi-agent build are in.
 Final state on `master`:
 
-| # | Commit | Phase | What |
-|---|---|---|---|
-| 1 | `ec94cb9` | — | Pre-migration snapshot (first-ever git commit in this repo). |
-| 2 | `f96557f` | 1A | Schema additions (cycles/initiatives/relations/time/polymorphic attachments/granular ApiKey scopes/workspace settings) + FRG→AXI rekey + PER/WRK seed. |
-| 3 | `af45433` | 2B | Routers: cycle, initiative, relation, timeEntry (+ 23 tests). |
-| 4 | `cf2adec` | 2H | Docs sweep — SYSTEM.md, CLAUDE.md, Hermes skill runbook, Obsidian vault, memory files. Mizu/Lumin correction. |
-| 5 | `b3555bf` | 2E | UI shell — workspace switcher, `/w/[slug]/*` URL scheme, workspace settings pages. |
-| 6 | `bae90b9` | 2C | MinIO service + attachment router + granular ApiKey scopes enforcement + blocker-aware claim. |
-| 7 | `6650e07` | 3F | Cycles / initiatives / roadmap / relations panel UI + list-view filter chips. |
-| 8 | `22fb3cb` | 3G.wip | Salvaged inbox + pin routers from a stalled agent run. |
-| 9 | `271eedc` | 3D | MCP surface: 38 tools (10 existing + 28 new), narrowing-aware. 14 new tests. |
-| 10 | `3dcb589` | 3G | Attachments drag/drop + paste, inbox page, pins strip, time tracker widget. |
+| #   | Commit    | Phase  | What                                                                                                                                                   |
+| --- | --------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | `ec94cb9` | —      | Pre-migration snapshot (first-ever git commit in this repo).                                                                                           |
+| 2   | `f96557f` | 1A     | Schema additions (cycles/initiatives/relations/time/polymorphic attachments/granular ApiKey scopes/workspace settings) + FRG→AXI rekey + PER/WRK seed. |
+| 3   | `af45433` | 2B     | Routers: cycle, initiative, relation, timeEntry (+ 23 tests).                                                                                          |
+| 4   | `cf2adec` | 2H     | Docs sweep — SYSTEM.md, CLAUDE.md, Hermes skill runbook, Obsidian vault, memory files. Mizu/Lumin correction.                                          |
+| 5   | `b3555bf` | 2E     | UI shell — workspace switcher, `/w/[slug]/*` URL scheme, workspace settings pages.                                                                     |
+| 6   | `bae90b9` | 2C     | MinIO service + attachment router + granular ApiKey scopes enforcement + blocker-aware claim.                                                          |
+| 7   | `6650e07` | 3F     | Cycles / initiatives / roadmap / relations panel UI + list-view filter chips.                                                                          |
+| 8   | `22fb3cb` | 3G.wip | Salvaged inbox + pin routers from a stalled agent run.                                                                                                 |
+| 9   | `271eedc` | 3D     | MCP surface: 38 tools (10 existing + 28 new), narrowing-aware. 14 new tests.                                                                           |
+| 10  | `3dcb589` | 3G     | Attachments drag/drop + paste, inbox page, pins strip, time tracker widget.                                                                            |
 
 **Totals:** 10 commits, 64 tests passing, typecheck clean, 3 active workspaces (AXI/PER/WRK), 38 MCP tools, MinIO healthy with three buckets (`forge-axiom-labs` / `forge-personal` / `forge-work`).
 
@@ -576,7 +766,7 @@ in; Phase 3 MCP tool additions come after.
 
 `ApiKey` gets `projectIds`, `labelIds`, `initiativeIds` — string arrays,
 empty = no narrowing (unchanged semantics). A key can still have FULL
-scope *and* be narrowed to a project / label / initiative subset, so a
+scope _and_ be narrowed to a project / label / initiative subset, so a
 sub-agent can be scoped to just one initiative without losing any
 existing capability. Victor and Mizu currently keep FULL + unnarrowed.
 
@@ -725,6 +915,7 @@ Streamable HTTP transport (spec 2025-03-26). REST stays as a simpler
 curl/debugging alias.
 
 ### Server
+
 - `src/app/api/mcp/rpc/route.ts` — JSON-RPC handler supporting
   `initialize`, `notifications/initialized`, `ping`, `tools/list`,
   `tools/call`. Batched requests + notifications (no-response) honored.
@@ -738,6 +929,7 @@ curl/debugging alias.
   `GET` during the Streamable HTTP handshake succeed.
 
 ### Client / docs
+
 - `/settings/access` Integration blocks rewritten:
   - **Claude Desktop**: `mcp-remote` now points at the real `/api/mcp/rpc`.
   - **Claude Code**: `claude mcp add --transport http ... /api/mcp/rpc`.
@@ -750,6 +942,7 @@ curl/debugging alias.
   clients that can't speak HTTP MCP, but is no longer the preferred path.
 
 ### Verified
+
 - `initialize` returns 2025-03-26 protocol + serverInfo/instructions.
 - `tools/list` returns 10 tools with full JSON Schema input shapes.
 - `tools/call` `analytics.summary` with Victor's bearer → `{openIssues:1, doneIssues:0}`.
@@ -758,6 +951,7 @@ curl/debugging alias.
 ## 2026-04-19 — Hermes integration + settings layout pass
 
 ### Settings UI polish (subagent pass)
+
 - `src/components/settings/{section,card,empty-state}.tsx` — 3 tiny primitives.
 - Every `/settings/*` page now shares `mx-auto max-w-{2xl|3xl|5xl} space-y-6 p-6`
   and renders lists through `<Card>` + `<EmptyState>`. Widths by type:
@@ -768,6 +962,7 @@ curl/debugging alias.
 - Settings index grouped into **General / Workspace / Developer** sections.
 
 ### Hermes integration (new)
+
 Forge's `/api/mcp/*` is a REST tool dispatcher. Hermes speaks standard MCP
 JSON-RPC 2.0 over stdio. Bridged them with a tiny subprocess:
 
@@ -783,12 +978,14 @@ JSON-RPC 2.0 over stdio. Bridged them with a tiny subprocess:
   integration blocks alongside Claude Desktop/Code/curl/env.
 
 ### Keys minted
+
 - `Hermes · Victor` (FULL access) — stored in `~/.hermes/.env`.
 - `Hermes · Mizu` (FULL access) — stored in `~/.hermes/profiles/mizu/.env`.
-Both inserted directly via SQL (prefix + sha256 hash) since the minting
-procedure expects a tRPC session.
+  Both inserted directly via SQL (prefix + sha256 hash) since the minting
+  procedure expects a tRPC session.
 
 ### Verified end-to-end
+
 - Bridge smoke test: `initialize` → 10 tools listed → `issues.list` responds.
 - MCP REST call with Victor's key created issue **FRG-1** successfully.
 - All 10 settings routes return 200 after the layout pass.
@@ -799,6 +996,7 @@ Huge feature pass. Big batch of small things, one consistent theme: reduce
 the "blank-page" friction + make Forge usable by agents.
 
 ### Data model
+
 - `IssueTemplate` — reusable starters (name, title, description, priority,
   labelIds). Workspace-scoped + optional project pin.
 - `ProjectTemplate` — starter suggestions shown on `/projects`. Replaces
@@ -812,6 +1010,7 @@ the "blank-page" friction + make Forge usable by agents.
   the agent queue.
 
 ### Routers
+
 - `template` — CRUD for issue templates.
 - `projectTemplate` — CRUD + auto-seed defaults.
 - `recurring` — CRUD + `runNow` to fire a schedule manually.
@@ -824,6 +1023,7 @@ the "blank-page" friction + make Forge usable by agents.
   `timezone/locale/timeFormat/theme` (prior entry).
 
 ### MCP tools for agents
+
 - `issues.claim({ claimTtlMinutes })` — atomically picks the highest-
   priority unclaimed queued issue, stamps `claimedAt` + `claimExpiresAt`,
   upserts the caller into `assignees`. Returns the issue or null.
@@ -831,6 +1031,7 @@ the "blank-page" friction + make Forge usable by agents.
 - `issues.queue({ includeClaimed })` — peek the queue without claiming.
 
 ### Scheduler
+
 - `src/instrumentation.ts` calls `startRecurringTicker()` on server boot
   (Node runtime only). `setTimeout` chain that scans `RecurringIssue` rows
   with `active=true AND nextRunAt ≤ now`, creates issues via a transaction
@@ -838,6 +1039,7 @@ the "blank-page" friction + make Forge usable by agents.
 - Admins can force-fire via the Run now button on `/settings/recurring`.
 
 ### New UI
+
 - `/standup` — draft card with copy-markdown button and 1d/3d/7d window
   toggle.
 - `/focus/[id]` — stripped fullscreen view outside the app shell. Timer
@@ -855,17 +1057,20 @@ the "blank-page" friction + make Forge usable by agents.
   admin page to manage them.
 
 ### Sidebar user menu
+
 - User row at the bottom is now a button that opens a dropdown with
   Account settings, Workspace settings, and Sign out. Sign out uses a
   server action calling NextAuth's `signOut({ redirectTo: "/signin" })`.
 
 ### Verified
+
 - Build clean on second pass (satori fixes + all new routers).
 - `prisma db push` applied `ProjectTemplate` cleanly.
 - All new routes + existing routes return 200.
 - Recurring ticker boots on container start (log line on success).
 
 ### Remaining
+
 - Bulk select UI on `/issues` now supports multi-status + delete; could
   add multi-label / multi-assign.
 - Onboarding checklist hasn't been extended to include "create a
@@ -875,6 +1080,7 @@ the "blank-page" friction + make Forge usable by agents.
 ## 2026-04-19 — Dashboard + brand assets
 
 ### Brand
+
 - `public/forge-mark.svg` + `src/app/icon.svg` — anvil-on-ember glyph. Used
   on the sign-in page and as the favicon (Next auto-links from `app/icon.svg`).
 - `src/app/opengraph-image.tsx` + `src/app/twitter-image.tsx` — 1200×630
@@ -885,7 +1091,9 @@ the "blank-page" friction + make Forge usable by agents.
   openGraph, twitter, theme-color per-scheme, `robots: { index: false }`.
 
 ### Dashboard (`/dashboard`, `g d`)
+
 Client page built by a subagent. Sections:
+
 - Time-aware greeting + quick-actions (New issue via QuickCreate, Browse
   templates, Invite).
 - **Focus today** — up to 6 issues assigned to me, priority-desc + due-soon.
@@ -900,12 +1108,14 @@ Sign-in default destination updated to match. Sidebar + command palette
 have "Dashboard" as the first entry.
 
 ### UI polish (from audit pass)
+
 - `Button.danger` used `text-white` — swapped for `text-background`.
 - `QuickCreate` dialog padding `p-4` → `p-5` (dialog rhythm consistent).
 - `Topbar` accepts `ReactNode` title/subtitle and dropped the always-on
   placeholder Filter/Display buttons.
 
 ### Verified
+
 - `docker compose build` clean after the satori fixes.
 - All 8 app routes 200; `forge-mark.svg` / `icon.svg` / `opengraph-image` /
   `twitter-image` served.
@@ -915,12 +1125,14 @@ have "Dashboard" as the first entry.
 Closed the remaining gaps from the audit.
 
 ### Chord navigation
+
 - `src/lib/keyboard.ts` gains `useChord(leader, map, windowMs)`. The
-  sidebar's `g i`/`g s`/… labels now *actually* work — press `g` then
+  sidebar's `g i`/`g s`/… labels now _actually_ work — press `g` then
   `i`/`s`/`p`/`a`/`l`/`,` to jump. Sidebar renders kbd chips (`G` + target
   letter) in place of the old string hint.
 
 ### Label CRUD
+
 - `src/server/routers/label.ts` — list/create/update/delete (admin) +
   `setForIssue` (member). Workspace-scoped, unique `(workspaceId, name)`.
 - `/settings/labels` page — color swatches, inline edit, delete with
@@ -929,10 +1141,12 @@ Closed the remaining gaps from the audit.
   workspace labels, commits via `label.setForIssue`).
 
 ### Status drag-reorder
+
 - Native HTML5 DnD on `/settings/statuses`. Dragging commits via the
   existing `status.reorder` proc on drop; optimistic UI reverts on error.
 
 ### Bulk select on issue list
+
 - `IssueList` now renders a per-row checkbox, a sticky action bar with
   "Move to status…" (via `issue.bulkStatus`) and Delete (fan-out to
   `issue.softDelete`), and a clear-all. Wired everywhere `<IssueList>` is
@@ -940,16 +1154,19 @@ Closed the remaining gaps from the audit.
   out.
 
 ### Project CRUD completion
+
 - New-from-scratch "New project" dialog on `/projects` (name + key + desc
-  + color swatches + emoji icon). Key auto-suggested from name initials.
+  - color swatches + emoji icon). Key auto-suggested from name initials.
 - `project.softDelete` mutation + Delete button on project detail page.
 - Starter templates dialog preserved for the common suggestions.
 
 ### API key deletion
+
 - `access.delete` admin mutation — hard-deletes the row entirely (Revoke
   still sets `revokedAt` for audit trail). Access page exposes both.
 
 ### Prisma baseline migration
+
 - `prisma migrate diff --from-empty --to-schema-datamodel` generated
   `prisma/migrations/0000_init/migration.sql` (582 lines).
 - `prisma migrate resolve --applied 0000_init` baselined the existing
@@ -957,6 +1174,7 @@ Closed the remaining gaps from the audit.
   ("No pending migrations to apply.") instead of hitting `P3005`.
 
 ### Verified
+
 - Build clean.
 - All 12 routes 200 (inbox, issues, projects, analytics, settings +
   account/access/members/statuses/labels/plugins/admin).
@@ -968,6 +1186,7 @@ Closed the remaining gaps from the audit.
 Quick follow-up pass.
 
 ### Changes
+
 - `src/lib/platform.ts` — `useIsMac` / `useModKeyLabel`. Sidebar now
   renders `⌘K` on macOS, `Ctrl+K` elsewhere. The underlying hotkey handler
   already treated `cmd+k` as `Ctrl+K` on non-Mac, so only the visible
@@ -986,6 +1205,7 @@ Quick follow-up pass.
 - `/settings` index now lists Account as the top entry.
 
 ### Verified
+
 - `docker compose build` → clean.
 - `prisma db push` applied the new columns cleanly.
 - Login + `/settings/account`, `/settings/admin`, `/settings/access`,
@@ -998,6 +1218,7 @@ Post-audit pass: closed most of the gaps found by the explore subagent.
 Focus was on real CRUD surfaces and a first-class developer-access flow.
 
 ### Server
+
 - `src/server/routers/admin.ts` (new) — `stats`, `audit`, `events`,
   `deliveries`. Admin-gated.
 - `src/server/routers/access.ts` — added `rotate` (atomic revoke + reissue
@@ -1006,6 +1227,7 @@ Focus was on real CRUD surfaces and a first-class developer-access flow.
   `removeMember`. Last-owner guard on both mutations.
 
 ### Pages
+
 - `/settings/access` — preset toggle (Full / Standard / Read-only / Custom)
   plus per-scope grid. Rotate button on each key; post-rotate reveal reuses
   the same tabbed integration blocks (Claude Desktop / Code / curl / env).
@@ -1026,6 +1248,7 @@ Focus was on real CRUD surfaces and a first-class developer-access flow.
 - `/inbox` — real filter tabs: Assigned / Created / All active.
 
 ### Shared UI
+
 - `src/components/view-toggle.tsx` (new) — `<ViewToggle>` + `useViewPref`
   (localStorage-persisted per scope).
 - `Topbar` — dropped the always-visible Filter + Display placeholders that
@@ -1036,6 +1259,7 @@ Focus was on real CRUD surfaces and a first-class developer-access flow.
 - `Sidebar` — added Settings link; dropped the duplicate settings gear.
 
 ### Verified
+
 - `docker compose build` → clean.
 - Login + all 10 routes 200 (inbox, issues, projects, analytics, settings,
   settings/{access,members,statuses,plugins,admin}).
@@ -1043,6 +1267,7 @@ Focus was on real CRUD surfaces and a first-class developer-access flow.
   baseline warning).
 
 ### Still pending
+
 - Statuses drag-to-reorder.
 - Label CRUD surface.
 - Bulk-select + status mutation on issue list.
@@ -1056,6 +1281,7 @@ developer-access page with copy-paste MCP config blocks, and made it trivial
 to seed the workspace with the usual suspects.
 
 ### New surface
+
 - `src/server/routers/access.ts` — workspace-level API keys (not tied to a
   plugin). `list` / `create` / `revoke`. `create` returns the raw key once;
   only the sha256 is persisted.
@@ -1064,10 +1290,10 @@ to seed the workspace with the usual suspects.
 - `src/app/(app)/settings/access/page.tsx` — lists keys, create dialog with
   scope toggle grid + optional expiry, post-create reveal modal with
   tabbed copy-paste blocks:
-    - Claude Desktop (`mcpServers.forge` JSON via `mcp-remote`)
-    - Claude Code (`claude mcp add --transport http ...`)
-    - curl (issues.list + issues.create examples)
-    - `.env` block
+  - Claude Desktop (`mcpServers.forge` JSON via `mcp-remote`)
+  - Claude Code (`claude mcp add --transport http ...`)
+  - curl (issues.list + issues.create examples)
+  - `.env` block
 - `src/app/(app)/settings/members/page.tsx` — uses existing
   `workspace.members` + `workspace.invite` procedures.
 - `src/app/(app)/settings/statuses/page.tsx` — uses existing
@@ -1079,11 +1305,13 @@ to seed the workspace with the usual suspects.
   client so it stays out of the platform's data model.
 
 ### Verified
+
 - `docker compose build forge` → clean.
 - `POST /api/auth/callback/credentials` → 302 `/inbox`.
 - `GET /{inbox,settings,settings/access,settings/members,settings/statuses,settings/plugins,projects}` → 200.
 
 ### Known / next
+
 - Prisma baseline migration still missing (`P3005` on entrypoint migrate,
   soft-failed). Generate one before the next schema change.
 - `mcp-remote` is the canonical bridge for HTTP-transport MCP into Claude
@@ -1095,6 +1323,7 @@ to seed the workspace with the usual suspects.
 Authelia header-bridge didn't land cleanly (edge middleware was setting response headers instead of forwarding request headers; fixed version still didn't produce the expected handshake in the browser). Bailey called it — dropped the bridge entirely.
 
 ### Changes
+
 - Deleted `src/middleware.ts`, `src/server/authelia-bridge.ts`, `src/app/api/auth/authelia-bridge/`.
 - `src/server/auth.ts` now exposes a **Credentials** provider comparing against `ADMIN_EMAIL` / `ADMIN_PASSWORD`. On first match, upserts the user by email and creates their default workspace (statuses seeded). Session strategy switched from `database` → `jwt` (required for Credentials).
 - `src/app/(auth)/signin/page.tsx` rewritten: single email+password form, Server Action handing off to `signIn("credentials")`. OAuth/magic-link buttons removed (providers remain conditionally registered so they can return if env is set).
@@ -1104,11 +1333,13 @@ Authelia header-bridge didn't land cleanly (edge middleware was setting response
 - DB reset via `prisma db push --force-reset` — the abandoned Authelia-bridge attempt had left a stale `handle: "bailey"` row that was breaking the upsert on first sign-in. Safe to reset since no real data existed.
 
 ### Verified
+
 - `POST /api/auth/callback/credentials` with valid creds → `302 /inbox`, `__Secure-authjs.session-token` set.
 - `GET /inbox` with that cookie → `200`.
 - Login: `timothy.b.dixon@gmail.com` / `@Tqbfj0tld!` (from `~/docker/forge/.env`).
 
 ### Ran into
+
 - Disk hit ENOSPC after 8 rebuilds of the ~1 GB image. `docker builder prune -af && docker image prune -af` reclaimed ~17 GB.
 
 ## 2026-04-19 — Deploy behind Traefik + Authelia
@@ -1116,6 +1347,7 @@ Authelia header-bridge didn't land cleanly (edge middleware was setting response
 Same session as scaffold (renamed Cairn → Forge first). Version bumped to `1.0.0`.
 
 ### What went live
+
 - `~/docker/forge/docker-compose.yaml` — app + postgres + redis + persistent volumes, on `traefik_proxy` + internal bridge.
 - Traefik routed at `https://forge.axiom-labs.dev` via Docker labels; `chain-authelia@file` middleware enforces SSO.
 - Homepage entry added under General-Services (`mdi-anvil` icon).
@@ -1124,6 +1356,7 @@ Same session as scaffold (renamed Cairn → Forge first). Version bumped to `1.0
 - Schema pushed with `prisma db push` (no migration file yet — first deploy).
 
 ### Build fixes that mattered
+
 - `experimental.typedRoutes` → removed (Next 15.5 moved it top-level AND it's too strict for the string-backed nav array; disabled).
 - Local plugin import: switched from dynamic template-string `import()` to a static registry at `src/server/services/local-plugins.ts`. Dynamic fs-loading was fighting the bundler and pnpm's virtual store; static registry is the right shape for `runtime: "local"`.
 - Prisma + pnpm + Next standalone: `.prisma` lives at `node_modules/.pnpm/@prisma+client*/node_modules/.prisma`, but `@prisma/client/default.js` requires `.prisma/client/default`. Fix: explicit `COPY` in Dockerfile runner to flatten it into `node_modules/.prisma`.
@@ -1132,11 +1365,13 @@ Same session as scaffold (renamed Cairn → Forge first). Version bumped to `1.0
 - MCP tool handlers needed explicit `input: ...` param types (TS can't close the inference loop across an object literal entry).
 
 ### Verified end-to-end
+
 - `curl https://forge.axiom-labs.dev/` → 302 to `login.axiom-labs.dev` (Authelia).
 - Follow-redirect with SSO → HTTP 200.
 - Forge container logs clean (no Prisma or hydration errors).
 
 ### Known / next
+
 - No `prisma/migrations/` yet — first deploy used `db push`. Generate a baseline migration before the next schema change.
 - Signin page still renders OAuth/magic-link buttons even when providers are unset (server actions would fail). Behind Authelia this page shouldn't be reached — clean up next pass.
 - `issue-triage` sample plugin not yet wired to event delivery — BullMQ outbox scheduler is still TODO.
@@ -1147,6 +1382,7 @@ Same session as scaffold (renamed Cairn → Forge first). Version bumped to `1.0
 **Session:** Bailey → Claude (Opus 4.7, 1M ctx, auto mode)
 
 ### What was done
+
 - Scaffolded repo at `~/forge/` — Next.js 15 + TS + Tailwind + Prisma + tRPC 11 + NextAuth v5 + Redis + BullMQ.
 - Wrote comprehensive Prisma schema: users, workspaces + memberships (RBAC),
   projects, issues (with subtasks via self-ref), statuses (workspace-scoped),
@@ -1174,6 +1410,7 @@ Same session as scaffold (renamed Cairn → Forge first). Version bumped to `1.0
   Postgres + Redis service containers.
 
 ### Decisions
+
 - **Separate AuditLog from ActivityEvent.** Audit is for compliance (immutable,
   includes IP/UA/before/after). ActivityEvent is the product stream plugins
   subscribe to. Keeps access controls and retention policies independent.
@@ -1181,12 +1418,13 @@ Same session as scaffold (renamed Cairn → Forge first). Version bumped to `1.0
   for fan-out of server-originated events. Swap to Socket.io if we need
   bidirectional (presence, typing, cursors).
 - **Scoped API keys + manifest ceiling.** Plugin manifests declare the max
-  scope set. API keys issued to a plugin can only *narrow*, never widen.
+  scope set. API keys issued to a plugin can only _narrow_, never widen.
 - **Metric rollup table + live fallback.** Analytics router reads from
   `MetricAggregate` where warm, otherwise falls back to live SQL. Worker
   job populates rollups out-of-band.
 
 ### Next steps
+
 - Actually install deps and run `prisma migrate dev` to validate schema.
 - Wire BullMQ delivery scheduler so ActivityEvent → Webhook fan-out is durable.
 - Drag-and-drop on kanban board (leave keyboard bulk-status working first).
@@ -1198,6 +1436,7 @@ Same session as scaffold (renamed Cairn → Forge first). Version bumped to `1.0
   into `#hermes-agent` Discord.
 
 ### Known gaps / TODOs in code
+
 - `auth.ts` assumes `nodemailer` provider; install and configure SMTP.
 - `worker.ts` webhook delivery job: enqueue is currently manual — add a
   transactional outbox step that enqueues when `WebhookDelivery` rows are

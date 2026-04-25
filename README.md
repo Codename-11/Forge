@@ -1,7 +1,7 @@
 <h1 align="center">Forge — Project Management for Humans and Agents</h1>
 
 <p align="center">
-  Linear-style issues, cycles, initiatives, and time tracking — with a<br>
+  Linear-style issues, sprints, initiatives, and time tracking — with a<br>
   first-class MCP surface so LLM agents are real actors, not afterthoughts.
 </p>
 
@@ -54,17 +54,31 @@ primitives instead of webhook-config stitching.
 
 All tenant-scoped on `workspaceId`.
 
-| Primitive | What it is |
-|---|---|
-| **Workspace** | Tenant. Short `key` (e.g. `AXI`, `PER`, `WRK`) is the issue prefix and is immutable after create. Slug/name can change freely. |
-| **Project** | Groups issues. Optionally nests under an Initiative. |
-| **Issue** | The unit of work. Optional `projectId`, optional `cycleId`, optional human assignees, optional **agent** assignee. |
-| **Cycle** | Time-boxed iteration. Default length from `Workspace.cycleLengthDays`. Issues move in/out freely. |
-| **Initiative** | Umbrella above projects — quarterly bets, themes. |
-| **IssueRelation** | Directed, typed link (`BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `RELATES_TO`). |
-| **TimeEntry** | Per-user duration rows against issues, gated by `Workspace.timeTrackingEnabled`. |
-| **Attachment** | Polymorphic via `targetType` + `targetId`; MinIO-backed. |
-| **Agent** | First-class non-human actor. `profileKey` (stable handle), `capabilities[]`, `webhookUrl`, `status`, `maxConcurrent`. Receives dispatch via webhook; authenticates via linked ApiKey. |
+| Primitive         | What it is                                                                                                                                                                                                                  |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Workspace**     | Tenant. Short `key` (e.g. `AXI`, `PER`, `WRK`) is the issue prefix and is immutable after create. Slug/name can change freely.                                                                                              |
+| **Project**       | Groups issues. Optionally nests under an Initiative.                                                                                                                                                                        |
+| **Issue**         | The unit of work. Optional `projectId`, optional `cycleId`, optional human assignees, optional **agent** assignee.                                                                                                          |
+| **Sprint**        | Time-boxed iteration. Default length from `Workspace.cycleLengthDays`. Issues move in/out freely. Stored internally as `Cycle`; routes (`/cycles`) and MCP namespace (`cycles.*`) keep the original name for compatibility. |
+| **Initiative**    | Umbrella above projects — quarterly bets, themes.                                                                                                                                                                           |
+| **IssueRelation** | Directed, typed link (`BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `RELATES_TO`).                                                                                                                                                  |
+| **TimeEntry**     | Per-user duration rows against issues, gated by `Workspace.timeTrackingEnabled`.                                                                                                                                            |
+| **Attachment**    | Polymorphic via `targetType` + `targetId`; MinIO-backed.                                                                                                                                                                    |
+| **Agent**         | First-class non-human actor. `profileKey` (stable handle), `capabilities[]`, `webhookUrl`, `status`, `maxConcurrent`. Receives dispatch via webhook; authenticates via linked ApiKey.                                       |
+
+## Execution model
+
+Forge is the execution layer: approved work lives as issues, backlog items,
+sprints, assignments, blockers, and done history. Durable notes, raw capture,
+and private decision logs can stay outside Forge; use issue templates and the
+Backlog for proposed work that still needs review. Nothing is auto-promoted
+into an active sprint.
+
+Default issue templates cover dev tasks, agent-ready handoffs, personal tasks,
+finance follow-ups, side quests, and review items. The agent-ready template
+asks for objective, system area, acceptance criteria, safety boundaries, and
+verification path. Shared household or couple-specific workflows are deferred;
+Forge only ships generic workspace/project/template primitives today.
 
 ## Agents &amp; MCP
 
@@ -100,10 +114,10 @@ only that initiative; a full-trust agent gets no narrowing.
 routed to the best-fit agent automatically, with `maxConcurrent` respected
 and `AGENT_ASSIGNED` events firing into the webhook stream carrying full
 decision provenance (`payload.dispatch.{mode, candidates, chosen, reason}`
-— operators can replay *why* an agent was picked, and which agents were
+— operators can replay _why_ an agent was picked, and which agents were
 ineligible, from the event alone).
 
-**Dispatch rules** run *before* mode-based selection. Admins configure
+**Dispatch rules** run _before_ mode-based selection. Admins configure
 `(priority, labelId, projectId) → targetAgent` rules at
 `/settings/dispatch-rules`; conditions are ANDed with null = wildcard,
 first match wins (order-sortable). A matched rule with an ineligible
@@ -111,8 +125,8 @@ target falls through to mode-based selection rather than stalling, and
 the fallthrough is preserved on the event reason.
 
 **Per-agent issue templates.** If `Agent.templateMarkdown` is set, it is
-applied to the issue description on assign *only when the description is
-empty* — agents never overwrite human content. Runs in the same
+applied to the issue description on assign _only when the description is
+empty_ — agents never overwrite human content. Runs in the same
 transaction as the assignment for all four assignment paths (auto, manual,
 reassign, initial-create-with-assignee).
 
@@ -143,12 +157,14 @@ mcp_servers:
 ```bash
 # 1. Services (Postgres + Redis + MinIO)
 cd docker && docker compose up -d
+# MinIO console: http://localhost:59001 (forgeminio / forgeminio-dev-password)
 
 # 2. Install + bootstrap DB
-cp .env.example .env            # fill in values
+cp .env.example .env            # fill in values (S3 vars are pre-filled for the
+                                # bundled MinIO; rotate creds before deploying)
 pnpm install
 pnpm prisma:generate
-pnpm prisma:migrate             # applies migrations 0000+0001+0002
+pnpm prisma:migrate             # applies all migrations
 pnpm prisma:seed                # seeds workspaces + issues + labels
 
 # 3. Seed agents (optional — creates Victor + Mizu in AXI)
@@ -161,20 +177,20 @@ pnpm worker                     # separate process: webhook + metric workers
 
 ## Keyboard
 
-| Shortcut       | Action                      |
-|----------------|-----------------------------|
-| `⌘K` / `/`     | Command palette             |
-| `⇧C`           | Quick-create (pathname-aware) |
-| `?`            | Keyboard help overlay       |
-| `⌘\`           | Collapse sidebar            |
-| `G` `I`        | Go to Inbox                 |
-| `G` `D`        | Go to Dashboard             |
-| `G` `S`        | Go to Issues                |
-| `G` `P`        | Go to Projects              |
-| `G` `C`        | Go to Cycles                |
-| `G` `A`        | Go to Analytics             |
-| `G` `E`        | Go to Agents                |
-| `⇧A`           | Assign agent (issue detail) |
+| Shortcut   | Action                        |
+| ---------- | ----------------------------- |
+| `⌘K` / `/` | Command palette               |
+| `⇧C`       | Quick-create (pathname-aware) |
+| `?`        | Keyboard help overlay         |
+| `⌘\`       | Collapse sidebar              |
+| `G` `I`    | Go to Inbox                   |
+| `G` `D`    | Go to Dashboard               |
+| `G` `S`    | Go to Issues                  |
+| `G` `P`    | Go to Projects                |
+| `G` `C`    | Go to Sprints                 |
+| `G` `A`    | Go to Analytics               |
+| `G` `E`    | Go to Agents                  |
+| `⇧A`       | Assign agent (issue detail)   |
 
 Full table lives in `src/lib/shortcuts.ts` and is rendered by the `?`
 overlay.

@@ -148,26 +148,30 @@ enum AutoDispatchMode {
 // ----------------------------------------------------------------------------
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  emailVerified DateTime?
-  name          String?
-  handle        String?   @unique
-  image         String?
+  id              String    @id @default(cuid())
+  email           String    @unique
+  emailVerified   DateTime?
+  name            String?
+  handle          String?   @unique
+  image           String?
   /// IANA timezone, e.g. "America/New_York". Null = infer from browser.
-  timezone      String?
+  timezone        String?
   /// BCP-47 locale, e.g. "en-US". Null = infer from browser.
-  locale        String?
+  locale          String?
   /// "12h" | "24h". Null = infer from locale.
-  timeFormat    String?
+  timeFormat      String?
   /// "light" | "dark" | "system". Null = "system".
-  theme         String?
+  theme           String?
+  /// "compact" | "comfortable". Null = "compact" (default, current behavior).
+  density         String?
+  /// "default" | "larger". Null = "default".
+  textSize        String?
   /// Workspace id remembered across logins; UI loads this one by default.
   lastWorkspaceId String?
   /// Ordered list of pinned issue ids (max 3 enforced server-side).
-  pinnedIssueIds String[] @default([])
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  pinnedIssueIds  String[]  @default([])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   accounts    Account[]
   sessions    Session[]
@@ -229,71 +233,71 @@ model VerificationToken {
 // ----------------------------------------------------------------------------
 
 model Workspace {
-  id        String   @id @default(cuid())
-  slug      String   @unique
-  name      String
+  id                         String           @id @default(cuid())
+  slug                       String           @unique
+  name                       String
   /// Short key used for issue identifiers: e.g. `FRG-123`.
-  key       String   @unique
-  avatarUrl String?
+  key                        String           @unique
+  avatarUrl                  String?
   /// Default cycle length (days). Overridable per cycle at create time.
-  cycleLengthDays Int @default(7)
+  cycleLengthDays            Int              @default(7)
   /// Default rest/cooldown days between cycles (0 = back-to-back).
-  cycleCooldownDays Int @default(0)
+  cycleCooldownDays          Int              @default(0)
   /// When true, the time-tracking surface is enabled for this workspace.
-  timeTrackingEnabled Boolean @default(false)
+  timeTrackingEnabled        Boolean          @default(false)
   /// Soft cap on total attachment storage (MB) for this workspace.
-  attachmentQuotaMb Int @default(1024)
+  attachmentQuotaMb          Int              @default(1024)
   /// Master toggle for auto-dispatching queued issues to agents.
-  autoDispatch Boolean @default(false)
+  autoDispatch               Boolean          @default(false)
   /// Strategy used when autoDispatch is on. MANUAL_ONLY disables picking.
-  autoDispatchMode AutoDispatchMode @default(MANUAL_ONLY)
+  autoDispatchMode           AutoDispatchMode @default(MANUAL_ONLY)
   /// When true, assigning (manually or auto) immediately pushes the agent
   /// webhook to start work; when false, the issue sits in the agent queue.
-  autoStartOnAssign Boolean @default(false)
+  autoStartOnAssign          Boolean          @default(false)
   /// If a claimed issue sees no activity (comments/transitions) within this
   /// window, it is auto-released back to the pool. 0 = disabled.
-  agentIdleTimeoutMinutes Int @default(0)
+  agentIdleTimeoutMinutes    Int              @default(0)
   /// Gated dispatch — assignment lands in queue but agent does not start
   /// work until a human approves.
-  requireApprovalBeforeStart Boolean @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  deletedAt DateTime?
+  requireApprovalBeforeStart Boolean          @default(false)
+  createdAt                  DateTime         @default(now())
+  updatedAt                  DateTime         @updatedAt
+  deletedAt                  DateTime?
 
-  memberships Membership[]
-  projects    Project[]
-  issues      Issue[]
-  statuses    Status[]
-  labels      Label[]
-  comments    Comment[]
-  attachments Attachment[]
-  auditLogs   AuditLog[]
-  events      ActivityEvent[]
-  plugins     Plugin[]
-  apiKeys     ApiKey[]
-  webhooks    Webhook[]
-  metrics     MetricAggregate[]
-  skills      Skill[]
-  templates   IssueTemplate[]
+  memberships      Membership[]
+  projects         Project[]
+  issues           Issue[]
+  statuses         Status[]
+  labels           Label[]
+  comments         Comment[]
+  attachments      Attachment[]
+  auditLogs        AuditLog[]
+  events           ActivityEvent[]
+  plugins          Plugin[]
+  apiKeys          ApiKey[]
+  webhooks         Webhook[]
+  metrics          MetricAggregate[]
+  skills           Skill[]
+  templates        IssueTemplate[]
   projectTemplates ProjectTemplate[]
-  recurring   RecurringIssue[]
-  savedViews  SavedView[]
-  cycles      Cycle[]
-  initiatives Initiative[]
-  issueRelations IssueRelation[]
-  timeEntries TimeEntry[]
-  agents      Agent[]
-  dispatchRules DispatchRule[]
+  recurring        RecurringIssue[]
+  savedViews       SavedView[]
+  cycles           Cycle[]
+  initiatives      Initiative[]
+  issueRelations   IssueRelation[]
+  timeEntries      TimeEntry[]
+  agents           Agent[]
+  dispatchRules    DispatchRule[]
 
   @@index([slug])
 }
 
 model Membership {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   userId      String
   workspaceId String
-  role        Role      @default(MEMBER)
-  createdAt   DateTime  @default(now())
+  role        Role     @default(MEMBER)
+  createdAt   DateTime @default(now())
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -307,29 +311,29 @@ model Membership {
 // ----------------------------------------------------------------------------
 
 model Project {
-  id          String    @id @default(cuid())
-  workspaceId String
-  key         String
-  name        String
-  description String?   @db.Text
-  icon        String?
-  color       String?
-  archived    Boolean   @default(false)
-  startDate   DateTime?
-  targetDate  DateTime?
+  id           String    @id @default(cuid())
+  workspaceId  String
+  key          String
+  name         String
+  description  String?   @db.Text
+  icon         String?
+  color        String?
+  archived     Boolean   @default(false)
+  startDate    DateTime?
+  targetDate   DateTime?
   /// Optional parent initiative that groups related projects.
   initiativeId String?
-  createdById String
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  deletedAt   DateTime?
+  createdById  String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy User      @relation("ProjectCreator", fields: [createdById], references: [id])
-  initiative Initiative? @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
-  issues    Issue[]
-  templates IssueTemplate[]
-  recurring RecurringIssue[]
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy     User             @relation("ProjectCreator", fields: [createdById], references: [id])
+  initiative    Initiative?      @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
+  issues        Issue[]
+  templates     IssueTemplate[]
+  recurring     RecurringIssue[]
   dispatchRules DispatchRule[]
 
   @@unique([workspaceId, key])
@@ -360,60 +364,60 @@ model Label {
   name        String
   color       String
 
-  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  issues    IssueLabel[]
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issues        IssueLabel[]
   dispatchRules DispatchRule[]
 
   @@unique([workspaceId, name])
 }
 
 model Issue {
-  id          String       @id @default(cuid())
-  workspaceId String
-  projectId   String?
-  parentId    String?
+  id              String       @id @default(cuid())
+  workspaceId     String
+  projectId       String?
+  parentId        String?
   /// Optional cycle membership. SetNull on cycle delete so issues survive.
-  cycleId     String?
+  cycleId         String?
   /// Human-readable identifier: `${workspace.key}-${number}` e.g. `FRG-42`.
-  number      Int
-  kind        WorkItemKind @default(ISSUE)
-  title       String
-  description String?      @db.Text
-  statusId    String
-  priority    Priority     @default(NONE)
-  authorId    String
-  dueDate     DateTime?
-  startedAt   DateTime?
-  completedAt DateTime?
-  canceledAt  DateTime?
-  estimate    Float?
+  number          Int
+  kind            WorkItemKind @default(ISSUE)
+  title           String
+  description     String?      @db.Text
+  statusId        String
+  priority        Priority     @default(NONE)
+  authorId        String
+  dueDate         DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  canceledAt      DateTime?
+  estimate        Float?
   /// SLA target, in minutes from creation. Used for breach detection.
-  slaMinutes  Int?
+  slaMinutes      Int?
   /// Agent queue — true means eligible for `issues.claim` via MCP.
-  queued      Boolean      @default(false)
-  claimedAt   DateTime?
-  claimedById String?
-  claimExpiresAt DateTime?
+  queued          Boolean      @default(false)
+  claimedAt       DateTime?
+  claimedById     String?
+  claimExpiresAt  DateTime?
   /// Explicit agent assignment. Independent of `claimedById` (human claim).
   /// Set by users or the auto-dispatcher; cleared on unassign.
   assignedAgentId String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  deletedAt   DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  deletedAt       DateTime?
 
-  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project   Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  parent    Issue?          @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
-  children  Issue[]         @relation("IssueChildren")
-  cycle     Cycle?          @relation(fields: [cycleId], references: [id], onDelete: SetNull)
-  status    Status          @relation(fields: [statusId], references: [id])
-  author    User            @relation("IssueAuthor", fields: [authorId], references: [id])
-  claimedBy User?           @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
-  assignedAgent Agent?      @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
-  assignees IssueAssignee[]
-  labels    IssueLabel[]
-  comments  Comment[]
-  attachments Attachment[]
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project       Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  parent        Issue?          @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children      Issue[]         @relation("IssueChildren")
+  cycle         Cycle?          @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  status        Status          @relation(fields: [statusId], references: [id])
+  author        User            @relation("IssueAuthor", fields: [authorId], references: [id])
+  claimedBy     User?           @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  assignedAgent Agent?          @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  assignees     IssueAssignee[]
+  labels        IssueLabel[]
+  comments      Comment[]
+  attachments   Attachment[]
   relationsFrom IssueRelation[] @relation("IssueRelationFrom")
   relationsTo   IssueRelation[] @relation("IssueRelationTo")
   timeEntries   TimeEntry[]
@@ -430,17 +434,17 @@ model Issue {
 
 /// Reusable project blueprints shown in the "Starter templates" picker.
 model ProjectTemplate {
-  id              String   @id @default(cuid())
-  workspaceId     String
-  name            String
+  id           String   @id @default(cuid())
+  workspaceId  String
+  name         String
   /// Suggested project key. Can be overridden at create time.
-  suggestedKey    String
-  description     String?  @db.Text
-  color           String?
-  icon            String?
-  position        Int      @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  suggestedKey String
+  description  String?  @db.Text
+  color        String?
+  icon         String?
+  position     Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
@@ -538,25 +542,25 @@ model IssueLabel {
 // ----------------------------------------------------------------------------
 
 model Comment {
-  id          String   @id @default(cuid())
-  workspaceId String
-  issueId     String
-  authorId    String
+  id               String    @id @default(cuid())
+  workspaceId      String
+  issueId          String
+  authorId         String
   /// When the comment was created via an API key whose `linkedAgentId`
   /// pointed at an Agent, we record that Agent here so the UI can
   /// render it as "Victor (agent)" rather than the human key owner.
   /// Null for human-session comments. SetNull on agent delete so the
   /// comment survives agent lifecycle churn.
   authoringAgentId String?
-  body        String   @db.Text
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  deletedAt   DateTime?
+  body             String    @db.Text
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  issue     Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  author    User      @relation(fields: [authorId], references: [id])
-  authoringAgent Agent? @relation("AgentAuthoredComments", fields: [authoringAgentId], references: [id], onDelete: SetNull)
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue          Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  author         User      @relation(fields: [authorId], references: [id])
+  authoringAgent Agent?    @relation("AgentAuthoredComments", fields: [authoringAgentId], references: [id], onDelete: SetNull)
 
   @@index([issueId])
   @@index([workspaceId, createdAt])
@@ -624,8 +628,8 @@ model ActivityEvent {
   payload     Json
   createdAt   DateTime  @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  workspace  Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor      User?             @relation(fields: [actorId], references: [id], onDelete: SetNull)
   deliveries WebhookDelivery[]
 
   @@index([workspaceId, kind, createdAt])
@@ -682,18 +686,18 @@ model Plugin {
 }
 
 model Skill {
-  id          String   @id @default(cuid())
-  workspaceId String
-  pluginId    String
-  name        String
-  description String?  @db.Text
+  id           String   @id @default(cuid())
+  workspaceId  String
+  pluginId     String
+  name         String
+  description  String?  @db.Text
   /// JSON Schema for invocation input.
-  inputSchema Json
+  inputSchema  Json
   /// JSON Schema for invocation output.
   outputSchema Json?
   /// Where this skill executes: "plugin" (delegated via webhook) or "local" (server-side handler).
-  runtime     String
-  createdAt   DateTime @default(now())
+  runtime      String
+  createdAt    DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   plugin    Plugin    @relation(fields: [pluginId], references: [id], onDelete: Cascade)
@@ -703,23 +707,23 @@ model Skill {
 }
 
 model ApiKey {
-  id            String    @id @default(cuid())
+  id            String        @id @default(cuid())
   workspaceId   String
   /// Either userId (personal key) OR pluginId (plugin key) must be set.
   userId        String?
   pluginId      String?
   name          String
   /// SHA-256 of the raw key. Raw key shown once at creation.
-  hashedKey     String    @unique
+  hashedKey     String        @unique
   prefix        String
   scopes        PluginScope[]
   /// Optional narrowing: restrict this key to specific project ids.
   /// Empty array = no restriction.
-  projectIds    String[]  @default([])
+  projectIds    String[]      @default([])
   /// Optional narrowing: restrict this key to specific label ids.
-  labelIds      String[]  @default([])
+  labelIds      String[]      @default([])
   /// Optional narrowing: restrict this key to specific initiative ids.
-  initiativeIds String[]  @default([])
+  initiativeIds String[]      @default([])
   /// When set, this key acts as a specific agent. MCP tools like
   /// `issues.assigned` infer the agent from the key; webhook payloads can
   /// reverse-route by agent without a separate lookup.
@@ -727,7 +731,7 @@ model ApiKey {
   lastUsedAt    DateTime?
   expiresAt     DateTime?
   revokedAt     DateTime?
-  createdAt     DateTime  @default(now())
+  createdAt     DateTime      @default(now())
 
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -740,32 +744,32 @@ model ApiKey {
 }
 
 model Webhook {
-  id          String   @id @default(cuid())
+  id          String      @id @default(cuid())
   workspaceId String
   pluginId    String?
   url         String
   secret      String
   events      EventKind[]
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  plugin    Plugin?   @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  workspace  Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plugin     Plugin?           @relation(fields: [pluginId], references: [id], onDelete: Cascade)
   deliveries WebhookDelivery[]
 
   @@index([workspaceId, active])
 }
 
 model WebhookDelivery {
-  id         String                @id @default(cuid())
-  webhookId  String
-  eventId    String
-  status     WebhookDeliveryStatus @default(PENDING)
-  attempt    Int                   @default(0)
+  id             String                @id @default(cuid())
+  webhookId      String
+  eventId        String
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempt        Int                   @default(0)
   responseStatus Int?
-  responseBody   String?           @db.Text
-  scheduledAt DateTime             @default(now())
-  deliveredAt DateTime?
+  responseBody   String?               @db.Text
+  scheduledAt    DateTime              @default(now())
+  deliveredAt    DateTime?
 
   webhook Webhook       @relation(fields: [webhookId], references: [id], onDelete: Cascade)
   event   ActivityEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
@@ -781,16 +785,16 @@ model WebhookDelivery {
 /// Time-boxed iteration that groups in-flight issues. Length defaults to
 /// the workspace `cycleLengthDays`, but each cycle stores its own.
 model Cycle {
-  id            String      @id @default(cuid())
-  workspaceId   String
-  name          String
-  startsAt      DateTime
-  endsAt        DateTime
-  lengthDays    Int
-  cooldownDays  Int         @default(0)
-  status        CycleStatus @default(PLANNED)
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id           String      @id @default(cuid())
+  workspaceId  String
+  name         String
+  startsAt     DateTime
+  endsAt       DateTime
+  lengthDays   Int
+  cooldownDays Int         @default(0)
+  status       CycleStatus @default(PLANNED)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issues    Issue[]
@@ -824,16 +828,16 @@ model Initiative {
 /// Directed relation between two issues. `kind` captures the semantics.
 /// Deleting either endpoint cascades the relation row.
 model IssueRelation {
-  id           String       @id @default(cuid())
-  workspaceId  String
-  fromIssueId  String
-  toIssueId    String
-  kind         RelationKind
-  createdAt    DateTime     @default(now())
+  id          String       @id @default(cuid())
+  workspaceId String
+  fromIssueId String
+  toIssueId   String
+  kind        RelationKind
+  createdAt   DateTime     @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   fromIssue Issue     @relation("IssueRelationFrom", fields: [fromIssueId], references: [id], onDelete: Cascade)
-  toIssue   Issue     @relation("IssueRelationTo",   fields: [toIssueId],   references: [id], onDelete: Cascade)
+  toIssue   Issue     @relation("IssueRelationTo", fields: [toIssueId], references: [id], onDelete: Cascade)
 
   @@unique([fromIssueId, toIssueId, kind])
   @@index([fromIssueId])
@@ -843,17 +847,17 @@ model IssueRelation {
 
 /// Time tracking entry. Open entries have `endedAt = null`.
 model TimeEntry {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   workspaceId String
   userId      String
   issueId     String?
   description String?
   startedAt   DateTime
   endedAt     DateTime?
-  billable    Boolean  @default(false)
+  billable    Boolean   @default(false)
   hourlyRate  Float?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -903,10 +907,10 @@ model Agent {
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
-  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  assignedIssues Issue[]   @relation("IssueAssignedAgent")
-  apiKeys        ApiKey[]  @relation("AgentApiKeys")
-  authoredComments Comment[] @relation("AgentAuthoredComments")
+  workspace        Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignedIssues   Issue[]        @relation("IssueAssignedAgent")
+  apiKeys          ApiKey[]       @relation("AgentApiKeys")
+  authoredComments Comment[]      @relation("AgentAuthoredComments")
   dispatchRules    DispatchRule[]
 
   @@unique([workspaceId, profileKey])
@@ -921,26 +925,26 @@ model Agent {
 /// wins. If the target is not eligible (archived / OFFLINE / at cap) the
 /// dispatcher falls through to mode-based selection rather than stalling.
 model DispatchRule {
-  id            String    @id @default(cuid())
-  workspaceId   String
+  id          String  @id @default(cuid())
+  workspaceId String
   /// Human-readable label. Surfaced verbatim in the admin UI.
-  name          String
-  enabled       Boolean   @default(true)
+  name        String
+  enabled     Boolean @default(true)
   /// Lower values evaluate first. Stable tiebreak on `createdAt ASC`.
-  order         Int
+  order       Int
 
   // Conditions — all non-null columns must match the incoming issue. A
   // row with every condition null matches every issue (catch-all).
-  priority      Priority?
-  labelId       String?
-  projectId     String?
+  priority  Priority?
+  labelId   String?
+  projectId String?
 
   /// Agent to assign when the rule fires. Restrict so that you can't
   /// accidentally delete an agent that still has rules pointing at it.
   targetAgentId String
 
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   label       Label?    @relation(fields: [labelId], references: [id], onDelete: SetNull)
