@@ -19,6 +19,7 @@ import {
   Map as MapIcon,
   Shield,
   Bot,
+  Workflow,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
@@ -107,7 +108,8 @@ const SECTIONS: readonly NavSection[] = [
     label: "Admin",
     items: [
       { path: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
-      { path: "/settings/agents", label: "Agents", icon: Bot, chord: "e" },
+      { path: "/agents", label: "Agents", icon: Workflow, chord: "o" },
+      { path: "/settings/agents", label: "Agent admin", icon: Bot, chord: "e" },
       { path: "/settings/plugins", label: "Plugins", icon: Plug, chord: "l" },
       { path: "/settings/admin", label: "Admin portal", icon: Shield },
       { path: "/settings", label: "Settings", icon: Settings, chord: "," },

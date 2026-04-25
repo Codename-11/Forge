@@ -26,7 +26,7 @@ be consumed via the typed client.
 | `status`          | `list`, `create`, `reorder`                                                                                                |
 | `template`        | `list`, `byId`, `create`, `update`, `delete` — issue templates                                                             |
 | `projectTemplate` | `list`, `create`, `update`, `delete` — project starter templates                                                           |
-| `agent`           | `list`, `byId`, `create`, `update`, `archive`, `delete`, `heartbeat`                                                       |
+| `agent`           | `list`, `byId`, `create`, `update`, `archive`, `delete`, `heartbeat`, `pipeline`, `timeline`                               |
 | `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                          |
 | `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                                |
 | `user`            | `me`, `updateAppearance` — current user + per-user prefs (theme, density, textSize)                                        |
@@ -89,12 +89,31 @@ cross-tenant linked agents are rejected.
 
 **Not currently on the MCP surface** (tRPC-only, admin/UI path):
 agent CRUD (`agent.create`, `.update`, `.archive`, `.delete`),
+agent operations dashboard data (`agent.pipeline`, `agent.timeline`),
 dispatch rules (`dispatchRule.*`), member management
 (`workspace.addMember` etc.), webhook DLQ retry
 (`admin.webhookDeliveries.retry`), dispatch analytics
 (`analytics.dispatch.*`). All of these are admin/workspace-owner
 surfaces — agents don't need them. Candidates for MCP promotion
 if use cases materialize.
+
+`agent.pipeline` returns `{ pool: { ready, blocked }, lanes:
+[{ agent, counts: { assigned, inFlight, recentlyDone, load },
+assigned, inFlight, recentlyDone }], generatedAt }`. Pool = queued
+issues with `assignedAgentId = null`, split by blocker presence.
+Each lane bucket is a category-filtered slice of the agent's
+issues: `assigned` = BACKLOG/TODO, `inFlight` = IN_PROGRESS/IN_REVIEW,
+`recentlyDone` = DONE within `recentDays` (default 7). Lane and
+pool sizes are capped (`laneLimit`, `poolLimit`).
+
+`agent.timeline` returns `{ events, nextCursor }`. Events filter to
+`AGENT_*`, `ISSUE_QUEUED`, `ISSUE_STATUS_CHANGED`, `COMMENT_CREATED`.
+When `agentId` is supplied, narrows to events where
+`subjectType=agent AND subjectId=agentId`, OR
+`kind=AGENT_ASSIGNED AND payload.agentId=agentId`, OR
+`subjectType=issue` on issues currently assigned to that agent.
+The "currently assigned" join is a heuristic — reassigned issues
+drop out of the past-events view.
 
 `issues.assign` / `issues.assigned` identify agents by `agentId` or
 `profileKey`. `issues.assigned` falls back to the calling key's

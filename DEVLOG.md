@@ -2,6 +2,103 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-25 — Agents operational dashboard (3-agent parallel wave)
+
+Stood up `/w/[slug]/agents` — a live operational view of the agent fleet
+that complements (not replaces) the existing CRUD page at
+`/settings/agents`. Goal was to surface presence, in-flight work, and
+recent activity on one screen so operators can see "what's everyone
+doing right now" without clicking through Inbox + Analytics.
+
+### What landed
+
+**Server (one router, two procedures, no migration).** Extended
+`src/server/routers/agent.ts`:
+
+- `agent.pipeline` — per-agent swimlanes plus the unassigned pool. For
+  each non-archived agent returns `{ assigned, inFlight, recentlyDone }`
+  bucketed by status category (BACKLOG/TODO, IN_PROGRESS/IN_REVIEW,
+  DONE-within-`recentDays`). Pool = queued issues with
+  `assignedAgentId = null`, split into ready/blocked using the same
+  blocker-graph logic as `issue.queue`. Lane and pool sizes capped
+  (`laneLimit` default 25, `poolLimit` default 50).
+- `agent.timeline` — paginated agent-relevant ActivityEvent feed.
+  Kinds: `AGENT_*`, `ISSUE_QUEUED`, `ISSUE_STATUS_CHANGED`,
+  `COMMENT_CREATED`. Optional `agentId` narrows to subject-agent events,
+  `payload.agentId` matches, and issue events on issues currently
+  assigned to that agent. Cursor pagination on `(createdAt DESC, id
+  DESC)`. Hydrates referenced issues + agents in batched lookups.
+
+The blocker-graph helper (`findBlockedIssueIdsForWorkspace`) is a local
+copy of the one in `issue.ts` — keeps the agent router import-
+independent of issue.ts; the duplication is ~25 lines of pure SQL
+filter logic.
+
+**UI (3 components, fan-out to a single page).**
+
+- `src/components/agent-presence-strip.tsx` (133 lines) — horizontal
+  strip of per-agent presence cards. Reads `agent.list` +
+  `agent.pipeline` + `analytics.dispatch.summary`. Live invalidation on
+  `AGENT_STATUS_CHANGED`, `AGENT_ASSIGNED`, `AGENT_UPDATED`,
+  `ISSUE_STATUS_CHANGED`. Load bar tints amber when at/over
+  `maxConcurrent`.
+- `src/components/agent-pipeline.tsx` (222 lines) — the centerpiece.
+  Pool lane on top (`Ready | Blocked`), then one lane per agent
+  (`Assigned | In flight | Recently done`). Compact issue cards reuse
+  the warm-earthy tokens (`text-id`, status-color dots, project key
+  chip). Live invalidation on `ISSUE_*` and `AGENT_*` kinds.
+- `src/components/agent-timeline.tsx` (340 lines) — chronological feed
+  with per-agent filter chips. Per-kind icons; per-kind summary
+  builder (assignment / status move / queue / comment / agent CRUD).
+  "Load older" replaces visible page (no cross-page accumulation —
+  picked the simpler ship over infinite scroll).
+
+**Page + nav wiring.** New page at
+`src/app/(app)/w/[slug]/agents/page.tsx` composes the three components
+under a `Topbar` with a "Manage agents" link out to `/settings/agents`.
+Sidebar nav added a new "Agents" entry with `Workflow` icon between
+Analytics and the existing settings entry; existing settings entry
+relabeled to "Agent admin" so the two surfaces don't both read
+"Agents". Chord `g a` was already taken (Analytics) so the new page is
+`g o` (mnemonic: ops); `g e` continues to point at Agent admin.
+`src/lib/shortcuts.ts` updated to match.
+
+**Wave structure.** Wave 1 = me, sequential, server contract (one file
+edit). Wave 2 = 3 parallel general-purpose agents, one component each,
+disjoint files, all consuming the Wave 1 procedure shapes. Wave 3 =
+me, sequential, page composition + nav + chord + docs. Roughly
+matches the parallel waves used on 2026-04-23 and 2026-04-24 — keeps
+component agents on disjoint files so merges are trivial.
+
+### Verification
+
+- `pnpm typecheck` clean (post-integration).
+- `pnpm lint` — no new warnings or errors from any of the new files.
+  The existing `src/components/issue-board.tsx` `no-explicit-any`
+  errors are still there from before this session; not touched.
+- `pnpm build` and `pnpm test*` not run because Postgres + Redis are
+  not reachable in this environment.
+
+### Follow-ups
+
+- The "currently assigned" heuristic in `agent.timeline` will mis-
+  attribute past activity for issues that have been reassigned. If
+  that becomes user-visible, snapshot `assignedAgentId` in the
+  `AGENT_ASSIGNED` payload (already there) + `ISSUE_STATUS_CHANGED`
+  payload (would need a small dispatcher tweak) and filter on
+  payload-agent rather than current-state.
+- Optional Hermes-side enhancement (deferred): extend
+  `agents.heartbeat` to accept `currentIssueId` so the presence strip
+  can show "now working on X" without inferring from status. Forge
+  side = small migration; Hermes side = update
+  `~/.hermes/skills/pm/forge/SKILL.md` runbook so Victor calls
+  heartbeat with the issue id at pickup. Per `~/SYSTEM.md` line 119
+  this is the documented hook point.
+- `agent.pipeline` issues a small fan-out of queries (3 per agent +
+  pool + agents list + blocker graph). Fine for the current handful
+  of agents per workspace; if agent counts grow, fold into a single
+  raw query keyed off Issue + Status.
+
 ## 2026-04-25 — Life Ops execution layer polish
 
 Follow-up on the Sprint/Life Ops handoff. Kept backend/database names as
