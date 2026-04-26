@@ -132,6 +132,32 @@ hook within the window; `recent` returns the most recent N rows
 with their event kind and response status for a "what just failed"
 panel.
 
+### Outbound webhook signing
+
+`deliverWebhook` (worker) sends two signature headers on every POST:
+
+- `x-forge-timestamp: <unix seconds>` + `x-forge-signature: <hex
+  HMAC-SHA256 of "$ts.$body">` — Forge-native; the receiver should
+  verify both for replay protection (5 min default tolerance via
+  `verifyWebhookSignature`).
+- `x-webhook-signature: <hex HMAC-SHA256 of $body>` — body-only sig
+  for receivers using the common generic validator (Hermes' inbound
+  webhook adapter falls into this group).
+
+Both use the same per-subscription secret. Receivers can validate
+either; sending both keeps Forge interoperable without per-receiver
+signing variants.
+
+### Push-dispatch presence
+
+Successful delivery to an agent's resolved real `webhookUrl` (after
+the synthetic `agent:dispatch` shim resolves) bumps
+`Agent.lastHeartbeatAt` and flips OFFLINE → ONLINE in the worker via
+`recordAgentReachable` in `src/server/services/heartbeat.ts`. This
+is the heartbeat producer in the push-dispatch model — agents do
+not need to call `agents.heartbeat` themselves on a schedule. The
+MCP tool still exists for manual / out-of-band updates.
+
 `issues.assign` / `issues.assigned` identify agents by `agentId` or
 `profileKey`. `issues.assigned` falls back to the calling key's
 `linkedAgentId` when neither is supplied, so a key linked to Victor

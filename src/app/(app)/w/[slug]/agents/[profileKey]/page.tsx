@@ -178,8 +178,17 @@ function IdentityStrip({ agent }: { agent: AgentRow }) {
             {agent.maxConcurrent === 0 ? "∞" : agent.maxConcurrent}
           </span>
         </span>
-        {agent.webhookUrl && (
-          <span className="font-mono">{truncateUrl(agent.webhookUrl)}</span>
+        {agent.webhookUrl ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="rounded-sm bg-success/10 px-1 text-[10px] font-semibold uppercase tracking-wider text-success">
+              push
+            </span>
+            <span className="font-mono">{truncateUrl(agent.webhookUrl)}</span>
+          </span>
+        ) : (
+          <span className="rounded-sm bg-subtle px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            pull-only
+          </span>
         )}
       </div>
     </div>

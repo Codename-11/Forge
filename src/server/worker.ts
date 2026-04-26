@@ -19,7 +19,7 @@ import {
   AGENT_DISPATCH_WEBHOOK_URL_PREFIX,
 } from "@/server/audit";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
-import { sweepIdleAgents } from "@/server/services/heartbeat";
+import { sweepIdleAgents, recordAgentReachable } from "@/server/services/heartbeat";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -48,6 +48,7 @@ export const webhookWorker = new Worker(
     // escalations). The per-agent `webhookUrl` is the source of truth.
     let targetUrl = delivery.webhook.url;
     let targetSecret = delivery.webhook.secret;
+    let presenceAgentId: string | null = null;
     if (
       targetUrl === AGENT_DISPATCH_WEBHOOK_URL ||
       targetUrl.startsWith(AGENT_DISPATCH_WEBHOOK_URL_PREFIX)
@@ -109,6 +110,7 @@ export const webhookWorker = new Worker(
       // synthetic workspace-level secret so deliveries still sign against
       // something stable if the agent hasn't been rotated yet.
       targetSecret = agent.webhookSecret ?? delivery.webhook.secret;
+      presenceAgentId = agentId;
     }
 
     const res = await deliverWebhook({
@@ -134,6 +136,14 @@ export const webhookWorker = new Worker(
         deliveredAt: res.ok ? new Date() : null,
       },
     });
+
+    // Push-dispatch presence: every successful delivery to an agent's
+    // webhook URL is proof the agent is reachable, so bump its
+    // `lastHeartbeatAt` and (if it was OFFLINE) flip it back to ONLINE.
+    // Best-effort — failures here are logged but don't fail the job.
+    if (res.ok && presenceAgentId) {
+      await recordAgentReachable(presenceAgentId);
+    }
 
     if (!res.ok) throw new Error(`Delivery failed (${res.status}).`);
   },
