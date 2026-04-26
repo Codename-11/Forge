@@ -7,7 +7,7 @@ import {
   type Prisma,
 } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
-import { recordChange } from "@/server/audit";
+import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import type { db as PrismaDb } from "@/server/db";
 
 /**
@@ -557,6 +557,269 @@ export const agentRouter = router({
           };
         }),
         nextCursor,
+      };
+    }),
+
+  /**
+   * Windowed status math from `AGENT_STATUS_CHANGED` events.
+   *
+   * Returns total time spent in ONLINE / BUSY / OFFLINE plus an uptime
+   * percentage (online + busy / total) and the raw transition list for
+   * the status ribbon.
+   *
+   * Heuristic: when the window has no transitions, attribute the entire
+   * window to the agent's current status. The first transition inside
+   * the window starts a fresh segment; everything before it is bucketed
+   * by the *last status the agent held before the window opened* (we
+   * read the most recent transition before `windowStart`; if none, the
+   * agent has only ever been at its current status, so we extrapolate).
+   */
+  uptime: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        windowDays: z.number().int().min(1).max(90).default(7),
+        transitionLimit: z.number().int().min(1).max(500).default(200),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const agent = await ctx.db.agent.findFirstOrThrow({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, status: true, lastHeartbeatAt: true },
+      });
+
+      const now = new Date();
+      const windowStart = new Date(
+        now.getTime() - input.windowDays * 86_400_000,
+      );
+
+      const eventsAfter = await ctx.db.activityEvent.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          kind: EventKind.AGENT_STATUS_CHANGED,
+          subjectType: "agent",
+          subjectId: input.id,
+          createdAt: { gte: windowStart },
+        },
+        orderBy: { createdAt: "asc" },
+        take: input.transitionLimit,
+      });
+
+      const lastBefore = await ctx.db.activityEvent.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          kind: EventKind.AGENT_STATUS_CHANGED,
+          subjectType: "agent",
+          subjectId: input.id,
+          createdAt: { lt: windowStart },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      const buckets: Record<AgentStatus, number> = {
+        ONLINE: 0,
+        BUSY: 0,
+        OFFLINE: 0,
+      };
+
+      const readStatus = (e: { payload: unknown }): AgentStatus | null => {
+        const p = (e.payload ?? {}) as Record<string, unknown>;
+        const s = p.status ?? p.to;
+        if (s === "ONLINE" || s === "BUSY" || s === "OFFLINE") return s;
+        return null;
+      };
+
+      // Status the agent held at windowStart. If no prior transition
+      // exists, fall back to the agent's current status — the truth is
+      // that we don't know, but the current value is the best guess.
+      let cursorStatus: AgentStatus =
+        (lastBefore && readStatus(lastBefore)) ??
+        (eventsAfter[0] && readStatus(eventsAfter[0])) ??
+        agent.status;
+      let cursorAt = windowStart;
+
+      for (const e of eventsAfter) {
+        const next = readStatus(e);
+        if (!next) continue;
+        const segment = e.createdAt.getTime() - cursorAt.getTime();
+        if (segment > 0) buckets[cursorStatus] += segment;
+        cursorStatus = next;
+        cursorAt = e.createdAt;
+      }
+
+      const tail = now.getTime() - cursorAt.getTime();
+      if (tail > 0) buckets[cursorStatus] += tail;
+
+      const totalMs =
+        buckets.ONLINE + buckets.BUSY + buckets.OFFLINE || 1;
+      const uptimePct = Math.round(
+        ((buckets.ONLINE + buckets.BUSY) / totalMs) * 1000,
+      ) / 10;
+
+      // currentSinceIso = createdAt of the most-recent transition; falls
+      // back to lastHeartbeatAt, then windowStart.
+      const currentSince =
+        eventsAfter.length > 0
+          ? eventsAfter[eventsAfter.length - 1].createdAt
+          : (lastBefore?.createdAt ?? agent.lastHeartbeatAt ?? windowStart);
+
+      return {
+        agentId: agent.id,
+        windowDays: input.windowDays,
+        windowStart: windowStart.toISOString(),
+        windowEnd: now.toISOString(),
+        totalMs,
+        onlineMs: buckets.ONLINE,
+        busyMs: buckets.BUSY,
+        offlineMs: buckets.OFFLINE,
+        uptimePct,
+        currentStatus: agent.status,
+        currentSince: currentSince.toISOString(),
+        transitions: eventsAfter.map((e) => ({
+          id: e.id,
+          at: e.createdAt.toISOString(),
+          status: readStatus(e),
+          payload: e.payload,
+        })),
+      };
+    }),
+
+  /**
+   * Webhook delivery health for an agent's synthetic dispatch shims —
+   * `agent:dispatch:{agentId}` (per-agent, used for mentions / priority
+   * bumps) and the workspace-shared `agent:dispatch`.
+   *
+   * Counts within the window plus the most recent N rows so the UI can
+   * show a sparkline + "what just failed" list. The agent's configured
+   * real `webhookUrl` is returned alongside so operators can verify
+   * what URL Forge would deliver to.
+   */
+  webhookHealth: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        windowDays: z.number().int().min(1).max(90).default(7),
+        recentLimit: z.number().int().min(1).max(50).default(20),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const agent = await ctx.db.agent.findFirstOrThrow({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, webhookUrl: true },
+      });
+
+      const since = new Date(
+        Date.now() - input.windowDays * 86_400_000,
+      );
+
+      const perAgentUrl = agentDispatchUrlFor(agent.id);
+
+      // Hooks that route to this agent: the per-agent shim AND the
+      // workspace-wide generic shim (the worker resolves the latter to
+      // the issue's assignee at delivery time, but for health rollups
+      // we count both with a clear label).
+      const hooks = await ctx.db.webhook.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          OR: [{ url: perAgentUrl }, { url: "agent:dispatch" }],
+        },
+        select: { id: true, url: true },
+      });
+
+      if (hooks.length === 0) {
+        return {
+          agentId: agent.id,
+          configuredWebhookUrl: agent.webhookUrl,
+          windowDays: input.windowDays,
+          totals: { pending: 0, success: 0, failed: 0, deadLetter: 0 },
+          perHook: [],
+          recent: [],
+        };
+      }
+
+      const hookIds = hooks.map((h) => h.id);
+
+      const counts = await ctx.db.webhookDelivery.groupBy({
+        by: ["webhookId", "status"],
+        where: {
+          webhookId: { in: hookIds },
+          scheduledAt: { gte: since },
+        },
+        _count: { _all: true },
+      });
+
+      const perHookMap = new Map<
+        string,
+        { pending: number; success: number; failed: number; deadLetter: number }
+      >();
+      for (const h of hooks) {
+        perHookMap.set(h.id, {
+          pending: 0,
+          success: 0,
+          failed: 0,
+          deadLetter: 0,
+        });
+      }
+      for (const r of counts) {
+        const row = perHookMap.get(r.webhookId);
+        if (!row) continue;
+        if (r.status === "PENDING") row.pending = r._count._all;
+        else if (r.status === "SUCCESS") row.success = r._count._all;
+        else if (r.status === "FAILED") row.failed = r._count._all;
+        else if (r.status === "DEAD_LETTER") row.deadLetter = r._count._all;
+      }
+
+      const totals = { pending: 0, success: 0, failed: 0, deadLetter: 0 };
+      for (const v of perHookMap.values()) {
+        totals.pending += v.pending;
+        totals.success += v.success;
+        totals.failed += v.failed;
+        totals.deadLetter += v.deadLetter;
+      }
+
+      const recent = await ctx.db.webhookDelivery.findMany({
+        where: {
+          webhookId: { in: hookIds },
+          scheduledAt: { gte: since },
+        },
+        orderBy: { scheduledAt: "desc" },
+        take: input.recentLimit,
+        select: {
+          id: true,
+          webhookId: true,
+          status: true,
+          attempt: true,
+          scheduledAt: true,
+          deliveredAt: true,
+          responseStatus: true,
+          event: {
+            select: {
+              id: true,
+              kind: true,
+              subjectType: true,
+              subjectId: true,
+              createdAt: true,
+            },
+          },
+        },
+      });
+
+      return {
+        agentId: agent.id,
+        configuredWebhookUrl: agent.webhookUrl,
+        windowDays: input.windowDays,
+        totals,
+        perHook: hooks.map((h) => ({
+          webhookId: h.id,
+          syntheticUrl: h.url,
+          ...(perHookMap.get(h.id) ?? {
+            pending: 0,
+            success: 0,
+            failed: 0,
+            deadLetter: 0,
+          }),
+        })),
+        recent,
       };
     }),
 });

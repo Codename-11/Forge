@@ -26,7 +26,7 @@ be consumed via the typed client.
 | `status`          | `list`, `create`, `reorder`                                                                                                |
 | `template`        | `list`, `byId`, `create`, `update`, `delete` — issue templates                                                             |
 | `projectTemplate` | `list`, `create`, `update`, `delete` — project starter templates                                                           |
-| `agent`           | `list`, `byId`, `create`, `update`, `archive`, `delete`, `heartbeat`, `pipeline`, `timeline`                               |
+| `agent`           | `list`, `byId`, `byProfileKey`, `create`, `update`, `archive`, `delete`, `heartbeat`, `pipeline`, `timeline`, `uptime`, `webhookHealth` |
 | `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                          |
 | `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                                |
 | `user`            | `me`, `updateAppearance` — current user + per-user prefs (theme, density, textSize)                                        |
@@ -114,6 +114,23 @@ When `agentId` is supplied, narrows to events where
 `subjectType=issue` on issues currently assigned to that agent.
 The "currently assigned" join is a heuristic — reassigned issues
 drop out of the past-events view.
+
+`agent.uptime` returns `{ totalMs, onlineMs, busyMs, offlineMs,
+uptimePct, currentStatus, currentSince, transitions }` over a
+configurable `windowDays` window (default 7). Time spent in each
+status is computed by walking `AGENT_STATUS_CHANGED` events from
+windowStart → now; the seed status (before the first transition in
+the window) is read from the most recent transition before the
+window — falling back to the agent's current status if none. The
+`transitions` list is the raw event tail for the status ribbon UI.
+
+`agent.webhookHealth` returns `{ configuredWebhookUrl, totals,
+perHook, recent }` for the synthetic dispatch shims that route to
+this agent (`agent:dispatch:{agentId}` per-agent + the workspace-
+shared `agent:dispatch`). Counts bucket `WebhookDelivery.status` by
+hook within the window; `recent` returns the most recent N rows
+with their event kind and response status for a "what just failed"
+panel.
 
 `issues.assign` / `issues.assigned` identify agents by `agentId` or
 `profileKey`. `issues.assigned` falls back to the calling key's

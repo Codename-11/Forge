@@ -103,12 +103,17 @@ export default function AgentPipeline() {
                   size="md"
                   lastHeartbeatAt={agent.lastHeartbeatAt}
                 />
-                <span className="truncate text-sm font-medium text-foreground">
-                  {agent.name}
-                </span>
-                <span className="text-meta truncate font-mono text-muted-foreground">
-                  @{agent.profileKey}
-                </span>
+                <Link
+                  href={`/w/${ws.slug}/agents/${agent.profileKey}`}
+                  className="flex min-w-0 items-center gap-2 hover:underline"
+                >
+                  <span className="truncate text-sm font-medium text-foreground">
+                    {agent.name}
+                  </span>
+                  <span className="text-meta truncate font-mono text-muted-foreground">
+                    @{agent.profileKey}
+                  </span>
+                </Link>
                 <span className="text-meta ml-auto shrink-0 font-mono text-muted-foreground">
                   {loadText}
                 </span>

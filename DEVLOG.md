@@ -2,6 +2,124 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-25 — Heartbeat wired + agent detail page
+
+Two follow-ups to today's `/agents` dashboard. (1) Victor's
+`lastHeartbeatAt` was 21h stale because nothing was calling
+`agents.heartbeat` on a schedule — the BullMQ idle-sweep + workspace
+knob exist but the producer was missing. (2) The dashboard surfaced
+agents but had no drill-down for "what's this agent's history?".
+
+### Heartbeat wiring (Hermes-side cron)
+
+Added two `hermes cron` entries — one per profile — that call
+`forge_agents.heartbeat` every 5 minutes via the MCP tool. Cron is
+managed by the gateway scheduler; the entries are persisted in
+`~/.hermes/cron/jobs.json` (Victor) and `~/.hermes/profiles/mizu/cron/jobs.json`
+(Mizu). Verified Victor's `lastHeartbeatAt` updates within ~5s of
+each tick. Mizu's tick reports OK but the DB row hasn't bumped —
+likely the prompt didn't force a tool call; tracking as a follow-up.
+
+Bumped `Workspace.agentIdleTimeoutMinutes` from 0 (sweep no-op) to
+15 minutes via a new UI knob added to `/settings/workspace`. The
+`workspace.update` zod schema gained the field with bounds [0, 1440].
+The settings page mirrors the existing Sprint length / Cooldown /
+Attachment quota pattern.
+
+### Agent detail page
+
+New route `/w/[slug]/agents/[profileKey]` (e.g. `/w/AXI/agents/victor`).
+Composes six tRPC calls into a single page:
+
+- **Identity strip** — avatar, name, profileKey, capabilities,
+  `maxConcurrent`, configured `webhookUrl`.
+- **Stats row (4 cards)** — uptime % (7d), assignments (30d), mean
+  TTFA, throughput (7d).
+- **Status ribbon** — horizontal SVG segment bar over the last 7 days,
+  built from `AGENT_STATUS_CHANGED` events. Legend below shows
+  ONLINE/BUSY/OFFLINE durations.
+- **Currently working on** — pulls this agent's lane out of
+  `agent.pipeline`, splits into In-flight / Assigned / Recently done.
+- **Webhook health card** — `agent.webhookHealth` rollup: success /
+  pending / failed / dead-letter counts plus the last 6 deliveries.
+- **Dispatch eligibility card** — status, load (with cap-flag tone),
+  capabilities, last heartbeat, last dispatched.
+- **Recent activity feed** — `agent.timeline` filtered to this agent.
+
+### New tRPC procedures (no migration)
+
+- `agent.uptime` — windowed status math from `AGENT_STATUS_CHANGED`
+  events. Returns `totalMs`, per-status time, `uptimePct`,
+  `currentStatus` + `currentSince`, and the raw `transitions` list.
+  Heuristic: when the window has no events, attribute the entire
+  window to the agent's current status; the pre-window seed comes
+  from the most-recent transition before windowStart.
+- `agent.webhookHealth` — counts `WebhookDelivery` rows for the
+  synthetic per-agent shim (`agent:dispatch:{agentId}`) and the
+  workspace-shared shim (`agent:dispatch`). Returns totals plus a
+  `recent` list with response status for a "what just failed" panel.
+
+### Click-through wiring
+
+Four entry points now navigate to the detail page:
+
+- `AgentPresenceStrip` — the whole card is now a `<Link>`.
+- `AgentPipeline` — the agent name + profile key in the lane header
+  links to the detail; status dot stays inert (it's a hover-title
+  primitive, not a click target).
+- `/settings/agents` — added a "View" button on each row, before
+  Edit/Archive/Delete.
+
+### Hermes webhooks investigation (ran in parallel as a research lane)
+
+Hermes has a first-class **inbound webhook adapter** at
+`gateway/platforms/webhook.py` (binds 8644 by default, HMAC-SHA256
+auth — GitHub / GitLab / generic flavors), with a CLI manager
+(`hermes webhook subscribe|list|remove|test`) that hot-reloads
+subscriptions from `~/.hermes/webhook_subscriptions.json` on every
+POST. Per-route prompt templates with `{dot.notation}` payload
+interpolation; `deliver_only: true` flag bypasses the agent loop
+entirely (zero LLM cost — straight push). Profile routing = one
+port per profile (Victor 8644, Mizu 8645, Mizuki 8646), since each
+profile runs its own gateway.
+
+Currently NOT enabled (no listener on 8644). To switch from the
+poll-style heartbeat / queue-pull pattern to push-style dispatch:
+flip `platforms.webhook` on in each profile config, subscribe one
+route per profile, set the corresponding `Agent.webhookUrl` (e.g.
+`http://<internal-host>:8644/webhooks/forge-dispatch`), and let the
+existing Forge `WebhookDelivery` worker POST `AGENT_ASSIGNED`
+straight to Hermes — the route prompt would render "you have a new
+assignment: AXI-42" and wake Victor's session. MCP polling for
+issue data + state stays; webhooks **complement** MCP (wake +
+notify), they don't replace it.
+
+Filing as a follow-up — keeping cron heartbeat for now as the user
+specified.
+
+### Verification
+
+- `pnpm typecheck` clean.
+- Heartbeat cron verified live: Victor's `lastHeartbeatAt` updated
+  to within seconds of the first tick.
+- `pnpm lint` / `pnpm test` not re-run; no new files vs the previous
+  commit beyond the detail page + procedure additions; pre-existing
+  `issue-board.tsx` lint errors still untouched.
+
+### Follow-ups
+
+- Mizu's heartbeat cron fires "OK" but `Agent.lastHeartbeatAt`
+  doesn't bump — the prompt likely doesn't force a tool call. Tighten
+  the prompt or replace with a direct `mcporter call` for both
+  profiles.
+- Hermes webhook adapter looks like a clean fit for push-dispatch
+  (see investigation above). Worth a follow-up wave once Mizu's
+  heartbeat is fixed.
+- The status ribbon currently shows a flat segment when the agent
+  has been at one status for the full window. Consider overlaying
+  heartbeat-tick markers so silent hours look different from active-
+  online hours.
+
 ## 2026-04-25 — Agents operational dashboard (3-agent parallel wave)
 
 Stood up `/w/[slug]/agents` — a live operational view of the agent fleet

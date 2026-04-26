@@ -26,6 +26,7 @@ export default function WorkspaceSettingsPage() {
   const [cycleCooldownDays, setCycleCooldownDays] = useState(ws.cycleCooldownDays);
   const [timeTrackingEnabled, setTimeTrackingEnabled] = useState(ws.timeTrackingEnabled);
   const [attachmentQuotaMb, setAttachmentQuotaMb] = useState(ws.attachmentQuotaMb);
+  const [agentIdleTimeoutMinutes, setAgentIdleTimeoutMinutes] = useState(0);
 
   useEffect(() => {
     if (!current) return;
@@ -35,6 +36,7 @@ export default function WorkspaceSettingsPage() {
     setCycleCooldownDays(current.cycleCooldownDays);
     setTimeTrackingEnabled(current.timeTrackingEnabled);
     setAttachmentQuotaMb(current.attachmentQuotaMb);
+    setAgentIdleTimeoutMinutes(current.agentIdleTimeoutMinutes);
   }, [current]);
 
   const update = trpc.workspace.update.useMutation({
@@ -191,6 +193,21 @@ export default function WorkspaceSettingsPage() {
                   disabled={!canEdit}
                 />
               </Field>
+              <Field
+                label="Agent idle timeout (minutes)"
+                hint="Flip an agent to OFFLINE when its last heartbeat is older than this. 0 disables the sweep — presence stays whatever the agent last set it to. 10–15 is a good default once Hermes is calling agents.heartbeat on a schedule."
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  value={agentIdleTimeoutMinutes}
+                  onChange={(e) =>
+                    setAgentIdleTimeoutMinutes(Number(e.target.value) || 0)
+                  }
+                  disabled={!canEdit}
+                />
+              </Field>
             </div>
           </Section>
 
@@ -207,6 +224,7 @@ export default function WorkspaceSettingsPage() {
                     cycleCooldownDays,
                     timeTrackingEnabled,
                     attachmentQuotaMb,
+                    agentIdleTimeoutMinutes,
                   })
                 }
               >

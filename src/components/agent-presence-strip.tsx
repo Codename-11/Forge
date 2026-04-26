@@ -1,13 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { Bot } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { EmptyState } from "@/components/ui";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useWorkspace } from "@/hooks/use-workspace";
 import { cn, relativeTime } from "@/lib/utils";
 
 export default function AgentPresenceStrip() {
+  const ws = useWorkspace();
   const utils = trpc.useUtils();
   const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false });
   const { data: pipeline } = trpc.agent.pipeline.useQuery({});
@@ -78,9 +81,10 @@ export default function AgentPresenceStrip() {
         const throughput = stats?.throughputLast7d ?? 0;
 
         return (
-          <div
+          <Link
             key={agent.id}
-            className="flex w-[220px] shrink-0 flex-col gap-2 rounded-lg border border-border bg-card p-3"
+            href={`/w/${ws.slug}/agents/${agent.profileKey}`}
+            className="focus-ring flex w-[220px] shrink-0 flex-col gap-2 rounded-lg border border-border bg-card p-3 hover:bg-subtle"
           >
             <div className="flex min-w-0 items-center gap-2">
               <AgentPresenceDot
@@ -125,7 +129,7 @@ export default function AgentPresenceStrip() {
                 <> &middot; last beat {relativeTime(agent.lastHeartbeatAt)}</>
               )}
             </div>
-          </div>
+          </Link>
         );
       })}
     </div>
