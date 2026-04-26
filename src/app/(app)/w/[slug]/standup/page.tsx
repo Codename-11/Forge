@@ -30,7 +30,7 @@ export default function StandupPage() {
         subtitle="Auto-generated from your recent activity. Edit + paste wherever you report."
         actions={
           <div className="flex items-center gap-2">
-            <div className="flex h-7 items-center gap-0.5 rounded-md bg-subtle p-0.5 text-[11px]">
+            <div className="flex h-7 items-center gap-0.5 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
               {[24, 72, 168].map((h) => (
                 <button
                   key={h}
@@ -76,14 +76,14 @@ export default function StandupPage() {
             </div>
           ) : (
             <>
-              <div className="flex flex-wrap gap-2 text-[11px]">
+              <div className="flex flex-wrap gap-2 text-[0.6875rem]">
                 <Badge color="#65a30d">closed {data.counts.closed}</Badge>
                 <Badge color="#0ea5e9">opened {data.counts.opened}</Badge>
                 <Badge color="#ca8a04">in progress {data.counts.inProgress}</Badge>
                 <Badge color="#be185d">stalled {data.counts.blocked}</Badge>
                 <Badge>events {data.counts.moved}</Badge>
               </div>
-              <pre className="whitespace-pre-wrap rounded-lg border border-border bg-card/40 p-4 font-sans text-[13px] leading-relaxed">
+              <pre className="whitespace-pre-wrap rounded-lg border border-border bg-card/40 p-4 font-sans text-[0.8125rem] leading-relaxed">
                 {data.markdown}
               </pre>
               <p className="text-meta text-muted-foreground">

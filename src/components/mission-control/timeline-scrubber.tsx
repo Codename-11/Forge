@@ -311,7 +311,7 @@ export function TimelineScrubber({
               style={{ left: `${t.pct}%` }}
             >
               <span className="block h-1 w-px bg-border" />
-              <span className="mt-0.5 text-[10px] text-muted-foreground">
+              <span className="mt-0.5 text-[0.625rem] text-muted-foreground">
                 {t.label}
               </span>
             </div>

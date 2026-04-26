@@ -235,7 +235,7 @@ export function QuickForm({
               )}
             </div>
             {restored && (
-              <span className="shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[11px] uppercase tracking-wider text-ember">
+              <span className="shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.6875rem] uppercase tracking-wider text-ember">
                 Restored draft
               </span>
             )}
@@ -317,10 +317,10 @@ function Field({
       )}
       {children}
       {hint && !error && (
-        <p className="text-[11px] text-muted-foreground">{hint}</p>
+        <p className="text-[0.6875rem] text-muted-foreground">{hint}</p>
       )}
       {error && (
-        <p className="text-[11px] text-danger" role="alert">
+        <p className="text-[0.6875rem] text-danger" role="alert">
           {error}
         </p>
       )}

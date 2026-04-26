@@ -164,7 +164,7 @@ function IssuesTab() {
 
         <Card title="Flow time (hours by priority)">
           <table className="w-full text-xs">
-            <thead className="text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+            <thead className="text-left text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
               <tr>
                 <th className="py-1">Priority</th>
                 <th>p50</th>
@@ -281,7 +281,7 @@ function DispatchTab() {
       <section className="mt-4">
         <Card title="Per-agent">
           <table className="w-full text-xs">
-            <thead className="text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+            <thead className="text-left text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
               <tr>
                 <th className="py-1">Agent</th>
                 <SortableHeader
@@ -314,7 +314,7 @@ function DispatchTab() {
                         <span className="text-sm">{a.avatar ?? ""}</span>
                         <div className="flex flex-col">
                           <span className="font-medium">{a.name}</span>
-                          <span className="font-mono text-[11px] text-muted-foreground">
+                          <span className="font-mono text-[0.6875rem] text-muted-foreground">
                             @{a.profileKey}
                           </span>
                         </div>
@@ -339,7 +339,7 @@ function DispatchTab() {
               )}
             </tbody>
           </table>
-          <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-3 text-[0.6875rem] leading-relaxed text-muted-foreground">
             Excluded from the means: assignments with no follow-up event (TTFA) and assignments
             whose issue is still open (TTC). The per-agent row surfaces them under the Excl. column.
           </p>
@@ -362,12 +362,12 @@ function SortableHeader({
     <th>
       <button
         onClick={onClick}
-        className={`flex items-center gap-1 text-[11px] uppercase tracking-wider ${
+        className={`flex items-center gap-1 text-[0.6875rem] uppercase tracking-wider ${
           active ? "text-foreground" : "text-muted-foreground"
         }`}
       >
         {label}
-        <span className="text-[11px]">{active ? "↓" : ""}</span>
+        <span className="text-[0.6875rem]">{active ? "↓" : ""}</span>
       </button>
     </th>
   );
@@ -434,7 +434,7 @@ function Timeseries({
           strokeDasharray="3 3"
         />
       </svg>
-      <div className="mt-1 flex items-center gap-4 text-[11px] text-muted-foreground">
+      <div className="mt-1 flex items-center gap-4 text-[0.6875rem] text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-0.5 w-4 bg-ember" />
           Assignments
@@ -484,7 +484,7 @@ function ModeBar({
           return (
             <li key={k} className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
-              <span className="flex-1 font-mono text-[11px]">{k.toLowerCase()}</span>
+              <span className="flex-1 font-mono text-[0.6875rem]">{k.toLowerCase()}</span>
               <span className="font-mono tabular-nums">{n}</span>
             </li>
           );
@@ -510,7 +510,7 @@ function formatDuration(ms: number | null | undefined): string {
 function Stat({ label, value, tone }: { label: string; value: number | string; tone?: "warn" }) {
   return (
     <div className="rounded-lg border border-border bg-card/40 p-4">
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div
         className={`mt-1 text-2xl font-semibold tabular-nums ${tone === "warn" ? "text-warning" : ""}`}
       >
@@ -534,7 +534,7 @@ function Card({
   return (
     <div className={`rounded-lg border border-border bg-card/40 p-4 ${className ?? ""}`}>
       <div
-        className={`mb-3 text-[11px] font-semibold uppercase tracking-wider ${tone === "warn" ? "text-warning" : "text-muted-foreground"}`}
+        className={`mb-3 text-[0.6875rem] font-semibold uppercase tracking-wider ${tone === "warn" ? "text-warning" : "text-muted-foreground"}`}
       >
         {title}
       </div>

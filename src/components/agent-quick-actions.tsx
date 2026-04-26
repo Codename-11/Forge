@@ -104,7 +104,7 @@ export function AgentQuickActions({
           <Link
             href={detailHref}
             onClick={() => setOpen(false)}
-            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] hover:bg-subtle"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.75rem] hover:bg-subtle"
           >
             <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
             <span>View detail</span>
@@ -116,7 +116,7 @@ export function AgentQuickActions({
             type="button"
             onClick={() => force("ONLINE")}
             disabled={status === "ONLINE" || heartbeat.isPending}
-            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] hover:bg-subtle disabled:opacity-40 disabled:hover:bg-transparent"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.75rem] hover:bg-subtle disabled:opacity-40 disabled:hover:bg-transparent"
           >
             <Power className="h-3.5 w-3.5 text-muted-foreground" />
             <span>Force ONLINE</span>
@@ -125,7 +125,7 @@ export function AgentQuickActions({
             type="button"
             onClick={() => force("BUSY")}
             disabled={status === "BUSY" || heartbeat.isPending}
-            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] hover:bg-subtle disabled:opacity-40 disabled:hover:bg-transparent"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.75rem] hover:bg-subtle disabled:opacity-40 disabled:hover:bg-transparent"
           >
             <Pause className="h-3.5 w-3.5 text-muted-foreground" />
             <span>Force BUSY</span>
@@ -134,7 +134,7 @@ export function AgentQuickActions({
             type="button"
             onClick={() => force("OFFLINE")}
             disabled={status === "OFFLINE" || heartbeat.isPending}
-            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] hover:bg-subtle disabled:opacity-40 disabled:hover:bg-transparent"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.75rem] hover:bg-subtle disabled:opacity-40 disabled:hover:bg-transparent"
           >
             <PowerOff className="h-3.5 w-3.5 text-muted-foreground" />
             <span>Force OFFLINE</span>
@@ -145,7 +145,7 @@ export function AgentQuickActions({
           <Link
             href={deliveriesHref}
             onClick={() => setOpen(false)}
-            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] hover:bg-subtle"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.75rem] hover:bg-subtle"
           >
             <Activity className="h-3.5 w-3.5 text-muted-foreground" />
             <span>View recent deliveries</span>

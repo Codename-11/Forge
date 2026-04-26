@@ -201,7 +201,7 @@ function UnavailablePill({
   return (
     <span
       title={tooltip}
-      className="inline-flex items-center gap-1 rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[10.5px] text-warning"
+      className="inline-flex items-center gap-1 rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.65625rem] text-warning"
     >
       <AlertTriangle className="h-3 w-3" />
       Attachment unavailable — storage error
@@ -225,7 +225,7 @@ function InlineAttachmentImage({
   );
   if (isLoading) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-md bg-subtle px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+      <span className="inline-flex items-center gap-1 rounded-md bg-subtle px-2 py-0.5 font-mono text-[0.6875rem] text-muted-foreground">
         <Paperclip className="h-3 w-3" /> loading…
       </span>
     );
@@ -273,12 +273,12 @@ function InlineIssueRef({ issueKey }: { issueKey: string }) {
   if (!ws) {
     // No workspace context (e.g. account-level page rendering a comment).
     // Fall back to plain text so we don't link into the wrong place.
-    return <span className="font-mono text-[12px]">{issueKey}</span>;
+    return <span className="font-mono text-[0.75rem]">{issueKey}</span>;
   }
   return (
     <Link
       href={`/w/${ws.slug}/i/${issueKey}`}
-      className="font-mono text-[12px] text-ember underline-offset-2 hover:underline"
+      className="font-mono text-[0.75rem] text-ember underline-offset-2 hover:underline"
       title={`Open ${issueKey}`}
     >
       {issueKey}
@@ -296,7 +296,7 @@ function InlineIssueRef({ issueKey }: { issueKey: string }) {
 function InlineAgentMention({ profileKey }: { profileKey: string }) {
   return (
     <span
-      className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1 py-0.5 font-mono text-[11px] text-indigo-700 dark:text-indigo-300"
+      className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1 py-0.5 font-mono text-[0.6875rem] text-indigo-700 dark:text-indigo-300"
       title={`@${profileKey}`}
     >
       <Bot className="h-3 w-3" />@{profileKey}
@@ -335,7 +335,7 @@ function InlineAttachmentLink({
         })
       }
       title="Click to preview"
-      className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[11px] hover:border-ember/40 hover:bg-subtle"
+      className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.6875rem] hover:border-ember/40 hover:bg-subtle"
     >
       <Icon className="h-3 w-3 text-muted-foreground" />
       {label}

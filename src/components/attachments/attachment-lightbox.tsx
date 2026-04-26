@@ -307,7 +307,7 @@ function Lightbox({
         <KindGlyph mime={current.mimeType} />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{current.filename}</div>
-          <div className="font-mono text-[10.5px] uppercase tracking-wider text-background/60">
+          <div className="font-mono text-[0.65625rem] uppercase tracking-wider text-background/60">
             {current.mimeType || "binary"} · {prettyBytes(current.size)}
             {hasPaging && (
               <>
@@ -353,7 +353,7 @@ function Lightbox({
           {isLoading ? (
             <div className="flex flex-col items-center gap-2 text-background/80">
               <Loader2 className="h-5 w-5 animate-spin" />
-              <span className="font-mono text-[11px] uppercase tracking-wider">
+              <span className="font-mono text-[0.6875rem] uppercase tracking-wider">
                 Loading preview
               </span>
             </div>
@@ -389,7 +389,7 @@ function Lightbox({
         className="flex shrink-0 items-center justify-between gap-3 border-t border-border/40 bg-foreground/10 px-4 py-2.5 text-background"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="hidden font-mono text-[10.5px] uppercase tracking-wider text-background/60 sm:block">
+        <div className="hidden font-mono text-[0.65625rem] uppercase tracking-wider text-background/60 sm:block">
           {hasPaging ? "←  →  page · " : ""}
           d download · o open · c copy
           {canDelete ? " · ⌫ delete" : ""} · esc close
@@ -528,7 +528,7 @@ function AudioPreview({
       <Music className="h-10 w-10 text-muted-foreground" />
       <div className="text-center">
         <div className="text-sm font-medium">{filename}</div>
-        <div className="font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+        <div className="font-mono text-[0.65625rem] uppercase tracking-wider text-muted-foreground">
           {mime}
         </div>
       </div>
@@ -592,7 +592,7 @@ function TextPreview({
     return (
       <div className="flex flex-col items-center gap-2 text-background/80">
         <Loader2 className="h-5 w-5 animate-spin" />
-        <span className="font-mono text-[11px] uppercase tracking-wider">
+        <span className="font-mono text-[0.6875rem] uppercase tracking-wider">
           Loading text
         </span>
       </div>
@@ -600,11 +600,11 @@ function TextPreview({
   }
   return (
     <div className="flex h-full w-full max-w-4xl flex-col rounded-md border border-border/30 bg-background text-foreground shadow-2xl">
-      <pre className="m-0 min-h-0 flex-1 overflow-auto p-4 font-mono text-[12.5px] leading-[1.55]">
+      <pre className="m-0 min-h-0 flex-1 overflow-auto p-4 font-mono text-[0.78125rem] leading-[1.55]">
         {text}
       </pre>
       {truncated && (
-        <div className="flex items-center justify-between border-t border-border bg-muted px-3 py-1.5 font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+        <div className="flex items-center justify-between border-t border-border bg-muted px-3 py-1.5 font-mono text-[0.65625rem] uppercase tracking-wider text-muted-foreground">
           <span>Showing first {Math.round(TEXT_PREVIEW_LIMIT / 1024)} KB</span>
           <button
             type="button"
@@ -631,7 +631,7 @@ function NoPreview({
       <FileIcon className="h-10 w-10 text-muted-foreground" />
       <div>
         <div className="text-sm font-medium">{attachment.filename}</div>
-        <div className="mt-0.5 font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+        <div className="mt-0.5 font-mono text-[0.65625rem] uppercase tracking-wider text-muted-foreground">
           {attachment.mimeType || "binary"} · {prettyBytes(attachment.size)}
         </div>
       </div>
@@ -661,7 +661,7 @@ function UnavailableCard({
     <div className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-border/30 bg-card p-6 text-center text-foreground shadow-2xl">
       <AlertTriangle className="h-7 w-7 text-warning" />
       <div className="text-sm font-medium">Preview unavailable</div>
-      <div className="font-mono text-[10.5px] text-muted-foreground">{filename}</div>
+      <div className="font-mono text-[0.65625rem] text-muted-foreground">{filename}</div>
       <p className="text-xs text-muted-foreground">{message}</p>
     </div>
   );

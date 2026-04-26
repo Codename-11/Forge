@@ -161,7 +161,7 @@ export function TimeTrackerWidget() {
               update.mutate({ entryId: running.id, billable: !running.billable })
             }
             className={cn(
-              "focus-ring grid h-6 w-6 place-items-center rounded-full border text-[11px]",
+              "focus-ring grid h-6 w-6 place-items-center rounded-full border text-[0.6875rem]",
               running.billable
                 ? "border-success/60 bg-success/10 text-success"
                 : "border-border text-muted-foreground hover:bg-subtle",
@@ -174,7 +174,7 @@ export function TimeTrackerWidget() {
             type="button"
             variant="danger"
             size="sm"
-            className="h-6 rounded-full px-2 text-[11px]"
+            className="h-6 rounded-full px-2 text-[0.6875rem]"
             onClick={() => stop.mutate({ entryId: running.id })}
             disabled={stop.isPending}
           >
@@ -185,7 +185,7 @@ export function TimeTrackerWidget() {
         <div className="w-80 rounded-lg border border-border bg-card shadow-lg">
           <header className="flex items-center gap-2 border-b border-border px-3 py-2">
             <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-[11px] font-semibold">Start tracking</span>
+            <span className="text-[0.6875rem] font-semibold">Start tracking</span>
             <button
               type="button"
               onClick={() => setOpen(false)}
@@ -195,9 +195,9 @@ export function TimeTrackerWidget() {
               <X className="h-3 w-3" />
             </button>
           </header>
-          <div className="space-y-2 p-3 text-[12px]">
+          <div className="space-y-2 p-3 text-[0.75rem]">
             <label className="block">
-              <span className="mb-1 block text-[11px] uppercase tracking-wider text-muted-foreground">
+              <span className="mb-1 block text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
                 Issue (optional)
               </span>
               <select
@@ -216,7 +216,7 @@ export function TimeTrackerWidget() {
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 block text-[11px] uppercase tracking-wider text-muted-foreground">
+              <span className="mb-1 block text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
                 Description
               </span>
               <input
@@ -227,7 +227,7 @@ export function TimeTrackerWidget() {
                 className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1"
               />
             </label>
-            <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <label className="flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
               <input
                 type="checkbox"
                 checked={billable}
@@ -258,12 +258,12 @@ export function TimeTrackerWidget() {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="flex items-center gap-1.5 rounded-full border border-border bg-card/95 px-3 py-1.5 text-[11px] shadow-lg backdrop-blur hover:bg-subtle"
+          className="flex items-center gap-1.5 rounded-full border border-border bg-card/95 px-3 py-1.5 text-[0.6875rem] shadow-lg backdrop-blur hover:bg-subtle"
           title="Start tracking (t)"
         >
           <Clock className="h-3.5 w-3.5 text-muted-foreground" />
           <span>Start tracking</span>
-          <span className="kbd !px-1 !text-[11px]">T</span>
+          <span className="kbd !px-1 !text-[0.6875rem]">T</span>
         </button>
       )}
     </div>

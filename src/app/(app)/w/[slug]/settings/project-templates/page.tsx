@@ -89,7 +89,7 @@ export default function ProjectTemplatesPage() {
                     <Badge>{r.suggestedKey}</Badge>
                   </div>
                   {r.description && (
-                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                    <div className="mt-0.5 truncate text-[0.6875rem] text-muted-foreground">
                       {r.description}
                     </div>
                   )}

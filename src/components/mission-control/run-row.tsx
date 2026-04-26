@@ -83,7 +83,7 @@ export function RunRow({
     <div
       data-active={active || undefined}
       className={cn(
-        "group/row relative rounded-md border border-border bg-card/40 px-2.5 py-2 text-[12px] transition-colors",
+        "group/row relative rounded-md border border-border bg-card/40 px-2.5 py-2 text-[0.75rem] transition-colors",
         active && "border-ember/40 bg-ember/5",
       )}
       onMouseEnter={onActivate}
@@ -115,13 +115,13 @@ export function RunRow({
         {issueHref ? (
           <Link
             href={issueHref}
-            className="font-mono text-[11px] text-foreground/80 hover:text-ember"
+            className="font-mono text-[0.6875rem] text-foreground/80 hover:text-ember"
             title={run.issue?.title}
           >
             {issueKey}
           </Link>
         ) : (
-          <span className="font-mono text-[11px] text-foreground/60">{issueKey}</span>
+          <span className="font-mono text-[0.6875rem] text-foreground/60">{issueKey}</span>
         )}
         <span className="ml-auto flex items-center gap-1.5">
           <span

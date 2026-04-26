@@ -103,7 +103,7 @@ export default function ViewsPage() {
                       </Link>
                       {v.userId ? <Badge>personal</Badge> : <Badge color="#7c3aed">shared</Badge>}
                     </div>
-                    <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                    <div className="mt-0.5 truncate font-mono text-[0.6875rem] text-muted-foreground">
                       {qs || "no filters"}
                     </div>
                   </div>

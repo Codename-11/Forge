@@ -107,7 +107,7 @@ export default function WebhookDeliveriesPage() {
             title="Deliveries"
             hint="Rows reflect the durable queue. Retries reset attempt count and push back onto the worker."
             actions={
-              <div className="flex gap-1 rounded-md bg-subtle p-0.5 text-[11px]">
+              <div className="flex gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
                 <FilterChip
                   label="Dead letter"
                   active={status === "DEAD_LETTER"}
@@ -156,7 +156,7 @@ export default function WebhookDeliveriesPage() {
               </Card>
             ) : (
               <Card>
-                <li className="grid grid-cols-[1fr_1.25fr_5rem_5rem_1fr_7rem] items-center gap-3 border-b border-border bg-subtle/30 px-4 py-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+                <li className="grid grid-cols-[1fr_1.25fr_5rem_5rem_1fr_7rem] items-center gap-3 border-b border-border bg-subtle/30 px-4 py-2 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
                   <span>Event</span>
                   <span>Endpoint</span>
                   <span>Status</span>
@@ -176,18 +176,18 @@ export default function WebhookDeliveriesPage() {
                       )}
                     >
                       <div className="min-w-0">
-                        <div className="font-mono text-[11px] text-foreground">
+                        <div className="font-mono text-[0.6875rem] text-foreground">
                           {d.event.kind}
                         </div>
-                        <div className="truncate text-[11px] text-muted-foreground">
+                        <div className="truncate text-[0.6875rem] text-muted-foreground">
                           {d.event.subjectType}/{d.event.subjectId.slice(0, 8)}
                         </div>
                       </div>
                       <div className="min-w-0">
-                        <div className="truncate font-mono text-[11px] text-foreground">
+                        <div className="truncate font-mono text-[0.6875rem] text-foreground">
                           {truncateUrl(d.webhook.url, 48)}
                         </div>
-                        <div className="text-[11px] text-muted-foreground">
+                        <div className="text-[0.6875rem] text-muted-foreground">
                           {formatWebhookKind(d.webhook)}
                         </div>
                       </div>
@@ -196,13 +196,13 @@ export default function WebhookDeliveriesPage() {
                           {d.status}
                         </Badge>
                       </div>
-                      <div className="font-mono tabular-nums text-[11px] text-muted-foreground">
+                      <div className="font-mono tabular-nums text-[0.6875rem] text-muted-foreground">
                         {d.attempt}
                       </div>
-                      <div className="min-w-0 truncate text-[11px] text-muted-foreground">
+                      <div className="min-w-0 truncate text-[0.6875rem] text-muted-foreground">
                         {err ?? "—"}
                       </div>
-                      <div className="text-right text-[11px] text-muted-foreground">
+                      <div className="text-right text-[0.6875rem] text-muted-foreground">
                         {d.deliveredAt
                           ? relativeTime(d.deliveredAt)
                           : relativeTime(d.scheduledAt)}
@@ -237,7 +237,7 @@ export default function WebhookDeliveriesPage() {
         footer={
           selected ? (
             <>
-              <div className="mr-auto text-[11px] text-muted-foreground">
+              <div className="mr-auto text-[0.6875rem] text-muted-foreground">
                 Attempt {selected.attempt} ·{" "}
                 {selected.deliveredAt
                   ? `delivered ${relativeTime(selected.deliveredAt)}`
@@ -346,10 +346,10 @@ function DeliveryDetail({ d }: { d: DeliveryRow }) {
 
       <Field label="Webhook">
         <div className="space-y-0.5">
-          <div className="break-all font-mono text-[11px] text-foreground">
+          <div className="break-all font-mono text-[0.6875rem] text-foreground">
             {d.webhook.url}
           </div>
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-[0.6875rem] text-muted-foreground">
             {formatWebhookKind(d.webhook)}
             {d.webhook.events.length > 0 && (
               <> · subscribes to {d.webhook.events.length} event kinds</>
@@ -360,10 +360,10 @@ function DeliveryDetail({ d }: { d: DeliveryRow }) {
 
       <Field label="Event">
         <div className="space-y-0.5">
-          <div className="font-mono text-[11px] text-foreground">
+          <div className="font-mono text-[0.6875rem] text-foreground">
             {d.event.kind} on {d.event.subjectType}/{d.event.subjectId}
           </div>
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-[0.6875rem] text-muted-foreground">
             fired {relativeTime(d.event.createdAt)}
           </div>
         </div>
@@ -372,26 +372,26 @@ function DeliveryDetail({ d }: { d: DeliveryRow }) {
       <Field label="Response">
         {d.responseStatus != null ? (
           <div className="space-y-1">
-            <div className="font-mono text-[11px]">
+            <div className="font-mono text-[0.6875rem]">
               HTTP {d.responseStatus}
             </div>
-            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background/60 p-2 font-mono text-[11px] text-muted-foreground">
+            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background/60 p-2 font-mono text-[0.6875rem] text-muted-foreground">
               {d.responseBody ?? "(empty body)"}
             </pre>
           </div>
         ) : d.responseBody ? (
-          <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background/60 p-2 font-mono text-[11px] text-muted-foreground">
+          <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background/60 p-2 font-mono text-[0.6875rem] text-muted-foreground">
             {d.responseBody}
           </pre>
         ) : (
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-[0.6875rem] text-muted-foreground">
             No response recorded.
           </div>
         )}
       </Field>
 
       <Field label="Payload">
-        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background/60 p-2 font-mono text-[11px] text-muted-foreground">
+        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background/60 p-2 font-mono text-[0.6875rem] text-muted-foreground">
           {JSON.stringify(d.event.payload, null, 2)}
         </pre>
       </Field>
@@ -408,7 +408,7 @@ function Field({
 }) {
   return (
     <div className="space-y-1">
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+      <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       <div>{children}</div>

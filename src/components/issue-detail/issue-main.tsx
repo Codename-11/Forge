@@ -134,7 +134,7 @@ function DescriptionBlock({
         </div>
       ) : (
         <article
-          className="prose prose-sm max-w-none cursor-text rounded-md px-1 py-0.5 text-[13px] leading-relaxed text-foreground/90 hover:bg-subtle/40"
+          className="prose prose-sm max-w-none cursor-text rounded-md px-1 py-0.5 text-[0.8125rem] leading-relaxed text-foreground/90 hover:bg-subtle/40"
           onClick={() => setEditing(true)}
           title="Click to edit"
         >
@@ -216,7 +216,7 @@ function Comments({
                     // consistent across the app.
                     <Badge
                       color="#6366f1"
-                      className="font-mono text-[11px] uppercase tracking-wider"
+                      className="font-mono text-[0.6875rem] uppercase tracking-wider"
                     >
                       agent
                     </Badge>
@@ -227,7 +227,7 @@ function Comments({
                 </div>
                 <MarkdownWithAttachments
                   body={c.body}
-                  className="mt-1 text-[13px]"
+                  className="mt-1 text-[0.8125rem]"
                 />
               </div>
             </div>
@@ -248,7 +248,7 @@ function Comments({
           onChange={(e) => setDraft(e.target.value)}
           onPaste={paste.onPaste}
           rows={2}
-          className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[13px]"
+          className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[0.8125rem]"
         />
         <div className="flex justify-end">
           <Button
@@ -289,13 +289,13 @@ function StatusCommentPin({ comment }: { comment: Comment }) {
           {isAgent && (
             <Badge
               color="#d97706"
-              className="font-mono text-[11px] uppercase tracking-wider"
+              className="font-mono text-[0.6875rem] uppercase tracking-wider"
             >
               live status
             </Badge>
           )}
           {comment.currentStep && (
-            <span className="font-mono text-[11px] text-muted-foreground">
+            <span className="font-mono text-[0.6875rem] text-muted-foreground">
               · {comment.currentStep}
             </span>
           )}
@@ -305,7 +305,7 @@ function StatusCommentPin({ comment }: { comment: Comment }) {
         </div>
         <MarkdownWithAttachments
           body={comment.body}
-          className="mt-1 text-[13px]"
+          className="mt-1 text-[0.8125rem]"
         />
       </div>
     </div>
@@ -314,7 +314,7 @@ function StatusCommentPin({ comment }: { comment: Comment }) {
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <h2 className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <h2 className="mb-3 flex items-center gap-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
       {children}
     </h2>
   );
@@ -322,7 +322,7 @@ function SectionLabel({ children }: { children: ReactNode }) {
 
 function Count({ children }: { children: ReactNode }) {
   return (
-    <span className="font-mono text-[11px] text-muted-foreground">
+    <span className="font-mono text-[0.6875rem] text-muted-foreground">
       {children}
     </span>
   );

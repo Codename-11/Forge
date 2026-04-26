@@ -52,7 +52,7 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
       <section className="mt-8 rounded-lg border border-border bg-card/40">
         <header className="flex h-9 items-center gap-2 border-b border-border px-3">
           <ActivityIcon className="h-3.5 w-3.5 text-muted-foreground" />
-          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
             Activity
           </h2>
         </header>
@@ -69,10 +69,10 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
     <section className="mt-8 rounded-lg border border-border bg-card/40">
       <header className="flex h-9 items-center gap-2 border-b border-border px-3">
         <ActivityIcon className="h-3.5 w-3.5 text-muted-foreground" />
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Activity
         </h2>
-        <span className="font-mono text-[11px] text-muted-foreground">
+        <span className="font-mono text-[0.6875rem] text-muted-foreground">
           {rows.length}
         </span>
       </header>
@@ -94,7 +94,7 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
                   size={18}
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-1.5 text-[11px]">
+                  <div className="flex items-baseline gap-1.5 text-[0.6875rem]">
                     <span className="truncate font-medium">
                       {e.actor?.name ?? "System"}
                     </span>
@@ -103,14 +103,14 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
                     </span>
                     {dispatch?.mode && (
                       <span
-                        className="ml-1 inline-flex items-center gap-1 rounded-sm bg-subtle px-1 text-[11px] font-mono uppercase tracking-wider text-muted-foreground"
+                        className="ml-1 inline-flex items-center gap-1 rounded-sm bg-subtle px-1 text-[0.6875rem] font-mono uppercase tracking-wider text-muted-foreground"
                         title={dispatch.reason ?? undefined}
                       >
                         {dispatch.mode}
                       </span>
                     )}
                     {dispatch?.chosen?.profileKey && (
-                      <span className="ml-1 text-[11px] font-mono text-muted-foreground">
+                      <span className="ml-1 text-[0.6875rem] font-mono text-muted-foreground">
                         → @{dispatch.chosen.profileKey}
                       </span>
                     )}

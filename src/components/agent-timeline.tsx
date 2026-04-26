@@ -316,7 +316,7 @@ export default function AgentTimeline() {
           setCursor(undefined);
         }}
         className={cn(
-          "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+          "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[0.6875rem] transition-colors",
           agentId === undefined
             ? "border-ember bg-ember/10 text-ember"
             : "border-border bg-card text-muted-foreground hover:text-foreground",
@@ -335,7 +335,7 @@ export default function AgentTimeline() {
               setCursor(undefined);
             }}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+              "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[0.6875rem] transition-colors",
               active
                 ? "border-ember bg-ember/10 text-ember"
                 : "border-border bg-card text-muted-foreground hover:text-foreground",
@@ -386,7 +386,7 @@ export default function AgentTimeline() {
           return (
             <li
               key={evt.id}
-              className="flex items-start gap-2 px-3 py-2 text-[12px]"
+              className="flex items-start gap-2 px-3 py-2 text-[0.75rem]"
             >
               <span className="mt-0.5 shrink-0">{iconFor(evt.kind)}</span>
               <div className="flex-1 min-w-0">
@@ -409,7 +409,7 @@ export default function AgentTimeline() {
           <button
             type="button"
             onClick={() => setCursor(data.nextCursor ?? undefined)}
-            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[0.6875rem] text-muted-foreground transition-colors hover:text-foreground"
           >
             Load older
           </button>

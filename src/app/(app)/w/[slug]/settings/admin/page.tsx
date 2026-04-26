@@ -78,7 +78,7 @@ export default function AdminPage() {
                     c.danger ? "border-danger/40" : "border-border",
                   )}
                 >
-                  <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
                     {c.label}
                   </div>
                   <div
@@ -89,7 +89,7 @@ export default function AdminPage() {
                   >
                     {c.value ?? "—"}
                   </div>
-                  <div className="mt-1 text-[11px] text-muted-foreground">{c.hint}</div>
+                  <div className="mt-1 text-[0.6875rem] text-muted-foreground">{c.hint}</div>
                 </div>
               ))}
             </div>
@@ -97,7 +97,7 @@ export default function AdminPage() {
 
           <Section title="Activity">
             <div className="space-y-2">
-              <div className="flex gap-1 rounded-md bg-subtle p-0.5 text-[11px]">
+              <div className="flex gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
                 {tabs.map((t) => (
                   <button
                     key={t.id}
@@ -143,21 +143,21 @@ function AuditTab() {
     <Card>
       {items.map((a) => (
         <li key={a.id} className="flex items-start gap-3 px-4 py-3 text-xs">
-          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-subtle text-[11px] font-medium">
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-subtle text-[0.6875rem] font-medium">
             {initials(a.actor?.name ?? a.actor?.email ?? null)}
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <Badge>{a.action}</Badge>
-              <span className="font-mono text-[11px] text-muted-foreground">
+              <span className="font-mono text-[0.6875rem] text-muted-foreground">
                 {a.entity}/{a.entityId.slice(0, 8)}
               </span>
-              <span className="ml-auto text-[11px] text-muted-foreground">
+              <span className="ml-auto text-[0.6875rem] text-muted-foreground">
                 {relativeTime(a.createdAt)}
               </span>
             </div>
             {(a.actor || a.ip) && (
-              <div className="mt-0.5 text-[11px] text-muted-foreground">
+              <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                 {a.actor?.name ?? a.actor?.email ?? "system"}
                 {a.ip && <> · <span className="font-mono">{a.ip}</span></>}
               </div>
@@ -189,10 +189,10 @@ function EventsTab() {
       {items.map((e) => (
         <li key={e.id} className="flex items-center gap-3 px-4 py-3 text-xs">
           <Badge color="#7c3aed">{e.kind}</Badge>
-          <span className="font-mono text-[11px] text-muted-foreground">
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">
             {e.subjectType}/{e.subjectId.slice(0, 8)}
           </span>
-          <span className="ml-auto text-[11px] text-muted-foreground">
+          <span className="ml-auto text-[0.6875rem] text-muted-foreground">
             {relativeTime(e.createdAt)}
           </span>
         </li>
@@ -227,18 +227,18 @@ function DeliveriesTab() {
       {items.map((d) => (
         <li key={d.id} className="flex flex-wrap items-center gap-3 px-4 py-3 text-xs">
           <Badge color={deliveryTone[d.status]}>{d.status}</Badge>
-          <span className="truncate font-mono text-[11px] text-muted-foreground">
+          <span className="truncate font-mono text-[0.6875rem] text-muted-foreground">
             {d.webhook.url}
           </span>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-[0.6875rem] text-muted-foreground">
             {d.event.kind} · attempt {d.attempt}
           </span>
           {d.responseStatus != null && (
-            <span className="font-mono text-[11px] text-muted-foreground">
+            <span className="font-mono text-[0.6875rem] text-muted-foreground">
               HTTP {d.responseStatus}
             </span>
           )}
-          <span className="ml-auto text-[11px] text-muted-foreground">
+          <span className="ml-auto text-[0.6875rem] text-muted-foreground">
             {d.deliveredAt
               ? `delivered ${relativeTime(d.deliveredAt)}`
               : `scheduled ${relativeTime(d.scheduledAt)}`}

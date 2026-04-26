@@ -209,7 +209,7 @@ export function ActivityHeatmap({
             return (
               <div
                 key={label}
-                className="flex items-center justify-end pr-1 text-[10px] text-muted-foreground"
+                className="flex items-center justify-end pr-1 text-[0.625rem] text-muted-foreground"
                 style={{ height: cellSize, marginBottom: idx === 6 ? 0 : cellGap }}
               >
                 {visible ? label : ""}
@@ -229,7 +229,7 @@ export function ActivityHeatmap({
               label ? (
                 <span
                   key={`${label}-${col}`}
-                  className="absolute top-0 text-[10px] text-muted-foreground"
+                  className="absolute top-0 text-[0.625rem] text-muted-foreground"
                   style={{ left: col * colWidth }}
                 >
                   {label}
@@ -300,7 +300,7 @@ export function ActivityHeatmap({
       </div>
 
       {/* Legend */}
-      <div className="flex items-center justify-end gap-1.5 text-[10px] text-muted-foreground">
+      <div className="flex items-center justify-end gap-1.5 text-[0.625rem] text-muted-foreground">
         <span>Less</span>
         {BUCKET_CLASS.map((cls, i) => (
           <span

@@ -114,7 +114,7 @@ export default async function WorkspaceShellLayout({
             Full phone layout is explicitly out of scope for this design
             sweep; users on narrower screens get a hint and a degraded
             (but still functional) icon-rail + center-pins experience. */}
-        <div className="sticky top-0 z-40 flex items-center gap-2 border-b border-border bg-ember/10 px-3 py-1.5 text-[11px] text-foreground sm:hidden">
+        <div className="sticky top-0 z-40 flex items-center gap-2 border-b border-border bg-ember/10 px-3 py-1.5 text-[0.6875rem] text-foreground sm:hidden">
           <span className="font-medium">Forge is keyboard-driven.</span>
           <span className="text-muted-foreground">
             Use on tablet or larger for the full experience.

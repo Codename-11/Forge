@@ -254,7 +254,7 @@ export function IssueList({
             ? "w-20 shrink-0 text-id text-muted-foreground"
             : "w-20 shrink-0 text-id text-muted-foreground";
           const titleCls = compact
-            ? "truncate text-[12px]"
+            ? "truncate text-[0.75rem]"
             : "truncate text-sm";
           return (
             <div
@@ -277,7 +277,7 @@ export function IssueList({
                   compact ? "py-0" : "h-10",
                 )}
               >
-                <span className="w-4 text-center font-mono text-[11px] text-muted-foreground">
+                <span className="w-4 text-center font-mono text-[0.6875rem] text-muted-foreground">
                   {priorityGlyph[issue.priority]}
                 </span>
                 <span className={keyCls}>
@@ -459,7 +459,7 @@ function BulkLabelPicker({
             )}
           />
           <Badge color={r.color}>{r.name}</Badge>
-          <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+          <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
             {r.state === "full"
               ? "all"
               : r.state === "partial"
@@ -573,7 +573,7 @@ function BulkAssigneePicker({
   ];
 
   const tabStrip = (
-    <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5 text-[11px]">
+    <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5 text-[0.6875rem]">
       <button
         type="button"
         onClick={() => {
@@ -637,7 +637,7 @@ function BulkAssigneePicker({
               <Avatar name={r.name} image={r.image} size={18} />
               <span className="truncate">{r.name}</span>
               {r.email && (
-                <span className="ml-auto truncate font-mono text-[11px] text-muted-foreground">
+                <span className="ml-auto truncate font-mono text-[0.6875rem] text-muted-foreground">
                   {r.email}
                 </span>
               )}
@@ -680,7 +680,7 @@ function BulkAssigneePicker({
         }
         return (
           <div className="flex items-center gap-2">
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-subtle text-[11px]">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-subtle text-[0.6875rem]">
               {r.avatar ? (
                 <span aria-hidden>{r.avatar}</span>
               ) : (
@@ -691,7 +691,7 @@ function BulkAssigneePicker({
             </span>
             <AgentPresenceDot status={r.status as "ONLINE" | "BUSY" | "OFFLINE"} />
             <span className="truncate">{r.name}</span>
-            <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+            <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
               @{r.profileKey}
             </span>
           </div>

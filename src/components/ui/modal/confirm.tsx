@@ -135,7 +135,7 @@ export function Confirm({
 
           {gated && (
             <div className="space-y-1.5">
-              <label className="block text-[11px] text-muted-foreground">
+              <label className="block text-[0.6875rem] text-muted-foreground">
                 Type{" "}
                 <span className="font-mono text-foreground">{typeToConfirm}</span>{" "}
                 to confirm

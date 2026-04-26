@@ -103,7 +103,7 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
             return (
               <div
                 key={r.id}
-                className="flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[12px]"
+                className="flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem]"
               >
                 <Icon className={cn("h-3 w-3 shrink-0", tint)} />
                 <Bot className="h-3 w-3 shrink-0 text-foreground/70" />
@@ -112,12 +112,12 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
                 {issueHref ? (
                   <Link
                     href={issueHref}
-                    className="font-mono text-[11px] text-foreground/80 hover:text-ember"
+                    className="font-mono text-[0.6875rem] text-foreground/80 hover:text-ember"
                   >
                     {issueKey}
                   </Link>
                 ) : (
-                  <span className="font-mono text-[11px] text-foreground/60">{issueKey}</span>
+                  <span className="font-mono text-[0.6875rem] text-foreground/60">{issueKey}</span>
                 )}
                 <span className="ml-auto text-meta text-muted-foreground">
                   {r.finishedAt ? relativeTime(r.finishedAt) : ""}
@@ -133,7 +133,7 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <h3 className="mb-1.5 px-1 text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
       {children}
     </h3>
   );

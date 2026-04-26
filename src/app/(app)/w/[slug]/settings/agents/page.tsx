@@ -233,12 +233,12 @@ export default function AgentsPage() {
                         {a.name}
                       </span>
                       <span
-                        className="font-mono text-[11px] text-muted-foreground"
+                        className="font-mono text-[0.6875rem] text-muted-foreground"
                         title="Profile key — the stable cross-system handle. Matches the Hermes profile directory."
                       >
                         @{a.profileKey}
                       </span>
-                      <span className="inline-flex items-center gap-1.5 rounded-sm bg-subtle px-1.5 py-0.5 text-[11px] font-medium">
+                      <span className="inline-flex items-center gap-1.5 rounded-sm bg-subtle px-1.5 py-0.5 text-[0.6875rem] font-medium">
                         <AgentPresenceDot
                           status={a.status}
                           size="sm"
@@ -262,12 +262,12 @@ export default function AgentsPage() {
                         <Badge key={c}>{c}</Badge>
                       ))}
                       {a.capabilities.length === 0 && (
-                        <span className="text-[11px] text-muted-foreground/70">
+                        <span className="text-[0.6875rem] text-muted-foreground/70">
                           No capabilities declared.
                         </span>
                       )}
                     </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+                    <div className="mt-2 flex flex-wrap items-center gap-3 text-[0.6875rem] text-muted-foreground">
                       <span>
                         {assignedCount} assigned issue
                         {assignedCount === 1 ? "" : "s"}
@@ -593,7 +593,7 @@ function Field({
         {required && <span className="text-ember">*</span>}
       </label>
       {children}
-      {hint && <p className="text-[11px] text-muted-foreground/80">{hint}</p>}
+      {hint && <p className="text-[0.6875rem] text-muted-foreground/80">{hint}</p>}
     </div>
   );
 }

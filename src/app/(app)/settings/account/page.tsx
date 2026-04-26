@@ -162,7 +162,7 @@ export default function AccountPage() {
           <Section
             title="Regional"
             actions={
-              <span className="font-mono text-[11px] text-muted-foreground">{preview}</span>
+              <span className="font-mono text-[0.6875rem] text-muted-foreground">{preview}</span>
             }
           >
             <div className="grid grid-cols-1 gap-3 rounded-lg border border-border bg-card/40 p-4 sm:grid-cols-2">
@@ -198,7 +198,7 @@ export default function AccountPage() {
                 </select>
               </Field>
               <Field label="Time format">
-                <div className="flex h-8 items-center gap-1 rounded-md bg-subtle p-0.5 text-[11px]">
+                <div className="flex h-8 items-center gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
                   {(["12h", "24h"] as const).map((f) => (
                     <button
                       key={f}
@@ -217,7 +217,7 @@ export default function AccountPage() {
                 </div>
               </Field>
               <Field label="Theme">
-                <div className="flex h-8 items-center gap-1 rounded-md bg-subtle p-0.5 text-[11px]">
+                <div className="flex h-8 items-center gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
                   {(["light", "dark", "system"] as const).map((t) => (
                     <button
                       key={t}
@@ -303,7 +303,7 @@ export default function AccountPage() {
               </div>
               {(account?.onboardingSkippedSteps ?? []).length > 0 && (
                 <div>
-                  <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
                     Skipped steps
                   </div>
                   <ul className="space-y-1.5">
@@ -347,7 +347,7 @@ const ONBOARDING_STEP_LABELS: Record<string, string> = {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+      <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       {children}

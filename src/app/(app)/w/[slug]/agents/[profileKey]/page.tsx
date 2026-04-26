@@ -180,13 +180,13 @@ function IdentityStrip({ agent }: { agent: AgentRow }) {
         </span>
         {agent.webhookUrl ? (
           <span className="inline-flex items-center gap-1.5">
-            <span className="rounded-sm bg-success/10 px-1 text-[11px] font-semibold uppercase tracking-wider text-success">
+            <span className="rounded-sm bg-success/10 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-success">
               push
             </span>
             <span className="font-mono">{truncateUrl(agent.webhookUrl)}</span>
           </span>
         ) : (
-          <span className="rounded-sm bg-subtle px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <span className="rounded-sm bg-subtle px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
             pull-only
           </span>
         )}
@@ -359,7 +359,7 @@ function CurrentlyWorkingSection({ agentId }: { agentId: string }) {
         <span className="flex items-center gap-2">
           <Workflow className="h-3.5 w-3.5 text-muted-foreground" />
           Currently working on
-          <span className="font-mono text-[11px] text-muted-foreground">
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">
             {lane.counts.load} active · {lane.counts.recentlyDone} done (7d)
           </span>
         </span>
@@ -415,7 +415,7 @@ function Bucket({
 }) {
   return (
     <div>
-      <div className="mb-1 flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+      <div className="mb-1 flex items-center gap-2 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
         <span>{label}</span>
         <span className="font-mono">{issues.length}</span>
       </div>
@@ -430,7 +430,7 @@ function Bucket({
               <Link
                 href={`/w/${slug}/issues/${i.id}`}
                 className={cn(
-                  "focus-ring flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-[12px] hover:bg-subtle",
+                  "focus-ring flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-[0.75rem] hover:bg-subtle",
                   muted ? "bg-card/40" : "bg-card",
                 )}
               >
@@ -438,7 +438,7 @@ function Bucket({
                   {formatIssueId(wsKey, i.number)}
                 </span>
                 {!i.unblocked && (
-                  <span className="rounded-sm bg-danger/10 px-1 text-[11px] font-semibold uppercase tracking-wider text-danger">
+                  <span className="rounded-sm bg-danger/10 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-danger">
                     blocked
                   </span>
                 )}
@@ -500,7 +500,7 @@ function WebhookHealthCard({ agentId }: { agentId: string }) {
             No deliveries in window.
           </div>
         ) : (
-          <div className="grid grid-cols-4 gap-2 text-[12px]">
+          <div className="grid grid-cols-4 gap-2 text-[0.75rem]">
             <Pill tone="ok" label="ok" value={totals.success} />
             <Pill tone="warn" label="pend" value={totals.pending} />
             <Pill tone="warn" label="fail" value={totals.failed} />
@@ -549,7 +549,7 @@ function Pill({
   return (
     <div className={cn("rounded-md px-2 py-1 text-center", cls)}>
       <div className="font-mono text-sm">{value}</div>
-      <div className="text-[11px] uppercase tracking-wider opacity-80">
+      <div className="text-[0.6875rem] uppercase tracking-wider opacity-80">
         {label}
       </div>
     </div>
@@ -595,7 +595,7 @@ function DispatchEligibilityCard({ agent }: { agent: AgentRow }) {
         </span>
       }
     >
-      <Card className="space-y-2 p-3 text-[12px]">
+      <Card className="space-y-2 p-3 text-[0.75rem]">
         <Row label="Status">
           <span className="inline-flex items-center gap-1.5">
             <AgentPresenceDot status={agent.status} size="sm" />
@@ -687,7 +687,7 @@ function ActivitySection({ agentId }: { agentId: string }) {
           {data.events.map((e) => (
             <li
               key={e.id}
-              className="flex items-start gap-2 px-3 py-2 text-[12px]"
+              className="flex items-start gap-2 px-3 py-2 text-[0.75rem]"
             >
               <span className="mt-0.5 shrink-0">
                 <KindIcon kind={e.kind} />

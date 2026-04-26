@@ -51,23 +51,23 @@ export function AgentsTab({ slug }: { slug: string }) {
           <Link
             key={a.id}
             href={`/w/${slug}/agents/${a.id}`}
-            className="flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[12px] hover:border-ember/40"
+            className="flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem] hover:border-ember/40"
           >
             <PresenceDot status={a.status} />
             <Bot className="h-3.5 w-3.5 shrink-0 text-ember" />
             <span className="font-medium text-foreground">{a.name}</span>
-            <span className="font-mono text-[10.5px] text-muted-foreground">
+            <span className="font-mono text-[0.65625rem] text-muted-foreground">
               @{a.profileKey}
             </span>
             <span className="ml-auto flex items-center gap-1.5">
               {a.role !== "WORKER" && (
-                <span className="rounded-md border border-border bg-subtle px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span className="rounded-md border border-border bg-subtle px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
                   {a.role}
                 </span>
               )}
               <span
                 className={cn(
-                  "font-mono text-[10.5px]",
+                  "font-mono text-[0.65625rem]",
                   atCap ? "text-amber-600" : "text-muted-foreground",
                 )}
                 title={

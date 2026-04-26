@@ -158,7 +158,7 @@ export function AiTriageCard({ issue }: { issue: Issue }) {
       <div className="mb-2 flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
           <Sparkles className="h-3.5 w-3.5 text-amber-300" />
-          <span className="text-[11px] font-medium uppercase tracking-wider text-amber-200/80">
+          <span className="text-[0.6875rem] font-medium uppercase tracking-wider text-amber-200/80">
             AI triage suggestion
           </span>
         </div>
@@ -174,7 +174,7 @@ export function AiTriageCard({ issue }: { issue: Issue }) {
       </div>
 
       {issue.aiTriageReasoning && (
-        <p className="mb-3 text-[12px] leading-relaxed text-muted-foreground">
+        <p className="mb-3 text-[0.75rem] leading-relaxed text-muted-foreground">
           {issue.aiTriageReasoning}
         </p>
       )}
@@ -187,13 +187,13 @@ export function AiTriageCard({ issue }: { issue: Issue }) {
             label="Priority"
           >
             <span
-              className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${PRIORITY_TONE[issue.priority]}`}
+              className={`rounded-md px-2 py-0.5 text-[0.6875rem] font-medium ${PRIORITY_TONE[issue.priority]}`}
             >
               {PRIORITY_LABEL[issue.priority]}
             </span>
             <span className="text-muted-foreground">→</span>
             <span
-              className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${PRIORITY_TONE[issue.aiSuggestedPriority!]}`}
+              className={`rounded-md px-2 py-0.5 text-[0.6875rem] font-medium ${PRIORITY_TONE[issue.aiSuggestedPriority!]}`}
             >
               {PRIORITY_LABEL[issue.aiSuggestedPriority!]}
             </span>
@@ -225,17 +225,17 @@ export function AiTriageCard({ issue }: { issue: Issue }) {
             onChange={setApplyAgent}
             label="Assign agent"
           >
-            <span className="font-mono text-[11px] text-foreground">
+            <span className="font-mono text-[0.6875rem] text-foreground">
               {suggestedAgent.profileKey}
             </span>
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-[0.6875rem] text-muted-foreground">
               ({suggestedAgent.name})
             </span>
           </SuggestionRow>
         )}
 
         {nothingToApply && (
-          <p className="text-[11px] italic text-muted-foreground">
+          <p className="text-[0.6875rem] italic text-muted-foreground">
             No changes proposed beyond what&apos;s already set.
           </p>
         )}
@@ -246,7 +246,7 @@ export function AiTriageCard({ issue }: { issue: Issue }) {
           type="button"
           onClick={() => rerun.mutate({ issueId: issue.id })}
           disabled={rerun.isPending}
-          className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          className="flex items-center gap-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
           title="Re-run on the current title + description"
         >
           <RefreshCw className="h-3 w-3" />
@@ -305,7 +305,7 @@ function SuggestionRow({
         onChange={(e) => onChange(e.target.checked)}
         className="h-3.5 w-3.5"
       />
-      <span className="w-24 shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">
+      <span className="w-24 shrink-0 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
         {label}
       </span>
       <span className="flex flex-wrap items-center gap-1.5">{children}</span>

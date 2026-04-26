@@ -141,7 +141,7 @@ export function QueueTab({ slug }: { slug: string }) {
           onClick={dispatchAllUnblocked}
           disabled={unassignedCount === 0 || eligibleAgents.length === 0}
           className={cn(
-            "flex items-center gap-1 rounded-md bg-ember px-2 py-1 text-[11px] font-medium text-ember-foreground hover:bg-ember/90 disabled:cursor-not-allowed disabled:opacity-50",
+            "flex items-center gap-1 rounded-md bg-ember px-2 py-1 text-[0.6875rem] font-medium text-ember-foreground hover:bg-ember/90 disabled:cursor-not-allowed disabled:opacity-50",
           )}
         >
           <Send className="h-3 w-3" /> Dispatch all
@@ -172,14 +172,14 @@ function QueueRow({
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[12px]">
+    <div className="rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem]">
       <div className="flex items-center gap-2">
         {issue.blocked && (
           <Shield className="h-3 w-3 shrink-0 text-amber-600" aria-label="Blocked" />
         )}
         <Link
           href={`/w/${slug}/issues/${issue.id}`}
-          className="shrink-0 font-mono text-[11px] text-foreground/80 hover:text-ember"
+          className="shrink-0 font-mono text-[0.6875rem] text-foreground/80 hover:text-ember"
         >
           {issue.key}
         </Link>
@@ -189,7 +189,7 @@ function QueueRow({
         <span className="ml-auto flex items-center gap-1">
           {issue.assignedAgent ? (
             <span
-              className="flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 font-mono text-[10.5px] text-indigo-700 dark:text-indigo-300"
+              className="flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 font-mono text-[0.65625rem] text-indigo-700 dark:text-indigo-300"
               title={`Assigned to ${issue.assignedAgent.name}`}
             >
               <Bot className="h-3 w-3" />
@@ -200,7 +200,7 @@ function QueueRow({
               type="button"
               onClick={() => setOpen((o) => !o)}
               className={cn(
-                "flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground hover:border-ember/40 hover:text-foreground",
+                "flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[0.65625rem] text-muted-foreground hover:border-ember/40 hover:text-foreground",
                 open && "border-ember/40 text-foreground",
               )}
             >
@@ -233,7 +233,7 @@ function QueueRow({
                   setOpen(false);
                 }}
                 className={cn(
-                  "flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[10.5px] hover:border-ember/40",
+                  "flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[0.65625rem] hover:border-ember/40",
                   a.status === "OFFLINE" && "opacity-60",
                 )}
                 title={`Status: ${a.status}`}

@@ -64,7 +64,7 @@ export default function IssuesPage() {
                 setCycleId(undefined);
                 setInitiativeId(undefined);
               }}
-              className="text-[11px] text-muted-foreground hover:text-foreground"
+              className="text-[0.6875rem] text-muted-foreground hover:text-foreground"
             >
               Clear filters
             </button>
@@ -121,7 +121,7 @@ function DensityToggle() {
   const density = useDensity();
   const setDensity = useSetDensity();
   return (
-    <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5 text-[11px]">
+    <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5 text-[0.6875rem]">
       <button
         type="button"
         onClick={() => setDensity("comfortable")}

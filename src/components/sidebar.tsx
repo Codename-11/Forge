@@ -308,7 +308,7 @@ export function Sidebar({
           <div key={sec.id} className="flex flex-col gap-px">
             <div
               className={cn(
-                "px-2 pb-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70",
+                "px-2 pb-0.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/70",
                 collapsed ? "hidden" : "max-md:hidden",
               )}
             >
@@ -354,7 +354,7 @@ export function Sidebar({
         onClick={() => setCollapsed(!collapsed)}
         title={`${collapsed ? "Expand" : "Collapse"} sidebar (${mod}+\\)`}
         className={cn(
-          "mx-2 mb-2 flex h-7 items-center gap-2 rounded-md border border-border/70 bg-transparent text-[11px] text-muted-foreground hover:bg-subtle hover:text-foreground",
+          "mx-2 mb-2 flex h-7 items-center gap-2 rounded-md border border-border/70 bg-transparent text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground",
           collapsed
             ? "justify-center px-0"
             : "px-2 max-md:justify-center max-md:px-0",
@@ -408,7 +408,7 @@ function NavRow({
       href={href}
       title={chordHint}
       className={cn(
-        "row relative h-8 rounded-md text-[13px]",
+        "row relative h-8 rounded-md text-[0.8125rem]",
         active
           ? "bg-subtle text-foreground"
           : "text-muted-foreground hover:bg-subtle hover:text-foreground",
@@ -438,14 +438,14 @@ function NavRow({
       >
         <span className="truncate">{label}</span>
         {badgeCount > 0 && (
-          <span className="ml-2 rounded-full bg-ember/15 px-1.5 py-0 font-mono text-[11px] text-ember">
+          <span className="ml-2 rounded-full bg-ember/15 px-1.5 py-0 font-mono text-[0.6875rem] text-ember">
             {badgeCount > 99 ? "99+" : badgeCount}
           </span>
         )}
         {chord && (
-          <span className="ml-auto flex items-center gap-px text-[11px] text-muted-foreground/70">
-            <span className="kbd !px-1 !text-[11px]">G</span>
-            <span className="kbd !px-1 !text-[11px]">{chord.toUpperCase()}</span>
+          <span className="ml-auto flex items-center gap-px text-[0.6875rem] text-muted-foreground/70">
+            <span className="kbd !px-1 !text-[0.6875rem]">G</span>
+            <span className="kbd !px-1 !text-[0.6875rem]">{chord.toUpperCase()}</span>
           </span>
         )}
       </span>

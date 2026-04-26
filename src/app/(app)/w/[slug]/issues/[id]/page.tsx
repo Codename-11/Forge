@@ -141,7 +141,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     <>
       <Topbar
         title={issueKey}
-        subtitle={<span className="font-mono text-[11px]">{issue.status.name}</span>}
+        subtitle={<span className="font-mono text-[0.6875rem]">{issue.status.name}</span>}
         actions={
           <>
             <PinToggleButton issueId={issue.id} />
@@ -163,7 +163,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
       <IssueDetailTopbar
         left={
           <>
-            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{issueKey}</span>
+            <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">{issueKey}</span>
             {editingTitle ? (
               <form
                 onSubmit={(e) => {
@@ -302,7 +302,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 />
               </SidebarField>
               <SidebarField label="Agent queue">
-                <label className="flex w-full max-w-xs items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[11px]">
+                <label className="flex w-full max-w-xs items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[0.6875rem]">
                   <input
                     type="checkbox"
                     checked={issue.queued}
@@ -316,13 +316,13 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                     </Badge>
                   </span>
                 </label>
-                <div className="max-w-xs text-[11px] text-muted-foreground">
+                <div className="max-w-xs text-[0.6875rem] text-muted-foreground">
                   Queued issues are available to{" "}
                   <span className="font-mono text-foreground">issues.claim</span>; assigned issues
                   can still sit unclaimed until an agent starts.
                 </div>
                 {issue.claimedAt && (
-                  <div className="mt-2 max-w-xs rounded-md border border-border bg-card/60 p-2 text-[11px]">
+                  <div className="mt-2 max-w-xs rounded-md border border-border bg-card/60 p-2 text-[0.6875rem]">
                     <div className="text-muted-foreground">Claimed</div>
                     <div className="mt-0.5">
                       by <span className="font-mono">{issue.claimedById?.slice(0, 8)}</span>
@@ -403,7 +403,7 @@ function InlineStatus({
   const current = options.find((o) => o.id === value);
   return (
     <label className="relative flex items-center">
-      <span className="pointer-events-none inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[11px]">
+      <span className="pointer-events-none inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[0.6875rem]">
         {current && (
           <span
             aria-hidden
@@ -438,7 +438,7 @@ function InlinePriority({
 }) {
   return (
     <label className="relative flex items-center">
-      <span className="pointer-events-none inline-flex items-center rounded-md border border-border bg-background px-2 py-1 font-mono text-[11px]">
+      <span className="pointer-events-none inline-flex items-center rounded-md border border-border bg-background px-2 py-1 font-mono text-[0.6875rem]">
         {value}
       </span>
       <select
@@ -458,7 +458,7 @@ function InlinePriority({
 function SidebarField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">{label}</div>
       {children}
     </div>
   );
@@ -525,7 +525,7 @@ function LabelPicker({
               </li>
             ))}
             {all.length === 0 && (
-              <li className="px-3 py-3 text-center text-[11px] text-muted-foreground">
+              <li className="px-3 py-3 text-center text-[0.6875rem] text-muted-foreground">
                 No labels defined yet.
               </li>
             )}
@@ -560,7 +560,7 @@ function AssigneePicker({
       <button
         type="button"
         onClick={() => setOpen((x) => !x)}
-        className="focus-ring flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-left text-[11px] hover:bg-subtle"
+        className="focus-ring flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-left text-[0.6875rem] hover:bg-subtle"
       >
         {current.length === 0 ? (
           <span className="text-muted-foreground">Unassigned</span>
@@ -603,7 +603,7 @@ function AssigneePicker({
               </li>
             ))}
             {members.length === 0 && (
-              <li className="px-3 py-4 text-center text-[11px] text-muted-foreground">
+              <li className="px-3 py-4 text-center text-[0.6875rem] text-muted-foreground">
                 No workspace members.
               </li>
             )}
@@ -632,11 +632,11 @@ function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => 
       type="button"
       onClick={onOpen}
       title="Assign agent (shift+a)"
-      className="focus-ring flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-left text-[11px] hover:bg-subtle"
+      className="focus-ring flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-left text-[0.6875rem] hover:bg-subtle"
     >
       {current ? (
         <>
-          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-subtle text-[11px]">
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-subtle text-[0.6875rem]">
             {current.avatar ? (
               <span aria-hidden>{current.avatar}</span>
             ) : (
@@ -647,7 +647,7 @@ function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => 
           </span>
           <AgentPresenceDot status={current.status} size="sm" />
           <span className="truncate">{current.name}</span>
-          <span className="font-mono text-[11px] text-muted-foreground">@{current.profileKey}</span>
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">@{current.profileKey}</span>
         </>
       ) : (
         <span className="text-muted-foreground">Assign agent</span>
@@ -735,7 +735,7 @@ function AgentPickerModal({
               <span className="inline-block h-2 w-2 rounded-full bg-muted" />
               <span className="text-muted-foreground">Unassign</span>
               {active && (
-                <span className="ml-auto font-mono text-[11px] text-muted-foreground">current</span>
+                <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">current</span>
               )}
             </div>
           );
@@ -743,7 +743,7 @@ function AgentPickerModal({
         const active = currentAgentId === it.id;
         return (
           <div className="flex items-center gap-2">
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-subtle text-[11px]">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-subtle text-[0.6875rem]">
               {it.avatar ? (
                 <span aria-hidden>{it.avatar}</span>
               ) : (
@@ -754,14 +754,14 @@ function AgentPickerModal({
             </span>
             <AgentPresenceDot status={it.status} size="md" lastHeartbeatAt={it.lastHeartbeatAt} />
             <span className="truncate">{it.name}</span>
-            <span className="font-mono text-[11px] text-muted-foreground">@{it.profileKey}</span>
+            <span className="font-mono text-[0.6875rem] text-muted-foreground">@{it.profileKey}</span>
             {it.capabilities.length > 0 && (
-              <span className="ml-2 hidden min-w-0 truncate text-[11px] text-muted-foreground/80 sm:inline">
+              <span className="ml-2 hidden min-w-0 truncate text-[0.6875rem] text-muted-foreground/80 sm:inline">
                 {it.capabilities.slice(0, 3).join(" · ")}
               </span>
             )}
             {active && (
-              <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
+              <span className="ml-auto shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
                 current
               </span>
             )}

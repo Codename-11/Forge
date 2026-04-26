@@ -190,7 +190,7 @@ function StarterDialog({
             <div className="text-sm font-semibold">Starter templates</div>
             <Link
               href={`/w/${slug}/settings/project-templates`}
-              className="text-[11px] text-muted-foreground hover:text-ember"
+              className="text-[0.6875rem] text-muted-foreground hover:text-ember"
             >
               Manage templates →
             </Link>

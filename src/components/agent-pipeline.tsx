@@ -168,7 +168,7 @@ function Column({
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-1.5 px-1">
-        <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+        <span className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
           {label}
         </span>
         <span className="text-meta font-mono text-muted-foreground">{count}</span>
@@ -192,12 +192,12 @@ function IssueCard({
       href={`/w/${wsSlug}/issues/${issue.id}`}
       className="focus-ring block rounded-md border border-border bg-card px-2 py-1.5 hover:bg-subtle"
     >
-      <div className="flex items-center gap-1.5 text-[12px]">
+      <div className="flex items-center gap-1.5 text-[0.75rem]">
         <span className="text-id text-muted-foreground">
           {formatIssueId(wsKey, issue.number)}
         </span>
         {!issue.unblocked && (
-          <span className="rounded-sm bg-danger/10 px-1 text-[11px] font-semibold uppercase tracking-wider text-danger">
+          <span className="rounded-sm bg-danger/10 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-danger">
             blocked
           </span>
         )}
@@ -207,7 +207,7 @@ function IssueCard({
           title={issue.status.name}
         />
       </div>
-      <div className="mt-0.5 truncate text-[12px]">{issue.title}</div>
+      <div className="mt-0.5 truncate text-[0.75rem]">{issue.title}</div>
       {(issue.project || issue._count.comments > 0) && (
         <div className="text-meta mt-1 flex items-center gap-2 text-muted-foreground">
           {issue.project && (

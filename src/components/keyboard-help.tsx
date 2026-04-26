@@ -42,7 +42,7 @@ export function KeyboardHelp() {
         <Keyboard className="h-4 w-4 text-muted-foreground" />
         <div className="flex-1">
           <div className="text-sm font-semibold tracking-tight">Keyboard shortcuts</div>
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-[0.6875rem] text-muted-foreground">
             Forge is keyboard-first. Press any chord outside a text field.
           </div>
         </div>
@@ -53,19 +53,19 @@ export function KeyboardHelp() {
         <div className="grid gap-5 md:grid-cols-2">
           {groups.map((g) => (
             <section key={g.category} className="space-y-1.5">
-              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <h3 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
                 {g.category}
               </h3>
               <ul className="divide-y divide-border/60 rounded-md border border-border/60 bg-card/40">
                 {g.items.map((s) => (
                   <li
                     key={`${g.category}:${s.chord}:${s.label}`}
-                    className="flex items-center gap-2 px-2.5 py-1.5 text-[12px]"
+                    className="flex items-center gap-2 px-2.5 py-1.5 text-[0.75rem]"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-foreground">{s.label}</div>
                       {s.scope && (
-                        <div className="truncate text-[11px] text-muted-foreground">
+                        <div className="truncate text-[0.6875rem] text-muted-foreground">
                           {s.scope}
                         </div>
                       )}
@@ -79,7 +79,7 @@ export function KeyboardHelp() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+      <div className="flex items-center justify-between border-t border-border px-4 py-2 text-[0.6875rem] text-muted-foreground">
         <span>
           Total: <span className="font-mono">{SHORTCUT_COUNT}</span> chords
         </span>

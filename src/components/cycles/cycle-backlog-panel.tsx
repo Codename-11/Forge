@@ -24,10 +24,10 @@ export function CycleBacklogPanel() {
       className="hidden h-full w-72 shrink-0 flex-col border-l border-border bg-card/40 lg:flex"
     >
       <header className="flex h-9 items-center gap-2 border-b border-border px-3">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Backlog
         </span>
-        <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+        <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
           {data?.items.length ?? 0}
         </span>
       </header>

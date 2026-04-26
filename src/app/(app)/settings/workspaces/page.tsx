@@ -81,7 +81,7 @@ export default function WorkspacesPage() {
                       className="group flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-subtle/60"
                     >
                       <span
-                        className="grid h-8 w-8 shrink-0 place-items-center rounded-md font-mono text-[11px] font-semibold"
+                        className="grid h-8 w-8 shrink-0 place-items-center rounded-md font-mono text-[0.6875rem] font-semibold"
                         style={{
                           backgroundColor: c.bg,
                           color: c.fg,
@@ -93,11 +93,11 @@ export default function WorkspacesPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="truncate text-sm font-medium">{w.name}</span>
-                          <span className="font-mono text-[11px] text-muted-foreground">
+                          <span className="font-mono text-[0.6875rem] text-muted-foreground">
                             {w.key}
                           </span>
                         </div>
-                        <div className="mt-0.5 text-[11px] text-muted-foreground">
+                        <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                           /{w.slug} · role {role.toLowerCase()}
                         </div>
                       </div>
@@ -105,7 +105,7 @@ export default function WorkspacesPage() {
                         <Link
                           href={`/w/${w.slug}/settings/workspace`}
                           onClick={(e) => e.stopPropagation()}
-                          className="text-[11px] text-muted-foreground hover:text-ember"
+                          className="text-[0.6875rem] text-muted-foreground hover:text-ember"
                         >
                           Manage
                         </Link>
@@ -225,7 +225,7 @@ function CreateDialog({
         className="space-y-3 p-5"
       >
         <div className="text-sm font-semibold">Create workspace</div>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[0.6875rem] text-muted-foreground">
           The key shows up in issue identifiers like <span className="font-mono">ACME-42</span>
           {" "}and is permanent. Slug appears in URLs; it can be renamed later by an
           owner via a data migration.
@@ -283,12 +283,12 @@ function CreateDialog({
           </Field>
         </div>
 
-        <div className="rounded-md border border-warning/40 bg-warning/5 p-2.5 text-[11px] text-warning">
+        <div className="rounded-md border border-warning/40 bg-warning/5 p-2.5 text-[0.6875rem] text-warning">
           The key cannot be changed later. Pick something short and stable.
         </div>
 
         {issues.length > 0 && (
-          <ul className="space-y-0.5 text-[11px] text-danger">
+          <ul className="space-y-0.5 text-[0.6875rem] text-danger">
             {issues.map((m) => (
               <li key={m}>· {m}</li>
             ))}
@@ -315,7 +315,7 @@ function CreateDialog({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+      <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       {children}

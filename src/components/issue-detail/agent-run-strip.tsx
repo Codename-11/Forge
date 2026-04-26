@@ -51,7 +51,7 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
   const step = run.currentStep ?? "working…";
 
   return (
-    <div className="mb-3 flex items-center gap-2 rounded-md border border-ember/30 bg-ember/5 px-3 py-1.5 text-[12px]">
+    <div className="mb-3 flex items-center gap-2 rounded-md border border-ember/30 bg-ember/5 px-3 py-1.5 text-[0.75rem]">
       <span className="relative flex h-2 w-2 shrink-0">
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember opacity-60" />
         <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />

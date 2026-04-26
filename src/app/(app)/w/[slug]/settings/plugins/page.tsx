@@ -58,7 +58,7 @@ export default function PluginsPage() {
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{p.name}</span>
                     <Badge color={statusTone[p.status]}>{p.status}</Badge>
-                    <span className="font-mono text-[11px] text-muted-foreground">
+                    <span className="font-mono text-[0.6875rem] text-muted-foreground">
                       v{p.version} · {p.slug}
                     </span>
                   </div>
@@ -71,7 +71,7 @@ export default function PluginsPage() {
                     ))}
                   </div>
                   {p.skills.length > 0 && (
-                    <div className="mt-2 text-[11px] text-muted-foreground">
+                    <div className="mt-2 text-[0.6875rem] text-muted-foreground">
                       <span className="uppercase tracking-wider">Skills: </span>
                       {p.skills.map((s) => s.name).join(", ")}
                     </div>

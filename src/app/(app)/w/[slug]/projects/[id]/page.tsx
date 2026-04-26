@@ -123,7 +123,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
       <div className="min-h-0 flex-1 overflow-hidden">
         <section className="border-b border-border px-5 py-3 text-xs text-muted-foreground">
           {project.description ? (
-            <p className="max-w-4xl whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/80">
+            <p className="max-w-4xl whitespace-pre-wrap text-[0.8125rem] leading-relaxed text-foreground/80">
               {project.description}
             </p>
           ) : (

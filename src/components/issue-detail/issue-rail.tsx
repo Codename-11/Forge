@@ -93,7 +93,7 @@ export function IssueRail({ issueId }: { issueId: string }) {
               aria-selected={selected}
               onClick={() => setTab(t.id)}
               className={cn(
-                "focus-ring relative flex h-8 items-center gap-1.5 rounded-t-md px-2.5 text-[11px] font-medium",
+                "focus-ring relative flex h-8 items-center gap-1.5 rounded-t-md px-2.5 text-[0.6875rem] font-medium",
                 MOTION.fast,
                 selected
                   ? "text-foreground"

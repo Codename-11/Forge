@@ -93,7 +93,7 @@ export default function MembersPage() {
                       </div>
                       {isSelf && <Badge>you</Badge>}
                     </div>
-                    <div className="truncate text-[11px] text-muted-foreground">
+                    <div className="truncate text-[0.6875rem] text-muted-foreground">
                       <span className="font-mono">{m.email}</span>
                       {m.handle && (
                         <>
@@ -119,7 +119,7 @@ export default function MembersPage() {
                       <option key={r}>{r}</option>
                     ))}
                   </select>
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-[0.6875rem] text-muted-foreground">
                     joined {relativeTime(m.joinedAt)}
                   </span>
                   <Button

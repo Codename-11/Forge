@@ -107,7 +107,7 @@ export default function InboxPage() {
         subtitle="Everything worth looking at, in one place."
         actions={
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 rounded-md bg-subtle p-0.5 text-[11px]">
+            <div className="flex items-center gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
               <button
                 type="button"
                 onClick={() => setAllWorkspaces(false)}
@@ -137,7 +137,7 @@ export default function InboxPage() {
             </div>
             <Link
               href={`/w/${workspace.slug}/dashboard`}
-              className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+              className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
               title="Workspace overview — onboarding, focus, recent done"
             >
               Workspace overview
@@ -200,7 +200,7 @@ export default function InboxPage() {
                   <span className="flex items-center gap-2">
                     <Inbox className="h-3.5 w-3.5 text-muted-foreground" />
                     Assigned & unblocked
-                    <span className="font-mono text-[11px] text-muted-foreground">
+                    <span className="font-mono text-[0.6875rem] text-muted-foreground">
                       {data.counts.assignedUnblocked}
                     </span>
                   </span>
@@ -243,7 +243,7 @@ export default function InboxPage() {
                   <span className="flex items-center gap-2">
                     <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />
                     Mentions
-                    <span className="font-mono text-[11px] text-muted-foreground">
+                    <span className="font-mono text-[0.6875rem] text-muted-foreground">
                       {data.counts.mentions}
                     </span>
                   </span>
@@ -261,7 +261,7 @@ export default function InboxPage() {
                     />
                   ) : (
                     data.mentions.map((m) => (
-                      <li key={m.id} className="flex items-start gap-3 px-3 py-2 text-[12px]">
+                      <li key={m.id} className="flex items-start gap-3 px-3 py-2 text-[0.75rem]">
                         <WorkspaceBadge
                           slug={m.issue.workspace.slug}
                           wsKey={m.issue.workspace.key}
@@ -270,7 +270,7 @@ export default function InboxPage() {
                           <div className="flex items-center gap-2">
                             <Link
                               href={`/w/${m.issue.workspace.slug}/issues/${m.issue.id}`}
-                              className="font-mono text-[11px] hover:underline"
+                              className="font-mono text-[0.6875rem] hover:underline"
                             >
                               {formatIssueId(m.issue.workspace.key, m.issue.number)}
                             </Link>
@@ -284,7 +284,7 @@ export default function InboxPage() {
                             {m.body}
                           </div>
                         </div>
-                        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                        <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
                           {relativeTime(m.createdAt)}
                         </span>
                       </li>
@@ -298,7 +298,7 @@ export default function InboxPage() {
                   <span className="flex items-center gap-2">
                     <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />
                     Stalled &gt; 7d
-                    <span className="font-mono text-[11px] text-muted-foreground">
+                    <span className="font-mono text-[0.6875rem] text-muted-foreground">
                       {data.counts.stalled}
                     </span>
                   </span>
@@ -353,7 +353,7 @@ export default function InboxPage() {
                           >
                             {data.cycle.name}
                           </Link>
-                          <div className="font-mono text-[11px] text-muted-foreground">
+                          <div className="font-mono text-[0.6875rem] text-muted-foreground">
                             {data.cycle.done}/{data.cycle.total} done · {data.cycle.remaining}{" "}
                             remaining
                           </div>
@@ -368,7 +368,7 @@ export default function InboxPage() {
                           style={{ width: `${data.cycle.pctDone}%` }}
                         />
                       </div>
-                      <div className="mt-3 flex items-center gap-3 text-[11px] text-muted-foreground">
+                      <div className="mt-3 flex items-center gap-3 text-[0.6875rem] text-muted-foreground">
                         <Clock className="h-3 w-3" />
                         <span>
                           {data.cycle.endsAt
@@ -422,7 +422,7 @@ function FocusRollup({
         <Zap className="h-4 w-4" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Today&apos;s focus
         </div>
         <div className="mt-0.5 text-sm">
@@ -478,10 +478,10 @@ function PulseRollup({
 }) {
   return (
     <div className="rounded-lg border border-border bg-card/30 p-4">
-      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
         Workspace pulse
       </div>
-      <div className="mt-2 grid grid-cols-4 gap-2 text-[11px]">
+      <div className="mt-2 grid grid-cols-4 gap-2 text-[0.6875rem]">
         <Stat label="Open" value={openCount} href={`/w/${slug}/issues`} />
         <Stat label="In progress" value={inProgress} href={`/w/${slug}/issues`} />
         <Stat label="Done / 7d" value={doneThisWeek} href={`/w/${slug}/issues?status=done`} />
@@ -539,7 +539,7 @@ function AgentQueueSection({
         <span className="flex items-center gap-2">
           <Bot className="h-3.5 w-3.5 text-muted-foreground" />
           Agent queue
-          <span className="font-mono text-[11px] text-muted-foreground">{rows.length}</span>
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">{rows.length}</span>
         </span>
       }
       hint={`${ready} ready now · ${assigned} assigned · ${claimed} claimed · ${onlineAgents} online/busy agents`}
@@ -560,12 +560,12 @@ function AgentQueueSection({
         ) : (
           rows.map((issue) => (
             <li key={issue.id} className="px-3 py-2 hover:bg-subtle/40">
-              <div className="flex flex-wrap items-center gap-2 text-[12px]">
+              <div className="flex flex-wrap items-center gap-2 text-[0.75rem]">
                 <Link
                   href={`/w/${slug}/issues/${issue.id}`}
                   className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
                 >
-                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                  <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
                     {formatIssueId(workspaceKey, issue.number)}
                   </span>
                   <span className="truncate">{issue.title}</span>
@@ -575,7 +575,7 @@ function AgentQueueSection({
                   <Badge color={issue.project.color ?? undefined}>{issue.project.key}</Badge>
                 )}
               </div>
-              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[0.6875rem] text-muted-foreground">
                 <QueueStateBadge issue={issue} />
                 {issue.assignedAgent ? (
                   <span
@@ -662,19 +662,19 @@ function IssueRow({
   tone?: "warn";
 }) {
   return (
-    <li className="flex items-center gap-3 px-3 py-2 text-[12px] hover:bg-subtle/40">
+    <li className="flex items-center gap-3 px-3 py-2 text-[0.75rem] hover:bg-subtle/40">
       <WorkspaceBadge slug={issue.workspace.slug} wsKey={issue.workspace.key} />
       <Link
         href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
         className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
       >
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+        <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
           {formatIssueId(issue.workspace.key, issue.number)}
         </span>
         <span className="truncate">{issue.title}</span>
       </Link>
       <span
-        className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px]"
+        className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[0.6875rem]"
         style={{
           backgroundColor: `${issue.status.color}22`,
           color: issue.status.color,
@@ -684,7 +684,7 @@ function IssueRow({
       </span>
       <span
         className={cn(
-          "shrink-0 font-mono text-[11px]",
+          "shrink-0 font-mono text-[0.6875rem]",
           tone === "warn" ? "text-danger" : "text-muted-foreground",
         )}
       >
@@ -699,7 +699,7 @@ function WorkspaceBadge({ slug, wsKey }: { slug: string; wsKey: string }) {
   return (
     <Link
       href={`/w/${slug}/inbox`}
-      className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[11px] font-semibold"
+      className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[0.6875rem] font-semibold"
       style={{
         backgroundColor: c.bg,
         color: c.fg,
