@@ -1,0 +1,76 @@
+# Forge — VitePress docs → GitHub Pages.
+#
+# Status: deferred until the repo is public.
+#
+#   • Trigger is `workflow_dispatch` only — the workflow does not fire
+#     on pushes today. Switch to `push: branches: [master]` (commented
+#     below) when you're ready to publish on every merge.
+#   • Pages must be enabled at:
+#       Settings → Pages → Build and deployment → Source: GitHub Actions
+#     Once enabled, the `pages` + `id-token` permissions below are all
+#     this workflow needs.
+#   • The site lives at /docs/ — VitePress `base` is set to "/docs/" in
+#     docs/.vitepress/config.ts so URLs resolve correctly under
+#     <owner>.github.io/forge/docs/. If you publish to the apex
+#     (a custom domain or repo named `<owner>.github.io`), flip `base`
+#     to "/" before enabling automatic deploys.
+
+name: Deploy docs (GitHub Pages)
+
+on:
+  workflow_dispatch:
+  # Uncomment when the repo flips public + Pages is enabled:
+  # push:
+  #   branches: [master]
+  #   paths:
+  #     - "docs/**"
+  #     - ".github/workflows/docs.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+
+      - name: Install
+        working-directory: docs
+        run: pnpm install --ignore-workspace --frozen-lockfile
+
+      - name: Build
+        working-directory: docs
+        run: pnpm build
+
+      - uses: actions/configure-pages@v4
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
