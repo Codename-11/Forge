@@ -27,6 +27,7 @@ be consumed via the typed client.
 | `template`        | `list`, `byId`, `create`, `update`, `delete` — issue templates                                                             |
 | `projectTemplate` | `list`, `create`, `update`, `delete` — project starter templates                                                           |
 | `agent`           | `list`, `byId`, `byProfileKey`, `create`, `update`, `archive`, `delete`, `heartbeat`, `pipeline`, `timeline`, `uptime`, `webhookHealth` |
+| `event`           | `recent`, `unreadCount` — workspace-scoped activity feed for the topbar Activity drawer                                  |
 | `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                          |
 | `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                                |
 | `user`            | `me`, `updateAppearance` — current user + per-user prefs (theme, density, textSize)                                        |
@@ -147,6 +148,19 @@ panel.
 Both use the same per-subscription secret. Receivers can validate
 either; sending both keeps Forge interoperable without per-receiver
 signing variants.
+
+### Activity drawer
+
+`event.recent` returns the last N workspace events filtered to
+relevant kinds (ISSUE_*, COMMENT_CREATED, AGENT_*) with referenced
+issues + agents hydrated. `mineOnly` narrows to events where the
+caller is the actor or the subject issue is one they author/claim/
+are an assignee of (best-effort heuristic). Cursor pagination.
+
+`event.unreadCount` returns a cheap COUNT since `since` (default
+24h ago). The drawer tracks `lastReadAt` in localStorage and feeds
+it as `since` so the topbar bell badge reflects "events since you
+last opened the drawer".
 
 ### Push-dispatch presence
 

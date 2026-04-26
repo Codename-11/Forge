@@ -106,33 +106,43 @@ export default function InboxPage() {
         title="Inbox"
         subtitle="Everything worth looking at, in one place."
         actions={
-          <div className="flex items-center gap-1 rounded-md bg-subtle p-0.5 text-[11px]">
-            <button
-              type="button"
-              onClick={() => setAllWorkspaces(false)}
-              className={cn(
-                "focus-ring rounded px-2 py-1",
-                MOTION.fast,
-                !allWorkspaces
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 rounded-md bg-subtle p-0.5 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setAllWorkspaces(false)}
+                className={cn(
+                  "focus-ring rounded px-2 py-1",
+                  MOTION.fast,
+                  !allWorkspaces
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                This workspace
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllWorkspaces(true)}
+                className={cn(
+                  "focus-ring rounded px-2 py-1",
+                  MOTION.fast,
+                  allWorkspaces
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                All my workspaces
+              </button>
+            </div>
+            <Link
+              href={`/w/${workspace.slug}/dashboard`}
+              className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+              title="Workspace overview — onboarding, focus, recent done"
             >
-              This workspace
-            </button>
-            <button
-              type="button"
-              onClick={() => setAllWorkspaces(true)}
-              className={cn(
-                "focus-ring rounded px-2 py-1",
-                MOTION.fast,
-                allWorkspaces
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              All my workspaces
-            </button>
+              Workspace overview
+              <ChevronRight className="h-3 w-3" />
+            </Link>
           </div>
         }
       />

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   ArrowRight,
   Check,
+  ChevronLeft,
   CircleDashed,
   Clock3,
   Globe,
@@ -106,16 +107,26 @@ export default function DashboardPage() {
     <>
       <Topbar
         title="Dashboard"
-        subtitle="A clear place to start the day."
+        subtitle="Workspace overview — onboarding, focus, recent done."
         actions={
-          <ResumeSetupPill
-            projectsCount={projects?.items.length ?? 0}
-            issuesCount={anyIssue.data?.items.length ?? 0}
-            membersCount={members?.length ?? 0}
-            apiKeysCount={access?.length ?? 0}
-            hasTimezone={!!me?.user.timezone}
-            ready={!!me && !!projects && !!access && !!members}
-          />
+          <div className="flex items-center gap-2">
+            <ResumeSetupPill
+              projectsCount={projects?.items.length ?? 0}
+              issuesCount={anyIssue.data?.items.length ?? 0}
+              membersCount={members?.length ?? 0}
+              apiKeysCount={access?.length ?? 0}
+              hasTimezone={!!me?.user.timezone}
+              ready={!!me && !!projects && !!access && !!members}
+            />
+            <Link
+              href={`/w/${slug}/inbox`}
+              className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+              title="Inbox is the daily driver — pulse, queue, mentions, stalled"
+            >
+              <ChevronLeft className="h-3 w-3" />
+              Back to Inbox
+            </Link>
+          </div>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">

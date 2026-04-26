@@ -26,6 +26,112 @@ need direct Prisma/database workarounds for normal Forge PM operations.
 - `pnpm vitest run src/server/services/__tests__/mcp.test.ts`
 - `pnpm typecheck`
 
+## 2026-04-25 — Forge logo concept pass
+
+Generated and narrowed Forge logo directions around a stronger favicon-safe
+mark. Selected concept 1: a graphite anvil silhouette with a separate ember
+billet above it.
+
+### Assets
+
+- Saved the generated concept sheet to `output/imagegen/forge-logo-concepts.png`.
+- Saved the selected concept crop to
+  `output/imagegen/forge-logo-concept-1-selected.png`.
+- Added `public/brand/forge-mark-v2.svg` as the transparent standalone mark.
+- Added `public/brand/forge-app-icon-v2.svg` as the warm-paper app icon draft.
+- Added `public/brand/forge-app-icon-v2-ember.svg` as an ember-background
+  alternate for higher contrast contexts.
+
+### Verification
+
+- Rendered SVG previews with ImageMagick at 512px and 32px.
+- Left the current `src/app/icon.svg` and `public/forge-mark.svg` untouched.
+
+## 2026-04-25 — Cohesive flow polish (4-agent parallel wave)
+
+Surface-level UX work to make Forge feel like one continuous thing
+instead of a stack of independent pages. Six visible items shipped
+plus a small inbox/dashboard cross-link to fix the "two homes"
+ambiguity. New `event` router added for the activity drawer.
+
+### Server
+
+- New `event` router (`src/server/routers/event.ts`): `event.recent`
+  (paginated workspace-wide ActivityEvent feed, optional `mineOnly`
+  narrowing) + `event.unreadCount` (cheap count since `since` for
+  the topbar bell badge). Mounted at `appRouter.event` in `_app.ts`.
+  No migration; reads existing `ActivityEvent` table.
+
+### UI
+
+- **Activity drawer** (`src/components/activity-drawer.tsx`, default
+  export + `useActivityDrawer()` hook). Right-side slide-out
+  triggered from a topbar bell icon; subscribes to `useRealtime` to
+  invalidate `event.recent` + `event.unreadCount`. "Mine only" toggle
+  + "Mark all read" persisted to `localStorage[forge.activityDrawer.lastReadAt]`.
+  Esc / backdrop close. Pagination cursor via "Load older". Hidden
+  in account-level shells (no workspace context).
+- **Topbar bell** with unread-count badge prepended to existing
+  actions. Always visible inside a workspace, hidden outside.
+- **RealtimeToaster** (`src/components/realtime-toaster.tsx`,
+  mounted once in `(app)/w/[slug]/layout.tsx`). Subscribes to
+  AGENT_ASSIGNED / AGENT_STATUS_CHANGED / AGENT_DELETED /
+  COMMENT_CREATED (mention-only). Fires Sonner toasts with
+  per-event icons. Dedup via 100-id LRU set.
+- **Dispatch provenance chip** in the issue activity panel. When
+  a row is `AGENT_ASSIGNED`, parses `payload.dispatch` defensively
+  and renders `[MODE] → @profileKey` after the kind label. Hover
+  title carries the full reason.
+- **Density utilities sweep** across older surfaces — issue list,
+  issue board, cycle planning board, cycle backlog/summary, issue
+  detail comment byline, relations panel, time tracker widget,
+  standup, projects. Replaced ad-hoc `text-[10px]`/`text-[11px]`
+  with the density-aware utilities (`text-id`, `text-meta`).
+  Per-user Appearance setting now visibly moves type across the
+  whole app, not just the new surfaces.
+- **Agent presence drops** — added `AgentPresenceDot` in cycle
+  planning board cards (already present on issue list/board
+  via earlier work).
+- **Agent quick-actions context menu**
+  (`src/components/agent-quick-actions.tsx`). Kebab dropdown on
+  presence cards (`/agents`) and admin rows (`/settings/agents`).
+  Items: View detail, Force ONLINE/BUSY/OFFLINE (calls existing
+  `agent.heartbeat` MCP-protected mutation), View recent
+  deliveries (links to `/agents/[profileKey]#webhook-health`).
+  Click-outside / Escape close. Toast feedback on status flip.
+- **Inbox ↔ Dashboard cross-links.** Inbox topbar gains a
+  "Workspace overview →" link to `/dashboard`; Dashboard topbar
+  gains a "← Back to Inbox" link. Subtitles updated to clarify
+  roles: Inbox = "Everything worth looking at, in one place";
+  Dashboard = "Workspace overview — onboarding, focus, recent done".
+  No migration, no chord changes. Two-homes ambiguity is now
+  intentional (Inbox is the daily driver, Dashboard is the
+  deeper view) and obvious from either page.
+
+### Wave structure
+
+Wave 1 (me, sequential) = `event` router. Wave 2 (4 agents in
+parallel, disjoint files) = ActivityDrawer/bell, Toaster + chip,
+density sweep + presence drops, agent quick-actions. Wave 3 (me,
+sequential) = inbox/dashboard cross-links. Wave 4 (me, sequential)
+= docs + commit + build + deploy + push. Same parallel-wave shape
+as the 2026-04-23 / 2026-04-24 polish waves; component agents on
+disjoint files keeps merges trivial.
+
+### Verification
+
+- `pnpm typecheck` clean.
+- All four agent reports landed clean (no orphaned imports, no
+  `any`, no half-finished code per the briefs).
+
+### Follow-ups (filed in TODO.md)
+
+- **Task follow-through (push-dispatch reliability).** Delivery is
+  now bulletproof but the agent isn't held to the work. Three-layer
+  plan filed under P1: (1) stale-work watchdog (assignment SLA),
+  (2) required acknowledgement after wake, (3) real SLA enforcement
+  on `Issue.slaMinutes`. Pick up in order; (1) is cheapest.
+
 ## 2026-04-25 — Push-dispatch (replace heartbeat cron with Hermes webhooks)
 
 Re-architecting heartbeat from agent-pulled to server-pushed. Replaces

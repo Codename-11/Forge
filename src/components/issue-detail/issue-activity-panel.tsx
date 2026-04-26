@@ -14,6 +14,15 @@ import { relativeTime } from "@/lib/utils";
  * writes one, so "no activity" is common and doesn't mean an error.
  */
 
+function readDispatch(
+  payload: unknown,
+): { mode?: string; reason?: string; chosen?: { profileKey?: string; name?: string } } | null {
+  if (!payload || typeof payload !== "object") return null;
+  const d = (payload as Record<string, unknown>).dispatch;
+  if (!d || typeof d !== "object") return null;
+  return d as { mode?: string; reason?: string; chosen?: { profileKey?: string; name?: string } };
+}
+
 const KIND_LABEL: Record<string, string> = {
   ISSUE_CREATED: "Created issue",
   ISSUE_UPDATED: "Updated",
@@ -71,28 +80,45 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
         </p>
       ) : (
         <ul className="divide-y divide-border">
-          {rows.map((e) => (
-            <li key={e.id} className="flex items-start gap-2 px-3 py-2">
-              <Avatar
-                name={e.actor?.name ?? null}
-                image={e.actor?.image ?? null}
-                size={18}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-1.5 text-[11px]">
-                  <span className="truncate font-medium">
-                    {e.actor?.name ?? "System"}
-                  </span>
-                  <span className="truncate text-muted-foreground">
-                    {KIND_LABEL[e.kind] ?? e.kind.replace(/_/g, " ").toLowerCase()}
-                  </span>
+          {rows.map((e) => {
+            const dispatch =
+              e.kind === "AGENT_ASSIGNED" ? readDispatch(e.payload) : null;
+            return (
+              <li key={e.id} className="flex items-start gap-2 px-3 py-2">
+                <Avatar
+                  name={e.actor?.name ?? null}
+                  image={e.actor?.image ?? null}
+                  size={18}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-1.5 text-[11px]">
+                    <span className="truncate font-medium">
+                      {e.actor?.name ?? "System"}
+                    </span>
+                    <span className="truncate text-muted-foreground">
+                      {KIND_LABEL[e.kind] ?? e.kind.replace(/_/g, " ").toLowerCase()}
+                    </span>
+                    {dispatch?.mode && (
+                      <span
+                        className="ml-1 inline-flex items-center gap-1 rounded-sm bg-subtle px-1 text-[10px] font-mono uppercase tracking-wider text-muted-foreground"
+                        title={dispatch.reason ?? undefined}
+                      >
+                        {dispatch.mode}
+                      </span>
+                    )}
+                    {dispatch?.chosen?.profileKey && (
+                      <span className="ml-1 text-[10px] font-mono text-muted-foreground">
+                        → @{dispatch.chosen.profileKey}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 text-meta text-muted-foreground">
+                    {relativeTime(e.createdAt)}
+                  </div>
                 </div>
-                <div className="mt-0.5 text-meta text-muted-foreground">
-                  {relativeTime(e.createdAt)}
-                </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

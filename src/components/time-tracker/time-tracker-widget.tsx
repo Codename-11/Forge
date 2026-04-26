@@ -150,8 +150,8 @@ export function TimeTrackerWidget() {
             <Clock className="h-3.5 w-3.5" />
           </span>
           <div className="min-w-0">
-            <div className="font-mono text-[11px] leading-tight">{elapsedLabel}</div>
-            <div className="max-w-[200px] truncate text-[10px] text-muted-foreground">
+            <div className="text-id leading-tight">{elapsedLabel}</div>
+            <div className="max-w-[200px] truncate text-meta text-muted-foreground">
               {running.issue ? running.issue.title : running.description || "Tracking…"}
             </div>
           </div>

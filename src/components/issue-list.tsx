@@ -251,8 +251,8 @@ export function IssueList({
             ? "row gap-2 px-5 py-1.5 hover:bg-subtle/60"
             : "row h-10 gap-3 px-5 hover:bg-subtle/60";
           const keyCls = compact
-            ? "w-20 shrink-0 font-mono text-[11px] text-muted-foreground"
-            : "w-20 shrink-0 font-mono text-[11px] text-muted-foreground";
+            ? "w-20 shrink-0 text-id text-muted-foreground"
+            : "w-20 shrink-0 text-id text-muted-foreground";
           const titleCls = compact
             ? "truncate text-[12px]"
             : "truncate text-sm";
@@ -291,19 +291,19 @@ export function IssueList({
                   </Badge>
                 )}
                 <div className="ml-auto flex items-center gap-3">
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-meta text-muted-foreground">
                     {relativeTime(issue.createdAt)}
                   </span>
                   {issue.assignedAgent && (
                     <span
-                      className="flex items-center gap-1 text-[11px] text-muted-foreground"
+                      className="flex items-center gap-1 text-meta text-muted-foreground"
                       title={`Agent: ${issue.assignedAgent.name}`}
                     >
                       <AgentPresenceDot
                         status={issue.assignedAgent.status}
                         size="sm"
                       />
-                      <span className="font-mono text-[10px]">
+                      <span className="text-id">
                         @{issue.assignedAgent.profileKey}
                       </span>
                     </span>

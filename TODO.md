@@ -111,6 +111,42 @@ reason }`. Ineligible candidates included with `eligible: false`.
 
 ---
 
+## P1 — Task follow-through (push-dispatch reliability)
+
+Push-dispatch (2026-04-25) made delivery bulletproof — Forge POSTs
+to Hermes' webhook adapter, the worker drains PENDING rows on a 5s
+sweep, retries with backoff, and bumps `lastHeartbeatAt` on each
+success. **What's still missing:** there is no guarantee the agent
+actually does the work after the wake event lands. Hermes returns
+202 immediately; if the LLM call drops mid-thought, nothing notices.
+
+Three layers, increasing in scope. Pick up in order:
+
+- [ ] **(1) Stale-work watchdog (assignment SLA).** When
+      `Issue.assignedAgentId` has been set for > N minutes and the
+      issue's status is still BACKLOG/TODO, emit `ISSUE_STALLED` and
+      either re-dispatch or alert. Per-workspace knob
+      `Workspace.assignmentSlaMinutes` (default 30). Lives in the
+      maintenance worker alongside the existing heartbeat sweep. Pure
+      Forge-side. Cheapest reliability win.
+
+- [ ] **(2) Required acknowledgement.** Within X seconds of a wake
+      delivery (configurable), require a signal from the agent:
+      a `COMMENT_CREATED` from `authoringAgentId == agent` OR an
+      `ISSUE_STATUS_CHANGED` actor-attributed to the agent on the
+      same issue. If neither lands inside the window, treat as a
+      missed wake — re-dispatch (with backoff to avoid thrash) or
+      escalate to a dispatch rule fallback. Builds on (1).
+
+- [ ] **(3) Required completion (real SLA).** `Issue.slaMinutes`
+      already exists in the schema but isn't enforced for agents.
+      Wire it: track time-since-assigned, emit `ISSUE_SLA_BREACH` on
+      breach, allow rules to escalate priority / reassign / alert.
+      Surface the breach on the issue list + agent detail page. More
+      product judgment needed (per-workspace, per-priority defaults).
+
+---
+
 ## UX polish wave (shipped 2026-04-24)
 
 - [x] **MinIO compose + storage misconfig surface** — `forge-minio`

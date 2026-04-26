@@ -65,11 +65,11 @@ export function CycleBacklogPanel() {
                 title="Drag to a column to plan into this sprint"
               >
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-[10px] text-muted-foreground">
+                  <span className="text-id text-muted-foreground">
                     {formatIssueId(ws.key, i.number)}
                   </span>
                   {i.project && (
-                    <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                    <span className="ml-auto text-id text-muted-foreground">
                       {i.project.key}
                     </span>
                   )}

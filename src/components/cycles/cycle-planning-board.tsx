@@ -7,6 +7,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId } from "@/lib/utils";
 import { MOTION } from "@/lib/motion";
@@ -98,7 +99,7 @@ export function CyclePlanningBoard({
   }
 
   if (!statuses) {
-    return <div className="p-6 text-center text-[11px] text-muted-foreground">Loading board…</div>;
+    return <div className="p-6 text-center text-meta text-muted-foreground">Loading board…</div>;
   }
 
   const hasLoadedIssues = !!issues;
@@ -182,7 +183,7 @@ export function CyclePlanningBoard({
                   >
                     <Link href={`/w/${ws.slug}/issues/${i.id}`} className="block">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-[10px] text-muted-foreground">
+                        <span className="text-id text-muted-foreground">
                           {formatIssueId(ws.key, i.number)}
                         </span>
                         {i.project && (
@@ -204,12 +205,26 @@ export function CyclePlanningBoard({
                             />
                           ))}
                         </div>
+                        {i.assignedAgent && (
+                          <span
+                            className="inline-flex items-center gap-1 text-meta text-muted-foreground"
+                            title={`Agent: ${i.assignedAgent.name}`}
+                          >
+                            <AgentPresenceDot
+                              status={i.assignedAgent.status}
+                              size="sm"
+                            />
+                            <span className="text-id">
+                              @{i.assignedAgent.profileKey}
+                            </span>
+                          </span>
+                        )}
                       </div>
                     </Link>
                   </div>
                 ))}
                 {column.length === 0 && (
-                  <div className="py-6 text-center text-[10px] text-muted-foreground/70">
+                  <div className="py-6 text-center text-meta text-muted-foreground/70">
                     Drop issues here
                   </div>
                 )}

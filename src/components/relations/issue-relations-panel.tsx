@@ -90,7 +90,7 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
 
       <div className="divide-y divide-border">
         {isLoading && (
-          <div className="px-3 py-3 text-[11px] text-muted-foreground">Loading…</div>
+          <div className="px-3 py-3 text-meta text-muted-foreground">Loading…</div>
         )}
         {!isLoading &&
           ORDER.map((kind) => {
@@ -115,7 +115,7 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
                         href={`/w/${ws.slug}/issues/${r.target.id}`}
                         className="flex min-w-0 flex-1 items-center gap-2 hover:text-ember"
                       >
-                        <span className="font-mono text-[11px] text-muted-foreground">
+                        <span className="text-id text-muted-foreground">
                           {formatIssueId(ws.key, r.target.number)}
                         </span>
                         <span className="truncate text-xs">{r.target.title}</span>
@@ -138,7 +138,7 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
             );
           })}
         {!isLoading && totalCount === 0 && !adding && (
-          <div className="px-3 py-4 text-center text-[11px] text-muted-foreground">
+          <div className="px-3 py-4 text-center text-meta text-muted-foreground">
             No relations. Use{" "}
             <button
               type="button"
@@ -224,7 +224,7 @@ function AddRelationForm({
               className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-input bg-card/60 px-2 py-1 text-left text-xs hover:border-ember/40"
               title="Change target"
             >
-              <span className="font-mono text-[10px] text-muted-foreground">
+              <span className="text-id text-muted-foreground">
                 {formatIssueId(ws.key, selected.number)}
               </span>
               <span className="truncate">{selected.title}</span>
@@ -250,7 +250,7 @@ function AddRelationForm({
         {!selected && debounced && (
           <ul className="max-h-52 overflow-y-auto rounded-md border border-border bg-card/40">
             {search.isLoading && (
-              <li className="px-2 py-1.5 text-[11px] text-muted-foreground">
+              <li className="px-2 py-1.5 text-meta text-muted-foreground">
                 Searching…
               </li>
             )}
@@ -269,7 +269,7 @@ function AddRelationForm({
                     }
                     className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-subtle"
                   >
-                    <span className="font-mono text-[10px] text-muted-foreground">
+                    <span className="text-id text-muted-foreground">
                       {formatIssueId(ws.key, i.number)}
                     </span>
                     <span className="truncate">{i.title}</span>
@@ -277,7 +277,7 @@ function AddRelationForm({
                 </li>
               ))}
             {!search.isLoading && (search.data?.items.length ?? 0) === 0 && (
-              <li className="px-2 py-2 text-[11px] text-muted-foreground">
+              <li className="px-2 py-2 text-meta text-muted-foreground">
                 No matches.
               </li>
             )}

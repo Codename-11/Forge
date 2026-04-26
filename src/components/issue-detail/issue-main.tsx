@@ -183,7 +183,7 @@ function Comments({
                 size={22}
               />
               <div className="min-w-0 flex-1 rounded-md border border-border bg-card/40 p-2.5">
-                <div className="flex items-center gap-2 text-[11px]">
+                <div className="flex items-center gap-2 text-meta">
                   <span className="font-medium">{displayName}</span>
                   {isAgent && (
                     // Indigo `agent` chip mirrors the `linkedAgent` badge on

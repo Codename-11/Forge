@@ -76,7 +76,7 @@ export function IssueBoard({
                   className="block rounded-md border border-border bg-background p-2 text-left hover:border-ember/40"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-[10px] text-muted-foreground">
+                    <span className="text-id text-muted-foreground">
                       {workspaceKey}-{i.number}
                     </span>
                     {i.project && (
@@ -100,14 +100,14 @@ export function IssueBoard({
                     </div>
                     {i.assignedAgent && (
                       <span
-                        className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+                        className="inline-flex items-center gap-1 text-meta text-muted-foreground"
                         title={`Agent: ${i.assignedAgent.name}`}
                       >
                         <AgentPresenceDot
                           status={i.assignedAgent.status}
                           size="sm"
                         />
-                        <span className="font-mono">
+                        <span className="text-id">
                           @{i.assignedAgent.profileKey}
                         </span>
                       </span>
