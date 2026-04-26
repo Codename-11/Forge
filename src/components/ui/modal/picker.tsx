@@ -186,7 +186,7 @@ export function Picker<T>({
         </div>
 
         {footer && (
-          <div className="border-t border-border bg-card/60 px-3 py-1.5 text-[11px] text-muted-foreground">
+          <div className="border-t border-border bg-card/60 px-3 py-1.5 text-[0.6875rem] text-muted-foreground">
             {footer}
           </div>
         )}

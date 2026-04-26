@@ -72,7 +72,7 @@ export default function LabelsPage() {
             {(labels ?? []).map((l) => (
               <li key={l.id} className="flex items-center gap-3 px-4 py-3">
                 <Badge color={l.color}>{l.name}</Badge>
-                <span className="ml-auto text-[11px] text-muted-foreground">
+                <span className="ml-auto text-[0.6875rem] text-muted-foreground">
                   {l._count.issues} issue{l._count.issues === 1 ? "" : "s"}
                 </span>
                 <Button

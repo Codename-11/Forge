@@ -302,7 +302,7 @@ export function MissionControl() {
           }}
           title="Mission Control (⌘')"
           className={cn(
-            "group flex items-center gap-2 rounded-full border bg-card/90 px-3 py-1.5 text-[12px] shadow-sm backdrop-blur",
+            "group flex items-center gap-2 rounded-full border bg-card/90 px-3 py-1.5 text-[0.75rem] shadow-sm backdrop-blur",
             hasStalled
               ? "border-amber-500/40 hover:border-amber-500/60"
               : "border-border hover:border-ember/40",
@@ -323,7 +323,7 @@ export function MissionControl() {
               {dots.map((r) => (
                 <span
                   key={r.id}
-                  className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-card bg-ember/15 font-mono text-[9px] uppercase text-ember"
+                  className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-card bg-ember/15 font-mono text-[0.5625rem] uppercase text-ember"
                   title={r.agent.name}
                 >
                   {r.agent.profileKey.slice(0, 2)}
@@ -331,11 +331,11 @@ export function MissionControl() {
               ))}
             </span>
           )}
-          <span className="font-mono text-[11px] text-foreground">
+          <span className="font-mono text-[0.6875rem] text-foreground">
             {activeCount > 0 ? `${activeCount} active` : "idle"}
           </span>
           {queueCount > 0 && (
-            <span className="rounded-md border border-border bg-subtle px-1 py-0 font-mono text-[10px] text-muted-foreground">
+            <span className="rounded-md border border-border bg-subtle px-1 py-0 font-mono text-[0.625rem] text-muted-foreground">
               {queueCount} queued
             </span>
           )}
@@ -372,11 +372,11 @@ export function MissionControl() {
         )}
       >
         <GripHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Mission Control
         </span>
         {hasStalled && (
-          <span className="flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[10px] text-amber-600">
+          <span className="flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[0.625rem] text-amber-600">
             <Hourglass className="h-2.5 w-2.5" /> stalled
           </span>
         )}
@@ -430,7 +430,7 @@ export function MissionControl() {
               onClick={() => setTab(t.id)}
               title={`${t.label} (${t.chord})`}
               className={cn(
-                "flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px]",
+                "flex items-center gap-1 rounded-md px-2 py-0.5 text-[0.6875rem]",
                 isActive
                   ? "bg-subtle text-foreground"
                   : "text-muted-foreground hover:bg-subtle/50 hover:text-foreground",
@@ -440,7 +440,7 @@ export function MissionControl() {
               {count != null && count > 0 && (
                 <span
                   className={cn(
-                    "rounded-md px-1 font-mono text-[10px]",
+                    "rounded-md px-1 font-mono text-[0.625rem]",
                     isActive ? "bg-ember/15 text-ember" : "bg-card text-muted-foreground",
                   )}
                 >

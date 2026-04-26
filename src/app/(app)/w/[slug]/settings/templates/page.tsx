@@ -89,7 +89,7 @@ export default function TemplatesPage() {
                       <Badge color={t.project.color ?? undefined}>{t.project.key}</Badge>
                     )}
                   </div>
-                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                  <div className="mt-0.5 truncate text-[0.6875rem] text-muted-foreground">
                     {t.titleTemplate}
                   </div>
                 </div>
@@ -231,7 +231,7 @@ export default function TemplatesPage() {
                         })
                       }
                       className={
-                        "focus-ring rounded-sm border px-1.5 py-0.5 text-[11px] " +
+                        "focus-ring rounded-sm border px-1.5 py-0.5 text-[0.6875rem] " +
                         (on ? "border-ember/50 bg-ember/10" : "border-transparent")
                       }
                     >
@@ -240,7 +240,7 @@ export default function TemplatesPage() {
                   );
                 })}
                 {labels?.length === 0 && (
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-[0.6875rem] text-muted-foreground">
                     Create labels in Settings → Labels.
                   </span>
                 )}

@@ -78,7 +78,7 @@ export default function FocusPage({ params }: { params: Promise<{ id: string }> 
         </span>
         <Badge color={issue.status.color}>{issue.status.name}</Badge>
         <div className="ml-auto flex items-center gap-2">
-          <span className="font-mono text-[13px] tabular-nums">
+          <span className="font-mono text-[0.8125rem] tabular-nums">
             {mm}:{ss}
           </span>
           <Button
@@ -105,7 +105,7 @@ export default function FocusPage({ params }: { params: Promise<{ id: string }> 
 
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col overflow-y-auto px-8 py-10">
         <h1 className="text-2xl font-semibold tracking-tight">{issue.title}</h1>
-        <article className="prose prose-sm mt-6 max-w-none whitespace-pre-wrap text-[14px] leading-relaxed text-foreground/90">
+        <article className="prose prose-sm mt-6 max-w-none whitespace-pre-wrap text-[0.875rem] leading-relaxed text-foreground/90">
           {issue.description || (
             <span className="text-muted-foreground">No description.</span>
           )}

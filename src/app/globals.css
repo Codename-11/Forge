@@ -67,7 +67,32 @@
   * {
     @apply border-border;
   }
-  html,
+  /*
+   * Root font-size cascade — drives the Appearance preference. Every
+   * sized token in the app is rem-based (Tailwind defaults plus the
+   * `text-[Nrem]` arbitrary values we maintain), so changing this
+   * single number scales:
+   *   - all type
+   *   - control heights (h-7/h-8/h-9 are rem)
+   *   - paddings, gaps, sidebar width — anything in rem
+   *
+   * 16px is the browser default and our compact baseline. Each step
+   * adds +1px (≈+6.25%) so "comfortable + larger" lands at 18px which
+   * is a meaningful 12.5% jump from default — finally enough to feel
+   * the toggle.
+   */
+  html {
+    font-size: 16px;
+  }
+  html[data-density="comfortable"] {
+    font-size: 17px;
+  }
+  html[data-textsize="larger"] {
+    font-size: 18px;
+  }
+  html[data-density="comfortable"][data-textsize="larger"] {
+    font-size: 19px;
+  }
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
@@ -80,7 +105,7 @@
 
 @layer components {
   .kbd {
-    @apply inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-border bg-muted px-1.5 font-mono text-[11px] font-medium text-muted-foreground;
+    @apply inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-border bg-muted px-1.5 font-mono text-[0.6875rem] font-medium text-muted-foreground;
   }
   .divider-dot::before {
     content: "·";
@@ -147,77 +172,27 @@
   }
 
   /* ------------------------------------------------------------------ */
-  /* Density + text-size utilities
+  /* Density + text-size utilities (semantic role classes)
    *
-   * Driven by `data-density` ("compact" | "comfortable") and
-   * `data-textsize` ("default" | "larger") attributes set on the <html>
-   * element by `<AppearanceProvider />`. Compact + default match the
-   * pre-existing pixel sizes used across the app; comfortable bumps
-   * each by ~1px, larger stacks another +1px on top.
-   *
-   * Use these classes in place of ad-hoc `text-[10px]` etc. so a single
-   * preference toggle re-flows the whole product. The four names below
-   * are stable contracts — the `apply-density` agent retrofits specific
-   * components against them.
+   * These four classes name common surfaces — issue ids, secondary
+   * metadata, filename overlays, topbar subtitles — so component
+   * authors don't have to remember exact rem values. They resolve to
+   * fixed rem sizes; the *appearance preference* now scales via the
+   * root `font-size` cascade above (see html[data-density|textsize]).
+   * That means flipping "Larger" doesn't just move these four — it
+   * scales every rem-based size in the app, which is what users
+   * actually expected.
    * ------------------------------------------------------------------ */
-  /*
-   * Each cascade got bumped +1px on every cell vs the original 2026-04
-   * defaults — the maximum (comfortable + larger) used to top out at
-   * 12-13px which still felt cramped for primary content. Now the
-   * baseline is 11/12/11/12 and "larger" lands at 13/14/13/14, which
-   * is closer to Linear/Notion-style densities while preserving the
-   * Forge "small precise type" character on chrome (kbd, count bubbles,
-   * uppercase eyebrows — all of which stay hardcoded).
-   */
   .text-id {
-    @apply font-mono text-[11px];
+    @apply font-mono text-[0.6875rem];
   }
-  [data-density="comfortable"] .text-id {
-    @apply text-xs;
-  }
-  [data-textsize="larger"] .text-id {
-    @apply text-xs;
-  }
-  [data-density="comfortable"][data-textsize="larger"] .text-id {
-    @apply text-[13px];
-  }
-
   .text-meta {
     @apply text-xs;
   }
-  [data-density="comfortable"] .text-meta {
-    @apply text-[13px];
-  }
-  [data-textsize="larger"] .text-meta {
-    @apply text-[13px];
-  }
-  [data-density="comfortable"][data-textsize="larger"] .text-meta {
-    @apply text-sm;
-  }
-
   .text-filename {
-    @apply text-[11px];
+    @apply text-[0.6875rem];
   }
-  [data-density="comfortable"] .text-filename {
-    @apply text-xs;
-  }
-  [data-textsize="larger"] .text-filename {
-    @apply text-xs;
-  }
-  [data-density="comfortable"][data-textsize="larger"] .text-filename {
-    @apply text-[13px];
-  }
-
   .text-subtitle {
     @apply text-xs;
-  }
-  [data-density="comfortable"] .text-subtitle {
-    @apply text-[13px];
-  }
-  [data-textsize="larger"] .text-subtitle {
-    @apply text-[13px];
-  }
-  [data-density="comfortable"][data-textsize="larger"] .text-subtitle {
-    @apply text-sm;
   }
 }

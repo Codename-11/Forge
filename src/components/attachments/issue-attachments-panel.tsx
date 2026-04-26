@@ -229,10 +229,10 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
     >
       <header className="flex h-9 items-center gap-2 border-b border-border px-3">
         <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Attachments
         </h2>
-        <span className="font-mono text-[11px] text-muted-foreground">
+        <span className="font-mono text-[0.6875rem] text-muted-foreground">
           {rows.length}
         </span>
         <div className="ml-auto flex items-center gap-1">
@@ -251,7 +251,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
             type="button"
             variant="ghost"
             size="sm"
-            className="h-6 px-2 text-[11px]"
+            className="h-6 px-2 text-[0.6875rem]"
             onClick={() => inputRef.current?.click()}
           >
             <Upload className="h-3 w-3" /> Upload
@@ -341,7 +341,7 @@ function StorageNotConfiguredBanner() {
           admin to set the following environment variables and restart the
           app:
         </p>
-        <code className="block whitespace-pre rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[10.5px] text-muted-foreground">
+        <code className="block whitespace-pre rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[0.65625rem] text-muted-foreground">
           {`S3_ENDPOINT=http://localhost:59000\nS3_ACCESS_KEY=...\nS3_SECRET_KEY=...`}
         </code>
       </div>
@@ -418,10 +418,10 @@ function AttachmentTile({
         ) : (
           <FileIcon className="h-6 w-6 text-muted-foreground" />
         )}
-        <div className="line-clamp-2 text-[11px] font-medium">
+        <div className="line-clamp-2 text-[0.6875rem] font-medium">
           {attachment.filename}
         </div>
-        <div className="font-mono text-[11px] text-muted-foreground">
+        <div className="font-mono text-[0.6875rem] text-muted-foreground">
           {prettyBytes(attachment.size)}
         </div>
       </div>

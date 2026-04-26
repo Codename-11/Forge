@@ -123,7 +123,7 @@ export default function DashboardPage() {
             />
             <Link
               href={`/w/${slug}/inbox`}
-              className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+              className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
               title="Inbox is the daily driver — pulse, queue, mentions, stalled"
             >
               <ChevronLeft className="h-3 w-3" />
@@ -350,7 +350,7 @@ function FocusGrid({
             className="group flex h-full flex-col rounded-lg border border-border bg-card/40 p-3 transition-colors hover:border-ember/40"
           >
             <div className="flex items-center gap-2">
-              <span className="w-5 text-center font-mono text-[11px] text-muted-foreground">
+              <span className="w-5 text-center font-mono text-[0.6875rem] text-muted-foreground">
                 {PRIORITY_GLYPH[issue.priority]}
               </span>
               <span className="text-id text-muted-foreground">
@@ -361,7 +361,7 @@ function FocusGrid({
               </Badge>
             </div>
             <div className="mt-2 line-clamp-2 text-sm">{issue.title}</div>
-            <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground">
+            <div className="mt-3 flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
               {issue.project && (
                 <Badge color={issue.project.color ?? undefined}>{issue.project.key}</Badge>
               )}
@@ -552,7 +552,7 @@ function OnboardingCard({
         <button
           type="button"
           onClick={handleSkipPermanently}
-          className="focus-ring rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+          className="focus-ring rounded px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground"
           title="Hide onboarding across every device. Re-enable from Settings → Account."
         >
           Skip permanently
@@ -626,7 +626,7 @@ function ResumeSetupPill({
       type="button"
       onClick={() => setDismissed(false)}
       title="Re-open the getting-started checklist"
-      className="text-meta inline-flex items-center gap-1 rounded-full border border-ember/30 bg-ember/10 px-2 py-0.5 text-[11px] uppercase tracking-wider text-ember hover:bg-ember/15"
+      className="text-meta inline-flex items-center gap-1 rounded-full border border-ember/30 bg-ember/10 px-2 py-0.5 text-[0.6875rem] uppercase tracking-wider text-ember hover:bg-ember/15"
     >
       <ArrowRight className="h-3 w-3" />
       <span>Resume setup</span>
@@ -661,7 +661,7 @@ function OnboardingRow({
       </div>
       <div className="min-w-0 flex-1">
         <div className="text-xs font-medium">{step.label}</div>
-        <div className="mt-0.5 text-[11px] text-muted-foreground">{step.hint}</div>
+        <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">{step.hint}</div>
       </div>
       {!step.done && <ArrowRight className="mt-1 h-3 w-3 text-muted-foreground" />}
     </div>
@@ -686,7 +686,7 @@ function OnboardingRow({
           e.stopPropagation();
           onSkip();
         }}
-        className="focus-ring absolute right-2 top-2 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+        className="focus-ring absolute right-2 top-2 rounded px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground"
         title="Skip this step. Re-enable from Settings → Account."
       >
         Skip
@@ -702,10 +702,10 @@ function OnboardingRow({
 function SectionHeader({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="mb-3 flex items-baseline gap-2">
-      <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
         {title}
       </h2>
-      {hint && <span className="text-[11px] text-muted-foreground/70">{hint}</span>}
+      {hint && <span className="text-[0.6875rem] text-muted-foreground/70">{hint}</span>}
     </div>
   );
 }
@@ -722,10 +722,10 @@ function Column({
   return (
     <div className="rounded-lg border border-border bg-card/40 p-4">
       <div className="mb-3 flex items-baseline gap-2">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
         </div>
-        {hint && <div className="text-[11px] text-muted-foreground/70">{hint}</div>}
+        {hint && <div className="text-[0.6875rem] text-muted-foreground/70">{hint}</div>}
       </div>
       {children}
     </div>
@@ -788,7 +788,7 @@ function IssueRow({
         className="flex items-center gap-2 text-xs hover:text-foreground"
       >
         {priority && (
-          <span className="w-5 text-center font-mono text-[11px] text-muted-foreground">
+          <span className="w-5 text-center font-mono text-[0.6875rem] text-muted-foreground">
             {PRIORITY_GLYPH[priority]}
           </span>
         )}
@@ -798,7 +798,7 @@ function IssueRow({
         <span className="truncate">{title}</span>
         <span
           className={
-            "ml-auto text-[11px] " +
+            "ml-auto text-[0.6875rem] " +
             (trailingTone === "warn" ? "text-warning" : "text-muted-foreground")
           }
         >

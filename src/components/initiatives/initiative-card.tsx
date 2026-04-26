@@ -94,7 +94,7 @@ export function InitiativeCard({
           {initiative.description}
         </p>
       )}
-      <div className="mt-3 flex items-center gap-3 text-[11px] text-muted-foreground">
+      <div className="mt-3 flex items-center gap-3 text-[0.6875rem] text-muted-foreground">
         <span>
           {initiative._count.projects} project
           {initiative._count.projects === 1 ? "" : "s"}

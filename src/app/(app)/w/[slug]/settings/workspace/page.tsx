@@ -137,7 +137,7 @@ export default function WorkspaceSettingsPage() {
                     <Input value={ws.slug} disabled readOnly />
                   </Field>
                 </div>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-[0.6875rem] text-muted-foreground">
                   Keys are immutable once created; slug changes would require a
                   data migration and aren&apos;t supported from the UI.
                 </p>
@@ -380,7 +380,7 @@ export default function WorkspaceSettingsPage() {
               {aiStatus &&
                 !aiStatus.activeProviderAvailable &&
                 aiStatus.activeProviderReason && (
-                  <div className="rounded-md border border-amber-300/30 bg-amber-300/[0.05] px-3 py-2 text-[11px] text-amber-200/90">
+                  <div className="rounded-md border border-amber-300/30 bg-amber-300/[0.05] px-3 py-2 text-[0.6875rem] text-amber-200/90">
                     <span className="font-medium">Provider unavailable.</span>{" "}
                     {aiStatus.activeProviderReason} — calls will be skipped
                     until env is set.
@@ -572,11 +572,11 @@ function Field({
 }) {
   return (
     <div>
-      <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+      <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       {children}
-      {hint && <div className="mt-1 text-[11px] text-muted-foreground">{hint}</div>}
+      {hint && <div className="mt-1 text-[0.6875rem] text-muted-foreground">{hint}</div>}
     </div>
   );
 }

@@ -41,7 +41,7 @@ export function PinsStrip() {
           return (
             <div
               key={`empty-${idx}`}
-              className="inline-flex h-7 min-w-[96px] items-center gap-1.5 rounded-md border border-dashed border-border/70 px-2 text-[11px] text-muted-foreground/60"
+              className="inline-flex h-7 min-w-[96px] items-center gap-1.5 rounded-md border border-dashed border-border/70 px-2 text-[0.6875rem] text-muted-foreground/60"
               title="Press p on an issue to pin it"
             >
               <PinIcon className="h-3 w-3" />
@@ -64,7 +64,7 @@ export function PinsStrip() {
             )}
           >
             <span
-              className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[11px] font-semibold"
+              className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[0.6875rem] font-semibold"
               style={{
                 backgroundColor: badge.bg,
                 color: badge.fg,
@@ -73,10 +73,10 @@ export function PinsStrip() {
             >
               {pin.workspace.key.slice(0, 2)}
             </span>
-            <span className="truncate font-mono text-[11px] text-muted-foreground">
+            <span className="truncate font-mono text-[0.6875rem] text-muted-foreground">
               {idLabel}
             </span>
-            <span className="truncate text-[11px]">{pin.title}</span>
+            <span className="truncate text-[0.6875rem]">{pin.title}</span>
           </button>
         );
       })}

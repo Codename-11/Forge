@@ -271,7 +271,7 @@ export default function DispatchRulesPage() {
                   >
                     ⋮⋮
                   </span>
-                  <span className="font-mono text-[11px] text-muted-foreground">
+                  <span className="font-mono text-[0.6875rem] text-muted-foreground">
                     {String(r.order).padStart(2, "0")}
                   </span>
                   <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
@@ -289,7 +289,7 @@ export default function DispatchRulesPage() {
                     <div className="truncate text-sm font-medium">
                       {r.name}
                     </div>
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
                       <span>if</span>
                       <Badge>
                         priority={" "}

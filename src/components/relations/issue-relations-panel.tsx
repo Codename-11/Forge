@@ -64,17 +64,17 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
   return (
     <section className="mt-8 rounded-lg border border-border bg-card/40">
       <header className="flex h-9 items-center gap-2 border-b border-border px-3">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Relations
         </h2>
-        <span className="font-mono text-[11px] text-muted-foreground">
+        <span className="font-mono text-[0.6875rem] text-muted-foreground">
           {totalCount}
         </span>
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          className="ml-auto h-6 px-2 text-[11px]"
+          className="ml-auto h-6 px-2 text-[0.6875rem]"
           onClick={() => setAdding((v) => !v)}
         >
           {adding ? "Cancel" : "Add relation"}
@@ -98,7 +98,7 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
             if (rows.length === 0) return null;
             return (
               <div key={kind} className="px-3 py-2">
-                <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+                <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
                   {LABELS[kind]}
                 </div>
                 <ul className="space-y-1">
@@ -206,7 +206,7 @@ function AddRelationForm({
           <select
             value={kind}
             onChange={(e) => setKind(e.target.value as Kind)}
-            className="focus-ring h-7 rounded-md border border-input bg-background px-1.5 text-[11px]"
+            className="focus-ring h-7 rounded-md border border-input bg-background px-1.5 text-[0.6875rem]"
           >
             {ORDER.map((k) => (
               <option key={k} value={k}>

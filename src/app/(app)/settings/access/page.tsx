@@ -62,10 +62,10 @@ function CodeBlock({ label, code }: { label: string; code: string }) {
   return (
     <div className="rounded-lg border border-border bg-background/60">
       <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-        <span className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</span>
+        <span className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">{label}</span>
         <button
           type="button"
-          className="focus-ring rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-subtle hover:text-foreground"
+          className="focus-ring rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
           onClick={async () => {
             await navigator.clipboard.writeText(code);
             setCopied(true);
@@ -75,7 +75,7 @@ function CodeBlock({ label, code }: { label: string; code: string }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <pre className="overflow-x-auto p-3 text-[12px] leading-relaxed text-foreground/90">
+      <pre className="overflow-x-auto p-3 text-[0.75rem] leading-relaxed text-foreground/90">
         <code>{code}</code>
       </pre>
     </div>
@@ -207,7 +207,7 @@ export default function AccessPage() {
             title="API keys"
             hint="Raw keys are revealed once at creation or rotation. Store them in your agent's secret manager — Forge retains only a SHA-256 hash."
             actions={
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-[0.6875rem] text-muted-foreground">
                 {activeKeys.filter((k) => !k.revokedAt).length} active ·{" "}
                 {activeKeys.filter((k) => k.revokedAt).length} revoked
               </span>
@@ -222,7 +222,7 @@ export default function AccessPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-medium">{k.name}</span>
-                        <span className="font-mono text-[11px] text-muted-foreground">
+                        <span className="font-mono text-[0.6875rem] text-muted-foreground">
                           {k.prefix}…
                         </span>
                         {k.linkedAgent && (
@@ -238,7 +238,7 @@ export default function AccessPage() {
                           <Badge key={s}>{s}</Badge>
                         ))}
                       </div>
-                      <div className="mt-2 text-[11px] text-muted-foreground">
+                      <div className="mt-2 text-[0.6875rem] text-muted-foreground">
                         Created {relativeTime(k.createdAt)} ·{" "}
                         {k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : "never used"}
                         {k.expiresAt && !k.revokedAt && (
@@ -340,7 +340,7 @@ export default function AccessPage() {
                   type="button"
                   onClick={() => applyPreset(p.id)}
                   className={
-                    "focus-ring flex-1 rounded px-2 py-1 text-[11px] transition-colors " +
+                    "focus-ring flex-1 rounded px-2 py-1 text-[0.6875rem] transition-colors " +
                     (preset === p.id
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground")
@@ -350,7 +350,7 @@ export default function AccessPage() {
                 </button>
               ))}
             </div>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[0.6875rem] text-muted-foreground">
               {preset === "full" && "Every scope. Use for trusted single-user agents like Claude Desktop."}
               {preset === "default" && "Read + write issues and comments; no user/project writes."}
               {preset === "read" && "No writes anywhere — safe for dashboards or passive monitors."}
@@ -369,7 +369,7 @@ export default function AccessPage() {
                     key={s}
                     onClick={() => toggleScope(s)}
                     className={
-                      "focus-ring rounded-md border px-2 py-1 text-left font-mono text-[11px] " +
+                      "focus-ring rounded-md border px-2 py-1 text-left font-mono text-[0.6875rem] " +
                       (on
                         ? "border-ember/50 bg-ember/10 text-foreground"
                         : "border-border bg-background text-muted-foreground hover:border-border/80 hover:text-foreground")
@@ -397,7 +397,7 @@ export default function AccessPage() {
                 </option>
               ))}
             </select>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[0.6875rem] text-muted-foreground">
               Binds this key to an Agent. MCP tools like{" "}
               <code className="font-mono">issues.assigned</code> will then infer the
               agent when <code className="font-mono">profileKey</code> is omitted.
@@ -503,10 +503,10 @@ function Intro({ baseUrl }: { baseUrl: string }) {
         </>
       }
     >
-      <div className="grid grid-cols-1 gap-2 rounded-lg border border-border bg-card/40 p-3 text-[11px] text-muted-foreground sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-2 rounded-lg border border-border bg-card/40 p-3 text-[0.6875rem] text-muted-foreground sm:grid-cols-3">
         <div className="rounded-md border border-border p-2">
           <div className="mb-1 font-semibold text-foreground">MCP endpoint</div>
-          <code className="text-[11px]">{baseUrl}/api/mcp/</code>
+          <code className="text-[0.6875rem]">{baseUrl}/api/mcp/</code>
         </div>
         <div className="rounded-md border border-border p-2">
           <div className="mb-1 font-semibold text-foreground">Auth</div>
@@ -514,7 +514,7 @@ function Intro({ baseUrl }: { baseUrl: string }) {
         </div>
         <div className="rounded-md border border-border p-2">
           <div className="mb-1 font-semibold text-foreground">Describe tools</div>
-          <code className="text-[11px]">GET /api/mcp/describe</code>
+          <code className="text-[0.6875rem]">GET /api/mcp/describe</code>
         </div>
       </div>
     </Section>
@@ -611,7 +611,7 @@ function IntegrationBlocks({ baseUrl, rawKey }: { baseUrl: string; rawKey: strin
             type="button"
             onClick={() => setTab(t.id)}
             className={
-              "focus-ring flex-1 rounded px-2 py-1 text-[11px] transition-colors " +
+              "focus-ring flex-1 rounded px-2 py-1 text-[0.6875rem] transition-colors " +
               (tab === t.id
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground")

@@ -20,7 +20,7 @@ export function Avatar({
     <span
       style={dim}
       className={cn(
-        "inline-flex items-center justify-center rounded-full bg-subtle font-mono text-[11px] text-muted-foreground",
+        "inline-flex items-center justify-center rounded-full bg-subtle font-mono text-[0.6875rem] text-muted-foreground",
         className,
       )}
     >

@@ -190,7 +190,7 @@ export function CommandPalette() {
       </div>
       <ul className="max-h-96 overflow-y-auto py-1">
         {issueItems.length > 0 && (
-          <li className="px-3 py-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+          <li className="px-3 py-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
             Issues
           </li>
         )}
@@ -206,12 +206,12 @@ export function CommandPalette() {
             >
               <CircleDot className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="truncate">{a.label}</span>
-              <span className="ml-auto font-mono text-[11px] text-muted-foreground">{a.hint}</span>
+              <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">{a.hint}</span>
             </button>
           </li>
         ))}
         {filteredNav.length > 0 && (
-          <li className="mt-1 px-3 py-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+          <li className="mt-1 px-3 py-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
             Navigate
           </li>
         )}
@@ -231,7 +231,7 @@ export function CommandPalette() {
                 <Icon className="h-3.5 w-3.5 text-muted-foreground" />
                 <span>{a.label}</span>
                 {a.hint && (
-                  <span className="ml-auto text-[11px] text-muted-foreground">{a.hint}</span>
+                  <span className="ml-auto text-[0.6875rem] text-muted-foreground">{a.hint}</span>
                 )}
               </button>
             </li>

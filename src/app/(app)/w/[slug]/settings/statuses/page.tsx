@@ -126,7 +126,7 @@ export default function StatusesPage() {
                 <span className="font-medium">{s.name}</span>
                 <Badge>{s.category}</Badge>
                 {s.isDefault && <Badge color="#d97706">default</Badge>}
-                <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+                <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
                   pos {s.position}
                 </span>
               </li>

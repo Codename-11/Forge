@@ -256,7 +256,7 @@ export default function InitiativeDetailPage({
           </header>
 
           <section className="rounded-lg border border-border bg-card/40 p-4">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
               Rollup
             </h2>
             <div className="mt-2 grid grid-cols-4 gap-4">
@@ -279,14 +279,14 @@ export default function InitiativeDetailPage({
           <section>
             <div className="mb-2 flex items-baseline justify-between">
               <h2 className="text-sm font-semibold">Linked projects</h2>
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-[0.6875rem] text-muted-foreground">
                 {linkedProjects.length} linked
               </span>
             </div>
             <div className="space-y-2">
               <ul className="divide-y divide-border rounded-lg border border-border bg-card/40">
                 {linkedProjects.length === 0 && (
-                  <li className="p-4 text-center text-[11px] text-muted-foreground">
+                  <li className="p-4 text-center text-[0.6875rem] text-muted-foreground">
                     No linked projects. Use the picker below to attach one.
                   </li>
                 )}
@@ -335,7 +335,7 @@ export default function InitiativeDetailPage({
                 <h2 className="text-sm font-semibold">
                   In current sprint ({currentCycle.name})
                 </h2>
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-[0.6875rem] text-muted-foreground">
                   {upcomingInCycle?.items.length ?? 0} issue
                   {(upcomingInCycle?.items.length ?? 0) === 1 ? "" : "s"}
                 </span>
@@ -382,7 +382,7 @@ export default function InitiativeDetailPage({
 function Stat({ label, value }: { label: string; value: number | string }) {
   return (
     <div>
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+      <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       <div className="mt-0.5 font-mono text-sm">{value}</div>
@@ -441,7 +441,7 @@ function LinkProjectPicker({
             </li>
           ))}
           {filtered.length === 0 && (
-            <li className="px-2 py-2 text-[11px] text-muted-foreground">
+            <li className="px-2 py-2 text-[0.6875rem] text-muted-foreground">
               No matches.
             </li>
           )}

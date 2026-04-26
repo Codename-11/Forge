@@ -87,7 +87,7 @@ export function LiveTab({
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <div className="px-1 pt-1 text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
       {children}
     </div>
   );

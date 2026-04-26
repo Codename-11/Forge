@@ -250,7 +250,7 @@ export function ActivityBell() {
         <span
           className={cn(
             "absolute -top-0.5 -right-0.5 grid h-3.5 min-w-3.5 place-items-center",
-            "rounded-full bg-ember px-1 text-[11px] font-mono font-semibold text-ember-foreground",
+            "rounded-full bg-ember px-1 text-[0.6875rem] font-mono font-semibold text-ember-foreground",
           )}
         >
           {unreadCount > 99 ? "99+" : unreadCount}
@@ -629,7 +629,7 @@ export default function ActivityDrawer() {
                   type="button"
                   onClick={markAllRead}
                   className={cn(
-                    "focus-ring rounded-md px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-subtle hover:text-foreground",
+                    "focus-ring rounded-md px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground",
                     MOTION.fast,
                   )}
                 >
@@ -641,7 +641,7 @@ export default function ActivityDrawer() {
                   href={`/w/${ws.slug}/inbox`}
                   onClick={close}
                   className={cn(
-                    "focus-ring rounded-md px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-subtle hover:text-foreground",
+                    "focus-ring rounded-md px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground",
                     MOTION.fast,
                   )}
                   title="Open the full Inbox page (g i)"
@@ -683,7 +683,7 @@ export default function ActivityDrawer() {
             {tab === "activity" && (
               <label
                 className={cn(
-                  "ml-auto mr-2 inline-flex cursor-pointer select-none items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px]",
+                  "ml-auto mr-2 inline-flex cursor-pointer select-none items-center gap-1.5 rounded-full border px-2 py-0.5 text-[0.6875rem]",
                   MOTION.fast,
                   mineOnly
                     ? "border-ember bg-ember/10 text-ember"
@@ -730,7 +730,7 @@ export default function ActivityDrawer() {
                 return (
                   <li
                     key={evt.id}
-                    className="flex items-start gap-2 px-4 py-2.5 text-[12px]"
+                    className="flex items-start gap-2 px-4 py-2.5 text-[0.75rem]"
                   >
                     <span className="mt-0.5 shrink-0">{iconFor(evt.kind)}</span>
                     <div className="min-w-0 flex-1">
@@ -756,7 +756,7 @@ export default function ActivityDrawer() {
                 type="button"
                 onClick={() => setCursor(nextCursor)}
                 className={cn(
-                  "focus-ring inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[11px] text-muted-foreground hover:text-foreground",
+                  "focus-ring inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground",
                   MOTION.fast,
                 )}
               >
@@ -796,7 +796,7 @@ function DrawerTab({
       {typeof count === "number" && count > 0 && (
         <span
           className={cn(
-            "inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 font-mono text-[10px]",
+            "inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 font-mono text-[0.625rem]",
             active
               ? "bg-ember/20 text-ember"
               : "bg-subtle text-muted-foreground",
@@ -872,7 +872,7 @@ function MinePanel({
               href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
               onNavigate={onNavigate}
               left={
-                <span className="font-mono text-[11px] text-muted-foreground">
+                <span className="font-mono text-[0.6875rem] text-muted-foreground">
                   {issue.workspace.key}-{issue.number}
                 </span>
               }
@@ -895,7 +895,7 @@ function MinePanel({
               href={`/w/${c.issue.workspace.slug}/issues/${c.issue.id}`}
               onNavigate={onNavigate}
               left={
-                <span className="font-mono text-[11px] text-muted-foreground">
+                <span className="font-mono text-[0.6875rem] text-muted-foreground">
                   {c.issue.workspace.key}-{c.issue.number}
                 </span>
               }
@@ -918,7 +918,7 @@ function MinePanel({
               href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
               onNavigate={onNavigate}
               left={
-                <span className="font-mono text-[11px] text-muted-foreground">
+                <span className="font-mono text-[0.6875rem] text-muted-foreground">
                   {issue.workspace.key}-{issue.number}
                 </span>
               }
@@ -934,7 +934,7 @@ function MinePanel({
           href={`/w/${ws.slug}/inbox`}
           onClick={onNavigate}
           className={cn(
-            "focus-ring inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[11px] text-muted-foreground hover:text-foreground",
+            "focus-ring inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground",
             MOTION.fast,
           )}
         >
@@ -958,7 +958,7 @@ function MineSection({
 }) {
   return (
     <div>
-      <div className="sticky top-0 flex items-center gap-1.5 bg-card/80 px-4 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground backdrop-blur-sm">
+      <div className="sticky top-0 flex items-center gap-1.5 bg-card/80 px-4 py-1.5 text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground backdrop-blur-sm">
         {icon}
         <span>{title}</span>
         <span className="ml-1 font-mono normal-case">{count}</span>
@@ -986,13 +986,13 @@ function MineRow({
       <Link
         href={href}
         onClick={onNavigate}
-        className="flex items-start gap-2 px-4 py-2 text-[12px] hover:bg-subtle/40"
+        className="flex items-start gap-2 px-4 py-2 text-[0.75rem] hover:bg-subtle/40"
       >
         <span className="mt-0.5 shrink-0">{left}</span>
         <div className="min-w-0 flex-1">
           <div className="truncate text-foreground">{title}</div>
           {meta && (
-            <div className="truncate text-[11px] text-muted-foreground">
+            <div className="truncate text-[0.6875rem] text-muted-foreground">
               {meta}
             </div>
           )}

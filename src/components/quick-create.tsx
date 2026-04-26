@@ -481,12 +481,12 @@ export function QuickCreate() {
             className="focus-ring min-w-0 flex-1 bg-transparent px-1 text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
           />
           {restored && (
-            <span className="hidden shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[11px] uppercase tracking-wider text-ember sm:inline">
+            <span className="hidden shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.6875rem] uppercase tracking-wider text-ember sm:inline">
               Restored
             </span>
           )}
           {secondaryHint && (
-            <span className="hidden shrink-0 items-center gap-1 text-[11px] text-muted-foreground sm:inline-flex">
+            <span className="hidden shrink-0 items-center gap-1 text-[0.6875rem] text-muted-foreground sm:inline-flex">
               <Kbd>⌘⏎</Kbd>
               <span>{secondaryHint.replace("⌘⏎ ", "")}</span>
             </span>
@@ -510,7 +510,7 @@ export function QuickCreate() {
         {/* Secondary row: priority chips (issue) / intent tabs (issue-context) */}
         {(mode.kind === "issue" ||
           mode.kind === "issue-context") && (
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 bg-card/50 px-3 py-2 text-[11px]">
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 bg-card/50 px-3 py-2 text-[0.6875rem]">
             {mode.kind === "issue-context" && (
               <>
                 <IntentChip
@@ -555,7 +555,7 @@ export function QuickCreate() {
                       value={projectId}
                       onChange={(e) => setProjectId(e.target.value)}
                       aria-label="Project"
-                      className="focus-ring h-6 max-w-[180px] truncate rounded-md border border-border bg-background px-1.5 text-[11px] text-foreground"
+                      className="focus-ring h-6 max-w-[180px] truncate rounded-md border border-border bg-background px-1.5 text-[0.6875rem] text-foreground"
                     >
                       <option value="">No project</option>
                       {projects.items.map((p) => (
@@ -634,7 +634,7 @@ function ModeChip({
         type="button"
         onClick={onToggleIntent}
         aria-label="Toggle comment / sub-issue"
-        className="focus-ring shrink-0 cursor-pointer rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground hover:bg-subtle"
+        className="focus-ring shrink-0 cursor-pointer rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[0.6875rem] uppercase tracking-wider text-muted-foreground hover:bg-subtle"
       >
         {label}
       </button>
@@ -653,7 +653,7 @@ function ModeChip({
         aria-haspopup="listbox"
         aria-expanded={open}
         title="Switch what to create"
-        className="focus-ring inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground hover:bg-subtle"
+        className="focus-ring inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[0.6875rem] uppercase tracking-wider text-muted-foreground hover:bg-subtle"
       >
         <span>{label}</span>
         <ChevronDown className="h-2.5 w-2.5 opacity-70" aria-hidden />
@@ -711,7 +711,7 @@ function PriorityChip({
       onClick={onClick}
       aria-pressed={selected}
       className={cn(
-        "focus-ring rounded px-1.5 py-0.5 font-mono text-[11px] uppercase tracking-wider transition-colors",
+        "focus-ring rounded px-1.5 py-0.5 font-mono text-[0.6875rem] uppercase tracking-wider transition-colors",
         selected
           ? "bg-ember/15 text-ember"
           : "text-muted-foreground hover:bg-subtle hover:text-foreground",

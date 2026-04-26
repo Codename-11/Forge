@@ -131,12 +131,12 @@ export default function TimeLogPage() {
           Billable only
         </label>
         {isAdmin && (
-          <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+          <label className="flex flex-col gap-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
             Assignee
             <select
               value={userId ?? ""}
               onChange={(e) => setUserId(e.target.value || undefined)}
-              className="focus-ring h-7 rounded-md border border-input bg-background px-2 text-[12px] normal-case tracking-normal text-foreground"
+              className="focus-ring h-7 rounded-md border border-input bg-background px-2 text-[0.75rem] normal-case tracking-normal text-foreground"
             >
               <option value="">Everyone</option>
               {(members ?? []).map((m) => (
@@ -147,7 +147,7 @@ export default function TimeLogPage() {
             </select>
           </label>
         )}
-        <div className="ml-auto flex items-center gap-4 font-mono text-[11px]">
+        <div className="ml-auto flex items-center gap-4 font-mono text-[0.6875rem]">
           <span>
             <span className="text-muted-foreground">Total:</span>{" "}
             {formatMinutes(totals.minutes)}
@@ -174,8 +174,8 @@ export default function TimeLogPage() {
             />
           </div>
         ) : (
-          <table className="w-full text-[12px]">
-            <thead className="sticky top-0 z-10 bg-card/80 text-[11px] uppercase tracking-wider text-muted-foreground backdrop-blur">
+          <table className="w-full text-[0.75rem]">
+            <thead className="sticky top-0 z-10 bg-card/80 text-[0.6875rem] uppercase tracking-wider text-muted-foreground backdrop-blur">
               <tr>
                 <th className="px-5 py-2 text-left font-medium">Date</th>
                 <th className="px-3 py-2 text-left font-medium">Issue</th>
@@ -203,14 +203,14 @@ export default function TimeLogPage() {
                     : 0;
                 return (
                   <tr key={e.id} className="hover:bg-subtle/40">
-                    <td className="px-5 py-2 font-mono text-[11px] text-muted-foreground">
+                    <td className="px-5 py-2 font-mono text-[0.6875rem] text-muted-foreground">
                       {new Date(e.startedAt).toLocaleDateString()}
                     </td>
                     <td className="px-3 py-2">
                       {e.issue ? (
                         <Link
                           href={`/w/${workspace.slug}/issues/${e.issue.id}`}
-                          className="font-mono text-[11px] hover:underline"
+                          className="font-mono text-[0.6875rem] hover:underline"
                         >
                           {formatIssueId(workspace.key, e.issue.number)}
                         </Link>
@@ -228,7 +228,7 @@ export default function TimeLogPage() {
                     </td>
                     <td className="px-3 py-2 text-center">
                       {e.billable ? (
-                        <span className="rounded bg-success/10 px-1.5 py-0.5 text-[11px] text-success">
+                        <span className="rounded bg-success/10 px-1.5 py-0.5 text-[0.6875rem] text-success">
                           yes
                         </span>
                       ) : (
@@ -262,7 +262,7 @@ function DateField({
   onChange: (next: Date) => void;
 }) {
   return (
-    <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+    <label className="flex flex-col gap-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
       {label}
       <input
         type="date"
@@ -275,7 +275,7 @@ function DateField({
             onChange(d);
           }
         }}
-        className="focus-ring h-7 rounded-md border border-input bg-background px-2 font-mono text-[11px] normal-case tracking-normal text-foreground"
+        className="focus-ring h-7 rounded-md border border-input bg-background px-2 font-mono text-[0.6875rem] normal-case tracking-normal text-foreground"
       />
     </label>
   );

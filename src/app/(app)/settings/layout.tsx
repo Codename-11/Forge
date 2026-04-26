@@ -50,14 +50,14 @@ export default async function AccountSettingsLayout({
         <div className="flex h-12 items-center gap-2 px-4">
           <Link
             href={backSlug ? `/w/${backSlug}/inbox` : "/"}
-            className="focus-ring flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[12px] text-muted-foreground hover:text-foreground"
+            className="focus-ring flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[0.75rem] text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             <span>{backSlug ? "Back to workspace" : "Home"}</span>
           </Link>
         </div>
 
-        <div className="mt-2 px-3 text-[11px] uppercase tracking-wider text-muted-foreground">
+        <div className="mt-2 px-3 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
           Account
         </div>
         <nav className="mt-1 flex flex-col gap-px px-2">
@@ -66,7 +66,7 @@ export default async function AccountSettingsLayout({
           <NavLink href="/settings/workspaces" label="Workspaces" Icon={Layers} />
         </nav>
 
-        <div className="mt-auto px-4 py-3 text-[11px] text-muted-foreground">
+        <div className="mt-auto px-4 py-3 text-[0.6875rem] text-muted-foreground">
           Signed in as <span className="font-medium">{session.user.email}</span>
         </div>
       </aside>
@@ -87,7 +87,7 @@ function NavLink({
   return (
     <Link
       href={href}
-      className="row h-7 rounded-md px-2 text-[13px] text-muted-foreground hover:bg-subtle hover:text-foreground"
+      className="row h-7 rounded-md px-2 text-[0.8125rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
     >
       <Icon className="mr-2 h-3.5 w-3.5" />
       {label}

@@ -57,7 +57,7 @@ export function TopBar({
           data-quick-create
           title="New issue (Shift+C)"
           className={cn(
-            "focus-ring inline-flex h-7 items-center gap-1.5 rounded-md bg-ember px-2 text-[11px] font-medium text-ember-foreground hover:bg-ember/90",
+            "focus-ring inline-flex h-7 items-center gap-1.5 rounded-md bg-ember px-2 text-[0.6875rem] font-medium text-ember-foreground hover:bg-ember/90",
             MOTION.fast,
           )}
         >
@@ -141,7 +141,7 @@ function UserMenu({
         >
           <div className="border-b border-border px-3 py-2">
             <div className="truncate text-xs font-medium">{user.name ?? user.email}</div>
-            <div className="truncate text-[11px] text-muted-foreground">{user.email}</div>
+            <div className="truncate text-[0.6875rem] text-muted-foreground">{user.email}</div>
           </div>
           <Link
             href="/settings/account"
@@ -238,7 +238,7 @@ function AvatarFallback({
     .map((p) => p[0]?.toUpperCase() ?? "")
     .join("");
   return (
-    <span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-subtle font-mono text-[11px] text-muted-foreground">
+    <span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-subtle font-mono text-[0.6875rem] text-muted-foreground">
       {initials || "·"}
     </span>
   );

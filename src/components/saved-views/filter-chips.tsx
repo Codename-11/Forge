@@ -161,14 +161,14 @@ function Chip({
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "focus-ring inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px]",
+          "focus-ring inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[0.6875rem]",
           active
             ? "border-ember/50 bg-ember/10 text-foreground"
             : "border-border bg-background/60 text-muted-foreground hover:bg-subtle/60",
         )}
       >
         {label}
-        <span className="text-[11px] opacity-60">▾</span>
+        <span className="text-[0.6875rem] opacity-60">▾</span>
       </button>
       {open && (
         <div className="absolute left-0 top-[calc(100%+4px)] z-20 rounded-md border border-border bg-card shadow-lg">
@@ -196,7 +196,7 @@ function Option({
         type="button"
         onClick={onClick}
         className={cn(
-          "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] hover:bg-subtle",
+          "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.75rem] hover:bg-subtle",
           selected && "bg-subtle/60",
         )}
       >

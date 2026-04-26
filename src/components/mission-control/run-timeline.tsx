@@ -127,7 +127,7 @@ export function RunTimeline({
             </span>
             <div className="min-w-0 flex-1 pt-0.5">
               <div className="flex items-baseline gap-2">
-                <span className="font-mono text-[11px] font-medium uppercase tracking-wider text-foreground">
+                <span className="font-mono text-[0.6875rem] font-medium uppercase tracking-wider text-foreground">
                   {evt.kind}
                 </span>
                 <span className="text-meta text-muted-foreground">

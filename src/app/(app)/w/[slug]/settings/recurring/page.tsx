@@ -105,10 +105,10 @@ export default function RecurringPage() {
                       <Badge color={r.project.color ?? undefined}>{r.project.key}</Badge>
                     )}
                   </div>
-                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                  <div className="mt-0.5 truncate text-[0.6875rem] text-muted-foreground">
                     {r.titleTemplate}
                   </div>
-                  <div className="mt-1 text-[11px] text-muted-foreground">
+                  <div className="mt-1 text-[0.6875rem] text-muted-foreground">
                     Next run {relativeTime(r.nextRunAt)}
                     {r.lastRunAt && <> · last ran {relativeTime(r.lastRunAt)}</>}
                   </div>
