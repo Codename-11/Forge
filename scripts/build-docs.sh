@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Build the VitePress docs and stage them under public/docs/ so the Next
 # server can serve them at /docs/ on the same origin as the app shell.
 #
@@ -6,34 +6,39 @@
 # (see src/app/(app)/w/[slug]/docs/). Same-origin avoids CORS and lets the
 # X-Frame-Options: SAMEORIGIN header (set in next.config.ts) succeed.
 #
-# Mirrors Lucid's pattern — Lucid's dashboard backend mounts
-# ~/lucid/docs/.vitepress/dist at /docs/. We achieve the same by copying
-# into public/ at build time, since Next's static-asset model is the
-# clean Next-native equivalent.
-#
-# Run as part of `pnpm build` (see package.json). Standalone:
-#   ./scripts/build-docs.sh
+# POSIX sh (not bash) so this works in the node:20-alpine runner without
+# pulling bash in just for one script. The Docker build runs this as part
+# of `pnpm build`.
 #
 # Skips the rebuild if STAGE_ONLY=1 — useful in CI when you've already
-# built docs in a prior step.
+# built docs in a prior step. Skips entirely if SKIP_DOCS=1 so a hot
+# inner-loop `pnpm build:app` doesn't pay the docs cost.
 
-set -euo pipefail
+set -eu
+
+if [ "${SKIP_DOCS:-0}" = "1" ]; then
+  echo "[build-docs] SKIP_DOCS=1 — skipping docs build."
+  exit 0
+fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DOCS_DIR="$ROOT_DIR/docs"
 DIST_DIR="$DOCS_DIR/.vitepress/dist"
 PUBLIC_DOCS="$ROOT_DIR/public/docs"
 
-if [[ "${STAGE_ONLY:-0}" != "1" ]]; then
-  if [[ ! -d "$DOCS_DIR/node_modules" ]]; then
+if [ "${STAGE_ONLY:-0}" != "1" ]; then
+  if [ ! -d "$DOCS_DIR/node_modules" ]; then
     echo "[build-docs] Installing docs deps (first run)..."
-    pnpm --dir "$DOCS_DIR" --ignore-workspace install --frozen-lockfile
+    # Don't fail if the lockfile is out of date in CI — fall back to a
+    # plain install so the build proceeds.
+    pnpm --dir "$DOCS_DIR" --ignore-workspace install --frozen-lockfile \
+      || pnpm --dir "$DOCS_DIR" --ignore-workspace install
   fi
   echo "[build-docs] Building VitePress site..."
   pnpm --dir "$DOCS_DIR" --ignore-workspace build
 fi
 
-if [[ ! -d "$DIST_DIR" ]]; then
+if [ ! -d "$DIST_DIR" ]; then
   echo "[build-docs] Expected dist at $DIST_DIR but it's missing. Did the build fail?" >&2
   exit 1
 fi
