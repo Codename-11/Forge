@@ -200,7 +200,7 @@ export default function InboxPage() {
                   <span className="flex items-center gap-2">
                     <Inbox className="h-3.5 w-3.5 text-muted-foreground" />
                     Assigned & unblocked
-                    <span className="font-mono text-[10px] text-muted-foreground">
+                    <span className="font-mono text-[11px] text-muted-foreground">
                       {data.counts.assignedUnblocked}
                     </span>
                   </span>
@@ -243,7 +243,7 @@ export default function InboxPage() {
                   <span className="flex items-center gap-2">
                     <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />
                     Mentions
-                    <span className="font-mono text-[10px] text-muted-foreground">
+                    <span className="font-mono text-[11px] text-muted-foreground">
                       {data.counts.mentions}
                     </span>
                   </span>
@@ -284,7 +284,7 @@ export default function InboxPage() {
                             {m.body}
                           </div>
                         </div>
-                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
                           {relativeTime(m.createdAt)}
                         </span>
                       </li>
@@ -298,7 +298,7 @@ export default function InboxPage() {
                   <span className="flex items-center gap-2">
                     <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />
                     Stalled &gt; 7d
-                    <span className="font-mono text-[10px] text-muted-foreground">
+                    <span className="font-mono text-[11px] text-muted-foreground">
                       {data.counts.stalled}
                     </span>
                   </span>
@@ -539,7 +539,7 @@ function AgentQueueSection({
         <span className="flex items-center gap-2">
           <Bot className="h-3.5 w-3.5 text-muted-foreground" />
           Agent queue
-          <span className="font-mono text-[10px] text-muted-foreground">{rows.length}</span>
+          <span className="font-mono text-[11px] text-muted-foreground">{rows.length}</span>
         </span>
       }
       hint={`${ready} ready now · ${assigned} assigned · ${claimed} claimed · ${onlineAgents} online/busy agents`}
@@ -674,7 +674,7 @@ function IssueRow({
         <span className="truncate">{issue.title}</span>
       </Link>
       <span
-        className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px]"
+        className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px]"
         style={{
           backgroundColor: `${issue.status.color}22`,
           color: issue.status.color,
@@ -684,7 +684,7 @@ function IssueRow({
       </span>
       <span
         className={cn(
-          "shrink-0 font-mono text-[10px]",
+          "shrink-0 font-mono text-[11px]",
           tone === "warn" ? "text-danger" : "text-muted-foreground",
         )}
       >
@@ -699,7 +699,7 @@ function WorkspaceBadge({ slug, wsKey }: { slug: string; wsKey: string }) {
   return (
     <Link
       href={`/w/${slug}/inbox`}
-      className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[9px] font-semibold"
+      className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[11px] font-semibold"
       style={{
         backgroundColor: c.bg,
         color: c.fg,

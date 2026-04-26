@@ -180,13 +180,13 @@ function IdentityStrip({ agent }: { agent: AgentRow }) {
         </span>
         {agent.webhookUrl ? (
           <span className="inline-flex items-center gap-1.5">
-            <span className="rounded-sm bg-success/10 px-1 text-[10px] font-semibold uppercase tracking-wider text-success">
+            <span className="rounded-sm bg-success/10 px-1 text-[11px] font-semibold uppercase tracking-wider text-success">
               push
             </span>
             <span className="font-mono">{truncateUrl(agent.webhookUrl)}</span>
           </span>
         ) : (
-          <span className="rounded-sm bg-subtle px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <span className="rounded-sm bg-subtle px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             pull-only
           </span>
         )}
@@ -359,7 +359,7 @@ function CurrentlyWorkingSection({ agentId }: { agentId: string }) {
         <span className="flex items-center gap-2">
           <Workflow className="h-3.5 w-3.5 text-muted-foreground" />
           Currently working on
-          <span className="font-mono text-[10px] text-muted-foreground">
+          <span className="font-mono text-[11px] text-muted-foreground">
             {lane.counts.load} active · {lane.counts.recentlyDone} done (7d)
           </span>
         </span>
@@ -415,7 +415,7 @@ function Bucket({
 }) {
   return (
     <div>
-      <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="mb-1 flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
         <span>{label}</span>
         <span className="font-mono">{issues.length}</span>
       </div>
@@ -438,7 +438,7 @@ function Bucket({
                   {formatIssueId(wsKey, i.number)}
                 </span>
                 {!i.unblocked && (
-                  <span className="rounded-sm bg-danger/10 px-1 text-[9px] font-semibold uppercase tracking-wider text-danger">
+                  <span className="rounded-sm bg-danger/10 px-1 text-[11px] font-semibold uppercase tracking-wider text-danger">
                     blocked
                   </span>
                 )}
@@ -549,7 +549,7 @@ function Pill({
   return (
     <div className={cn("rounded-md px-2 py-1 text-center", cls)}>
       <div className="font-mono text-sm">{value}</div>
-      <div className="text-[10px] uppercase tracking-wider opacity-80">
+      <div className="text-[11px] uppercase tracking-wider opacity-80">
         {label}
       </div>
     </div>

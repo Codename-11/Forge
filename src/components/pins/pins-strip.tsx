@@ -64,7 +64,7 @@ export function PinsStrip() {
             )}
           >
             <span
-              className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[9px] font-semibold"
+              className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[11px] font-semibold"
               style={{
                 backgroundColor: badge.bg,
                 color: badge.fg,
@@ -73,7 +73,7 @@ export function PinsStrip() {
             >
               {pin.workspace.key.slice(0, 2)}
             </span>
-            <span className="truncate font-mono text-[10px] text-muted-foreground">
+            <span className="truncate font-mono text-[11px] text-muted-foreground">
               {idLabel}
             </span>
             <span className="truncate text-[11px]">{pin.title}</span>

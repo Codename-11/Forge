@@ -232,7 +232,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
         <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Attachments
         </h2>
-        <span className="font-mono text-[10px] text-muted-foreground">
+        <span className="font-mono text-[11px] text-muted-foreground">
           {rows.length}
         </span>
         <div className="ml-auto flex items-center gap-1">
@@ -421,7 +421,7 @@ function AttachmentTile({
         <div className="line-clamp-2 text-[11px] font-medium">
           {attachment.filename}
         </div>
-        <div className="font-mono text-[10px] text-muted-foreground">
+        <div className="font-mono text-[11px] text-muted-foreground">
           {prettyBytes(attachment.size)}
         </div>
       </div>

@@ -178,7 +178,7 @@ function InlineAttachmentImage({
   );
   if (isLoading) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-md bg-subtle px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+      <span className="inline-flex items-center gap-1 rounded-md bg-subtle px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
         <Paperclip className="h-3 w-3" /> loading…
       </span>
     );

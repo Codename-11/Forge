@@ -141,7 +141,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     <>
       <Topbar
         title={issueKey}
-        subtitle={<span className="font-mono text-[10px]">{issue.status.name}</span>}
+        subtitle={<span className="font-mono text-[11px]">{issue.status.name}</span>}
         actions={
           <>
             <PinToggleButton issueId={issue.id} />
@@ -458,7 +458,7 @@ function InlinePriority({
 function SidebarField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</div>
       {children}
     </div>
   );
@@ -636,7 +636,7 @@ function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => 
     >
       {current ? (
         <>
-          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-subtle text-[10px]">
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-subtle text-[11px]">
             {current.avatar ? (
               <span aria-hidden>{current.avatar}</span>
             ) : (
@@ -647,7 +647,7 @@ function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => 
           </span>
           <AgentPresenceDot status={current.status} size="sm" />
           <span className="truncate">{current.name}</span>
-          <span className="font-mono text-[10px] text-muted-foreground">@{current.profileKey}</span>
+          <span className="font-mono text-[11px] text-muted-foreground">@{current.profileKey}</span>
         </>
       ) : (
         <span className="text-muted-foreground">Assign agent</span>
@@ -735,7 +735,7 @@ function AgentPickerModal({
               <span className="inline-block h-2 w-2 rounded-full bg-muted" />
               <span className="text-muted-foreground">Unassign</span>
               {active && (
-                <span className="ml-auto font-mono text-[10px] text-muted-foreground">current</span>
+                <span className="ml-auto font-mono text-[11px] text-muted-foreground">current</span>
               )}
             </div>
           );
@@ -754,14 +754,14 @@ function AgentPickerModal({
             </span>
             <AgentPresenceDot status={it.status} size="md" lastHeartbeatAt={it.lastHeartbeatAt} />
             <span className="truncate">{it.name}</span>
-            <span className="font-mono text-[10px] text-muted-foreground">@{it.profileKey}</span>
+            <span className="font-mono text-[11px] text-muted-foreground">@{it.profileKey}</span>
             {it.capabilities.length > 0 && (
-              <span className="ml-2 hidden min-w-0 truncate text-[10px] text-muted-foreground/80 sm:inline">
+              <span className="ml-2 hidden min-w-0 truncate text-[11px] text-muted-foreground/80 sm:inline">
                 {it.capabilities.slice(0, 3).join(" · ")}
               </span>
             )}
             {active && (
-              <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">
+              <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
                 current
               </span>
             )}

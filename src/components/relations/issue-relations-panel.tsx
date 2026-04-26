@@ -67,7 +67,7 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
         <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Relations
         </h2>
-        <span className="font-mono text-[10px] text-muted-foreground">
+        <span className="font-mono text-[11px] text-muted-foreground">
           {totalCount}
         </span>
         <Button
@@ -98,7 +98,7 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
             if (rows.length === 0) return null;
             return (
               <div key={kind} className="px-3 py-2">
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
                   {LABELS[kind]}
                 </div>
                 <ul className="space-y-1">

@@ -572,7 +572,7 @@ function Field({
 }) {
   return (
     <div>
-      <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       {children}

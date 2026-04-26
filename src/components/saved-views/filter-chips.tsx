@@ -168,7 +168,7 @@ function Chip({
         )}
       >
         {label}
-        <span className="text-[9px] opacity-60">▾</span>
+        <span className="text-[11px] opacity-60">▾</span>
       </button>
       {open && (
         <div className="absolute left-0 top-[calc(100%+4px)] z-20 rounded-md border border-border bg-card shadow-lg">

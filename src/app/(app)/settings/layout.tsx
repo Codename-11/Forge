@@ -57,7 +57,7 @@ export default async function AccountSettingsLayout({
           </Link>
         </div>
 
-        <div className="mt-2 px-3 text-[10px] uppercase tracking-wider text-muted-foreground">
+        <div className="mt-2 px-3 text-[11px] uppercase tracking-wider text-muted-foreground">
           Account
         </div>
         <nav className="mt-1 flex flex-col gap-px px-2">
@@ -66,7 +66,7 @@ export default async function AccountSettingsLayout({
           <NavLink href="/settings/workspaces" label="Workspaces" Icon={Layers} />
         </nav>
 
-        <div className="mt-auto px-4 py-3 text-[10px] text-muted-foreground">
+        <div className="mt-auto px-4 py-3 text-[11px] text-muted-foreground">
           Signed in as <span className="font-medium">{session.user.email}</span>
         </div>
       </aside>

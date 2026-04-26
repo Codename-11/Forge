@@ -72,7 +72,7 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
         <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Activity
         </h2>
-        <span className="font-mono text-[10px] text-muted-foreground">
+        <span className="font-mono text-[11px] text-muted-foreground">
           {rows.length}
         </span>
       </header>
@@ -103,14 +103,14 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
                     </span>
                     {dispatch?.mode && (
                       <span
-                        className="ml-1 inline-flex items-center gap-1 rounded-sm bg-subtle px-1 text-[10px] font-mono uppercase tracking-wider text-muted-foreground"
+                        className="ml-1 inline-flex items-center gap-1 rounded-sm bg-subtle px-1 text-[11px] font-mono uppercase tracking-wider text-muted-foreground"
                         title={dispatch.reason ?? undefined}
                       >
                         {dispatch.mode}
                       </span>
                     )}
                     {dispatch?.chosen?.profileKey && (
-                      <span className="ml-1 text-[10px] font-mono text-muted-foreground">
+                      <span className="ml-1 text-[11px] font-mono text-muted-foreground">
                         → @{dispatch.chosen.profileKey}
                       </span>
                     )}

@@ -53,7 +53,7 @@ export function KeyboardHelp() {
         <div className="grid gap-5 md:grid-cols-2">
           {groups.map((g) => (
             <section key={g.category} className="space-y-1.5">
-              <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 {g.category}
               </h3>
               <ul className="divide-y divide-border/60 rounded-md border border-border/60 bg-card/40">
@@ -65,7 +65,7 @@ export function KeyboardHelp() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-foreground">{s.label}</div>
                       {s.scope && (
-                        <div className="truncate text-[10px] text-muted-foreground">
+                        <div className="truncate text-[11px] text-muted-foreground">
                           {s.scope}
                         </div>
                       )}
