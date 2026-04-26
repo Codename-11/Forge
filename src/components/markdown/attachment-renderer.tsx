@@ -7,6 +7,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useAttachmentLightbox, type AttachmentLite } from "@/components/attachments/attachment-lightbox";
 
 /**
  * Inline attachment renderer.
@@ -65,6 +66,21 @@ export function MarkdownWithAttachments({
 }) {
   const segments = useMemo(() => tokenize(body ?? ""), [body]);
 
+  // Build the list of inline attachment ids in order — used for paging
+  // when the user clicks any inline chip, so ←/→ walks through every
+  // attachment referenced in the body.
+  const inlineList = useMemo<{ id: string; label: string; isImage: boolean }[]>(
+    () =>
+      segments
+        .filter((s) => s.type !== "text")
+        .map((s) => {
+          if (s.type === "image")
+            return { id: s.attachmentId, label: s.alt || "image", isImage: true };
+          return { id: s.attachmentId, label: s.label, isImage: false };
+        }),
+    [segments],
+  );
+
   if (segments.length === 1 && segments[0].type === "text") {
     return (
       <div className={className} style={{ whiteSpace: "pre-wrap" }}>
@@ -83,6 +99,7 @@ export function MarkdownWithAttachments({
               key={`${s.attachmentId}-${i}`}
               attachmentId={s.attachmentId}
               alt={s.alt}
+              inlineList={inlineList}
             />
           );
         return (
@@ -90,11 +107,32 @@ export function MarkdownWithAttachments({
             key={`${s.attachmentId}-${i}`}
             attachmentId={s.attachmentId}
             label={s.label}
+            inlineList={inlineList}
           />
         );
       })}
     </div>
   );
+}
+
+/**
+ * Resolve the surrounding inline-attachment list to the AttachmentLite
+ * shape the lightbox wants. Filenames on inline references aren't always
+ * the on-disk filename (the user can write any markdown alt/label) but
+ * they're the best label we have without an extra round-trip to
+ * `attachment.list`.
+ */
+function inlineListToAttachments(
+  inlineList: { id: string; label: string; isImage: boolean }[],
+): AttachmentLite[] {
+  return inlineList.map((it) => ({
+    id: it.id,
+    filename: it.label,
+    // Best-effort mime from the label extension. The lightbox does its own
+    // mime sniffing and falls back to the filename if mime is empty.
+    mimeType: it.isImage ? "image/*" : "",
+    size: 0,
+  }));
 }
 
 /**
@@ -127,10 +165,13 @@ function UnavailablePill({
 function InlineAttachmentImage({
   attachmentId,
   alt,
+  inlineList,
 }: {
   attachmentId: string;
   alt: string;
+  inlineList: { id: string; label: string; isImage: boolean }[];
 }) {
+  const lightbox = useAttachmentLightbox();
   const { data, isLoading, error } = trpc.attachment.getDownloadUrl.useQuery(
     { attachmentId },
     { staleTime: 5 * 60_000, retry: false },
@@ -158,7 +199,14 @@ function InlineAttachmentImage({
         src={data.url}
         alt={alt}
         loading="lazy"
-        className="max-h-96 max-w-full rounded-md border border-border object-contain"
+        onClick={() =>
+          lightbox.open({
+            attachmentId,
+            attachments: inlineListToAttachments(inlineList),
+          })
+        }
+        className="max-h-96 max-w-full cursor-zoom-in rounded-md border border-border object-contain transition-shadow hover:ring-1 hover:ring-ember/40"
+        title="Click to preview"
       />
     </span>
   );
@@ -167,11 +215,16 @@ function InlineAttachmentImage({
 function InlineAttachmentLink({
   attachmentId,
   label,
+  inlineList,
 }: {
   attachmentId: string;
   label: string;
+  inlineList: { id: string; label: string; isImage: boolean }[];
 }) {
-  const { data, error } = trpc.attachment.getDownloadUrl.useQuery(
+  const lightbox = useAttachmentLightbox();
+  // We don't need the URL up front — the lightbox resolves it on open.
+  // We do still query it so an error pill can replace a broken chip.
+  const { error } = trpc.attachment.getDownloadUrl.useQuery(
     { attachmentId },
     { staleTime: 5 * 60_000, retry: false },
   );
@@ -181,17 +234,19 @@ function InlineAttachmentLink({
   const isPdf = label.toLowerCase().endsWith(".pdf");
   const Icon = isPdf ? FileText : FileIcon;
   return (
-    <a
-      href={data?.url ?? "#"}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={(e) => {
-        if (!data?.url) e.preventDefault();
-      }}
-      className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[11px] hover:bg-subtle"
+    <button
+      type="button"
+      onClick={() =>
+        lightbox.open({
+          attachmentId,
+          attachments: inlineListToAttachments(inlineList),
+        })
+      }
+      title="Click to preview"
+      className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[11px] hover:border-ember/40 hover:bg-subtle"
     >
       <Icon className="h-3 w-3 text-muted-foreground" />
       {label}
-    </a>
+    </button>
   );
 }

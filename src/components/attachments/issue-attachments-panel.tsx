@@ -15,6 +15,7 @@ import { Confirm } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useAttachmentLightbox } from "@/components/attachments/attachment-lightbox";
 
 /**
  * tRPC error shape we care about for the misconfig banner. We can't
@@ -287,6 +288,8 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
               <AttachmentTile
                 key={a.id}
                 attachment={a}
+                allAttachments={rows}
+                issueId={issueId}
                 canDelete={isAdmin}
                 onDelete={() =>
                   deleteMut.mutate({ attachmentId: a.id })
@@ -348,22 +351,28 @@ function StorageNotConfiguredBanner() {
 
 function AttachmentTile({
   attachment,
+  allAttachments,
+  issueId,
   canDelete,
   onDelete,
   onStorageMisconfig,
 }: {
   attachment: Attachment;
+  allAttachments: Attachment[];
+  issueId: string;
   canDelete: boolean;
   onDelete: () => void;
   onStorageMisconfig?: () => void;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const lightbox = useAttachmentLightbox();
   const isImage = isImageMime(attachment.mimeType);
+  // We still issue a presigned GET *only* for image thumbs in the grid
+  // (cheap, cached). Non-image tiles render an icon and only resolve a
+  // URL on click via the lightbox.
   const { data, error } = trpc.attachment.getDownloadUrl.useQuery(
     { attachmentId: attachment.id },
-    // Keep previously-fetched URLs warm; the server TTL is 15 min so
-    // this ends up refreshing naturally on revisit.
-    { staleTime: 5 * 60_000, retry: false },
+    { staleTime: 5 * 60_000, retry: false, enabled: isImage },
   );
   // Bubble the misconfig signal up so the panel can swap to the banner
   // instead of rendering broken thumbnails. Idempotent — parent dedupes
@@ -373,15 +382,29 @@ function AttachmentTile({
       onStorageMisconfig?.();
     }
   }, [error, onStorageMisconfig]);
-  const href = data?.url;
+  const thumbUrl = isImage ? data?.url : undefined;
+
+  const openInLightbox = () => {
+    lightbox.open({
+      attachmentId: attachment.id,
+      attachments: allAttachments.map((a) => ({
+        id: a.id,
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+      })),
+      target: { type: "issue", id: issueId },
+      canDelete,
+    });
+  };
 
   const body = useMemo(() => {
-    if (isImage && href) {
+    if (isImage && thumbUrl) {
       return (
         // Presigned GET into an <img>; `object-fit: cover` for the thumb.
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={href}
+          src={thumbUrl}
           alt={attachment.filename}
           loading="lazy"
           className="h-full w-full object-cover"
@@ -398,25 +421,24 @@ function AttachmentTile({
         <div className="line-clamp-2 text-[11px] font-medium">
           {attachment.filename}
         </div>
+        <div className="font-mono text-[10px] text-muted-foreground">
+          {prettyBytes(attachment.size)}
+        </div>
       </div>
     );
-  }, [isImage, href, attachment.filename, attachment.mimeType]);
+  }, [isImage, thumbUrl, attachment.filename, attachment.mimeType, attachment.size]);
 
   return (
     <li className="group relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-background">
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="block h-full w-full"
-        onClick={(e) => {
-          if (!href) e.preventDefault();
-        }}
-        title={`${attachment.filename} · ${prettyBytes(attachment.size)}`}
+      <button
+        type="button"
+        onClick={openInLightbox}
+        className="block h-full w-full text-left transition-shadow hover:ring-1 hover:ring-ember/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ember"
+        title={`${attachment.filename} · ${prettyBytes(attachment.size)} · click to preview`}
       >
         {body}
-      </a>
-      {/* Overlay footer — filename + size, always visible on non-image. */}
+      </button>
+      {/* Overlay footer — filename only on image thumbs (covers the image). */}
       {isImage && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-background/95 to-transparent px-2 py-1 text-filename text-foreground/90">
           {attachment.filename}
@@ -428,6 +450,7 @@ function AttachmentTile({
           className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-md bg-background/90 text-muted-foreground opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
           onClick={(e) => {
             e.preventDefault();
+            e.stopPropagation();
             setConfirmOpen(true);
           }}
           title="Delete attachment"
