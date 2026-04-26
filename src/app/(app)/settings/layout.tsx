@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowLeft, Key, Layers, User as UserIcon } from "lucide-react";
+import { ArrowLeft, Key, Layers, Palette, User as UserIcon } from "lucide-react";
 import { auth } from "@/server/auth";
 import { db } from "@/server/db";
 
@@ -62,6 +62,7 @@ export default async function AccountSettingsLayout({
         </div>
         <nav className="mt-1 flex flex-col gap-px px-2">
           <NavLink href="/settings/account" label="Profile" Icon={UserIcon} />
+          <NavLink href="/settings/appearance" label="Appearance" Icon={Palette} />
           <NavLink href="/settings/access" label="Developer access" Icon={Key} />
           <NavLink href="/settings/workspaces" label="Workspaces" Icon={Layers} />
         </nav>

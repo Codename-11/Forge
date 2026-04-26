@@ -138,6 +138,26 @@ export function MissionControl() {
     },
   });
 
+  // ---------- Click-outside auto-collapse ----------
+  // When the panel is open and not pinned, clicking anywhere outside
+  // the widget collapses it back to pill. Respects `state.pinned` so a
+  // pinned widget stays open while the user clicks around the app.
+  // Uses pointerdown instead of click so the collapse fires before the
+  // outside element handles its own click — feels more responsive.
+  useEffect(() => {
+    if (state.size === "pill") return;
+    if (state.pinned) return;
+    const handler = (ev: PointerEvent) => {
+      const node = containerRef.current;
+      if (!node) return;
+      const target = ev.target as Node | null;
+      if (target && node.contains(target)) return;
+      setSize("pill");
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
+  }, [state.size, state.pinned, setSize]);
+
   // ---------- Keyboard ----------
   // Toggle pill ↔ panel. mod+' = cmd+' on Mac, ctrl+' elsewhere.
   useHotkey("cmd+'", () => toggleCollapse(), [toggleCollapse]);
@@ -360,8 +380,8 @@ export function MissionControl() {
         isDragging && "opacity-90",
       )}
       style={{
-        width: 380,
-        height: 520,
+        width: 460,
+        height: 560,
       }}
     >
       <header
