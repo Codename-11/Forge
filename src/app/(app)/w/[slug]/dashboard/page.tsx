@@ -159,6 +159,9 @@ export default function DashboardPage() {
             />
           </section>
 
+          <StandupTile slug={slug} />
+
+
           <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             {isAdmin && !events.isError ? (
               <Column title="Recent activity" hint="Workspace events">
@@ -842,4 +845,95 @@ function formatDueDate(d: Date | string, tz: string | null) {
   } catch {
     return date.toLocaleDateString();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Standup tile
+// ---------------------------------------------------------------------------
+
+/**
+ * Compact dashboard tile for the standup draft. Replaces the dedicated
+ * sidebar entry — the full page (`/standup`) still exists for editing
+ * + copy-paste, but most of the time a glance + a copy button is all
+ * the operator needs.
+ */
+function StandupTile({ slug }: { slug: string }) {
+  const { data, isLoading } = trpc.standup.draft.useQuery({ sinceHours: 24 });
+  const empty =
+    !!data &&
+    !data.groups.closed.length &&
+    !data.groups.opened.length &&
+    !data.groups.inProgress.length &&
+    !data.groups.blocked.length;
+
+  const total = data
+    ? data.counts.closed +
+      data.counts.opened +
+      data.counts.inProgress +
+      data.counts.blocked
+    : 0;
+
+  return (
+    <section className="rounded-lg border border-border bg-card/40">
+      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+        <span className="text-sm font-medium">Standup — last 24h</span>
+        {data && total > 0 && (
+          <span className="rounded-full bg-subtle px-1.5 font-mono text-[0.6875rem] text-muted-foreground">
+            {total}
+          </span>
+        )}
+        <Link
+          href={`/w/${slug}/standup`}
+          className="ml-auto text-[0.75rem] text-muted-foreground hover:text-foreground"
+        >
+          Open →
+        </Link>
+      </header>
+      <div className="p-4 text-[0.8125rem]">
+        {isLoading || !data ? (
+          <div className="text-muted-foreground">Composing…</div>
+        ) : empty ? (
+          <div className="text-muted-foreground">
+            Quiet 24 hours. Close issues, leave comments, or move tickets and
+            it&apos;ll fill in.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-4">
+            <StandupCount label="Closed" n={data.counts.closed} tone="success" />
+            <StandupCount label="Opened" n={data.counts.opened} tone="info" />
+            <StandupCount
+              label="Continuing"
+              n={data.counts.inProgress}
+              tone="warning"
+            />
+            <StandupCount label="Blocked" n={data.counts.blocked} tone="danger" />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function StandupCount({
+  label,
+  n,
+  tone,
+}: {
+  label: string;
+  n: number;
+  tone: "success" | "info" | "warning" | "danger";
+}) {
+  const dot = {
+    success: "bg-success",
+    info: "bg-sky-400",
+    warning: "bg-warning",
+    danger: "bg-danger",
+  }[tone];
+  return (
+    <div className="flex items-center gap-2">
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      <span className="text-muted-foreground">{label}</span>
+      <span className="ml-auto font-mono tabular-nums">{n}</span>
+    </div>
+  );
 }

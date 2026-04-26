@@ -13,7 +13,6 @@ import {
   Settings,
   Search,
   Plus,
-  FileText,
   CalendarRange,
   Compass,
   Map as MapIcon,
@@ -82,11 +81,15 @@ const SECTIONS: readonly NavSection[] = [
     // Inbox sits next to it because both are "homepage-y" surfaces — the
     // bell-drawer Mine tab is a fast-access version of Inbox, but the
     // full page lives here. Issues / Projects round out the workflow.
+    // Time is workspace-feature-flagged; renders only when enabled.
+    // Standup was dropped from the rail — it lives on the Dashboard as
+    // a tile and stays reachable via the command palette and `g u` chord.
     items: [
       { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
       { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
       { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
       { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
+      { path: "/time", label: "Time", icon: Clock, chord: "t", onlyWhenTimeTracking: true },
     ],
   },
   {
@@ -96,14 +99,6 @@ const SECTIONS: readonly NavSection[] = [
       { path: "/cycles", label: "Sprints", icon: CalendarRange, chord: "c" },
       { path: "/initiatives", label: "Initiatives", icon: Compass, chord: "n" },
       { path: "/roadmap", label: "Roadmap", icon: MapIcon, chord: "r" },
-    ],
-  },
-  {
-    id: "personal",
-    label: "Personal",
-    items: [
-      { path: "/standup", label: "Standup", icon: FileText, chord: "u" },
-      { path: "/time", label: "Time", icon: Clock, chord: "t", onlyWhenTimeTracking: true },
     ],
   },
   {
@@ -220,8 +215,11 @@ export function Sidebar({
     // Spec overrides (preserved from the previous shell):
     //   `g n` opens the new-initiative dialog via ?new.
     //   `g b` = "browse inbox" alias for `g i`.
+    //   `g u` = standup (used to be a sidebar entry; kept as a chord
+    //           since the page itself still exists).
     m["n"] = () => router.push(`/w/${slug}/initiatives?new`);
     m["b"] = () => router.push(`/w/${slug}/inbox`);
+    m["u"] = () => router.push(`/w/${slug}/standup`);
     return m;
   }, [sections, footerItems, router, slug]);
   useChord("g", chordMap);
