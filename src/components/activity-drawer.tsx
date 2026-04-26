@@ -32,6 +32,7 @@ type Kind =
   | "ISSUE_ASSIGNED"
   | "ISSUE_PRIORITY_CHANGED"
   | "ISSUE_QUEUED"
+  | "ISSUE_STALLED"
   | "COMMENT_CREATED"
   | "AGENT_ASSIGNED"
   | "AGENT_STATUS_CHANGED";
@@ -68,6 +69,7 @@ const KINDS: Kind[] = [
   "ISSUE_ASSIGNED",
   "ISSUE_PRIORITY_CHANGED",
   "ISSUE_QUEUED",
+  "ISSUE_STALLED",
   "COMMENT_CREATED",
   "AGENT_ASSIGNED",
   "AGENT_STATUS_CHANGED",
@@ -192,6 +194,8 @@ function iconFor(kind: Kind) {
       return <ArrowRightLeft className="h-3.5 w-3.5 text-muted-foreground" />;
     case "ISSUE_PRIORITY_CHANGED":
       return <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "ISSUE_STALLED":
+      return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
     case "ISSUE_QUEUED":
       return <Inbox className="h-3.5 w-3.5 text-muted-foreground" />;
     case "COMMENT_CREATED":
@@ -334,6 +338,26 @@ function summarizeEvent(
         ),
         meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
       };
+    case "ISSUE_STALLED": {
+      const handle = readPayloadString(evt.payload, "agentProfileKey");
+      return {
+        headline: (
+          <>
+            Stalled — {issueLink}{" "}
+            <span className="text-muted-foreground">
+              hadn&apos;t moved
+              {handle && (
+                <>
+                  {" "}
+                  (assigned <span className="font-mono">@{handle}</span>)
+                </>
+              )}
+            </span>
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
+    }
     case "COMMENT_CREATED":
       return {
         headline: (

@@ -46,6 +46,7 @@ export default function DashboardPage() {
   const slug = workspace.slug;
   const w = (p: string) => `/w/${slug}${p}`;
   const { data: me } = trpc.workspace.me.useQuery();
+  const { data: account } = trpc.user.me.useQuery();
   const { data: ws } = trpc.workspace.current.useQuery();
   const { data: members } = trpc.workspace.members.useQuery();
   const { data: statuses } = trpc.status.list.useQuery();
@@ -117,6 +118,8 @@ export default function DashboardPage() {
               apiKeysCount={access?.length ?? 0}
               hasTimezone={!!me?.user.timezone}
               ready={!!me && !!projects && !!access && !!members}
+              serverDismissedAt={account?.onboardingDismissedAt ?? null}
+              skippedSteps={account?.onboardingSkippedSteps ?? []}
             />
             <Link
               href={`/w/${slug}/inbox`}
@@ -139,8 +142,10 @@ export default function DashboardPage() {
             membersCount={members?.length ?? 0}
             apiKeysCount={access?.length ?? 0}
             hasTimezone={!!me?.user.timezone}
-            ready={!!me && !!projects && !!access && !!members}
+            ready={!!me && !!projects && !!access && !!members && !!account}
             slug={slug}
+            serverDismissedAt={account?.onboardingDismissedAt ?? null}
+            skippedSteps={account?.onboardingSkippedSteps ?? []}
           />
 
           <section>
@@ -435,6 +440,8 @@ function OnboardingCard({
   hasTimezone,
   ready,
   slug,
+  serverDismissedAt,
+  skippedSteps,
 }: {
   projectsCount: number;
   issuesCount: number;
@@ -443,10 +450,47 @@ function OnboardingCard({
   hasTimezone: boolean;
   ready: boolean;
   slug: string;
+  serverDismissedAt: Date | string | null;
+  skippedSteps: string[];
 }) {
   const [dismissed, setDismissed] = useOnboardingDismissed();
+  const utils = trpc.useUtils();
 
-  const steps: OnboardingStep[] = useMemo(
+  const dismissPermanently = trpc.user.dismissOnboarding.useMutation({
+    onMutate: async () => {
+      await utils.user.me.cancel();
+      const prev = utils.user.me.getData();
+      utils.user.me.setData(undefined, (cur) =>
+        cur ? { ...cur, onboardingDismissedAt: new Date() } : cur,
+      );
+      return { prev };
+    },
+    onError: (e, _v, ctx) => {
+      if (ctx?.prev) utils.user.me.setData(undefined, ctx.prev);
+      toast.error(e.message);
+    },
+    onSettled: () => utils.user.me.invalidate(),
+  });
+
+  const skipStep = trpc.user.skipOnboardingStep.useMutation({
+    onMutate: async ({ stepId }) => {
+      await utils.user.me.cancel();
+      const prev = utils.user.me.getData();
+      utils.user.me.setData(undefined, (cur) =>
+        cur && !cur.onboardingSkippedSteps.includes(stepId)
+          ? { ...cur, onboardingSkippedSteps: [...cur.onboardingSkippedSteps, stepId] }
+          : cur,
+      );
+      return { prev };
+    },
+    onError: (e, _v, ctx) => {
+      if (ctx?.prev) utils.user.me.setData(undefined, ctx.prev);
+      toast.error(e.message);
+    },
+    onSettled: () => utils.user.me.invalidate(),
+  });
+
+  const allSteps: OnboardingStep[] = useMemo(
     () => [
       { id: "project", label: "Create your first project", hint: "Group related issues.", done: projectsCount > 0, href: `/w/${slug}/projects`, icon: Rocket },
       { id: "issue", label: "Create an issue", hint: "Capture work. Press C anywhere.", done: issuesCount > 0, action: "quick-create", icon: Plus },
@@ -457,9 +501,14 @@ function OnboardingCard({
     [projectsCount, issuesCount, membersCount, apiKeysCount, hasTimezone, slug],
   );
 
+  const steps = useMemo(
+    () => allSteps.filter((s) => !skippedSteps.includes(s.id)),
+    [allSteps, skippedSteps],
+  );
+
   const total = steps.length;
   const completed = steps.filter((s) => s.done).length;
-  const allDone = ready && completed === total;
+  const allDone = ready && total > 0 && completed === total;
 
   useEffect(() => {
     if (!allDone) return;
@@ -472,7 +521,24 @@ function OnboardingCard({
     }
   }, [allDone]);
 
-  if (!ready || dismissed || allDone) return null;
+  if (!ready) return null;
+  if (serverDismissedAt) return null;
+  if (dismissed || allDone) return null;
+
+  function handleSkipPermanently() {
+    dismissPermanently.mutate();
+    // Mirror to localStorage so the Resume pill stays consistent within
+    // this session even before the server roundtrip lands.
+    setDismissed(true);
+    toast.success("Onboarding skipped — resume from Settings → Account if you change your mind.");
+  }
+
+  function handleSkipStep(stepId: "member") {
+    skipStep.mutate({ stepId });
+    if (stepId === "member") {
+      toast.success("Skipped — you can invite later from Settings → Members.");
+    }
+  }
 
   return (
     <section className="rounded-lg border border-border bg-card/40 p-5">
@@ -483,6 +549,14 @@ function OnboardingCard({
             {completed} of {total} steps complete.
           </div>
         </div>
+        <button
+          type="button"
+          onClick={handleSkipPermanently}
+          className="focus-ring rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+          title="Hide onboarding across every device. Re-enable from Settings → Account."
+        >
+          Skip permanently
+        </button>
         <button
           className="text-muted-foreground hover:text-foreground"
           onClick={() => setDismissed(true)}
@@ -495,13 +569,16 @@ function OnboardingCard({
       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-subtle">
         <div
           className="h-full rounded-full bg-ember transition-all"
-          style={{ width: `${(completed / total) * 100}%` }}
+          style={{ width: total === 0 ? "100%" : `${(completed / total) * 100}%` }}
         />
       </div>
       <ul className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {steps.map((s) => (
           <li key={s.id}>
-            <OnboardingRow step={s} />
+            <OnboardingRow
+              step={s}
+              onSkip={s.id === "member" ? () => handleSkipStep("member") : undefined}
+            />
           </li>
         ))}
       </ul>
@@ -522,6 +599,8 @@ function ResumeSetupPill({
   apiKeysCount,
   hasTimezone,
   ready,
+  serverDismissedAt,
+  skippedSteps,
 }: {
   projectsCount: number;
   issuesCount: number;
@@ -529,16 +608,19 @@ function ResumeSetupPill({
   apiKeysCount: number;
   hasTimezone: boolean;
   ready: boolean;
+  serverDismissedAt: Date | string | null;
+  skippedSteps: string[];
 }) {
   const [dismissed, setDismissed] = useOnboardingDismissed();
+  const memberDone = membersCount > 1 || skippedSteps.includes("member");
   const allDone =
     ready &&
     projectsCount > 0 &&
     issuesCount > 0 &&
-    membersCount > 1 &&
+    memberDone &&
     apiKeysCount > 0 &&
     hasTimezone;
-  if (!ready || !dismissed || allDone) return null;
+  if (!ready || serverDismissedAt || !dismissed || allDone) return null;
   return (
     <button
       type="button"
@@ -552,7 +634,13 @@ function ResumeSetupPill({
   );
 }
 
-function OnboardingRow({ step }: { step: OnboardingStep }) {
+function OnboardingRow({
+  step,
+  onSkip,
+}: {
+  step: OnboardingStep;
+  onSkip?: () => void;
+}) {
   const Icon = step.icon;
   const inner = (
     <div
@@ -578,15 +666,33 @@ function OnboardingRow({ step }: { step: OnboardingStep }) {
       {!step.done && <ArrowRight className="mt-1 h-3 w-3 text-muted-foreground" />}
     </div>
   );
-  if (step.done) return inner;
-  if (step.action === "quick-create") {
-    return (
-      <button data-quick-create className="w-full text-left">
-        {inner}
+  const body = step.done ? (
+    inner
+  ) : step.action === "quick-create" ? (
+    <button data-quick-create className="w-full text-left">
+      {inner}
+    </button>
+  ) : (
+    <Link href={step.href ?? "#"}>{inner}</Link>
+  );
+  if (!onSkip || step.done) return body;
+  return (
+    <div className="relative">
+      {body}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onSkip();
+        }}
+        className="focus-ring absolute right-2 top-2 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+        title="Skip this step. Re-enable from Settings → Account."
+      >
+        Skip
       </button>
-    );
-  }
-  return <Link href={step.href ?? "#"}>{inner}</Link>;
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------

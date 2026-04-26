@@ -47,6 +47,102 @@ billet above it.
 - Rendered SVG previews with ImageMagick at 512px and 32px.
 - Left the current `src/app/icon.svg` and `public/forge-mark.svg` untouched.
 
+## 2026-04-25 — Stale-work watchdog + onboarding skip + MinIO mixed-content fix
+
+Three things shipped together. Two subagents in parallel + a hand
+fix for an attachment-upload bug surfaced during testing.
+
+### MinIO mixed-content fix
+
+The browser was blocking upload PUTs because Forge generated
+presigned URLs against the SDK's configured endpoint
+(`http://minio:9000`) — Docker-internal hostname AND HTTP under an
+HTTPS app. Two changes:
+
+- `~/docker/forge/docker-compose.yaml` — MinIO joins the
+  `traefik_proxy` network and gets Traefik labels routing
+  `https://forge-s3.axiom-labs.dev` to its port 9000. The console
+  port (9001) stays loopback-only.
+- `src/server/services/storage.ts` — split into two clients:
+  `getS3Client()` keeps using `S3_ENDPOINT` (internal, `http://minio:9000`)
+  for SDK API calls (bucket create, head, list, delete);
+  `getPresignClient()` uses `S3_PUBLIC_ENDPOINT`
+  (`https://forge-s3.axiom-labs.dev`) and is used only by the two
+  `getSignedUrl(...)` call sites. Browser PUT/GET hits the public
+  endpoint, MinIO accepts, signature host matches.
+
+Verified: `https://forge-s3.axiom-labs.dev/minio/health/live` →
+HTTP 200 from outside the host. Cert provisioned via existing
+Cloudflare DNS challenge.
+
+### Stale-work watchdog (P1 layer 1)
+
+Closes the "Hermes returned 202 but the agent never actually did
+anything" gap from push-dispatch.
+
+- Migration `0009_stale_work_watchdog` adds
+  `Workspace.assignmentSlaMinutes` (Int, default 0) +
+  `Workspace.autoRedispatchOnStall` (Bool, default false), and the
+  `ISSUE_STALLED` value to `EventKind`.
+- `src/server/services/stale-work.ts` — `sweepStaleWork()` runs in
+  the maintenance worker every 60s. For each workspace with
+  `assignmentSlaMinutes > 0`: find issues where
+  `assignedAgentId IS NOT NULL` AND status category in
+  (BACKLOG, TODO) AND `updatedAt < now - slaMinutes`. Emit
+  `ISSUE_STALLED` via `recordChange` with payload
+  `{ assignedAgentId, agentProfileKey, slaMinutes, lastUpdate }`.
+  Idempotent — skips issues that already have an `ISSUE_STALLED`
+  event in the last hour (single batched query per workspace).
+  When `autoRedispatchOnStall=true`, also clears
+  `assignedAgentId = null` and calls `maybeAutoDispatch` to re-pick.
+- Wired into `src/server/worker.ts` alongside the existing
+  `heartbeat-sweep` and `delivery-drain` jobs (same registration
+  pattern, same dedup jobId).
+- UI knob added to `/settings/workspace` in a new "Agent SLA"
+  section (between Features and Danger zone).
+- `ISSUE_STALLED` surfaces in the activity drawer (with
+  `AlertTriangle` icon, `text-warning`), agent timeline, issue
+  activity panel, and as a `toast.warning` via RealtimeToaster.
+- Tests in `src/server/services/__tests__/stale-work.test.ts` (6
+  cases: SLA=0 no-op, past-cutoff stalls, fresh updatedAt skipped,
+  double-stall idempotency, redispatch path, terminal categories
+  ignored). Mirrors `heartbeat.test.ts` style; not run in this
+  env (no Postgres on localhost).
+
+### Onboarding skip + invite optional
+
+- Migration `0010_onboarding_persistence` adds
+  `User.onboardingDismissedAt` (DateTime?) +
+  `User.onboardingSkippedSteps` (String[], default []).
+- `src/server/routers/user.ts` extends `me` to include the new
+  fields and adds `dismissOnboarding` / `resumeOnboarding` /
+  `skipOnboardingStep({ stepId })` / `unskipOnboardingStep({ stepId })`
+  mutations. `stepId` constrained to `z.enum(["member"])` for now.
+- `OnboardingCard` reads the server flags, filters out skipped
+  steps, hides itself permanently when `onboardingDismissedAt`
+  is set. New "Skip permanently" button next to the existing X
+  dismiss-for-now. Inline "Skip" link on the "Invite a teammate"
+  row.
+- `ResumeSetupPill` respects the server-dismissed flag and treats
+  skipped steps as done for the count.
+- `/settings/account` gains an "Onboarding" section: state line,
+  Resume/Skip toggle, list of skipped steps with un-skip buttons.
+
+### TODO updates
+
+- P1 layer 1 (stale-work watchdog) marked shipped with the new
+  mechanism details. Layers 2 (required ack) and 3 (real SLA
+  enforcement on `Issue.slaMinutes`) remain open.
+
+### Verification
+
+- `pnpm typecheck` clean across all three changes.
+- MinIO public endpoint live: HTTP 200.
+- Migrations land cleanly on a fresh DB (verified by reading the
+  generated SQL; the entrypoint runs `prisma migrate deploy` on
+  every boot).
+- E2E upload test: deferred until container rebuild + redeploy.
+
 ## 2026-04-25 — Cohesive flow polish (4-agent parallel wave)
 
 Surface-level UX work to make Forge feel like one continuous thing

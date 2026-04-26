@@ -30,6 +30,7 @@ const KIND_LABEL: Record<string, string> = {
   ISSUE_STATUS_CHANGED: "Status changed",
   ISSUE_ASSIGNED: "Assignees changed",
   ISSUE_PRIORITY_CHANGED: "Priority changed",
+  ISSUE_STALLED: "Stalled — agent hadn't moved it",
   COMMENT_CREATED: "Commented",
   COMMENT_UPDATED: "Edited comment",
   SKILL_INVOKED: "Skill ran",

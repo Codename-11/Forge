@@ -46,6 +46,8 @@ const COMMON_LOCALES = [
 
 export default function AccountPage() {
   const { data: me, refetch } = trpc.workspace.me.useQuery();
+  const { data: account } = trpc.user.me.useQuery();
+  const utils = trpc.useUtils();
   const { theme: currentTheme, setTheme } = useTheme();
   const isMac = useIsMac();
 
@@ -81,6 +83,28 @@ export default function AccountPage() {
     onSuccess: () => {
       toast.success("Preferences saved.");
       refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const dismissOnboarding = trpc.user.dismissOnboarding.useMutation({
+    onSuccess: () => {
+      utils.user.me.invalidate();
+      toast.success("Onboarding skipped.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const resumeOnboarding = trpc.user.resumeOnboarding.useMutation({
+    onSuccess: () => {
+      utils.user.me.invalidate();
+      toast.success("Onboarding re-enabled — head to your dashboard.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const unskipStep = trpc.user.unskipOnboardingStep.useMutation({
+    onSuccess: () => {
+      utils.user.me.invalidate();
+      toast.success("Step re-enabled.");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -232,11 +256,93 @@ export default function AccountPage() {
               {update.isPending ? "Saving…" : "Save preferences"}
             </Button>
           </div>
+
+          <Section
+            title="Onboarding"
+            hint="Control the getting-started checklist on your dashboard."
+          >
+            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="text-xs">
+                  <span className="text-muted-foreground">State: </span>
+                  {account?.onboardingDismissedAt ? (
+                    <span>
+                      Skipped on{" "}
+                      {new Intl.DateTimeFormat(effectiveLocale, {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                        timeZone: effectiveTz,
+                      }).format(new Date(account.onboardingDismissedAt))}
+                    </span>
+                  ) : (
+                    <span>Active</span>
+                  )}
+                </div>
+                <div className="ml-auto flex gap-2">
+                  {account?.onboardingDismissedAt ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={resumeOnboarding.isPending}
+                      onClick={() => resumeOnboarding.mutate()}
+                    >
+                      Resume onboarding
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={dismissOnboarding.isPending}
+                      onClick={() => dismissOnboarding.mutate()}
+                    >
+                      Skip onboarding
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {(account?.onboardingSkippedSteps ?? []).length > 0 && (
+                <div>
+                  <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Skipped steps
+                  </div>
+                  <ul className="space-y-1.5">
+                    {(account?.onboardingSkippedSteps ?? []).map((stepId) => (
+                      <li
+                        key={stepId}
+                        className="flex items-center gap-2 rounded-md border border-border bg-background/40 px-3 py-2 text-xs"
+                      >
+                        <span className="font-mono">{stepId}</span>
+                        <span className="text-muted-foreground">
+                          {ONBOARDING_STEP_LABELS[stepId] ?? stepId}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="ml-auto"
+                          disabled={unskipStep.isPending}
+                          onClick={() =>
+                            unskipStep.mutate({ stepId: stepId as "member" })
+                          }
+                        >
+                          Un-skip
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </Section>
         </div>
       </div>
     </>
   );
 }
+
+const ONBOARDING_STEP_LABELS: Record<string, string> = {
+  member: "Invite a teammate",
+};
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
