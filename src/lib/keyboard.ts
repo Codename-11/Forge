@@ -3,18 +3,52 @@ import { useEffect, useRef } from "react";
 
 export type Hotkey = string; // e.g. "cmd+k", "c", "?", "g i"
 
+/**
+ * On Mac, "Mod" (cmd in our combo strings) maps to Cmd / Meta. On every
+ * other platform Mod maps to Ctrl. Detected once per page load — covers
+ * desktop browsers; mobile/edge cases fall back to non-Mac.
+ */
+function isMac(): boolean {
+  if (typeof navigator === "undefined") return false;
+  // navigator.platform is deprecated but still the most reliable
+  // synchronous flag here. UA-ch's `userAgentData.platform` is not
+  // available in Firefox.
+  return /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+}
+
 function match(e: KeyboardEvent, combo: Hotkey): boolean {
   const parts = combo.toLowerCase().split("+");
   const key = parts.pop();
   if (!key) return false;
-  const needMeta = parts.includes("cmd") || parts.includes("meta");
+  const needMod = parts.includes("cmd") || parts.includes("meta") || parts.includes("mod");
   const needCtrl = parts.includes("ctrl");
   const needShift = parts.includes("shift");
   const needAlt = parts.includes("alt");
-  if (needMeta !== (e.metaKey || e.ctrlKey && navigator.platform.includes("Mac"))) return false;
+
+  // Mod = Cmd on Mac, Ctrl elsewhere. This makes `cmd+\` work for
+  // both Mac (Cmd+\) and Linux/Windows (Ctrl+\).
+  const modPressed = isMac() ? e.metaKey : e.ctrlKey;
+  if (needMod !== modPressed) return false;
+
+  // Explicit ctrl+ combos still require ctrl regardless of platform.
+  // (Skip the check on non-Mac when needMod already mapped to ctrl —
+  // otherwise `mod+x` would also require ctrl unconditionally.)
   if (needCtrl && !e.ctrlKey) return false;
+
   if (needShift !== e.shiftKey) return false;
   if (needAlt !== e.altKey) return false;
+
+  // Combos with no modifier prefixes (e.g. "c", "?") must match an
+  // event with NO modifiers. Without this guard, Ctrl+C would fire
+  // any `useHotkey("c")` handler and `e.preventDefault()` would
+  // swallow the platform copy shortcut.
+  const combosHasAnyMod = needMod || needCtrl || needShift || needAlt;
+  if (!combosHasAnyMod) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return false;
+    // Note: shift is allowed for shifted-character keys ("?" etc.) so
+    // we don't gate it here — `e.key` already encodes the shifted form.
+  }
+
   return e.key.toLowerCase() === key;
 }
 

@@ -71,7 +71,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { chord: "⇧C", label: "Quick-create issue", category: "Create" },
 
   // --- Work ----------------------------------------------------------------
-  { chord: "c", label: "Open current sprint", category: "Work" },
+  // Bare "c" hotkey was removed (it ate Ctrl+C copy). Sprint nav via `g c`.
   { chord: "⇧A", label: "Assign agent", category: "Work", scope: "issue detail" },
 
   // --- Pins ----------------------------------------------------------------
