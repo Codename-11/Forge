@@ -16,5 +16,4 @@ docker/docker-compose.yml
 README.md
 DEVLOG.md
 CLAUDE.md
-docs
 *.log
