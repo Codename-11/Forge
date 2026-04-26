@@ -448,7 +448,7 @@ export default function AgentsPage() {
             </Field>
             <Field
               label="Webhook URL"
-              hint="POSTed to on assignment / start when auto-dispatch is on. Optional — leave blank for pull-only agents that poll via MCP."
+              hint="Forge POSTs dispatch events here (AGENT_ASSIGNED, COMMENT_CREATED, ISSUE_PRIORITY_CHANGED) signed with the per-agent secret. Hermes' webhook adapter format is http://<host>:<port>/webhooks/<route>. Leave blank for pull-only agents that poll via MCP — those won't get push presence either."
             >
               <Input
                 type="url"
@@ -457,7 +457,7 @@ export default function AgentsPage() {
                   setEditing({ ...editing, webhookUrl: e.target.value })
                 }
                 maxLength={500}
-                placeholder="https://hermes.example.com/webhooks/agent"
+                placeholder="http://<internal-host>:8644/webhooks/forge-dispatch"
               />
             </Field>
             <Field

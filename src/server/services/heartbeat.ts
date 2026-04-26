@@ -124,3 +124,65 @@ export async function sweepIdleAgents(
 
   return { workspacesScanned: workspaces.length, flipped };
 }
+
+/**
+ * Record a successful agent delivery as a presence signal.
+ *
+ * Push-dispatch model: every successful POST to an agent's webhook URL
+ * is treated as proof the agent is reachable, so we bump
+ * `lastHeartbeatAt` and (if the agent was OFFLINE) flip to ONLINE plus
+ * emit `AGENT_STATUS_CHANGED` so the timeline + uptime ribbon pick up
+ * the transition.
+ *
+ * Best-effort: any failure here is swallowed and logged. The caller is
+ * the webhook delivery worker, which has already updated the delivery
+ * row; presence drift is acceptable, dropping the delivery is not.
+ */
+export async function recordAgentReachable(
+  agentId: string,
+  client: PrismaClient | Prisma.TransactionClient = db,
+): Promise<void> {
+  try {
+    const before = await client.agent.findUnique({
+      where: { id: agentId },
+      select: { id: true, status: true, workspaceId: true, profileKey: true },
+    });
+    if (!before) return;
+
+    const now = new Date();
+    if (before.status === AgentStatus.ONLINE) {
+      await client.agent.update({
+        where: { id: agentId },
+        data: { lastHeartbeatAt: now },
+      });
+      return;
+    }
+
+    // Status transition. Bump heartbeat + flip status, then audit.
+    await client.agent.update({
+      where: { id: agentId },
+      data: { lastHeartbeatAt: now, status: AgentStatus.ONLINE },
+    });
+
+    await recordChange(client, {
+      workspaceId: before.workspaceId,
+      actorId: null,
+      entity: "Agent",
+      entityId: agentId,
+      action: "delivery-online",
+      before: { status: before.status },
+      after: { status: AgentStatus.ONLINE },
+      eventKind: EventKind.AGENT_STATUS_CHANGED,
+      subjectType: "agent",
+      subjectId: agentId,
+      payload: {
+        profileKey: before.profileKey,
+        from: before.status,
+        to: AgentStatus.ONLINE,
+        reason: "delivery-success",
+      },
+    });
+  } catch (err) {
+    logger.warn({ err, agentId }, "recordAgentReachable failed");
+  }
+}

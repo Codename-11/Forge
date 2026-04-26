@@ -195,7 +195,7 @@ export default function WorkspaceSettingsPage() {
               </Field>
               <Field
                 label="Agent idle timeout (minutes)"
-                hint="Flip an agent to OFFLINE when its last heartbeat is older than this. 0 disables the sweep — presence stays whatever the agent last set it to. 10–15 is a good default once Hermes is calling agents.heartbeat on a schedule."
+                hint="Flip an agent to OFFLINE when no signal has been received for this long. Signals = successful webhook deliveries to the agent's URL (push-dispatch model — every delivered AGENT_ASSIGNED / COMMENT_CREATED counts) plus any explicit agents.heartbeat MCP call. 0 disables the sweep entirely; 15 is a good default if your agents receive regular event traffic, higher if quiet hours are common."
               >
                 <Input
                   type="number"

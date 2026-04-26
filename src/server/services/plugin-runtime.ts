@@ -82,6 +82,15 @@ export async function deliverWebhook(opts: DeliverOptions): Promise<{
   const ts = String(Math.floor(Date.now() / 1000));
   const raw = JSON.stringify(opts.body);
   const sig = signWebhookBody(opts.secret, ts, raw);
+  // Generic body-only HMAC, hex digest. Sent alongside the Forge-native
+  // `x-forge-timestamp`/`x-forge-signature` pair so receivers that follow
+  // the common `X-Webhook-Signature` convention (Hermes' webhook adapter,
+  // most off-the-shelf validators) accept the delivery without code on
+  // the receiver side. Forge-aware receivers continue to use the
+  // timestamped pair for replay protection.
+  const bodyOnlySig = createHmac("sha256", opts.secret)
+    .update(raw)
+    .digest("hex");
   const controller = new AbortController();
   const to = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5000);
   try {
@@ -93,6 +102,7 @@ export async function deliverWebhook(opts: DeliverOptions): Promise<{
         "user-agent": "forge-webhook/1",
         "x-forge-timestamp": ts,
         "x-forge-signature": sig,
+        "x-webhook-signature": bodyOnlySig,
       },
       body: raw,
     });

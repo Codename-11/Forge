@@ -2,6 +2,97 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-25 — Push-dispatch (replace heartbeat cron with Hermes webhooks)
+
+Re-architecting heartbeat from agent-pulled to server-pushed. Replaces
+the `hermes cron`-driven `agents.heartbeat` jobs with Hermes' native
+inbound webhook adapter receiving real Forge events. Presence is now
+derived from "Forge successfully POSTed to this agent's URL" — every
+real dispatch event doubles as a heartbeat.
+
+### Forge changes
+
+- `signWebhookBody` unchanged; added a second header
+  `x-webhook-signature: <hex of body>` alongside the existing
+  `x-forge-signature: <hex of timestamp.body>`. Hermes' generic HMAC
+  validator (`X-Webhook-Signature` lookup) accepts the body-only sig;
+  Forge-aware receivers can still use the timestamped pair for replay
+  protection. Dual-signing avoids forking signature paths per receiver.
+- `recordAgentReachable(agentId)` in `src/server/services/heartbeat.ts`
+  — bumps `lastHeartbeatAt` and (if OFFLINE) flips ONLINE +
+  emits `AGENT_STATUS_CHANGED` with `reason: "delivery-success"`.
+  Best-effort; logged but never throws.
+- `src/server/worker.ts` calls `recordAgentReachable` after every
+  successful delivery to an agent's resolved real URL (i.e. after
+  the synthetic `agent:dispatch:{agentId}` shim resolves to the real
+  `Agent.webhookUrl`). Failures don't update presence — they let the
+  existing idle-sweep flip OFFLINE on its own cadence.
+
+### Hermes side (no Forge code)
+
+- Added `platforms.webhook` to `~/.hermes/config.yaml` (port 8644) and
+  `~/.hermes/profiles/mizu/config.yaml` (port 8645). Both gateways
+  restarted; `/health` returns 200 on both.
+- Subscribed `forge-dispatch` route on each profile via
+  `hermes webhook subscribe forge-dispatch --secret ... --prompt ...`
+  (subscriptions persist to `~/.hermes/webhook_subscriptions.json` /
+  `~/.hermes/profiles/mizu/webhook_subscriptions.json` and hot-reload
+  on every POST). The route prompt template tells the agent how to
+  respond to each `kind` (AGENT_ASSIGNED → claim/start, COMMENT_CREATED
+  → read, etc.).
+- `Agent.webhookUrl` set to
+  `http://<internal-host>:8644/webhooks/forge-dispatch` (Victor) and
+  `:8645/...` (Mizu). `Agent.webhookSecret` set to the per-route HMAC
+  secret returned by the subscribe call. Secrets generated with
+  `openssl rand -hex 32`; intermediate file shredded after the DB
+  update.
+- Removed the two cron heartbeat jobs (`hermes cron remove c5ec6bd4bb6e`,
+  `mizu cron remove 45d2c0eb0444`) — push presence subsumes them.
+
+### UI polish
+
+- `/settings/workspace` — `agentIdleTimeoutMinutes` hint rewritten
+  from "agent didn't ping" framing to "no successful delivery in N
+  min"; explains push-dispatch model.
+- `/settings/agents` — webhook URL field hint rewritten to describe
+  Hermes' route format and the dispatch event kinds; placeholder
+  updated.
+- `/agents/[profileKey]` identity strip — adds a small `push` badge
+  (success-tinted) next to the configured URL when set, or `pull-only`
+  (muted) when not.
+
+### Verification
+
+- `pnpm typecheck` clean.
+- `hermes webhook test forge-dispatch` → 202 on Victor's adapter.
+  Mizu adapter responded 200 on `/health`.
+- E2E from Forge after rebuild: TODO this session — run an issue
+  through assignment, watch `lastHeartbeatAt` bump from delivery
+  rather than cron.
+
+### Net effect
+
+Forge now owns the dispatch loop end-to-end: events fire, the worker
+POSTs, Hermes routes them into the right profile's session, and
+presence is a side-effect of real delivery success. No producer on the
+Hermes side, no scheduled tool-calls, no LLM cost just to keep
+presence fresh.
+
+### Follow-ups
+
+- **Quiet-hours presence:** if agent goes 15+ min without any real
+  Forge event, the idle-sweep flips OFFLINE — accurate but possibly
+  noisy. Bump `agentIdleTimeoutMinutes` higher overnight, or add a
+  periodic `AGENT_PING` synthetic event in the maintenance worker.
+  Skipped this lap.
+- **Mizu cron** also removed; her webhook adapter is live but she had
+  no `lastHeartbeatAt` to begin with — first real dispatch event
+  intended for her will set both URL trust and presence.
+- The webhook URL is currently the LAN IP `<internal-host>` because
+  Forge runs in a Docker container on the same host as Hermes (which
+  runs on the host filesystem). For the cross-host case, swap to a
+  reachable hostname.
+
 ## 2026-04-25 — Heartbeat wired + agent detail page
 
 Two follow-ups to today's `/agents` dashboard. (1) Victor's
