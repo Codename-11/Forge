@@ -166,6 +166,7 @@ export const workspaceRouter = router({
         cycleCooldownDays: z.number().int().min(0).max(30).optional(),
         timeTrackingEnabled: z.boolean().optional(),
         attachmentQuotaMb: z.number().int().min(0).max(1_024_000).optional(),
+        agentIdleTimeoutMinutes: z.number().int().min(0).max(1440).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

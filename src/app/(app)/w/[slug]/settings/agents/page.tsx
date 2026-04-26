@@ -1,8 +1,10 @@
 "use client";
 import { useMemo, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Bot } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { useWorkspace } from "@/hooks/use-workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,6 +58,7 @@ const TEMPLATE_PLACEHOLDER = `### Context
 
 
 export default function AgentsPage() {
+  const ws = useWorkspace();
   const utils = trpc.useUtils();
   const { data: agents, refetch, isLoading } = trpc.agent.list.useQuery({
     includeArchived: true,
@@ -285,6 +288,11 @@ export default function AgentsPage() {
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
+                    <Link href={`/w/${ws.slug}/agents/${a.profileKey}`}>
+                      <Button size="sm" variant="ghost">
+                        View
+                      </Button>
+                    </Link>
                     <Button
                       size="sm"
                       variant="ghost"
