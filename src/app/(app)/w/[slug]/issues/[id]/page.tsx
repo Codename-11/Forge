@@ -18,6 +18,7 @@ import { PinToggleButton } from "@/components/pins/pin-toggle-button";
 import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
+import { AiTriageCard } from "@/components/ai-triage-card";
 import { useHotkey } from "@/lib/keyboard";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
@@ -246,6 +247,8 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 updated {relativeTime(issue.updatedAt)}
               </span>
             </div>
+
+            <AiTriageCard issue={issue} />
 
             <IssueMain
               issueId={issue.id}

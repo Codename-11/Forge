@@ -4,6 +4,7 @@ import { EventKind } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { recordChange } from "@/server/audit";
+import { coachOnEvent } from "@/server/services/ai-coach";
 
 /**
  * SLA-breach sweep (P1 layer 3 of task follow-through).
@@ -108,6 +109,11 @@ export async function sweepSlaBreaches(
           },
         });
         breached.push(issue.id);
+        void coachOnEvent(client, {
+          workspaceId: ws.id,
+          issueId: issue.id,
+          eventKind: "ISSUE_SLA_BREACH",
+        });
       } catch (err) {
         logger.warn(
           { err, issueId: issue.id, workspaceId: ws.id },

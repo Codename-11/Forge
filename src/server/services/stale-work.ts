@@ -5,6 +5,7 @@ import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { recordChange } from "@/server/audit";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
+import { coachOnEvent } from "@/server/services/ai-coach";
 
 /**
  * Stale-work watchdog (P1 layer 1 of task follow-through).
@@ -125,6 +126,14 @@ export async function sweepStaleWork(
       }
 
       stalled.push(issue.id);
+
+      // Fire-and-forget Coach comment. No-op when AI is off or there's
+      // no COACH agent in the workspace; never blocks the sweep.
+      void coachOnEvent(client, {
+        workspaceId: ws.id,
+        issueId: issue.id,
+        eventKind: "ISSUE_STALLED",
+      });
 
       if (ws.autoRedispatchOnStall) {
         try {
