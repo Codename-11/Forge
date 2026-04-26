@@ -2,6 +2,80 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-26 — VitePress user docs (warm/soft theme, Lucid pattern)
+
+Built out a full VitePress site at `docs/` mirroring the Lucid layout,
+themed against the dashboard's warm-paper / ember palette. Replaces the
+flat `docs/API.md` + `docs/PLUGINS.md` (now thin pointers).
+
+### Structure
+
+- `docs/.vitepress/config.ts` — site config; `base: "/docs/"`,
+  light-default, local search, sidebar grouped by Guide / Concepts /
+  Agents / Automation / Reference.
+- `docs/.vitepress/theme/style.css` — custom theme: Inter +
+  JetBrains Mono, warm paper bg (`hsl(38 20% 97%)`), graphite text,
+  single ember accent (`hsl(25 80% 50%)`) on primary CTAs / focus /
+  active sidebar bar / code-block left-rail. Dark mode supported
+  (graphite, never pure black). Light is default. Restraint over
+  ornament — no tick-corners, no scoreboard fonts, no gradients.
+- `docs/public/` — favicon + Forge mark assets copied from
+  `/public/brand/`.
+
+### Content (~5,200 lines across 26 pages)
+
+- **Guide** (10 pages) — welcome, architecture, quickstart, workspaces,
+  issues, projects-and-initiatives, sprints, time-and-attachments,
+  settings, keyboard.
+- **Concepts** (4) — primitives, scopes-and-tenancy, activity-and-audit,
+  design-language.
+- **Agents** (6) — overview, hermes, auto-dispatch, dispatch-rules,
+  slas-and-watchdogs, ai-triage-and-coach.
+- **Automation** (3) — webhooks, plugins, api-keys.
+- **Reference** (4) — mcp, trpc, events, env.
+
+Authored by three parallel general-purpose agents (Guide, Concepts +
+Agents, Automation + Reference) from a shared inventory built by an
+Explore agent that audited the Prisma schema, MCP service, dispatcher,
+audit/event pipeline, AI providers, and the recent P1/P3 commit waves.
+
+### Wire-up
+
+- Standalone install in `docs/` (uses `--ignore-workspace` so it
+  doesn't try to join the Forge pnpm workspace).
+- Root scripts added: `docs:install`, `docs:dev`, `docs:build`,
+  `docs:preview`, plus `dev:all` (runs Next + docs side by side, both
+  log-prefixed, single ctrl-c kills both).
+- `scripts/dev-all.sh` — the dev:all entry point.
+- `.github/workflows/docs.yml` — GH Pages deploy. Trigger is
+  `workflow_dispatch` only today (manual run); flip to push on master
+  when the repo goes public. Pages source must be set to "GitHub
+  Actions" in repo settings before the first deploy.
+
+### Verification
+
+- `pnpm docs:build` — build complete in 9.5s; 26 pages render clean,
+  no dead links.
+- `pnpm docs:dev` — boots at `http://localhost:5181/docs/`,
+  HTTP 200 on root.
+- Tailwind warning during build is from the parent's PostCSS config
+  leaking into VitePress's pipeline; harmless (VitePress doesn't use
+  Tailwind for the docs theme — it's pure CSS variables).
+
+### Notes for future
+
+- Theme intentionally diverges from Lucid's brutalist tick-corners +
+  VT323. Forge's dashboard reads as warm/soft, so the docs follow:
+  Inter throughout, mono only on identifiers, ember as the single
+  accent. Distinctive from Lucid while reading as the same family.
+- Edit-link in `themeConfig.editLink` points at
+  `Codename-11/forge` — verify the org/repo when flipping public.
+- `base: "/docs/"` assumes the site lives under `<owner>.github.io/forge/docs/`.
+  Change to `"/"` if publishing to apex / custom domain.
+- `data-embed="dashboard"` rules in the theme drop the top nav when
+  the docs are rendered inside an iframe — a future "Help" panel in
+  the Forge UI can use this without re-styling.
+
 ## 2026-04-25 — FRG-32 MCP project mutations + queue toggle
 
 Added MCP parity for project setup and agent queue steering so agents no longer

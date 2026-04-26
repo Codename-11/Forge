@@ -173,7 +173,18 @@ pnpm seed:agents
 # 4. Run
 pnpm dev                        # http://localhost:3000
 pnpm worker                     # separate process: webhook + metric workers
+
+# 5. Docs (optional — VitePress, served at /docs/)
+pnpm docs:install               # one-time, standalone install in docs/
+pnpm docs:dev                   # http://localhost:5181/docs/
+pnpm dev:all                    # both app and docs in one terminal
 ```
+
+The full user docs live in `./docs/` as a VitePress project — Guide,
+Concepts, Agents (Hermes / dispatch / SLAs / AI), Automation
+(webhooks / plugins / API keys), and a reference for MCP, tRPC,
+events, and env. Once the repo flips public, `.github/workflows/docs.yml`
+deploys the site to GitHub Pages.
 
 ## Keyboard
 

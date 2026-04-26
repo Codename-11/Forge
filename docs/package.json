@@ -1,0 +1,16 @@
+{
+  "name": "forge-docs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Forge user documentation — VitePress, deployed to GitHub Pages.",
+  "scripts": {
+    "dev": "vitepress dev --port 5181",
+    "build": "vitepress build",
+    "preview": "vitepress preview --port 5182"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.3",
+    "vue": "^3.5.13"
+  }
+}

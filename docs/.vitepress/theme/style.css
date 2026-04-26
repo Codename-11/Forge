@@ -1,0 +1,823 @@
+/* ================================================================
+   Forge docs theme — warm paper aesthetic, matches the dashboard.
+
+   Reads as one product with the app:
+     • Inter (sans) for everything readable.
+     • JetBrains Mono only for identifiers, inline code, nav keys.
+     • Warm paper bg, graphite text, single ember accent.
+     • Flat surfaces, thin tan borders, no drop shadows.
+     • Light is default; dark is graphite (never pure black).
+
+   The dashboard's restraint is the brand. We do not add decorative
+   ornament here — no tick-corners, no scoreboard fonts, no gradients.
+   Energy comes from typographic precision and the surgical use of
+   ember.
+   ================================================================ */
+
+:root {
+  /* ---------- Type ---------- */
+  --vp-font-family-base:
+    "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, sans-serif;
+  --vp-font-family-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* ---------- Geometry ---------- */
+  --vp-layout-max-width: 1480px;
+  --vp-nav-height: 56px;
+  --vp-sidebar-width: 280px;
+}
+
+/* ================================================================
+   LIGHT — warm paper, default. HSL components mirror the dashboard
+   tokens in src/app/globals.css so the two surfaces feel identical.
+   ================================================================ */
+:root {
+  /* Surfaces */
+  --forge-paper:        hsl(38 20% 97%);   /* --background */
+  --forge-paper-alt:    hsl(36 24% 98%);   /* --card */
+  --forge-paper-soft:   hsl(34 20% 94%);   /* between card & subtle */
+  --forge-paper-elv:    hsl(36 24% 99%);   /* slightly above paper */
+
+  /* Ink */
+  --forge-ink:          hsl(30 10% 12%);   /* --foreground */
+  --forge-ink-2:        hsl(30 8% 36%);    /* --muted-foreground */
+  --forge-ink-3:        hsl(30 6% 52%);    /* tertiary */
+
+  /* Edges */
+  --forge-border:       hsl(30 10% 86%);   /* --border */
+  --forge-border-soft:  hsl(30 10% 92%);   /* lighter divider */
+  --forge-subtle:       hsl(34 20% 90%);   /* --subtle (hover bg) */
+
+  /* Ember — single accent. Only appears on primary CTA, focus, the
+     active sidebar bar, code-block left-rail, and feature-card hover. */
+  --forge-ember:        hsl(25 80% 50%);
+  --forge-ember-soft:   hsl(25 80% 50% / 0.10);
+  --forge-ember-line:   hsl(25 80% 50% / 0.40);
+  --forge-ember-fg:     hsl(40 40% 98%);
+
+  /* Status semantics — used very sparingly */
+  --forge-success:      hsl(120 45% 34%);
+  --forge-warning:      hsl(38 90% 45%);
+  --forge-danger:       hsl(0 60% 44%);
+
+  /* ---------- VitePress contract ---------- */
+  --vp-c-bg:            var(--forge-paper);
+  --vp-c-bg-alt:        var(--forge-paper-alt);
+  --vp-c-bg-elv:        var(--forge-paper-elv);
+  --vp-c-bg-soft:       var(--forge-paper-soft);
+
+  --vp-c-text-1:        var(--forge-ink);
+  --vp-c-text-2:        var(--forge-ink-2);
+  --vp-c-text-3:        var(--forge-ink-3);
+
+  --vp-c-border:        var(--forge-border);
+  --vp-c-divider:       var(--forge-border-soft);
+  --vp-c-gutter:        var(--forge-paper-soft);
+
+  --vp-c-brand-1:       var(--forge-ember);
+  --vp-c-brand-2:       hsl(25 80% 44%);
+  --vp-c-brand-3:       var(--forge-ember);
+  --vp-c-brand-soft:    var(--forge-ember-soft);
+
+  --vp-button-brand-bg:           var(--forge-ember);
+  --vp-button-brand-hover-bg:     hsl(25 80% 46%);
+  --vp-button-brand-text:         var(--forge-ember-fg);
+  --vp-button-brand-border:       var(--forge-ember);
+  --vp-button-brand-hover-border: hsl(25 80% 46%);
+
+  --vp-button-alt-bg:             transparent;
+  --vp-button-alt-hover-bg:       var(--forge-subtle);
+  --vp-button-alt-text:           var(--forge-ink);
+  --vp-button-alt-border:         var(--forge-border);
+  --vp-button-alt-hover-border:   var(--forge-ink-2);
+
+  --vp-code-block-bg:   hsl(36 22% 96%);
+  --vp-code-block-color: var(--forge-ink);
+
+  --vp-custom-block-tip-border:    var(--forge-ember-line);
+  --vp-custom-block-tip-text:      var(--forge-ink);
+  --vp-custom-block-tip-bg:        var(--forge-ember-soft);
+
+  --vp-custom-block-info-border:   var(--forge-border);
+  --vp-custom-block-info-text:     var(--forge-ink);
+  --vp-custom-block-info-bg:       hsl(36 22% 95%);
+
+  --vp-custom-block-warning-border: hsl(38 90% 45% / 0.45);
+  --vp-custom-block-warning-text:   var(--forge-ink);
+  --vp-custom-block-warning-bg:     hsl(38 90% 80% / 0.30);
+
+  --vp-custom-block-danger-border:  hsl(0 60% 44% / 0.45);
+  --vp-custom-block-danger-text:    var(--forge-ink);
+  --vp-custom-block-danger-bg:      hsl(0 60% 80% / 0.25);
+
+  --vp-custom-block-details-border: var(--forge-border);
+  --vp-custom-block-details-text:   var(--forge-ink);
+  --vp-custom-block-details-bg:     var(--forge-paper-alt);
+}
+
+/* ================================================================
+   DARK — graphite, warm undertones. Never pure black, never pure
+   white. Mirrors src/app/globals.css `.dark` token family.
+   ================================================================ */
+.dark {
+  --forge-paper:        hsl(30 6% 8%);
+  --forge-paper-alt:    hsl(30 6% 10%);
+  --forge-paper-soft:   hsl(30 6% 12%);
+  --forge-paper-elv:    hsl(30 6% 11%);
+
+  --forge-ink:          hsl(36 16% 92%);
+  --forge-ink-2:        hsl(30 10% 62%);
+  --forge-ink-3:        hsl(30 8% 48%);
+
+  --forge-border:       hsl(30 6% 18%);
+  --forge-border-soft:  hsl(30 6% 14%);
+  --forge-subtle:       hsl(30 6% 16%);
+
+  --forge-ember:        hsl(25 90% 58%);
+  --forge-ember-soft:   hsl(25 90% 58% / 0.12);
+  --forge-ember-line:   hsl(25 90% 58% / 0.45);
+  --forge-ember-fg:     hsl(30 6% 8%);
+
+  --vp-c-bg:            var(--forge-paper);
+  --vp-c-bg-alt:        var(--forge-paper-alt);
+  --vp-c-bg-elv:        var(--forge-paper-elv);
+  --vp-c-bg-soft:       var(--forge-paper-soft);
+
+  --vp-c-text-1:        var(--forge-ink);
+  --vp-c-text-2:        var(--forge-ink-2);
+  --vp-c-text-3:        var(--forge-ink-3);
+
+  --vp-c-border:        var(--forge-border);
+  --vp-c-divider:       var(--forge-border-soft);
+  --vp-c-gutter:        var(--forge-paper-soft);
+
+  --vp-c-brand-1:       var(--forge-ember);
+  --vp-c-brand-2:       hsl(25 90% 64%);
+  --vp-c-brand-3:       var(--forge-ember);
+  --vp-c-brand-soft:    var(--forge-ember-soft);
+
+  --vp-button-brand-bg:           var(--forge-ember);
+  --vp-button-brand-hover-bg:     hsl(25 90% 62%);
+
+  --vp-code-block-bg:   hsl(30 6% 7%);
+
+  --vp-custom-block-info-bg:       hsl(30 6% 12%);
+  --vp-custom-block-tip-bg:        var(--forge-ember-soft);
+  --vp-custom-block-warning-bg:    hsl(38 70% 28% / 0.30);
+  --vp-custom-block-danger-bg:     hsl(0 50% 28% / 0.28);
+}
+
+/* ================================================================
+   Global typography
+   ================================================================ */
+html {
+  font-feature-settings: "cv02" 1, "cv03" 1, "cv04" 1, "cv11" 1;
+}
+
+body {
+  font-family: var(--vp-font-family-base);
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--forge-ember-soft);
+  color: var(--forge-ink);
+}
+
+/* ================================================================
+   Nav bar — flat, thin, warm. The wordmark feels mono-typed (small
+   caps via tracking, not ALL CAPS) so it matches dashboard chrome.
+   ================================================================ */
+.VPNavBar {
+  background: var(--forge-paper) !important;
+  border-bottom: 1px solid var(--forge-border) !important;
+  backdrop-filter: none;
+}
+
+.VPNavBar.has-sidebar .content {
+  background: var(--forge-paper) !important;
+}
+
+.VPNavBarTitle .title {
+  font-family: var(--vp-font-family-mono) !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--forge-ink) !important;
+}
+
+.VPNavBarTitle .title:hover {
+  color: var(--forge-ember) !important;
+}
+
+.VPNavBarMenuLink {
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: var(--forge-ink-2) !important;
+}
+
+.VPNavBarMenuLink:hover,
+.VPNavBarMenuLink.active {
+  color: var(--forge-ink) !important;
+}
+
+.VPNavBarMenuLink.active::after {
+  /* Active section gets a small ember underline — the only color on
+     top chrome. Restraint is the point. */
+  content: "";
+  display: block;
+  height: 2px;
+  background: var(--forge-ember);
+  margin: 6px auto 0;
+  width: 14px;
+  border-radius: 1px;
+}
+
+/* ================================================================
+   Sidebar — uppercase mono section headers (tracked tight), normal
+   sans nav items, ember left-bar on the active item. This is the
+   one place the docs nav explicitly echoes the dashboard sidebar.
+   ================================================================ */
+.VPSidebar {
+  background: var(--forge-paper) !important;
+  border-right: 1px solid var(--forge-border) !important;
+  padding-top: 1rem !important;
+}
+
+.VPSidebarItem.level-0 > .item > .text {
+  font-family: var(--vp-font-family-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--forge-ink-2) !important;
+}
+
+.VPSidebarItem.level-1 .text {
+  font-family: var(--vp-font-family-base) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--forge-ink-2);
+}
+
+.VPSidebarItem.level-1 .link:hover .text {
+  color: var(--forge-ink);
+}
+
+.VPSidebarItem.is-active > .item .link {
+  position: relative;
+}
+
+.VPSidebarItem.is-active > .item .link .text {
+  color: var(--forge-ink) !important;
+  font-weight: 600 !important;
+}
+
+.VPSidebarItem.is-active > .item .link::before {
+  /* Ember left-bar on the active page — the dashboard uses this same
+     visual idiom for active sidebar items. */
+  content: "";
+  position: absolute;
+  left: -16px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--forge-ember);
+  border-radius: 1px;
+}
+
+/* Search button — pill, mono label, tight chrome */
+.DocSearch-Button,
+.VPNavBarSearch .DocSearch-Button {
+  border: 1px solid var(--forge-border) !important;
+  border-radius: 6px !important;
+  background: var(--forge-paper-alt) !important;
+  font-family: var(--vp-font-family-base) !important;
+  font-size: 12.5px !important;
+  color: var(--forge-ink-2) !important;
+}
+
+.DocSearch-Button-Keys {
+  font-family: var(--vp-font-family-mono) !important;
+  font-size: 10px !important;
+}
+
+/* ================================================================
+   Document headings — title-case, tight tracking, sans for hierarchy.
+   No uppercase chrome on body — only on small labels (sidebar
+   sections, kbd, eyebrows).
+   ================================================================ */
+.vp-doc h1 {
+  font-family: var(--vp-font-family-base);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  font-size: clamp(2rem, 3.4vw, 2.5rem);
+  line-height: 1.1;
+  margin-bottom: 0.5rem;
+}
+
+/* The "lede" — first paragraph after H1 — gets a slightly larger,
+   muted treatment to read as a tagline. */
+.vp-doc h1 + p {
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--forge-ink-2);
+  margin-top: 0.75rem;
+  margin-bottom: 1.75rem;
+}
+
+.vp-doc h2 {
+  font-family: var(--vp-font-family-base);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  font-size: 1.5rem;
+  line-height: 1.2;
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--forge-border);
+}
+
+.vp-doc h3 {
+  font-family: var(--vp-font-family-base);
+  font-weight: 600;
+  font-size: 1.125rem;
+  letter-spacing: -0.01em;
+  margin-top: 2rem;
+  margin-bottom: 0.5rem;
+  color: var(--forge-ink);
+}
+
+/* H4 reads as a small mono eyebrow — used sparingly */
+.vp-doc h4 {
+  font-family: var(--vp-font-family-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--forge-ink-2);
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* ================================================================
+   Body prose
+   ================================================================ */
+.vp-doc p,
+.vp-doc li {
+  line-height: 1.7;
+  color: var(--forge-ink);
+}
+
+.vp-doc strong {
+  font-weight: 600;
+  color: var(--forge-ink);
+}
+
+.vp-doc a {
+  color: var(--forge-ember);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.vp-doc a:hover {
+  border-bottom-color: var(--forge-ember-line);
+}
+
+/* Inline code — soft tan chip with mono. The dashboard uses a near-
+   identical treatment for issue keys and identifiers. */
+.vp-doc :not(pre) > code {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.85em;
+  padding: 0.12em 0.4em;
+  background: var(--forge-subtle);
+  border: 1px solid var(--forge-border);
+  border-radius: 4px;
+  color: var(--forge-ink);
+}
+
+.vp-doc a > code {
+  color: var(--forge-ember);
+}
+
+/* ================================================================
+   Code blocks — flat, soft border, ember left-rail. We deliberately
+   replace VitePress's default rounded-fluffy block with a thin,
+   precise frame. The single ember vertical accent on the left edge
+   matches the dashboard's `border-ember/40` hover treatment for
+   primary content cards. No tick-corners.
+   ================================================================ */
+.vp-doc div[class*="language-"] {
+  position: relative;
+  background: var(--vp-code-block-bg) !important;
+  border: 1px solid var(--forge-border);
+  border-left: 2px solid var(--forge-ember-line);
+  border-radius: 6px;
+  margin: 1.25rem 0;
+  overflow: hidden;
+}
+
+.vp-doc div[class*="language-"] > span.lang {
+  font-family: var(--vp-font-family-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--forge-ink-3);
+  top: 8px !important;
+  right: 12px;
+}
+
+.vp-doc [class*="language-"] pre {
+  font-size: 12.75px;
+  line-height: 1.65;
+  padding: 18px 20px !important;
+}
+
+.vp-doc [class*="language-"] code {
+  font-size: 12.75px;
+}
+
+.vp-doc div[class*="language-"] button.copy {
+  border-radius: 4px !important;
+  border: 1px solid var(--forge-border) !important;
+  background: var(--forge-paper-alt) !important;
+}
+
+/* Line-highlight on shiki — soft ember tint */
+.vp-doc .line.highlighted {
+  background: var(--forge-ember-soft);
+  box-shadow: inset 2px 0 0 var(--forge-ember);
+}
+
+/* ================================================================
+   Tables — flat, mono cells, thin tan rules. Same texture as the
+   issue list / agents page in the dashboard.
+   ================================================================ */
+.vp-doc table {
+  font-family: var(--vp-font-family-base);
+  font-size: 13.5px;
+  border: 1px solid var(--forge-border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 1.25rem 0;
+  width: 100%;
+  display: table;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.vp-doc th {
+  font-family: var(--vp-font-family-mono);
+  background: var(--forge-paper-alt);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 10.5px;
+  color: var(--forge-ink-2);
+  font-weight: 600;
+  text-align: left;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--forge-border);
+}
+
+.vp-doc td {
+  padding: 0.55rem 0.85rem;
+  border-top: 1px solid var(--forge-border-soft);
+  vertical-align: top;
+  color: var(--forge-ink);
+}
+
+.vp-doc tr:first-child td {
+  border-top: none;
+}
+
+.vp-doc td code {
+  font-size: 12px;
+}
+
+/* ================================================================
+   Custom blocks — left-bar accent only, no ornament.
+   ================================================================ */
+.vp-doc .custom-block {
+  border: 1px solid var(--forge-border);
+  border-left-width: 2px;
+  border-radius: 6px;
+  padding: 0.8rem 1rem;
+  font-size: 0.95rem;
+  margin: 1.25rem 0;
+}
+
+.vp-doc .custom-block.tip {
+  border-left-color: var(--forge-ember);
+  background: var(--forge-ember-soft);
+}
+
+.vp-doc .custom-block.info {
+  border-left-color: var(--forge-ink-2);
+  background: var(--vp-custom-block-info-bg);
+}
+
+.vp-doc .custom-block.warning {
+  border-left-color: var(--forge-warning);
+  background: var(--vp-custom-block-warning-bg);
+}
+
+.vp-doc .custom-block.danger {
+  border-left-color: var(--forge-danger);
+  background: var(--vp-custom-block-danger-bg);
+}
+
+.vp-doc .custom-block-title {
+  font-family: var(--vp-font-family-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--forge-ink-2);
+  margin-bottom: 0.35rem;
+}
+
+.vp-doc .custom-block.tip .custom-block-title {
+  color: var(--forge-ember);
+}
+
+.vp-doc .custom-block p:last-child {
+  margin-bottom: 0;
+}
+
+/* ================================================================
+   Outline (right column) — small mono list, ember on active.
+   ================================================================ */
+.VPDocOutlineItem a {
+  font-size: 12.5px;
+  color: var(--forge-ink-2);
+}
+
+.VPDocOutlineItem.active > a,
+.VPDocOutlineItem a:hover {
+  color: var(--forge-ember);
+}
+
+.VPDocAsideOutline .outline-marker {
+  background-color: var(--forge-ember) !important;
+}
+
+.VPDocAside .outline-title {
+  font-family: var(--vp-font-family-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--forge-ink-2);
+}
+
+/* ================================================================
+   Buttons — match the dashboard's variant=ember and variant=outline.
+   ================================================================ */
+.VPButton {
+  border-radius: 6px !important;
+  font-family: var(--vp-font-family-base) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.005em !important;
+  padding: 0 18px !important;
+  height: 38px !important;
+  line-height: 38px !important;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.VPButton.brand {
+  background: var(--forge-ember) !important;
+  border-color: var(--forge-ember) !important;
+  color: var(--forge-ember-fg) !important;
+}
+
+.VPButton.brand:hover {
+  background: hsl(25 80% 46%) !important;
+  border-color: hsl(25 80% 46%) !important;
+}
+
+.VPButton.alt {
+  background: transparent !important;
+  border: 1px solid var(--forge-border) !important;
+  color: var(--forge-ink) !important;
+}
+
+.VPButton.alt:hover {
+  background: var(--forge-subtle) !important;
+  border-color: var(--forge-ink-2) !important;
+}
+
+/* ================================================================
+   Hero — calm, type-led, generous space. The wordmark style is the
+   single distinctive touch (mono, tracked uppercase) that tells you
+   "this is Forge" before the prose does.
+   ================================================================ */
+.VPHero {
+  padding: 3.5rem 0 2.5rem !important;
+}
+
+.VPHero .name,
+.VPHero .text {
+  font-family: var(--vp-font-family-base) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.035em !important;
+  background: none !important;
+  -webkit-text-fill-color: var(--forge-ink) !important;
+  color: var(--forge-ink) !important;
+}
+
+.VPHero .name {
+  font-size: clamp(2.5rem, 5vw, 3.5rem) !important;
+  line-height: 1 !important;
+}
+
+.VPHero .text {
+  font-size: clamp(1.5rem, 3vw, 2rem) !important;
+  line-height: 1.1 !important;
+  color: var(--forge-ink-2) !important;
+  -webkit-text-fill-color: var(--forge-ink-2) !important;
+}
+
+.VPHero .tagline {
+  font-family: var(--vp-font-family-base) !important;
+  font-size: 16px !important;
+  line-height: 1.6 !important;
+  color: var(--forge-ink-2) !important;
+  letter-spacing: 0;
+  max-width: 60ch;
+}
+
+.VPHero .image-bg {
+  background: radial-gradient(
+    circle at center,
+    var(--forge-ember-soft) 0%,
+    transparent 70%
+  ) !important;
+  filter: blur(40px);
+}
+
+/* ================================================================
+   Feature cards — flat, thin border, ember on hover. Mirrors the
+   dashboard project-card hover treatment exactly.
+   ================================================================ */
+.VPFeature {
+  border-radius: 8px !important;
+  border: 1px solid var(--forge-border) !important;
+  background: var(--forge-paper-alt) !important;
+  padding: 20px 22px !important;
+  transition: border-color 150ms ease, transform 150ms ease,
+    background 150ms ease;
+}
+
+.VPFeature:hover {
+  border-color: var(--forge-ember-line) !important;
+  background: var(--forge-paper-elv) !important;
+  transform: translateY(-1px);
+}
+
+.VPFeature .icon {
+  background: transparent !important;
+  font-size: 22px;
+  margin-bottom: 0.25rem;
+}
+
+.VPFeature .title {
+  font-family: var(--vp-font-family-base) !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em;
+  color: var(--forge-ink) !important;
+}
+
+.VPFeature .details {
+  font-size: 13.5px !important;
+  line-height: 1.6 !important;
+  color: var(--forge-ink-2) !important;
+}
+
+/* ================================================================
+   kbd — pill that matches `.kbd` utility in the dashboard
+   ================================================================ */
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  min-width: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--forge-border);
+  border-radius: 4px;
+  background: var(--forge-subtle);
+  font-family: var(--vp-font-family-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--forge-ink-2);
+  vertical-align: middle;
+}
+
+/* ================================================================
+   Footer + doc-footer
+   ================================================================ */
+.VPDocFooter {
+  border-top: 1px solid var(--forge-border) !important;
+  padding-top: 1.5rem !important;
+}
+
+.VPDocFooter .edit-link-button {
+  font-size: 12.5px !important;
+  color: var(--forge-ink-2) !important;
+}
+
+.VPDocFooter .pager-link {
+  border: 1px solid var(--forge-border) !important;
+  border-radius: 8px !important;
+  padding: 14px 16px !important;
+  background: var(--forge-paper-alt) !important;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.VPDocFooter .pager-link:hover {
+  border-color: var(--forge-ember-line) !important;
+  background: var(--forge-paper-elv) !important;
+}
+
+.VPDocFooter .pager-link .desc {
+  font-family: var(--vp-font-family-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--forge-ink-3);
+}
+
+.VPDocFooter .pager-link .title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--forge-ink);
+}
+
+.VPFooter {
+  border-top: 1px solid var(--forge-border) !important;
+  padding: 1.25rem 1.5rem !important;
+}
+
+.VPFooter .message,
+.VPFooter .copyright {
+  font-family: var(--vp-font-family-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--forge-ink-3);
+}
+
+/* ================================================================
+   Misc — scrollbar, focus ring, last-updated
+   ================================================================ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--forge-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--forge-ink-3);
+}
+
+:focus-visible {
+  outline: 2px solid var(--forge-ember) !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.VPLastUpdated {
+  font-family: var(--vp-font-family-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--forge-ink-3) !important;
+}
+
+/* When the docs are rendered inside the dashboard iframe (via the
+   /docs route), drop the top chrome so the docs feel embedded. */
+html[data-embed="dashboard"] .VPNav,
+html[data-embed="dashboard"] .VPLocalNav {
+  display: none !important;
+}
+html[data-embed="dashboard"] .VPContent {
+  padding-top: 0 !important;
+}
+html[data-embed="dashboard"] .VPSidebar {
+  top: 0 !important;
+}
