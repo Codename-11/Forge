@@ -20,6 +20,7 @@ import {
   Shield,
   Bot,
   Workflow,
+  BookOpen,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
@@ -112,6 +113,10 @@ const SECTIONS: readonly NavSection[] = [
       { path: "/settings/agents", label: "Agent admin", icon: Bot, chord: "e" },
       { path: "/settings/plugins", label: "Plugins", icon: Plug, chord: "l" },
       { path: "/settings/admin", label: "Admin portal", icon: Shield },
+      // Docs — in-app VitePress viewer (iframes /docs/?embed=dashboard).
+      // Lives next to Settings as a "help" landing; `g h` chord matches
+      // the universal "help" mnemonic without colliding with `g a` etc.
+      { path: "/docs", label: "Docs", icon: BookOpen, chord: "h" },
       { path: "/settings", label: "Settings", icon: Settings, chord: "," },
     ],
   },

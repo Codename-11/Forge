@@ -1,7 +1,9 @@
 import "server-only";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import {
   AgentStatus,
+  CommentKind,
   CycleStatus,
   EventKind,
   InitiativeStatus,
@@ -11,6 +13,7 @@ import { db } from "@/server/db";
 import { recordChange } from "@/server/audit";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
+import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
 import {
   assertKeyScope,
   buildKeyScopeWhere,
@@ -249,10 +252,34 @@ export const mcpTools = {
       ]);
       if (!issue) throw new Error("Issue not found in this workspace.");
       if (!status) throw new Error("Status not found in this workspace.");
-      return db.issue.update({
+      const updated = await db.issue.update({
         where: { id: issue.id },
         data: { statusId: status.id },
       });
+      // Touch the agent run so the live pulse strip + watchdog see this
+      // transition. No-op when the API key isn't agent-linked.
+      const agentId = ctx.apiKey?.linkedAgentId ?? null;
+      if (agentId) {
+        await db.$transaction(async (tx) => {
+          const { run, isNew } = await openOrTouchRun(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: input.id,
+            agentId,
+            currentStep: `→ ${input.statusId}`,
+          });
+          if (!isNew) {
+            await appendRunEvent(tx, {
+              runId: run.id,
+              workspaceId: ctx.workspaceId,
+              issueId: input.id,
+              agentId,
+              kind: "TRANSITION",
+              payload: { statusId: input.statusId },
+            });
+          }
+        });
+      }
+      return updated;
     },
   },
 
@@ -777,7 +804,7 @@ export const mcpTools = {
       // the issue detail UI can render it as agent-authored instead of
       // attributing the write to the human key owner.
       const authoringAgentId = ctx.apiKey?.linkedAgentId ?? null;
-      return db.comment.create({
+      const comment = await db.comment.create({
         data: {
           workspaceId: ctx.workspaceId,
           issueId: input.issueId,
@@ -785,6 +812,151 @@ export const mcpTools = {
           body: input.body,
           authoringAgentId,
         },
+      });
+      // Touch the agent run on every agent-authored comment so the live
+      // pulse strip stays warm. Comments are usually big-picture turn
+      // markers, so we keep the kind as COMMENT (not STATUS — that's a
+      // separate dedicated tool).
+      if (authoringAgentId) {
+        await db.$transaction(async (tx) => {
+          const { run, isNew } = await openOrTouchRun(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: input.issueId,
+            agentId: authoringAgentId,
+          });
+          if (!isNew) {
+            await appendRunEvent(tx, {
+              runId: run.id,
+              workspaceId: ctx.workspaceId,
+              issueId: input.issueId,
+              agentId: authoringAgentId,
+              kind: "COMMENT",
+              payload: { commentId: comment.id, preview: input.body.slice(0, 120) },
+            });
+          }
+        });
+      }
+      return comment;
+    },
+  },
+
+  /**
+   * Rolling live status comment. Idempotent — agents call it on every
+   * loop turn with the current step + body, and Forge upserts a single
+   * STATUS-kind Comment per AgentRun (rolling history kept in
+   * `revisions`). Implicitly opens an AgentRun if one isn't active for
+   * (issueId, callingAgent), giving the issue page a live pulse strip
+   * to render. Only callable by agent-linked API keys.
+   *
+   * Best practice: call this *before* you start a turn ("Reading…",
+   * "Running tests…") so the live strip reflects what's happening right
+   * now. The body itself can be markdown — including
+   * `forge-attachment:` references, `@profileKey` mentions, and bare
+   * `KEY-NN` issue refs (auto-linked by the comment renderer).
+   */
+  "comments.upsertStatus": {
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({
+      issueId: z.string(),
+      body: z.string().min(1).max(50_000),
+      currentStep: z.string().max(120).nullable().optional(),
+    }),
+    async run(
+      input: { issueId: string; body: string; currentStep?: string | null },
+      ctx: McpContext,
+    ) {
+      const agentId = ctx.apiKey?.linkedAgentId ?? null;
+      if (!agentId) {
+        throw new Error(
+          "comments.upsertStatus requires an agent-linked API key.",
+        );
+      }
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      const authorId = await resolveActorId(ctx);
+      return db.$transaction(async (tx) => {
+        const { run, isNew } = await openOrTouchRun(tx, {
+          workspaceId: ctx.workspaceId,
+          issueId: input.issueId,
+          agentId,
+          actorId: authorId,
+          currentStep: input.currentStep ?? null,
+        });
+
+        const existing = await tx.comment.findFirst({
+          where: { runId: run.id, kind: CommentKind.STATUS },
+        });
+
+        let comment;
+        if (!existing) {
+          comment = await tx.comment.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              issueId: input.issueId,
+              authorId,
+              authoringAgentId: agentId,
+              body: input.body,
+              kind: CommentKind.STATUS,
+              runId: run.id,
+              currentStep: input.currentStep ?? null,
+              revisions: [],
+            },
+          });
+        } else {
+          const priorRevisions = Array.isArray(existing.revisions)
+            ? (existing.revisions as Prisma.JsonArray)
+            : [];
+          const nextRevisions: Prisma.JsonArray = [
+            ...priorRevisions,
+            {
+              body: existing.body,
+              currentStep: existing.currentStep,
+              ts: existing.updatedAt.toISOString(),
+            },
+          ].slice(-50);
+          comment = await tx.comment.update({
+            where: { id: existing.id },
+            data: {
+              body: input.body,
+              currentStep: input.currentStep ?? null,
+              revisions: nextRevisions,
+              updatedAt: new Date(),
+            },
+          });
+        }
+
+        if (!isNew) {
+          await appendRunEvent(tx, {
+            runId: run.id,
+            workspaceId: ctx.workspaceId,
+            issueId: input.issueId,
+            agentId,
+            kind: "STATUS",
+            payload: { commentId: comment.id, preview: input.body.slice(0, 120) },
+            currentStep: input.currentStep ?? null,
+          });
+        }
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: authorId,
+          entity: "Comment",
+          entityId: comment.id,
+          action: existing ? "update-status" : "create-status",
+          after: comment,
+          eventKind: existing ? EventKind.COMMENT_UPDATED : EventKind.COMMENT_CREATED,
+          subjectType: "issue",
+          subjectId: input.issueId,
+          payload: {
+            commentId: comment.id,
+            issueId: input.issueId,
+            kind: "STATUS",
+            runId: run.id,
+            preview: input.body.slice(0, 120),
+            currentStep: input.currentStep ?? null,
+          },
+        });
+
+        return { ...comment, runId: run.id };
       });
     },
   },

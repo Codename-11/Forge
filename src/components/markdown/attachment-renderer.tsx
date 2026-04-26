@@ -1,43 +1,55 @@
 "use client";
 import { Fragment, useMemo } from "react";
+import Link from "next/link";
 import {
   FileText,
   File as FileIcon,
   Paperclip,
   AlertTriangle,
+  Bot,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { useAttachmentLightbox, type AttachmentLite } from "@/components/attachments/attachment-lightbox";
 
 /**
- * Inline attachment renderer.
+ * Inline attachment + reference renderer.
  *
  * We don't run the full markdown pipeline here — the project currently
  * displays descriptions + comments as `whitespace-pre-wrap` plain text.
- * What we *do* want to pick out are our own `forge-attachment:<id>`
- * references, which are emitted when users drag/drop/paste files into
- * a textarea. Those get resolved to a presigned GET and rendered inline
- * as an image or a file chip; everything else is rendered as plain text
- * (preserving whitespace), so the existing look-and-feel doesn't change.
+ * What we *do* want to pick out are first-class Forge primitives so
+ * comments can act like teammates instead of plain prose:
  *
- * Supported forms:
  *   - ![alt](forge-attachment:cuid)       → inline <img>
  *   - [filename.ext](forge-attachment:cuid) → file chip link
+ *   - bare `KEY-NN`                        → link to issue page
+ *   - bare `@profileKey`                   → agent mention chip
+ *
+ * Issue + mention detection happens as a second pass on text segments
+ * so attachment tokens (which use brackets and parens) take precedence
+ * and aren't accidentally re-tokenized.
  */
 
 const TOKEN_RE = /(!?)\[([^\]]*)\]\(forge-attachment:([a-z0-9]{20,})\)/gi;
 
+// Issue refs and agent mentions are matched on word boundaries so
+// `forklift-mention` doesn't match `@mention`, and `axion-42` doesn't
+// match `AXI-42`. The capture groups feed straight into the renderer.
+const REF_RE = /(\b[A-Z][A-Z0-9]{1,9}-\d+\b)|(?<=^|[\s(,.;:!?])@([a-z0-9][a-z0-9_-]*)/gi;
+
 type Segment =
   | { type: "text"; value: string }
   | { type: "image"; alt: string; attachmentId: string }
-  | { type: "link"; label: string; attachmentId: string };
+  | { type: "link"; label: string; attachmentId: string }
+  | { type: "issueRef"; key: string }
+  | { type: "mention"; profileKey: string };
 
 function tokenize(body: string): Segment[] {
   const segs: Segment[] = [];
   let last = 0;
   for (const m of body.matchAll(TOKEN_RE)) {
     const idx = m.index ?? 0;
-    if (idx > last) segs.push({ type: "text", value: body.slice(last, idx) });
+    if (idx > last) segs.push(...tokenizeText(body.slice(last, idx)));
     const bang = m[1];
     const label = m[2] ?? "";
     const id = m[3] ?? "";
@@ -48,8 +60,31 @@ function tokenize(body: string): Segment[] {
     }
     last = idx + m[0].length;
   }
-  if (last < body.length) segs.push({ type: "text", value: body.slice(last) });
+  if (last < body.length) segs.push(...tokenizeText(body.slice(last)));
   return segs;
+}
+
+/**
+ * Second-pass tokenizer: splits raw text into [text, issueRef, mention]
+ * segments. Run after the attachment-token pass so urls/markdown links
+ * have already been claimed.
+ */
+function tokenizeText(text: string): Segment[] {
+  const segs: Segment[] = [];
+  let last = 0;
+  REF_RE.lastIndex = 0;
+  for (const m of text.matchAll(REF_RE)) {
+    const idx = m.index ?? 0;
+    if (idx > last) segs.push({ type: "text", value: text.slice(last, idx) });
+    if (m[1]) {
+      segs.push({ type: "issueRef", key: m[1].toUpperCase() });
+    } else if (m[2]) {
+      segs.push({ type: "mention", profileKey: m[2].toLowerCase() });
+    }
+    last = idx + m[0].length;
+  }
+  if (last < text.length) segs.push({ type: "text", value: text.slice(last) });
+  return segs.length ? segs : [{ type: "text", value: text }];
 }
 
 /**
@@ -70,14 +105,17 @@ export function MarkdownWithAttachments({
   // when the user clicks any inline chip, so ←/→ walks through every
   // attachment referenced in the body.
   const inlineList = useMemo<{ id: string; label: string; isImage: boolean }[]>(
-    () =>
-      segments
-        .filter((s) => s.type !== "text")
-        .map((s) => {
-          if (s.type === "image")
-            return { id: s.attachmentId, label: s.alt || "image", isImage: true };
-          return { id: s.attachmentId, label: s.label, isImage: false };
-        }),
+    () => {
+      const out: { id: string; label: string; isImage: boolean }[] = [];
+      for (const s of segments) {
+        if (s.type === "image") {
+          out.push({ id: s.attachmentId, label: s.alt || "image", isImage: true });
+        } else if (s.type === "link") {
+          out.push({ id: s.attachmentId, label: s.label, isImage: false });
+        }
+      }
+      return out;
+    },
     [segments],
   );
 
@@ -102,12 +140,21 @@ export function MarkdownWithAttachments({
               inlineList={inlineList}
             />
           );
+        if (s.type === "link")
+          return (
+            <InlineAttachmentLink
+              key={`${s.attachmentId}-${i}`}
+              attachmentId={s.attachmentId}
+              label={s.label}
+              inlineList={inlineList}
+            />
+          );
+        if (s.type === "issueRef")
+          return <InlineIssueRef key={`r-${i}-${s.key}`} issueKey={s.key} />;
         return (
-          <InlineAttachmentLink
-            key={`${s.attachmentId}-${i}`}
-            attachmentId={s.attachmentId}
-            label={s.label}
-            inlineList={inlineList}
+          <InlineAgentMention
+            key={`m-${i}-${s.profileKey}`}
+            profileKey={s.profileKey}
           />
         );
       })}
@@ -208,6 +255,51 @@ function InlineAttachmentImage({
         className="max-h-96 max-w-full cursor-zoom-in rounded-md border border-border object-contain transition-shadow hover:ring-1 hover:ring-ember/40"
         title="Click to preview"
       />
+    </span>
+  );
+}
+
+/**
+ * Bare `KEY-NN` becomes a link to the issue page. We resolve via the
+ * `/w/{slug}/i/{KEY-NN}` short-link route — the server picks up the
+ * cuid lookup and redirects to the canonical URL, so we don't need a
+ * client-side roundtrip on render. If the workspace key in the ref
+ * doesn't match the current workspace, we still render the link as a
+ * safety net (the route will 404 cleanly) — this lets cross-workspace
+ * pasted refs surface visually instead of silently going as plain text.
+ */
+function InlineIssueRef({ issueKey }: { issueKey: string }) {
+  const ws = useMaybeWorkspace();
+  if (!ws) {
+    // No workspace context (e.g. account-level page rendering a comment).
+    // Fall back to plain text so we don't link into the wrong place.
+    return <span className="font-mono text-[12px]">{issueKey}</span>;
+  }
+  return (
+    <Link
+      href={`/w/${ws.slug}/i/${issueKey}`}
+      className="font-mono text-[12px] text-ember underline-offset-2 hover:underline"
+      title={`Open ${issueKey}`}
+    >
+      {issueKey}
+    </Link>
+  );
+}
+
+/**
+ * Bare `@profileKey` renders as a small agent chip. We don't query the
+ * `Agent` table on render — most comments have no mentions, and the
+ * chip's presence already cues the reader. The `agent` icon + the
+ * mono profileKey are enough; a follow-up tooltip could add the agent's
+ * display name on hover.
+ */
+function InlineAgentMention({ profileKey }: { profileKey: string }) {
+  return (
+    <span
+      className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1 py-0.5 font-mono text-[11px] text-indigo-700 dark:text-indigo-300"
+      title={`@${profileKey}`}
+    >
+      <Bot className="h-3 w-3" />@{profileKey}
     </span>
   );
 }

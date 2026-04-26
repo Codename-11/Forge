@@ -20,3 +20,8 @@ pnpm-workspace.yaml
 
 # Image generation working directory — final assets are committed under public/brand/
 output/
+
+# VitePress docs staged into public/ at `pnpm build` time so Next can
+# serve them at /docs/. Source lives in docs/; the staged copy is a
+# build artifact and should never be committed. See scripts/build-docs.sh.
+/public/docs/

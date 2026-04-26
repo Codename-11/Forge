@@ -102,6 +102,11 @@ enum EventKind {
   ISSUE_STALLED
   AGENT_NOACK
   ISSUE_SLA_BREACH
+  AGENT_RUN_STARTED
+  AGENT_RUN_STEP
+  AGENT_RUN_BLOCKED
+  AGENT_RUN_COMPLETED
+  AGENT_RUN_STALLED
 }
 
 enum WebhookDeliveryStatus {
@@ -167,33 +172,54 @@ enum AutoDispatchMode {
   CAPABILITY_MATCH
 }
 
+/// Distinguishes a normal user/agent comment (BODY) from a single rolling
+/// "live status" comment per AgentRun (STATUS). STATUS comments are
+/// upserted via `comments.upsertStatus` and have a 1:1 link to the
+/// owning AgentRun via `runId`. Body history is appended to `revisions`
+/// so the conversation isn't lost when the agent updates its turn.
+enum CommentKind {
+  BODY
+  STATUS
+}
+
+/// Lifecycle of an AgentRun — opened on first activity from an agent
+/// against an issue, closed when the issue transitions to a terminal
+/// status, the agent reports completion, or the watchdog flags it
+/// stalled. ABANDONED is the manual-cancel terminal state.
+enum AgentRunStatus {
+  ACTIVE
+  COMPLETED
+  ABANDONED
+  STALLED
+}
+
 // ----------------------------------------------------------------------------
 // Auth (NextAuth v5)
 // ----------------------------------------------------------------------------
 
 model User {
-  id              String    @id @default(cuid())
-  email           String    @unique
-  emailVerified   DateTime?
-  name            String?
-  handle          String?   @unique
-  image           String?
+  id                     String    @id @default(cuid())
+  email                  String    @unique
+  emailVerified          DateTime?
+  name                   String?
+  handle                 String?   @unique
+  image                  String?
   /// IANA timezone, e.g. "America/New_York". Null = infer from browser.
-  timezone        String?
+  timezone               String?
   /// BCP-47 locale, e.g. "en-US". Null = infer from browser.
-  locale          String?
+  locale                 String?
   /// "12h" | "24h". Null = infer from locale.
-  timeFormat      String?
+  timeFormat             String?
   /// "light" | "dark" | "system". Null = "system".
-  theme           String?
+  theme                  String?
   /// "compact" | "comfortable". Null = "compact" (default, current behavior).
-  density         String?
+  density                String?
   /// "default" | "larger". Null = "default".
-  textSize        String?
+  textSize               String?
   /// Workspace id remembered across logins; UI loads this one by default.
-  lastWorkspaceId String?
+  lastWorkspaceId        String?
   /// Ordered list of pinned issue ids (max 3 enforced server-side).
-  pinnedIssueIds  String[]  @default([])
+  pinnedIssueIds         String[]  @default([])
   /// Server-persisted onboarding state. Null = not dismissed; the
   /// localStorage flag (browser-scoped) controls the per-session
   /// resume-pill behavior. When set, the OnboardingCard is hidden
@@ -203,8 +229,8 @@ model User {
   /// "member" / invite is skippable). Stored as string ids matching
   /// the OnboardingStep.id values.
   onboardingSkippedSteps String[]  @default([])
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   accounts    Account[]
   sessions    Session[]
@@ -339,6 +365,11 @@ model Workspace {
   /// (Hermes default = workspace's session model; OpenAI default =
   /// gpt-4o-mini; Anthropic default = claude-haiku-4-5-20251001).
   aiModel                    String?
+  /// AgentRun monitoring: when > 0, the watchdog flags an ACTIVE run
+  /// as STALLED if it sees no AgentRunEvent within this many minutes.
+  /// 5 is a reasonable starting point for short loops; bump for slower
+  /// agents. 0 disables the sweep.
+  agentRunStaleMinutes       Int              @default(0)
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
   deletedAt                  DateTime?
@@ -367,6 +398,8 @@ model Workspace {
   timeEntries      TimeEntry[]
   agents           Agent[]
   dispatchRules    DispatchRule[]
+  agentRuns        AgentRun[]
+  agentRunEvents   AgentRunEvent[]
 
   @@index([slug])
 }
@@ -451,50 +484,50 @@ model Label {
 }
 
 model Issue {
-  id              String       @id @default(cuid())
-  workspaceId     String
-  projectId       String?
-  parentId        String?
+  id                  String          @id @default(cuid())
+  workspaceId         String
+  projectId           String?
+  parentId            String?
   /// Optional cycle membership. SetNull on cycle delete so issues survive.
-  cycleId         String?
+  cycleId             String?
   /// Human-readable identifier: `${workspace.key}-${number}` e.g. `FRG-42`.
-  number          Int
-  kind            WorkItemKind @default(ISSUE)
-  title           String
-  description     String?      @db.Text
-  statusId        String
-  priority        Priority     @default(NONE)
-  authorId        String
-  dueDate         DateTime?
-  startedAt       DateTime?
-  completedAt     DateTime?
-  canceledAt      DateTime?
-  estimate        Float?
+  number              Int
+  kind                WorkItemKind    @default(ISSUE)
+  title               String
+  description         String?         @db.Text
+  statusId            String
+  priority            Priority        @default(NONE)
+  authorId            String
+  dueDate             DateTime?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  canceledAt          DateTime?
+  estimate            Float?
   /// SLA target, in minutes from creation. Used for breach detection.
-  slaMinutes      Int?
+  slaMinutes          Int?
   /// AI triage state machine. Null = not run. Set to PENDING when the
   /// background triage call is fired, READY when a suggestion is
   /// available, APPLIED/DISMISSED after the operator acts, ERROR if
   /// the call failed. Lets the UI render the chip without a separate
   /// table.
-  aiTriageStatus       AiTriageStatus?
-  aiSuggestedPriority  Priority?
-  aiSuggestedLabelIds  String[]        @default([])
-  aiSuggestedAgentId   String?
-  aiTriageReasoning    String?         @db.Text
-  aiTriagedAt          DateTime?
-  aiTriageDecidedAt    DateTime?
+  aiTriageStatus      AiTriageStatus?
+  aiSuggestedPriority Priority?
+  aiSuggestedLabelIds String[]        @default([])
+  aiSuggestedAgentId  String?
+  aiTriageReasoning   String?         @db.Text
+  aiTriagedAt         DateTime?
+  aiTriageDecidedAt   DateTime?
   /// Agent queue — true means eligible for `issues.claim` via MCP.
-  queued          Boolean      @default(false)
-  claimedAt       DateTime?
-  claimedById     String?
-  claimExpiresAt  DateTime?
+  queued              Boolean         @default(false)
+  claimedAt           DateTime?
+  claimedById         String?
+  claimExpiresAt      DateTime?
   /// Explicit agent assignment. Independent of `claimedById` (human claim).
   /// Set by users or the auto-dispatcher; cleared on unassign.
-  assignedAgentId String?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  deletedAt       DateTime?
+  assignedAgentId     String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  deletedAt           DateTime?
 
   workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   project       Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
@@ -512,6 +545,7 @@ model Issue {
   relationsFrom IssueRelation[] @relation("IssueRelationFrom")
   relationsTo   IssueRelation[] @relation("IssueRelationTo")
   timeEntries   TimeEntry[]
+  agentRuns     AgentRun[]
 
   @@unique([workspaceId, number])
   @@index([workspaceId, statusId])
@@ -634,7 +668,7 @@ model IssueLabel {
 // ----------------------------------------------------------------------------
 
 model Comment {
-  id               String    @id @default(cuid())
+  id               String      @id @default(cuid())
   workspaceId      String
   issueId          String
   authorId         String
@@ -644,19 +678,36 @@ model Comment {
   /// Null for human-session comments. SetNull on agent delete so the
   /// comment survives agent lifecycle churn.
   authoringAgentId String?
-  body             String    @db.Text
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  body             String      @db.Text
+  /// BODY = normal comment (default). STATUS = the single rolling live
+  /// status comment for an AgentRun, upserted via `comments.upsertStatus`.
+  kind             CommentKind @default(BODY)
+  /// 1:1 link to the owning AgentRun for STATUS-kind comments. Always
+  /// null for BODY comments. Postgres treats NULL as distinct in unique
+  /// indexes, so many BODYs can coexist while each AgentRun has at most
+  /// one STATUS row.
+  runId            String?     @unique
+  /// Compact step label rendered next to the live pulse (e.g. "running
+  /// tests"). Null for BODY comments.
+  currentStep      String?
+  /// Append-only revision history for STATUS comments — each upsert
+  /// pushes the previous body + timestamp so the agent's earlier turns
+  /// aren't lost. Stored as `[{ body, currentStep, ts }]` JSON.
+  revisions        Json?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
   deletedAt        DateTime?
 
   workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue          Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
   author         User      @relation(fields: [authorId], references: [id])
   authoringAgent Agent?    @relation("AgentAuthoredComments", fields: [authoringAgentId], references: [id], onDelete: SetNull)
+  run            AgentRun? @relation("AgentRunStatusComment", fields: [runId], references: [id], onDelete: SetNull)
 
   @@index([issueId])
   @@index([workspaceId, createdAt])
   @@index([authoringAgentId])
+  @@index([issueId, kind])
 }
 
 /// Polymorphic attachment: `targetType` is one of "issue" | "initiative" |
@@ -1008,6 +1059,7 @@ model Agent {
   apiKeys          ApiKey[]       @relation("AgentApiKeys")
   authoredComments Comment[]      @relation("AgentAuthoredComments")
   dispatchRules    DispatchRule[]
+  runs             AgentRun[]
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
@@ -1048,4 +1100,64 @@ model DispatchRule {
   targetAgent Agent     @relation(fields: [targetAgentId], references: [id], onDelete: Restrict)
 
   @@index([workspaceId, enabled, order])
+}
+
+// ----------------------------------------------------------------------------
+// Agent runs (live monitoring)
+// ----------------------------------------------------------------------------
+
+/// One AgentRun row per "the agent is actively working this issue" cycle.
+/// Opens on the first activity from the assigned agent against the issue
+/// (status comment upsert, MCP write, transition out of TODO/BACKLOG, …).
+/// Closes when the issue transitions to a terminal status, the agent
+/// reports completion, or the watchdog flags it stalled. Multiple runs
+/// can exist over an issues lifetime if it is re-dispatched. The single
+/// 1:1 STATUS Comment for this run is referenced via Comment.runId.
+model AgentRun {
+  id                String         @id @default(cuid())
+  workspaceId       String
+  issueId           String
+  agentId           String
+  status            AgentRunStatus @default(ACTIVE)
+  startedAt         DateTime       @default(now())
+  /// Updated on every appended AgentRunEvent — what the watchdog reads.
+  lastEventAt       DateTime       @default(now())
+  finishedAt        DateTime?
+  /// Compact label rendered by the live pulse strip ("running tests").
+  currentStep       String?
+  /// Optional final summary populated when the agent reports completion.
+  summary           String?        @db.Text
+  /// Optional pointer at the AGENT_ASSIGNED ActivityEvent that triggered
+  /// this run. Useful for ack-window reasoning later.
+  assignmentEventId String?
+
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue         Issue           @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  agent         Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  events        AgentRunEvent[]
+  statusComment Comment?        @relation("AgentRunStatusComment")
+
+  @@index([workspaceId, status, lastEventAt])
+  @@index([issueId, startedAt])
+  @@index([agentId, status])
+}
+
+/// Append-only timeline for an AgentRun. Drives the live pulse strip and
+/// the watchdog freshness check. `kind` is intentionally a free-form
+/// string (not an enum) so agents can stamp arbitrary step names from
+/// their loop without schema churn — STARTED, STEP, TOOL_CALL, STATUS,
+/// BLOCKED, COMPLETED, ERRORED, … are conventional.
+model AgentRunEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  runId       String
+  kind        String
+  payload     Json?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  run       AgentRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@index([workspaceId, createdAt])
 }
