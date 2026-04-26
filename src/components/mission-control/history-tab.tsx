@@ -1,5 +1,5 @@
 "use client";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Bot, Check, X as XIcon, Hourglass } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -63,12 +63,46 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
     });
   }, [rangeEvents]);
 
+  // Heatmap autosizing: measure the card's inner width and derive how
+  // many weeks fit at our cell size. The grid stays calibrated to the
+  // panel without hardcoded width assumptions, so resizing the panel
+  // (or future "expanded" mode) just shows more history.
+  const heatmapBoxRef = useRef<HTMLDivElement | null>(null);
+  const [heatmapWidth, setHeatmapWidth] = useState(0);
+  useEffect(() => {
+    const node = heatmapBoxRef.current;
+    if (!node) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setHeatmapWidth(e.contentRect.width);
+    });
+    ro.observe(node);
+    setHeatmapWidth(node.getBoundingClientRect().width);
+    return () => ro.disconnect();
+  }, []);
+
+  // Cells are 11px with a 2px gap; reserve ~26px for the day labels in
+  // the heatmap component. Min 12 weeks, max 30 (≈7 months).
+  const computedWeeks = useMemo(() => {
+    if (heatmapWidth < 1) return 16;
+    const usable = Math.max(0, heatmapWidth - 28);
+    const weeks = Math.floor((usable + 2) / (11 + 2));
+    return Math.max(12, Math.min(30, weeks));
+  }, [heatmapWidth]);
+
   return (
     <div className="space-y-3 overflow-y-auto px-2 py-2">
       <section>
-        <SectionHeader>Activity · last 90 days</SectionHeader>
-        <div className="rounded-md border border-border bg-card/40 p-2">
-          <ActivityHeatmap data={heatmap ?? []} weeks={13} cellSize={9} cellGap={2} />
+        <SectionHeader>Activity · last {computedWeeks * 7} days</SectionHeader>
+        <div
+          ref={heatmapBoxRef}
+          className="rounded-md border border-border bg-card/40 p-2"
+        >
+          <ActivityHeatmap
+            data={heatmap ?? []}
+            weeks={computedWeeks}
+            cellSize={11}
+            cellGap={2}
+          />
         </div>
       </section>
 
