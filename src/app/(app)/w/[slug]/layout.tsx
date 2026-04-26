@@ -13,6 +13,7 @@ import { WorkspaceProvider } from "@/components/workspace-provider";
 import { WorkspaceCookieSync } from "@/components/workspace-cookie-sync";
 import { AppearanceProvider } from "@/components/appearance-provider";
 import { TimeTrackerWidget } from "@/components/time-tracker/time-tracker-widget";
+import { MissionControl } from "@/components/mission-control/mission-control";
 import { AttachmentLightboxProvider } from "@/components/attachments/attachment-lightbox";
 import type { WorkspaceContextValue } from "@/hooks/use-workspace";
 
@@ -143,6 +144,7 @@ export default async function WorkspaceShellLayout({
         <QuickCreate />
         <KeyboardHelp />
         <TimeTrackerWidget />
+        <MissionControl />
         <RealtimeProvider workspaceId={workspace.id} />
         <RealtimeToaster />
         <WorkspaceCookieSync slug={workspace.slug} />

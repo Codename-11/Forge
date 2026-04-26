@@ -143,7 +143,7 @@ export function TimeTrackerWidget() {
   if (!enabled) return null;
 
   return (
-    <div className={cn("fixed bottom-4 right-4 z-40", MOTION.slideUp)}>
+    <div className={cn("fixed bottom-4 left-4 z-40", MOTION.slideUp)}>
       {running ? (
         <div className="flex items-center gap-2 rounded-full border border-border bg-card/95 px-2 py-1.5 shadow-lg backdrop-blur">
           <span className="grid h-6 w-6 place-items-center rounded-full bg-ember/10 text-ember">
