@@ -32,6 +32,22 @@ export default function WorkspaceSettingsPage() {
   const [requiredAckSeconds, setRequiredAckSeconds] = useState(0);
   const [autoRedispatchOnNoack, setAutoRedispatchOnNoack] = useState(false);
   const [slaEnforcementEnabled, setSlaEnforcementEnabled] = useState(false);
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiTriageOnCreate, setAiTriageOnCreate] = useState(true);
+  const [aiCoachEnabled, setAiCoachEnabled] = useState(true);
+  const [aiProvider, setAiProvider] = useState<
+    "hermes" | "openai" | "anthropic" | "custom"
+  >("hermes");
+  const [aiModel, setAiModel] = useState("");
+
+  const { data: aiStatus, refetch: refetchAi } = trpc.ai.status.useQuery();
+  const ensureCoach = trpc.ai.ensureCoach.useMutation({
+    onSuccess: () => {
+      toast.success("Coach agent ready.");
+      refetchAi();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   useEffect(() => {
     if (!current) return;
@@ -47,6 +63,14 @@ export default function WorkspaceSettingsPage() {
     setRequiredAckSeconds(current.requiredAckSeconds);
     setAutoRedispatchOnNoack(current.autoRedispatchOnNoack);
     setSlaEnforcementEnabled(current.slaEnforcementEnabled);
+    setAiEnabled(current.aiEnabled);
+    setAiTriageOnCreate(current.aiTriageOnCreate);
+    setAiCoachEnabled(current.aiCoachEnabled);
+    setAiProvider(
+      (current.aiProvider as "hermes" | "openai" | "anthropic" | "custom") ??
+        "hermes",
+    );
+    setAiModel(current.aiModel ?? "");
   }, [current]);
 
   const update = trpc.workspace.update.useMutation({
@@ -322,6 +346,134 @@ export default function WorkspaceSettingsPage() {
             </div>
           </Section>
 
+          <Section
+            title="AI"
+            hint="Forge-internal AI features. Calls Anthropic directly; no cross-system data sharing. Off by default."
+          >
+            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+              <Field
+                label="Provider"
+                hint="Hermes is the default — it routes through your model-router plugin so you don't need a direct API key. Switch to another provider for direct calls."
+              >
+                <select
+                  value={aiProvider}
+                  onChange={(e) =>
+                    setAiProvider(
+                      e.target.value as
+                        | "hermes"
+                        | "openai"
+                        | "anthropic"
+                        | "custom",
+                    )
+                  }
+                  disabled={!canEdit}
+                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
+                >
+                  {(aiStatus?.providers ?? []).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                      {!p.available ? " (env not configured)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {aiStatus &&
+                !aiStatus.activeProviderAvailable &&
+                aiStatus.activeProviderReason && (
+                  <div className="rounded-md border border-amber-300/30 bg-amber-300/[0.05] px-3 py-2 text-[11px] text-amber-200/90">
+                    <span className="font-medium">Provider unavailable.</span>{" "}
+                    {aiStatus.activeProviderReason} — calls will be skipped
+                    until env is set.
+                  </div>
+                )}
+              <label className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">Enable AI features</div>
+                  <div className="text-xs text-muted-foreground">
+                    Master toggle. When off, no AI calls are made regardless
+                    of the sub-toggles below.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={aiEnabled}
+                  onChange={(e) => setAiEnabled(e.target.checked)}
+                  disabled={!canEdit}
+                  className="h-4 w-4"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">Triage on create</div>
+                  <div className="text-xs text-muted-foreground">
+                    When a human creates an issue, run a one-shot AI
+                    classification (priority, labels, agent) and surface
+                    it as an apply/dismiss chip on the issue page.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={aiTriageOnCreate}
+                  onChange={(e) => setAiTriageOnCreate(e.target.checked)}
+                  disabled={!canEdit || !aiEnabled}
+                  className="h-4 w-4"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">Coach comments</div>
+                  <div className="text-xs text-muted-foreground">
+                    When an issue stalls, an agent misses an ack, or an SLA
+                    is breached, post a short diagnostic comment as the
+                    Coach agent. Requires the Coach agent below.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={aiCoachEnabled}
+                  onChange={(e) => setAiCoachEnabled(e.target.checked)}
+                  disabled={!canEdit || !aiEnabled}
+                  className="h-4 w-4"
+                />
+              </label>
+              <Field
+                label="Model"
+                hint="Override the provider's default. Leave blank to use the provider default (Hermes resolves via your session model)."
+              >
+                <Input
+                  value={aiModel}
+                  onChange={(e) => setAiModel(e.target.value)}
+                  placeholder={
+                    aiStatus?.providers.find((p) => p.id === aiProvider)
+                      ?.defaultModel ?? "(provider default)"
+                  }
+                  disabled={!canEdit || !aiEnabled}
+                />
+              </Field>
+
+              <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/40 px-3 py-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">Coach agent</div>
+                  <div className="text-xs text-muted-foreground">
+                    {aiStatus?.coach
+                      ? `Active — @${aiStatus.coach.profileKey} (${aiStatus.coach.name})`
+                      : "Not yet set up. Coach is a non-claiming agent that posts diagnostic comments."}
+                  </div>
+                </div>
+                {!aiStatus?.coach && canEdit && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => ensureCoach.mutate({})}
+                    disabled={ensureCoach.isPending}
+                  >
+                    {ensureCoach.isPending ? "Creating…" : "Set up Coach"}
+                  </Button>
+                )}
+              </div>
+            </div>
+          </Section>
+
           {canEdit && (
             <div className="flex justify-end">
               <Button
@@ -341,6 +493,11 @@ export default function WorkspaceSettingsPage() {
                     requiredAckSeconds,
                     autoRedispatchOnNoack,
                     slaEnforcementEnabled,
+                    aiEnabled,
+                    aiTriageOnCreate,
+                    aiCoachEnabled,
+                    aiProvider,
+                    aiModel: aiModel.trim() ? aiModel.trim() : null,
                   })
                 }
               >

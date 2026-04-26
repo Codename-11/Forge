@@ -5,6 +5,7 @@ import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { recordChange } from "@/server/audit";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
+import { coachOnEvent } from "@/server/services/ai-coach";
 
 /**
  * Required-ack watchdog (P1 layer 2 of task follow-through).
@@ -185,6 +186,12 @@ export async function checkRequiredAck(
         requiredAckSeconds: workspace.requiredAckSeconds,
         originalAssignedEventId: event.id,
       },
+    });
+
+    void coachOnEvent(client, {
+      workspaceId: event.workspaceId,
+      issueId,
+      eventKind: "AGENT_NOACK",
     });
 
     if (workspace.autoRedispatchOnNoack && issue?.assignedAgentId) {

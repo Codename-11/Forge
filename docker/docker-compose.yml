@@ -1,13 +1,16 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: forge-postgres
+    # Distinct from the deployed `forge-postgres` (which lives on
+    # `forge-internal` and never exposes a host port). Dev ports use the
+    # 5xxxx range to avoid clashing with anything else on the box.
+    container_name: forge-dev-postgres
     environment:
       POSTGRES_USER: forge
       POSTGRES_PASSWORD: forge
       POSTGRES_DB: forge
     ports:
-      - "5432:5432"
+      - "55432:5432"
     volumes:
       - forge-pg:/var/lib/postgresql/data
     healthcheck:
@@ -17,9 +20,9 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: forge-redis
+    container_name: forge-dev-redis
     ports:
-      - "6379:6379"
+      - "56379:6379"
     volumes:
       - forge-redis:/data
     healthcheck:
@@ -29,7 +32,7 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: forge-minio
+    container_name: forge-dev-minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: forgeminio

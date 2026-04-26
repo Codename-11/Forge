@@ -6,6 +6,7 @@ import { recordChange } from "@/server/audit";
 import { assertKeyScope, buildKeyScopeWhere } from "@/server/services/api-key-auth";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
+import { triageIssue } from "@/server/services/ai-triage";
 
 const cursorSchema = z.string().optional();
 
@@ -297,6 +298,18 @@ export const issueRouter = router({
         // `maybeAutoDispatch` handles its own template application when it
         // picks an agent — no need to double-call from here.
         await maybeAutoDispatch(tx, issue.id);
+        return issue;
+      }).then((issue) => {
+        // Fire-and-forget AI triage. Skipped server-side when AI is off
+        // or already-triaged. Runs out-of-band so create stays sub-100ms
+        // even when the LLM call takes seconds. We don't await — clients
+        // poll via the issue.byId query (toaster/realtime invalidation
+        // surfaces the chip when ready).
+        if (!ctx.apiKey) {
+          // Only auto-triage human-authored issues. Skip when an agent
+          // creates an issue via API key (saves cost on bulk creates).
+          void triageIssue(issue.id);
+        }
         return issue;
       });
     }),

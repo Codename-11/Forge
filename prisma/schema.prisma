@@ -138,6 +138,27 @@ enum AgentStatus {
   BUSY
 }
 
+/// Distinguishes humans-in-the-loop from intelligence helpers. WORKER is
+/// the default and the only role auto-dispatch picks up. COACH agents
+/// observe events (stalls, no-acks, breaches) and post diagnostic
+/// comments — they don't claim work. OBSERVER is for read-only audit /
+/// notification bots that should never receive dispatches.
+enum AgentRole {
+  WORKER
+  COACH
+  OBSERVER
+}
+
+/// Lifecycle of the AI triage suggestion attached to an issue at create
+/// time. Null = AI was disabled or skipped (agent-authored, etc.).
+enum AiTriageStatus {
+  PENDING
+  READY
+  APPLIED
+  DISMISSED
+  ERROR
+}
+
 /// How the auto-dispatcher picks an agent for an unassigned queued issue.
 enum AutoDispatchMode {
   MANUAL_ONLY
@@ -296,6 +317,28 @@ model Workspace {
   /// requires `Issue.slaMinutes` to be set per-issue, otherwise the
   /// sweep is a no-op for the row.
   slaEnforcementEnabled      Boolean          @default(false)
+  /// Master toggle for AI features in this workspace. Off by default.
+  /// Gates AI triage on issue create AND Coach agent comments on
+  /// stall/noack/breach events. Requires `ANTHROPIC_API_KEY` in env.
+  aiEnabled                  Boolean          @default(false)
+  /// When true, every newly created issue (by a human author) kicks off
+  /// a background AI triage. Null when `aiEnabled` is off.
+  aiTriageOnCreate           Boolean          @default(true)
+  /// When true, Coach agents post diagnostic comments on
+  /// ISSUE_STALLED / AGENT_NOACK / ISSUE_SLA_BREACH events. The
+  /// workspace must have an Agent with role=COACH for this to fire.
+  aiCoachEnabled             Boolean          @default(true)
+  /// Which provider Forge talks to for AI features. Default `hermes`
+  /// uses Mission-Control's pattern: an OpenAI-compatible Hermes
+  /// gateway that itself fans out to Anthropic / OpenAI / etc. via the
+  /// model-router plugin. Other values (`openai`, `anthropic`,
+  /// `custom`) bypass Hermes and call the named provider directly.
+  /// All provider URLs / keys live in env — see ai-providers.ts.
+  aiProvider                 String           @default("hermes")
+  /// Optional model override. The provider supplies a sensible default
+  /// (Hermes default = workspace's session model; OpenAI default =
+  /// gpt-4o-mini; Anthropic default = claude-haiku-4-5-20251001).
+  aiModel                    String?
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
   deletedAt                  DateTime?
@@ -429,6 +472,18 @@ model Issue {
   estimate        Float?
   /// SLA target, in minutes from creation. Used for breach detection.
   slaMinutes      Int?
+  /// AI triage state machine. Null = not run. Set to PENDING when the
+  /// background triage call is fired, READY when a suggestion is
+  /// available, APPLIED/DISMISSED after the operator acts, ERROR if
+  /// the call failed. Lets the UI render the chip without a separate
+  /// table.
+  aiTriageStatus       AiTriageStatus?
+  aiSuggestedPriority  Priority?
+  aiSuggestedLabelIds  String[]        @default([])
+  aiSuggestedAgentId   String?
+  aiTriageReasoning    String?         @db.Text
+  aiTriagedAt          DateTime?
+  aiTriageDecidedAt    DateTime?
   /// Agent queue — true means eligible for `issues.claim` via MCP.
   queued          Boolean      @default(false)
   claimedAt       DateTime?
@@ -466,6 +521,7 @@ model Issue {
   @@index([workspaceId, queued, claimedAt])
   @@index([workspaceId, cycleId])
   @@index([workspaceId, assignedAgentId])
+  @@index([workspaceId, aiTriageStatus])
 }
 
 /// Reusable project blueprints shown in the "Starter templates" picker.
@@ -928,6 +984,10 @@ model Agent {
   /// Free-form capability tags (e.g. "ops", "research", "code-review").
   /// Consumed by `autoDispatchMode = CAPABILITY_MATCH`.
   capabilities     String[]    @default([])
+  /// Distinguishes WORKER (claims work, default) from COACH (observes
+  /// events and posts diagnostic comments) and OBSERVER (read-only).
+  /// Auto-dispatch only considers WORKER agents.
+  role             AgentRole   @default(WORKER)
   /// Optional markdown template auto-applied to an issue's description on
   /// assignment, when the description is empty. Freeform (no length cap).
   /// See `src/server/services/agent-template.ts`.

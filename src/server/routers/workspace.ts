@@ -172,6 +172,11 @@ export const workspaceRouter = router({
         requiredAckSeconds: z.number().int().min(0).max(3600).optional(),
         autoRedispatchOnNoack: z.boolean().optional(),
         slaEnforcementEnabled: z.boolean().optional(),
+        aiEnabled: z.boolean().optional(),
+        aiTriageOnCreate: z.boolean().optional(),
+        aiCoachEnabled: z.boolean().optional(),
+        aiProvider: z.enum(["hermes", "openai", "anthropic", "custom"]).optional(),
+        aiModel: z.string().min(1).max(80).nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

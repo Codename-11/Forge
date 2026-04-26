@@ -10,6 +10,7 @@ import {
   ListObjectsV2Command,
   DeleteObjectsCommand,
   DeleteBucketCommand,
+  PutBucketCorsCommand,
   type ObjectIdentifier,
   type ListObjectsV2CommandOutput,
 } from "@aws-sdk/client-s3";
@@ -215,7 +216,55 @@ export async function ensureWorkspaceBucket(workspaceId: string): Promise<string
       throw err;
     }
   }
+  await applyBucketCors(s3, bucket);
   return bucket;
+}
+
+/**
+ * Apply a permissive-but-bounded CORS policy so the browser can PUT to
+ * presigned URLs from the Forge app origin.
+ *
+ * Origins come from `S3_CORS_ALLOWED_ORIGINS` (comma-separated) so prod
+ * can pin to its public origin while dev sees `*`. Always includes the
+ * `x-amz-*` request headers the AWS SDK emits — without those exposed,
+ * the browser preflight fails before the PUT even goes out.
+ *
+ * Idempotent — safe to call on every bucket-create.
+ */
+async function applyBucketCors(s3: S3Client, bucket: string): Promise<void> {
+  const raw =
+    process.env.S3_CORS_ALLOWED_ORIGINS ??
+    process.env.NEXT_PUBLIC_APP_URL ??
+    "*";
+  const origins = raw
+    .split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+  try {
+    await s3.send(
+      new PutBucketCorsCommand({
+        Bucket: bucket,
+        CORSConfiguration: {
+          CORSRules: [
+            {
+              AllowedOrigins: origins.length ? origins : ["*"],
+              AllowedMethods: ["GET", "PUT", "POST", "HEAD", "DELETE"],
+              AllowedHeaders: ["*"],
+              ExposeHeaders: ["ETag", "Content-Length", "Content-Type"],
+              MaxAgeSeconds: 3600,
+            },
+          ],
+        },
+      }),
+    );
+  } catch (err) {
+    // Don't fail bucket creation on CORS — the browser uploads will
+    // still surface the error and the operator can investigate.
+    console.warn(
+      `[storage.applyBucketCors] CORS apply failed for ${bucket}:`,
+      (err as Error).message,
+    );
+  }
 }
 
 export async function workspaceQuotaStats(
