@@ -26,6 +26,7 @@ import { LiveTab } from "./live-tab";
 import { QueueTab } from "./queue-tab";
 import { AgentsTab } from "./agents-tab";
 import { HistoryTab } from "./history-tab";
+import { GlanceView } from "./glance-view";
 
 /**
  * Mission Control — the global agent ops widget.
@@ -235,10 +236,14 @@ export function MissionControl() {
     }
   }, [activeRunId, runIds]);
 
+  // j/k/p only meaningful when the panel is rendering the Live tab —
+  // glance has no run list, so the keys stay free for the rest of the
+  // app (e.g. issue list keyboard nav).
+  const inLivePanel = state.size === "panel" && state.tab === "live";
   useHotkey(
     "j",
     (e) => {
-      if (!expanded || state.tab !== "live") return;
+      if (!inLivePanel) return;
       const target = e.target as HTMLElement | null;
       if (target?.matches("input, textarea, [contenteditable=true]")) return;
       e.preventDefault();
@@ -246,12 +251,12 @@ export function MissionControl() {
       const next = runIds[Math.min(runIds.length - 1, idx + 1)] ?? runIds[0];
       if (next) setActiveRunId(next);
     },
-    [expanded, state.tab, activeRunId, runIds],
+    [inLivePanel, activeRunId, runIds],
   );
   useHotkey(
     "k",
     (e) => {
-      if (!expanded || state.tab !== "live") return;
+      if (!inLivePanel) return;
       const target = e.target as HTMLElement | null;
       if (target?.matches("input, textarea, [contenteditable=true]")) return;
       e.preventDefault();
@@ -259,14 +264,14 @@ export function MissionControl() {
       const prev = runIds[Math.max(0, idx - 1)] ?? runIds[0];
       if (prev) setActiveRunId(prev);
     },
-    [expanded, state.tab, activeRunId, runIds],
+    [inLivePanel, activeRunId, runIds],
   );
 
   // p toggles pin on the active row. The row itself also has a button.
   useHotkey(
     "p",
     (e) => {
-      if (!expanded || state.tab !== "live") return;
+      if (!inLivePanel) return;
       const target = e.target as HTMLElement | null;
       if (target?.matches("input, textarea, [contenteditable=true]")) return;
       if (!activeRunId) return;
@@ -274,7 +279,7 @@ export function MissionControl() {
       if (isPinned(activeRunId)) unpinRun(activeRunId);
       else pinRun(activeRunId);
     },
-    [expanded, state.tab, activeRunId, isPinned, pinRun, unpinRun],
+    [inLivePanel, activeRunId, isPinned, pinRun, unpinRun],
   );
 
   // `g m` chord opens the panel from anywhere — same shell pattern as
@@ -318,7 +323,10 @@ export function MissionControl() {
               e.preventDefault();
               return;
             }
-            setSize("panel");
+            // Click goes to the glance (agents + heartbeat) view, not
+            // straight to the full panel. Users who want tabs can hit
+            // mod+' twice or click "Open panel" inside glance.
+            setSize("glance");
           }}
           title="Mission Control (⌘')"
           className={cn(
@@ -366,6 +374,30 @@ export function MissionControl() {
           )}
           <ChevronUp className="h-3 w-3 text-muted-foreground" />
         </button>
+      </div>
+    );
+  }
+
+  // ---------- Glance mode (mid-size: agents + heartbeats) ----------
+  if (state.size === "glance") {
+    return (
+      <div
+        ref={containerRef}
+        className={cn(
+          "fixed z-40 flex flex-col rounded-lg border border-border bg-card shadow-md backdrop-blur",
+          cornerClass,
+          isDragging && "opacity-90",
+        )}
+        style={{ width: 320, height: 380 }}
+      >
+        <GlanceView
+          slug={slug}
+          onExpand={() => setSize("panel")}
+          onCollapse={() => setSize("pill")}
+          onPointerDownDrag={onPointerDown}
+          isDragging={isDragging}
+          hasStalled={hasStalled}
+        />
       </div>
     );
   }

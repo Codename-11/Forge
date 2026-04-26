@@ -16,7 +16,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
  */
 
 export type MissionControlTab = "live" | "queue" | "agents" | "history";
-export type MissionControlSize = "pill" | "panel" | "expanded";
+/**
+ * Three visual modes:
+ *   - pill: ambient indicator only (active count + presence dots).
+ *   - glance: small agent-focused popover with heartbeats + load.
+ *   - panel: full tabbed UI (Live / Queue / Agents / History).
+ *
+ * Default cycle on `mod+'` and click: pill → glance → panel → pill.
+ */
+export type MissionControlSize = "pill" | "glance" | "panel";
 export type MissionControlCorner = "tl" | "tr" | "bl" | "br";
 
 export interface MissionControlState {
@@ -110,7 +118,9 @@ export function useMissionControl(slug: string): {
     setState((s) => ({ ...s, size }));
   }, []);
   const setTab = useCallback((tab: MissionControlTab) => {
-    setState((s) => ({ ...s, tab, size: s.size === "pill" ? "panel" : s.size }));
+    // Jumping to a tab implies "I want the full panel" — promote out of
+    // pill or glance.
+    setState((s) => ({ ...s, tab, size: "panel" }));
   }, []);
   const setCorner = useCallback((corner: MissionControlCorner) => {
     setState((s) => ({ ...s, corner }));
@@ -123,9 +133,10 @@ export function useMissionControl(slug: string): {
   }, []);
   const toggleCollapse = useCallback(() => {
     setState((s) => {
-      // pill → panel, panel → expanded? No: that would skip collapse.
-      // Cycle: pill → panel → pill (Esc cycles back to pill).
-      if (s.size === "pill") return { ...s, size: "panel" };
+      // Cycle pill → glance → panel → pill. Esc always shortcuts back
+      // to pill regardless of where you are; that's a separate path.
+      if (s.size === "pill") return { ...s, size: "glance" };
+      if (s.size === "glance") return { ...s, size: "panel" };
       return { ...s, size: "pill" };
     });
   }, []);
