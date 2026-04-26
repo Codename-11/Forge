@@ -74,6 +74,17 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
         void utils.issue.byId.invalidate();
         void utils.inbox.badge.invalidate();
       }
+      // AgentRun lifecycle: every STARTED/STEP/STALLED/COMPLETED event
+      // invalidates the active-run query for the run's issue so the
+      // live pulse strip patches in real time without polling.
+      if (evt.subjectType === "agent-run" || evt.kind?.startsWith("AGENT_RUN_")) {
+        const payload = evt.payload as { issueId?: string } | null;
+        if (payload?.issueId) {
+          void utils.agentRun.activeForIssue.invalidate({ issueId: payload.issueId });
+          // STATUS comment lives inside the issue's comments tree; refresh too.
+          void utils.issue.byId.invalidate({ id: payload.issueId });
+        }
+      }
       // Relation router also emits ISSUE_UPDATED with subjectType=issue, so
       // the issue branch above already triggers a rail refresh (issue.byId
       // bundles relations) — no extra case needed.

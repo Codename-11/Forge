@@ -1,5 +1,6 @@
 import { router } from "@/server/trpc";
 import { agentRouter } from "./agent";
+import { agentRunRouter } from "./agent-run";
 import { aiRouter } from "./ai";
 import { workspaceRouter } from "./workspace";
 import { projectRouter } from "./project";
@@ -31,6 +32,7 @@ export const appRouter = router({
   access: accessRouter,
   admin: adminRouter,
   agent: agentRouter,
+  agentRun: agentRunRouter,
   ai: aiRouter,
   analytics: analyticsRouter,
   attachment: attachmentRouter,

@@ -46,6 +46,7 @@ const config: NextConfig = {
   },
   async headers() {
     return [
+      // Default: deny framing site-wide (clickjacking guard).
       {
         source: "/:path*",
         headers: [
@@ -56,6 +57,25 @@ const config: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
           },
+        ],
+      },
+      // Override for the in-app VitePress docs at /docs/*. The workspace
+      // /docs route iframes this path; SAMEORIGIN keeps clickjacking
+      // guards in place while letting the Forge shell embed it.
+      // VitePress static assets (HTML, JS, CSS, images) all live under
+      // /docs/ in the public dir thanks to `base: "/docs/"` in
+      // docs/.vitepress/config.ts, so the two matchers below cover the
+      // whole site.
+      {
+        source: "/docs",
+        headers: [
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+        ],
+      },
+      {
+        source: "/docs/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
         ],
       },
     ];

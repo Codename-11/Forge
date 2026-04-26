@@ -23,6 +23,8 @@ import { sweepIdleAgents, recordAgentReachable } from "@/server/services/heartbe
 import { sweepStaleWork } from "@/server/services/stale-work";
 import { checkRequiredAck } from "@/server/services/required-ack";
 import { sweepSlaBreaches } from "@/server/services/sla-breach";
+import { sweepStalledRuns } from "@/server/services/agent-run-stale";
+import { recordAgentAction } from "@/server/services/agent-run";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -37,6 +39,8 @@ const STALE_WORK_SWEEP_INTERVAL_MS = 60_000;
 const STALE_WORK_SWEEP_JOB_ID = "stale-work-sweep";
 const SLA_BREACH_SWEEP_INTERVAL_MS = 60_000;
 const SLA_BREACH_SWEEP_JOB_ID = "sla-breach-sweep";
+const AGENT_RUN_STALE_SWEEP_INTERVAL_MS = 60_000;
+const AGENT_RUN_STALE_SWEEP_JOB_ID = "agent-run-stale-sweep";
 
 export { webhookQueue, maintenanceQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
@@ -153,6 +157,30 @@ export const webhookWorker = new Worker(
     // Best-effort — failures here are logged but don't fail the job.
     if (res.ok && presenceAgentId) {
       await recordAgentReachable(presenceAgentId);
+
+      // AgentRun lifecycle: a successful agent webhook delivery against
+      // an issue subject is the canonical "agent picked up the work"
+      // signal. Open (or touch) the run so the live pulse strip starts
+      // showing activity, even if the agent hasn't yet posted a status
+      // comment. AGENT_ASSIGNED gets a STARTED kind; everything else
+      // (priority bump, mention) gets DISPATCH so the timeline still
+      // distinguishes them.
+      if (delivery.event.subjectType === "issue") {
+        await db.$transaction(async (tx) => {
+          await recordAgentAction(tx, {
+            workspaceId: delivery.event.workspaceId,
+            issueId: delivery.event.subjectId,
+            agentId: presenceAgentId!,
+            kind:
+              delivery.event.kind === "AGENT_ASSIGNED"
+                ? "DISPATCH_RECEIVED"
+                : `DISPATCH_${delivery.event.kind}`,
+            assignmentEventId:
+              delivery.event.kind === "AGENT_ASSIGNED" ? delivery.event.id : null,
+            payload: { eventId: delivery.event.id, eventKind: delivery.event.kind },
+          });
+        });
+      }
       // Required-ack window: if the workspace opted in, schedule a
       // delayed maintenance job that checks whether the agent actually
       // moved/commented on the issue. Stable jobId per delivery so a
@@ -212,6 +240,10 @@ export const maintenanceWorker = new Worker(
       }
       case "sla-breach-sweep": {
         const res = await sweepSlaBreaches();
+        return res;
+      }
+      case "agent-run-stale-sweep": {
+        const res = await sweepStalledRuns();
         return res;
       }
       case "required-ack-check": {
@@ -335,6 +367,25 @@ export async function registerSlaBreachSweepJob(): Promise<void> {
   );
 }
 
+/**
+ * Periodic stalled-AgentRun sweep. Closes any ACTIVE run whose
+ * `lastEventAt` is older than the workspace's `agentRunStaleMinutes`,
+ * flipping it to STALLED + emitting AGENT_RUN_STALLED. The live pulse
+ * strip on the issue page reacts in real time via the SSE bus.
+ */
+export async function registerAgentRunStaleSweepJob(): Promise<void> {
+  await maintenanceQueue.add(
+    "agent-run-stale-sweep",
+    {},
+    {
+      jobId: AGENT_RUN_STALE_SWEEP_JOB_ID,
+      repeat: { every: AGENT_RUN_STALE_SWEEP_INTERVAL_MS },
+      removeOnComplete: { age: 3600, count: 100 },
+      removeOnFail: { age: 86_400, count: 50 },
+    },
+  );
+}
+
 // Auto-register recurring jobs when this module loads (i.e. when
 // `pnpm worker` boots). Fire-and-forget — a Redis outage at boot should
 // not crash the worker; BullMQ will retry internally on the next op.
@@ -349,6 +400,9 @@ void registerStaleWorkSweepJob().catch((err) => {
 });
 void registerSlaBreachSweepJob().catch((err) => {
   logger.warn({ err }, "failed to register sla-breach-sweep job");
+});
+void registerAgentRunStaleSweepJob().catch((err) => {
+  logger.warn({ err }, "failed to register agent-run-stale-sweep job");
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {

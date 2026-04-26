@@ -7,6 +7,7 @@ import { assertKeyScope, buildKeyScopeWhere } from "@/server/services/api-key-au
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
+import { finishRunsForIssue, recordAgentAction } from "@/server/services/agent-run";
 import { agentId as agentIdSchema } from "./agent";
 
 const cursorSchema = z.string().optional();
@@ -379,10 +380,12 @@ export const issueRouter = router({
 
         // Mark lifecycle timestamps based on status category transitions.
         const extra: { startedAt?: Date; completedAt?: Date | null; canceledAt?: Date | null } = {};
+        let nextCategory: string | null = null;
         if (patch.statusId && patch.statusId !== before.statusId) {
           const next = await tx.status.findFirstOrThrow({
             where: { id: patch.statusId, workspaceId: ctx.workspaceId },
           });
+          nextCategory = next.category;
           if (next.category === "IN_PROGRESS" && !before.startedAt) extra.startedAt = new Date();
           if (next.category === "DONE") extra.completedAt = new Date();
           if (next.category === "CANCELED") extra.canceledAt = new Date();
@@ -480,6 +483,34 @@ export const issueRouter = router({
           if (patch.assignedAgentId) {
             await maybeApplyAgentTemplate(tx, id, patch.assignedAgentId);
           }
+        }
+
+        // AgentRun lifecycle: when the issue lands in a terminal status
+        // (DONE / CANCELED) close any ACTIVE runs so the live pulse
+        // strip drops off the issue page. ABANDONED on cancel keeps the
+        // distinction between "agent finished" and "operator killed it."
+        if (nextCategory === "DONE" || nextCategory === "CANCELED") {
+          await finishRunsForIssue(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: id,
+            status: nextCategory === "DONE" ? "COMPLETED" : "ABANDONED",
+            actorId: ctx.session.user.id,
+          });
+        } else if (
+          // Touch the run on transition by the assigned agent so the
+          // status-change is reflected in the timeline as a STEP event.
+          before.assignedAgentId &&
+          patch.statusId &&
+          patch.statusId !== before.statusId
+        ) {
+          await recordAgentAction(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: id,
+            agentId: before.assignedAgentId,
+            kind: "TRANSITION",
+            payload: { from: before.statusId, to: patch.statusId, category: nextCategory },
+            actorId: ctx.session.user.id,
+          });
         }
 
         return after;
