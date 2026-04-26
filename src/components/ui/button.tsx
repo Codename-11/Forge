@@ -15,10 +15,10 @@ const button = cva(
         danger: "bg-danger/90 text-background hover:bg-danger",
       },
       size: {
-        default: "h-8 px-3",
+        default: "h-9 px-3.5",
         sm: "h-7 px-2 text-xs",
         lg: "h-10 px-5",
-        icon: "h-8 w-8",
+        icon: "h-9 w-9",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

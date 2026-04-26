@@ -161,7 +161,7 @@ export function TimeTrackerWidget() {
               update.mutate({ entryId: running.id, billable: !running.billable })
             }
             className={cn(
-              "focus-ring grid h-6 w-6 place-items-center rounded-full border text-[10px]",
+              "focus-ring grid h-6 w-6 place-items-center rounded-full border text-[11px]",
               running.billable
                 ? "border-success/60 bg-success/10 text-success"
                 : "border-border text-muted-foreground hover:bg-subtle",
@@ -197,7 +197,7 @@ export function TimeTrackerWidget() {
           </header>
           <div className="space-y-2 p-3 text-[12px]">
             <label className="block">
-              <span className="mb-1 block text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="mb-1 block text-[11px] uppercase tracking-wider text-muted-foreground">
                 Issue (optional)
               </span>
               <select
@@ -216,7 +216,7 @@ export function TimeTrackerWidget() {
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 block text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="mb-1 block text-[11px] uppercase tracking-wider text-muted-foreground">
                 Description
               </span>
               <input
@@ -263,7 +263,7 @@ export function TimeTrackerWidget() {
         >
           <Clock className="h-3.5 w-3.5 text-muted-foreground" />
           <span>Start tracking</span>
-          <span className="kbd !px-1 !text-[9px]">T</span>
+          <span className="kbd !px-1 !text-[11px]">T</span>
         </button>
       )}
     </div>

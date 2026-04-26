@@ -13,7 +13,7 @@ import { trpc } from "@/lib/trpc";
  * is stable across renders. Mounted inside the workspace shell layout
  * so it sits behind the auth gate.
  *
- * The `apply-density` agent owns swapping ad-hoc `text-[10px]` etc.
+ * The `apply-density` agent owns swapping ad-hoc `text-[11px]` etc.
  * across components for the named utility classes; this provider is
  * the single source of truth that wires the preference to the DOM.
  */

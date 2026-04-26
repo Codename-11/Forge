@@ -131,7 +131,7 @@ export default function TimeLogPage() {
           Billable only
         </label>
         {isAdmin && (
-          <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wider text-muted-foreground">
             Assignee
             <select
               value={userId ?? ""}
@@ -175,7 +175,7 @@ export default function TimeLogPage() {
           </div>
         ) : (
           <table className="w-full text-[12px]">
-            <thead className="sticky top-0 z-10 bg-card/80 text-[10px] uppercase tracking-wider text-muted-foreground backdrop-blur">
+            <thead className="sticky top-0 z-10 bg-card/80 text-[11px] uppercase tracking-wider text-muted-foreground backdrop-blur">
               <tr>
                 <th className="px-5 py-2 text-left font-medium">Date</th>
                 <th className="px-3 py-2 text-left font-medium">Issue</th>
@@ -228,7 +228,7 @@ export default function TimeLogPage() {
                     </td>
                     <td className="px-3 py-2 text-center">
                       {e.billable ? (
-                        <span className="rounded bg-success/10 px-1.5 py-0.5 text-[10px] text-success">
+                        <span className="rounded bg-success/10 px-1.5 py-0.5 text-[11px] text-success">
                           yes
                         </span>
                       ) : (
@@ -262,7 +262,7 @@ function DateField({
   onChange: (next: Date) => void;
 }) {
   return (
-    <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+    <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wider text-muted-foreground">
       {label}
       <input
         type="date"

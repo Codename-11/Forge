@@ -686,7 +686,7 @@ function OnboardingRow({
           e.stopPropagation();
           onSkip();
         }}
-        className="focus-ring absolute right-2 top-2 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+        className="focus-ring absolute right-2 top-2 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
         title="Skip this step. Re-enable from Settings → Account."
       >
         Skip
@@ -725,7 +725,7 @@ function Column({
         <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
         </div>
-        {hint && <div className="text-[10px] text-muted-foreground/70">{hint}</div>}
+        {hint && <div className="text-[11px] text-muted-foreground/70">{hint}</div>}
       </div>
       {children}
     </div>
@@ -788,7 +788,7 @@ function IssueRow({
         className="flex items-center gap-2 text-xs hover:text-foreground"
       >
         {priority && (
-          <span className="w-5 text-center font-mono text-[10px] text-muted-foreground">
+          <span className="w-5 text-center font-mono text-[11px] text-muted-foreground">
             {PRIORITY_GLYPH[priority]}
           </span>
         )}
@@ -798,7 +798,7 @@ function IssueRow({
         <span className="truncate">{title}</span>
         <span
           className={
-            "ml-auto text-[10px] " +
+            "ml-auto text-[11px] " +
             (trailingTone === "warn" ? "text-warning" : "text-muted-foreground")
           }
         >

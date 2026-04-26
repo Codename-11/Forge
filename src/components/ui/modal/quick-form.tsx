@@ -235,7 +235,7 @@ export function QuickForm({
               )}
             </div>
             {restored && (
-              <span className="shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ember">
+              <span className="shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[11px] uppercase tracking-wider text-ember">
                 Restored draft
               </span>
             )}

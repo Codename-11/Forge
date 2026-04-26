@@ -58,7 +58,7 @@ export default function PluginsPage() {
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{p.name}</span>
                     <Badge color={statusTone[p.status]}>{p.status}</Badge>
-                    <span className="font-mono text-[10px] text-muted-foreground">
+                    <span className="font-mono text-[11px] text-muted-foreground">
                       v{p.version} · {p.slug}
                     </span>
                   </div>

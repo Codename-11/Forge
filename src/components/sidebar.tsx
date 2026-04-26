@@ -291,7 +291,7 @@ export function Sidebar({
           <div key={sec.id} className="flex flex-col gap-px">
             <div
               className={cn(
-                "px-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70",
+                "px-2 pb-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70",
                 collapsed ? "hidden" : "max-md:hidden",
               )}
             >
@@ -340,14 +340,14 @@ export function Sidebar({
                   >
                     <span className="truncate">{label}</span>
                     {badgeCount > 0 && (
-                      <span className="ml-2 rounded-full bg-ember/15 px-1.5 py-0 font-mono text-[10px] text-ember">
+                      <span className="ml-2 rounded-full bg-ember/15 px-1.5 py-0 font-mono text-[11px] text-ember">
                         {badgeCount > 99 ? "99+" : badgeCount}
                       </span>
                     )}
                     {chord && (
-                      <span className="ml-auto flex items-center gap-px text-[10px] text-muted-foreground/70">
-                        <span className="kbd !px-1 !text-[9px]">G</span>
-                        <span className="kbd !px-1 !text-[9px]">
+                      <span className="ml-auto flex items-center gap-px text-[11px] text-muted-foreground/70">
+                        <span className="kbd !px-1 !text-[11px]">G</span>
+                        <span className="kbd !px-1 !text-[11px]">
                           {chord.toUpperCase()}
                         </span>
                       </span>

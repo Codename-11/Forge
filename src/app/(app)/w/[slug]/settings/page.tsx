@@ -146,7 +146,7 @@ function EntryRow({ href, s }: { href: string; s: Entry }) {
           <div className="flex items-center gap-2">
             <span className="font-medium">{s.title}</span>
             {s.badge && (
-              <span className="rounded border border-ember/30 bg-ember/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-ember">
+              <span className="rounded border border-ember/30 bg-ember/10 px-1.5 py-0.5 text-[11px] uppercase tracking-wider text-ember">
                 {s.badge}
               </span>
             )}

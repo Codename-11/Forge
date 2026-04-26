@@ -25,7 +25,7 @@ function ActivityBell() {
         <span
           className={cn(
             "absolute -top-0.5 -right-0.5 grid h-3.5 min-w-3.5 place-items-center",
-            "rounded-full bg-ember px-1 text-[9px] font-mono font-semibold text-ember-foreground",
+            "rounded-full bg-ember px-1 text-[11px] font-mono font-semibold text-ember-foreground",
           )}
         >
           {unreadCount > 99 ? "99+" : unreadCount}

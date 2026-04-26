@@ -78,7 +78,7 @@ export default function AppearancePage() {
         <div className="mx-auto max-w-2xl space-y-10 p-8">
           {/* Hero / live preview ------------------------------------- */}
           <section className="rounded-2xl border border-border bg-card/40 p-6">
-            <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+            <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
               Live preview
             </div>
             <div className="mb-5 text-sm text-muted-foreground">
@@ -156,7 +156,7 @@ export default function AppearancePage() {
                 title="Default"
                 blurb="The standard sizes Forge ships with."
                 sample={
-                  <span className="font-mono text-[10px] text-muted-foreground">
+                  <span className="font-mono text-[11px] text-muted-foreground">
                     AXI-1024 · 11px meta
                   </span>
                 }
@@ -235,7 +235,7 @@ function DensitySample({ tight = false }: { tight?: boolean }) {
   // Hard-coded sizes here (rather than the .text-id class) so the
   // preview honestly demonstrates each option regardless of what the
   // user currently has selected at the html level.
-  const idCls = tight ? "text-[10px]" : "text-[11px]";
+  const idCls = tight ? "text-[11px]" : "text-[11px]";
   const metaCls = tight ? "text-[11px]" : "text-xs";
   return (
     <div className="flex w-full items-center gap-2">

@@ -192,7 +192,7 @@ function Comments({
                     // consistent across the app.
                     <Badge
                       color="#6366f1"
-                      className="font-mono text-[9px] uppercase tracking-wider"
+                      className="font-mono text-[11px] uppercase tracking-wider"
                     >
                       agent
                     </Badge>
@@ -250,7 +250,7 @@ function SectionLabel({ children }: { children: ReactNode }) {
 
 function Count({ children }: { children: ReactNode }) {
   return (
-    <span className="font-mono text-[10px] text-muted-foreground">
+    <span className="font-mono text-[11px] text-muted-foreground">
       {children}
     </span>
   );

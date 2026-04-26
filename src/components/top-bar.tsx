@@ -103,7 +103,7 @@ export function TopBar({
           >
             <Bell className="h-3.5 w-3.5" />
             {inboxBadge && inboxBadge.count > 0 && (
-              <span className="absolute -right-1 -top-1 min-w-[14px] rounded-full bg-ember px-1 text-center font-mono text-[9px] leading-[14px] text-ember-foreground">
+              <span className="absolute -right-1 -top-1 min-w-[14px] rounded-full bg-ember px-1 text-center font-mono text-[11px] leading-[14px] text-ember-foreground">
                 {inboxBadge.count > 99 ? "99+" : inboxBadge.count}
               </span>
             )}
@@ -177,7 +177,7 @@ function UserMenu({
         >
           <div className="border-b border-border px-3 py-2">
             <div className="truncate text-xs font-medium">{user.name ?? user.email}</div>
-            <div className="truncate text-[10px] text-muted-foreground">{user.email}</div>
+            <div className="truncate text-[11px] text-muted-foreground">{user.email}</div>
           </div>
           <Link
             href="/settings/account"
@@ -274,7 +274,7 @@ function AvatarFallback({
     .map((p) => p[0]?.toUpperCase() ?? "")
     .join("");
   return (
-    <span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-subtle font-mono text-[10px] text-muted-foreground">
+    <span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-subtle font-mono text-[11px] text-muted-foreground">
       {initials || "·"}
     </span>
   );

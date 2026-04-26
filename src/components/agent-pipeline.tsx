@@ -168,7 +168,7 @@ function Column({
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-1.5 px-1">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
           {label}
         </span>
         <span className="text-meta font-mono text-muted-foreground">{count}</span>
@@ -197,7 +197,7 @@ function IssueCard({
           {formatIssueId(wsKey, issue.number)}
         </span>
         {!issue.unblocked && (
-          <span className="rounded-sm bg-danger/10 px-1 text-[9px] font-semibold uppercase tracking-wider text-danger">
+          <span className="rounded-sm bg-danger/10 px-1 text-[11px] font-semibold uppercase tracking-wider text-danger">
             blocked
           </span>
         )}

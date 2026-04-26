@@ -78,7 +78,7 @@ export default function AdminPage() {
                     c.danger ? "border-danger/40" : "border-border",
                   )}
                 >
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
                     {c.label}
                   </div>
                   <div
@@ -143,7 +143,7 @@ function AuditTab() {
     <Card>
       {items.map((a) => (
         <li key={a.id} className="flex items-start gap-3 px-4 py-3 text-xs">
-          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-subtle text-[9px] font-medium">
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-subtle text-[11px] font-medium">
             {initials(a.actor?.name ?? a.actor?.email ?? null)}
           </div>
           <div className="min-w-0 flex-1">

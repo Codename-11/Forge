@@ -72,7 +72,7 @@ export function WorkspaceSwitcher() {
         className="focus-ring group inline-flex h-7 items-center gap-2 rounded-md border border-border bg-card/60 pl-1 pr-2 text-left hover:bg-subtle"
       >
         <span
-          className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[10px] font-semibold"
+          className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[11px] font-semibold"
           style={{
             backgroundColor: badge.bg,
             color: badge.fg,
@@ -128,7 +128,7 @@ export function WorkspaceSwitcher() {
                   )}
                 >
                   <span
-                    className="grid h-6 w-6 shrink-0 place-items-center rounded font-mono text-[10px] font-semibold"
+                    className="grid h-6 w-6 shrink-0 place-items-center rounded font-mono text-[11px] font-semibold"
                     style={{
                       backgroundColor: c.bg,
                       color: c.fg,
@@ -139,7 +139,7 @@ export function WorkspaceSwitcher() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="truncate">{w.name}</div>
-                    <div className="truncate font-mono text-[10px] text-muted-foreground">
+                    <div className="truncate font-mono text-[11px] text-muted-foreground">
                       {w.key} · /{w.slug}
                     </div>
                   </div>

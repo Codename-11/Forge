@@ -42,7 +42,7 @@ export function Chord({
       {parts.map((part, i) => (
         <span key={i} className="inline-flex items-center gap-1">
           {i > 0 && separator !== undefined && (
-            <span className="text-[10px] text-muted-foreground">{separator}</span>
+            <span className="text-[11px] text-muted-foreground">{separator}</span>
           )}
           <Kbd>{part}</Kbd>
         </span>

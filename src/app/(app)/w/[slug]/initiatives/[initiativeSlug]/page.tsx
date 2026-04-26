@@ -382,7 +382,7 @@ export default function InitiativeDetailPage({
 function Stat({ label, value }: { label: string; value: number | string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       <div className="mt-0.5 font-mono text-sm">{value}</div>

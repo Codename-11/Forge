@@ -459,7 +459,7 @@ function BulkLabelPicker({
             )}
           />
           <Badge color={r.color}>{r.name}</Badge>
-          <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+          <span className="ml-auto font-mono text-[11px] text-muted-foreground">
             {r.state === "full"
               ? "all"
               : r.state === "partial"
@@ -637,7 +637,7 @@ function BulkAssigneePicker({
               <Avatar name={r.name} image={r.image} size={18} />
               <span className="truncate">{r.name}</span>
               {r.email && (
-                <span className="ml-auto truncate font-mono text-[10px] text-muted-foreground">
+                <span className="ml-auto truncate font-mono text-[11px] text-muted-foreground">
                   {r.email}
                 </span>
               )}
@@ -691,7 +691,7 @@ function BulkAssigneePicker({
             </span>
             <AgentPresenceDot status={r.status as "ONLINE" | "BUSY" | "OFFLINE"} />
             <span className="truncate">{r.name}</span>
-            <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+            <span className="ml-auto font-mono text-[11px] text-muted-foreground">
               @{r.profileKey}
             </span>
           </div>

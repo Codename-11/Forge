@@ -93,7 +93,7 @@ export default function WorkspacesPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="truncate text-sm font-medium">{w.name}</span>
-                          <span className="font-mono text-[10px] text-muted-foreground">
+                          <span className="font-mono text-[11px] text-muted-foreground">
                             {w.key}
                           </span>
                         </div>
@@ -315,7 +315,7 @@ function CreateDialog({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       {children}

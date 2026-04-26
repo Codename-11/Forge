@@ -303,7 +303,7 @@ export default function AccountPage() {
               </div>
               {(account?.onboardingSkippedSteps ?? []).length > 0 && (
                 <div>
-                  <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
                     Skipped steps
                   </div>
                   <ul className="space-y-1.5">
@@ -347,7 +347,7 @@ const ONBOARDING_STEP_LABELS: Record<string, string> = {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       {children}

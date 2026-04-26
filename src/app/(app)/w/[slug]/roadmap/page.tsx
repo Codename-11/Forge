@@ -204,7 +204,7 @@ export default function RoadmapPage() {
               return (
                 <div
                   key={i}
-                  className="absolute top-0 flex h-full items-center text-[10px] text-muted-foreground"
+                  className="absolute top-0 flex h-full items-center text-[11px] text-muted-foreground"
                   style={{ left: `${left}%` }}
                 >
                   <span className="ml-1">{t.label}</span>
@@ -347,7 +347,7 @@ function RoadmapRow({
       </div>
       <div className="relative min-h-[32px]">
         {projects.length === 0 && (
-          <div className="py-1 text-[10px] italic text-muted-foreground/70">
+          <div className="py-1 text-[11px] italic text-muted-foreground/70">
             No dated projects
           </div>
         )}
@@ -358,7 +358,7 @@ function RoadmapRow({
             return (
               <div
                 key={p.id}
-                className="mb-1 text-[10px] text-muted-foreground/70"
+                className="mb-1 text-[11px] text-muted-foreground/70"
               >
                 {p.key} · no dates
               </div>
@@ -377,7 +377,7 @@ function RoadmapRow({
               key={p.id}
               href={`/w/${ws.slug}/projects/${p.id}`}
               className={cn(
-                "mb-1.5 flex h-5 items-center overflow-hidden rounded-full text-[10px] font-medium hover:opacity-90",
+                "mb-1.5 flex h-5 items-center overflow-hidden rounded-full text-[11px] font-medium hover:opacity-90",
                 MOTION.fast,
               )}
               style={{
