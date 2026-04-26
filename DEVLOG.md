@@ -2,6 +2,30 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-25 — FRG-32 MCP project mutations + queue toggle
+
+Added MCP parity for project setup and agent queue steering so agents no longer
+need direct Prisma/database workarounds for normal Forge PM operations.
+
+### Changes
+
+- Added MCP tools: `projects.create`, `projects.update`, `projects.archive`,
+  and `issues.setQueued`.
+- Enforced MCP scope metadata: project mutations require `WRITE_PROJECTS`,
+  queue toggling requires `WRITE_ISSUES`.
+- Preserved resource narrowing via API key project/issue scope checks.
+- Mirrored project router create/update/archive semantics, including
+  create/update audit/activity events and archive as a scoped archive update.
+- Mirrored issue queue-toggle behavior: conditional `ISSUE_QUEUED` event on
+  off→on transitions, no duplicate queue spam, and auto-dispatch on toggle.
+- Updated the Forge Hermes skill to document the new MCP surface.
+
+### Verification
+
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts -t "project mutations and issue queue toggle"`
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts`
+- `pnpm typecheck`
+
 ## 2026-04-25 — Push-dispatch (replace heartbeat cron with Hermes webhooks)
 
 Re-architecting heartbeat from agent-pulled to server-pushed. Replaces
