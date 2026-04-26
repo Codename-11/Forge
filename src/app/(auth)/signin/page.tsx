@@ -17,10 +17,10 @@ export default async function SignInPage({
         <header className="space-y-1 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/forge-mark.svg"
+            src="/brand/forge-app-icon-v2-ember.svg"
             alt="Forge"
-            width={40}
-            height={40}
+            width={48}
+            height={48}
             className="mx-auto rounded-md"
           />
           <h1 className="text-lg font-semibold tracking-tight">Sign in to Forge</h1>

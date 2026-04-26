@@ -134,20 +134,28 @@ Three layers, increasing in scope. Pick up in order:
       panel, and as a Sonner warning toast. Workspace settings UI
       knob in a new "Agent SLA" section.
 
-- [ ] **(2) Required acknowledgement.** Within X seconds of a wake
-      delivery (configurable), require a signal from the agent:
-      a `COMMENT_CREATED` from `authoringAgentId == agent` OR an
-      `ISSUE_STATUS_CHANGED` actor-attributed to the agent on the
-      same issue. If neither lands inside the window, treat as a
-      missed wake — re-dispatch (with backoff to avoid thrash) or
-      escalate to a dispatch rule fallback. Builds on (1).
+- [x] **(2) Required acknowledgement** — shipped 2026-04-25.
+      `Workspace.requiredAckSeconds` (default 0 = disabled) +
+      `Workspace.autoRedispatchOnNoack` (default false). New
+      `AGENT_NOACK` EventKind. Worker schedules a delayed
+      `required-ack-check` BullMQ job per successful AGENT_ASSIGNED
+      delivery; the job checks for a follow-up `COMMENT_CREATED`
+      authored by the agent OR an `ISSUE_STATUS_CHANGED` actor-event
+      on the same issue within the window. If neither, emits
+      AGENT_NOACK and (when configured) clears assignedAgentId so
+      the dispatcher re-picks. Idempotent on `originalAssignedEventId`.
+      Surfaces in activity drawer, agent timeline, issue activity
+      panel, and as a `toast.warning`.
 
-- [ ] **(3) Required completion (real SLA).** `Issue.slaMinutes`
-      already exists in the schema but isn't enforced for agents.
-      Wire it: track time-since-assigned, emit `ISSUE_SLA_BREACH` on
-      breach, allow rules to escalate priority / reassign / alert.
-      Surface the breach on the issue list + agent detail page. More
-      product judgment needed (per-workspace, per-priority defaults).
+- [x] **(3) Real SLA enforcement** — shipped 2026-04-25.
+      `Workspace.slaEnforcementEnabled` (default false) gates the
+      sweep. Per-issue `Issue.slaMinutes` (already in schema) is the
+      cutoff. New `ISSUE_SLA_BREACH` EventKind. Maintenance worker
+      `sla-breach-sweep` job runs every 60s; emits the event for
+      non-DONE/CANCELED issues past `slaMinutes` from `createdAt`.
+      Idempotent within 24h grace per issue. Surfaces in activity
+      drawer, agent timeline, issue activity panel, and as a
+      `toast.warning`.
 
 ---
 

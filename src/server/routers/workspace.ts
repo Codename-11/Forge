@@ -169,6 +169,9 @@ export const workspaceRouter = router({
         agentIdleTimeoutMinutes: z.number().int().min(0).max(1440).optional(),
         assignmentSlaMinutes: z.number().int().min(0).max(10080).optional(),
         autoRedispatchOnStall: z.boolean().optional(),
+        requiredAckSeconds: z.number().int().min(0).max(3600).optional(),
+        autoRedispatchOnNoack: z.boolean().optional(),
+        slaEnforcementEnabled: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

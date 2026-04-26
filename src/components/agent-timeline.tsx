@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   ArrowRightLeft,
   Bot,
+  Clock,
   History,
   Inbox,
   MessageCircle,
@@ -26,10 +27,12 @@ type TimelineEvent = {
     | "AGENT_UPDATED"
     | "AGENT_DELETED"
     | "AGENT_ASSIGNED"
+    | "AGENT_NOACK"
     | "AGENT_STATUS_CHANGED"
     | "ISSUE_QUEUED"
     | "ISSUE_STATUS_CHANGED"
     | "ISSUE_STALLED"
+    | "ISSUE_SLA_BREACH"
     | "COMMENT_CREATED";
   createdAt: Date | string;
   actor: { id: string; name: string | null; image: string | null } | null;
@@ -68,6 +71,10 @@ function iconFor(kind: TimelineEvent["kind"]) {
       return <ArrowRightLeft className="h-3.5 w-3.5 text-muted-foreground" />;
     case "ISSUE_STALLED":
       return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
+    case "AGENT_NOACK":
+      return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
+    case "ISSUE_SLA_BREACH":
+      return <Clock className="h-3.5 w-3.5 text-danger" />;
     case "ISSUE_QUEUED":
       return <Inbox className="h-3.5 w-3.5 text-muted-foreground" />;
     case "COMMENT_CREATED":
@@ -204,6 +211,52 @@ function summarizeEvent(
         meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
       };
     }
+    case "AGENT_NOACK": {
+      const handle = readPayloadString(evt.payload, "agentProfileKey");
+      const seconds =
+        evt.payload && typeof evt.payload === "object"
+          ? (evt.payload as Record<string, unknown>).requiredAckSeconds
+          : null;
+      const secNum =
+        typeof seconds === "number" ? Math.round(seconds) : null;
+      return {
+        headline: (
+          <>
+            <span className="text-warning">Missed wake</span> — {issueLink}{" "}
+            <span className="text-muted-foreground">
+              {handle && (
+                <>
+                  <span className="font-mono">@{handle}</span> didn&apos;t ack
+                </>
+              )}
+              {secNum != null && <> within {secNum}s</>}
+            </span>
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
+    }
+    case "ISSUE_SLA_BREACH": {
+      const overdue =
+        evt.payload && typeof evt.payload === "object"
+          ? (evt.payload as Record<string, unknown>).breachedByMinutes
+          : null;
+      const overdueNum =
+        typeof overdue === "number" ? Math.max(0, overdue) : null;
+      return {
+        headline: (
+          <>
+            <span className="text-danger">SLA breach</span> — {issueLink}{" "}
+            {overdueNum != null && (
+              <span className="text-muted-foreground">
+                {overdueNum}m overdue
+              </span>
+            )}
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
+    }
     case "COMMENT_CREATED": {
       return {
         headline: (
@@ -243,10 +296,12 @@ export default function AgentTimeline() {
         "AGENT_UPDATED",
         "AGENT_DELETED",
         "AGENT_ASSIGNED",
+        "AGENT_NOACK",
         "AGENT_STATUS_CHANGED",
         "ISSUE_QUEUED",
         "ISSUE_STATUS_CHANGED",
         "ISSUE_STALLED",
+        "ISSUE_SLA_BREACH",
         "COMMENT_CREATED",
       ],
     },

@@ -429,10 +429,12 @@ export const agentRouter = router({
         EventKind.AGENT_UPDATED,
         EventKind.AGENT_DELETED,
         EventKind.AGENT_ASSIGNED,
+        EventKind.AGENT_NOACK,
         EventKind.AGENT_STATUS_CHANGED,
         EventKind.ISSUE_QUEUED,
         EventKind.ISSUE_STATUS_CHANGED,
         EventKind.ISSUE_STALLED,
+        EventKind.ISSUE_SLA_BREACH,
         EventKind.COMMENT_CREATED,
       ];
 

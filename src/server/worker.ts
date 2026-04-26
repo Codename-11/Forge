@@ -21,6 +21,8 @@ import {
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { sweepIdleAgents, recordAgentReachable } from "@/server/services/heartbeat";
 import { sweepStaleWork } from "@/server/services/stale-work";
+import { checkRequiredAck } from "@/server/services/required-ack";
+import { sweepSlaBreaches } from "@/server/services/sla-breach";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -33,6 +35,8 @@ const DELIVERY_DRAIN_JOB_ID = "delivery-drain";
 const DELIVERY_DRAIN_BATCH = 100;
 const STALE_WORK_SWEEP_INTERVAL_MS = 60_000;
 const STALE_WORK_SWEEP_JOB_ID = "stale-work-sweep";
+const SLA_BREACH_SWEEP_INTERVAL_MS = 60_000;
+const SLA_BREACH_SWEEP_JOB_ID = "sla-breach-sweep";
 
 export { webhookQueue, maintenanceQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
@@ -149,6 +153,28 @@ export const webhookWorker = new Worker(
     // Best-effort — failures here are logged but don't fail the job.
     if (res.ok && presenceAgentId) {
       await recordAgentReachable(presenceAgentId);
+      // Required-ack window: if the workspace opted in, schedule a
+      // delayed maintenance job that checks whether the agent actually
+      // moved/commented on the issue. Stable jobId per delivery so a
+      // double-deliver doesn't stack two checks.
+      if (delivery.event.kind === "AGENT_ASSIGNED") {
+        const workspace = await db.workspace.findUnique({
+          where: { id: delivery.event.workspaceId },
+          select: { requiredAckSeconds: true },
+        });
+        if (workspace && workspace.requiredAckSeconds > 0) {
+          await maintenanceQueue.add(
+            "required-ack-check",
+            { agentAssignedEventId: delivery.event.id },
+            {
+              delay: workspace.requiredAckSeconds * 1000,
+              jobId: `ack-check-${delivery.event.id}`,
+              removeOnComplete: { age: 3600, count: 200 },
+              removeOnFail: { age: 86_400, count: 50 },
+            },
+          );
+        }
+      }
     }
 
     if (!res.ok) throw new Error(`Delivery failed (${res.status}).`);
@@ -182,6 +208,16 @@ export const maintenanceWorker = new Worker(
       }
       case "stale-work-sweep": {
         const res = await sweepStaleWork();
+        return res;
+      }
+      case "sla-breach-sweep": {
+        const res = await sweepSlaBreaches();
+        return res;
+      }
+      case "required-ack-check": {
+        const eventId = job.data?.agentAssignedEventId as string | undefined;
+        if (!eventId) return null;
+        const res = await checkRequiredAck({ agentAssignedEventId: eventId });
         return res;
       }
       default:
@@ -281,6 +317,24 @@ export async function registerStaleWorkSweepJob(): Promise<void> {
   );
 }
 
+/**
+ * Periodic SLA-breach sweep. Emits `ISSUE_SLA_BREACH` for any open issue
+ * whose age exceeds its `slaMinutes` target. Workspace-gated by
+ * `slaEnforcementEnabled`; per-issue gate is `Issue.slaMinutes` itself.
+ */
+export async function registerSlaBreachSweepJob(): Promise<void> {
+  await maintenanceQueue.add(
+    "sla-breach-sweep",
+    {},
+    {
+      jobId: SLA_BREACH_SWEEP_JOB_ID,
+      repeat: { every: SLA_BREACH_SWEEP_INTERVAL_MS },
+      removeOnComplete: { age: 3600, count: 100 },
+      removeOnFail: { age: 86_400, count: 50 },
+    },
+  );
+}
+
 // Auto-register recurring jobs when this module loads (i.e. when
 // `pnpm worker` boots). Fire-and-forget — a Redis outage at boot should
 // not crash the worker; BullMQ will retry internally on the next op.
@@ -292,6 +346,9 @@ void registerDeliveryDrainJob().catch((err) => {
 });
 void registerStaleWorkSweepJob().catch((err) => {
   logger.warn({ err }, "failed to register stale-work-sweep job");
+});
+void registerSlaBreachSweepJob().catch((err) => {
+  logger.warn({ err }, "failed to register sla-breach-sweep job");
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {
