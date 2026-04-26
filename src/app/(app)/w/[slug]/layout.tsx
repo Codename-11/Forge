@@ -7,6 +7,7 @@ import { CommandPalette } from "@/components/command-palette";
 import { QuickCreate } from "@/components/quick-create";
 import { KeyboardHelp } from "@/components/keyboard-help";
 import { RealtimeProvider } from "@/components/realtime-provider";
+import RealtimeToaster from "@/components/realtime-toaster";
 import { TrpcProvider } from "@/lib/trpc-provider";
 import { WorkspaceProvider } from "@/components/workspace-provider";
 import { WorkspaceCookieSync } from "@/components/workspace-cookie-sync";
@@ -141,6 +142,7 @@ export default async function WorkspaceShellLayout({
         <KeyboardHelp />
         <TimeTrackerWidget />
         <RealtimeProvider workspaceId={workspace.id} />
+        <RealtimeToaster />
         <WorkspaceCookieSync slug={workspace.slug} />
         </AppearanceProvider>
       </WorkspaceProvider>

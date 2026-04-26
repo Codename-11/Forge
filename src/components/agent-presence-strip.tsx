@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Bot } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { AgentQuickActions } from "@/components/agent-quick-actions";
 import { EmptyState } from "@/components/ui";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -81,55 +82,64 @@ export default function AgentPresenceStrip() {
         const throughput = stats?.throughputLast7d ?? 0;
 
         return (
-          <Link
-            key={agent.id}
-            href={`/w/${ws.slug}/agents/${agent.profileKey}`}
-            className="focus-ring flex w-[220px] shrink-0 flex-col gap-2 rounded-lg border border-border bg-card p-3 hover:bg-subtle"
-          >
-            <div className="flex min-w-0 items-center gap-2">
-              <AgentPresenceDot
-                status={agent.status}
-                size="md"
-                pulse
-                lastHeartbeatAt={agent.lastHeartbeatAt}
-              />
-              <span className="truncate text-sm font-medium text-foreground">
-                {agent.name}
-              </span>
-              <span className="text-meta truncate font-mono text-muted-foreground">
-                @{agent.profileKey}
-              </span>
-            </div>
-
-            {unlimited ? (
-              <div className="text-meta font-mono text-muted-foreground">
-                {load} active
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <div className="h-1 flex-1 overflow-hidden rounded-full bg-subtle">
-                  <div
-                    className={cn(
-                      "h-full rounded-full",
-                      overloaded ? "bg-warning" : "bg-ember",
-                    )}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-                <span className="text-meta shrink-0 font-mono text-muted-foreground">
-                  {load}/{max}
+          <div key={agent.id} className="relative w-[220px] shrink-0">
+            <Link
+              href={`/w/${ws.slug}/agents/${agent.profileKey}`}
+              className="focus-ring flex w-full flex-col gap-2 rounded-lg border border-border bg-card p-3 pr-7 hover:bg-subtle"
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <AgentPresenceDot
+                  status={agent.status}
+                  size="md"
+                  pulse
+                  lastHeartbeatAt={agent.lastHeartbeatAt}
+                />
+                <span className="truncate text-sm font-medium text-foreground">
+                  {agent.name}
+                </span>
+                <span className="text-meta truncate font-mono text-muted-foreground">
+                  @{agent.profileKey}
                 </span>
               </div>
-            )}
 
-            <div className="text-meta truncate text-muted-foreground">
-              {throughput} done / 7d
-              {ttfaMin != null && <> &middot; {ttfaMin}m</>}
-              {agent.lastHeartbeatAt && (
-                <> &middot; last beat {relativeTime(agent.lastHeartbeatAt)}</>
+              {unlimited ? (
+                <div className="text-meta font-mono text-muted-foreground">
+                  {load} active
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <div className="h-1 flex-1 overflow-hidden rounded-full bg-subtle">
+                    <div
+                      className={cn(
+                        "h-full rounded-full",
+                        overloaded ? "bg-warning" : "bg-ember",
+                      )}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <span className="text-meta shrink-0 font-mono text-muted-foreground">
+                    {load}/{max}
+                  </span>
+                </div>
               )}
+
+              <div className="text-meta truncate text-muted-foreground">
+                {throughput} done / 7d
+                {ttfaMin != null && <> &middot; {ttfaMin}m</>}
+                {agent.lastHeartbeatAt && (
+                  <> &middot; last beat {relativeTime(agent.lastHeartbeatAt)}</>
+                )}
+              </div>
+            </Link>
+            <div className="absolute right-1 top-1">
+              <AgentQuickActions
+                agentId={agent.id}
+                profileKey={agent.profileKey}
+                name={agent.name}
+                status={agent.status}
+              />
             </div>
-          </Link>
+          </div>
         );
       })}
     </div>

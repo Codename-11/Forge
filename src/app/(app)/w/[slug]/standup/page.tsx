@@ -86,7 +86,7 @@ export default function StandupPage() {
               <pre className="whitespace-pre-wrap rounded-lg border border-border bg-card/40 p-4 font-sans text-[13px] leading-relaxed">
                 {data.markdown}
               </pre>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-meta text-muted-foreground">
                 Scope: last {data.sinceHours}h of your authored, assigned, or audited activity.
               </p>
             </>

@@ -63,18 +63,18 @@ export function CycleSummaryCard({
             )}
           />
           <h2 className="text-sm font-semibold">{cycle.name}</h2>
-          <span className="font-mono text-[10px] text-muted-foreground">
+          <span className="text-id text-muted-foreground">
             {cycle.status}
           </span>
         </div>
-        <div className="mt-0.5 text-[11px] text-muted-foreground">
+        <div className="mt-0.5 text-meta text-muted-foreground">
           {formatDateShort(startsAt)} → {formatDateShort(endsAt)}
           <span className="mx-1.5">·</span>
           <span className={cn(finalDay && "text-ember")}>
             {remaining === 0 ? "ended" : `${remaining}d remaining`}
           </span>
         </div>
-        <div className="mt-3 grid grid-cols-3 gap-3 text-[11px]">
+        <div className="mt-3 grid grid-cols-3 gap-3 text-meta">
           <Stat label="Issues" value={total} />
           <Stat label="Done" value={done} />
           <Stat

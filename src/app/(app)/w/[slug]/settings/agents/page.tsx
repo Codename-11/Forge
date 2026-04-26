@@ -12,6 +12,7 @@ import { Confirm, SidePanel } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { AgentQuickActions } from "@/components/agent-quick-actions";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 
@@ -288,6 +289,12 @@ export default function AgentsPage() {
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
+                    <AgentQuickActions
+                      agentId={a.id}
+                      profileKey={a.profileKey}
+                      name={a.name}
+                      status={a.status}
+                    />
                     <Link href={`/w/${ws.slug}/agents/${a.profileKey}`}>
                       <Button size="sm" variant="ghost">
                         View

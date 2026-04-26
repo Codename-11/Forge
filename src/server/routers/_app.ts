@@ -18,6 +18,7 @@ import { viewRouter } from "./view";
 import { standupRouter } from "./standup";
 import { cycleRouter } from "./cycle";
 import { dispatchRuleRouter } from "./dispatch-rule";
+import { eventRouter } from "./event";
 import { inboxRouter } from "./inbox";
 import { initiativeRouter } from "./initiative";
 import { pinRouter } from "./pin";
@@ -34,6 +35,7 @@ export const appRouter = router({
   comment: commentRouter,
   cycle: cycleRouter,
   dispatchRule: dispatchRuleRouter,
+  event: eventRouter,
   inbox: inboxRouter,
   initiative: initiativeRouter,
   issue: issueRouter,

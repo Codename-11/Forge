@@ -101,7 +101,7 @@ export default function ProjectsPage() {
                       style={{ backgroundColor: p.color ?? "#78716c" }}
                     />
                     <span className="text-id text-muted-foreground">{p.key}</span>
-                    <span className="ml-auto text-[11px] text-muted-foreground">
+                    <span className="ml-auto text-meta text-muted-foreground">
                       {p._count.issues} issues
                     </span>
                   </div>
@@ -114,7 +114,7 @@ export default function ProjectsPage() {
                       {p.description}
                     </div>
                   )}
-                  <div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground">
+                  <div className="mt-3 flex items-center gap-2 text-meta text-muted-foreground">
                     <span>Updated {relativeTime(p.updatedAt)}</span>
                     {p.archived && <Badge>archived</Badge>}
                   </div>
@@ -220,7 +220,7 @@ function StarterDialog({
                     </span>
                   </div>
                   {s.description && (
-                    <div className="mt-0.5 text-[11px] text-muted-foreground">{s.description}</div>
+                    <div className="mt-0.5 text-meta text-muted-foreground">{s.description}</div>
                   )}
                 </div>
                 <Button
@@ -235,7 +235,7 @@ function StarterDialog({
             );
           })}
           {starters?.length === 0 && (
-            <li className="py-8 text-center text-[11px] text-muted-foreground">
+            <li className="py-8 text-center text-meta text-muted-foreground">
               No templates defined. Create some in Settings.
             </li>
           )}
