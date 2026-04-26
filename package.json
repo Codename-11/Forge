@@ -5,6 +5,8 @@
   "description": "Forge — a fast, minimalist, keyboard-driven project management platform with pluggable agents.",
   "scripts": {
     "dev": "next dev --turbo",
+    "dev:live": "./scripts/dev-live.sh",
+    "dev:host": "DEV_HOST=0.0.0.0 ./scripts/dev-live.sh",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
