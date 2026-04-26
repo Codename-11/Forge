@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { RelationKind } from "@prisma/client";
+import { EventKind, RelationKind } from "@prisma/client";
 import { mcpTools, type McpContext } from "@/server/services/mcp";
 import type { ApiKeyContext } from "@/server/services/api-key-auth";
 import {
@@ -76,6 +76,11 @@ async function call<T extends keyof typeof mcpTools>(
   ctx: McpContext,
 ): Promise<unknown> {
   const def = mcpTools[name];
+  for (const required of def.scopes) {
+    if (ctx.apiKey && !ctx.apiKey.scopes.includes(required)) {
+      throw new Error(`Missing required scope: ${required}`);
+    }
+  }
   const parsed = def.input.parse(input ?? {});
   return def.run(parsed as never, ctx);
 }
@@ -474,6 +479,168 @@ describe("mcp — issues.claim honors blocker skip + narrowing", () => {
       claimed: { id: string } | null;
     };
     expect(res.claimed?.id).toBe(onlyMine.id);
+  });
+});
+
+describe("mcp — project mutations and issue queue toggle", () => {
+  it("projects.create / projects.update / projects.archive write audit and activity events", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+
+    const created = (await call(
+      "projects.create" as keyof typeof mcpTools,
+      {
+        key: "OPS",
+        name: "Operations",
+        description: "Agent-run ops lane",
+        icon: "⚙️",
+        color: "#3bb8f0",
+      },
+      ctx,
+    )) as {
+      id: string;
+      key: string;
+      name: string;
+      description: string | null;
+      icon: string | null;
+      color: string | null;
+      archived: boolean;
+    };
+
+    expect(created.key).toBe("OPS");
+    expect(created.name).toBe("Operations");
+    expect(created.description).toBe("Agent-run ops lane");
+    expect(created.icon).toBe("⚙️");
+    expect(created.color).toBe("#3bb8f0");
+    expect(created.archived).toBe(false);
+
+    const updated = (await call(
+      "projects.update" as keyof typeof mcpTools,
+      { id: created.id, name: "Operations v2", description: null, icon: "🧭" },
+      ctx,
+    )) as { id: string; name: string; description: string | null; icon: string | null };
+    expect(updated.name).toBe("Operations v2");
+    expect(updated.description).toBeNull();
+    expect(updated.icon).toBe("🧭");
+
+    const archived = (await call(
+      "projects.archive" as keyof typeof mcpTools,
+      { id: created.id },
+      ctx,
+    )) as { id: string; archived: boolean };
+    expect(archived.archived).toBe(true);
+
+    const events = await prisma.activityEvent.findMany({
+      where: { workspaceId: fixture.workspace.id, subjectType: "project", subjectId: created.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(events.map((e) => e.kind)).toEqual([EventKind.PROJECT_CREATED, EventKind.PROJECT_UPDATED]);
+
+    const audit = await prisma.auditLog.findMany({
+      where: { workspaceId: fixture.workspace.id, entity: "Project", entityId: created.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(audit.map((a) => a.action)).toEqual(["create", "update"]);
+  });
+
+  it("projects.create requires WRITE_PROJECTS", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCP" });
+    fixtures.push(fixture);
+    const { ctx } = buildMcpCtx(fixture, { scopes: ["READ_PROJECTS"] });
+
+    await expect(
+      call("projects.create" as keyof typeof mcpTools, { key: "NO", name: "Nope" }, ctx),
+    ).rejects.toThrow(/WRITE_PROJECTS/);
+  });
+
+  it("projects.update rejects projectIds-narrowed keys outside their lane", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const allowed = await prisma.project.create({
+      data: { workspaceId: fixture.workspace.id, key: "OK", name: "allowed", createdById: fixture.user.id },
+    });
+    const blocked = await prisma.project.create({
+      data: { workspaceId: fixture.workspace.id, key: "NO", name: "blocked", createdById: fixture.user.id },
+    });
+    const { ctx } = buildMcpCtx(fixture, { projectIds: [allowed.id] });
+
+    await expect(
+      call("projects.update" as keyof typeof mcpTools, { id: blocked.id, name: "blocked v2" }, ctx),
+    ).rejects.toThrow(/scope/i);
+  });
+
+  it("issues.setQueued emits ISSUE_QUEUED once and invokes auto-dispatch", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCQ" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { autoDispatch: true, autoDispatchMode: "ROUND_ROBIN" },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: "victor",
+        status: "ONLINE",
+        maxConcurrent: 5,
+      },
+    });
+    const issue = await createIssue(fixture, { title: "queue me" });
+    const { ctx } = buildMcpCtx(fixture);
+
+    const queued = (await call(
+      "issues.setQueued" as keyof typeof mcpTools,
+      { id: issue.id, queued: true },
+      ctx,
+    )) as { id: string; queued: boolean; assignedAgentId: string | null };
+    expect(queued.queued).toBe(true);
+    expect(queued.assignedAgentId).toBeNull();
+
+    const afterDispatch = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(afterDispatch.queued).toBe(true);
+    expect(afterDispatch.assignedAgentId).toBe(agent.id);
+
+    // Idempotent: the second true call should not spam ISSUE_QUEUED.
+    await call("issues.setQueued" as keyof typeof mcpTools, { id: issue.id, queued: true }, ctx);
+
+    const events = await prisma.activityEvent.findMany({
+      where: { workspaceId: fixture.workspace.id, subjectType: "issue", subjectId: issue.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(events.filter((e) => e.kind === EventKind.ISSUE_QUEUED)).toHaveLength(1);
+    expect(events.some((e) => e.kind === EventKind.AGENT_ASSIGNED)).toBe(true);
+
+    const unqueued = (await call(
+      "issues.setQueued" as keyof typeof mcpTools,
+      { id: issue.id, queued: false },
+      ctx,
+    )) as { id: string; queued: boolean };
+    expect(unqueued.queued).toBe(false);
+  });
+
+  it("issues.setQueued requires WRITE_ISSUES and respects issue narrowing", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCQ" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const project = await prisma.project.create({
+      data: { workspaceId: fixture.workspace.id, key: "LANE", name: "Lane", createdById: fixture.user.id },
+    });
+    const scoped = await createIssue(fixture, { title: "scoped", projectId: project.id });
+    const outside = await createIssue(fixture, { title: "outside" });
+
+    const readOnly = buildMcpCtx(fixture, { scopes: ["READ_ISSUES"] }).ctx;
+    await expect(
+      call("issues.setQueued" as keyof typeof mcpTools, { id: scoped.id, queued: true }, readOnly),
+    ).rejects.toThrow(/WRITE_ISSUES/);
+
+    const narrowed = buildMcpCtx(fixture, { projectIds: [project.id] }).ctx;
+    await expect(
+      call("issues.setQueued" as keyof typeof mcpTools, { id: outside.id, queued: true }, narrowed),
+    ).rejects.toThrow(/scope/i);
   });
 });
 

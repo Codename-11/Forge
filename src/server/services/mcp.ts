@@ -10,6 +10,7 @@ import {
 import { db } from "@/server/db";
 import { recordChange } from "@/server/audit";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
+import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import {
   assertKeyScope,
   buildKeyScopeWhere,
@@ -87,6 +88,8 @@ const addDays = (date: Date, days: number): Date => {
   d.setUTCDate(d.getUTCDate() + days);
   return d;
 };
+
+const projectKey = z.string().min(2).max(8).regex(/^[A-Z0-9]+$/);
 
 /**
  * Compute the set of issue ids in a workspace blocked by at least one
@@ -352,6 +355,57 @@ export const mcpTools = {
       return db.issue.update({
         where: { id: issue.id },
         data: { claimedAt: null, claimedById: null, claimExpiresAt: null },
+      });
+    },
+  },
+
+  "issues.setQueued": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().describe("Issue id (cuid)"),
+      queued: z.boolean().describe("Whether the issue should be in the agent queue"),
+    }),
+    async run(input: { id: string; queued: boolean }, ctx: McpContext) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.id });
+      const actorId = await resolveActorId(ctx);
+      return db.$transaction(async (tx) => {
+        const issue = await tx.issue.findFirstOrThrow({
+          where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
+        });
+        const updated = await tx.issue.update({
+          where: { id: issue.id },
+          data: {
+            queued: input.queued,
+            // Mirrors issue.setQueued: unqueue does not steal/release an active claim.
+            ...(!input.queued && issue.claimedAt == null
+              ? { claimedAt: null, claimedById: null, claimExpiresAt: null }
+              : {}),
+          },
+        });
+
+        // Emit ISSUE_QUEUED only on off -> on, matching the app mutation and
+        // avoiding repeated webhook spam from idempotent queue calls.
+        if (input.queued && !issue.queued) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId,
+            entity: "Issue",
+            entityId: issue.id,
+            action: "queue",
+            before: { queued: issue.queued },
+            after: { queued: true },
+            eventKind: EventKind.ISSUE_QUEUED,
+            subjectType: "issue",
+            subjectId: issue.id,
+            payload: {
+              number: issue.number,
+              assignedAgentId: issue.assignedAgentId,
+            },
+          });
+        }
+
+        await maybeAutoDispatch(tx, issue.id);
+        return updated;
       });
     },
   },
@@ -749,6 +803,129 @@ export const mcpTools = {
           ...(input.includeArchived ? {} : { archived: false }),
         },
         orderBy: { updatedAt: "desc" },
+      });
+    },
+  },
+
+  "projects.create": {
+    scopes: ["WRITE_PROJECTS"] as const,
+    input: z.object({
+      key: projectKey,
+      name: z.string().min(1).max(120),
+      description: z.string().max(4000).optional(),
+      icon: z.string().max(8).optional(),
+      color: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+      startDate: z.coerce.date().optional(),
+      targetDate: z.coerce.date().optional(),
+    }),
+    async run(
+      input: {
+        key: string;
+        name: string;
+        description?: string;
+        icon?: string;
+        color?: string;
+        startDate?: Date;
+        targetDate?: Date;
+      },
+      ctx: McpContext,
+    ) {
+      if (ctx.apiKey?.projectIds.length) {
+        throw new Error("API key scope does not include this resource.");
+      }
+      const actorId = await resolveActorId(ctx);
+      return db.$transaction(async (tx) => {
+        const project = await tx.project.create({
+          data: { ...input, workspaceId: ctx.workspaceId, createdById: actorId },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId,
+          entity: "Project",
+          entityId: project.id,
+          action: "create",
+          after: project,
+          eventKind: EventKind.PROJECT_CREATED,
+          subjectType: "project",
+          subjectId: project.id,
+          payload: { name: project.name, key: project.key },
+        });
+        return project;
+      });
+    },
+  },
+
+  "projects.update": {
+    scopes: ["WRITE_PROJECTS"] as const,
+    input: z.object({
+      id: z.string().describe("Project id (cuid)"),
+      name: z.string().min(1).max(120).optional(),
+      description: z.string().max(4000).nullable().optional(),
+      icon: z.string().max(8).optional(),
+      color: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+      archived: z.boolean().optional(),
+      startDate: z.coerce.date().nullable().optional(),
+      targetDate: z.coerce.date().nullable().optional(),
+    }),
+    async run(
+      input: {
+        id: string;
+        name?: string;
+        description?: string | null;
+        icon?: string;
+        color?: string;
+        archived?: boolean;
+        startDate?: Date | null;
+        targetDate?: Date | null;
+      },
+      ctx: McpContext,
+    ) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "project", id: input.id });
+      const actorId = await resolveActorId(ctx);
+      const { id, ...patch } = input;
+      return db.$transaction(async (tx) => {
+        const before = await tx.project.findFirstOrThrow({
+          where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
+        });
+        const after = await tx.project.update({ where: { id: before.id }, data: patch });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId,
+          entity: "Project",
+          entityId: before.id,
+          action: "update",
+          before,
+          after,
+          eventKind: EventKind.PROJECT_UPDATED,
+          subjectType: "project",
+          subjectId: before.id,
+          payload: patch,
+        });
+        return after;
+      });
+    },
+  },
+
+  "projects.archive": {
+    scopes: ["WRITE_PROJECTS"] as const,
+    input: z.object({ id: z.string().describe("Project id (cuid)") }),
+    async run(input: { id: string }, ctx: McpContext) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "project", id: input.id });
+      return db.$transaction(async (tx) => {
+        const project = await tx.project.findFirstOrThrow({
+          where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { id: true },
+        });
+        return tx.project.update({
+          where: { id: project.id },
+          data: { archived: true },
+        });
       });
     },
   },
