@@ -29,6 +29,9 @@ export default function WorkspaceSettingsPage() {
   const [agentIdleTimeoutMinutes, setAgentIdleTimeoutMinutes] = useState(0);
   const [assignmentSlaMinutes, setAssignmentSlaMinutes] = useState(0);
   const [autoRedispatchOnStall, setAutoRedispatchOnStall] = useState(false);
+  const [requiredAckSeconds, setRequiredAckSeconds] = useState(0);
+  const [autoRedispatchOnNoack, setAutoRedispatchOnNoack] = useState(false);
+  const [slaEnforcementEnabled, setSlaEnforcementEnabled] = useState(false);
 
   useEffect(() => {
     if (!current) return;
@@ -41,6 +44,9 @@ export default function WorkspaceSettingsPage() {
     setAgentIdleTimeoutMinutes(current.agentIdleTimeoutMinutes);
     setAssignmentSlaMinutes(current.assignmentSlaMinutes);
     setAutoRedispatchOnStall(current.autoRedispatchOnStall);
+    setRequiredAckSeconds(current.requiredAckSeconds);
+    setAutoRedispatchOnNoack(current.autoRedispatchOnNoack);
+    setSlaEnforcementEnabled(current.slaEnforcementEnabled);
   }, [current]);
 
   const update = trpc.workspace.update.useMutation({
@@ -253,6 +259,66 @@ export default function WorkspaceSettingsPage() {
                   className="h-4 w-4"
                 />
               </label>
+              <Field
+                label="Required ack (seconds)"
+                hint="How long an agent has to comment or transition an issue after assignment before AGENT_NOACK fires. 0 disables. 60–180s is typical."
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  max={3600}
+                  value={requiredAckSeconds}
+                  onChange={(e) =>
+                    setRequiredAckSeconds(Number(e.target.value) || 0)
+                  }
+                  disabled={!canEdit}
+                />
+              </Field>
+              <label className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">
+                    Auto-redispatch on no-ack
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    When checked, AGENT_NOACK also clears assignedAgentId so
+                    the auto-dispatcher re-picks. Mirrors the stall toggle.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoRedispatchOnNoack}
+                  onChange={(e) => setAutoRedispatchOnNoack(e.target.checked)}
+                  disabled={!canEdit}
+                  className="h-4 w-4"
+                />
+              </label>
+            </div>
+          </Section>
+
+          <Section
+            title="Issue SLA"
+            hint="Per-issue SLA enforcement. Set slaMinutes from issue detail; this toggle controls workspace-wide enforcement."
+          >
+            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+              <label className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">
+                    Enforce per-issue SLA
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    When checked, scans for issues past their slaMinutes
+                    target and emits ISSUE_SLA_BREACH. Set per-issue
+                    slaMinutes from issue detail.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={slaEnforcementEnabled}
+                  onChange={(e) => setSlaEnforcementEnabled(e.target.checked)}
+                  disabled={!canEdit}
+                  className="h-4 w-4"
+                />
+              </label>
             </div>
           </Section>
 
@@ -272,6 +338,9 @@ export default function WorkspaceSettingsPage() {
                     agentIdleTimeoutMinutes,
                     assignmentSlaMinutes,
                     autoRedispatchOnStall,
+                    requiredAckSeconds,
+                    autoRedispatchOnNoack,
+                    slaEnforcementEnabled,
                   })
                 }
               >

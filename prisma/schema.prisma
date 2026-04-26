@@ -100,6 +100,8 @@ enum EventKind {
   MEMBERSHIP_ROLE_CHANGED
   MEMBERSHIP_REMOVED
   ISSUE_STALLED
+  AGENT_NOACK
+  ISSUE_SLA_BREACH
 }
 
 enum WebhookDeliveryStatus {
@@ -279,6 +281,21 @@ model Workspace {
   /// auto-dispatcher re-picks. When false, the event fires but the
   /// assignment is preserved (operator-driven workflow).
   autoRedispatchOnStall      Boolean          @default(false)
+  /// When > 0, every successful AGENT_ASSIGNED delivery starts an
+  /// "ack window" — the agent must comment on or transition the
+  /// issue within this many seconds, otherwise an AGENT_NOACK event
+  /// fires (and the issue is re-dispatched if `autoRedispatchOnNoack`
+  /// is true). 0 disables the check. 60–180s is reasonable when the
+  /// agent's loop is fast.
+  requiredAckSeconds         Int              @default(0)
+  /// When true, AGENT_NOACK also clears assignedAgentId so the
+  /// auto-dispatcher re-picks. Mirrors `autoRedispatchOnStall`.
+  autoRedispatchOnNoack      Boolean          @default(false)
+  /// When true, the maintenance worker scans for SLA breaches every
+  /// minute and emits ISSUE_SLA_BREACH events. Off by default —
+  /// requires `Issue.slaMinutes` to be set per-issue, otherwise the
+  /// sweep is a no-op for the row.
+  slaEnforcementEnabled      Boolean          @default(false)
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
   deletedAt                  DateTime?

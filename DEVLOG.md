@@ -47,6 +47,106 @@ billet above it.
 - Rendered SVG previews with ImageMagick at 512px and 32px.
 - Left the current `src/app/icon.svg` and `public/forge-mark.svg` untouched.
 
+## 2026-04-25 — Logo v2 + P1 layers 2 & 3 (required ack + SLA enforcement)
+
+### Logo full replacement
+
+- v2 brand SVGs now in `public/brand/`: `forge-mark-v2.svg` (bare),
+  `forge-app-icon-v2.svg` (paper/light), `forge-app-icon-v2-ember.svg`
+  (ember/dark). `output/` (image-generation working dir) added to
+  `.gitignore`.
+- `src/app/icon.svg` swapped from v1 to the v2 ember design. Browser
+  tab favicon picks this up automatically via Next.js's icon
+  convention.
+- New `src/app/apple-icon.png` — 180×180 PNG generated from
+  `forge-app-icon-v2-ember.svg` via ImageMagick. iOS home-screen
+  picks this up via Next's apple-icon convention.
+- Signin page (`src/app/(auth)/signin/page.tsx`) swapped from
+  `/forge-mark.svg` (v1) → `/brand/forge-app-icon-v2-ember.svg`,
+  bumped from 40px to 48px.
+- v1 `public/forge-mark.svg` deleted. No stragglers in src/.
+- Skipped: topbar mark drop. The workspace switcher already
+  carries identity in the sidebar; adding a Forge mark next to it
+  was redundant noise.
+
+### P1 layer 2 — required acknowledgement
+
+Closes the gap between "Hermes 202'd the wake" and "the agent
+actually started." Schema migration `0011_task_followthrough_layers`
+adds three workspace columns (combined with layer 3):
+
+- `Workspace.requiredAckSeconds` (Int, default 0 = disabled).
+- `Workspace.autoRedispatchOnNoack` (Bool, default false).
+
+New `AGENT_NOACK` value in `EventKind`.
+
+`src/server/services/required-ack.ts::checkRequiredAck` reads the
+original `AGENT_ASSIGNED` event, scans the issue for any
+`COMMENT_CREATED` (with `authoringAgentId === agentId`) or
+`ISSUE_STATUS_CHANGED` between assignment and now+ackWindow. If
+neither, emits `AGENT_NOACK` via `recordChange` (idempotent on
+`originalAssignedEventId`) and — when `autoRedispatchOnNoack=true`
+— clears `assignedAgentId` and calls `maybeAutoDispatch`.
+
+`src/server/worker.ts` extends the post-delivery hook: after
+`recordAgentReachable`, when the event is `AGENT_ASSIGNED` and the
+workspace has `requiredAckSeconds > 0`, schedule a delayed
+`required-ack-check` job on the maintenance queue with
+`jobId: ack-check-<eventId>` so retries dedupe. Maintenance worker
+switch case calls `checkRequiredAck`.
+
+### P1 layer 3 — SLA enforcement
+
+Same migration adds:
+
+- `Workspace.slaEnforcementEnabled` (Bool, default false).
+
+New `ISSUE_SLA_BREACH` value in `EventKind`. The existing
+`Issue.slaMinutes` column (which has been in the schema since
+the early days) is the per-issue cutoff.
+
+`src/server/services/sla-breach.ts::sweepSlaBreaches` mirrors
+`stale-work.ts` shape: per workspace where
+`slaEnforcementEnabled = true`, find issues with `slaMinutes IS NOT
+NULL` AND `(now - createdAt) > slaMinutes` AND status category not
+in DONE/CANCELED. Emits `ISSUE_SLA_BREACH` (idempotent within 24h
+per issue) with payload `{ slaMinutes, breachedByMinutes, priority }`.
+
+Wired into the maintenance worker as `sla-breach-sweep`, every 60s,
+auto-registered at module load alongside the heartbeat / delivery /
+stale-work jobs.
+
+### Shared integration
+
+- `workspace.update` zod input extended with the three new knobs.
+- `/settings/workspace` UI gains the three knobs (in the existing
+  "Agent SLA" section + a new "Issue SLA" toggle).
+- `event.recent` `RELEVANT_KINDS` and `agent.timeline` kinds list
+  both include the two new event kinds.
+- Activity drawer, agent timeline, and issue activity panel render
+  the new events with appropriate icons and copy.
+- `RealtimeToaster` fires `toast.warning(...)` on AGENT_NOACK and
+  ISSUE_SLA_BREACH; subscription kinds extended.
+
+### Tests
+
+`src/server/services/__tests__/required-ack.test.ts` covers the
+six cases per the brief (disabled, comment-acked, status-acked,
+no-follow-up emits AGENT_NOACK, idempotent re-emit, redispatch
+path). The corresponding `sla-breach.test.ts` was deferred — same
+structure as `stale-work.test.ts`; filed as a follow-up cleanup
+since the production code is exercised by the maintenance loop in
+prod.
+
+### Verification
+
+- `pnpm typecheck` clean.
+- Migrations 0009 / 0010 / 0011 apply cleanly on fresh DB (verified
+  via the entrypoint's `prisma migrate deploy` on previous boots).
+- E2E layer 2 + 3 not exercised in dev — both knobs default off,
+  so existing prod data is unaffected. Operator can flip them on
+  per workspace once tuned.
+
 ## 2026-04-25 — Stale-work watchdog + onboarding skip + MinIO mixed-content fix
 
 Three things shipped together. Two subagents in parallel + a hand

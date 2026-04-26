@@ -31,6 +31,8 @@ const KIND_LABEL: Record<string, string> = {
   ISSUE_ASSIGNED: "Assignees changed",
   ISSUE_PRIORITY_CHANGED: "Priority changed",
   ISSUE_STALLED: "Stalled — agent hadn't moved it",
+  ISSUE_SLA_BREACH: "SLA breach — past target",
+  AGENT_NOACK: "Missed wake — agent didn't ack",
   COMMENT_CREATED: "Commented",
   COMMENT_UPDATED: "Edited comment",
   SKILL_INVOKED: "Skill ran",

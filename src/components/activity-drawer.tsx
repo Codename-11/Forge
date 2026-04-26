@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   ArrowRightLeft,
   Bot,
+  Clock,
   FilePlus,
   History,
   Inbox,
@@ -33,8 +34,10 @@ type Kind =
   | "ISSUE_PRIORITY_CHANGED"
   | "ISSUE_QUEUED"
   | "ISSUE_STALLED"
+  | "ISSUE_SLA_BREACH"
   | "COMMENT_CREATED"
   | "AGENT_ASSIGNED"
+  | "AGENT_NOACK"
   | "AGENT_STATUS_CHANGED";
 
 type TimelineEvent = {
@@ -70,8 +73,10 @@ const KINDS: Kind[] = [
   "ISSUE_PRIORITY_CHANGED",
   "ISSUE_QUEUED",
   "ISSUE_STALLED",
+  "ISSUE_SLA_BREACH",
   "COMMENT_CREATED",
   "AGENT_ASSIGNED",
+  "AGENT_NOACK",
   "AGENT_STATUS_CHANGED",
 ];
 
@@ -196,6 +201,10 @@ function iconFor(kind: Kind) {
       return <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />;
     case "ISSUE_STALLED":
       return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
+    case "AGENT_NOACK":
+      return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
+    case "ISSUE_SLA_BREACH":
+      return <Clock className="h-3.5 w-3.5 text-danger" />;
     case "ISSUE_QUEUED":
       return <Inbox className="h-3.5 w-3.5 text-muted-foreground" />;
     case "COMMENT_CREATED":
@@ -353,6 +362,52 @@ function summarizeEvent(
                 </>
               )}
             </span>
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
+    }
+    case "AGENT_NOACK": {
+      const handle = readPayloadString(evt.payload, "agentProfileKey");
+      const seconds =
+        evt.payload && typeof evt.payload === "object"
+          ? (evt.payload as Record<string, unknown>).requiredAckSeconds
+          : null;
+      const secNum =
+        typeof seconds === "number" ? Math.round(seconds) : null;
+      return {
+        headline: (
+          <>
+            <span className="text-warning">Missed wake</span> — {issueLink}{" "}
+            <span className="text-muted-foreground">
+              {handle && (
+                <>
+                  <span className="font-mono">@{handle}</span> didn&apos;t ack
+                </>
+              )}
+              {secNum != null && <> within {secNum}s</>}
+            </span>
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
+    }
+    case "ISSUE_SLA_BREACH": {
+      const overdue =
+        evt.payload && typeof evt.payload === "object"
+          ? (evt.payload as Record<string, unknown>).breachedByMinutes
+          : null;
+      const overdueNum =
+        typeof overdue === "number" ? Math.max(0, overdue) : null;
+      return {
+        headline: (
+          <>
+            <span className="text-danger">SLA breach</span> — {issueLink}{" "}
+            {overdueNum != null && (
+              <span className="text-muted-foreground">
+                {overdueNum}m overdue
+              </span>
+            )}
           </>
         ),
         meta: issue ? <span className="truncate">{issue.title}</span> : undefined,

@@ -22,8 +22,10 @@ const RELEVANT_KINDS: EventKind[] = [
   EventKind.ISSUE_PRIORITY_CHANGED,
   EventKind.ISSUE_QUEUED,
   EventKind.ISSUE_STALLED,
+  EventKind.ISSUE_SLA_BREACH,
   EventKind.COMMENT_CREATED,
   EventKind.AGENT_ASSIGNED,
+  EventKind.AGENT_NOACK,
   EventKind.AGENT_STATUS_CHANGED,
 ];
 

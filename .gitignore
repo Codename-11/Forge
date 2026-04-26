@@ -17,3 +17,6 @@ prisma/migrations/dev.db*
 next-env.d.ts
 tsconfig.tsbuildinfo
 pnpm-workspace.yaml
+
+# Image generation working directory — final assets are committed under public/brand/
+output/

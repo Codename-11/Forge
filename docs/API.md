@@ -27,7 +27,7 @@ be consumed via the typed client.
 | `template`        | `list`, `byId`, `create`, `update`, `delete` — issue templates                                                             |
 | `projectTemplate` | `list`, `create`, `update`, `delete` — project starter templates                                                           |
 | `agent`           | `list`, `byId`, `byProfileKey`, `create`, `update`, `archive`, `delete`, `heartbeat`, `pipeline`, `timeline`, `uptime`, `webhookHealth` |
-| `event`           | `recent`, `unreadCount` — workspace-scoped activity feed for the topbar Activity drawer                                  |
+| `event`           | `recent`, `unreadCount` — workspace-scoped activity feed for the topbar Activity drawer (kinds include `ISSUE_STALLED`, `AGENT_NOACK`, `ISSUE_SLA_BREACH`) |
 | `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                          |
 | `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                                |
 | `user`            | `me`, `updateAppearance` — current user + per-user prefs (theme, density, textSize)                                        |

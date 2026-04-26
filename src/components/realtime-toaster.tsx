@@ -5,6 +5,7 @@ import {
   UserCheck,
   Activity,
   AlertTriangle,
+  Clock,
   MessageCircle,
 } from "lucide-react";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -26,6 +27,8 @@ type EventPayload = {
   issuePrefix?: string;
   agentProfileKey?: string;
   slaMinutes?: number;
+  requiredAckSeconds?: number;
+  breachedByMinutes?: number;
 };
 
 function asPayload(p: unknown): EventPayload {
@@ -104,6 +107,32 @@ export default function RealtimeToaster() {
           });
           return;
         }
+        case "AGENT_NOACK": {
+          const prefix = payload.issuePrefix ?? evt.subjectId ?? "an issue";
+          const handle = payload.agentProfileKey;
+          const secs = payload.requiredAckSeconds;
+          toast.warning(`Missed wake: ${prefix}`, {
+            description: handle
+              ? `@${handle} didn't ack${secs ? ` within ${secs}s` : ""}`
+              : secs
+                ? `No ack within ${secs}s`
+                : undefined,
+            icon: <AlertTriangle className="h-4 w-4" />,
+          });
+          return;
+        }
+        case "ISSUE_SLA_BREACH": {
+          const prefix = payload.issuePrefix ?? evt.subjectId ?? "an issue";
+          const overdue = payload.breachedByMinutes;
+          toast.warning(`SLA breach: ${prefix}`, {
+            description:
+              typeof overdue === "number"
+                ? `${Math.max(0, overdue)}m overdue`
+                : undefined,
+            icon: <Clock className="h-4 w-4" />,
+          });
+          return;
+        }
         default:
           return;
       }
@@ -113,8 +142,10 @@ export default function RealtimeToaster() {
         "AGENT_ASSIGNED",
         "AGENT_STATUS_CHANGED",
         "AGENT_DELETED",
+        "AGENT_NOACK",
         "COMMENT_CREATED",
         "ISSUE_STALLED",
+        "ISSUE_SLA_BREACH",
       ],
     },
   );
