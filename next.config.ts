@@ -44,6 +44,18 @@ const config: NextConfig = {
       "./prisma/schema.prisma",
     ],
   },
+  async rewrites() {
+    return [
+      // The in-app VitePress docs live under /public/docs/ as static
+      // files. With `cleanUrls: false` in vitepress config, the home
+      // page is `index.html` — but Next's default trailing-slash
+      // redirect rewrites `/docs/` → `/docs`, which then 404s because
+      // the public folder doesn't auto-extension-resolve. Map both
+      // `/docs` and `/docs/` to the index file so the iframe lands.
+      { source: "/docs", destination: "/docs/index.html" },
+      { source: "/docs/", destination: "/docs/index.html" },
+    ];
+  },
   async headers() {
     return [
       // Default: deny framing site-wide (clickjacking guard).

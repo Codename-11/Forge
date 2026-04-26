@@ -113,13 +113,20 @@ const SECTIONS: readonly NavSection[] = [
       { path: "/settings/agents", label: "Agent admin", icon: Bot, chord: "e" },
       { path: "/settings/plugins", label: "Plugins", icon: Plug, chord: "l" },
       { path: "/settings/admin", label: "Admin portal", icon: Shield },
-      // Docs — in-app VitePress viewer (iframes /docs/?embed=dashboard).
-      // Lives next to Settings as a "help" landing; `g h` chord matches
-      // the universal "help" mnemonic without colliding with `g a` etc.
-      { path: "/docs", label: "Docs", icon: BookOpen, chord: "h" },
-      { path: "/settings", label: "Settings", icon: Settings, chord: "," },
     ],
   },
+] as const;
+
+/**
+ * Pinned-to-bottom items rendered in a separate footer block (above the
+ * collapse toggle). Visually separated by a thin border so utility
+ * surfaces — Docs (help) and Settings (configuration) — stay one click
+ * away without competing with the workflow nav above.
+ */
+const FOOTER_ITEMS: readonly NavItem[] = [
+  // `g h` = help mnemonic for the in-app VitePress viewer.
+  { path: "/docs", label: "Docs", icon: BookOpen, chord: "h" },
+  { path: "/settings", label: "Settings", icon: Settings, chord: "," },
 ] as const;
 
 const COLLAPSED_STORAGE_KEY = "forge.sidebarCollapsed";
@@ -193,6 +200,11 @@ export function Sidebar({
     [slug, timeTrackingEnabled],
   );
 
+  const footerItems = useMemo(
+    () => FOOTER_ITEMS.map((it) => ({ ...it, href: `/w/${slug}${it.path}` })),
+    [slug],
+  );
+
   const chordMap = useMemo(() => {
     const m: Record<string, () => void> = {};
     for (const sec of sections) {
@@ -200,13 +212,16 @@ export function Sidebar({
         if (it.chord) m[it.chord] = () => router.push(it.href);
       }
     }
+    for (const it of footerItems) {
+      if (it.chord) m[it.chord] = () => router.push(it.href);
+    }
     // Spec overrides (preserved from the previous shell):
     //   `g n` opens the new-initiative dialog via ?new.
     //   `g b` = "browse inbox" alias for `g i`.
     m["n"] = () => router.push(`/w/${slug}/initiatives?new`);
     m["b"] = () => router.push(`/w/${slug}/inbox`);
     return m;
-  }, [sections, router, slug]);
+  }, [sections, footerItems, router, slug]);
   useChord("g", chordMap);
 
   const { data: inboxBadge } = trpc.inbox.badge.useQuery(undefined, {
@@ -302,68 +317,38 @@ export function Sidebar({
             >
               {sec.label}
             </div>
-            {sec.items.map(({ href, path, label, icon: Icon, chord, badge }) => {
-              const active =
-                pathname === href || pathname?.startsWith(`${href}/`);
-              const badgeCount =
-                badge === "inbox" ? inboxBadge?.count ?? 0 : 0;
-              const chordHint = chord ? `g then ${chord}` : label;
-              return (
-                <Link
-                  key={path}
-                  href={href}
-                  title={chordHint}
-                  className={cn(
-                    "row relative h-7 rounded-md text-[13px]",
-                    active
-                      ? "bg-subtle text-foreground"
-                      : "text-muted-foreground hover:bg-subtle hover:text-foreground",
-                    collapsed
-                      ? "justify-center px-0"
-                      : "px-2 max-md:justify-center max-md:px-0",
-                  )}
-                >
-                  <Icon
-                    className={cn(
-                      "h-3.5 w-3.5 shrink-0",
-                      !collapsed && "mr-2 max-md:mr-0",
-                    )}
-                  />
-                  {/* Collapsed-mode unread dot — overlays the icon so the
-                      rail signals unread without swelling the row height. */}
-                  {collapsed && badgeCount > 0 && (
-                    <span
-                      aria-label={`${badgeCount} unread`}
-                      className="absolute right-3 top-1 h-1.5 w-1.5 rounded-full bg-ember ring-2 ring-card"
-                    />
-                  )}
-                  <span
-                    className={cn(
-                      "flex flex-1 items-center",
-                      collapsed ? "hidden" : "max-md:hidden",
-                    )}
-                  >
-                    <span className="truncate">{label}</span>
-                    {badgeCount > 0 && (
-                      <span className="ml-2 rounded-full bg-ember/15 px-1.5 py-0 font-mono text-[11px] text-ember">
-                        {badgeCount > 99 ? "99+" : badgeCount}
-                      </span>
-                    )}
-                    {chord && (
-                      <span className="ml-auto flex items-center gap-px text-[11px] text-muted-foreground/70">
-                        <span className="kbd !px-1 !text-[11px]">G</span>
-                        <span className="kbd !px-1 !text-[11px]">
-                          {chord.toUpperCase()}
-                        </span>
-                      </span>
-                    )}
-                  </span>
-                </Link>
-              );
-            })}
+            {sec.items.map((item) => (
+              <NavRow
+                key={item.path}
+                item={item}
+                pathname={pathname}
+                collapsed={collapsed}
+                inboxCount={inboxBadge?.count ?? 0}
+              />
+            ))}
           </div>
         ))}
       </nav>
+
+      {/* Footer block: utility surfaces (Docs + Settings) pinned to the
+          bottom, separated from the workflow nav by a thin border. The
+          collapse toggle lives below this block. */}
+      <div
+        className={cn(
+          "mx-2 flex flex-col gap-px border-t border-border/60 pt-2",
+        )}
+      >
+        {footerItems.map((item) => (
+          <NavRow
+            key={item.path}
+            item={item}
+            pathname={pathname}
+            collapsed={collapsed}
+            inboxCount={0}
+            inFooter
+          />
+        ))}
+      </div>
 
       {/* Collapse toggle lives at the bottom — primary affordance is `⌘\`,
           the button is the visual backup for mouse users. */}
@@ -394,5 +379,79 @@ export function Sidebar({
         </span>
       </button>
     </aside>
+  );
+}
+
+/**
+ * Single nav row used by both the main sections and the bottom-pinned
+ * footer block. Same visual contract — icon + label + optional `g X`
+ * chord hint — so Docs/Settings don't visually drift from the rest of
+ * the sidebar even though they live in a separate container.
+ */
+function NavRow({
+  item,
+  pathname,
+  collapsed,
+  inboxCount,
+  inFooter,
+}: {
+  item: { href: string; path: string; label: string; icon: typeof Inbox; chord?: string; badge?: "inbox" };
+  pathname: string | null;
+  collapsed: boolean;
+  inboxCount: number;
+  inFooter?: boolean;
+}) {
+  const { href, path, label, icon: Icon, chord, badge } = item;
+  const active = pathname === href || pathname?.startsWith(`${href}/`);
+  const badgeCount = badge === "inbox" ? inboxCount : 0;
+  const chordHint = chord ? `g then ${chord}` : label;
+  return (
+    <Link
+      key={path}
+      href={href}
+      title={chordHint}
+      className={cn(
+        "row relative h-7 rounded-md text-[13px]",
+        active
+          ? "bg-subtle text-foreground"
+          : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+        collapsed
+          ? "justify-center px-0"
+          : "px-2 max-md:justify-center max-md:px-0",
+      )}
+    >
+      <Icon
+        className={cn(
+          "h-3.5 w-3.5 shrink-0",
+          !collapsed && "mr-2 max-md:mr-0",
+          inFooter && !active && "text-muted-foreground/80",
+        )}
+      />
+      {collapsed && badgeCount > 0 && (
+        <span
+          aria-label={`${badgeCount} unread`}
+          className="absolute right-3 top-1 h-1.5 w-1.5 rounded-full bg-ember ring-2 ring-card"
+        />
+      )}
+      <span
+        className={cn(
+          "flex flex-1 items-center",
+          collapsed ? "hidden" : "max-md:hidden",
+        )}
+      >
+        <span className="truncate">{label}</span>
+        {badgeCount > 0 && (
+          <span className="ml-2 rounded-full bg-ember/15 px-1.5 py-0 font-mono text-[11px] text-ember">
+            {badgeCount > 99 ? "99+" : badgeCount}
+          </span>
+        )}
+        {chord && (
+          <span className="ml-auto flex items-center gap-px text-[11px] text-muted-foreground/70">
+            <span className="kbd !px-1 !text-[11px]">G</span>
+            <span className="kbd !px-1 !text-[11px]">{chord.toUpperCase()}</span>
+          </span>
+        )}
+      </span>
+    </Link>
   );
 }
