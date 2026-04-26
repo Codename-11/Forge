@@ -122,13 +122,17 @@ actually does the work after the wake event lands. Hermes returns
 
 Three layers, increasing in scope. Pick up in order:
 
-- [ ] **(1) Stale-work watchdog (assignment SLA).** When
-      `Issue.assignedAgentId` has been set for > N minutes and the
-      issue's status is still BACKLOG/TODO, emit `ISSUE_STALLED` and
-      either re-dispatch or alert. Per-workspace knob
-      `Workspace.assignmentSlaMinutes` (default 30). Lives in the
-      maintenance worker alongside the existing heartbeat sweep. Pure
-      Forge-side. Cheapest reliability win.
+- [x] **(1) Stale-work watchdog (assignment SLA)** — shipped
+      2026-04-25. `Workspace.assignmentSlaMinutes` (default 0 =
+      disabled) + `Workspace.autoRedispatchOnStall` (default false)
+      knobs. Migration `0009_stale_work_watchdog`. New EventKind
+      `ISSUE_STALLED`. Maintenance worker `stale-work-sweep` job
+      every 60s emits the event for assigned BACKLOG/TODO issues
+      past the cutoff; idempotent within a 1h grace; optionally
+      clears `assignedAgentId` and re-runs the auto-dispatcher.
+      Surfaced in activity drawer, agent timeline, issue activity
+      panel, and as a Sonner warning toast. Workspace settings UI
+      knob in a new "Agent SLA" section.
 
 - [ ] **(2) Required acknowledgement.** Within X seconds of a wake
       delivery (configurable), require a signal from the agent:

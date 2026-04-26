@@ -24,6 +24,8 @@ type EventPayload = {
   mentionsCount?: number;
   actorName?: string;
   issuePrefix?: string;
+  agentProfileKey?: string;
+  slaMinutes?: number;
 };
 
 function asPayload(p: unknown): EventPayload {
@@ -90,6 +92,18 @@ export default function RealtimeToaster() {
           });
           return;
         }
+        case "ISSUE_STALLED": {
+          const prefix = payload.issuePrefix ?? evt.subjectId ?? "an issue";
+          toast.warning(`Stalled: ${prefix} hasn't moved`, {
+            description: payload.agentProfileKey
+              ? `Assigned @${payload.agentProfileKey}${
+                  payload.slaMinutes ? ` · ${payload.slaMinutes}m SLA` : ""
+                }`
+              : undefined,
+            icon: <AlertTriangle className="h-4 w-4" />,
+          });
+          return;
+        }
         default:
           return;
       }
@@ -100,6 +114,7 @@ export default function RealtimeToaster() {
         "AGENT_STATUS_CHANGED",
         "AGENT_DELETED",
         "COMMENT_CREATED",
+        "ISSUE_STALLED",
       ],
     },
   );

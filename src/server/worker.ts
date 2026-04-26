@@ -20,6 +20,7 @@ import {
 } from "@/server/audit";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { sweepIdleAgents, recordAgentReachable } from "@/server/services/heartbeat";
+import { sweepStaleWork } from "@/server/services/stale-work";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -30,6 +31,8 @@ const HEARTBEAT_SWEEP_JOB_ID = "heartbeat-sweep";
 const DELIVERY_DRAIN_INTERVAL_MS = 5_000;
 const DELIVERY_DRAIN_JOB_ID = "delivery-drain";
 const DELIVERY_DRAIN_BATCH = 100;
+const STALE_WORK_SWEEP_INTERVAL_MS = 60_000;
+const STALE_WORK_SWEEP_JOB_ID = "stale-work-sweep";
 
 export { webhookQueue, maintenanceQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
@@ -177,6 +180,10 @@ export const maintenanceWorker = new Worker(
         const res = await drainPendingDeliveries();
         return res;
       }
+      case "stale-work-sweep": {
+        const res = await sweepStaleWork();
+        return res;
+      }
       default:
         logger.warn({ jobName: job.name }, "maintenance: unknown job");
         return null;
@@ -256,6 +263,24 @@ export async function registerDeliveryDrainJob(): Promise<void> {
   );
 }
 
+/**
+ * Periodic stale-work watchdog. Flips assigned-but-not-started issues to
+ * `ISSUE_STALLED` once they've sat in BACKLOG/TODO past the workspace's
+ * `assignmentSlaMinutes`. Sibling of the heartbeat sweep; same cadence.
+ */
+export async function registerStaleWorkSweepJob(): Promise<void> {
+  await maintenanceQueue.add(
+    "stale-work-sweep",
+    {},
+    {
+      jobId: STALE_WORK_SWEEP_JOB_ID,
+      repeat: { every: STALE_WORK_SWEEP_INTERVAL_MS },
+      removeOnComplete: { age: 3600, count: 100 },
+      removeOnFail: { age: 86_400, count: 50 },
+    },
+  );
+}
+
 // Auto-register recurring jobs when this module loads (i.e. when
 // `pnpm worker` boots). Fire-and-forget — a Redis outage at boot should
 // not crash the worker; BullMQ will retry internally on the next op.
@@ -264,6 +289,9 @@ void registerHeartbeatSweepJob().catch((err) => {
 });
 void registerDeliveryDrainJob().catch((err) => {
   logger.warn({ err }, "failed to register delivery-drain job");
+});
+void registerStaleWorkSweepJob().catch((err) => {
+  logger.warn({ err }, "failed to register stale-work-sweep job");
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {

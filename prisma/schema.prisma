@@ -99,6 +99,7 @@ enum EventKind {
   MEMBERSHIP_CREATED
   MEMBERSHIP_ROLE_CHANGED
   MEMBERSHIP_REMOVED
+  ISSUE_STALLED
 }
 
 enum WebhookDeliveryStatus {
@@ -170,6 +171,15 @@ model User {
   lastWorkspaceId String?
   /// Ordered list of pinned issue ids (max 3 enforced server-side).
   pinnedIssueIds  String[]  @default([])
+  /// Server-persisted onboarding state. Null = not dismissed; the
+  /// localStorage flag (browser-scoped) controls the per-session
+  /// resume-pill behavior. When set, the OnboardingCard is hidden
+  /// permanently across devices.
+  onboardingDismissedAt  DateTime?
+  /// Steps the user has explicitly opted out of (currently only
+  /// "member" / invite is skippable). Stored as string ids matching
+  /// the OnboardingStep.id values.
+  onboardingSkippedSteps String[]  @default([])
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -260,6 +270,15 @@ model Workspace {
   /// Gated dispatch — assignment lands in queue but agent does not start
   /// work until a human approves.
   requireApprovalBeforeStart Boolean          @default(false)
+  /// When > 0, agents must move issues out of BACKLOG/TODO within
+  /// this many minutes of assignment. Stale issues emit ISSUE_STALLED
+  /// and (depending on `autoRedispatchOnStall`) get their assignedAgentId
+  /// cleared so the next auto-dispatch picks them up.
+  assignmentSlaMinutes       Int              @default(0)
+  /// When true, ISSUE_STALLED also clears assignedAgentId so the
+  /// auto-dispatcher re-picks. When false, the event fires but the
+  /// assignment is preserved (operator-driven workflow).
+  autoRedispatchOnStall      Boolean          @default(false)
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
   deletedAt                  DateTime?

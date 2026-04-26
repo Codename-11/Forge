@@ -96,18 +96,31 @@ export function isStorageConfigured(): boolean {
 }
 
 let _client: S3Client | null = null;
+let _presignClient: S3Client | null = null;
 
-export function getS3Client(): S3Client {
-  if (_client) return _client;
-  const endpoint = process.env.S3_ENDPOINT;
+function readSharedConfig() {
   const accessKeyId = process.env.S3_ACCESS_KEY;
   const secretAccessKey = process.env.S3_SECRET_KEY;
   const region = process.env.S3_REGION ?? "us-east-1";
   const forcePathStyle =
     (process.env.S3_FORCE_PATH_STYLE ?? "true").toLowerCase() !== "false";
-  if (!endpoint || !accessKeyId || !secretAccessKey) {
+  if (!accessKeyId || !secretAccessKey) {
     throw new StorageNotConfiguredError();
   }
+  return { accessKeyId, secretAccessKey, region, forcePathStyle };
+}
+
+/**
+ * Internal SDK client — talks directly to MinIO over the Docker
+ * bridge for bucket ops, head, list, delete. Endpoint is
+ * `S3_ENDPOINT` (typically `http://minio:9000` in compose).
+ */
+export function getS3Client(): S3Client {
+  if (_client) return _client;
+  const endpoint = process.env.S3_ENDPOINT;
+  if (!endpoint) throw new StorageNotConfiguredError();
+  const { accessKeyId, secretAccessKey, region, forcePathStyle } =
+    readSharedConfig();
   _client = new S3Client({
     endpoint,
     region,
@@ -117,9 +130,37 @@ export function getS3Client(): S3Client {
   return _client;
 }
 
-/** Reset cached client (tests only). */
+/**
+ * Presign-only client — uses `S3_PUBLIC_ENDPOINT` (browser-reachable
+ * HTTPS through Traefik) so generated PUT/GET URLs work from the
+ * browser without mixed-content blocks or DNS lookups against
+ * Docker-internal hostnames. Falls back to `S3_ENDPOINT` when
+ * `S3_PUBLIC_ENDPOINT` is unset (single-host dev setups).
+ *
+ * Uploads: the browser issues a signed PUT against this URL → Traefik
+ * routes to MinIO → MinIO accepts (signature host matches).
+ * Downloads: same path with a signed GET.
+ */
+export function getPresignClient(): S3Client {
+  if (_presignClient) return _presignClient;
+  const endpoint =
+    process.env.S3_PUBLIC_ENDPOINT ?? process.env.S3_ENDPOINT;
+  if (!endpoint) throw new StorageNotConfiguredError();
+  const { accessKeyId, secretAccessKey, region, forcePathStyle } =
+    readSharedConfig();
+  _presignClient = new S3Client({
+    endpoint,
+    region,
+    credentials: { accessKeyId, secretAccessKey },
+    forcePathStyle,
+  });
+  return _presignClient;
+}
+
+/** Reset cached clients (tests only). */
 export function _resetS3ClientForTests(): void {
   _client = null;
+  _presignClient = null;
 }
 
 function bucketNameFromSlug(slug: string): string {
@@ -269,14 +310,17 @@ export async function presignUploadUrl(
   await ensureWorkspaceBucket(input.workspaceId);
 
   const storageKey = storageKeyFor(targetType, targetId, input.filename);
-  const s3 = getS3Client();
+  // Presign against the public endpoint so the URL is reachable from
+  // the browser. SDK ops (bucket ensure above) still use the internal
+  // client — that path doesn't leave the Docker bridge.
+  const presign = getPresignClient();
   const cmd = new PutObjectCommand({
     Bucket: bucket,
     Key: storageKey,
     ContentType: input.mimeType,
     ContentLength: input.size,
   });
-  const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn: UPLOAD_URL_TTL_SECONDS });
+  const uploadUrl = await getSignedUrl(presign, cmd, { expiresIn: UPLOAD_URL_TTL_SECONDS });
 
   // Record a pending attachment row (url="" marks it as not yet finalized).
   const row = await db.attachment.create({
@@ -383,13 +427,15 @@ export async function presignDownloadUrl(attachmentId: string): Promise<{
   }
   const ws = await loadWorkspace(row.workspaceId);
   const bucket = bucketNameFromSlug(ws.slug);
-  const s3 = getS3Client();
+  // Presign against the public endpoint — same reason as upload: the
+  // URL ends up in a browser <a download> click.
+  const presign = getPresignClient();
   const cmd = new GetObjectCommand({
     Bucket: bucket,
     Key: row.url,
     ResponseContentDisposition: `attachment; filename="${row.filename.replace(/"/g, "")}"`,
   });
-  const url = await getSignedUrl(s3, cmd, { expiresIn: DOWNLOAD_URL_TTL_SECONDS });
+  const url = await getSignedUrl(presign, cmd, { expiresIn: DOWNLOAD_URL_TTL_SECONDS });
   return {
     url,
     filename: row.filename,

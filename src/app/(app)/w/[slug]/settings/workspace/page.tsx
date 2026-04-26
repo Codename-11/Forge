@@ -27,6 +27,8 @@ export default function WorkspaceSettingsPage() {
   const [timeTrackingEnabled, setTimeTrackingEnabled] = useState(ws.timeTrackingEnabled);
   const [attachmentQuotaMb, setAttachmentQuotaMb] = useState(ws.attachmentQuotaMb);
   const [agentIdleTimeoutMinutes, setAgentIdleTimeoutMinutes] = useState(0);
+  const [assignmentSlaMinutes, setAssignmentSlaMinutes] = useState(0);
+  const [autoRedispatchOnStall, setAutoRedispatchOnStall] = useState(false);
 
   useEffect(() => {
     if (!current) return;
@@ -37,6 +39,8 @@ export default function WorkspaceSettingsPage() {
     setTimeTrackingEnabled(current.timeTrackingEnabled);
     setAttachmentQuotaMb(current.attachmentQuotaMb);
     setAgentIdleTimeoutMinutes(current.agentIdleTimeoutMinutes);
+    setAssignmentSlaMinutes(current.assignmentSlaMinutes);
+    setAutoRedispatchOnStall(current.autoRedispatchOnStall);
   }, [current]);
 
   const update = trpc.workspace.update.useMutation({
@@ -211,6 +215,47 @@ export default function WorkspaceSettingsPage() {
             </div>
           </Section>
 
+          <Section
+            title="Agent SLA"
+            hint="Watchdog for assignments where the agent woke up but never moved the issue. Pure follow-through reliability — no priority changes."
+          >
+            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+              <Field
+                label="Agent SLA (minutes)"
+                hint="Flip an issue to STALLED when an assigned agent hasn't moved it out of BACKLOG/TODO within this window. 0 disables. 30 is a reasonable starting point."
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  max={10080}
+                  value={assignmentSlaMinutes}
+                  onChange={(e) =>
+                    setAssignmentSlaMinutes(Number(e.target.value) || 0)
+                  }
+                  disabled={!canEdit}
+                />
+              </Field>
+              <label className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">
+                    Auto-redispatch on stall
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    When checked, also clears assignedAgentId so the
+                    auto-dispatcher re-picks. Off = event-only (operator-driven).
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoRedispatchOnStall}
+                  onChange={(e) => setAutoRedispatchOnStall(e.target.checked)}
+                  disabled={!canEdit}
+                  className="h-4 w-4"
+                />
+              </label>
+            </div>
+          </Section>
+
           {canEdit && (
             <div className="flex justify-end">
               <Button
@@ -225,6 +270,8 @@ export default function WorkspaceSettingsPage() {
                     timeTrackingEnabled,
                     attachmentQuotaMb,
                     agentIdleTimeoutMinutes,
+                    assignmentSlaMinutes,
+                    autoRedispatchOnStall,
                   })
                 }
               >
