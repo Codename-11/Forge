@@ -78,10 +78,13 @@ const SECTIONS: readonly NavSection[] = [
   {
     id: "work",
     label: "Work",
-    // Inbox (Personal) is the primary "what's next" landing; Dashboard is
-    // the workspace overview (rollups + onboarding) reachable via `g d`.
+    // Dashboard is the default workspace landing (rollups + onboarding).
+    // Inbox sits next to it because both are "homepage-y" surfaces — the
+    // bell-drawer Mine tab is a fast-access version of Inbox, but the
+    // full page lives here. Issues / Projects round out the workflow.
     items: [
       { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
+      { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
       { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
       { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
     ],
@@ -99,7 +102,6 @@ const SECTIONS: readonly NavSection[] = [
     id: "personal",
     label: "Personal",
     items: [
-      { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
       { path: "/standup", label: "Standup", icon: FileText, chord: "u" },
       { path: "/time", label: "Time", icon: Clock, chord: "t", onlyWhenTimeTracking: true },
     ],
@@ -229,15 +231,10 @@ export function Sidebar({
     staleTime: 60_000,
   });
 
-  const { data: currentCycle } = trpc.cycle.current.useQuery();
-  useHotkey(
-    "c",
-    () => {
-      if (currentCycle) router.push(`/w/${slug}/cycles/${currentCycle.id}`);
-      else router.push(`/w/${slug}/cycles`);
-    },
-    [currentCycle, router, slug],
-  );
+  // Sprint nav lives on `g c` (chord). The previous bare-"c" hotkey
+  // was dropped because it ate Ctrl+C copy on Linux/Windows where Ctrl
+  // is the platform modifier — pressing Ctrl+C anywhere outside an
+  // input would route to /cycles AND preventDefault the copy.
 
   return (
     <aside
@@ -411,7 +408,7 @@ function NavRow({
       href={href}
       title={chordHint}
       className={cn(
-        "row relative h-7 rounded-md text-[13px]",
+        "row relative h-8 rounded-md text-[13px]",
         active
           ? "bg-subtle text-foreground"
           : "text-muted-foreground hover:bg-subtle hover:text-foreground",

@@ -2,7 +2,6 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
-  Bell,
   ChevronDown,
   HelpCircle,
   LogOut,
@@ -14,11 +13,12 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { PinsStrip } from "@/components/pins/pins-strip";
+import ActivityDrawer, {
+  ActivityBell,
+} from "@/components/activity-drawer";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { signOutAction } from "@/server/actions/auth";
-import { trpc } from "@/lib/trpc";
-import { useCrossTab, useRealtime } from "@/hooks/use-realtime";
 import { MOTION } from "@/lib/motion";
 
 /**
@@ -39,32 +39,6 @@ export function TopBar({
   user: { name?: string | null; image?: string | null; email: string };
 }) {
   const ws = useMaybeWorkspace();
-  const utils = trpc.useUtils();
-  const { data: inboxBadge } = trpc.inbox.badge.useQuery(undefined, {
-    refetchOnWindowFocus: true,
-    staleTime: 60_000,
-  });
-
-  // Live-update the badge when relevant realtime events fire. Any issue
-  // mutation or new comment may change mentions / stalled / assigned
-  // counts; keep it cheap by just invalidating the query.
-  useRealtime(
-    () => {
-      void utils.inbox.badge.invalidate();
-    },
-    { subjectType: ["issue"] },
-  );
-  useRealtime(
-    () => {
-      void utils.inbox.badge.invalidate();
-    },
-    { kindPrefix: "COMMENT_" },
-  );
-  useCrossTab((msg) => {
-    if (msg.type === "inbox:refresh") {
-      void utils.inbox.badge.invalidate();
-    }
-  });
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card/30 px-3">
@@ -92,23 +66,12 @@ export function TopBar({
           <span className="kbd hidden bg-ember/20 text-ember-foreground md:inline">⇧C</span>
         </button>
 
-        {ws && (
-          <Link
-            href={`/w/${ws.slug}/inbox`}
-            title="Inbox (g i)"
-            className={cn(
-              "focus-ring relative inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground",
-              MOTION.fast,
-            )}
-          >
-            <Bell className="h-3.5 w-3.5" />
-            {inboxBadge && inboxBadge.count > 0 && (
-              <span className="absolute -right-1 -top-1 min-w-[14px] rounded-full bg-ember px-1 text-center font-mono text-[11px] leading-[14px] text-ember-foreground">
-                {inboxBadge.count > 99 ? "99+" : inboxBadge.count}
-              </span>
-            )}
-          </Link>
-        )}
+        {/* Single notification surface for the workspace shell. Opens
+            ActivityDrawer with a Mine/Activity tab pair — see
+            activity-drawer.tsx. The badge surfaces the actionable
+            count from `inbox.badge` so users know the number means
+            "items needing my attention", not "events in the stream". */}
+        {ws && <ActivityBell />}
 
         <button
           type="button"
@@ -124,6 +87,7 @@ export function TopBar({
 
         <UserMenu user={user} wsSlug={ws?.slug} />
       </div>
+      <ActivityDrawer />
     </header>
   );
 }
