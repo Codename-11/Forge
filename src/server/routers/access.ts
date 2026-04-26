@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { PluginScope } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
 import { router, adminProcedure, workspaceProcedure } from "@/server/trpc";
+import { agentId as agentIdSchema } from "./agent";
 
 function generateApiKey(prefix = "forge_sk"): { raw: string; hashed: string; prefix: string } {
   const rawBytes = randomBytes(32).toString("base64url");
@@ -86,7 +87,7 @@ const narrowingInput = {
    * resolve without a `profileKey` on every call. Must be an agent in the
    * same workspace.
    */
-  linkedAgentId: z.string().cuid().nullable().optional(),
+  linkedAgentId: agentIdSchema.nullable().optional(),
 };
 
 /**
@@ -208,7 +209,7 @@ export const accessRouter = router({
         projectIds: z.array(z.string().cuid()).optional(),
         labelIds: z.array(z.string().cuid()).optional(),
         initiativeIds: z.array(z.string().cuid()).optional(),
-        linkedAgentId: z.string().cuid().nullable().optional(),
+        linkedAgentId: agentIdSchema.nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

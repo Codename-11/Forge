@@ -29,9 +29,9 @@ const profileKey = z
  * Agent ids are *not* always cuids — some agents were seeded with
  * non-cuid handles (hex strings) and have to keep them. Use this
  * permissive schema instead of `z.string().cuid()` anywhere an agent
- * id arrives over the wire.
+ * id arrives over the wire. Exported for cross-router use.
  */
-const agentId = z.string().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/);
+export const agentId = z.string().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/);
 
 const upsertInput = z.object({
   name: z.string().min(1).max(120),

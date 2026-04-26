@@ -7,6 +7,7 @@ import { assertKeyScope, buildKeyScopeWhere } from "@/server/services/api-key-au
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
+import { agentId as agentIdSchema } from "./agent";
 
 const cursorSchema = z.string().optional();
 
@@ -32,7 +33,7 @@ const filterSchema = z.object({
    * Agent-assignment filter. `undefined` = no filter. Pass an agent id
    * to pin; pass `null` to match issues with no agent assigned.
    */
-  assignedAgentId: z.string().cuid().nullable().optional(),
+  assignedAgentId: agentIdSchema.nullable().optional(),
   limit: z.number().min(1).max(500).default(50),
   cursor: cursorSchema,
 });
@@ -195,7 +196,7 @@ export const issueRouter = router({
         priority: z.nativeEnum(Priority).default(Priority.NONE),
         kind: z.nativeEnum(WorkItemKind).default(WorkItemKind.ISSUE),
         assigneeIds: z.array(z.string().cuid()).default([]),
-        assignedAgentId: z.string().cuid().optional(),
+        assignedAgentId: agentIdSchema.optional(),
         labelIds: z.array(z.string().cuid()).default([]),
         dueDate: z.date().optional(),
         estimate: z.number().min(0).optional(),
@@ -323,7 +324,7 @@ export const issueRouter = router({
         statusId: z.string().cuid().optional(),
         priority: z.nativeEnum(Priority).optional(),
         projectId: z.string().cuid().nullable().optional(),
-        assignedAgentId: z.string().cuid().nullable().optional(),
+        assignedAgentId: agentIdSchema.nullable().optional(),
         dueDate: z.date().nullable().optional(),
         estimate: z.number().min(0).nullable().optional(),
       }),
@@ -734,7 +735,7 @@ export const issueRouter = router({
     .input(
       z.object({
         issueIds: z.array(z.string().cuid()).max(500),
-        assignedAgentId: z.string().cuid().nullable(),
+        assignedAgentId: agentIdSchema.nullable(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

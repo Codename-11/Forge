@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { Priority, type Prisma, type PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
+import { agentId as agentIdSchema } from "./agent";
 
 /**
  * Dispatch rules — declarative routing layer consulted before the mode-
@@ -22,7 +23,7 @@ const upsertShape = {
   priority: z.nativeEnum(Priority).nullable().optional(),
   labelId: z.string().cuid().nullable().optional(),
   projectId: z.string().cuid().nullable().optional(),
-  targetAgentId: z.string().cuid(),
+  targetAgentId: agentIdSchema,
   order: z.number().int().min(0).max(100_000).optional(),
   enabled: z.boolean().optional(),
 };
@@ -130,7 +131,7 @@ export const dispatchRuleRouter = router({
         priority: z.nativeEnum(Priority).nullable().optional(),
         labelId: z.string().cuid().nullable().optional(),
         projectId: z.string().cuid().nullable().optional(),
-        targetAgentId: z.string().cuid().optional(),
+        targetAgentId: agentIdSchema.optional(),
         order: z.number().int().min(0).max(100_000).optional(),
         enabled: z.boolean().optional(),
       }),
