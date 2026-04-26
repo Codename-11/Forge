@@ -1129,6 +1129,33 @@ export const mcpTools = {
     },
   },
 
+  // -------------------------------------------------------------------- Standup
+  "standup.draft": {
+    scopes: ["READ_ISSUES", "READ_ANALYTICS"] as const,
+    input: z
+      .object({
+        /**
+         * Lookback window in hours. 24 = yesterday, 72 = three days,
+         * 168 = a full week. Capped at 168.
+         */
+        sinceHours: z.number().int().min(1).max(168).default(24),
+      })
+      .default({}),
+    async run(
+      raw: unknown,
+      ctx: McpContext,
+    ): Promise<unknown> {
+      const input = (raw ?? {}) as { sinceHours?: number };
+      const userId = await resolveActorId(ctx);
+      const { composeStandup } = await import("@/server/services/standup");
+      return composeStandup({
+        workspaceId: ctx.workspaceId,
+        userId,
+        sinceHours: input.sinceHours ?? 24,
+      });
+    },
+  },
+
   // ---------------------------------------------------------------------- Cycles
   "cycles.list": {
     scopes: ["READ_ISSUES"] as const,

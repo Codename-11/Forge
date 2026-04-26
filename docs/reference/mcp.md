@@ -162,6 +162,23 @@ no argument at all — in which case it uses the calling key's
 > Dispatch analytics (`analytics.dispatch.*`) are tRPC-only — see
 > [/reference/trpc.html](/reference/trpc.html).
 
+### `standup`
+
+| Tool    | Summary                                                              |
+|---------|----------------------------------------------------------------------|
+| `draft` | Compose a "closed / opened / continuing / blocked" markdown draft from the caller's last 24h (configurable up to 168h) of activity. |
+
+`standup.draft` accepts `{ sinceHours?: number }` (default 24, max 168)
+and returns `{ markdown, sinceHours, workspaceKey, counts, groups }`.
+The `groups` payload contains the underlying issue rows (id / number /
+key / title) so callers can render their own UI; the `markdown` field
+is mrkdwn-flavored for direct paste into Slack / Discord.
+
+The actor is resolved from the API key's linked user (or, for
+plugin-only keys without a linked user, the first workspace member —
+matching `issues.create`'s fallback). Scopes: `READ_ISSUES`,
+`READ_ANALYTICS`.
+
 ### `agents`
 
 | Tool        | Summary                                                              |
