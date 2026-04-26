@@ -12,7 +12,11 @@ export default defineConfig({
   // the apex.
   base: "/docs/",
   cleanUrls: false,
-  lastUpdated: true,
+  // Last-updated reads `git log` per page. Disabled because the Docker
+  // prod builder excludes `.git` and doesn't ship git, so this would
+  // fail every build. The dashboard's in-app docs viewer never shows
+  // the last-updated stamp anyway.
+  lastUpdated: false,
   appearance: true, // light is default; users can flip to dark
   ignoreDeadLinks: [
     /^https?:\/\/localhost/,
