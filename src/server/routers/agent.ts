@@ -25,6 +25,14 @@ const profileKey = z
   .max(40)
   .regex(/^[a-z0-9][a-z0-9-_]*$/, "Lowercase, digits, `-` or `_` only");
 
+/**
+ * Agent ids are *not* always cuids — some agents were seeded with
+ * non-cuid handles (hex strings) and have to keep them. Use this
+ * permissive schema instead of `z.string().cuid()` anywhere an agent
+ * id arrives over the wire.
+ */
+const agentId = z.string().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/);
+
 const upsertInput = z.object({
   name: z.string().min(1).max(120),
   profileKey,
@@ -59,7 +67,7 @@ export const agentRouter = router({
     ),
 
   byId: workspaceProcedure
-    .input(z.object({ id: z.string().cuid() }))
+    .input(z.object({ id: agentId }))
     .query(async ({ ctx, input }) => {
       const agent = await ctx.db.agent.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
@@ -129,7 +137,7 @@ export const agentRouter = router({
   update: adminProcedure
     .input(
       z.object({
-        id: z.string().cuid(),
+        id: agentId,
         name: z.string().min(1).max(120).optional(),
         description: z.string().max(2000).nullable().optional(),
         avatar: z.string().max(200).nullable().optional(),
@@ -167,7 +175,7 @@ export const agentRouter = router({
     }),
 
   archive: adminProcedure
-    .input(z.object({ id: z.string().cuid() }))
+    .input(z.object({ id: agentId }))
     .mutation(async ({ ctx, input }) => {
       const row = await ctx.db.agent.findFirstOrThrow({
         where: { id: input.id, workspaceId: ctx.workspaceId },
@@ -179,7 +187,7 @@ export const agentRouter = router({
     }),
 
   unarchive: adminProcedure
-    .input(z.object({ id: z.string().cuid() }))
+    .input(z.object({ id: agentId }))
     .mutation(async ({ ctx, input }) => {
       const row = await ctx.db.agent.findFirstOrThrow({
         where: { id: input.id, workspaceId: ctx.workspaceId },
@@ -191,7 +199,7 @@ export const agentRouter = router({
     }),
 
   delete: adminProcedure
-    .input(z.object({ id: z.string().cuid() }))
+    .input(z.object({ id: agentId }))
     .mutation(async ({ ctx, input }) => {
       const row = await ctx.db.agent.findFirstOrThrow({
         where: { id: input.id, workspaceId: ctx.workspaceId },
@@ -203,7 +211,7 @@ export const agentRouter = router({
   heartbeat: workspaceProcedure
     .input(
       z.object({
-        id: z.string().cuid(),
+        id: agentId,
         status: z.nativeEnum(AgentStatus).default(AgentStatus.ONLINE),
       }),
     )
@@ -390,7 +398,7 @@ export const agentRouter = router({
     .input(
       z
         .object({
-          agentId: z.string().cuid().optional(),
+          agentId: agentId.optional(),
           cursor: z.string().cuid().optional(),
           limit: z.number().int().min(1).max(100).default(50),
         })
@@ -577,7 +585,7 @@ export const agentRouter = router({
   uptime: workspaceProcedure
     .input(
       z.object({
-        id: z.string().cuid(),
+        id: agentId,
         windowDays: z.number().int().min(1).max(90).default(7),
         transitionLimit: z.number().int().min(1).max(500).default(200),
       }),
@@ -697,7 +705,7 @@ export const agentRouter = router({
   webhookHealth: workspaceProcedure
     .input(
       z.object({
-        id: z.string().cuid(),
+        id: agentId,
         windowDays: z.number().int().min(1).max(90).default(7),
         recentLimit: z.number().int().min(1).max(50).default(20),
       }),

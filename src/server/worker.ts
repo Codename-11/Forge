@@ -27,6 +27,9 @@ const connection = { url: process.env.REDIS_URL ?? "redis://localhost:6379" };
 
 const HEARTBEAT_SWEEP_INTERVAL_MS = 60_000;
 const HEARTBEAT_SWEEP_JOB_ID = "heartbeat-sweep";
+const DELIVERY_DRAIN_INTERVAL_MS = 5_000;
+const DELIVERY_DRAIN_JOB_ID = "delivery-drain";
+const DELIVERY_DRAIN_BATCH = 100;
 
 export { webhookQueue, maintenanceQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
@@ -170,6 +173,10 @@ export const maintenanceWorker = new Worker(
         const res = await sweepIdleAgents();
         return res;
       }
+      case "delivery-drain": {
+        const res = await drainPendingDeliveries();
+        return res;
+      }
       default:
         logger.warn({ jobName: job.name }, "maintenance: unknown job");
         return null;
@@ -177,6 +184,35 @@ export const maintenanceWorker = new Worker(
   },
   { connection, concurrency: 1 },
 );
+
+/**
+ * Pick up any `WebhookDelivery` rows that are still PENDING (createMany
+ * in `audit.recordChange` writes them but doesn't enqueue) and add them
+ * to the BullMQ webhook queue with a small per-job dedupe key so a
+ * second drain on the same row is a no-op. Bounded batch keeps the loop
+ * predictable; the queue itself handles backoff + DLQ on failure.
+ */
+async function drainPendingDeliveries(): Promise<{ enqueued: number }> {
+  const rows = await db.webhookDelivery.findMany({
+    where: { status: "PENDING" },
+    select: { id: true },
+    orderBy: { scheduledAt: "asc" },
+    take: DELIVERY_DRAIN_BATCH,
+  });
+  let enqueued = 0;
+  for (const r of rows) {
+    await webhookQueue.add(
+      "deliver",
+      { deliveryId: r.id },
+      { jobId: r.id, removeOnComplete: { age: 3600, count: 500 } },
+    );
+    enqueued++;
+  }
+  if (enqueued > 0) {
+    logger.info({ enqueued }, "delivery-drain: enqueued PENDING rows");
+  }
+  return { enqueued };
+}
 
 maintenanceWorker.on("failed", (job, err) => {
   logger.warn({ jobId: job?.id, jobName: job?.name, err }, "maintenance job failed");
@@ -202,11 +238,32 @@ export async function registerHeartbeatSweepJob(): Promise<void> {
   );
 }
 
+/**
+ * Periodic drain of PENDING `WebhookDelivery` rows. `recordChange()`
+ * writes these synchronously inside its transaction but doesn't (and
+ * can't) reach into BullMQ from there — the drain bridges that gap.
+ */
+export async function registerDeliveryDrainJob(): Promise<void> {
+  await maintenanceQueue.add(
+    "delivery-drain",
+    {},
+    {
+      jobId: DELIVERY_DRAIN_JOB_ID,
+      repeat: { every: DELIVERY_DRAIN_INTERVAL_MS },
+      removeOnComplete: { age: 600, count: 50 },
+      removeOnFail: { age: 3600, count: 50 },
+    },
+  );
+}
+
 // Auto-register recurring jobs when this module loads (i.e. when
 // `pnpm worker` boots). Fire-and-forget — a Redis outage at boot should
 // not crash the worker; BullMQ will retry internally on the next op.
 void registerHeartbeatSweepJob().catch((err) => {
   logger.warn({ err }, "failed to register heartbeat-sweep job");
+});
+void registerDeliveryDrainJob().catch((err) => {
+  logger.warn({ err }, "failed to register delivery-drain job");
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {

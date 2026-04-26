@@ -43,7 +43,12 @@ const dispatchRouter = router({
       z
         .object({
           since: z.date().optional(),
-          agentId: z.string().cuid().optional(),
+          agentId: z
+            .string()
+            .min(1)
+            .max(40)
+            .regex(/^[a-zA-Z0-9_-]+$/)
+            .optional(),
         })
         .default({}),
     )

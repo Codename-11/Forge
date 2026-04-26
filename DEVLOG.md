@@ -66,9 +66,31 @@ real dispatch event doubles as a heartbeat.
 - `pnpm typecheck` clean.
 - `hermes webhook test forge-dispatch` → 202 on Victor's adapter.
   Mizu adapter responded 200 on `/health`.
-- E2E from Forge after rebuild: TODO this session — run an issue
-  through assignment, watch `lastHeartbeatAt` bump from delivery
-  rather than cron.
+- E2E green after fixing two pre-existing infrastructure gaps:
+  - **Worker wasn't running.** `src/server/worker.ts` defines the
+    BullMQ workers but nothing in the Next.js app imported it, so the
+    workers were never constructed in production. Added the import to
+    `src/instrumentation.ts` (Next.js boot hook). Required externalising
+    `bullmq` + every `node:*` builtin in the edge bundle pass via
+    `next.config.ts` so the instrumentation hook compiles.
+  - **PENDING deliveries weren't enqueued.** `recordChange()` writes
+    `WebhookDelivery` rows but never adds them to the BullMQ queue.
+    Added a `delivery-drain` job to the maintenance worker that scans
+    for `status=PENDING` rows every 5s and adds each one to the queue
+    with a stable jobId for dedupe.
+  - Live verification: assigned AXI-32 to Victor → `AGENT_ASSIGNED`
+    event row written → drain enqueued the delivery → worker POSTed to
+    `http://172.16.24.250:8644/webhooks/forge-dispatch` → HTTP 202 →
+    `recordAgentReachable` bumped `Agent.lastHeartbeatAt` within 14ms
+    of `deliveredAt`.
+- **Bonus fix during E2E:** existing agent ids in this DB are not
+  cuids (they're 25-char hex strings — Victor `6ea973a47af8fd626d298823d`,
+  Mizu `b4f8cf5fe57b40e6a8be27c31`). The `z.string().cuid()` validation
+  on `agent.byId/update/archive/.../uptime/webhookHealth/timeline`
+  inputs and `analytics.dispatch.summary.agentId` was rejecting them.
+  Replaced with a permissive `agentId = z.string().min(1).max(40).regex(...)`
+  schema. The `cursor` field on `agent.timeline` stays cuid since it
+  refers to ActivityEvent ids which are real cuids.
 
 ### Net effect
 
