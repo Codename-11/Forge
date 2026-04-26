@@ -4,7 +4,7 @@ const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: "standalone",
-  serverExternalPackages: ["ioredis"],
+  serverExternalPackages: ["ioredis", "bullmq"],
   eslint: {
     // Lint in CI / pre-commit via `pnpm lint`; don't gate production
     // build on warnings.
@@ -12,9 +12,24 @@ const config: NextConfig = {
   },
   webpack: (config, { nextRuntime }) => {
     // Middleware forces an edge-runtime bundle pass even for server-only
-    // code. ioredis can't be bundled for edge — mark as external there.
+    // code. ioredis + bullmq can't be bundled for edge — mark as external
+    // there so the instrumentation hook (which boots the BullMQ workers
+    // in-process) doesn't drag node:* builtins into the edge graph.
+    // The function-form catches every `node:*` builtin since BullMQ pulls
+    // node:crypto / node:net / node:worker_threads transitively.
     if (nextRuntime === "edge") {
-      config.externals = [...(config.externals ?? []), "ioredis"];
+      const existing = config.externals ?? [];
+      config.externals = [
+        ...(Array.isArray(existing) ? existing : [existing]),
+        "ioredis",
+        "bullmq",
+        ({ request }: { request?: string }, callback: (err?: Error | null, result?: string) => void) => {
+          if (request && request.startsWith("node:")) {
+            return callback(null, `commonjs ${request}`);
+          }
+          callback();
+        },
+      ];
     }
     return config;
   },
