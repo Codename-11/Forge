@@ -2,6 +2,50 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-26 — Agent/MCP provider onboarding steppers
+
+Reworked agent and MCP setup around explicit provider selection and centered
+onboarding modals.
+
+### Changes
+
+- Added `AgentProvider` (`HERMES`, `CLAUDE`, `CODEX`, `CUSTOM`) and
+  `AgentRuntimeMode` (`PERSISTENT`, `EPHEMERAL`) to Prisma, with migration
+  `0014_agent_provider_runtime`.
+- `agent.create` / `agent.update` now accept provider/runtime metadata and
+  webhook secrets; audit payloads redact webhook secrets.
+- Added `agent.testWebhook`, an admin-gated signed connection probe that sends
+  `AGENT_CONNECTION_TEST` without creating assignment work.
+- Replaced the Settings -> Agents drawer with a large centered stepper:
+  provider, profile, connection, workload/key, review. Webhook is optional;
+  MCP-only is first-class. New agents can issue a linked MCP key during
+  onboarding and reveal provider-specific config immediately.
+- Replaced Developer access key creation with a centered MCP key stepper:
+  provider, scopes, context/linking, review.
+- Added shared MCP copy blocks for Hermes, Claude Desktop, Claude Code, Codex
+  (`~/.codex/config.toml` streamable HTTP), generic HTTP, and env vars.
+- Agent detail/list surfaces now show provider/runtime badges.
+- Docs updated across Agents, MCP reference, API keys, quickstart, settings,
+  architecture, primitives, and index.
+- `pnpm dev` now runs through `scripts/dev-live.sh` so local UI work reflects
+  the live compose data by default. `pnpm dev:isolated` keeps the old
+  standalone `next dev --turbo` path for explicit isolated service work.
+
+### Verification
+
+- `pnpm prisma:generate` - clean.
+- `pnpm typecheck` - clean.
+- `pnpm exec eslint ...touched files...` - clean.
+- `git diff --check` - clean.
+
+### Known / not run
+
+- `pnpm lint` still fails on pre-existing `src/components/issue-board.tsx`
+  `no-explicit-any` errors (plus unrelated warnings).
+- `pnpm test -- ...` attempted to run the suite but Postgres/Redis were not
+  available at `localhost:55432` / Redis, so DB-backed tests failed before
+  exercising this change.
+
 ## 2026-04-26 — VitePress user docs (warm/soft theme, Lucid pattern)
 
 Built out a full VitePress site at `docs/` mirroring the Lucid layout,

@@ -33,8 +33,8 @@ The full table of knobs lives in
 
 CRUD for first-class agent members.
 
-- Create new agents (name, `profileKey`, capabilities, webhook URL +
-  secret, `maxConcurrent`).
+- Create new agents (provider/runtime, name, `profileKey`, capabilities,
+  optional webhook URL + secret, `maxConcurrent`).
 - Edit existing agents.
 - Archive agents (reversible). Archived agents don't show in dispatch
   candidate lists or assignment pickers.

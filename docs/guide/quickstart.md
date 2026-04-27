@@ -6,10 +6,10 @@ where to point your first agent. This assumes you have Forge running locally
 or against a deployed instance.
 
 ::: info
-If you don't have Forge running yet, see the README at the repo root. The
-short version: bring up Postgres, Redis, and MinIO from
-`docker/docker-compose.yml`, run `pnpm install`, `pnpm prisma migrate dev`,
-then `pnpm dev`.
+If you don't have Forge running yet, see the README at the repo root. In this
+workspace, `pnpm dev` uses the deployed compose data by default. Use
+`pnpm dev:isolated` only when you explicitly want the local
+`docker/docker-compose.yml` services.
 :::
 
 ## 1. Sign in
@@ -114,13 +114,14 @@ open the active sprint.
 ## 7. Spin up an agent
 
 Forge's defining feature is first-class agent membership. Agents have
-profiles, presence, capabilities, and webhook contracts — and they can be
-assigned issues just like humans.
+profiles, providers, presence, capabilities, and optional webhook contracts —
+and they can be assigned issues just like humans.
 
 To onboard one, head to **Settings → Agents** and click **New agent**.
-Give it a `profileKey` (a stable handle like `victor` or `mizu`), a name,
-and capabilities (free-form labels like `frontend`, `urgent`,
-`docs-review`). Configure the webhook URL and secret it expects.
+Choose Hermes, Claude, Codex, or custom, give it a `profileKey` (a stable
+handle like `victor` or `mizu`), a name, and capabilities (free-form labels
+like `frontend`, `urgent`, `docs-review`). Configure a webhook URL only when
+the runtime can accept push dispatch; MCP-only agents can use a linked key.
 
 The full onboarding flow — including dispatch modes, presence sweeps,
 SLA enforcement, and the AI Coach — is covered in

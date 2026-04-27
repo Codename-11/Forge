@@ -87,7 +87,7 @@ dialects of the same surface:
 - **REST** — `GET /api/mcp/issues`, `POST /api/mcp/issues`, etc. Convenient
   for curl and scripts.
 - **JSON-RPC** — the MCP spec dialect: `tools/list`, `tools/call`. Convenient
-  for MCP clients (Claude Desktop, Hermes, custom).
+  for MCP clients (Hermes, Claude, Codex, custom).
 
 Authentication is an API key (`Authorization: Bearer <key>`), scoped by
 `PluginScope[]` and optionally narrowed by `projectIds`, `labelIds`,

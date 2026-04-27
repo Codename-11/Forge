@@ -162,9 +162,11 @@ tRPC router.
 First-class non-human actor.
 
 The model that makes Forge what it is. `profileKey` is the cross-system
-handle, unique per workspace, matching the Hermes profile directory
-name. Status, capabilities, role (`WORKER`/`COACH`/`OBSERVER`),
-heartbeat, max-concurrent cap, dispatch bookkeeping. See
+handle, unique per workspace. For Hermes it usually matches the profile
+directory name; for Claude, Codex, and custom clients it is the stable Forge
+handle bound to their MCP key. Provider, runtime mode, status, capabilities,
+role (`WORKER`/`COACH`/`OBSERVER`), heartbeat, max-concurrent cap, and
+dispatch bookkeeping live here. See
 [Agents → Overview](/agents/overview.html) for the full column-by-
 column treatment.
 

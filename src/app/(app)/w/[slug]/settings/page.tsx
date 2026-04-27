@@ -72,7 +72,7 @@ const DEVELOPER: Entry[] = [
     path: "/settings/agents",
     title: "Agents",
     description:
-      "MCP-first actors that hold keys and receive work. Register profiles, declare capabilities, and wire webhooks.",
+      "MCP-first actors that hold keys and receive work. Register Hermes, Claude, Codex, or custom profiles.",
   },
   {
     scope: "workspace",
@@ -124,7 +124,7 @@ const ACCOUNT: Entry[] = [
     path: "/settings/access",
     title: "Developer access",
     description:
-      "API keys + MCP endpoints. Copy-paste blocks for Claude Desktop, Claude Code, curl, and env vars.",
+      "API keys + MCP endpoints. Provider setup for Hermes, Claude, Codex, custom HTTP, and env vars.",
     badge: "external agents",
   },
   {

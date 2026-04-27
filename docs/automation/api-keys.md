@@ -138,9 +138,10 @@ A key can optionally point at an `Agent` row. When set:
 - `issues.assigned` (with no `agentId`/`profileKey` argument) returns issues
   assigned to that agent.
 
-This is the right shape for per-agent keys — Hermes' Victor and Mizu profiles
-each carry a `linkedAgentId` so their MCP calls automatically resolve "me"
-without the caller passing identity on every request.
+This is the right shape for per-agent keys. Hermes' Victor and Mizu profiles,
+Claude sessions, Codex sessions, and custom bridges can each carry a
+`linkedAgentId` so their MCP calls automatically resolve "me" without the
+caller passing identity on every request.
 
 ::: warning
 Keys with `linkedAgentId` set to an archived agent are rejected by

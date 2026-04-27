@@ -148,6 +148,13 @@ export default function AgentDetailPage() {
 
 type AgentRow = NonNullable<RouterOutputs["agent"]["byProfileKey"]>;
 
+const PROVIDER_LABELS: Record<string, string> = {
+  HERMES: "Hermes",
+  CLAUDE: "Claude",
+  CODEX: "Codex",
+  CUSTOM: "Custom",
+};
+
 function IdentityStrip({ agent }: { agent: AgentRow }) {
   return (
     <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border bg-card p-4">
@@ -160,6 +167,10 @@ function IdentityStrip({ agent }: { agent: AgentRow }) {
           <span className="font-mono text-meta text-muted-foreground">
             @{agent.profileKey}
           </span>
+          <Badge>{PROVIDER_LABELS[agent.provider] ?? agent.provider}</Badge>
+          <Badge>
+            {agent.runtimeMode === "PERSISTENT" ? "persistent" : "single-session"}
+          </Badge>
         </div>
         {agent.capabilities.length > 0 && (
           <div className="flex flex-wrap gap-1">

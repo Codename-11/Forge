@@ -154,6 +154,21 @@ enum AgentRole {
   OBSERVER
 }
 
+/// Runtime/provider family for a registered agent. Hermes remains the
+/// first-class persistent runtime; Claude/Codex currently operate as
+/// single-session MCP clients unless a custom bridge is supplied.
+enum AgentProvider {
+  HERMES
+  CLAUDE
+  CODEX
+  CUSTOM
+}
+
+enum AgentRuntimeMode {
+  PERSISTENT
+  EPHEMERAL
+}
+
 /// Lifecycle of the AI triage suggestion attached to an issue at create
 /// time. Null = AI was disabled or skipped (agent-authored, etc.).
 enum AiTriageStatus {
@@ -1027,6 +1042,8 @@ model Agent {
   description      String?     @db.Text
   /// Avatar/emoji or URL — freeform. UI decides.
   avatar           String?
+  provider         AgentProvider    @default(HERMES)
+  runtimeMode      AgentRuntimeMode @default(PERSISTENT)
   /// Outbound webhook for push dispatch (issue.assigned etc).
   webhookUrl       String?
   /// Optional HMAC secret for webhook signing; falls back to the

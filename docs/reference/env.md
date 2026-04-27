@@ -125,21 +125,22 @@ already-completed calls.
 
 | Var             | Notes                                                                     |
 |-----------------|---------------------------------------------------------------------------|
-| `PROD_ENV_FILE` | Path used by `pnpm dev:live` to source env from a deployed compose file.  |
+| `PROD_ENV_FILE` | Path used by `pnpm dev` / `pnpm dev:live` to source env from a deployed env file. |
 | `DEV_HOST`      | Pass to `pnpm dev:host` to expose the dev server on the LAN.              |
 | `AUTH_URL_DEV`  | Overrides `AUTH_URL` in dev (so dev auth callbacks don't fight prod).     |
 
 ```bash
 # .env.local
-PROD_ENV_FILE="../docker/forge/docker-compose.yml"
+PROD_ENV_FILE="/home/bailey/docker/forge/.env"
 DEV_HOST="0.0.0.0"
 AUTH_URL_DEV="http://localhost:3000"
 ```
 
 ::: tip
-`pnpm dev:live` reads env from the deployed compose file referenced by
-`PROD_ENV_FILE` so local dev can proxy real Postgres, Redis, and MinIO. Use
-this to debug production data shapes without copying creds by hand.
+`pnpm dev` reads env from the deployed compose env file referenced by
+`PROD_ENV_FILE` so local dev uses the same Postgres, Redis, and MinIO data as
+the live app. Use `pnpm dev:isolated` when you explicitly want the local
+`docker/docker-compose.yml` services.
 :::
 
 ## Boot order
