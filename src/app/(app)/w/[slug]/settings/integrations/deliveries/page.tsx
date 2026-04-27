@@ -1,7 +1,9 @@
 "use client";
 import { useMemo, useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Webhook, RotateCcw } from "lucide-react";
+import { ExternalLink, Webhook, RotateCcw } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +31,7 @@ type DeliveryRow =
  */
 
 type DeliveryStatus = "PENDING" | "SUCCESS" | "FAILED" | "DEAD_LETTER";
+type StatusFilter = DeliveryStatus | "ALL";
 
 const DELIVERY_TONE: Record<DeliveryStatus, string> = {
   PENDING: "#ca8a04",
@@ -36,6 +39,37 @@ const DELIVERY_TONE: Record<DeliveryStatus, string> = {
   FAILED: "#be185d",
   DEAD_LETTER: "#7c2d12",
 };
+
+const DELIVERY_STATUSES = new Set<DeliveryStatus>([
+  "PENDING",
+  "SUCCESS",
+  "FAILED",
+  "DEAD_LETTER",
+]);
+
+function parseStatusFilter(value: string | null): StatusFilter {
+  if (value === "ALL") return "ALL";
+  if (value && DELIVERY_STATUSES.has(value as DeliveryStatus)) {
+    return value as DeliveryStatus;
+  }
+  return "DEAD_LETTER";
+}
+
+function deliveryDetailHref(
+  pathname: string,
+  input: {
+    status: DeliveryStatus;
+    deliveryId: string;
+    agentId?: string;
+  },
+): string {
+  const params = new URLSearchParams({
+    status: input.status,
+    deliveryId: input.deliveryId,
+  });
+  if (input.agentId) params.set("agentId", input.agentId);
+  return `${pathname}?${params.toString()}`;
+}
 
 function truncateUrl(url: string, max = 56): string {
   if (url.length <= max) return url;
@@ -52,15 +86,18 @@ function formatWebhookKind(webhook: {
 }
 
 export default function WebhookDeliveriesPage() {
-  const [status, setStatus] = useState<DeliveryStatus | undefined>(
-    "DEAD_LETTER",
-  );
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const statusFilter = parseStatusFilter(searchParams.get("status"));
+  const status = statusFilter === "ALL" ? undefined : statusFilter;
+  const selectedId = searchParams.get("deliveryId") || null;
+  const agentId = searchParams.get("agentId") || undefined;
   const [retryTarget, setRetryTarget] = useState<string | null>(null);
 
   const utils = trpc.useUtils();
   const { data, isLoading, error } = trpc.admin.webhookDeliveries.list.useQuery(
-    { status, limit: 50 },
+    { status, deliveryId: selectedId || undefined, agentId, limit: 50 },
   );
 
   const retry = trpc.admin.webhookDeliveries.retry.useMutation({
@@ -77,6 +114,37 @@ export default function WebhookDeliveriesPage() {
     () => items.find((d) => d.id === selectedId) ?? null,
     [items, selectedId],
   );
+
+  const replaceQuery = (patch: {
+    status?: StatusFilter | null;
+    deliveryId?: string | null;
+    agentId?: string | null;
+  }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if ("status" in patch) {
+      if (patch.status) params.set("status", patch.status);
+      else params.delete("status");
+    }
+    if ("deliveryId" in patch) {
+      if (patch.deliveryId) params.set("deliveryId", patch.deliveryId);
+      else params.delete("deliveryId");
+    }
+    if ("agentId" in patch) {
+      if (patch.agentId) params.set("agentId", patch.agentId);
+      else params.delete("agentId");
+    }
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, {
+      scroll: false,
+    });
+  };
+
+  const selectDelivery = (id: string, rowStatus?: DeliveryStatus) => {
+    replaceQuery({
+      status: rowStatus ?? statusFilter,
+      deliveryId: id,
+    });
+  };
 
   if (error) {
     const msg = error.message.includes("Admin")
@@ -107,35 +175,53 @@ export default function WebhookDeliveriesPage() {
             title="Deliveries"
             hint="Rows reflect the durable queue. Retries reset attempt count and push back onto the worker."
             actions={
-              <div className="flex gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
+              <div className="flex flex-wrap gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
                 <FilterChip
                   label="Dead letter"
-                  active={status === "DEAD_LETTER"}
-                  onClick={() => setStatus("DEAD_LETTER")}
+                  active={statusFilter === "DEAD_LETTER"}
+                  onClick={() => replaceQuery({ status: "DEAD_LETTER", deliveryId: null })}
                 />
                 <FilterChip
                   label="Failed"
-                  active={status === "FAILED"}
-                  onClick={() => setStatus("FAILED")}
+                  active={statusFilter === "FAILED"}
+                  onClick={() => replaceQuery({ status: "FAILED", deliveryId: null })}
                 />
                 <FilterChip
                   label="Pending"
-                  active={status === "PENDING"}
-                  onClick={() => setStatus("PENDING")}
+                  active={statusFilter === "PENDING"}
+                  onClick={() => replaceQuery({ status: "PENDING", deliveryId: null })}
                 />
                 <FilterChip
                   label="Success"
-                  active={status === "SUCCESS"}
-                  onClick={() => setStatus("SUCCESS")}
+                  active={statusFilter === "SUCCESS"}
+                  onClick={() => replaceQuery({ status: "SUCCESS", deliveryId: null })}
                 />
                 <FilterChip
                   label="All"
-                  active={status === undefined}
-                  onClick={() => setStatus(undefined)}
+                  active={statusFilter === "ALL"}
+                  onClick={() => replaceQuery({ status: "ALL", deliveryId: null })}
                 />
               </div>
             }
           >
+            {agentId && (
+              <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-border bg-card/40 px-3 py-2 text-meta text-muted-foreground">
+                <span>
+                  Filtered to agent dispatch deliveries for{" "}
+                  <span className="font-mono text-foreground">
+                    {agentId.slice(0, 8)}
+                  </span>
+                  .
+                </span>
+                <button
+                  type="button"
+                  onClick={() => replaceQuery({ agentId: null, deliveryId: null })}
+                  className="focus-ring rounded-sm text-foreground hover:text-ember"
+                >
+                  Clear agent filter
+                </button>
+              </div>
+            )}
             {isLoading ? (
               <Card>
                 <li className="px-4 py-3 text-xs text-muted-foreground">
@@ -156,7 +242,7 @@ export default function WebhookDeliveriesPage() {
               </Card>
             ) : (
               <Card>
-                <li className="grid grid-cols-[1fr_1.25fr_5rem_5rem_1fr_7rem] items-center gap-3 border-b border-border bg-subtle/30 px-4 py-2 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+                <li className="hidden grid-cols-[1fr_1.25fr_5rem_5rem_1fr_7rem] items-center gap-3 border-b border-border bg-subtle/30 px-4 py-2 text-[0.6875rem] uppercase tracking-wider text-muted-foreground md:grid">
                   <span>Event</span>
                   <span>Endpoint</span>
                   <span>Status</span>
@@ -169,9 +255,9 @@ export default function WebhookDeliveriesPage() {
                   return (
                     <li
                       key={d.id}
-                      onClick={() => setSelectedId(d.id)}
+                      onClick={() => selectDelivery(d.id, d.status as DeliveryStatus)}
                       className={cn(
-                        "grid grid-cols-[1fr_1.25fr_5rem_5rem_1fr_7rem] cursor-pointer items-center gap-3 px-4 py-2.5 text-xs hover:bg-subtle/60",
+                        "grid cursor-pointer grid-cols-[1fr_auto] items-start gap-2 px-4 py-2.5 text-xs hover:bg-subtle/60 md:grid-cols-[1fr_1.25fr_5rem_5rem_1fr_7rem] md:items-center md:gap-3",
                         selectedId === d.id && "bg-subtle/60",
                       )}
                     >
@@ -196,16 +282,30 @@ export default function WebhookDeliveriesPage() {
                           {d.status}
                         </Badge>
                       </div>
-                      <div className="font-mono tabular-nums text-[0.6875rem] text-muted-foreground">
+                      <div className="font-mono tabular-nums text-[0.6875rem] text-muted-foreground max-md:hidden">
                         {d.attempt}
                       </div>
-                      <div className="min-w-0 truncate text-[0.6875rem] text-muted-foreground">
+                      <div className="col-span-2 min-w-0 truncate text-[0.6875rem] text-muted-foreground md:col-span-1">
                         {err ?? "—"}
                       </div>
-                      <div className="text-right text-[0.6875rem] text-muted-foreground">
-                        {d.deliveredAt
-                          ? relativeTime(d.deliveredAt)
-                          : relativeTime(d.scheduledAt)}
+                      <div className="col-span-2 flex items-center justify-between gap-2 text-[0.6875rem] text-muted-foreground md:col-span-1 md:block md:text-right">
+                        <span>
+                          {d.deliveredAt
+                            ? relativeTime(d.deliveredAt)
+                            : relativeTime(d.scheduledAt)}
+                        </span>
+                        <Link
+                          href={deliveryDetailHref(pathname, {
+                            status: d.status as DeliveryStatus,
+                            deliveryId: d.id,
+                            agentId,
+                          })}
+                          onClick={(e) => e.stopPropagation()}
+                          className="focus-ring inline-flex items-center gap-1 rounded-sm text-foreground hover:text-ember md:mt-0.5 md:justify-end"
+                        >
+                          Details
+                          <ExternalLink className="h-3 w-3" />
+                        </Link>
                       </div>
                     </li>
                   );
@@ -218,7 +318,7 @@ export default function WebhookDeliveriesPage() {
 
       <SidePanel
         open={selected !== null}
-        onOpenChange={(o) => !o && setSelectedId(null)}
+        onOpenChange={(o) => !o && replaceQuery({ deliveryId: null })}
         size="wide"
         title={
           selected ? (
@@ -247,7 +347,7 @@ export default function WebhookDeliveriesPage() {
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => setSelectedId(null)}
+                onClick={() => replaceQuery({ deliveryId: null })}
               >
                 Close
               </Button>
@@ -321,6 +421,7 @@ function errorSummary(d: DeliveryRow): string | null {
 }
 
 function DeliveryDetail({ d }: { d: DeliveryRow }) {
+  const guidance = deliveryGuidance(d);
   return (
     <div className="space-y-4 text-xs">
       <div className="grid grid-cols-2 gap-3">
@@ -343,6 +444,22 @@ function DeliveryDetail({ d }: { d: DeliveryRow }) {
           </span>
         </Field>
       </div>
+
+      {guidance && (
+        <div className="grid gap-3 rounded-md border border-border bg-background/40 p-3 md:grid-cols-3">
+          <Field label="Reason">
+            <span className="text-muted-foreground">{guidance.reason}</span>
+          </Field>
+          <Field label="Recommended fix">
+            <span className="text-muted-foreground">
+              {guidance.recommendedFix}
+            </span>
+          </Field>
+          <Field label="Place to check">
+            <span className="text-muted-foreground">{guidance.place}</span>
+          </Field>
+        </div>
+      )}
 
       <Field label="Webhook">
         <div className="space-y-0.5">
@@ -397,6 +514,47 @@ function DeliveryDetail({ d }: { d: DeliveryRow }) {
       </Field>
     </div>
   );
+}
+
+function deliveryGuidance(d: DeliveryRow): {
+  reason: string;
+  recommendedFix: string;
+  place: string;
+} | null {
+  if (d.status === "SUCCESS") return null;
+  if (d.status === "PENDING") {
+    return {
+      reason: "The delivery has not completed yet.",
+      recommendedFix:
+        "Wait for the worker to pick it up, or check the worker queue if it stays pending.",
+      place: "Worker logs and scheduled time.",
+    };
+  }
+  const endpointKind = formatWebhookKind(d.webhook);
+  if (d.status === "DEAD_LETTER") {
+    return {
+      reason:
+        "Forge exhausted retry attempts and moved this delivery out of the active queue.",
+      recommendedFix:
+        "Fix the endpoint, secret, or agent runner, then retry this delivery.",
+      place:
+        endpointKind === "agent"
+          ? "Agent webhook URL, heartbeat, and runner logs."
+          : "Webhook endpoint logs and response body.",
+    };
+  }
+  return {
+    reason:
+      d.responseStatus != null
+        ? `The endpoint returned HTTP ${d.responseStatus}.`
+        : "The delivery failed before a successful response was recorded.",
+    recommendedFix:
+      "Inspect the response body, repair the endpoint or secret, and let the retry schedule continue.",
+    place:
+      endpointKind === "agent"
+        ? "Agent runner logs and webhook configuration."
+        : "Webhook endpoint logs and delivery response.",
+  };
 }
 
 function Field({

@@ -93,14 +93,15 @@ export function MissionControl() {
 
   const activeCount = activeRuns?.length ?? 0;
   const queueCount = (queue ?? []).filter((q) => !q.assignedAgent).length;
-  const hasStalled = useMemo(() => {
+  const stalledRuns = useMemo(() => {
     // Detect runs that haven't ticked in >5min — even if the watchdog
     // hasn't flipped them yet, the pill should warn.
     const now = Date.now();
-    return (activeRuns ?? []).some(
+    return (activeRuns ?? []).filter(
       (r) => now - new Date(r.lastEventAt).getTime() > 5 * 60_000,
     );
   }, [activeRuns]);
+  const hasStalled = stalledRuns.length > 0;
 
   // Realtime fan-out: every AGENT_RUN_*, AGENT_ASSIGNED, ISSUE_QUEUED,
   // COMMENT_CREATED reshapes some tab's data. Invalidate broadly —
@@ -328,7 +329,11 @@ export function MissionControl() {
             // mod+' twice or click "Open panel" inside glance.
             setSize("glance");
           }}
-          title="Mission Control (⌘')"
+          title={
+            hasStalled
+              ? `${stalledRuns.length} stalled ${stalledRuns.length === 1 ? "run" : "runs"} · open Mission Control`
+              : "Mission Control (⌘')"
+          }
           className={cn(
             "group flex items-center gap-2 rounded-full border bg-card/90 px-3 py-1.5 text-[0.75rem] shadow-sm backdrop-blur",
             hasStalled
@@ -397,6 +402,7 @@ export function MissionControl() {
           onPointerDownDrag={onPointerDown}
           isDragging={isDragging}
           hasStalled={hasStalled}
+          stalledCount={stalledRuns.length}
         />
       </div>
     );
@@ -429,7 +435,7 @@ export function MissionControl() {
         </span>
         {hasStalled && (
           <span className="flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[0.625rem] text-amber-600">
-            <Hourglass className="h-2.5 w-2.5" /> stalled
+            <Hourglass className="h-2.5 w-2.5" /> {stalledRuns.length} stalled
           </span>
         )}
         <span className="ml-auto flex items-center gap-1" data-no-drag>

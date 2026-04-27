@@ -11,15 +11,18 @@ import Link from "next/link";
 import {
   Activity,
   AlertTriangle,
+  Archive,
   ArrowRightLeft,
   AtSign,
   Bell,
   Bot,
+  Check,
   Clock,
   FilePlus,
   History,
   Inbox,
   MessageCircle,
+  CircleCheck,
   UserCheck,
   X,
 } from "lucide-react";
@@ -29,6 +32,11 @@ import type { AppRouter } from "@/server/routers/_app";
 import { useCrossTab, useRealtime } from "@/hooks/use-realtime";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn, relativeTime } from "@/lib/utils";
+import {
+  getEventNotificationActionLinks,
+  mapActivityEventToNotification,
+  type EventNotificationMetadata,
+} from "@/lib/notifications/event-notification";
 import { EmptyState, MOTION, SkeletonList } from "@/components/ui";
 
 type Kind =
@@ -69,6 +77,16 @@ type TimelineEvent = {
   } | null;
   payload: unknown;
 };
+
+type NotificationRow = {
+  id?: string;
+  status?: "UNREAD" | "READ" | "DISMISSED" | "ACKNOWLEDGED" | "RESOLVED";
+  event: TimelineEvent;
+  notification: EventNotificationMetadata;
+};
+
+type PersistedNotificationRow =
+  inferRouterOutputs<AppRouter>["notification"]["list"]["notifications"][number];
 
 const KINDS: Kind[] = [
   "ISSUE_CREATED",
@@ -152,11 +170,9 @@ function getLastReadServerSnapshot(): string {
 /**
  * Drawer-and-bell hook.
  *
- * `unreadCount` is sourced from `inbox.badge` — the count of items
- * needing my attention (assigned + mentions + stalled). That's what
- * the bell number actually means now: "how many things should I look
- * at." The realtime event stream keeps a separate "unread events"
- * counter for the Activity tab itself, but it doesn't drive the bell.
+ * `unreadCount` combines the work inbox badge with persisted alert state.
+ * The realtime event stream keeps a separate "unread events" counter for
+ * the Activity tab itself, but it doesn't drive the bell by itself.
  */
 export function useActivityDrawer(): {
   open: boolean;
@@ -189,12 +205,23 @@ export function useActivityDrawer(): {
     staleTime: 60_000,
   });
 
+  const { data: notificationUnread } = trpc.notification.unreadCount.useQuery(
+    undefined,
+    {
+      enabled: Boolean(ws),
+      refetchOnWindowFocus: true,
+      staleTime: 30_000,
+    },
+  );
+
   const utils = trpc.useUtils();
   useRealtime(
     () => {
       if (!ws) return;
       void utils.event.unreadCount.invalidate();
       void utils.event.recent.invalidate();
+      void utils.notification.unreadCount.invalidate();
+      void utils.notification.list.invalidate();
       void utils.inbox.badge.invalidate();
     },
     { kind: KINDS },
@@ -219,7 +246,7 @@ export function useActivityDrawer(): {
   return {
     open: state.open,
     toggle,
-    unreadCount: inboxBadge?.count ?? 0,
+    unreadCount: (inboxBadge?.count ?? 0) + (notificationUnread?.count ?? 0),
     eventUnreadCount: eventUnread?.count ?? 0,
   };
 }
@@ -294,6 +321,92 @@ function readPayloadString(payload: unknown, key: string): string | null {
     if (typeof v === "string" && v.length > 0) return v;
   }
   return null;
+}
+
+function notificationForEvent(
+  evt: TimelineEvent,
+  ws: { slug: string; key: string },
+): EventNotificationMetadata | null {
+  return mapActivityEventToNotification({
+    workspace: { slug: ws.slug, key: ws.key },
+    event: {
+      id: evt.id,
+      kind: evt.kind,
+      subjectType: evt.subjectType,
+      subjectId: evt.subjectId,
+      payload: evt.payload,
+    },
+    issue: evt.issue,
+    agent: evt.agent,
+  });
+}
+
+function notificationRowFromPersisted(row: PersistedNotificationRow): NotificationRow {
+  return {
+    id: row.id,
+    status: row.status,
+    event: row.event as unknown as TimelineEvent,
+    notification: row.notification as EventNotificationMetadata,
+  };
+}
+
+function severityLabel(severity: EventNotificationMetadata["severity"]): string {
+  switch (severity) {
+    case "CRITICAL":
+      return "Critical";
+    case "ERROR":
+      return "Error";
+    case "WARNING":
+      return "Warning";
+    case "SUCCESS":
+      return "Success";
+    case "INFO":
+      return "Info";
+  }
+}
+
+function severityBadgeClass(severity: EventNotificationMetadata["severity"]): string {
+  switch (severity) {
+    case "CRITICAL":
+    case "ERROR":
+      return "border-danger/30 bg-danger/10 text-danger";
+    case "WARNING":
+      return "border-warning/30 bg-warning/10 text-warning";
+    case "SUCCESS":
+      return "border-success/30 bg-success/10 text-success";
+    case "INFO":
+      return "border-border bg-subtle text-muted-foreground";
+  }
+}
+
+function severityRowClass(severity: EventNotificationMetadata["severity"]): string {
+  switch (severity) {
+    case "CRITICAL":
+    case "ERROR":
+      return "bg-danger/5";
+    case "WARNING":
+      return "bg-warning/5";
+    case "SUCCESS":
+      return "bg-success/5";
+    case "INFO":
+      return "";
+  }
+}
+
+function alertStatusLabel(status: NotificationRow["status"]): string | null {
+  switch (status) {
+    case "ACKNOWLEDGED":
+      return "Acked";
+    case "READ":
+      return "Read";
+    case "RESOLVED":
+      return "Resolved";
+    case "DISMISSED":
+      return "Dismissed";
+    case "UNREAD":
+    case undefined:
+      return null;
+  }
 }
 
 function summarizeEvent(
@@ -506,6 +619,124 @@ function summarizeEvent(
   }
 }
 
+function AlertActivityRow({
+  row,
+  onNavigate,
+  onAcknowledge,
+  onDismiss,
+  onResolve,
+  isMutating,
+}: {
+  row: NotificationRow;
+  onNavigate: () => void;
+  onAcknowledge?: (id: string) => void;
+  onDismiss?: (id: string) => void;
+  onResolve?: (id: string) => void;
+  isMutating?: boolean;
+}) {
+  const { event, notification } = row;
+  const links = getEventNotificationActionLinks(notification);
+  const stateId = row.id;
+  const statusLabel = alertStatusLabel(row.status);
+  const isClosed = row.status === "DISMISSED" || row.status === "RESOLVED";
+  return (
+    <li
+      className={cn(
+        "flex items-start gap-2 px-4 py-2.5 text-[0.75rem]",
+        severityRowClass(notification.severity),
+      )}
+    >
+      <span className="mt-0.5 shrink-0">{iconFor(event.kind)}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={cn(
+              "shrink-0 rounded-sm border px-1 py-0 text-[0.5625rem] font-semibold uppercase tracking-wider",
+              severityBadgeClass(notification.severity),
+            )}
+          >
+            {severityLabel(notification.severity)}
+          </span>
+          {statusLabel && (
+            <span className="shrink-0 rounded-sm border border-border bg-subtle px-1 py-0 text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+              {statusLabel}
+            </span>
+          )}
+          <span className="min-w-0 truncate text-foreground">
+            {notification.summary}
+          </span>
+        </div>
+        {notification.reason && (
+          <div className="text-meta mt-0.5 line-clamp-2 text-muted-foreground">
+            {notification.reason}
+          </div>
+        )}
+        <div className="text-meta mt-0.5 line-clamp-2 text-muted-foreground">
+          {notification.recommendedAction}
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          {links.map((link) => (
+            <Link
+              key={`${link.kind}:${link.href}`}
+              href={link.href}
+              onClick={onNavigate}
+              className={cn(
+                "focus-ring rounded-sm text-[0.6875rem] font-medium hover:text-ember",
+                link.kind === "primary" ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {link.label}
+            </Link>
+          ))}
+          {stateId && !isClosed && (
+            <span className="ml-auto inline-flex items-center gap-1">
+              {row.status === "ACKNOWLEDGED" ? (
+                <button
+                  type="button"
+                  onClick={() => onResolve?.(stateId)}
+                  disabled={isMutating || !onResolve}
+                  title="Resolve alert"
+                  aria-label="Resolve alert"
+                  className="focus-ring inline-flex h-6 items-center gap-1 rounded-sm px-1.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
+                >
+                  <CircleCheck className="h-3 w-3" />
+                  Resolve
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onAcknowledge?.(stateId)}
+                  disabled={isMutating || !onAcknowledge}
+                  title="Acknowledge alert"
+                  aria-label="Acknowledge alert"
+                  className="focus-ring inline-flex h-6 items-center gap-1 rounded-sm px-1.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
+                >
+                  <Check className="h-3 w-3" />
+                  Ack
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => onDismiss?.(stateId)}
+                disabled={isMutating || !onDismiss}
+                title="Dismiss alert"
+                aria-label="Dismiss alert"
+                className="focus-ring inline-flex h-6 items-center gap-1 rounded-sm px-1.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
+              >
+                <Archive className="h-3 w-3" />
+                Dismiss
+              </button>
+            </span>
+          )}
+        </div>
+      </div>
+      <span className="text-meta shrink-0 text-muted-foreground">
+        {relativeTime(event.createdAt)}
+      </span>
+    </li>
+  );
+}
+
 type Tab = "mine" | "activity";
 
 export default function ActivityDrawer() {
@@ -522,6 +753,31 @@ export default function ActivityDrawer() {
   const [mineOnly, setMineOnly] = useState(false);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [pages, setPages] = useState<TimelineEvent[]>([]);
+  const utils = trpc.useUtils();
+
+  const invalidateNotifications = useCallback(() => {
+    void utils.notification.list.invalidate();
+    void utils.notification.unreadCount.invalidate();
+  }, [utils]);
+
+  const markNotificationRead = trpc.notification.markRead.useMutation({
+    onSuccess: invalidateNotifications,
+  });
+  const markNotificationReadMutate = markNotificationRead.mutate;
+  const acknowledgeNotification = trpc.notification.acknowledge.useMutation({
+    onSuccess: invalidateNotifications,
+  });
+  const dismissNotification = trpc.notification.dismiss.useMutation({
+    onSuccess: invalidateNotifications,
+  });
+  const resolveNotification = trpc.notification.resolve.useMutation({
+    onSuccess: invalidateNotifications,
+  });
+  const notificationMutating =
+    markNotificationRead.isPending ||
+    acknowledgeNotification.isPending ||
+    dismissNotification.isPending ||
+    resolveNotification.isPending;
 
   useEffect(() => {
     if (open) setHasOpenedOnce(true);
@@ -553,9 +809,10 @@ export default function ActivityDrawer() {
     const t = window.setTimeout(() => {
       writeLastRead(new Date().toISOString());
       notifyLastRead();
+      markNotificationReadMutate({ all: true });
     }, 1000);
     return () => window.clearTimeout(t);
-  }, [open]);
+  }, [open, markNotificationReadMutate]);
 
   const { data, isLoading } = trpc.event.recent.useQuery(
     { cursor, limit: 40, mineOnly },
@@ -576,6 +833,16 @@ export default function ActivityDrawer() {
     },
   );
 
+  const { data: attentionData, isLoading: attentionLoading } =
+    trpc.notification.list.useQuery(
+      { limit: 30 },
+      {
+        enabled: Boolean(ws) && (open || hasOpenedOnce) && tab === "mine",
+        refetchOnWindowFocus: true,
+        staleTime: 30_000,
+      },
+    );
+
   useEffect(() => {
     if (!data) return;
     const incoming = data.events as unknown as TimelineEvent[];
@@ -585,8 +852,6 @@ export default function ActivityDrawer() {
       return [...prev, ...incoming.filter((e) => !seen.has(e.id))];
     });
   }, [data, cursor]);
-
-  const utils = trpc.useUtils();
 
   const markAllRead = useCallback(() => {
     writeLastRead(new Date().toISOString());
@@ -598,6 +863,15 @@ export default function ActivityDrawer() {
 
   const events = pages;
   const nextCursor = data?.nextCursor ?? null;
+  const attentionRows =
+    attentionData?.notifications.map(notificationRowFromPersisted) ?? [];
+  const unreadAlertCount = attentionRows.filter((row) => row.status === "UNREAD").length;
+  const mineCount =
+    (mineData
+      ? mineData.counts.assignedUnblocked +
+        mineData.counts.mentions +
+        mineData.counts.stalled
+      : 0) + attentionRows.length;
 
   return (
     <div
@@ -624,6 +898,19 @@ export default function ActivityDrawer() {
               Notifications
             </div>
             <div className="ml-auto flex items-center gap-1.5">
+              {tab === "mine" && unreadAlertCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => markNotificationRead.mutate({ all: true })}
+                  disabled={markNotificationRead.isPending}
+                  className={cn(
+                    "focus-ring rounded-md px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50",
+                    MOTION.fast,
+                  )}
+                >
+                  Mark alerts read
+                </button>
+              )}
               {tab === "activity" && (
                 <button
                   type="button"
@@ -667,13 +954,7 @@ export default function ActivityDrawer() {
               active={tab === "mine"}
               onClick={() => setTab("mine")}
               label="Mine"
-              count={
-                mineData
-                  ? mineData.counts.assignedUnblocked +
-                    mineData.counts.mentions +
-                    mineData.counts.stalled
-                  : undefined
-              }
+              count={mineData || attentionRows.length > 0 ? mineCount : undefined}
             />
             <DrawerTab
               active={tab === "activity"}
@@ -708,6 +989,12 @@ export default function ActivityDrawer() {
               ws={ws}
               data={mineData}
               isLoading={mineLoading}
+              alertRows={attentionRows}
+              alertsLoading={attentionLoading}
+              onAcknowledgeAlert={(id) => acknowledgeNotification.mutate({ id })}
+              onDismissAlert={(id) => dismissNotification.mutate({ id })}
+              onResolveAlert={(id) => resolveNotification.mutate({ id })}
+              alertsMutating={notificationMutating}
               onNavigate={close}
             />
           ) : isLoading && events.length === 0 ? (
@@ -726,6 +1013,16 @@ export default function ActivityDrawer() {
           ) : (
             <ul className="divide-y divide-border">
               {events.map((evt) => {
+                const notification = notificationForEvent(evt, ws);
+                if (notification) {
+                  return (
+                    <AlertActivityRow
+                      key={evt.id}
+                      row={{ event: evt, notification }}
+                      onNavigate={close}
+                    />
+                  );
+                }
                 const { headline, meta } = summarizeEvent(evt, ws.slug);
                 return (
                   <li
@@ -815,21 +1112,33 @@ function MinePanel({
   ws,
   data,
   isLoading,
+  alertRows,
+  alertsLoading,
+  onAcknowledgeAlert,
+  onDismissAlert,
+  onResolveAlert,
+  alertsMutating,
   onNavigate,
 }: {
   ws: { slug: string };
   data: InboxData | undefined;
   isLoading: boolean;
+  alertRows: NotificationRow[];
+  alertsLoading: boolean;
+  onAcknowledgeAlert: (id: string) => void;
+  onDismissAlert: (id: string) => void;
+  onResolveAlert: (id: string) => void;
+  alertsMutating: boolean;
   onNavigate: () => void;
 }) {
-  if (isLoading && !data) {
+  if ((isLoading || alertsLoading) && !data && alertRows.length === 0) {
     return (
       <div className="px-4 py-3">
         <SkeletonList rows={6} />
       </div>
     );
   }
-  if (!data) {
+  if (!data && alertRows.length === 0) {
     return (
       <div className="px-4 py-6">
         <EmptyState
@@ -843,7 +1152,10 @@ function MinePanel({
   }
 
   const totalCount =
-    data.counts.assignedUnblocked + data.counts.mentions + data.counts.stalled;
+    (data?.counts.assignedUnblocked ?? 0) +
+    (data?.counts.mentions ?? 0) +
+    (data?.counts.stalled ?? 0) +
+    alertRows.length;
 
   if (totalCount === 0) {
     return (
@@ -860,13 +1172,33 @@ function MinePanel({
 
   return (
     <div className="divide-y divide-border">
-      {data.counts.assignedUnblocked > 0 && (
+      {alertRows.length > 0 && (
+        <MineSection
+          title="Alerts"
+          count={alertRows.length}
+          icon={<AlertTriangle className="h-3.5 w-3.5 text-warning" />}
+        >
+          {alertRows.slice(0, 6).map((row) => (
+            <AlertActivityRow
+              key={row.event.id}
+              row={row}
+              onAcknowledge={onAcknowledgeAlert}
+              onDismiss={onDismissAlert}
+              onResolve={onResolveAlert}
+              isMutating={alertsMutating}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </MineSection>
+      )}
+
+      {(data?.counts.assignedUnblocked ?? 0) > 0 && (
         <MineSection
           title="Assigned"
-          count={data.counts.assignedUnblocked}
+          count={data?.counts.assignedUnblocked ?? 0}
           icon={<UserCheck className="h-3.5 w-3.5 text-muted-foreground" />}
         >
-          {data.assignedUnblocked.slice(0, 8).map((issue) => (
+          {data?.assignedUnblocked.slice(0, 8).map((issue) => (
             <MineRow
               key={issue.id}
               href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
@@ -883,13 +1215,13 @@ function MinePanel({
         </MineSection>
       )}
 
-      {data.counts.mentions > 0 && (
+      {(data?.counts.mentions ?? 0) > 0 && (
         <MineSection
           title="Mentions"
-          count={data.counts.mentions}
+          count={data?.counts.mentions ?? 0}
           icon={<AtSign className="h-3.5 w-3.5 text-muted-foreground" />}
         >
-          {data.mentions.slice(0, 8).map((c) => (
+          {data?.mentions.slice(0, 8).map((c) => (
             <MineRow
               key={c.id}
               href={`/w/${c.issue.workspace.slug}/issues/${c.issue.id}`}
@@ -906,13 +1238,13 @@ function MinePanel({
         </MineSection>
       )}
 
-      {data.counts.stalled > 0 && (
+      {(data?.counts.stalled ?? 0) > 0 && (
         <MineSection
           title="Stalled"
-          count={data.counts.stalled}
+          count={data?.counts.stalled ?? 0}
           icon={<AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />}
         >
-          {data.stalled.slice(0, 8).map((issue) => (
+          {data?.stalled.slice(0, 8).map((issue) => (
             <MineRow
               key={issue.id}
               href={`/w/${issue.workspace.slug}/issues/${issue.id}`}

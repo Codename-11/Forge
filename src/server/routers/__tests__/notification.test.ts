@@ -1,0 +1,165 @@
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { EventKind, NotificationStatus } from "@prisma/client";
+import { notificationRouter } from "@/server/routers/notification";
+import {
+  buildContext,
+  createIssue,
+  createWorkspaceFixture,
+  disconnectPrisma,
+  getPrisma,
+  type TestFixture,
+} from "./helpers";
+
+const fixtures: TestFixture[] = [];
+
+afterEach(async () => {
+  while (fixtures.length) {
+    const fixture = fixtures.pop()!;
+    await fixture.cleanup();
+  }
+});
+
+afterAll(async () => {
+  await disconnectPrisma();
+});
+
+async function setup() {
+  const fixture = await createWorkspaceFixture({ keyPrefix: "NTF" });
+  fixtures.push(fixture);
+  const ctx = await buildContext(fixture);
+  const caller = notificationRouter.createCaller(ctx);
+  const prisma = getPrisma();
+  const issue = await createIssue(fixture, { title: "Alerted issue" });
+  const agent = await prisma.agent.create({
+    data: {
+      workspaceId: fixture.workspace.id,
+      name: "Victor",
+      profileKey: "victor",
+      status: "ONLINE",
+    },
+  });
+  await prisma.issue.update({
+    where: { id: issue.id },
+    data: { assignedAgentId: agent.id },
+  });
+  return { fixture, caller, prisma, issue, agent };
+}
+
+async function createStalledEvent(params: Awaited<ReturnType<typeof setup>>, createdAt: Date) {
+  return params.prisma.activityEvent.create({
+    data: {
+      workspaceId: params.fixture.workspace.id,
+      kind: EventKind.ISSUE_STALLED,
+      actorId: params.fixture.user.id,
+      subjectType: "issue",
+      subjectId: params.issue.id,
+      payload: {
+        assignedAgentId: params.agent.id,
+        agentProfileKey: params.agent.profileKey,
+        slaMinutes: 15,
+      },
+      createdAt,
+    },
+  });
+}
+
+describe("notificationRouter", () => {
+  it("materializes alertable activity events into persisted notification state", async () => {
+    const setupData = await setup();
+    const event = await createStalledEvent(
+      setupData,
+      new Date("2026-04-26T12:00:00Z"),
+    );
+
+    const unread = await setupData.caller.unreadCount();
+    expect(unread.count).toBe(1);
+
+    const list = await setupData.caller.list({ limit: 10 });
+    expect(list.notifications).toHaveLength(1);
+    expect(list.notifications[0].event.id).toBe(event.id);
+    expect(list.notifications[0].status).toBe(NotificationStatus.UNREAD);
+    expect(list.notifications[0].notification.summary).toContain("stalled");
+    expect(list.notifications[0].notification.primaryHref).toContain(
+      `/issues/${setupData.issue.id}`,
+    );
+
+    const state = await setupData.prisma.notificationState.findUniqueOrThrow({
+      where: {
+        workspaceId_userId_eventId: {
+          workspaceId: setupData.fixture.workspace.id,
+          userId: setupData.fixture.user.id,
+          eventId: event.id,
+        },
+      },
+    });
+    expect(state.replacementKey).toBe(`issue:${setupData.issue.id}:stalled`);
+    expect(state.importance).toBeGreaterThan(0);
+    expect(state.createdAt.toISOString()).toBe(event.createdAt.toISOString());
+  });
+
+  it("persists read, acknowledge, dismiss, and resolve lifecycle state", async () => {
+    const setupData = await setup();
+    await createStalledEvent(setupData, new Date("2026-04-26T13:00:00Z"));
+    const list = await setupData.caller.list({ limit: 10 });
+    const id = list.notifications[0].id;
+
+    await setupData.caller.markRead({ id });
+    let state = await setupData.prisma.notificationState.findUniqueOrThrow({
+      where: { id },
+    });
+    expect(state.status).toBe(NotificationStatus.READ);
+    expect(state.readAt).toBeInstanceOf(Date);
+    expect((await setupData.caller.unreadCount()).count).toBe(0);
+
+    await setupData.caller.acknowledge({ id });
+    state = await setupData.prisma.notificationState.findUniqueOrThrow({
+      where: { id },
+    });
+    expect(state.status).toBe(NotificationStatus.ACKNOWLEDGED);
+    expect(state.acknowledgedAt).toBeInstanceOf(Date);
+
+    await setupData.caller.dismiss({ id });
+    state = await setupData.prisma.notificationState.findUniqueOrThrow({
+      where: { id },
+    });
+    expect(state.status).toBe(NotificationStatus.DISMISSED);
+    expect(state.dismissedAt).toBeInstanceOf(Date);
+    expect((await setupData.caller.list({ limit: 10 })).notifications).toHaveLength(0);
+
+    await setupData.caller.resolve({ id });
+    state = await setupData.prisma.notificationState.findUniqueOrThrow({
+      where: { id },
+    });
+    expect(state.status).toBe(NotificationStatus.RESOLVED);
+    expect(state.resolvedAt).toBeInstanceOf(Date);
+  });
+
+  it("uses replacementKey to keep only the latest matching alert active", async () => {
+    const setupData = await setup();
+    const older = await createStalledEvent(
+      setupData,
+      new Date("2026-04-26T14:00:00Z"),
+    );
+    const newer = await createStalledEvent(
+      setupData,
+      new Date("2026-04-26T14:05:00Z"),
+    );
+
+    const list = await setupData.caller.list({ limit: 10 });
+    expect(list.notifications.map((n) => n.event.id)).toEqual([newer.id]);
+
+    const states = await setupData.prisma.notificationState.findMany({
+      where: {
+        workspaceId: setupData.fixture.workspace.id,
+        userId: setupData.fixture.user.id,
+        eventId: { in: [older.id, newer.id] },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(states.map((state) => state.status)).toEqual([
+      NotificationStatus.RESOLVED,
+      NotificationStatus.UNREAD,
+    ]);
+    expect(states[0].replacementKey).toBe(states[1].replacementKey);
+  });
+});

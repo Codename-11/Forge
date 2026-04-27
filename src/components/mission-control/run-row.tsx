@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { Pin, PinOff, ChevronRight, Bot, ExternalLink } from "lucide-react";
+import { AlertTriangle, Pin, PinOff, ChevronRight, Bot, ExternalLink } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { RunTimeline } from "./run-timeline";
@@ -31,6 +31,8 @@ export type RunRowData = {
   } | null;
   statusComment?: { body: string; currentStep: string | null } | null;
 };
+
+const STALE_RUN_MS = 5 * 60_000;
 
 function elapsed(from: Date | string): string {
   const t = typeof from === "string" ? new Date(from) : from;
@@ -78,6 +80,10 @@ export function RunRow({
   const issueHref = run.issue
     ? `/w/${run.issue.workspace.slug}/issues/${run.issue.id}`
     : null;
+  const lastEventAt =
+    typeof run.lastEventAt === "string" ? new Date(run.lastEventAt) : run.lastEventAt;
+  const lastEventAgeMs = Date.now() - lastEventAt.getTime();
+  const isStalled = lastEventAgeMs > STALE_RUN_MS;
 
   return (
     <div
@@ -85,6 +91,7 @@ export function RunRow({
       className={cn(
         "group/row relative rounded-md border border-border bg-card/40 px-2.5 py-2 text-[0.75rem] transition-colors",
         active && "border-ember/40 bg-ember/5",
+        isStalled && "border-warning/40 bg-warning/5",
       )}
       onMouseEnter={onActivate}
     >
@@ -103,10 +110,14 @@ export function RunRow({
             )}
           />
         </button>
-        <span className="relative flex h-2 w-2 shrink-0">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember opacity-50" />
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
-        </span>
+        {isStalled ? (
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
+        ) : (
+          <span className="relative flex h-2 w-2 shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember opacity-50" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
+          </span>
+        )}
         <Bot className="h-3.5 w-3.5 shrink-0 text-ember" />
         <span className="truncate font-medium text-foreground">
           {run.agent.name}
@@ -159,10 +170,28 @@ export function RunRow({
         <span className="truncate text-foreground/80">
           {run.currentStep ?? run.statusComment?.currentStep ?? "working…"}
         </span>
-        <span className="ml-auto shrink-0 text-meta text-muted-foreground">
+        <span
+          className={cn(
+            "ml-auto shrink-0 text-meta",
+            isStalled ? "text-warning" : "text-muted-foreground",
+          )}
+          title={`Last event ${lastEventAt.toLocaleString()}`}
+        >
           {relativeTime(run.lastEventAt)}
         </span>
       </div>
+      {isStalled && (
+        <div className="mt-1.5 rounded-md border border-warning/30 bg-background/50 px-2 py-1.5 text-meta text-muted-foreground">
+          <div className="font-medium text-foreground">
+            No run event for {elapsed(lastEventAt)}.
+          </div>
+          <div>
+            Last signal: {lastEventAt.toLocaleString()}. Recommended fix:
+            check the agent heartbeat, webhook delivery, and latest issue
+            status comment before reassigning.
+          </div>
+        </div>
+      )}
       {expanded && (
         <div className="mt-1.5 border-t border-border/60 pl-6 pt-1.5">
           <RunTimeline events={events ?? []} />

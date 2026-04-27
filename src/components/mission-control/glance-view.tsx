@@ -35,6 +35,7 @@ export function GlanceView({
   onPointerDownDrag,
   isDragging,
   hasStalled,
+  stalledCount,
 }: {
   slug: string;
   onExpand: () => void;
@@ -42,6 +43,7 @@ export function GlanceView({
   onPointerDownDrag: (e: React.PointerEvent) => void;
   isDragging: boolean;
   hasStalled: boolean;
+  stalledCount: number;
 }) {
   const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false });
   const { data: activeRuns } = trpc.agentRun.activeAll.useQuery(
@@ -141,7 +143,7 @@ export function GlanceView({
           return (
             <Link
               key={a.id}
-              href={`/w/${slug}/agents/${a.id}`}
+              href={`/w/${slug}/agents/${a.profileKey}`}
               className="group flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem] hover:border-ember/40"
             >
               <PresenceDot status={a.status} />
@@ -189,7 +191,9 @@ export function GlanceView({
           {activeCount} active
           {queueCount > 0 && ` · ${queueCount} queued`}
           {hasStalled && (
-            <span className="ml-1.5 text-amber-600">· stalled</span>
+            <span className="ml-1.5 text-warning">
+              · {stalledCount} stalled
+            </span>
           )}
         </span>
         <button
