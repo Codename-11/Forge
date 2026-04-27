@@ -16,6 +16,9 @@ Refined the settings navbar into primary section tabs with a contextual subnav.
   nested-sidebar layout while reducing visual clutter.
 - Added `min-h-0` to the workspace shell content column so nested settings
   pages keep their own scroll container at narrow widths.
+- Removed `h-full` from the workspace settings layout; combined with the
+  shell topbar, it caused mobile settings content to be clipped instead of
+  scrolling inside the page content pane.
 
 ### Verification
 
@@ -23,7 +26,7 @@ Refined the settings navbar into primary section tabs with a contextual subnav.
 - `pnpm exec eslint src/components/settings/settings-navbar.tsx` - clean.
 - `git diff --check` - clean.
 - Browser smoke: desktop settings panes scrolled correctly; mobile uncovered
-  the missing shell `min-h-0`, fixed above.
+  the missing shell/layout flex constraints, fixed above.
 
 ## 2026-04-27 — Settings navbar cleanup
 
