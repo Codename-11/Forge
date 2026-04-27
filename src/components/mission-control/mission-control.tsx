@@ -22,11 +22,16 @@ import {
   useMissionControl,
   type MissionControlTab,
 } from "@/hooks/use-mission-control";
+import { useResizeHandle } from "@/hooks/use-resize-handle";
+import { playRunCompletedSound, playRunStalledSound } from "@/lib/mission-control-sound";
 import { LiveTab } from "./live-tab";
 import { QueueTab } from "./queue-tab";
 import { AgentsTab } from "./agents-tab";
 import { HistoryTab } from "./history-tab";
 import { GlanceView } from "./glance-view";
+import { SettingsPopover } from "./settings-popover";
+import { PillSparkline } from "./pill-sparkline";
+import { ChatTab } from "./chat-tab";
 
 /**
  * Mission Control — the global agent ops widget.
@@ -61,6 +66,7 @@ const TABS: { id: MissionControlTab; label: string; chord: string }[] = [
   { id: "queue", label: "Queue", chord: "2" },
   { id: "agents", label: "Agents", chord: "3" },
   { id: "history", label: "History", chord: "4" },
+  { id: "chat", label: "Chat", chord: "5" },
 ];
 
 export function MissionControl() {
@@ -71,7 +77,9 @@ export function MissionControl() {
     setSize,
     setTab,
     setCorner,
+    setDimensions,
     togglePin,
+    toggleSound,
     toggleCollapse,
     pinRun,
     unpinRun,
@@ -91,6 +99,11 @@ export function MissionControl() {
     { enabled: Boolean(slug), staleTime: 5_000 },
   );
 
+  const { data: sparkPoints } = trpc.agentRun.recentEventCounts.useQuery(
+    { windowMinutes: 30, bucketSeconds: 60 },
+    { enabled: Boolean(slug), staleTime: 30_000 },
+  );
+
   const activeCount = activeRuns?.length ?? 0;
   const queueCount = (queue ?? []).filter((q) => !q.assignedAgent).length;
   const stalledRuns = useMemo(() => {
@@ -103,6 +116,12 @@ export function MissionControl() {
   }, [activeRuns]);
   const hasStalled = stalledRuns.length > 0;
 
+  // Ref so the realtime callback can read the latest soundEnabled without
+  // becoming stale (the callback is registered once and can't be updated
+  // cheaply without re-subscribing).
+  const soundEnabledRef = useRef(state.soundEnabled);
+  soundEnabledRef.current = state.soundEnabled;
+
   // Realtime fan-out: every AGENT_RUN_*, AGENT_ASSIGNED, ISSUE_QUEUED,
   // COMMENT_CREATED reshapes some tab's data. Invalidate broadly —
   // the cost is a refetch, the win is "no polling, no stale UI."
@@ -113,6 +132,7 @@ export function MissionControl() {
       void utils.agentRun.recentTerminal.invalidate();
       void utils.agentRun.heatmap.invalidate();
       void utils.agentRun.eventsInRange.invalidate();
+      void utils.agentRun.recentEventCounts.invalidate();
     }
     if (k === "AGENT_ASSIGNED" || k === "ISSUE_QUEUED" || k === "ISSUE_UPDATED") {
       void utils.issue.queue.invalidate();
@@ -121,10 +141,22 @@ export function MissionControl() {
     if (k === "AGENT_STATUS_CHANGED" || evt.subjectType === "agent") {
       void utils.agent.list.invalidate();
     }
+    if (k === "CHAT_MESSAGE_POSTED" || evt.subjectType === "chat-thread") {
+      void utils.chat.threads.invalidate();
+    }
     if (k.startsWith("COMMENT_")) {
       // Status-comment upserts surface as comment events; refresh runs
       // so the headline current-step stays fresh.
       void utils.agentRun.activeAll.invalidate();
+    }
+    // Sound notifications — only fire when user has opted in.
+    if (soundEnabledRef.current) {
+      const agentId = (evt.payload as Record<string, string> | undefined)?.agentId;
+      if (k === "AGENT_RUN_COMPLETED") {
+        playRunCompletedSound(agentId);
+      } else if (k === "AGENT_RUN_STALLED") {
+        playRunStalledSound(agentId);
+      }
     }
   });
 
@@ -138,6 +170,17 @@ export function MissionControl() {
       void x;
       void y;
     },
+  });
+
+  // ---------- Resize handle ----------
+  const { onPointerDown: onResizePointerDown, isResizing } = useResizeHandle({
+    containerRef,
+    onResizeEnd: setDimensions,
+    minWidth: 380,
+    minHeight: 420,
+    maxWidth: 720,
+    maxHeight: 800,
+    anchor: state.corner,
   });
 
   // ---------- Click-outside auto-collapse ----------
@@ -209,6 +252,17 @@ export function MissionControl() {
       if (target?.matches("input, textarea, [contenteditable=true]")) return;
       e.preventDefault();
       setTab("history");
+    },
+    [expanded, setTab],
+  );
+  useHotkey(
+    "5",
+    (e) => {
+      if (!expanded) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.matches("input, textarea, [contenteditable=true]")) return;
+      e.preventDefault();
+      setTab("chat");
     },
     [expanded, setTab],
   );
@@ -367,6 +421,15 @@ export function MissionControl() {
           <span className="font-mono text-[0.6875rem] text-foreground">
             {activeCount > 0 ? `${activeCount} active` : "idle"}
           </span>
+          {/* Sparkline: recent 30-minute event activity. Hidden on small screens. */}
+          <PillSparkline
+            points={sparkPoints ?? []}
+            windowMinutes={30}
+            bucketSeconds={60}
+            width={48}
+            height={12}
+            className="hidden text-ember sm:block"
+          />
           {queueCount > 0 && (
             <span className="rounded-md border border-border bg-subtle px-1 py-0 font-mono text-[0.625rem] text-muted-foreground">
               {queueCount} queued
@@ -408,6 +471,18 @@ export function MissionControl() {
     );
   }
 
+  // Resize handle position tracks the panel's anchor corner.
+  // For a bottom-right anchor the handle sits at the top-left.
+  // For other corners the handle moves to the opposite corner.
+  const resizeHandleClass =
+    state.corner === "br"
+      ? "top-0 left-0 cursor-nwse-resize"
+      : state.corner === "bl"
+        ? "top-0 right-0 cursor-nesw-resize"
+        : state.corner === "tr"
+          ? "bottom-0 left-0 cursor-nesw-resize"
+          : "bottom-0 right-0 cursor-nwse-resize";
+
   // ---------- Panel mode ----------
   return (
     <div
@@ -415,13 +490,22 @@ export function MissionControl() {
       className={cn(
         "fixed z-40 flex flex-col rounded-lg border border-border bg-card shadow-md backdrop-blur",
         cornerClass,
-        isDragging && "opacity-90",
+        (isDragging || isResizing) && "opacity-90",
       )}
       style={{
-        width: 460,
-        height: 560,
+        width: state.width,
+        height: state.height,
       }}
     >
+      {/* Resize handle — invisible 12×12 hit area at the appropriate corner */}
+      <div
+        onPointerDown={onResizePointerDown}
+        className={cn("absolute h-3 w-3", resizeHandleClass)}
+        style={{ zIndex: 41 }}
+        data-no-drag
+        title="Resize"
+      />
+
       <header
         onPointerDown={onPointerDown}
         className={cn(
@@ -439,6 +523,10 @@ export function MissionControl() {
           </span>
         )}
         <span className="ml-auto flex items-center gap-1" data-no-drag>
+          <SettingsPopover
+            soundEnabled={state.soundEnabled}
+            onToggleSound={toggleSound}
+          />
           <button
             type="button"
             onClick={togglePin}
@@ -522,6 +610,7 @@ export function MissionControl() {
         {state.tab === "queue" && <QueueTab slug={slug} />}
         {state.tab === "agents" && <AgentsTab slug={slug} />}
         {state.tab === "history" && <HistoryTab slug={slug} />}
+        {state.tab === "chat" && <ChatTab slug={slug} />}
       </div>
     </div>
   );

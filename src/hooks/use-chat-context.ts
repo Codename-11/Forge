@@ -1,0 +1,45 @@
+"use client";
+import { useEffect, useMemo, useId } from "react";
+import { usePathname } from "next/navigation";
+import {
+  useChatContextRegistry,
+  type ChatContextSnapshot,
+} from "@/contexts/chat-context-provider";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
+
+/**
+ * Build the current chat context bundle. Pure read — for sending with
+ * a chat message. Pages can also `useChatContextRegister(snapshot)` to
+ * push their state up.
+ */
+export function useChatContext(): ChatContextSnapshot {
+  const { registered } = useChatContextRegistry();
+  const pathname = usePathname();
+  const workspace = useMaybeWorkspace();
+
+  return useMemo(
+    () => ({
+      ...registered,
+      route: registered.route ?? pathname ?? undefined,
+      slug: workspace?.slug,
+    }),
+    [registered, pathname, workspace?.slug],
+  );
+}
+
+/**
+ * Page-level helper: register `snapshot` for the lifetime of the
+ * component. Use stable refs in the deps to avoid re-registering every
+ * render — pass primitive values, not objects.
+ */
+export function useChatContextRegister(snapshot: ChatContextSnapshot): void {
+  const { register } = useChatContextRegistry();
+  const id = useId();
+  // Stringify is fine for our small snapshots — keeps the effect stable
+  // when callers pass new object refs but identical content.
+  const key = JSON.stringify(snapshot);
+  useEffect(() => {
+    return register(id, snapshot);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, key, register]);
+}

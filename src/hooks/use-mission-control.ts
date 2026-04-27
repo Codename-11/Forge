@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * edge if they want.
  */
 
-export type MissionControlTab = "live" | "queue" | "agents" | "history";
+export type MissionControlTab = "live" | "queue" | "agents" | "history" | "chat";
 /**
  * Three visual modes:
  *   - pill: ambient indicator only (active count + presence dots).
@@ -36,6 +36,11 @@ export interface MissionControlState {
   pinnedRunIds: string[];
   /** When true, panel doesn't auto-collapse on outside click. */
   pinned: boolean;
+  /** Panel width in px (pill/glance are fixed). */
+  width: number;
+  /** Panel height in px. */
+  height: number;
+  soundEnabled: boolean;
 }
 
 const DEFAULT_STATE: MissionControlState = {
@@ -46,6 +51,9 @@ const DEFAULT_STATE: MissionControlState = {
   offsetY: 16,
   pinnedRunIds: [],
   pinned: false,
+  width: 460,
+  height: 560,
+  soundEnabled: false,
 };
 
 const STORAGE_PREFIX = "forge.mission-control";
@@ -86,7 +94,9 @@ export function useMissionControl(slug: string): {
   setTab: (tab: MissionControlTab) => void;
   setCorner: (corner: MissionControlCorner) => void;
   setOffset: (x: number, y: number) => void;
+  setDimensions: (width: number, height: number) => void;
   togglePin: () => void;
+  toggleSound: () => void;
   toggleCollapse: () => void;
   pinRun: (runId: string) => void;
   unpinRun: (runId: string) => void;
@@ -128,6 +138,12 @@ export function useMissionControl(slug: string): {
   const setOffset = useCallback((offsetX: number, offsetY: number) => {
     setState((s) => ({ ...s, offsetX, offsetY }));
   }, []);
+  const setDimensions = useCallback((width: number, height: number) => {
+    setState((s) => ({ ...s, width, height }));
+  }, []);
+  const toggleSound = useCallback(() => {
+    setState((s) => ({ ...s, soundEnabled: !s.soundEnabled }));
+  }, []);
   const togglePin = useCallback(() => {
     setState((s) => ({ ...s, pinned: !s.pinned }));
   }, []);
@@ -163,7 +179,9 @@ export function useMissionControl(slug: string): {
     setTab,
     setCorner,
     setOffset,
+    setDimensions,
     togglePin,
+    toggleSound,
     toggleCollapse,
     pinRun,
     unpinRun,

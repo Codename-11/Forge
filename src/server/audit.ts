@@ -59,6 +59,7 @@ async function upsertAgentDispatchWebhook(
         EventKind.ISSUE_QUEUED,
         EventKind.COMMENT_CREATED,
         EventKind.ISSUE_PRIORITY_CHANGED,
+        EventKind.CHAT_MESSAGE_POSTED,
       ],
       active: true,
     },
@@ -216,6 +217,34 @@ export async function recordChange(
           tx,
           params.workspaceId,
           agentDispatchUrlFor(a.id),
+        );
+        agentWebhookIds.push(wid);
+      }
+    }
+  }
+
+  // (d) Chat — route to the agent the user is talking to.
+  if (
+    params.eventKind === EventKind.CHAT_MESSAGE_POSTED &&
+    params.subjectType === "chat-thread"
+  ) {
+    const payload = params.payload as { agentId?: string; role?: string } | undefined;
+    // Only dispatch on USER messages (don't loop agent's own posts back).
+    if (payload?.agentId && payload?.role === "USER") {
+      const agent = await tx.agent.findFirst({
+        where: {
+          workspaceId: params.workspaceId,
+          id: payload.agentId,
+          archivedAt: null,
+          webhookUrl: { not: null },
+        },
+        select: { id: true },
+      });
+      if (agent) {
+        const wid = await upsertAgentDispatchWebhook(
+          tx,
+          params.workspaceId,
+          agentDispatchUrlFor(agent.id),
         );
         agentWebhookIds.push(wid);
       }
