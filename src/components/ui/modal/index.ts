@@ -9,6 +9,7 @@
  *   <Confirm>    — small centered yes/no, optional type-to-confirm
  *                  for destructive actions.
  *   <QuickForm>  — 1-3 field centered form, optional draft persistence.
+ *   <CenterModal> — large centered setup/editing flow with sticky footer.
  *   <SidePanel>  — right-edge slide-in for heavy forms (page visible).
  *   <Picker>     — command-palette-style searchable list.
  *   <Drawer>     — bottom sheet for tablet widths and below.
@@ -18,6 +19,7 @@
  */
 export { Confirm } from "./confirm";
 export { QuickForm } from "./quick-form";
+export { CenterModal } from "./center-modal";
 export { SidePanel } from "./side-panel";
 export { Picker } from "./picker";
 export { Drawer } from "./drawer";

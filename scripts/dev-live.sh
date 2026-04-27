@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pnpm dev:live — run `next dev` against the deployed Postgres / Redis /
+# pnpm dev / pnpm dev:live — run `next dev` against the deployed Postgres / Redis /
 # MinIO instead of a local docker compose stack.
 #
 # Why: HMR-backed UI iteration without a 2-minute container rebuild for

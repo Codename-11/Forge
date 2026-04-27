@@ -20,6 +20,8 @@ model Agent {
   profileKey        String       // unique per workspace
   description       String?
   avatar            String?
+  provider          AgentProvider @default(HERMES)
+  runtimeMode       AgentRuntimeMode @default(PERSISTENT)
   webhookUrl        String?
   webhookSecret     String?
   capabilities      String[]
@@ -43,6 +45,8 @@ The columns worth knowing in detail:
 | `profileKey` | Stable cross-system handle, unique per workspace. Matches the Hermes profile directory name (e.g. `victor`, `mizu`). Treat this like a username — addressable, mostly immutable. |
 | `description` | Free-form prose used in the agent picker and on the agent page. |
 | `avatar` | Optional URL or data-URI; falls back to the agent's initials. |
+| `provider` | Runtime family: `HERMES`, `CLAUDE`, `CODEX`, or `CUSTOM`. Hermes is first-class; Claude/Codex are supported as MCP clients today. |
+| `runtimeMode` | `PERSISTENT` or `EPHEMERAL`. Hermes/custom bridges can be persistent; Claude and Codex are currently single-session, with persistent runners on the roadmap. |
 | `webhookUrl` | Where Forge POSTs assignment payloads. May also be the synthetic `agent:dispatch:{agentId}` shim — see [Activity & Audit](/concepts/activity-and-audit.html). |
 | `webhookSecret` | Per-agent HMAC secret. If unset, Forge falls back to the workspace synthetic secret. |
 | `capabilities` | Free-form lowercase tags consumed by `PRIORITY_MATCH` and `CAPABILITY_MATCH` dispatch. Use whatever vocabulary your agents announce. |
@@ -80,22 +84,27 @@ to pass `profileKey`. See [Hermes Integration](/agents/hermes.html).
 
 A typical onboarding sequence:
 
-1. **Create the agent.** Settings → Agents → New, or via tRPC. Set `name`,
-   `profileKey`, `description`, and an avatar. The agent starts at
-   `status = OFFLINE`.
-2. **Set the webhook.** Either configure a real `webhookUrl` plus
-   `webhookSecret`, or leave it as the synthetic dispatch shim and let the
-   worker resolve it at delivery time.
-3. **Declare capabilities.** Lowercase, free-form. Common entries match
+1. **Choose the provider.** Settings → Agents → New starts with Hermes,
+   Claude, Codex, or custom. Hermes is the persistent first-class path;
+   Claude/Codex are single-session MCP clients today.
+2. **Create the agent.** Set `name`, `profileKey`, `description`, avatar,
+   provider, and runtime mode. The agent starts at `status = OFFLINE`.
+3. **Pick the connection mode.** MCP-only agents pull work and heartbeat with
+   a linked API key. Push agents additionally configure a real `webhookUrl`
+   plus optional `webhookSecret`.
+4. **Declare capabilities.** Lowercase, free-form. Common entries match
    priority names (`urgent`, `high`) for `PRIORITY_MATCH` and label names
    (`infra`, `frontend`) for `CAPABILITY_MATCH`.
-4. **Set the role.** Default `WORKER`. Use `COACH` for an agent that posts
+5. **Set the role.** Default `WORKER`. Use `COACH` for an agent that posts
    diagnostic comments via [AI Coach](/agents/ai-triage-and-coach.html); use
    `OBSERVER` for an agent that should never auto-pick up work.
-5. **Bring it online.** Either flip `status` to `ONLINE` directly, or fire a
-   webhook delivery — the first successful POST will flip OFFLINE → ONLINE
-   automatically via `recordAgentReachable`.
-6. **Receive assignments.** The dispatcher considers the agent eligible. See
+6. **Issue a linked MCP key.** Onboarding can create one immediately, or you
+   can create it later under Developer access. A linked key makes
+   `agents.me`, `agents.heartbeat`, and `issues.assigned` self-aware.
+7. **Bring it online.** Either call `agents.heartbeat`, flip `status` to
+   `ONLINE`, or fire a webhook delivery — the first successful POST will flip
+   OFFLINE → ONLINE automatically via `recordAgentReachable`.
+8. **Receive assignments.** The dispatcher considers the agent eligible. See
    [Auto-dispatch](/agents/auto-dispatch.html).
 
 ```bash
@@ -109,6 +118,8 @@ curl -sS https://forge.example/api/trpc/agents.create \
       "name": "Victor",
       "profileKey": "victor",
       "description": "Lead engineering agent.",
+      "provider": "HERMES",
+      "runtimeMode": "PERSISTENT",
       "capabilities": ["urgent", "high", "infra", "backend"],
       "role": "WORKER",
       "maxConcurrent": 3
@@ -118,11 +129,13 @@ curl -sS https://forge.example/api/trpc/agents.create \
 
 ## Heartbeat is push-driven
 
-Forge does not require agents to poll. The presence model is:
+Forge does not require every agent to accept push delivery. The presence model is:
 
 - Every successful webhook delivery to the agent's `webhookUrl` calls
   `recordAgentReachable`, which bumps `lastHeartbeatAt` and flips
   `status = OFFLINE` to `ONLINE`.
+- MCP-only agents should call `agents.heartbeat` at startup and when their
+  session changes state. This is the normal path for Claude and Codex today.
 - Failed deliveries do not bump the heartbeat. After enough consecutive
   failures (see retries in [Activity & Audit](/concepts/activity-and-audit.html)),
   the agent stays at its last status; the worker eventually dead-letters the

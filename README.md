@@ -155,7 +155,7 @@ mcp_servers:
 ## Quick start
 
 ```bash
-# 1. Services (Postgres + Redis + MinIO)
+# 1. Services (Postgres + Redis + MinIO for isolated dev/test)
 cd docker && docker compose up -d
 # MinIO console: http://localhost:59001 (forgeminio / forgeminio-dev-password)
 
@@ -171,7 +171,8 @@ pnpm prisma:seed                # seeds workspaces + issues + labels
 pnpm seed:agents
 
 # 4. Run
-pnpm dev                        # http://localhost:3000
+pnpm dev                        # live compose data, http://localhost:3000
+pnpm dev:isolated               # isolated local services from docker/
 pnpm worker                     # separate process: webhook + metric workers
 
 # 5. Docs (optional — VitePress, served at /docs/)

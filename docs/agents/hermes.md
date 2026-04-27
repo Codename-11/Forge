@@ -1,7 +1,9 @@
 # Hermes Integration
 
 Hermes is Axiom-Labs' AI gateway and agent runtime; Forge is built to talk to
-Hermes-style agents bidirectionally.
+Hermes-style agents bidirectionally. Hermes remains the first-class provider
+in Forge, even though the agent registry now also names Claude, Codex, and
+custom MCP clients explicitly.
 
 This page is for the operator wiring an existing Hermes profile into Forge —
 or anyone who wants to understand the contract well enough to implement a
@@ -205,7 +207,13 @@ await mcp.call("comments.create", {
 });
 ```
 
-That round-trip — webhook in, MCP out — is the entire integration.
+That round-trip — webhook in, MCP out — is the Hermes integration.
+
+Claude and Codex use the same Forge MCP tools, but they are currently modeled
+as single-session clients unless you run a custom persistent bridge. They can
+still be first-class Forge `Agent` rows, hold linked API keys, heartbeat via
+`agents.heartbeat`, and pull assigned work via `issues.assigned`; they just do
+not require a `webhookUrl`.
 
 ## The signed envelope
 

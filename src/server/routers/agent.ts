@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
+  AgentProvider,
+  AgentRuntimeMode,
   AgentStatus,
   EventKind,
   RelationKind,
@@ -9,14 +11,15 @@ import {
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import type { db as PrismaDb } from "@/server/db";
+import { deliverWebhook } from "@/server/services/plugin-runtime";
 
 /**
  * Agent registry. Agents are MCP-first actors — LLM profiles that hold
  * ApiKeys, receive push dispatches, and can be assigned issues directly.
  *
- * `profileKey` is the stable cross-system handle (e.g. `victor`, `mizu`) and
- * matches the Hermes profile directory name so webhook payloads can route
- * locally without extra lookup.
+ * `profileKey` is the stable cross-system handle (e.g. `victor`, `mizu`).
+ * For Hermes it usually matches the profile directory; for Claude, Codex, and
+ * custom clients it is the Forge-side identity attached to linked MCP keys.
  */
 
 const profileKey = z
@@ -38,13 +41,27 @@ const upsertInput = z.object({
   profileKey,
   description: z.string().max(2000).optional(),
   avatar: z.string().max(200).optional(),
+  provider: z.nativeEnum(AgentProvider).default(AgentProvider.HERMES),
+  runtimeMode: z
+    .nativeEnum(AgentRuntimeMode)
+    .default(AgentRuntimeMode.PERSISTENT),
   webhookUrl: z.string().url().max(500).optional().or(z.literal("")),
+  webhookSecret: z.string().max(500).optional().or(z.literal("")),
   capabilities: z.array(z.string().min(1).max(40)).max(32).default([]),
   maxConcurrent: z.number().int().min(0).max(100).default(1),
   /// Freeform markdown applied to the issue description when this agent
   /// is assigned to an issue whose description is empty. No length cap.
   templateMarkdown: z.string().optional(),
 });
+
+function redactWebhookSecret<T extends { webhookSecret?: string | null }>(
+  value: T,
+): T {
+  return {
+    ...value,
+    webhookSecret: value.webhookSecret ? "[redacted]" : value.webhookSecret,
+  };
+}
 
 export const agentRouter = router({
   list: workspaceProcedure
@@ -110,7 +127,10 @@ export const agentRouter = router({
           profileKey: input.profileKey,
           description: input.description,
           avatar: input.avatar,
+          provider: input.provider,
+          runtimeMode: input.runtimeMode,
           webhookUrl: input.webhookUrl || null,
+          webhookSecret: input.webhookSecret || null,
           capabilities: input.capabilities,
           maxConcurrent: input.maxConcurrent,
           templateMarkdown: input.templateMarkdown || null,
@@ -122,11 +142,16 @@ export const agentRouter = router({
         entity: "Agent",
         entityId: agent.id,
         action: "create",
-        after: agent,
+        after: redactWebhookSecret(agent),
         eventKind: EventKind.AGENT_CREATED,
         subjectType: "agent",
         subjectId: agent.id,
-        payload: { name: agent.name, profileKey: agent.profileKey },
+        payload: {
+          name: agent.name,
+          profileKey: agent.profileKey,
+          provider: agent.provider,
+          runtimeMode: agent.runtimeMode,
+        },
         ip: ctx.ip,
         userAgent: ctx.userAgent,
       });
@@ -141,7 +166,10 @@ export const agentRouter = router({
         name: z.string().min(1).max(120).optional(),
         description: z.string().max(2000).nullable().optional(),
         avatar: z.string().max(200).nullable().optional(),
+        provider: z.nativeEnum(AgentProvider).optional(),
+        runtimeMode: z.nativeEnum(AgentRuntimeMode).optional(),
         webhookUrl: z.string().url().max(500).nullable().optional(),
+        webhookSecret: z.string().max(500).nullable().optional(),
         capabilities: z.array(z.string().min(1).max(40)).max(32).optional(),
         maxConcurrent: z.number().int().min(0).max(100).optional(),
         /// Freeform markdown template. Null clears. No length cap.
@@ -161,12 +189,12 @@ export const agentRouter = router({
           entity: "Agent",
           entityId: id,
           action: "update",
-          before,
-          after,
+          before: redactWebhookSecret(before),
+          after: redactWebhookSecret(after),
           eventKind: EventKind.AGENT_UPDATED,
           subjectType: "agent",
           subjectId: id,
-          payload: patch,
+          payload: redactWebhookSecret(patch),
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
@@ -205,6 +233,84 @@ export const agentRouter = router({
         where: { id: input.id, workspaceId: ctx.workspaceId },
       });
       return ctx.db.agent.delete({ where: { id: row.id } });
+    }),
+
+  testWebhook: adminProcedure
+    .input(
+      z.object({
+        id: agentId.optional(),
+        webhookUrl: z.string().url().max(500).optional().or(z.literal("")),
+        webhookSecret: z.string().max(500).optional().or(z.literal("")),
+        provider: z.nativeEnum(AgentProvider).optional(),
+        runtimeMode: z.nativeEnum(AgentRuntimeMode).optional(),
+        profileKey: profileKey.optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      let agent:
+        | {
+            id: string;
+            name: string;
+            profileKey: string;
+            webhookUrl: string | null;
+            webhookSecret: string | null;
+            provider: AgentProvider;
+            runtimeMode: AgentRuntimeMode;
+          }
+        | null = null;
+
+      if (input.id) {
+        agent = await ctx.db.agent.findFirstOrThrow({
+          where: { id: input.id, workspaceId: ctx.workspaceId },
+          select: {
+            id: true,
+            name: true,
+            profileKey: true,
+            webhookUrl: true,
+            webhookSecret: true,
+            provider: true,
+            runtimeMode: true,
+          },
+        });
+      }
+
+      const url = input.webhookUrl || agent?.webhookUrl || "";
+      if (!url) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Webhook URL is required to run a connection test.",
+        });
+      }
+
+      const provider = input.provider ?? agent?.provider ?? AgentProvider.CUSTOM;
+      const runtimeMode =
+        input.runtimeMode ?? agent?.runtimeMode ?? AgentRuntimeMode.EPHEMERAL;
+      const res = await deliverWebhook({
+        url,
+        secret:
+          input.webhookSecret || agent?.webhookSecret || "forge_connection_test",
+        timeoutMs: 5000,
+        body: {
+          id: `agent-test-${Date.now()}`,
+          kind: "AGENT_CONNECTION_TEST",
+          subjectType: "agent",
+          subjectId: agent?.id ?? "draft",
+          payload: {
+            workspaceId: ctx.workspaceId,
+            profileKey: input.profileKey ?? agent?.profileKey ?? null,
+            provider,
+            runtimeMode,
+            test: true,
+          },
+          createdAt: new Date().toISOString(),
+        },
+      });
+
+      return {
+        ok: res.ok,
+        status: res.status,
+        responseBody: res.responseBody?.slice(0, 2_000) ?? null,
+      };
     }),
 
   /** Agent presence ping. Sets status and bumps lastHeartbeatAt. */

@@ -31,7 +31,7 @@ import {
 
 /**
  * Forge's MCP (Model Context Protocol) surface — the stable set of tools any
- * agent runtime (Claude Code, Hermes, OpenAI Agents) can call to read/write
+ * agent runtime (Hermes, Claude, Codex, custom) can call to read/write
  * Forge data.
  *
  * Each tool is auth-gated by scope. Route handlers at `/api/mcp/rpc` (real
@@ -2289,6 +2289,8 @@ export const mcpTools = {
           id: true,
           profileKey: true,
           name: true,
+          provider: true,
+          runtimeMode: true,
           status: true,
           capabilities: true,
           webhookUrl: true,
@@ -2338,6 +2340,8 @@ export const mcpTools = {
         select: {
           id: true,
           profileKey: true,
+          provider: true,
+          runtimeMode: true,
           status: true,
           lastHeartbeatAt: true,
         },

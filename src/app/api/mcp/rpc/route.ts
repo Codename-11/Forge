@@ -72,7 +72,7 @@ async function handleRpc(
         capabilities: { tools: { listChanged: false } },
         serverInfo: SERVER_INFO,
         instructions:
-          "Forge — project management. Tools cover issues, projects, comments, analytics, and the agent queue. Use `forge_` prefix in Hermes.",
+          "Forge - project management. Tools cover issues, projects, comments, analytics, and the agent queue.",
       });
 
     case "notifications/initialized":

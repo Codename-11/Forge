@@ -36,7 +36,7 @@ error shapes all flow from this router definition.
 | `status`          | `list`, `create`, `reorder`                                                                                      |
 | `template`        | `list`, `byId`, `create`, `update`, `delete` (issue templates)                                                   |
 | `projectTemplate` | `list`, `create`, `update`, `delete`                                                                             |
-| `agent`           | `list`, `byId`, `byProfileKey`, `create`, `update`, `archive`, `delete`, `heartbeat`, `pipeline`, `timeline`, `uptime`, `webhookHealth` |
+| `agent`           | `list`, `byId`, `byProfileKey`, `create`, `update`, `archive`, `delete`, `testWebhook`, `heartbeat`, `pipeline`, `timeline`, `uptime`, `webhookHealth` |
 | `event`           | `recent`, `unreadCount`                                                                                          |
 | `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                |
 | `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                      |

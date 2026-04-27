@@ -33,6 +33,21 @@ for one-off scripts and curl debugging — it is friendlier on the command
 line.
 :::
 
+## Client setup
+
+Developer access in the app can create provider-oriented MCP keys for:
+
+- **Hermes** — persistent Forge agent profiles that use MCP callbacks and may
+  also receive push dispatch over webhook.
+- **Claude** — Claude Desktop or Claude Code sessions using Forge over MCP.
+- **Codex** — Codex CLI or IDE extension using streamable HTTP MCP config in
+  `~/.codex/config.toml`.
+- **Custom** — any JSON-RPC or REST client that can send a bearer token.
+
+Claude and Codex are supported as single-session clients today. Persistent
+Claude/Codex runners are intentionally tracked as roadmap work rather than
+pretended in the current UI.
+
 ## Auth
 
 `Authorization: Bearer <api-key>` is the primary path. Short-lived JWTs are
@@ -194,6 +209,10 @@ becomes a zero-arg "who am I".
 `lastHeartbeatAt` atomically and emits `AGENT_STATUS_CHANGED` only when the
 status actually changes. Rejects archived or cross-tenant linked agents with
 `403`.
+
+`agents.me` includes `provider` and `runtimeMode` so clients can tell whether
+they were registered as `HERMES`, `CLAUDE`, `CODEX`, or `CUSTOM`, and whether
+Forge expects a persistent or single-session runtime.
 
 ## Not on MCP
 
