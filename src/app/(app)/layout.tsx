@@ -7,7 +7,9 @@ import { TrpcProvider } from "@/lib/trpc-provider";
  * provider. Workspace-scoped pages additionally mount the full shell in
  * `w/[slug]/layout.tsx`. Account-level settings (`/settings/account`,
  * `/settings/access`, `/settings/workspaces`) render inside
- * `(app)/settings/layout.tsx` which adds its own chromeless shell.
+ * `(app)/settings/layout.tsx` which adds its own chromeless shell. When an
+ * active workspace exists, the same account surfaces are also reachable under
+ * `/w/[slug]/settings/*` to preserve the workspace shell while navigating.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();

@@ -10,56 +10,47 @@ type Entry = {
   title: string;
   description: string;
   badge?: string;
-  scope: "workspace" | "account";
 };
 
 const ENTRIES: Entry[] = [
   {
-    scope: "workspace",
     path: "/settings/workspace",
     title: "Workspace",
     description:
       "Name, avatar, sprint length (iteration cadence), time tracking on/off, per-workspace attachment storage cap, and the archive/delete danger zone.",
   },
   {
-    scope: "workspace",
     path: "/settings/members",
     title: "Members",
     description: "Admin-gated: add teammates by email, change roles, remove access.",
     badge: "admin only",
   },
   {
-    scope: "workspace",
     path: "/settings/statuses",
     title: "Statuses & workflow",
     description: "Customize the issue pipeline columns and their categories.",
   },
   {
-    scope: "workspace",
     path: "/settings/labels",
     title: "Labels",
     description: "Colored tags for issues. Create, recolor, rename.",
   },
   {
-    scope: "workspace",
     path: "/settings/templates",
     title: "Issue templates",
     description: "Reusable starting points. Stop hitting the blank page.",
   },
   {
-    scope: "workspace",
     path: "/settings/project-templates",
     title: "Project templates",
     description: "Starter suggestions shown on the Projects page.",
   },
   {
-    scope: "workspace",
     path: "/settings/recurring",
     title: "Recurring issues",
     description: "Auto-created on a cadence — weekly reviews, retros, standups.",
   },
   {
-    scope: "workspace",
     path: "/settings/views",
     title: "Saved views",
     description: "Bookmark filter combos. Personal or shared.",
@@ -68,28 +59,24 @@ const ENTRIES: Entry[] = [
 
 const DEVELOPER: Entry[] = [
   {
-    scope: "workspace",
     path: "/settings/agents",
     title: "Agents",
     description:
       "MCP-first actors that hold keys and receive work. Register Hermes, Claude, Codex, or custom profiles.",
   },
   {
-    scope: "workspace",
     path: "/settings/dispatch-rules",
     title: "Dispatch rules",
     description:
       "Declarative routing layer: pin issues matching priority / label / project to a specific agent before the mode-based picker runs.",
   },
   {
-    scope: "workspace",
     path: "/settings/plugins",
     title: "Plugins & integrations",
     description:
       "Manifest-based extensions with scoped access. Register, approve, or suspend installed plugins.",
   },
   {
-    scope: "workspace",
     path: "/settings/admin",
     title: "Admin portal",
     description:
@@ -97,7 +84,6 @@ const DEVELOPER: Entry[] = [
     badge: "admin only",
   },
   {
-    scope: "workspace",
     path: "/settings/integrations/deliveries",
     title: "Webhook deliveries",
     description:
@@ -108,19 +94,16 @@ const DEVELOPER: Entry[] = [
 
 const ACCOUNT: Entry[] = [
   {
-    scope: "account",
     path: "/settings/account",
     title: "Account",
     description: "Profile, timezone, locale, time format, theme.",
   },
   {
-    scope: "account",
     path: "/settings/appearance",
     title: "Appearance",
     description: "Density and text size. Saved per user.",
   },
   {
-    scope: "account",
     path: "/settings/access",
     title: "Developer access",
     description:
@@ -128,7 +111,6 @@ const ACCOUNT: Entry[] = [
     badge: "external agents",
   },
   {
-    scope: "account",
     path: "/settings/workspaces",
     title: "Workspaces",
     description: "Create, rename, archive, or switch workspaces you belong to.",
@@ -164,7 +146,7 @@ function EntryRow({ href, s }: { href: string; s: Entry }) {
 export default function SettingsPage() {
   const ws = useWorkspace();
   const w = (p: string) => `/w/${ws.slug}${p}`;
-  const resolve = (s: Entry) => (s.scope === "workspace" ? w(s.path) : s.path);
+  const resolve = (s: Entry) => w(s.path);
 
   return (
     <>

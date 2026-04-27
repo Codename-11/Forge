@@ -198,7 +198,12 @@ function workspaceGroups(slug: string): NavGroup[] {
     },
     {
       label: "Account",
-      items: [{ href: "/settings/account", label: "Account", Icon: UserIcon }],
+      items: [
+        { href: w("/account"), label: "Profile", Icon: UserIcon },
+        { href: w("/appearance"), label: "Appearance", Icon: Palette },
+        { href: w("/access"), label: "Developer access", Icon: Key },
+        { href: w("/workspaces"), label: "Workspaces", Icon: Layers },
+      ],
     },
   ];
 }

@@ -153,7 +153,7 @@ export function WorkspaceSwitcher() {
               type="button"
               onClick={() => {
                 setOpen(false);
-                router.push("/settings/workspaces");
+                router.push(`/w/${ws.slug}/settings/workspaces`);
               }}
               className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs text-muted-foreground hover:bg-subtle hover:text-foreground"
             >
