@@ -2,6 +2,24 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-27 — Settings navbar cleanup
+
+Replaced nested settings sidebars with a compact horizontal settings navbar.
+
+### Changes
+
+- Removed the redundant "Agent admin" entry from the primary workspace
+  sidebar; agent configuration remains under Settings -> Agents.
+- Added a shared settings navbar component for workspace and account settings.
+- Workspace settings now use the top navbar instead of a secondary left rail.
+- Account settings use the same navbar pattern with a back-to-workspace link.
+
+### Verification
+
+- `pnpm typecheck` - clean.
+- `pnpm exec eslint src/components/sidebar.tsx src/components/settings/settings-navbar.tsx src/app/(app)/settings/layout.tsx src/app/(app)/w/[slug]/settings/layout.tsx` - clean.
+- `git diff --check` - clean.
+
 ## 2026-04-26 — Agent/MCP provider onboarding steppers
 
 Reworked agent and MCP setup around explicit provider selection and centered
