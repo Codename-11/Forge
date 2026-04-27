@@ -120,13 +120,13 @@ export function CommandPalette() {
         id: "nav:account",
         label: "Go to Account settings",
         icon: Settings,
-        run: () => router.push("/settings/account"),
+        run: () => router.push(ws ? `/w/${ws.slug}/settings/account` : "/settings/account"),
       },
       {
         id: "nav:workspaces",
         label: "Manage workspaces",
         icon: Users,
-        run: () => router.push("/settings/workspaces"),
+        run: () => router.push(ws ? `/w/${ws.slug}/settings/workspaces` : "/settings/workspaces"),
       },
     ],
     // `wsPath` closes over `ws`; including `ws` is enough.

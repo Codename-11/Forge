@@ -498,8 +498,8 @@ function OnboardingCard({
       { id: "project", label: "Create your first project", hint: "Group related issues.", done: projectsCount > 0, href: `/w/${slug}/projects`, icon: Rocket },
       { id: "issue", label: "Create an issue", hint: "Capture work. Press C anywhere.", done: issuesCount > 0, action: "quick-create", icon: Plus },
       { id: "member", label: "Invite a teammate", hint: "Work is better with others.", done: membersCount > 1, href: `/w/${slug}/settings/members`, icon: Mail },
-      { id: "api", label: "Create an API key", hint: "Wire Forge into Hermes, Claude, or Codex.", done: apiKeysCount > 0, href: "/settings/access", icon: KeyRound },
-      { id: "tz", label: "Set your timezone", hint: "Makes due dates sane.", done: hasTimezone, href: "/settings/account", icon: Globe },
+      { id: "api", label: "Create an API key", hint: "Wire Forge into Hermes, Claude, or Codex.", done: apiKeysCount > 0, href: `/w/${slug}/settings/access`, icon: KeyRound },
+      { id: "tz", label: "Set your timezone", hint: "Makes due dates sane.", done: hasTimezone, href: `/w/${slug}/settings/account`, icon: Globe },
     ],
     [projectsCount, issuesCount, membersCount, apiKeysCount, hasTimezone, slug],
   );

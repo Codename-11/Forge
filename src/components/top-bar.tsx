@@ -101,6 +101,8 @@ function UserMenu({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const accountHref = wsSlug ? `/w/${wsSlug}/settings/account` : "/settings/account";
+  const workspacesHref = wsSlug ? `/w/${wsSlug}/settings/workspaces` : "/settings/workspaces";
 
   useEffect(() => {
     if (!open) return;
@@ -144,7 +146,7 @@ function UserMenu({
             <div className="truncate text-[0.6875rem] text-muted-foreground">{user.email}</div>
           </div>
           <Link
-            href="/settings/account"
+            href={accountHref}
             onClick={() => setOpen(false)}
             className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-subtle"
             role="menuitem"
@@ -164,7 +166,7 @@ function UserMenu({
             </Link>
           )}
           <Link
-            href="/settings/workspaces"
+            href={workspacesHref}
             onClick={() => setOpen(false)}
             className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-subtle"
             role="menuitem"
@@ -220,8 +222,8 @@ function AvatarFallback({
   user: { name?: string | null; image?: string | null; email: string };
 }) {
   if (user.image) {
-    // eslint-disable-next-line @next/next/no-img-element
     return (
+      // eslint-disable-next-line @next/next/no-img-element
       <img
         src={user.image}
         alt=""

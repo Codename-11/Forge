@@ -14,6 +14,10 @@ Refined the settings navbar into primary section tabs with a contextual subnav.
   section.
 - The navigation remains horizontal and responsive, avoiding the previous
   nested-sidebar layout while reducing visual clutter.
+- Account pages now have workspace-scoped aliases under
+  `/w/[slug]/settings/*`, so account/profile/API-key/workspace management
+  links keep the normal workspace shell instead of jumping to the standalone
+  account layout mid-settings.
 - Added `min-h-0` to the workspace shell content column so nested settings
   pages keep their own scroll container at narrow widths.
 - Removed `h-full` from the workspace settings layout; combined with the
