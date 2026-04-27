@@ -17,7 +17,7 @@ export default function WorkspaceSettingsLayout({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SettingsNavbar scope="workspace" slug={ws.slug} />
-      <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
     </div>
   );
 }
