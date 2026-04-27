@@ -2,6 +2,25 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-27 — Restore historical Forge audit
+
+Restored the 2026-04-26 Forge cohesion/agentic/mobile audit markdown from
+Hermes session history after the original untracked audit files were absent
+from the worktree.
+
+### Changes
+
+- Added `docs/audits/2026-04-26-forge-cohesion-agentic-mobile.md`.
+- Marked the report as historical/transcript-restored and noted that the
+  reported mobile screenshot artifacts are not present in the repo.
+- Noted that `pnpm typecheck` now passes at current HEAD, so the original
+  notification-state blocker is stale.
+
+### Verification
+
+- `pnpm typecheck` - clean before restoring the docs-only audit.
+- `git diff --check` - clean.
+
 ## 2026-04-27 — Mission Control actionable notifications
 
 Completed the Mission Control notification/traceability run across drill links,
