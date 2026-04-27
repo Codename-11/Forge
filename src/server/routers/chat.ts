@@ -4,6 +4,10 @@ import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 
+// Forge has mixed id formats across rows (some cuid v1, some hex). Use
+// the same loose validator the rest of the codebase uses for entity ids.
+const idString = z.string().min(1).max(40);
+
 const ChatContextSchema = z.object({
   route: z.string().optional(),
   slug: z.string().optional(),
@@ -40,7 +44,7 @@ export const chatRouter = router({
    * agentId) unique. Returns thread + last 50 messages oldest-first.
    */
   thread: workspaceProcedure
-    .input(z.object({ agentId: z.string().cuid() }))
+    .input(z.object({ agentId: idString }))
     .mutation(async ({ ctx, input }) => {
       const agent = await ctx.db.agent.findFirst({
         where: { id: input.agentId, workspaceId: ctx.workspaceId, archivedAt: null },
@@ -76,7 +80,7 @@ export const chatRouter = router({
    */
   send: workspaceProcedure
     .input(z.object({
-      agentId: z.string().cuid(),
+      agentId: idString,
       body: z.string().min(1).max(8000),
       context: ChatContextSchema.optional(),
     }))
@@ -141,9 +145,9 @@ export const chatRouter = router({
    */
   appendAgentMessage: workspaceProcedure
     .input(z.object({
-      threadId: z.string().cuid(),
+      threadId: idString,
       body: z.string().min(1).max(16_000),
-      sourceRunId: z.string().cuid().optional(),
+      sourceRunId: idString.optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const thread = await ctx.db.chatThread.findFirst({
@@ -195,7 +199,7 @@ export const chatRouter = router({
    */
   history: workspaceProcedure
     .input(z.object({
-      threadId: z.string().cuid(),
+      threadId: idString,
       before: z.coerce.date().optional(),
       limit: z.number().int().min(1).max(100).default(50),
     }))

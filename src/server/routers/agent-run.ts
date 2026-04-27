@@ -3,6 +3,10 @@ import { AgentRunStatus, EventKind } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 
+// Forge has mixed id formats across rows (some cuid v1, some hex). Use
+// a loose validator instead of `.cuid()` so both shapes pass.
+const idString = z.string().min(1).max(40);
+
 /**
  * Read-only router for AgentRun monitoring. Live mutations land via the
  * MCP `comments.upsertStatus` path or implicit hooks in the dispatcher
@@ -19,7 +23,7 @@ export const agentRunRouter = router({
    * so the strip surfaces the most-recently-active worker.
    */
   activeForIssue: workspaceProcedure
-    .input(z.object({ issueId: z.string().cuid() }))
+    .input(z.object({ issueId: idString }))
     .query(async ({ ctx, input }) => {
       const run = await ctx.db.agentRun.findFirst({
         where: {
@@ -47,7 +51,7 @@ export const agentRunRouter = router({
   events: workspaceProcedure
     .input(
       z.object({
-        runId: z.string().cuid(),
+        runId: idString,
         limit: z.number().int().min(1).max(100).default(20),
       }),
     )
@@ -255,7 +259,7 @@ export const agentRunRouter = router({
    * aiCoachEnabled is off or no coach comment exists.
    */
   coachDiagnosis: workspaceProcedure
-    .input(z.object({ runId: z.string().cuid() }))
+    .input(z.object({ runId: idString }))
     .query(async ({ ctx, input }) => {
       const run = await ctx.db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
@@ -307,7 +311,7 @@ export const agentRunRouter = router({
    * agent + label combination over the past 30 days.
    */
   eta: workspaceProcedure
-    .input(z.object({ runId: z.string().cuid() }))
+    .input(z.object({ runId: idString }))
     .query(async ({ ctx, input }) => {
       const run = await ctx.db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
@@ -335,7 +339,7 @@ export const agentRunRouter = router({
    */
   abandon: workspaceProcedure
     .input(z.object({
-      runId: z.string().cuid(),
+      runId: idString,
       summary: z.string().max(500).optional(),
       alsoUnassign: z.boolean().default(true),
     }))
@@ -371,7 +375,7 @@ export const agentRunRouter = router({
    * mark the issue queued, and trigger auto-dispatch.
    */
   redispatch: workspaceProcedure
-    .input(z.object({ runId: z.string().cuid() }))
+    .input(z.object({ runId: idString }))
     .mutation(async ({ ctx, input }) => {
       const { finishRun } = await import("@/server/services/agent-run");
       return ctx.db.$transaction(async (tx) => {
@@ -405,7 +409,7 @@ export const agentRunRouter = router({
    */
   nudge: workspaceProcedure
     .input(z.object({
-      runId: z.string().cuid(),
+      runId: idString,
       message: z.string().max(500).default("checking in"),
     }))
     .mutation(async ({ ctx, input }) => {
