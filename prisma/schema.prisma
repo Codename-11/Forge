@@ -107,6 +107,13 @@ enum EventKind {
   AGENT_RUN_BLOCKED
   AGENT_RUN_COMPLETED
   AGENT_RUN_STALLED
+  CHAT_MESSAGE_POSTED
+}
+
+enum ChatRole {
+  USER
+  AGENT
+  SYSTEM
 }
 
 enum NotificationSeverity {
@@ -279,6 +286,7 @@ model User {
   recurringCreated   RecurringIssue[]    @relation("RecurringCreator")
   savedViews         SavedView[]
   timeEntries        TimeEntry[]
+  chatThreads        ChatThread[]
 
   @@index([handle])
 }
@@ -433,6 +441,8 @@ model Workspace {
   dispatchRules      DispatchRule[]
   agentRuns          AgentRun[]
   agentRunEvents     AgentRunEvent[]
+  chatThreads        ChatThread[]
+  chatMessages       ChatMessage[]
 
   @@index([slug])
 }
@@ -1129,6 +1139,7 @@ model Agent {
   authoredComments Comment[]      @relation("AgentAuthoredComments")
   dispatchRules    DispatchRule[]
   runs             AgentRun[]
+  chatThreads      ChatThread[]
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
@@ -1228,5 +1239,41 @@ model AgentRunEvent {
   run       AgentRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   @@index([runId, createdAt])
+  @@index([workspaceId, createdAt])
+}
+
+model ChatThread {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  userId        String
+  agentId       String
+  title         String?
+  lastMessageAt DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  archivedAt    DateTime?
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent     Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  messages  ChatMessage[]
+
+  @@unique([workspaceId, userId, agentId])
+  @@index([workspaceId, userId, lastMessageAt])
+}
+
+model ChatMessage {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  threadId        String
+  role            ChatRole
+  body            String   @db.Text
+  contextSnapshot Json?
+  sourceRunId     String?
+  createdAt       DateTime @default(now())
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  thread    ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
   @@index([workspaceId, createdAt])
 }

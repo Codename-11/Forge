@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { AgentRunStatus } from "@prisma/client";
+import { AgentRunStatus, EventKind } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
+import { maybeAutoDispatch } from "@/server/services/dispatcher";
 
 /**
  * Read-only router for AgentRun monitoring. Live mutations land via the
@@ -225,5 +226,224 @@ export const agentRunRouter = router({
         },
       });
       return events;
+    }),
+
+  /**
+   * Sparkline data: event counts bucketed by minute over a rolling window.
+   * Powers the activity sparkline in Mission Control.
+   */
+  recentEventCounts: workspaceProcedure
+    .input(z.object({
+      windowMinutes: z.number().int().min(5).max(120).default(30),
+      bucketSeconds: z.number().int().min(30).max(600).default(60),
+    }).default({ windowMinutes: 30, bucketSeconds: 60 }))
+    .query(async ({ ctx, input }) => {
+      const since = new Date(Date.now() - input.windowMinutes * 60_000);
+      const rows = await ctx.db.$queryRawUnsafe<Array<{ bucket: Date; count: bigint }>>(
+        `SELECT date_trunc('minute', "createdAt") AS bucket, COUNT(*)::bigint AS count
+           FROM "AgentRunEvent"
+          WHERE "workspaceId" = $1 AND "createdAt" >= $2
+       GROUP BY bucket
+       ORDER BY bucket ASC`,
+        ctx.workspaceId, since,
+      );
+      return rows.map(r => ({ ts: r.bucket.toISOString(), count: Number(r.count) }));
+    }),
+
+  /**
+   * Latest AI-coach diagnosis comment for a run. Returns null when
+   * aiCoachEnabled is off or no coach comment exists.
+   */
+  coachDiagnosis: workspaceProcedure
+    .input(z.object({ runId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const run = await ctx.db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        select: { issueId: true, workspace: { select: { aiCoachEnabled: true } } },
+      });
+      if (!run || !run.workspace.aiCoachEnabled) return null;
+      const comment = await ctx.db.comment.findFirst({
+        where: {
+          issueId: run.issueId,
+          authoringAgent: { role: "COACH" },
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true, body: true, createdAt: true,
+          authoringAgent: { select: { name: true, profileKey: true, avatar: true } },
+        },
+      });
+      return comment;
+    }),
+
+  /**
+   * All runs (active + terminal) that overlap a time window. Powers the
+   * swimlane / Gantt view in Mission Control.
+   */
+  runsInRange: workspaceProcedure
+    .input(z.object({
+      fromMinutesAgo: z.number().int().min(15).max(360).default(60),
+      limit: z.number().int().min(1).max(500).default(200),
+    }).default({ fromMinutesAgo: 60, limit: 200 }))
+    .query(async ({ ctx, input }) => {
+      const from = new Date(Date.now() - input.fromMinutesAgo * 60_000);
+      return ctx.db.agentRun.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          OR: [{ startedAt: { gte: from } }, { finishedAt: { gte: from } }],
+        },
+        orderBy: { startedAt: "desc" },
+        take: input.limit,
+        select: {
+          id: true, status: true, startedAt: true, finishedAt: true, lastEventAt: true,
+          agent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+          issue: { select: { number: true, workspace: { select: { key: true, slug: true } } } },
+        },
+      });
+    }),
+
+  /**
+   * Predictive ETA for an active run, based on median duration for this
+   * agent + label combination over the past 30 days.
+   */
+  eta: workspaceProcedure
+    .input(z.object({ runId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const run = await ctx.db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true, agentId: true, startedAt: true,
+          issue: { select: { labels: { select: { labelId: true }, take: 1 } } },
+        },
+      });
+      if (!run) return null;
+      const labelId = run.issue.labels[0]?.labelId ?? null;
+      const { medianRunDurationMs } = await import("@/server/services/agent-run-eta");
+      const result = await medianRunDurationMs(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        agentId: run.agentId,
+        labelId,
+      });
+      if (!result) return null;
+      const elapsed = Date.now() - run.startedAt.getTime();
+      const remaining = Math.max(0, result.medianMs - elapsed);
+      return { medianMs: result.medianMs, sampleSize: result.sampleSize, etaMs: remaining };
+    }),
+
+  /**
+   * Abandon an active run, optionally unassigning the issue.
+   */
+  abandon: workspaceProcedure
+    .input(z.object({
+      runId: z.string().cuid(),
+      summary: z.string().max(500).optional(),
+      alsoUnassign: z.boolean().default(true),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { finishRun } = await import("@/server/services/agent-run");
+      return ctx.db.$transaction(async (tx) => {
+        const run = await tx.agentRun.findFirst({
+          where: { id: input.runId, workspaceId: ctx.workspaceId },
+          select: { id: true, issueId: true, agentId: true, status: true },
+        });
+        if (!run) throw new Error("Run not found");
+        await finishRun(tx, {
+          runId: run.id,
+          workspaceId: ctx.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          status: "ABANDONED",
+          summary: input.summary ?? null,
+          actorId: ctx.session.user.id,
+        });
+        if (input.alsoUnassign) {
+          await tx.issue.update({
+            where: { id: run.issueId },
+            data: { assignedAgentId: null, claimedById: null, claimedAt: null },
+          });
+        }
+        return { ok: true };
+      });
+    }),
+
+  /**
+   * Re-dispatch a run: abandon the current run, clear the assignment,
+   * mark the issue queued, and trigger auto-dispatch.
+   */
+  redispatch: workspaceProcedure
+    .input(z.object({ runId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { finishRun } = await import("@/server/services/agent-run");
+      return ctx.db.$transaction(async (tx) => {
+        const run = await tx.agentRun.findFirst({
+          where: { id: input.runId, workspaceId: ctx.workspaceId },
+          select: { id: true, issueId: true, agentId: true },
+        });
+        if (!run) throw new Error("Run not found");
+        await finishRun(tx, {
+          runId: run.id,
+          workspaceId: ctx.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          status: "ABANDONED",
+          summary: "Re-dispatched",
+          actorId: ctx.session.user.id,
+        });
+        await tx.issue.update({
+          where: { id: run.issueId },
+          data: { assignedAgentId: null, claimedById: null, claimedAt: null, queued: true },
+        });
+        // maybeAutoDispatch is imported at top of file.
+        await maybeAutoDispatch(tx, run.issueId);
+        return { ok: true, redispatched: true };
+      });
+    }),
+
+  /**
+   * Nudge an agent on an active run by posting an @mention comment on
+   * the issue. The audit fan-out routes the comment to the agent's webhook.
+   */
+  nudge: workspaceProcedure
+    .input(z.object({
+      runId: z.string().cuid(),
+      message: z.string().max(500).default("checking in"),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const run = await ctx.db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true, issueId: true,
+          agent: { select: { id: true, profileKey: true } },
+        },
+      });
+      if (!run) throw new Error("Run not found");
+      const body = `@${run.agent.profileKey} ${input.message}`;
+      return ctx.db.$transaction(async (tx) => {
+        const comment = await tx.comment.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            issueId: run.issueId,
+            authorId: ctx.session.user.id,
+            body,
+            kind: "BODY",
+          },
+        });
+        const { recordChange } = await import("@/server/audit");
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Comment",
+          entityId: comment.id,
+          action: "create",
+          eventKind: EventKind.COMMENT_CREATED,
+          subjectType: "issue",
+          subjectId: run.issueId,
+          payload: {
+            commentId: comment.id,
+            mentions: [{ agentId: run.agent.id, profileKey: run.agent.profileKey }],
+          },
+        });
+        return { ok: true, commentId: comment.id };
+      });
     }),
 });

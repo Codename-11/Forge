@@ -5,6 +5,7 @@ import { AlertTriangle, Pin, PinOff, ChevronRight, Bot, ExternalLink } from "luc
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { RunTimeline } from "./run-timeline";
+import { RunActions } from "./run-actions";
 
 /**
  * Single row inside the Live tab. One ACTIVE AgentRun.
@@ -53,6 +54,13 @@ function relativeTime(input: Date | string): string {
   return `${Math.floor(ms / 3_600_000)}h ago`;
 }
 
+function formatEta(ms: number): string {
+  const mins = Math.round(ms / 60_000);
+  if (mins < 1) return "<1m";
+  if (mins < 60) return `${mins}m`;
+  return `${Math.round(mins / 60)}h`;
+}
+
 export function RunRow({
   run,
   pinned,
@@ -84,6 +92,19 @@ export function RunRow({
     typeof run.lastEventAt === "string" ? new Date(run.lastEventAt) : run.lastEventAt;
   const lastEventAgeMs = Date.now() - lastEventAt.getTime();
   const isStalled = lastEventAgeMs > STALE_RUN_MS;
+
+  const { data: etaData } = trpc.agentRun.eta.useQuery(
+    { runId: run.id },
+    { staleTime: 60_000, enabled: !isStalled },
+  );
+  const etaLabel = etaData?.etaMs
+    ? `~${formatEta(etaData.etaMs)} left`
+    : null;
+
+  const { data: coachComment } = trpc.agentRun.coachDiagnosis.useQuery(
+    { runId: run.id },
+    { staleTime: 30_000, enabled: isStalled },
+  );
 
   return (
     <div
@@ -135,6 +156,7 @@ export function RunRow({
           <span className="font-mono text-[0.6875rem] text-foreground/60">{issueKey}</span>
         )}
         <span className="ml-auto flex items-center gap-1.5">
+          <RunActions runId={run.id} agentName={run.agent.name} />
           <span
             className="font-mono text-meta text-muted-foreground"
             title={`Started ${new Date(run.startedAt).toLocaleString()}`}
@@ -170,14 +192,24 @@ export function RunRow({
         <span className="truncate text-foreground/80">
           {run.currentStep ?? run.statusComment?.currentStep ?? "working…"}
         </span>
-        <span
-          className={cn(
-            "ml-auto shrink-0 text-meta",
-            isStalled ? "text-warning" : "text-muted-foreground",
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          {etaLabel && (
+            <span
+              className="rounded-md border border-border/60 bg-subtle/60 px-1.5 py-0 font-mono text-[0.625rem] text-muted-foreground"
+              title={`Median ${Math.round((etaData?.medianMs ?? 0) / 60_000)}m over ${etaData?.sampleSize ?? 0} runs`}
+            >
+              {etaLabel}
+            </span>
           )}
-          title={`Last event ${lastEventAt.toLocaleString()}`}
-        >
-          {relativeTime(run.lastEventAt)}
+          <span
+            className={cn(
+              "text-meta",
+              isStalled ? "text-warning" : "text-muted-foreground",
+            )}
+            title={`Last event ${lastEventAt.toLocaleString()}`}
+          >
+            {relativeTime(run.lastEventAt)}
+          </span>
         </span>
       </div>
       {isStalled && (
@@ -190,6 +222,16 @@ export function RunRow({
             check the agent heartbeat, webhook delivery, and latest issue
             status comment before reassigning.
           </div>
+          {coachComment && (
+            <div className="mt-1.5 rounded border border-amber-500/30 bg-card/60 px-2 py-1 text-foreground/80">
+              <div className="text-[0.625rem] font-semibold uppercase tracking-wider text-amber-700">
+                {coachComment.authoringAgent?.name ?? "Coach"} · {relativeTime(coachComment.createdAt)}
+              </div>
+              <div className="mt-0.5 line-clamp-3 whitespace-pre-wrap">
+                {coachComment.body}
+              </div>
+            </div>
+          )}
         </div>
       )}
       {expanded && (

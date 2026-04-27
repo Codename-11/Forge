@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { ActivityHeatmap } from "./activity-heatmap";
 import { TimelineScrubber, type ScrubberEvent } from "./timeline-scrubber";
+import { Swimlane, type SwimlaneRun } from "./swimlane";
 
 /**
  * History tab. Three sections stacked top-to-bottom:
@@ -27,9 +28,16 @@ function relativeTime(input: Date | string): string {
 }
 
 export function HistoryTab({ slug: _slug }: { slug: string }) {
+  const [activityView, setActivityView] = useState<"heatmap" | "swimlane">("heatmap");
+
   const { data: heatmap } = trpc.agentRun.heatmap.useQuery(
     { days: 90 },
     { staleTime: 60_000 },
+  );
+
+  const { data: swimlaneRuns } = trpc.agentRun.runsInRange.useQuery(
+    { fromMinutesAgo: 60, limit: 200 },
+    { enabled: activityView === "swimlane", staleTime: 5_000 },
   );
   const { data: terminal } = trpc.agentRun.recentTerminal.useQuery(
     { windowMinutes: 60, limit: 30 },
@@ -70,6 +78,7 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
   const heatmapBoxRef = useRef<HTMLDivElement | null>(null);
   const [heatmapWidth, setHeatmapWidth] = useState(0);
   useEffect(() => {
+    if (activityView !== "heatmap") return;
     const node = heatmapBoxRef.current;
     if (!node) return;
     const ro = new ResizeObserver((entries) => {
@@ -78,7 +87,7 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
     ro.observe(node);
     setHeatmapWidth(node.getBoundingClientRect().width);
     return () => ro.disconnect();
-  }, []);
+  }, [activityView]);
 
   // Cells are 11px with a 2px gap; reserve ~26px for the day labels in
   // the heatmap component. Min 12 weeks, max 30 (≈7 months).
@@ -92,18 +101,55 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
   return (
     <div className="space-y-3 overflow-y-auto px-2 py-2">
       <section>
-        <SectionHeader>Activity · last {computedWeeks * 7} days</SectionHeader>
-        <div
-          ref={heatmapBoxRef}
-          className="rounded-md border border-border bg-card/40 p-2"
-        >
-          <ActivityHeatmap
-            data={heatmap ?? []}
-            weeks={computedWeeks}
-            cellSize={11}
-            cellGap={2}
-          />
+        <div className="flex items-center justify-between">
+          <SectionHeader>
+            Activity · {activityView === "heatmap" ? `last ${computedWeeks * 7} days` : "last 60m"}
+          </SectionHeader>
+          <div className="mb-1.5 flex rounded-md border border-border bg-card/40 p-0.5 text-[0.5625rem]">
+            <button
+              type="button"
+              onClick={() => setActivityView("heatmap")}
+              className={cn(
+                "rounded px-1.5 py-0.5",
+                activityView === "heatmap"
+                  ? "bg-subtle text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              heatmap
+            </button>
+            <button
+              type="button"
+              onClick={() => setActivityView("swimlane")}
+              className={cn(
+                "rounded px-1.5 py-0.5",
+                activityView === "swimlane"
+                  ? "bg-subtle text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              swimlane
+            </button>
+          </div>
         </div>
+        {activityView === "heatmap" ? (
+          <div
+            ref={heatmapBoxRef}
+            className="rounded-md border border-border bg-card/40 p-2"
+          >
+            <ActivityHeatmap
+              data={heatmap ?? []}
+              weeks={computedWeeks}
+              cellSize={11}
+              cellGap={2}
+            />
+          </div>
+        ) : (
+          <Swimlane
+            runs={(swimlaneRuns ?? []) as SwimlaneRun[]}
+            windowMinutes={60}
+          />
+        )}
       </section>
 
       <section>
