@@ -19,14 +19,16 @@ Refined the settings navbar into primary section tabs with a contextual subnav.
 - Removed `h-full` from the workspace settings layout; combined with the
   shell topbar, it caused mobile settings content to be clipped instead of
   scrolling inside the page content pane.
+- Added `min-h-0` to the settings content wrapper so the page-level
+  `overflow-y-auto` pane is height-constrained on mobile.
 
 ### Verification
 
 - `pnpm typecheck` - clean.
 - `pnpm exec eslint src/components/settings/settings-navbar.tsx` - clean.
 - `git diff --check` - clean.
-- Browser smoke: desktop settings panes scrolled correctly; mobile uncovered
-  the missing shell/layout flex constraints, fixed above.
+- Browser smoke: desktop and mobile settings panes scroll internally for
+  workspace general settings, agents, and account settings.
 
 ## 2026-04-27 — Settings navbar cleanup
 
