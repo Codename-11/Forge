@@ -50,11 +50,14 @@ type SettingsNavbarProps =
 export function SettingsNavbar(props: SettingsNavbarProps) {
   const pathname = usePathname();
   const groups = props.scope === "workspace" ? workspaceGroups(props.slug) : accountGroups();
+  const activeGroup = groups.find((group) =>
+    group.items.some((item) => isActiveItem(pathname, item)),
+  ) ?? groups[0];
 
-  return (
-    <div className="shrink-0 border-b border-border bg-card/30">
-      <div className="flex min-h-12 flex-col gap-2 px-3 py-2 lg:flex-row lg:items-center lg:px-4">
-        {props.scope === "account" && (
+  if (props.scope === "account") {
+    return (
+      <div className="shrink-0 border-b border-border bg-card/30">
+        <div className="flex min-h-12 flex-col gap-2 px-3 py-2 lg:flex-row lg:items-center lg:px-4">
           <Link
             href={props.backHref}
             className="focus-ring inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-[0.75rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
@@ -62,49 +65,98 @@ export function SettingsNavbar(props: SettingsNavbarProps) {
             <ArrowLeft className="h-3.5 w-3.5" />
             <span className="truncate">{props.backLabel}</span>
           </Link>
-        )}
 
-        <nav
-          aria-label={props.scope === "workspace" ? "Workspace settings" : "Account settings"}
-          className="flex min-w-0 flex-1 gap-3 overflow-x-auto pb-1 lg:pb-0"
-        >
-          {groups.map((group) => (
-            <div key={group.label} className="flex shrink-0 items-center gap-1">
-              <div className="mr-1 hidden text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground/60 xl:block">
-                {group.label}
-              </div>
-              {group.items.map((item) => {
-                const active = item.exact
-                  ? pathname === item.href
-                  : pathname === item.href || pathname?.startsWith(`${item.href}/`);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(
-                      "focus-ring inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[0.8125rem] transition-colors",
-                      active
-                        ? "bg-subtle text-foreground"
-                        : "text-muted-foreground hover:bg-subtle/70 hover:text-foreground",
-                    )}
-                  >
-                    <item.Icon className="h-3.5 w-3.5 shrink-0" />
-                    <span className="whitespace-nowrap">{item.label}</span>
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
-        </nav>
+          <SettingsLinkRow
+            label="Account settings"
+            items={activeGroup.items}
+            pathname={pathname}
+            className="lg:justify-center"
+          />
 
-        {props.scope === "account" && (
           <div className="hidden max-w-64 truncate text-[0.6875rem] text-muted-foreground lg:block">
             Signed in as <span className="font-medium">{props.email}</span>
           </div>
-        )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="shrink-0 border-b border-border bg-card/30">
+      <div className="px-3 py-2 lg:px-4">
+        <nav aria-label="Settings sections" className="flex gap-1 overflow-x-auto pb-1">
+          {groups.map((group) => {
+            const active = group.label === activeGroup.label;
+            const first = group.items[0];
+            return (
+              <Link
+                key={group.label}
+                href={first.href}
+                className={cn(
+                  "focus-ring inline-flex h-8 shrink-0 items-center rounded-md border px-3 text-[0.8125rem] font-medium transition-colors",
+                  active
+                    ? "border-border bg-background text-foreground shadow-sm"
+                    : "border-transparent text-muted-foreground hover:bg-subtle hover:text-foreground",
+                )}
+              >
+                {group.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <SettingsLinkRow
+          label={`${activeGroup.label} settings`}
+          items={activeGroup.items}
+          pathname={pathname}
+          className="border-t border-border/60 pt-1.5"
+        />
       </div>
     </div>
   );
+}
+
+function SettingsLinkRow({
+  label,
+  items,
+  pathname,
+  className,
+}: {
+  label: string;
+  items: NavItem[];
+  pathname: string | null;
+  className?: string;
+}) {
+  return (
+    <nav
+      aria-label={label}
+      className={cn("flex min-w-0 flex-1 gap-1 overflow-x-auto pb-1 lg:pb-0", className)}
+    >
+      {items.map((item) => {
+        const active = isActiveItem(pathname, item);
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={cn(
+              "focus-ring inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[0.75rem] transition-colors",
+              active
+                ? "bg-subtle text-foreground"
+                : "text-muted-foreground hover:bg-subtle/70 hover:text-foreground",
+            )}
+          >
+            <item.Icon className="h-3.5 w-3.5 shrink-0" />
+            <span className="whitespace-nowrap">{item.label}</span>
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+function isActiveItem(pathname: string | null, item: NavItem) {
+  if (!pathname) return false;
+  return item.exact ? pathname === item.href : pathname === item.href || pathname.startsWith(`${item.href}/`);
 }
 
 function workspaceGroups(slug: string): NavGroup[] {
