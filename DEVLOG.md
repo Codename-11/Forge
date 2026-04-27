@@ -2,6 +2,25 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-27 — Two-tier settings navigation
+
+Refined the settings navbar into primary section tabs with a contextual subnav.
+
+### Changes
+
+- Workspace settings now show top-level section tabs first, then only the
+  active section's pages underneath.
+- Account settings keep a single compact navbar row since there is only one
+  section.
+- The navigation remains horizontal and responsive, avoiding the previous
+  nested-sidebar layout while reducing visual clutter.
+
+### Verification
+
+- `pnpm typecheck` - clean.
+- `pnpm exec eslint src/components/settings/settings-navbar.tsx` - clean.
+- `git diff --check` - clean.
+
 ## 2026-04-27 — Settings navbar cleanup
 
 Replaced nested settings sidebars with a compact horizontal settings navbar.
