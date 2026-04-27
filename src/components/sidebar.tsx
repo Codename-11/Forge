@@ -17,7 +17,6 @@ import {
   Compass,
   Map as MapIcon,
   Shield,
-  Bot,
   Workflow,
   BookOpen,
   PanelLeftClose,
@@ -107,7 +106,6 @@ const SECTIONS: readonly NavSection[] = [
     items: [
       { path: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
       { path: "/agents", label: "Agents", icon: Workflow, chord: "o" },
-      { path: "/settings/agents", label: "Agent admin", icon: Bot, chord: "e" },
       { path: "/settings/plugins", label: "Plugins", icon: Plug, chord: "l" },
       { path: "/settings/admin", label: "Admin portal", icon: Shield },
     ],
