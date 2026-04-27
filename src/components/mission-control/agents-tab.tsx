@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * Agents tab. Roster of workspace agents with status pill, capabilities,
- * current load (active runs), and a click-through to /agents/{id}.
+ * current load (active runs), and a click-through to /agents/{profileKey}.
  */
 
 export function AgentsTab({ slug }: { slug: string }) {
@@ -50,7 +50,7 @@ export function AgentsTab({ slug }: { slug: string }) {
         return (
           <Link
             key={a.id}
-            href={`/w/${slug}/agents/${a.id}`}
+            href={`/w/${slug}/agents/${a.profileKey}`}
             className="flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem] hover:border-ember/40"
           >
             <PresenceDot status={a.status} />

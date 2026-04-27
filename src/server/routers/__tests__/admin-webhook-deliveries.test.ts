@@ -161,4 +161,22 @@ describe("admin.webhookDeliveries", () => {
     expect(row!.responseBody?.length ?? 0).toBeLessThanOrEqual(2_048);
     expect(row!.responseBody?.startsWith("xxxx")).toBe(true);
   });
+
+  it("list includes a selected delivery for deep-linked detail views", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "SEL" });
+    fixtures.push(fixture);
+    const ctx = await buildContext(fixture);
+    const caller = adminRouter.createCaller(ctx);
+    const { deliveryId } = await seedDeadLetterDelivery(fixture);
+
+    const { items } = await caller.webhookDeliveries.list({
+      status: "SUCCESS",
+      deliveryId,
+      limit: 10,
+    });
+
+    const row = items.find((d) => d.id === deliveryId);
+    expect(row).toBeDefined();
+    expect(row!.status).toBe("DEAD_LETTER");
+  });
 });

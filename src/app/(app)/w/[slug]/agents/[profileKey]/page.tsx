@@ -1,12 +1,14 @@
 "use client";
 import Link from "next/link";
-import { notFound, useParams } from "next/navigation";
+import { notFound, useParams, useSearchParams } from "next/navigation";
 import type { AgentStatus } from "@prisma/client";
 import {
   Activity,
+  AlertTriangle,
   ArrowRightLeft,
   Bot,
   ChevronLeft,
+  ExternalLink,
   History,
   Inbox,
   MessageCircle,
@@ -46,7 +48,9 @@ type RouterOutputs = inferRouterOutputs<AppRouter>;
 export default function AgentDetailPage() {
   const ws = useWorkspace();
   const params = useParams<{ profileKey: string }>();
+  const searchParams = useSearchParams();
   const profileKey = params?.profileKey ?? "";
+  const healthFocus = parseHealthFocus(searchParams.get("health"));
 
   const utils = trpc.useUtils();
   useRealtime(
@@ -124,6 +128,9 @@ export default function AgentDetailPage() {
           ) : (
             <>
               <IdentityStrip agent={agent} />
+              {healthFocus && (
+                <HealthFocusBanner agent={agent} focus={healthFocus} />
+              )}
               <StatsRow agentId={agent.id} />
               <UptimeSection agentId={agent.id} />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -131,8 +138,8 @@ export default function AgentDetailPage() {
                   <CurrentlyWorkingSection agentId={agent.id} />
                 </div>
                 <div className="space-y-4">
-                  <WebhookHealthCard agentId={agent.id} />
-                  <DispatchEligibilityCard agent={agent} />
+                  <WebhookHealthCard agentId={agent.id} focus={healthFocus} />
+                  <DispatchEligibilityCard agent={agent} focus={healthFocus} />
                 </div>
               </div>
               <ActivitySection agentId={agent.id} />
@@ -147,6 +154,8 @@ export default function AgentDetailPage() {
 // ---------------------------------------------------------------------------
 
 type AgentRow = NonNullable<RouterOutputs["agent"]["byProfileKey"]>;
+type AgentHealthFocus = "noack" | "webhook" | "heartbeat";
+type DeliveryStatus = "PENDING" | "SUCCESS" | "FAILED" | "DEAD_LETTER";
 
 const PROVIDER_LABELS: Record<string, string> = {
   HERMES: "Hermes",
@@ -154,6 +163,104 @@ const PROVIDER_LABELS: Record<string, string> = {
   CODEX: "Codex",
   CUSTOM: "Custom",
 };
+
+function parseHealthFocus(value: string | null): AgentHealthFocus | null {
+  if (value === "noack" || value === "webhook" || value === "heartbeat") {
+    return value;
+  }
+  return null;
+}
+
+function HealthFocusBanner({
+  agent,
+  focus,
+}: {
+  agent: AgentRow;
+  focus: AgentHealthFocus;
+}) {
+  const ws = useWorkspace();
+  const copy =
+    focus === "noack"
+      ? {
+          title: "Missed ack investigation",
+          reason:
+            "Forge expected a comment or status transition after dispatch, but the ack window expired.",
+          fix:
+            "Check heartbeat freshness and failed webhook deliveries below, then retry the delivery or reassign the issue if the runner is unavailable.",
+        }
+      : focus === "webhook"
+        ? {
+            title: "Webhook delivery health",
+            reason:
+              "Agent dispatches travel through durable webhook deliveries before the runner receives work.",
+            fix:
+              "Open a failed or dead-letter delivery, inspect the response, fix the endpoint or secret, then retry.",
+          }
+        : {
+            title: "Heartbeat freshness",
+            reason:
+              "Heartbeat and successful dispatch deliveries are the signals Forge uses to trust this agent is reachable.",
+            fix:
+              "Restart the runner or verify it can receive webhooks and call the heartbeat endpoint.",
+          };
+  return (
+    <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 text-[0.75rem]">
+      <div className="flex flex-wrap items-center gap-2">
+        <AlertTriangle className="h-3.5 w-3.5 text-warning" />
+        <span className="font-semibold text-foreground">{copy.title}</span>
+        <span className="font-mono text-meta text-muted-foreground">
+          @{agent.profileKey}
+        </span>
+      </div>
+      <div className="mt-2 grid gap-2 md:grid-cols-3">
+        <HealthCallout label="Reason" value={copy.reason} />
+        <HealthCallout
+          label="Recommended fix"
+          value={copy.fix}
+          className="md:col-span-2"
+        />
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Link
+          href={`/w/${ws.slug}/settings/integrations/deliveries?status=DEAD_LETTER&agentId=${encodeURIComponent(agent.id)}`}
+          className="focus-ring inline-flex items-center gap-1 rounded-sm text-foreground hover:text-ember"
+        >
+          Open dead letters
+          <ExternalLink className="h-3 w-3" />
+        </Link>
+        <Link
+          href={`/w/${ws.slug}/settings/integrations/deliveries?status=FAILED&agentId=${encodeURIComponent(agent.id)}`}
+          className="focus-ring inline-flex items-center gap-1 rounded-sm text-muted-foreground hover:text-foreground"
+        >
+          Open failed deliveries
+          <ExternalLink className="h-3 w-3" />
+        </Link>
+        <span className="text-muted-foreground">
+          Place to check: webhook health and dispatch eligibility below.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function HealthCallout({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  return (
+    <div className={cn("rounded-md border border-border bg-card/40 p-2", className)}>
+      <div className="text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-0.5 text-muted-foreground">{value}</div>
+    </div>
+  );
+}
 
 function IdentityStrip({ agent }: { agent: AgentRow }) {
   return (
@@ -475,7 +582,14 @@ function Bucket({
 
 // ---------------------------------------------------------------------------
 
-function WebhookHealthCard({ agentId }: { agentId: string }) {
+function WebhookHealthCard({
+  agentId,
+  focus,
+}: {
+  agentId: string;
+  focus: AgentHealthFocus | null;
+}) {
+  const ws = useWorkspace();
   const { data } = trpc.agent.webhookHealth.useQuery({
     id: agentId,
     windowDays: 7,
@@ -486,6 +600,15 @@ function WebhookHealthCard({ agentId }: { agentId: string }) {
   const { totals } = data;
   const total =
     totals.success + totals.failed + totals.deadLetter + totals.pending || 0;
+  const hasDeliveryConcern = totals.failed > 0 || totals.deadLetter > 0;
+  const deadLetterHref = deliveryInspectorHref(ws.slug, {
+    status: "DEAD_LETTER",
+    agentId,
+  });
+  const failedHref = deliveryInspectorHref(ws.slug, {
+    status: "FAILED",
+    agentId,
+  });
 
   return (
     <Section
@@ -496,7 +619,14 @@ function WebhookHealthCard({ agentId }: { agentId: string }) {
         </span>
       }
     >
-      <Card className="space-y-2 p-3">
+      <Card
+        id="dispatch-health"
+        className={cn(
+          "space-y-2 p-3 scroll-mt-20",
+          (focus === "noack" || focus === "webhook") &&
+            "border-warning/40 bg-warning/5",
+        )}
+      >
         {data.configuredWebhookUrl ? (
           <div className="truncate font-mono text-meta text-muted-foreground">
             {data.configuredWebhookUrl}
@@ -518,23 +648,73 @@ function WebhookHealthCard({ agentId }: { agentId: string }) {
             <Pill tone="danger" label="dlq" value={totals.deadLetter} />
           </div>
         )}
+        {(focus === "noack" ||
+          focus === "webhook" ||
+          hasDeliveryConcern ||
+          !data.configuredWebhookUrl) && (
+          <div className="space-y-1 rounded-md border border-border bg-background/40 p-2 text-meta text-muted-foreground">
+            <div className="font-medium text-foreground">
+              {hasDeliveryConcern
+                ? "Delivery failures are blocking dispatch."
+                : data.configuredWebhookUrl
+                  ? "This is the dispatch trail to inspect."
+                  : "No push endpoint is configured."}
+            </div>
+            <div>
+              Reason: assignments and mentions reach this agent through the
+              synthetic dispatch webhook; failed or dead-letter rows mean the
+              runner may not have received the work.
+            </div>
+            <div>
+              Recommended fix: inspect the latest failed row, repair the
+              endpoint or secret, then retry the dead-letter delivery.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href={deadLetterHref}
+                className="focus-ring inline-flex items-center gap-1 text-foreground hover:text-ember"
+              >
+                Dead letters
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+              <Link
+                href={failedHref}
+                className="focus-ring inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+              >
+                Failed deliveries
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+            </div>
+          </div>
+        )}
         {data.recent.length > 0 && (
           <ul className="divide-y divide-border pt-1">
-            {data.recent.slice(0, 6).map((r) => (
-              <li
-                key={r.id}
-                className="flex items-center gap-2 py-1 text-meta"
-              >
-                <DeliveryStatusDot status={r.status} />
-                <span className="font-mono text-muted-foreground">
-                  {r.event.kind}
-                </span>
-                <span className="ml-auto text-muted-foreground">
-                  {r.responseStatus ? `${r.responseStatus} · ` : ""}
-                  {relativeTime(r.deliveredAt ?? r.scheduledAt)}
-                </span>
-              </li>
-            ))}
+            {data.recent.slice(0, 6).map((r) => {
+              const href = deliveryInspectorHref(ws.slug, {
+                status: r.status,
+                deliveryId: r.id,
+                agentId,
+              });
+              return (
+                <li key={r.id}>
+                  <Link
+                    href={href}
+                    className="focus-ring flex items-center gap-2 rounded-sm py-1 text-meta hover:bg-subtle/60"
+                    title="Open delivery details"
+                  >
+                    <DeliveryStatusDot status={r.status} />
+                    <span className="font-mono text-muted-foreground">
+                      {r.event.kind}
+                    </span>
+                    <span className="ml-auto text-right text-muted-foreground">
+                      {r.responseStatus ? `${r.responseStatus} · ` : ""}
+                      {relativeTime(r.deliveredAt ?? r.scheduledAt)}
+                    </span>
+                    <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         )}
       </Card>
@@ -570,7 +750,7 @@ function Pill({
 function DeliveryStatusDot({
   status,
 }: {
-  status: "PENDING" | "SUCCESS" | "FAILED" | "DEAD_LETTER";
+  status: DeliveryStatus;
 }) {
   const color =
     status === "SUCCESS"
@@ -590,12 +770,23 @@ function DeliveryStatusDot({
 
 // ---------------------------------------------------------------------------
 
-function DispatchEligibilityCard({ agent }: { agent: AgentRow }) {
+function DispatchEligibilityCard({
+  agent,
+  focus,
+}: {
+  agent: AgentRow;
+  focus: AgentHealthFocus | null;
+}) {
   const { data: pipeline } = trpc.agent.pipeline.useQuery({});
   const lane = pipeline?.lanes.find((l) => l.agent.id === agent.id);
   const load = lane?.counts.load ?? 0;
   const cap = agent.maxConcurrent;
   const atCap = cap > 0 && load >= cap;
+  const shouldExplainHeartbeat =
+    focus === "heartbeat" ||
+    focus === "noack" ||
+    agent.status === "OFFLINE" ||
+    !agent.lastHeartbeatAt;
 
   return (
     <Section
@@ -606,7 +797,12 @@ function DispatchEligibilityCard({ agent }: { agent: AgentRow }) {
         </span>
       }
     >
-      <Card className="space-y-2 p-3 text-[0.75rem]">
+      <Card
+        className={cn(
+          "space-y-2 p-3 text-[0.75rem]",
+          shouldExplainHeartbeat && "border-warning/30 bg-warning/5",
+        )}
+      >
         <Row label="Status">
           <span className="inline-flex items-center gap-1.5">
             <AgentPresenceDot status={agent.status} size="sm" />
@@ -650,6 +846,21 @@ function DispatchEligibilityCard({ agent }: { agent: AgentRow }) {
               : "never"}
           </span>
         </Row>
+        {shouldExplainHeartbeat && (
+          <div className="rounded-md border border-border bg-background/40 p-2 text-meta text-muted-foreground">
+            <div className="font-medium text-foreground">
+              Heartbeat context
+            </div>
+            <div>
+              Reason: Forge uses successful webhook delivery and explicit
+              heartbeat calls as reachability signals for dispatch.
+            </div>
+            <div>
+              Recommended fix: confirm the runner is online, can receive
+              dispatch webhooks, and is calling the heartbeat endpoint.
+            </div>
+          </div>
+        )}
       </Card>
     </Section>
   );
@@ -742,8 +953,23 @@ function EventSummary({
       {formatIssueId(issue.workspace?.key ?? fallbackKey, issue.number)}
     </Link>
   ) : null;
-  const meta =
+  let meta: React.ReactNode =
     issue && evt.kind !== "AGENT_STATUS_CHANGED" ? issue.title : null;
+  const agentProfileKey =
+    evt.agent?.profileKey ??
+    readPayloadString(evt.payload, "agentProfileKey") ??
+    issue?.assignedAgent?.profileKey ??
+    null;
+  const agentHealthLink = agentProfileKey ? (
+    <Link
+      href={`/w/${slug}/agents/${encodeURIComponent(agentProfileKey)}?health=noack#dispatch-health`}
+      className="text-foreground hover:text-ember"
+    >
+      agent health
+    </Link>
+  ) : (
+    "agent health"
+  );
 
   let headline: React.ReactNode = `${actor} · ${evt.kind}`;
   switch (evt.kind) {
@@ -768,6 +994,72 @@ function EventSummary({
         </>
       );
       break;
+    case "AGENT_NOACK": {
+      const requiredAckSeconds = readPayloadNumber(
+        evt.payload,
+        "requiredAckSeconds",
+      );
+      headline = (
+        <>
+          Missed ack on {issueLink ?? "an issue"}
+          {agentProfileKey && (
+            <>
+              {" "}from <span className="font-mono">@{agentProfileKey}</span>
+            </>
+          )}
+        </>
+      );
+      meta = (
+        <>
+          Reason: no comment or status transition
+          {requiredAckSeconds != null ? ` within ${requiredAckSeconds}s` : ""}.
+          Recommended fix: check {agentHealthLink} and failed dispatch
+          deliveries.
+        </>
+      );
+      break;
+    }
+    case "ISSUE_STALLED": {
+      const slaMinutes = readPayloadNumber(evt.payload, "slaMinutes");
+      headline = (
+        <>
+          {issueLink ?? "An issue"} stalled
+          {agentProfileKey && (
+            <>
+              {" "}while assigned to{" "}
+              <span className="font-mono">@{agentProfileKey}</span>
+            </>
+          )}
+        </>
+      );
+      meta = (
+        <>
+          Reason: no movement
+          {slaMinutes != null ? ` inside the ${slaMinutes}m assignment SLA` : ""}.
+          Recommended fix: check latest status/comment and reassign if needed.
+        </>
+      );
+      break;
+    }
+    case "ISSUE_SLA_BREACH": {
+      const slaMinutes = readPayloadNumber(evt.payload, "slaMinutes");
+      const breachedByMinutes = readPayloadNumber(
+        evt.payload,
+        "breachedByMinutes",
+      );
+      headline = <>{issueLink ?? "An issue"} breached SLA</>;
+      meta = (
+        <>
+          Reason:{" "}
+          {breachedByMinutes != null
+            ? `${breachedByMinutes}m overdue`
+            : "past target"}
+          {slaMinutes != null ? ` against a ${slaMinutes}m SLA` : ""}.
+          Recommended fix: reprioritize, assign a clear owner, or escalate.
+        </>
+      );
+      break;
+    }
     case "ISSUE_STATUS_CHANGED":
       headline = (
         <>
@@ -808,7 +1100,7 @@ function EventSummary({
     <>
       <div>{headline}</div>
       {meta && (
-        <div className="truncate text-meta text-muted-foreground">{meta}</div>
+        <div className="line-clamp-2 text-meta text-muted-foreground">{meta}</div>
       )}
     </>
   );
@@ -819,6 +1111,11 @@ function KindIcon({ kind }: { kind: TimelineEvent["kind"] }) {
   switch (kind) {
     case "AGENT_ASSIGNED":
       return <UserCheck className={cls} />;
+    case "AGENT_NOACK":
+    case "ISSUE_STALLED":
+      return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
+    case "ISSUE_SLA_BREACH":
+      return <AlertTriangle className="h-3.5 w-3.5 text-danger" />;
     case "AGENT_STATUS_CHANGED":
       return <Activity className={cls} />;
     case "AGENT_CREATED":
@@ -842,6 +1139,12 @@ function readPayloadString(payload: unknown, key: string): string | null {
   return typeof v === "string" ? v : null;
 }
 
+function readPayloadNumber(payload: unknown, key: string): number | null {
+  if (!payload || typeof payload !== "object") return null;
+  const v = (payload as Record<string, unknown>)[key];
+  return typeof v === "number" && Number.isFinite(v) ? Math.round(v) : null;
+}
+
 // ---------------------------------------------------------------------------
 
 function SectionShell({
@@ -863,6 +1166,20 @@ function SectionShell({
 function truncateUrl(url: string, max = 48): string {
   if (url.length <= max) return url;
   return `${url.slice(0, max - 1)}…`;
+}
+
+function deliveryInspectorHref(
+  slug: string,
+  input: {
+    status: DeliveryStatus;
+    deliveryId?: string;
+    agentId?: string;
+  },
+): string {
+  const params = new URLSearchParams({ status: input.status });
+  if (input.deliveryId) params.set("deliveryId", input.deliveryId);
+  if (input.agentId) params.set("agentId", input.agentId);
+  return `/w/${slug}/settings/integrations/deliveries?${params.toString()}`;
 }
 
 function formatDuration(ms: number | null | undefined): string {

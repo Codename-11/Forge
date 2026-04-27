@@ -109,6 +109,22 @@ enum EventKind {
   AGENT_RUN_STALLED
 }
 
+enum NotificationSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+  DISMISSED
+  ACKNOWLEDGED
+  RESOLVED
+}
+
 enum WebhookDeliveryStatus {
   PENDING
   SUCCESS
@@ -251,17 +267,18 @@ model User {
   sessions    Session[]
   memberships Membership[]
 
-  authoredIssues   Issue[]          @relation("IssueAuthor")
-  assignedIssues   IssueAssignee[]
-  comments         Comment[]
-  auditEntries     AuditLog[]
-  events           ActivityEvent[]
-  createdProjects  Project[]        @relation("ProjectCreator")
-  apiKeys          ApiKey[]
-  claimedIssues    Issue[]          @relation("IssueClaimedBy")
-  recurringCreated RecurringIssue[] @relation("RecurringCreator")
-  savedViews       SavedView[]
-  timeEntries      TimeEntry[]
+  authoredIssues     Issue[]             @relation("IssueAuthor")
+  assignedIssues     IssueAssignee[]
+  comments           Comment[]
+  auditEntries       AuditLog[]
+  events             ActivityEvent[]
+  notificationStates NotificationState[]
+  createdProjects    Project[]           @relation("ProjectCreator")
+  apiKeys            ApiKey[]
+  claimedIssues      Issue[]             @relation("IssueClaimedBy")
+  recurringCreated   RecurringIssue[]    @relation("RecurringCreator")
+  savedViews         SavedView[]
+  timeEntries        TimeEntry[]
 
   @@index([handle])
 }
@@ -389,32 +406,33 @@ model Workspace {
   updatedAt                  DateTime         @updatedAt
   deletedAt                  DateTime?
 
-  memberships      Membership[]
-  projects         Project[]
-  issues           Issue[]
-  statuses         Status[]
-  labels           Label[]
-  comments         Comment[]
-  attachments      Attachment[]
-  auditLogs        AuditLog[]
-  events           ActivityEvent[]
-  plugins          Plugin[]
-  apiKeys          ApiKey[]
-  webhooks         Webhook[]
-  metrics          MetricAggregate[]
-  skills           Skill[]
-  templates        IssueTemplate[]
-  projectTemplates ProjectTemplate[]
-  recurring        RecurringIssue[]
-  savedViews       SavedView[]
-  cycles           Cycle[]
-  initiatives      Initiative[]
-  issueRelations   IssueRelation[]
-  timeEntries      TimeEntry[]
-  agents           Agent[]
-  dispatchRules    DispatchRule[]
-  agentRuns        AgentRun[]
-  agentRunEvents   AgentRunEvent[]
+  memberships        Membership[]
+  projects           Project[]
+  issues             Issue[]
+  statuses           Status[]
+  labels             Label[]
+  comments           Comment[]
+  attachments        Attachment[]
+  auditLogs          AuditLog[]
+  events             ActivityEvent[]
+  notificationStates NotificationState[]
+  plugins            Plugin[]
+  apiKeys            ApiKey[]
+  webhooks           Webhook[]
+  metrics            MetricAggregate[]
+  skills             Skill[]
+  templates          IssueTemplate[]
+  projectTemplates   ProjectTemplate[]
+  recurring          RecurringIssue[]
+  savedViews         SavedView[]
+  cycles             Cycle[]
+  initiatives        Initiative[]
+  issueRelations     IssueRelation[]
+  timeEntries        TimeEntry[]
+  agents             Agent[]
+  dispatchRules      DispatchRule[]
+  agentRuns          AgentRun[]
+  agentRunEvents     AgentRunEvent[]
 
   @@index([slug])
 }
@@ -786,12 +804,46 @@ model ActivityEvent {
   payload     Json
   createdAt   DateTime  @default(now())
 
-  workspace  Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  actor      User?             @relation(fields: [actorId], references: [id], onDelete: SetNull)
-  deliveries WebhookDelivery[]
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor              User?               @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  deliveries         WebhookDelivery[]
+  notificationStates NotificationState[]
 
   @@index([workspaceId, kind, createdAt])
   @@index([workspaceId, subjectType, subjectId])
+}
+
+/// Mutable per-user alert lifecycle layered on immutable ActivityEvent rows.
+model NotificationState {
+  id                String               @id @default(cuid())
+  workspaceId       String
+  userId            String
+  eventId           String
+  replacementKey    String?
+  severity          NotificationSeverity @default(INFO)
+  importance        Int                  @default(0)
+  status            NotificationStatus   @default(UNREAD)
+  persistent        Boolean              @default(true)
+  primaryHref       String?
+  detailHref        String?
+  summary           String
+  reason            String?              @db.Text
+  recommendedAction String?              @db.Text
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  readAt            DateTime?
+  dismissedAt       DateTime?
+  acknowledgedAt    DateTime?
+  resolvedAt        DateTime?
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event     ActivityEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId, eventId])
+  @@index([workspaceId, userId, status, importance, createdAt])
+  @@index([workspaceId, userId, replacementKey])
+  @@index([eventId])
 }
 
 /// Denormalized metric rollups computed by scheduled jobs.
@@ -1034,12 +1086,12 @@ model TimeEntry {
 /// receive work via webhook push. `profileKey` is the stable, human-memorable
 /// handle used across Hermes and Forge (matches Hermes profile directory name).
 model Agent {
-  id               String      @id @default(cuid())
+  id               String           @id @default(cuid())
   workspaceId      String
   name             String
   /// Stable handle for cross-system lookup. Unique per workspace.
   profileKey       String
-  description      String?     @db.Text
+  description      String?          @db.Text
   /// Avatar/emoji or URL — freeform. UI decides.
   avatar           String?
   provider         AgentProvider    @default(HERMES)
@@ -1051,25 +1103,25 @@ model Agent {
   webhookSecret    String?
   /// Free-form capability tags (e.g. "ops", "research", "code-review").
   /// Consumed by `autoDispatchMode = CAPABILITY_MATCH`.
-  capabilities     String[]    @default([])
+  capabilities     String[]         @default([])
   /// Distinguishes WORKER (claims work, default) from COACH (observes
   /// events and posts diagnostic comments) and OBSERVER (read-only).
   /// Auto-dispatch only considers WORKER agents.
-  role             AgentRole   @default(WORKER)
+  role             AgentRole        @default(WORKER)
   /// Optional markdown template auto-applied to an issue's description on
   /// assignment, when the description is empty. Freeform (no length cap).
   /// See `src/server/services/agent-template.ts`.
-  templateMarkdown String?     @db.Text
-  status           AgentStatus @default(OFFLINE)
+  templateMarkdown String?          @db.Text
+  status           AgentStatus      @default(OFFLINE)
   lastHeartbeatAt  DateTime?
   /// Cap on simultaneously-claimed issues. 0 = unlimited.
-  maxConcurrent    Int         @default(1)
+  maxConcurrent    Int              @default(1)
   /// Timestamp of the last auto-dispatch assignment to this agent. Used by
   /// `AutoDispatchMode.ROUND_ROBIN` to pick the least-recent pick.
   lastDispatchedAt DateTime?
   archivedAt       DateTime?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   workspace        Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   assignedIssues   Issue[]        @relation("IssueAssignedAgent")

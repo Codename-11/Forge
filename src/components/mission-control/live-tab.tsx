@@ -10,6 +10,8 @@ import { RunRow } from "./run-row";
  * how runs open.
  */
 
+const STALE_RUN_MS = 5 * 60_000;
+
 export function LiveTab({
   pinnedIds,
   onTogglePin,
@@ -26,12 +28,17 @@ export function LiveTab({
     { staleTime: 3_000 },
   );
 
-  const { pinned, rest } = useMemo(() => {
+  const { stalled, pinned, rest } = useMemo(() => {
     const all = runs ?? [];
     const pinnedSet = new Set(pinnedIds);
+    const stalledRows = all.filter(
+      (r) => Date.now() - new Date(r.lastEventAt).getTime() > STALE_RUN_MS,
+    );
+    const stalledSet = new Set(stalledRows.map((r) => r.id));
     return {
-      pinned: all.filter((r) => pinnedSet.has(r.id)),
-      rest: all.filter((r) => !pinnedSet.has(r.id)),
+      stalled: stalledRows,
+      pinned: all.filter((r) => pinnedSet.has(r.id) && !stalledSet.has(r.id)),
+      rest: all.filter((r) => !pinnedSet.has(r.id) && !stalledSet.has(r.id)),
     };
   }, [runs, pinnedIds]);
 
@@ -55,6 +62,21 @@ export function LiveTab({
 
   return (
     <div className="space-y-1.5 overflow-y-auto px-2 py-2">
+      {stalled.length > 0 && (
+        <>
+          <SectionLabel>Needs attention</SectionLabel>
+          {stalled.map((run) => (
+            <RunRow
+              key={run.id}
+              run={run}
+              pinned={pinnedIds.includes(run.id)}
+              onTogglePin={() => onTogglePin(run.id)}
+              active={activeRunId === run.id}
+              onActivate={() => setActiveRunId(run.id)}
+            />
+          ))}
+        </>
+      )}
       {pinned.length > 0 && (
         <>
           <SectionLabel>Pinned</SectionLabel>
@@ -68,8 +90,10 @@ export function LiveTab({
               onActivate={() => setActiveRunId(run.id)}
             />
           ))}
-          <SectionLabel>Active</SectionLabel>
         </>
+      )}
+      {(stalled.length > 0 || pinned.length > 0) && rest.length > 0 && (
+        <SectionLabel>Active</SectionLabel>
       )}
       {rest.map((run) => (
         <RunRow

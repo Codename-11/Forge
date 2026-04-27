@@ -2,6 +2,80 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-27 — Mission Control actionable notifications
+
+Completed the Mission Control notification/traceability run across drill links,
+Sonner delivery, Activity Drawer persistence, and health/detail surfaces.
+
+### Changes
+
+- Fixed Mission Control agent drill links to use `/w/[slug]/agents/[profileKey]`
+  instead of database agent ids.
+- Added `src/lib/notifications/event-notification.ts`, a typed mapper for
+  alertable `ActivityEvent` kinds (`AGENT_NOACK`, `ISSUE_SLA_BREACH`,
+  `ISSUE_STALLED`) with severity, importance, summary, reason,
+  recommended action, replacement key, and primary/detail action links.
+- Wired realtime Sonner warning toasts through the shared mapper so warnings
+  open useful issue/agent/detail destinations instead of dead-end copy.
+- Added `NotificationState`, `NotificationSeverity`, and
+  `NotificationStatus` with migration `0015_notification_state`; the mutable
+  per-user lifecycle sits on top of immutable `ActivityEvent` rows.
+- Added a notification materialization service plus `notification.*` tRPC
+  endpoints for list, unread count, upsert, mark-read, dismiss, acknowledge,
+  and resolve. Replacement keys auto-resolve older active alerts.
+- Reworked Activity Drawer alert rows into a persistent attention queue with
+  reason/recommended-action copy, primary/detail links, severity/importance,
+  and per-alert read/dismiss/ack/resolve controls.
+- Added agent health focus links (`?health=noack|webhook|heartbeat#dispatch-health`)
+  and visible guidance on the agent detail page explaining the warning, likely
+  cause, recommended fix, and place to check.
+- Improved webhook delivery inspector deep links with `deliveryId`/`agentId`
+  query state, selected delivery persistence across filters, and agent-scoped
+  delivery filtering.
+- Added tests for event mapping, notification lifecycle persistence, replacement
+  behavior, and webhook delivery deep-linked rows.
+
+### Verification
+
+- `pnpm prisma:generate` - clean.
+- `pnpm prisma:deploy` - clean against the local Forge dev database.
+- `pnpm vitest run tests/unit/event-notification.test.ts src/server/routers/__tests__/notification.test.ts src/server/routers/__tests__/admin-webhook-deliveries.test.ts` - clean (14 tests).
+- `pnpm typecheck` - clean.
+- Targeted `pnpm exec eslint ...touched files...` - clean.
+- `pnpm build:app` - clean.
+- `git diff --check` - clean.
+- Full `pnpm lint` still fails on pre-existing `src/components/issue-board.tsx`
+  `no-explicit-any` errors.
+- Full `pnpm test` runs 185/191 tests clean; remaining six failures are the
+  pre-existing MinIO test environment issue (`localhost:59000` refused) in
+  storage/attachment tests.
+
+## 2026-04-27 — Mission Control notification mapping
+
+Implemented the first notification drill-down packet: fixed Mission Control
+agent links and added a typed mapper for alertable activity events.
+
+### Changes
+
+- Mission Control Glance and Agents tab links now route to
+  `/w/[slug]/agents/[profileKey]` instead of using the database agent id.
+- Added `src/lib/notifications/event-notification.ts`, a pure typed helper
+  for `AGENT_NOACK`, `ISSUE_SLA_BREACH`, and `ISSUE_STALLED` metadata.
+- Mapper output includes severity, importance, primary/detail hrefs, summary,
+  reason, recommended action, replacement key, and toast copy.
+- Added fallback handling for missing issue/agent hydration while preserving
+  issue subject drill-downs when the event still carries an issue id.
+- Added unit coverage for no-ack, SLA breach, stalled work, missing
+  references, profileKey agent URLs, and non-alertable events.
+
+### Verification
+
+- `pnpm vitest run tests/unit/event-notification.test.ts` - clean.
+- `pnpm typecheck` - clean.
+- `pnpm exec eslint src/components/mission-control/glance-view.tsx src/components/mission-control/agents-tab.tsx src/lib/notifications/event-notification.ts tests/unit/event-notification.test.ts` - clean.
+- `git diff --check` - clean.
+- Static grep confirmed Mission Control no longer links agents with `a.id`.
+
 ## 2026-04-27 — Two-tier settings navigation
 
 Refined the settings navbar into primary section tabs with a contextual subnav.

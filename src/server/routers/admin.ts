@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import type { Prisma } from "@prisma/client";
 import { router, adminProcedure } from "@/server/trpc";
 import { webhookQueue } from "@/server/queues";
+import {
+  AGENT_DISPATCH_WEBHOOK_URL,
+  agentDispatchUrlFor,
+} from "@/server/audit";
 
 /**
  * Cap on `responseBody` length we ship to the client. The worker
@@ -10,6 +15,38 @@ import { webhookQueue } from "@/server/queues";
  * payloads over the wire.
  */
 const RESPONSE_BODY_PREVIEW_BYTES = 2_048;
+const webhookDeliveryStatus = z.enum([
+  "PENDING",
+  "SUCCESS",
+  "FAILED",
+  "DEAD_LETTER",
+]);
+const agentIdFilter = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(/^[a-zA-Z0-9_-]+$/);
+
+const webhookDeliveryInclude = {
+  webhook: {
+    select: {
+      id: true,
+      url: true,
+      pluginId: true,
+      events: true,
+    },
+  },
+  event: {
+    select: {
+      id: true,
+      kind: true,
+      subjectType: true,
+      subjectId: true,
+      createdAt: true,
+      payload: true,
+    },
+  },
+} satisfies Prisma.WebhookDeliveryInclude;
 
 function truncateResponseBody(body: string | null): string | null {
   if (body == null) return null;
@@ -137,44 +174,62 @@ export const adminRouter = router({
     list: adminProcedure
       .input(
         z.object({
-          status: z.enum(["PENDING", "SUCCESS", "FAILED", "DEAD_LETTER"]).optional(),
+          status: webhookDeliveryStatus.optional(),
+          deliveryId: z.string().min(1).max(40).optional(),
+          agentId: agentIdFilter.optional(),
           limit: z.number().int().min(1).max(200).default(50),
           cursor: z.string().optional(),
         }),
       )
       .query(async ({ ctx, input }) => {
+        const where: Prisma.WebhookDeliveryWhereInput = {
+          webhook: { workspaceId: ctx.workspaceId },
+          ...(input.status ? { status: input.status } : {}),
+        };
+
+        if (input.agentId) {
+          where.OR = [
+            {
+              webhook: {
+                workspaceId: ctx.workspaceId,
+                url: agentDispatchUrlFor(input.agentId),
+              },
+            },
+            {
+              webhook: {
+                workspaceId: ctx.workspaceId,
+                url: AGENT_DISPATCH_WEBHOOK_URL,
+              },
+              event: {
+                payload: {
+                  path: ["agentId"],
+                  equals: input.agentId,
+                } as Prisma.JsonFilter,
+              },
+            },
+          ];
+        }
+
         const rows = await ctx.db.webhookDelivery.findMany({
-          where: {
-            webhook: { workspaceId: ctx.workspaceId },
-            ...(input.status ? { status: input.status } : {}),
-          },
+          where,
           orderBy: [{ scheduledAt: "desc" }, { id: "desc" }],
           take: input.limit + 1,
           cursor: input.cursor ? { id: input.cursor } : undefined,
           skip: input.cursor ? 1 : 0,
-          include: {
-            webhook: {
-              select: {
-                id: true,
-                url: true,
-                pluginId: true,
-                events: true,
-              },
-            },
-            event: {
-              select: {
-                id: true,
-                kind: true,
-                subjectType: true,
-                subjectId: true,
-                createdAt: true,
-                payload: true,
-              },
-            },
-          },
+          include: webhookDeliveryInclude,
         });
         let nextCursor: string | undefined;
         if (rows.length > input.limit) nextCursor = rows.pop()!.id;
+        if (input.deliveryId && !rows.some((row) => row.id === input.deliveryId)) {
+          const selected = await ctx.db.webhookDelivery.findFirst({
+            where: {
+              id: input.deliveryId,
+              webhook: { workspaceId: ctx.workspaceId },
+            },
+            include: webhookDeliveryInclude,
+          });
+          if (selected) rows.unshift(selected);
+        }
         // Truncate response bodies before handing the payload back to
         // the caller so we never ship an 8KB blob per row in a table.
         const items = rows.map((r) => ({

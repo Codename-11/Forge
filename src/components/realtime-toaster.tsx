@@ -1,5 +1,6 @@
 "use client";
 import { useRef } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   UserCheck,
@@ -10,6 +11,10 @@ import {
 } from "lucide-react";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import {
+  mapActivityEventToNotification,
+  type EventNotificationMetadata,
+} from "@/lib/notifications/event-notification";
 
 type DispatchPayload = {
   mode?: string;
@@ -38,8 +43,25 @@ function asPayload(p: unknown): EventPayload {
 
 const RECENT_LIMIT = 100;
 
+function toastDurationFor(notification: EventNotificationMetadata): number {
+  return notification.severity === "ERROR" || notification.severity === "CRITICAL"
+    ? 12_000
+    : 8_000;
+}
+
+function iconForNotification(notification: EventNotificationMetadata) {
+  switch (notification.kind) {
+    case "ISSUE_SLA_BREACH":
+      return <Clock className="h-4 w-4" />;
+    case "AGENT_NOACK":
+    case "ISSUE_STALLED":
+      return <AlertTriangle className="h-4 w-4" />;
+  }
+}
+
 export default function RealtimeToaster() {
   const ws = useMaybeWorkspace();
+  const router = useRouter();
   const seen = useRef<Set<string>>(new Set());
   const order = useRef<string[]>([]);
 
@@ -57,6 +79,37 @@ export default function RealtimeToaster() {
       }
 
       const payload = asPayload(evt.payload);
+      const notification = mapActivityEventToNotification({
+        workspace: { slug: ws.slug, key: ws.key },
+        event: {
+          id: evt.id,
+          kind: evt.kind ?? "",
+          subjectType: evt.subjectType ?? "workspace",
+          subjectId: evt.subjectId ?? ws.id,
+          payload: evt.payload,
+        },
+      });
+
+      if (notification) {
+        const options = {
+          description: notification.toast.description ?? notification.reason,
+          icon: iconForNotification(notification),
+          duration: toastDurationFor(notification),
+          action: {
+            label: notification.toast.actionLabel,
+            onClick: () => router.push(notification.primaryHref),
+          },
+        };
+        if (
+          notification.severity === "ERROR" ||
+          notification.severity === "CRITICAL"
+        ) {
+          toast.error(notification.toast.title, options);
+        } else {
+          toast.warning(notification.toast.title, options);
+        }
+        return;
+      }
 
       switch (evt.kind) {
         case "AGENT_ASSIGNED": {
@@ -67,21 +120,44 @@ export default function RealtimeToaster() {
             description:
               dispatch?.reason ?? `mode: ${dispatch?.mode ?? "manual"}`,
             icon: <UserCheck className="h-4 w-4" />,
+            ...(evt.subjectType === "issue" && evt.subjectId
+              ? {
+                  action: {
+                    label: "View issue",
+                    onClick: () => router.push(`/w/${ws.slug}/issues/${evt.subjectId}`),
+                  },
+                }
+              : {}),
           });
           return;
         }
         case "AGENT_STATUS_CHANGED": {
           if (!payload.profileKey || !payload.to) return;
           if (payload.from && payload.from === payload.to) return;
-          toast(`@${payload.profileKey} went ${payload.to}`, {
+          const options = {
             icon: <Activity className="h-4 w-4" />,
-          });
+            action: {
+              label: "View agent",
+              onClick: () => router.push(`/w/${ws.slug}/agents/${payload.profileKey}`),
+            },
+            ...(payload.to === "OFFLINE" ? { duration: 8_000 } : {}),
+          };
+          if (payload.to === "OFFLINE") {
+            toast.warning(`@${payload.profileKey} went ${payload.to}`, options);
+          } else {
+            toast(`@${payload.profileKey} went ${payload.to}`, options);
+          }
           return;
         }
         case "AGENT_DELETED": {
           if (!payload.profileKey) return;
           toast.warning(`Agent removed: @${payload.profileKey}`, {
             icon: <AlertTriangle className="h-4 w-4" />,
+            duration: 8_000,
+            action: {
+              label: "Open agents",
+              onClick: () => router.push(`/w/${ws.slug}/settings/agents`),
+            },
           });
           return;
         }
@@ -92,44 +168,14 @@ export default function RealtimeToaster() {
           toast(`New mention`, {
             description: `@${actor} commented on ${where}`,
             icon: <MessageCircle className="h-4 w-4" />,
-          });
-          return;
-        }
-        case "ISSUE_STALLED": {
-          const prefix = payload.issuePrefix ?? evt.subjectId ?? "an issue";
-          toast.warning(`Stalled: ${prefix} hasn't moved`, {
-            description: payload.agentProfileKey
-              ? `Assigned @${payload.agentProfileKey}${
-                  payload.slaMinutes ? ` · ${payload.slaMinutes}m SLA` : ""
-                }`
-              : undefined,
-            icon: <AlertTriangle className="h-4 w-4" />,
-          });
-          return;
-        }
-        case "AGENT_NOACK": {
-          const prefix = payload.issuePrefix ?? evt.subjectId ?? "an issue";
-          const handle = payload.agentProfileKey;
-          const secs = payload.requiredAckSeconds;
-          toast.warning(`Missed wake: ${prefix}`, {
-            description: handle
-              ? `@${handle} didn't ack${secs ? ` within ${secs}s` : ""}`
-              : secs
-                ? `No ack within ${secs}s`
-                : undefined,
-            icon: <AlertTriangle className="h-4 w-4" />,
-          });
-          return;
-        }
-        case "ISSUE_SLA_BREACH": {
-          const prefix = payload.issuePrefix ?? evt.subjectId ?? "an issue";
-          const overdue = payload.breachedByMinutes;
-          toast.warning(`SLA breach: ${prefix}`, {
-            description:
-              typeof overdue === "number"
-                ? `${Math.max(0, overdue)}m overdue`
-                : undefined,
-            icon: <Clock className="h-4 w-4" />,
+            ...(evt.subjectType === "issue" && evt.subjectId
+              ? {
+                  action: {
+                    label: "View issue",
+                    onClick: () => router.push(`/w/${ws.slug}/issues/${evt.subjectId}`),
+                  },
+                }
+              : {}),
           });
           return;
         }
