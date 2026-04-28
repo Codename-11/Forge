@@ -2350,7 +2350,43 @@ Same session as scaffold (renamed Cairn → Forge first). Version bumped to `1.0
   (webhook delivery). Good candidate: a Hermes bridge that pushes events
   into `#hermes-agent` Discord.
 
-### Known gaps / TODOs in code
+### 2026-04-27 — Mission Control chat: slash commands + streaming-draft bubble
+
+### Changes
+
+- Created `src/lib/chat-slash-commands.ts` — unchanged from pre-existing
+  stub (was already in place). The file has `SlashCommandContext`,
+  `SlashCommand`, `SLASH_COMMANDS` (`/help`, `/clear`, `/info`, `/agents`,
+  `/issue`, `/status`), `parseSlashCommand`, `matchSlashCommands`,
+  `isSlashInput`.
+- Updated `src/components/mission-control/chat-composer.tsx`:
+  - Added `slashContext?: SlashCommandContext` prop.
+  - Inline popover appears when `isSlashInput(body) && !body.includes(" ")`;
+    shows command name (mono) + description (muted). Arrow keys cycle
+    highlight, Enter/Tab accepts, Escape closes.
+  - Commands needing args (`/issue`) fill `/<name> ` and place cursor;
+    arg-less commands execute immediately.
+  - `submit()` intercepts slash commands before calling `onSend`.
+- Updated `src/components/mission-control/chat-thread.tsx`:
+  - Added `localMessages` state (`SYSTEM`-role cosmetic bubbles pushed by
+    slash commands; never hit the server).
+  - Built `slashContext` object wired to `appendLocal`, `clearLocal`, and
+    `handleSend`; passed to `ChatComposer`.
+  - Added `DraftBubble` state + SSE branch for `subjectType === "chat-thread-stream"`:
+    `started` creates the bubble, `delta` grows it, `finalized` sets a 800ms
+    timeout to clear it (persisted message replaces it naturally).
+  - `AgentDraftBubble` component: renders partial body through `<ChatMarkdown>`
+    with pulsing `▍` cursor; falls back to three-dot dots while body is empty.
+  - Draft bubble replaces the static `AgentThinkingBubble` while active — not
+    shown simultaneously.
+  - Auto-scroll now also triggers on `draft?.body` changes.
+
+### Verification
+
+- `pnpm typecheck` — clean.
+- `pnpm lint` (our files) — clean (pre-existing lint warnings unrelated).
+
+## Known gaps / TODOs in code
 
 - `auth.ts` assumes `nodemailer` provider; install and configure SMTP.
 - `worker.ts` webhook delivery job: enqueue is currently manual — add a

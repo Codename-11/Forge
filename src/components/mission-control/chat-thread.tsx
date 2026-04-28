@@ -1,13 +1,15 @@
 "use client";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useChatContext } from "@/hooks/use-chat-context";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
 import { ChatComposer } from "./chat-composer";
 import { ChatMarkdown } from "./chat-markdown";
+import type { SlashCommandContext } from "@/lib/chat-slash-commands";
 
 /**
  * Active chat thread between the operator and one agent. Polls via
@@ -68,6 +70,62 @@ function AgentThinkingBubble({ stale }: { stale: boolean }) {
   );
 }
 
+/** Streaming draft bubble — renders partial agent response with a blinking cursor. */
+function AgentDraftBubble({
+  body,
+  agentName,
+}: {
+  body: string;
+  agentName?: string;
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ember/15 text-ember">
+        <Bot className="h-3 w-3" />
+      </span>
+      <div className="min-w-0 max-w-[85%] rounded-md border border-border bg-card/60 px-2 py-1.5 text-[0.75rem] text-foreground">
+        {agentName && (
+          <div className="mb-0.5 text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+            {agentName}
+          </div>
+        )}
+        {body ? (
+          <div className="relative">
+            <ChatMarkdown body={body} />
+            {/* Pulsing cursor appended inline */}
+            <span className="inline-block animate-pulse text-muted-foreground">
+              ▍
+            </span>
+          </div>
+        ) : (
+          // Empty draft — show three dots while waiting for first delta.
+          <span className="flex gap-1">
+            <span
+              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
+              style={{ animationDelay: "0ms" }}
+            />
+            <span
+              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
+              style={{ animationDelay: "150ms" }}
+            />
+            <span
+              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
+              style={{ animationDelay: "300ms" }}
+            />
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type DraftBubble = {
+  draftId: string;
+  agentId: string;
+  body: string;
+  startedAt: number;
+};
+
 const EMPTY_STATE_BODY = `No messages yet.
 
 {agentName} can: read your current page, look up issues + comments,
@@ -97,11 +155,63 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
   const agent = agentFull ?? data?.agent;
   const messages = useMemo(() => data?.messages ?? [], [data?.messages]);
 
+  // ---------- Local (cosmetic) messages from slash commands ----------
+  const [localMessages, setLocalMessages] = useState<ChatMessageRow[]>([]);
+  const localIdRef = useRef(0);
+
+  const appendLocal = (body: string) => {
+    const id = `_local_${++localIdRef.current}`;
+    setLocalMessages((prev) => [
+      ...prev,
+      { id, role: "SYSTEM", body, createdAt: new Date() },
+    ]);
+  };
+
+  const clearLocal = () => {
+    setLocalMessages([]);
+  };
+
+  // ---------- Streaming draft bubble ----------
+  const [draft, setDraft] = useState<DraftBubble | null>(null);
+
   // Realtime — invalidate on chat events for this thread.
   useRealtime((evt) => {
+    if (!threadId) return;
+
+    // Streaming draft events.
+    if (
+      evt.subjectType === "chat-thread-stream" &&
+      evt.subjectId === threadId
+    ) {
+      const p = evt.payload as {
+        phase: string;
+        draftId: string;
+        delta?: string;
+        messageId?: string;
+      };
+      if (p.phase === "started") {
+        setDraft({
+          draftId: p.draftId,
+          agentId,
+          body: "",
+          startedAt: Date.now(),
+        });
+      } else if (p.phase === "delta" && p.delta) {
+        setDraft((d) =>
+          d && d.draftId === p.draftId ? { ...d, body: d.body + p.delta } : d,
+        );
+      } else if (p.phase === "finalized") {
+        // Hold draft visible briefly while the persisted message lands.
+        setTimeout(() => {
+          setDraft((d) => (d && d.draftId === p.draftId ? null : d));
+        }, 800);
+      }
+      return;
+    }
+
+    // Regular chat message posted — refetch.
     if (evt.subjectType !== "chat-thread") return;
     if (evt.subjectId !== threadId) return;
-    if (!threadId) return;
     // Refetch by re-running the mutation. Simplest path; cheap.
     threadM.mutate({ agentId });
   });
@@ -114,6 +224,8 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
   });
 
   const ctx = useChatContext();
+  const workspace = useMaybeWorkspace();
+
   const handleSend = (body: string) => {
     sendM.mutate({
       agentId,
@@ -130,13 +242,38 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
     });
   };
 
+  // Build slash-command context — stable reference via useMemo.
+  // Prefer agentFull (has all fields); fall back to basic agent shape for
+  // id/name/profileKey/status/role which are available from data.agent.
+  const slashContext: SlashCommandContext | undefined = useMemo(() => {
+    if (!agent || !threadId || !workspace) return undefined;
+    return {
+      agent: {
+        id: agent.id,
+        name: agent.name,
+        profileKey: agent.profileKey,
+        runtimeMode: agentFull?.runtimeMode ?? "PERSISTENT",
+        status: agent.status ?? "OFFLINE",
+        lastHeartbeatAt: agentFull?.lastHeartbeatAt ?? null,
+        capabilities: agentFull?.capabilities ?? [],
+        role: agent.role ?? "",
+      },
+      thread: { id: threadId },
+      workspaceSlug: workspace.slug,
+      appendLocal,
+      clearLocal,
+      sendPrompt: handleSend,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent?.id, agentFull?.runtimeMode, agentFull?.status, threadId, workspace?.slug]);
+
   // Auto-scroll to bottom on new messages.
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
+  }, [messages.length, localMessages.length, draft?.body]);
 
   const messageRows: ChatMessageRow[] = useMemo(
     () =>
@@ -147,6 +284,13 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
         createdAt: m.createdAt,
       })),
     [messages],
+  );
+
+  // Merged display rows: persisted + local SYSTEM messages interleaved.
+  // Local messages appear after the last persisted message.
+  const displayRows: ChatMessageRow[] = useMemo(
+    () => [...messageRows, ...localMessages],
+    [messageRows, localMessages],
   );
 
   // ---------- Presence-aware derived values ----------
@@ -180,15 +324,23 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
 
   // ---------- Thinking indicator logic ----------
   // Show when last message is USER and was sent within the last 60s.
-  const lastMessage = messageRows[messageRows.length - 1];
-  const lastMessageIsUser = lastMessage?.role === "USER";
-  const lastMessageAge = lastMessage
-    ? Date.now() - new Date(lastMessage.createdAt).getTime()
+  // Don't show the static three-dot bubble when a draft is active.
+  const lastMessage = displayRows[displayRows.length - 1];
+  const lastPersistedMessage = messageRows[messageRows.length - 1];
+  const lastMessageIsUser = lastPersistedMessage?.role === "USER";
+  const lastMessageAge = lastPersistedMessage
+    ? Date.now() - new Date(lastPersistedMessage.createdAt).getTime()
     : Infinity;
   // Also show while send is in flight (the draft bubble is present but not committed).
   const showThinking =
-    !sendM.isPending && lastMessageIsUser && lastMessageAge < 300_000; // 5 min
+    !sendM.isPending &&
+    !draft && // suppress static bubble when draft stream is active
+    lastMessageIsUser &&
+    lastMessageAge < 300_000; // 5 min
   const thinkingIsStale = showThinking && lastMessageAge >= 60_000;
+
+  // Suppress unused var warning — lastMessage is used for list rendering logic.
+  void lastMessage;
 
   return (
     <div className="flex h-full flex-col">
@@ -242,7 +394,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
         </div>
       )}
       <div ref={scrollerRef} className="flex-1 space-y-2 overflow-y-auto px-2 py-2">
-        {messageRows.length === 0 && (
+        {displayRows.length === 0 && (
           <div className="px-2 py-4 text-[0.6875rem] text-muted-foreground">
             {agent ? (
               <ChatMarkdown
@@ -254,7 +406,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
             )}
           </div>
         )}
-        {messageRows.map((m) => (
+        {displayRows.map((m) => (
           <ChatMessageBubble key={m.id} msg={m} agentName={agent?.name} />
         ))}
         {sendM.isPending && (
@@ -268,7 +420,12 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
             }}
           />
         )}
-        {showThinking && <AgentThinkingBubble stale={thinkingIsStale} />}
+        {/* Draft bubble — shows while agent is streaming. Replaces static thinking bubble. */}
+        {draft ? (
+          <AgentDraftBubble body={draft.body} agentName={agent?.name} />
+        ) : (
+          showThinking && <AgentThinkingBubble stale={thinkingIsStale} />
+        )}
       </div>
       <ChatComposer
         onSend={handleSend}
@@ -276,6 +433,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
         isPending={sendM.isPending}
         placeholder={composerPlaceholder}
         banner={composerBanner}
+        slashContext={slashContext}
       />
     </div>
   );

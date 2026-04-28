@@ -31,9 +31,19 @@ export function ChatMessageBubble({
   const isUser = msg.role === "USER";
   const isSystem = msg.role === "SYSTEM";
   if (isSystem) {
+    // Use markdown rendering for local slash-command output (multi-line, bold, etc.)
+    const isRichBody =
+      msg.body.includes("**") ||
+      msg.body.includes("###") ||
+      msg.body.includes("- ") ||
+      msg.body.includes("_");
     return (
-      <div className="px-1 py-0.5 text-center text-[0.625rem] text-muted-foreground">
-        {msg.body}
+      <div className="my-0.5 rounded-md border border-border/50 bg-subtle/30 px-2.5 py-1.5 text-[0.6875rem] text-muted-foreground">
+        {isRichBody ? (
+          <ChatMarkdown body={msg.body} className="text-muted-foreground" />
+        ) : (
+          <span>{msg.body}</span>
+        )}
       </div>
     );
   }

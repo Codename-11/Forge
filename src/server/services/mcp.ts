@@ -9,8 +9,10 @@ import {
   InitiativeStatus,
   RelationKind,
 } from "@prisma/client";
+import { nanoid } from "nanoid";
 import { db } from "@/server/db";
 import { recordChange } from "@/server/audit";
+import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
@@ -2433,6 +2435,192 @@ export const mcpTools = {
           },
         });
         return { messageId: message.id, threadId: thread.id };
+      });
+    },
+  },
+
+  // ---------------------------------------------------------------- Chat streaming
+  // Three-step streaming draft: startDraft → N×appendDraftChunk → finalizeDraft.
+  // Drafts are ephemeral (Redis pub/sub only); only finalizeDraft persists a
+  // ChatMessage row.
+
+  "chat.startDraft": {
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({
+      threadId: z
+        .string()
+        .min(1)
+        .max(40)
+        .describe("ChatThread.id from the inbound webhook payload."),
+    }),
+    async run(input: { threadId: string }, ctx: McpContext) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error(
+          "chat.startDraft requires an API key with linkedAgentId set.",
+        );
+      }
+      const thread = await db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId },
+        select: { id: true, agentId: true },
+      });
+      if (!thread) throw new Error("Chat thread not found in this workspace.");
+      if (thread.agentId !== linkedAgentId) {
+        throw new Error("Only the thread's agent may stream replies.");
+      }
+      const draftId = nanoid();
+      // Lightweight SSE-only publish; nothing persisted.
+      void publish({
+        id: nanoid(),
+        workspaceId: ctx.workspaceId,
+        kind: EventKind.CHAT_MESSAGE_POSTED, // re-use the event channel
+        subjectType: "chat-thread-stream", // discriminator for the client
+        subjectId: thread.id,
+        payload: {
+          phase: "started",
+          threadId: thread.id,
+          agentId: thread.agentId,
+          draftId,
+        },
+        actorId: null,
+        createdAt: new Date().toISOString(),
+      });
+      return { draftId, threadId: thread.id };
+    },
+  },
+
+  "chat.appendDraftChunk": {
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({
+      threadId: z.string().min(1).max(40),
+      draftId: z.string().min(1).max(40),
+      delta: z
+        .string()
+        .min(1)
+        .max(4_000)
+        .describe(
+          "Token delta to append. Caller is responsible for batching at a sane cadence (~60–200ms).",
+        ),
+      /** Optional cumulative index/sequence — purely advisory; client tolerates gaps. */
+      seq: z.number().int().nonnegative().optional(),
+    }),
+    async run(
+      input: { threadId: string; draftId: string; delta: string; seq?: number },
+      ctx: McpContext,
+    ) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error(
+          "chat.appendDraftChunk requires an API key with linkedAgentId set.",
+        );
+      }
+      // Lighter check — we trust draftId already proved permission via startDraft.
+      // But still verify the thread is in this workspace + this agent.
+      const thread = await db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, agentId: linkedAgentId },
+        select: { id: true, agentId: true },
+      });
+      if (!thread) throw new Error("Chat thread not found.");
+      void publish({
+        id: nanoid(),
+        workspaceId: ctx.workspaceId,
+        kind: EventKind.CHAT_MESSAGE_POSTED,
+        subjectType: "chat-thread-stream",
+        subjectId: thread.id,
+        payload: {
+          phase: "delta",
+          threadId: thread.id,
+          agentId: thread.agentId,
+          draftId: input.draftId,
+          delta: input.delta,
+          seq: input.seq ?? null,
+        },
+        actorId: null,
+        createdAt: new Date().toISOString(),
+      });
+      return { ok: true };
+    },
+  },
+
+  "chat.finalizeDraft": {
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({
+      threadId: z.string().min(1).max(40),
+      draftId: z.string().min(1).max(40),
+      body: z.string().min(1).max(16_000),
+      sourceRunId: z.string().min(1).max(40).optional(),
+    }),
+    async run(
+      input: { threadId: string; draftId: string; body: string; sourceRunId?: string },
+      ctx: McpContext,
+    ) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error(
+          "chat.finalizeDraft requires an API key with linkedAgentId set.",
+        );
+      }
+      const thread = await db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId },
+        select: { id: true, agentId: true },
+      });
+      if (!thread) throw new Error("Chat thread not found in this workspace.");
+      if (thread.agentId !== linkedAgentId) {
+        throw new Error("Only the thread's agent may finalize a draft here.");
+      }
+      return db.$transaction(async (tx) => {
+        const message = await tx.chatMessage.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            threadId: thread.id,
+            role: "AGENT",
+            body: input.body,
+            sourceRunId: input.sourceRunId ?? null,
+          },
+        });
+        await tx.chatThread.update({
+          where: { id: thread.id },
+          data: { lastMessageAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: null,
+          entity: "ChatMessage",
+          entityId: message.id,
+          action: "create",
+          eventKind: EventKind.CHAT_MESSAGE_POSTED,
+          subjectType: "chat-thread",
+          subjectId: thread.id,
+          payload: {
+            threadId: thread.id,
+            messageId: message.id,
+            agentId: thread.agentId,
+            role: "AGENT",
+            sourceRunId: input.sourceRunId ?? null,
+            // Carry the draftId so the client can swap its draft bubble for
+            // the persisted message without flicker.
+            finalizedDraftId: input.draftId,
+          },
+        });
+        // Also publish a stream-finalized event so clients listening on the
+        // chat-thread-stream channel know to dispose the draft bubble.
+        void publish({
+          id: nanoid(),
+          workspaceId: ctx.workspaceId,
+          kind: EventKind.CHAT_MESSAGE_POSTED,
+          subjectType: "chat-thread-stream",
+          subjectId: thread.id,
+          payload: {
+            phase: "finalized",
+            threadId: thread.id,
+            agentId: thread.agentId,
+            draftId: input.draftId,
+            messageId: message.id,
+          },
+          actorId: null,
+          createdAt: new Date().toISOString(),
+        });
+        return { messageId: message.id, threadId: thread.id, draftId: input.draftId };
       });
     },
   },
