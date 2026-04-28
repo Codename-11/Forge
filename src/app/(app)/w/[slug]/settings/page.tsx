@@ -37,13 +37,8 @@ const ENTRIES: Entry[] = [
   },
   {
     path: "/settings/templates",
-    title: "Issue templates",
-    description: "Reusable starting points. Stop hitting the blank page.",
-  },
-  {
-    path: "/settings/project-templates",
-    title: "Project templates",
-    description: "Starter suggestions shown on the Projects page.",
+    title: "Templates",
+    description: "Reusable starting points for issues and projects. Stop hitting the blank page.",
   },
   {
     path: "/settings/recurring",
@@ -57,7 +52,7 @@ const ENTRIES: Entry[] = [
   },
 ];
 
-const DEVELOPER: Entry[] = [
+const AUTOMATION: Entry[] = [
   {
     path: "/settings/agents",
     title: "Agents",
@@ -70,24 +65,33 @@ const DEVELOPER: Entry[] = [
     description:
       "Declarative routing layer: pin issues matching priority / label / project to a specific agent before the mode-based picker runs.",
   },
+];
+
+const INTEGRATIONS: Entry[] = [
   {
-    path: "/settings/plugins",
-    title: "Plugins & integrations",
+    path: "/settings/integrations",
+    title: "Integrations",
     description:
-      "Manifest-based extensions with scoped access. Register, approve, or suspend installed plugins.",
+      "Connect external services. Browse available integrations and manage active connections.",
   },
   {
-    path: "/settings/admin",
-    title: "Admin portal",
+    path: "/settings/plugins",
+    title: "Plugins",
     description:
-      "Workspace-wide observability — audit log, activity events, webhook delivery status.",
-    badge: "admin only",
+      "Manifest-based extensions with scoped access. Register, approve, or suspend installed plugins.",
   },
   {
     path: "/settings/integrations/deliveries",
     title: "Webhook deliveries",
     description:
       "Inspect the webhook delivery queue. Drill into failures and requeue dead-lettered rows.",
+    badge: "admin only",
+  },
+  {
+    path: "/settings/admin",
+    title: "Admin portal",
+    description:
+      "Workspace-wide observability — audit log, activity events, webhook delivery status.",
     badge: "admin only",
   },
 ];
@@ -161,9 +165,17 @@ export default function SettingsPage() {
             </Card>
           </Section>
 
-          <Section title="Developer">
+          <Section title="Automation">
             <Card>
-              {DEVELOPER.map((s) => (
+              {AUTOMATION.map((s) => (
+                <EntryRow key={s.path} href={resolve(s)} s={s} />
+              ))}
+            </Card>
+          </Section>
+
+          <Section title="Integrations">
+            <Card>
+              {INTEGRATIONS.map((s) => (
                 <EntryRow key={s.path} href={resolve(s)} s={s} />
               ))}
             </Card>

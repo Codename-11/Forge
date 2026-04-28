@@ -5,13 +5,13 @@ import { usePathname } from "next/navigation";
 import {
   ArrowLeft,
   Bot,
-  Boxes,
   ClipboardList,
   Key,
   Layers,
   ListChecks,
   Palette,
   Plug,
+  PlugZap,
   Repeat,
   Send,
   Settings as SettingsIcon,
@@ -176,9 +176,8 @@ function workspaceGroups(slug: string): NavGroup[] {
         { href: w("/statuses"), label: "Statuses", Icon: ListChecks },
         { href: w("/labels"), label: "Labels", Icon: Tag },
         { href: w("/templates"), label: "Templates", Icon: ClipboardList },
-        { href: w("/project-templates"), label: "Projects", Icon: Boxes },
+        { href: w("/views"), label: "Saved views", Icon: Layers },
         { href: w("/recurring"), label: "Recurring", Icon: Repeat },
-        { href: w("/views"), label: "Views", Icon: Layers },
       ],
     },
     {
@@ -189,20 +188,17 @@ function workspaceGroups(slug: string): NavGroup[] {
       ],
     },
     {
-      label: "Developer",
+      label: "Integrations",
       items: [
+        { href: w("/integrations"), label: "Integrations", Icon: PlugZap },
         { href: w("/plugins"), label: "Plugins", Icon: Plug },
-        { href: w("/admin"), label: "Admin", Icon: Shield },
         { href: w("/integrations/deliveries"), label: "Deliveries", Icon: Send },
       ],
     },
     {
-      label: "Account",
+      label: "Admin",
       items: [
-        { href: w("/account"), label: "Profile", Icon: UserIcon },
-        { href: w("/appearance"), label: "Appearance", Icon: Palette },
-        { href: w("/access"), label: "Developer access", Icon: Key },
-        { href: w("/workspaces"), label: "Workspaces", Icon: Layers },
+        { href: w("/admin"), label: "Admin portal", Icon: Shield },
       ],
     },
   ];
