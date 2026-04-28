@@ -51,12 +51,18 @@ Hermes pulls the workspace's MCP server with the linked agent context.
 Forge knows an agent is online when the runtime calls the MCP tool \`agents.heartbeat\`. The \`forge-presence\` skill at \`~/.hermes/skills/forge-presence/\` is a small cron-driven HTTP poke that does this for you. It only needs the Forge URL and an AGENT-kind API key — the agent id is inferred from the key's \`linkedAgentId\`.
 
 \`\`\`bash
-# Per profile that has a Forge integration:
+# Installed profile (mizu, mizuki, …):
 cp ~/.hermes/skills/forge-presence/forge.env.example \\
    ~/.hermes/profiles/<profile>/forge.env
-$EDITOR ~/.hermes/profiles/<profile>/forge.env  # fill in FORGE_URL + FORGE_API_KEY
+$EDITOR ~/.hermes/profiles/<profile>/forge.env  # FORGE_URL + FORGE_API_KEY
 chmod 600 ~/.hermes/profiles/<profile>/forge.env
 bash ~/.hermes/skills/forge-presence/bin/setup.sh <profile>
+
+# Default agent (victor — runs from ~/.hermes/config.yaml directly):
+cp ~/.hermes/skills/forge-presence/forge.env.example ~/.hermes/forge.env
+$EDITOR ~/.hermes/forge.env
+chmod 600 ~/.hermes/forge.env
+bash ~/.hermes/skills/forge-presence/bin/setup.sh victor
 \`\`\`
 
 The skill registers a system cron entry that pings every minute. Set \`Workspace.agentIdleTimeoutMinutes\` to 2–3 minutes so a single missed tick doesn't immediately flip the agent OFFLINE.
