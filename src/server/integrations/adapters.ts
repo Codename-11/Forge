@@ -44,7 +44,24 @@ A persistent daemon that hosts multiple agent profiles (Victor, Mizu, etc.) and 
 3. Generate a key here with kind=AGENT and \`linkedAgentId\` set.
 4. Set the key as Hermes's \`FORGE_API_KEY\` environment variable.
 
-Hermes pulls the workspace's MCP server with the linked agent context.`,
+Hermes pulls the workspace's MCP server with the linked agent context.
+
+## Presence (forge-presence skill)
+
+Forge knows an agent is online when the runtime calls the MCP tool \`agents.heartbeat\`. The \`forge-presence\` skill at \`~/.hermes/skills/forge-presence/\` is a small cron-driven HTTP poke that does this for you. It only needs the Forge URL and an AGENT-kind API key — the agent id is inferred from the key's \`linkedAgentId\`.
+
+\`\`\`bash
+# Per profile that has a Forge integration:
+cp ~/.hermes/skills/forge-presence/forge.env.example \\
+   ~/.hermes/profiles/<profile>/forge.env
+$EDITOR ~/.hermes/profiles/<profile>/forge.env  # fill in FORGE_URL + FORGE_API_KEY
+chmod 600 ~/.hermes/profiles/<profile>/forge.env
+bash ~/.hermes/skills/forge-presence/bin/setup.sh <profile>
+\`\`\`
+
+The skill registers a system cron entry that pings every minute. Set \`Workspace.agentIdleTimeoutMinutes\` to 2–3 minutes so a single missed tick doesn't immediately flip the agent OFFLINE.
+
+Without this skill the agent will be reachable for dispatched work (because successful webhook delivery also bumps heartbeat via \`recordAgentReachable\`), but chat will show "offline · queued" until the first delivery lands. With the skill, presence is honest from the moment Hermes starts.`,
   },
   {
     kind: "CLAUDE",
