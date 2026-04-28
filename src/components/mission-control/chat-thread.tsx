@@ -1,11 +1,13 @@
 "use client";
 import { useEffect, useMemo, useRef } from "react";
+import { Bot } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useChatContext } from "@/hooks/use-chat-context";
 import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
 import { ChatComposer } from "./chat-composer";
+import { ChatMarkdown } from "./chat-markdown";
 
 /**
  * Active chat thread between the operator and one agent. Polls via
@@ -30,6 +32,49 @@ function relativeTime(input: Date | string | null | undefined): string {
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
   return `${Math.floor(ms / 86_400_000)}d ago`;
 }
+
+/** Three-dot typing indicator rendered like an agent bubble. */
+function AgentThinkingBubble({ stale }: { stale: boolean }) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-start gap-2">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ember/15 text-ember">
+          <Bot className="h-3 w-3" />
+        </span>
+        <div className="rounded-md border border-border bg-card/60 px-3 py-2">
+          <span className="flex gap-1">
+            <span
+              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
+              style={{ animationDelay: "0ms" }}
+            />
+            <span
+              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
+              style={{ animationDelay: "150ms" }}
+            />
+            <span
+              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
+              style={{ animationDelay: "300ms" }}
+            />
+          </span>
+        </div>
+      </div>
+      {stale && (
+        <p className="pl-7 text-meta italic text-muted-foreground/60">
+          Still thinking… or take a different path? Check the agent&apos;s status in Mission
+          Control.
+        </p>
+      )}
+    </div>
+  );
+}
+
+const EMPTY_STATE_BODY = `No messages yet.
+
+{agentName} can: read your current page, look up issues + comments,
+and take actions on your behalf. Try:
+- "what am I assigned right now?"
+- "summarize this issue" (if you're on an issue page)
+- "@victor draft a status comment for AXI-31"`;
 
 export function ChatThreadView({ agentId }: { agentId: string }) {
   const utils = trpc.useUtils();
@@ -133,6 +178,18 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
     }
   }
 
+  // ---------- Thinking indicator logic ----------
+  // Show when last message is USER and was sent within the last 60s.
+  const lastMessage = messageRows[messageRows.length - 1];
+  const lastMessageIsUser = lastMessage?.role === "USER";
+  const lastMessageAge = lastMessage
+    ? Date.now() - new Date(lastMessage.createdAt).getTime()
+    : Infinity;
+  // Also show while send is in flight (the draft bubble is present but not committed).
+  const showThinking =
+    !sendM.isPending && lastMessageIsUser && lastMessageAge < 300_000; // 5 min
+  const thinkingIsStale = showThinking && lastMessageAge >= 60_000;
+
   return (
     <div className="flex h-full flex-col">
       {agent && (
@@ -186,10 +243,15 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
       )}
       <div ref={scrollerRef} className="flex-1 space-y-2 overflow-y-auto px-2 py-2">
         {messageRows.length === 0 && (
-          <div className="px-2 py-6 text-center text-[0.6875rem] text-muted-foreground">
-            {agent
-              ? `No messages yet. Say hi to ${agent.name}.`
-              : "Loading…"}
+          <div className="px-2 py-4 text-[0.6875rem] text-muted-foreground">
+            {agent ? (
+              <ChatMarkdown
+                body={EMPTY_STATE_BODY.replace("{agentName}", agent.name)}
+                className="text-muted-foreground"
+              />
+            ) : (
+              "Loading…"
+            )}
           </div>
         )}
         {messageRows.map((m) => (
@@ -206,10 +268,12 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
             }}
           />
         )}
+        {showThinking && <AgentThinkingBubble stale={thinkingIsStale} />}
       </div>
       <ChatComposer
         onSend={handleSend}
         disabled={sendM.isPending}
+        isPending={sendM.isPending}
         placeholder={composerPlaceholder}
         banner={composerBanner}
       />
