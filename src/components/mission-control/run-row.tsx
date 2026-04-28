@@ -31,7 +31,18 @@ export type RunRowData = {
     workspace: { key: string; slug: string };
   } | null;
   statusComment?: { body: string; currentStep: string | null } | null;
+  /** Token usage written by `runs.recordUsage` (Stream A). Each is
+   * cumulative-as-reported. Render a compact chip when present. */
+  tokensIn?: number | null;
+  tokensOut?: number | null;
+  tokensCached?: number | null;
 };
+
+/** Format a token count compactly: <1k as raw, ≥1k rounded to k. */
+function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  return `${Math.round(n / 1000)}k`;
+}
 
 const STALE_RUN_MS = 5 * 60_000;
 
@@ -157,6 +168,22 @@ export function RunRow({
         )}
         <span className="ml-auto flex items-center gap-1.5">
           <RunActions runId={run.id} agentName={run.agent.name} />
+          {(() => {
+            const tokens =
+              (run.tokensIn ?? 0) + (run.tokensOut ?? 0);
+            if (tokens === 0) return null;
+            const inPart = run.tokensIn ?? 0;
+            const outPart = run.tokensOut ?? 0;
+            const cachedPart = run.tokensCached ?? 0;
+            return (
+              <span
+                className="rounded border border-border/60 bg-subtle/40 px-1 py-0 font-mono text-[0.625rem] text-muted-foreground"
+                title={`tokens · in ${inPart} · out ${outPart}${cachedPart ? ` · cached ${cachedPart}` : ""}`}
+              >
+                {formatTokens(tokens)} tok
+              </span>
+            );
+          })()}
           <span
             className="font-mono text-meta text-muted-foreground"
             title={`Started ${new Date(run.startedAt).toLocaleString()}`}

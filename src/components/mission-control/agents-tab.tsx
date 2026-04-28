@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
-import { Bot, ExternalLink } from "lucide-react";
+import { Bot, Cloud, ExternalLink, Globe, HardDrive, Server } from "lucide-react";
+import type { RuntimeKind } from "@prisma/client";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
@@ -110,6 +111,14 @@ export function AgentsTab({ slug }: { slug: string }) {
                 >
                   {modeLabel}
                 </span>
+                {a.runtime && (
+                  <RuntimeChip
+                    slug={slug}
+                    runtimeId={a.runtime.id}
+                    name={a.runtime.name}
+                    kind={a.runtime.kind}
+                  />
+                )}
                 {a.role !== "WORKER" && (
                   <span className="rounded-md border border-border bg-subtle px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
                     {a.role}
@@ -144,6 +153,51 @@ export function AgentsTab({ slug }: { slug: string }) {
       })}
     </div>
   );
+}
+
+function RuntimeChip({
+  slug,
+  runtimeId,
+  name,
+  kind,
+}: {
+  slug: string;
+  runtimeId: string;
+  name: string;
+  kind: RuntimeKind;
+}) {
+  const Icon =
+    kind === "LOCAL_DAEMON"
+      ? HardDrive
+      : kind === "REMOTE_HTTP"
+        ? Globe
+        : kind === "CLOUD"
+          ? Cloud
+          : Server;
+  return (
+    <Link
+      href={`/w/${slug}/settings/runtimes/${runtimeId}`}
+      onClick={(e) => e.stopPropagation()}
+      title={`Runtime · ${kindLabel(kind)} · ${name}`}
+      className="inline-flex max-w-[10rem] items-center gap-1 rounded border border-border bg-subtle/40 px-1 py-0 text-[0.5625rem] text-muted-foreground hover:border-ember/40 hover:text-foreground"
+    >
+      <Icon className="h-2.5 w-2.5 shrink-0" />
+      <span className="truncate font-mono">{name}</span>
+    </Link>
+  );
+}
+
+function kindLabel(kind: RuntimeKind): string {
+  switch (kind) {
+    case "LOCAL_DAEMON":
+      return "local daemon";
+    case "REMOTE_HTTP":
+      return "remote webhook";
+    case "CLOUD":
+      return "cloud";
+    default:
+      return String(kind);
+  }
 }
 
 function PresenceDot({ status }: { status: string }) {

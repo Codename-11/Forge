@@ -14,6 +14,7 @@ import {
   PlugZap,
   Repeat,
   Send,
+  Server,
   Settings as SettingsIcon,
   Shield,
   Tag,
@@ -191,6 +192,7 @@ function workspaceGroups(slug: string): NavGroup[] {
       label: "Integrations",
       items: [
         { href: w("/integrations"), label: "Integrations", Icon: PlugZap },
+        { href: w("/runtimes"), label: "Runtimes", Icon: Server },
         { href: w("/plugins"), label: "Plugins", Icon: Plug },
         { href: w("/integrations/deliveries"), label: "Deliveries", Icon: Send },
       ],
