@@ -132,6 +132,7 @@ export default defineConfig({
           text: "Agents in Forge",
           items: [
             { text: "Overview", link: "/agents/overview.html" },
+            { text: "Runtimes", link: "/agents/runtimes.html" },
             { text: "Hermes Integration", link: "/agents/hermes.html" },
             { text: "Auto-dispatch", link: "/agents/auto-dispatch.html" },
             { text: "Dispatch Rules", link: "/agents/dispatch-rules.html" },
