@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useChatContext } from "@/hooks/use-chat-context";
+import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
 import { ChatComposer } from "./chat-composer";
 
@@ -10,7 +11,26 @@ import { ChatComposer } from "./chat-composer";
  * Active chat thread between the operator and one agent. Polls via
  * realtime SSE — every CHAT_MESSAGE_POSTED on this thread invalidates
  * the message list.
+ *
+ * Header shows runtimeMode badge and honest presence state:
+ *   - PERSISTENT + ONLINE/BUSY → emerald/ember dot
+ *   - PERSISTENT + OFFLINE     → grey dot + "offline · last seen Xm ago"
+ *   - EPHEMERAL  + any         → "session" badge + last-seen
+ *
+ * Composer placeholder and banner also adapt to presence.
  */
+
+function relativeTime(input: Date | string | null | undefined): string {
+  if (!input) return "unknown";
+  const t = typeof input === "string" ? new Date(input) : input;
+  const ms = Date.now() - t.getTime();
+  if (ms < 5_000) return "just now";
+  if (ms < 60_000) return `${Math.max(0, Math.floor(ms / 1000))}s ago`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
+  return `${Math.floor(ms / 86_400_000)}d ago`;
+}
+
 export function ChatThreadView({ agentId }: { agentId: string }) {
   const utils = trpc.useUtils();
   // Mutation that upserts + loads. Returns thread + agent + messages.
@@ -23,7 +43,13 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
 
   const data = threadM.data;
   const threadId = data?.thread.id;
-  const agent = data?.agent;
+  // Fetch full agent data (includes runtimeMode + lastHeartbeatAt) separately.
+  const { data: agentFull } = trpc.agent.byId.useQuery(
+    { id: agentId },
+    { enabled: Boolean(agentId), staleTime: 10_000 },
+  );
+  // Use agentFull for rich presence fields, fall back to thread data for basics.
+  const agent = agentFull ?? data?.agent;
   const messages = useMemo(() => data?.messages ?? [], [data?.messages]);
 
   // Realtime — invalidate on chat events for this thread.
@@ -78,6 +104,35 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
     [messages],
   );
 
+  // ---------- Presence-aware derived values ----------
+  const mode = agentFull ? (agentFull.runtimeMode ?? "PERSISTENT") : "PERSISTENT";
+  const lastHeartbeatAt = agentFull?.lastHeartbeatAt ?? null;
+  const isEphemeral = mode === "EPHEMERAL";
+  const status = agent?.status ?? "OFFLINE";
+  const isPersistentOnline = !isEphemeral && status === "ONLINE";
+  const isPersistentBusy = !isEphemeral && status === "BUSY";
+  const isPersistentOffline = !isEphemeral && status === "OFFLINE";
+
+  // Composer placeholder copy
+  let composerPlaceholder = agent ? `Message ${agent.name}…` : "Message agent…";
+  if (agent) {
+    if (isPersistentOffline) {
+      composerPlaceholder = `Message ${agent.name}… (offline — will reply when back)`;
+    } else if (isEphemeral) {
+      composerPlaceholder = `Message ${agent.name}… (async — replies on next session)`;
+    }
+  }
+
+  // Banner for offline/ephemeral agents
+  let composerBanner: string | undefined;
+  if (agent) {
+    if (isPersistentOffline) {
+      composerBanner = `${agent.name} is offline. Your message will be queued and delivered on next heartbeat.`;
+    } else if (isEphemeral) {
+      composerBanner = `${agent.name} runs as a session — replies arrive when the session is active.`;
+    }
+  }
+
   return (
     <div className="flex h-full flex-col">
       {agent && (
@@ -89,16 +144,44 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
           <span className="text-[0.625rem] text-muted-foreground">
             @{agent.profileKey}
           </span>
+
+          {/* Runtime mode badge */}
           <span
-            className={
-              agent.status === "ONLINE"
-                ? "ml-auto h-1.5 w-1.5 rounded-full bg-emerald-500"
-                : agent.status === "BUSY"
-                ? "ml-auto h-1.5 w-1.5 animate-pulse rounded-full bg-ember"
-                : "ml-auto h-1.5 w-1.5 rounded-full bg-muted-foreground/40"
-            }
-            title={agent.status}
-          />
+            className={cn(
+              "rounded border px-1 py-0 text-[0.5625rem] uppercase tracking-wider text-muted-foreground",
+              isEphemeral
+                ? "border-amber-500/30 bg-subtle/40"
+                : "border-border bg-subtle/40",
+            )}
+          >
+            {isEphemeral ? "session-only" : "persistent"}
+          </span>
+
+          {/* Presence indicator */}
+          <span className="ml-auto flex items-center gap-1.5">
+            {isEphemeral ? (
+              <span className="text-[0.625rem] text-muted-foreground">
+                {lastHeartbeatAt
+                  ? `session · ${relativeTime(lastHeartbeatAt)}`
+                  : "session · no heartbeat"}
+              </span>
+            ) : isPersistentOnline ? (
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title="online" />
+            ) : isPersistentBusy ? (
+              <span
+                className="h-1.5 w-1.5 animate-pulse rounded-full bg-ember"
+                title="busy"
+              />
+            ) : (
+              <span className="flex items-center gap-1 text-[0.625rem] text-muted-foreground">
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
+                offline
+                {lastHeartbeatAt
+                  ? ` · last seen ${relativeTime(lastHeartbeatAt)}`
+                  : ""}
+              </span>
+            )}
+          </span>
         </div>
       )}
       <div ref={scrollerRef} className="flex-1 space-y-2 overflow-y-auto px-2 py-2">
@@ -127,7 +210,8 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
       <ChatComposer
         onSend={handleSend}
         disabled={sendM.isPending}
-        placeholder={agent ? `Message ${agent.name}…` : "Message agent…"}
+        placeholder={composerPlaceholder}
+        banner={composerBanner}
       />
     </div>
   );

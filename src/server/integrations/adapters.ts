@@ -1,0 +1,147 @@
+import "server-only";
+import type { AgentProvider, AgentRuntimeMode } from "@prisma/client";
+
+export interface IntegrationAdapter {
+  /** Stable id matching the existing AgentProvider enum. */
+  kind: AgentProvider;
+  /** Human-friendly title. */
+  title: string;
+  /** One-liner shown on cards. */
+  tagline: string;
+  /** Default runtime mode for agents created via this adapter. */
+  defaultRuntimeMode: AgentRuntimeMode;
+  /** Lucide icon name (string — UI maps it). */
+  iconKey: string;
+  /** Markdown describing setup. Rendered on the install page. */
+  setupMarkdown: string;
+  /** Optional MCP install snippet template. `${apiKey}` placeholder substituted client-side. */
+  mcpSnippet?: string;
+  /** Whether this adapter expects a long-running daemon vs an ad-hoc CLI. */
+  presence: "daemon" | "session" | "remote-webhook";
+  /** Recommended ApiKeyKind for keys created by this adapter. */
+  defaultKeyKind: "AGENT" | "PERSONAL" | "SESSION";
+  /** Whether this adapter supports auto-provisioning via the install flow. */
+  autoProvisionable: boolean;
+}
+
+export const INTEGRATION_ADAPTERS: IntegrationAdapter[] = [
+  {
+    kind: "HERMES",
+    title: "Hermes",
+    tagline: "Persistent multi-profile agent runtime. Best for always-on agents.",
+    defaultRuntimeMode: "PERSISTENT",
+    iconKey: "Server",
+    presence: "daemon",
+    defaultKeyKind: "AGENT",
+    autoProvisionable: false,
+    setupMarkdown: `# Hermes
+
+A persistent daemon that hosts multiple agent profiles (Victor, Mizu, etc.) and reacts to Forge webhooks in real time.
+
+**Steps:**
+1. Install Hermes locally and configure profiles.
+2. Register an Agent in Forge, paste the agent's webhook URL into \`Agent.webhookUrl\`.
+3. Generate a key here with kind=AGENT and \`linkedAgentId\` set.
+4. Set the key as Hermes's \`FORGE_API_KEY\` environment variable.
+
+Hermes pulls the workspace's MCP server with the linked agent context.`,
+  },
+  {
+    kind: "CLAUDE",
+    title: "Claude Code (session)",
+    tagline: "Local Claude Code session — read-only project context.",
+    defaultRuntimeMode: "EPHEMERAL",
+    iconKey: "Terminal",
+    presence: "session",
+    defaultKeyKind: "SESSION",
+    autoProvisionable: true,
+    setupMarkdown: `# Claude Code
+
+Run a local Claude Code session that can read your workspace's project context (issues, comments, status). Best as a SESSION key — it auto-expires.
+
+**Install snippet:**
+\`\`\`
+claude mcp add forge --transport http \\
+  --url \${FORGE_URL}/api/mcp \\
+  --header "Authorization: Bearer \${apiKey}"
+\`\`\`
+
+The key expires in 24h by default. Generate a new one when this session ends.`,
+    mcpSnippet: `claude mcp add forge --transport http --url \${FORGE_URL}/api/mcp --header "Authorization: Bearer \${apiKey}"`,
+  },
+  {
+    kind: "CLAUDE",
+    title: "Claude Desktop",
+    tagline: "Persistent Claude Desktop with MCP — semi-persistent, key stays valid.",
+    defaultRuntimeMode: "PERSISTENT",
+    iconKey: "MonitorPlay",
+    presence: "session",
+    defaultKeyKind: "PERSONAL",
+    autoProvisionable: true,
+    setupMarkdown: `# Claude Desktop
+
+Add Forge as an MCP server in your \`claude_desktop_config.json\`. Use a PERSONAL key — it persists across sessions.
+
+\`\`\`json
+{
+  "mcpServers": {
+    "forge": {
+      "command": "npx",
+      "args": ["-y", "@forge/mcp-stdio"],
+      "env": {
+        "FORGE_URL": "\${FORGE_URL}",
+        "FORGE_API_KEY": "\${apiKey}"
+      }
+    }
+  }
+}
+\`\`\`
+
+Restart Claude Desktop after editing the config.`,
+  },
+  {
+    kind: "CODEX",
+    title: "Codex CLI",
+    tagline: "OpenAI Codex CLI — session-scoped key recommended.",
+    defaultRuntimeMode: "EPHEMERAL",
+    iconKey: "Code2",
+    presence: "session",
+    defaultKeyKind: "SESSION",
+    autoProvisionable: true,
+    setupMarkdown: `# Codex CLI
+
+Generate a SESSION key here, then export it for the Codex CLI session:
+\`\`\`
+export FORGE_API_KEY=\${apiKey}
+codex --mcp forge=\${FORGE_URL}/api/mcp
+\`\`\``,
+  },
+  {
+    kind: "CUSTOM",
+    title: "Custom (webhook-driven)",
+    tagline: "Bring your own runtime — register an agent + webhook URL.",
+    defaultRuntimeMode: "PERSISTENT",
+    iconKey: "Webhook",
+    presence: "remote-webhook",
+    defaultKeyKind: "AGENT",
+    autoProvisionable: false,
+    setupMarkdown: `# Custom integration
+
+For any runtime that can:
+1. Receive POST webhooks from Forge,
+2. Make MCP/tRPC calls back with a Bearer token.
+
+Register the Agent manually with its public webhook URL, then generate an AGENT key.`,
+  },
+];
+
+export function findAdapter(
+  kind: AgentProvider,
+  presence?: IntegrationAdapter["presence"],
+): IntegrationAdapter | null {
+  // Multiple adapters may share the same kind (e.g. CLAUDE has both Code and Desktop).
+  // Disambiguate by presence when given.
+  const matches = INTEGRATION_ADAPTERS.filter((a) => a.kind === kind);
+  if (presence) return matches.find((a) => a.presence === presence) ?? null;
+  return matches[0] ?? null;
+}

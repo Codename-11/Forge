@@ -1,5 +1,6 @@
 import { router } from "@/server/trpc";
 import { agentRouter } from "./agent";
+import { integrationRouter } from "./integration";
 import { agentRunRouter } from "./agent-run";
 import { chatRouter } from "./chat";
 import { aiRouter } from "./ai";
@@ -45,6 +46,7 @@ export const appRouter = router({
   event: eventRouter,
   inbox: inboxRouter,
   initiative: initiativeRouter,
+  integration: integrationRouter,
   notification: notificationRouter,
   issue: issueRouter,
   label: labelRouter,

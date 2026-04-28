@@ -154,6 +154,18 @@ export function GlanceView({
                   <span className="font-mono text-[0.65625rem] text-muted-foreground">
                     @{a.profileKey}
                   </span>
+                  {/* Mode badge: "p" = persistent, "s" = session */}
+                  <span
+                    className={cn(
+                      "rounded border px-1 py-0 font-mono text-[0.5625rem] text-muted-foreground",
+                      (a.runtimeMode ?? "PERSISTENT") === "PERSISTENT"
+                        ? "border-border bg-subtle/40"
+                        : "border-amber-500/30 bg-subtle/40",
+                    )}
+                    title={(a.runtimeMode ?? "PERSISTENT") === "PERSISTENT" ? "persistent" : "session"}
+                  >
+                    {(a.runtimeMode ?? "PERSISTENT") === "PERSISTENT" ? "p" : "s"}
+                  </span>
                   {a.role !== "WORKER" && (
                     <span className="rounded-md border border-border bg-subtle px-1 py-0 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
                       {a.role.toLowerCase()}

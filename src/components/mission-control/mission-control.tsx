@@ -32,6 +32,7 @@ import { GlanceView } from "./glance-view";
 import { SettingsPopover } from "./settings-popover";
 import { PillSparkline } from "./pill-sparkline";
 import { ChatTab } from "./chat-tab";
+import { ControlTab } from "./control-tab";
 
 /**
  * Mission Control — the global agent ops widget.
@@ -61,17 +62,21 @@ import { ChatTab } from "./chat-tab";
  *   - Esc    → collapse to pill (when expanded and not text-focused)
  */
 
-const TABS: { id: MissionControlTab; label: string; chord: string }[] = [
+const BASE_TABS: { id: MissionControlTab; label: string; chord: string; adminOnly?: boolean }[] = [
   { id: "live", label: "Live", chord: "1" },
   { id: "queue", label: "Queue", chord: "2" },
   { id: "agents", label: "Agents", chord: "3" },
   { id: "history", label: "History", chord: "4" },
   { id: "chat", label: "Chat", chord: "5" },
+  { id: "control", label: "Control", chord: "6", adminOnly: true },
 ];
 
 export function MissionControl() {
   const workspace = useMaybeWorkspace();
   const slug = workspace?.slug ?? "";
+  const isAdmin = workspace?.role === "OWNER" || workspace?.role === "ADMIN";
+  // Filter tabs: adminOnly tabs only visible to OWNER/ADMIN.
+  const TABS = BASE_TABS.filter((t) => !t.adminOnly || isAdmin);
   const {
     state,
     setSize,
@@ -265,6 +270,18 @@ export function MissionControl() {
       setTab("chat");
     },
     [expanded, setTab],
+  );
+  useHotkey(
+    "6",
+    (e) => {
+      if (!expanded) return;
+      if (!isAdmin) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.matches("input, textarea, [contenteditable=true]")) return;
+      e.preventDefault();
+      setTab("control");
+    },
+    [expanded, isAdmin, setTab],
   );
 
   // Esc collapses panel to pill (unless caller is in a field).
@@ -611,6 +628,7 @@ export function MissionControl() {
         {state.tab === "agents" && <AgentsTab slug={slug} />}
         {state.tab === "history" && <HistoryTab slug={slug} />}
         {state.tab === "chat" && <ChatTab slug={slug} />}
+        {state.tab === "control" && isAdmin && <ControlTab slug={slug} />}
       </div>
     </div>
   );

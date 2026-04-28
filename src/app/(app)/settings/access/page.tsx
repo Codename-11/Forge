@@ -6,10 +6,12 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Key,
   PlugZap,
   ServerCog,
   Terminal,
+  User,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
@@ -110,30 +112,61 @@ function setEq<T>(a: T[], b: T[]) {
   return true;
 }
 
+/** Format an expiry as "expires in Xh" / "expires in Xd" / "expired". */
+function formatExpiry(expiresAt: Date | string | null | undefined): string {
+  if (!expiresAt) return "";
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  if (ms <= 0) return "expired";
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours < 48) return `expires in ${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `expires in ${days}d`;
+}
+
+type RevealKeyState = {
+  name: string;
+  prefix: string;
+  rawKey: string;
+  scopes: Scope[];
+  context: "created" | "rotated";
+  provider: McpOnboardingProvider;
+};
+
 export default function AccessPage() {
   const { data: keys, refetch } = trpc.access.list.useQuery();
   const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false });
+
+  // ── Agent key create flow (existing wizard) ──────────────────────────────
   const [createOpen, setCreateOpen] = useState(false);
   const [step, setStep] = useState(0);
   const [provider, setProvider] = useState<McpOnboardingProvider>("hermes");
-  const [revealKey, setRevealKey] = useState<{
-    name: string;
-    prefix: string;
-    rawKey: string;
-    scopes: Scope[];
-    context: "created" | "rotated";
-    provider: McpOnboardingProvider;
-  } | null>(null);
-  const [mcpTest, setMcpTest] = useState<{
-    state: "idle" | "pending" | "ok" | "error";
-    message: string;
-  }>({ state: "idle", message: "" });
-
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<Scope[]>(FULL_ACCESS);
   const [preset, setPreset] = useState<Preset>("full");
   const [expiresInDays, setExpiresInDays] = useState<string>("");
   const [linkedAgentId, setLinkedAgentId] = useState<string>("");
+
+  // ── Personal token create flow ────────────────────────────────────────────
+  const [personalOpen, setPersonalOpen] = useState(false);
+  const [personalName, setPersonalName] = useState("");
+  const [personalScopes, setPersonalScopes] = useState<Scope[]>(DEFAULT_SCOPES);
+  const [personalPreset, setPersonalPreset] = useState<Preset>("default");
+  const [personalExpiresInDays, setPersonalExpiresInDays] = useState<string>("");
+
+  // ── Session key create flow ───────────────────────────────────────────────
+  const [sessionOpen, setSessionOpen] = useState(false);
+  const [sessionName, setSessionName] = useState("");
+  const [sessionScopes, setSessionScopes] = useState<Scope[]>(DEFAULT_SCOPES);
+  const [sessionPreset, setSessionPreset] = useState<Preset>("default");
+  const [sessionTtlHours, setSessionTtlHours] = useState<string>("24");
+
+  // ── Shared reveal / confirm states ────────────────────────────────────────
+  const [revealKey, setRevealKey] = useState<RevealKeyState | null>(null);
+  const [mcpTest, setMcpTest] = useState<{
+    state: "idle" | "pending" | "ok" | "error";
+    message: string;
+  }>({ state: "idle", message: "" });
+
   const [rotateTarget, setRotateTarget] = useState<{ id: string; name: string } | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
@@ -143,24 +176,24 @@ export default function AccessPage() {
       ? window.location.origin
       : process.env.NEXT_PUBLIC_APP_URL ?? "https://forge.axiom-labs.dev";
 
-  function applyPreset(p: Preset) {
-    setPreset(p);
-    if (p === "full") setScopes(FULL_ACCESS);
-    else if (p === "read") setScopes(READ_ONLY);
-    else if (p === "default") setScopes(DEFAULT_SCOPES);
+  // ── Scope helpers ─────────────────────────────────────────────────────────
+  function applyPreset(p: Preset, setter: (s: Scope[]) => void, presetSetter: (p: Preset) => void) {
+    presetSetter(p);
+    if (p === "full") setter(FULL_ACCESS);
+    else if (p === "read") setter(READ_ONLY);
+    else if (p === "default") setter(DEFAULT_SCOPES);
   }
 
-  function toggleScope(s: Scope) {
-    setScopes((curr) => {
-      const next = curr.includes(s) ? curr.filter((x) => x !== s) : [...curr, s];
-      if (setEq(next, FULL_ACCESS)) setPreset("full");
-      else if (setEq(next, READ_ONLY)) setPreset("read");
-      else if (setEq(next, DEFAULT_SCOPES)) setPreset("default");
-      else setPreset("custom");
-      return next;
-    });
+  function toggleScope(s: Scope, curr: Scope[], setter: (scopes: Scope[]) => void, presetSetter: (p: Preset) => void) {
+    const next = curr.includes(s) ? curr.filter((x) => x !== s) : [...curr, s];
+    if (setEq(next, FULL_ACCESS)) presetSetter("full");
+    else if (setEq(next, READ_ONLY)) presetSetter("read");
+    else if (setEq(next, DEFAULT_SCOPES)) presetSetter("default");
+    else presetSetter("custom");
+    setter(next);
   }
 
+  // ── Agent key flow ────────────────────────────────────────────────────────
   function openCreate() {
     setProvider("hermes");
     setName("");
@@ -172,7 +205,7 @@ export default function AccessPage() {
     setCreateOpen(true);
   }
 
-  function validate(): string | null {
+  function validateAgent(): string | null {
     if (!name.trim()) return "Name is required.";
     if (scopes.length === 0) return "Select at least one scope.";
     if (expiresInDays) {
@@ -212,6 +245,115 @@ export default function AccessPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  async function submitCreate() {
+    const err = validateAgent();
+    if (err) {
+      toast.error(err);
+      return;
+    }
+    create.mutate({
+      name: name.trim(),
+      scopes,
+      expiresInDays: expiresInDays ? Number(expiresInDays) : undefined,
+      linkedAgentId: linkedAgentId || undefined,
+    });
+  }
+
+  // ── Personal token flow ───────────────────────────────────────────────────
+  function openPersonal() {
+    setPersonalName("");
+    setPersonalScopes(DEFAULT_SCOPES);
+    setPersonalPreset("default");
+    setPersonalExpiresInDays("");
+    setPersonalOpen(true);
+  }
+
+  const createPersonal = trpc.access.createPersonal.useMutation({
+    onSuccess: (k) => {
+      setRevealKey({
+        name: k.name,
+        prefix: k.prefix,
+        rawKey: k.rawKey,
+        scopes: k.scopes as Scope[],
+        context: "created",
+        provider: "custom",
+      });
+      setPersonalOpen(false);
+      void refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  function submitPersonal() {
+    if (!personalName.trim()) {
+      toast.error("Name is required.");
+      return;
+    }
+    if (personalScopes.length === 0) {
+      toast.error("Select at least one scope.");
+      return;
+    }
+    if (personalExpiresInDays) {
+      const days = Number(personalExpiresInDays);
+      if (!Number.isInteger(days) || days < 1 || days > 365) {
+        toast.error("Expiry must be between 1 and 365 days.");
+        return;
+      }
+    }
+    createPersonal.mutate({
+      name: personalName.trim(),
+      scopes: personalScopes,
+      expiresInDays: personalExpiresInDays ? Number(personalExpiresInDays) : undefined,
+    });
+  }
+
+  // ── Session key flow ──────────────────────────────────────────────────────
+  function openSession() {
+    setSessionName("");
+    setSessionScopes(DEFAULT_SCOPES);
+    setSessionPreset("default");
+    setSessionTtlHours("24");
+    setSessionOpen(true);
+  }
+
+  const createSession = trpc.access.createSession.useMutation({
+    onSuccess: (k) => {
+      setRevealKey({
+        name: k.name,
+        prefix: k.prefix,
+        rawKey: k.rawKey,
+        scopes: k.scopes as Scope[],
+        context: "created",
+        provider: "custom",
+      });
+      setSessionOpen(false);
+      void refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  function submitSession() {
+    if (!sessionName.trim()) {
+      toast.error("Name is required.");
+      return;
+    }
+    if (sessionScopes.length === 0) {
+      toast.error("Select at least one scope.");
+      return;
+    }
+    const ttl = Number(sessionTtlHours);
+    if (!Number.isInteger(ttl) || ttl < 1 || ttl > 168) {
+      toast.error("TTL must be between 1 and 168 hours.");
+      return;
+    }
+    createSession.mutate({
+      name: sessionName.trim(),
+      scopes: sessionScopes,
+      ttlHours: ttl,
+    });
+  }
+
+  // ── Shared mutations ──────────────────────────────────────────────────────
   const revoke = trpc.access.revoke.useMutation({
     onSuccess: () => {
       toast.success("Key revoked.");
@@ -243,22 +385,13 @@ export default function AccessPage() {
     onError: (e) => toast.error(e.message),
   });
 
-  const activeKeys = keys ?? [];
+  // ── Derived data ──────────────────────────────────────────────────────────
+  const allKeys = keys ?? [];
+  const agentKeys = allKeys.filter((k) => k.kind === "AGENT");
+  const personalKeys = allKeys.filter((k) => k.kind === "PERSONAL");
+  const sessionKeys = allKeys.filter((k) => k.kind === "SESSION");
 
-  async function submitCreate() {
-    const err = validate();
-    if (err) {
-      toast.error(err);
-      return;
-    }
-    create.mutate({
-      name: name.trim(),
-      scopes,
-      expiresInDays: expiresInDays ? Number(expiresInDays) : undefined,
-      linkedAgentId: linkedAgentId || undefined,
-    });
-  }
-
+  // ── MCP test ──────────────────────────────────────────────────────────────
   async function runMcpTest() {
     if (!revealKey) return;
     setMcpTest({ state: "pending", message: "Testing Forge MCP..." });
@@ -306,7 +439,7 @@ export default function AccessPage() {
         subtitle="API keys + MCP endpoint for external agents."
         actions={
           <Button variant="ember" size="sm" onClick={openCreate}>
-            New MCP key
+            Register agent
           </Button>
         }
       />
@@ -314,18 +447,23 @@ export default function AccessPage() {
         <div className="mx-auto max-w-3xl space-y-6 p-6">
           <Intro baseUrl={baseUrl} />
 
+          {/* ── Registered Agents ── */}
           <Section
-            title="API keys"
-            hint="Raw keys are revealed once at creation or rotation. Store them in your agent's secret manager; Forge retains only a SHA-256 hash."
+            title="Registered Agents"
+            hint="Agent keys are tied to a persistent registered agent. Full scopes, linked via the agent registry. Use the wizard to generate a provider-specific MCP config."
             actions={
-              <span className="text-[0.6875rem] text-muted-foreground">
-                {activeKeys.filter((k) => !k.revokedAt).length} active .{" "}
-                {activeKeys.filter((k) => k.revokedAt).length} revoked
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-[0.6875rem] text-muted-foreground">
+                  {agentKeys.filter((k) => !k.revokedAt).length} active
+                </span>
+                <Button variant="outline" size="sm" onClick={openCreate}>
+                  Register agent
+                </Button>
+              </div>
             }
           >
             <Card>
-              {activeKeys.map((k) => {
+              {agentKeys.map((k) => {
                 const expired =
                   !!k.expiresAt && !k.revokedAt && new Date(k.expiresAt) < new Date();
                 return (
@@ -357,42 +495,166 @@ export default function AccessPage() {
                         )}
                       </div>
                     </div>
-                    <div className="flex flex-col gap-1">
-                      {!k.revokedAt && (
-                        <>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={rotate.isPending}
-                            onClick={() => setRotateTarget({ id: k.id, name: k.name })}
-                          >
-                            Rotate
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setRevokeTarget({ id: k.id, name: k.name })}
-                          >
-                            Revoke
-                          </Button>
-                        </>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setDeleteTarget({ id: k.id, name: k.name })}
-                      >
-                        Delete
-                      </Button>
-                    </div>
+                    <KeyActions
+                      k={k}
+                      rotatePending={rotate.isPending}
+                      revokePending={revoke.isPending}
+                      onRotate={() => setRotateTarget({ id: k.id, name: k.name })}
+                      onRevoke={() => setRevokeTarget({ id: k.id, name: k.name })}
+                      onDelete={() => setDeleteTarget({ id: k.id, name: k.name })}
+                      showRotate
+                    />
                   </li>
                 );
               })}
-              {activeKeys.length === 0 && (
+              {agentKeys.length === 0 && (
                 <EmptyState
-                  icon={Key}
-                  title="No API keys yet"
-                  hint="Create one to connect Hermes, Claude, Codex, or another external agent over MCP."
+                  icon={Bot}
+                  title="No registered agents"
+                  hint="Register an agent key to connect Hermes, Claude, Codex, or another persistent agent over MCP."
+                />
+              )}
+            </Card>
+          </Section>
+
+          {/* ── Personal Access Tokens ── */}
+          <Section
+            title="Personal Access Tokens"
+            hint="Personal access tokens give you read-only or scoped MCP access without registering a full agent. Use them for local Claude Code sessions, scripts, or one-off integrations."
+            actions={
+              <div className="flex items-center gap-3">
+                <span className="text-[0.6875rem] text-muted-foreground">
+                  {personalKeys.filter((k) => !k.revokedAt).length} active
+                </span>
+                <Button variant="outline" size="sm" onClick={openPersonal}>
+                  Create personal token
+                </Button>
+              </div>
+            }
+          >
+            <Card>
+              {personalKeys.map((k) => {
+                const expired =
+                  !!k.expiresAt && !k.revokedAt && new Date(k.expiresAt) < new Date();
+                return (
+                  <li key={k.id} className="flex items-start gap-4 px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{k.name}</span>
+                        <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                          {k.prefix}...
+                        </span>
+                        {k.revokedAt && <Badge>revoked</Badge>}
+                        {expired && <Badge>expired</Badge>}
+                        {k.projectIds.length > 0 && (
+                          <Badge>{k.projectIds.length} project{k.projectIds.length !== 1 ? "s" : ""}</Badge>
+                        )}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {k.scopes.map((s) => (
+                          <Badge key={s}>{s}</Badge>
+                        ))}
+                      </div>
+                      <div className="mt-2 text-[0.6875rem] text-muted-foreground">
+                        Created {relativeTime(k.createdAt)} .{" "}
+                        {k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : "never used"}
+                        {k.expiresAt && !k.revokedAt && (
+                          <> . expires {relativeTime(k.expiresAt)}</>
+                        )}
+                      </div>
+                    </div>
+                    <KeyActions
+                      k={k}
+                      rotatePending={rotate.isPending}
+                      revokePending={revoke.isPending}
+                      onRotate={() => setRotateTarget({ id: k.id, name: k.name })}
+                      onRevoke={() => setRevokeTarget({ id: k.id, name: k.name })}
+                      onDelete={() => setDeleteTarget({ id: k.id, name: k.name })}
+                      showRotate
+                    />
+                  </li>
+                );
+              })}
+              {personalKeys.length === 0 && (
+                <EmptyState
+                  icon={User}
+                  title="No personal tokens"
+                  hint="Personal access tokens give you read-only or scoped MCP access without registering a full agent."
+                />
+              )}
+            </Card>
+          </Section>
+
+          {/* ── Session Keys ── */}
+          <Section
+            title="Session Keys"
+            hint="Session keys auto-expire — perfect for ephemeral sessions or one-off tasks. They're revoked automatically when they expire."
+            actions={
+              <div className="flex items-center gap-3">
+                <span className="text-[0.6875rem] text-muted-foreground">
+                  {sessionKeys.filter((k) => !k.revokedAt && (!k.expiresAt || new Date(k.expiresAt) > new Date())).length} active
+                </span>
+                <Button variant="outline" size="sm" onClick={openSession}>
+                  Generate session key
+                </Button>
+              </div>
+            }
+          >
+            <Card>
+              {sessionKeys.map((k) => {
+                const isExpired =
+                  !!k.expiresAt && new Date(k.expiresAt) < new Date();
+                const expiryLabel = formatExpiry(k.expiresAt);
+                return (
+                  <li key={k.id} className="flex items-start gap-4 px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{k.name}</span>
+                        <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                          {k.prefix}...
+                        </span>
+                        {k.revokedAt && <Badge>revoked</Badge>}
+                        {isExpired && !k.revokedAt && (
+                          <Badge>expired</Badge>
+                        )}
+                        {!isExpired && !k.revokedAt && expiryLabel && (
+                          <Badge>
+                            <Clock className="mr-1 h-2.5 w-2.5" />
+                            {expiryLabel}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {k.scopes.map((s) => (
+                          <Badge key={s}>{s}</Badge>
+                        ))}
+                      </div>
+                      <div className="mt-2 text-[0.6875rem] text-muted-foreground">
+                        Created {relativeTime(k.createdAt)} .{" "}
+                        {k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : "never used"}
+                        {k.expiresAt && !k.revokedAt && (
+                          <> . {isExpired ? "expired" : "expires"} {relativeTime(k.expiresAt)}</>
+                        )}
+                      </div>
+                    </div>
+                    {/* Session keys: no rotate (TTL-bounded by design) */}
+                    <KeyActions
+                      k={k}
+                      rotatePending={rotate.isPending}
+                      revokePending={revoke.isPending}
+                      onRotate={() => setRotateTarget({ id: k.id, name: k.name })}
+                      onRevoke={() => setRevokeTarget({ id: k.id, name: k.name })}
+                      onDelete={() => setDeleteTarget({ id: k.id, name: k.name })}
+                      showRotate={false}
+                    />
+                  </li>
+                );
+              })}
+              {sessionKeys.length === 0 && (
+                <EmptyState
+                  icon={Clock}
+                  title="No session keys"
+                  hint="Session keys auto-expire — perfect for ephemeral sessions or one-off tasks."
                 />
               )}
             </Card>
@@ -400,11 +662,12 @@ export default function AccessPage() {
         </div>
       </div>
 
+      {/* ── Agent key wizard (existing) ── */}
       <CenterModal
         open={createOpen}
         onOpenChange={setCreateOpen}
         size="xl"
-        title="MCP key onboarding"
+        title="Register agent key"
         description="Select the agent runtime, choose scopes, and copy a provider-specific config after the key is created."
         footer={
           <div className="flex w-full flex-wrap items-center justify-between gap-2">
@@ -492,64 +755,12 @@ export default function AccessPage() {
             )}
 
             {step === 1 && (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">Preset</label>
-                  <div className="grid grid-cols-2 gap-1 rounded-md bg-subtle p-0.5 md:grid-cols-4">
-                    {([
-                      { id: "full", label: "Full access" },
-                      { id: "default", label: "Standard" },
-                      { id: "read", label: "Read-only" },
-                      { id: "custom", label: "Custom" },
-                    ] as { id: Preset; label: string }[]).map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => applyPreset(p.id)}
-                        className={
-                          "focus-ring rounded px-2 py-1 text-[0.6875rem] transition-colors " +
-                          (preset === p.id
-                            ? "bg-background text-foreground shadow-sm"
-                            : "text-muted-foreground hover:text-foreground")
-                        }
-                      >
-                        {p.label}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-[0.6875rem] text-muted-foreground">
-                    {preset === "full" && "Every scope. Use only for trusted local or single-user agents."}
-                    {preset === "default" && "Read + write issues and comments; no user or project writes."}
-                    {preset === "read" && "Read-only access for passive monitors or dashboards."}
-                    {preset === "custom" && "Manually selected scopes."}
-                  </p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs text-muted-foreground">Scopes ({scopes.length})</label>
-                  <div className="grid grid-cols-2 gap-1.5 text-xs">
-                    {ALL_SCOPES.map((s) => {
-                      const on = scopes.includes(s);
-                      return (
-                        <button
-                          type="button"
-                          key={s}
-                          onClick={() => toggleScope(s)}
-                          className={
-                            "focus-ring rounded-md border px-2 py-1 text-left font-mono text-[0.6875rem] " +
-                            (on
-                              ? "border-ember/50 bg-ember/10 text-foreground"
-                              : "border-border bg-background text-muted-foreground hover:border-border/80 hover:text-foreground")
-                          }
-                        >
-                          {on ? "+ " : "  "}
-                          {s}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
+              <ScopeSelector
+                scopes={scopes}
+                preset={preset}
+                onApplyPreset={(p) => applyPreset(p, setScopes, setPreset)}
+                onToggleScope={(s) => toggleScope(s, scopes, setScopes, setPreset)}
+              />
             )}
 
             {step === 2 && (
@@ -618,6 +829,128 @@ export default function AccessPage() {
         </div>
       </CenterModal>
 
+      {/* ── Personal token modal ── */}
+      <CenterModal
+        open={personalOpen}
+        onOpenChange={setPersonalOpen}
+        size="lg"
+        title="Create personal access token"
+        description="Personal tokens give you scoped MCP access without registering a full agent. Raw key shown once."
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setPersonalOpen(false)}
+              disabled={createPersonal.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="ember"
+              size="sm"
+              onClick={submitPersonal}
+              disabled={createPersonal.isPending}
+            >
+              Create token
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">Name</label>
+              <Input
+                value={personalName}
+                onChange={(e) => setPersonalName(e.target.value)}
+                placeholder="My Claude Code token"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">Expires in days (optional)</label>
+              <Input
+                value={personalExpiresInDays}
+                onChange={(e) => setPersonalExpiresInDays(e.target.value.replace(/[^0-9]/g, ""))}
+                placeholder="blank for no expiry"
+              />
+            </div>
+          </div>
+          <ScopeSelector
+            scopes={personalScopes}
+            preset={personalPreset}
+            onApplyPreset={(p) => applyPreset(p, setPersonalScopes, setPersonalPreset)}
+            onToggleScope={(s) => toggleScope(s, personalScopes, setPersonalScopes, setPersonalPreset)}
+          />
+        </div>
+      </CenterModal>
+
+      {/* ── Session key modal ── */}
+      <CenterModal
+        open={sessionOpen}
+        onOpenChange={setSessionOpen}
+        size="lg"
+        title="Generate session key"
+        description="Session keys auto-expire. Use them for ephemeral tasks — they cannot be rotated."
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSessionOpen(false)}
+              disabled={createSession.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="ember"
+              size="sm"
+              onClick={submitSession}
+              disabled={createSession.isPending}
+            >
+              Generate key
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">Name</label>
+              <Input
+                value={sessionName}
+                onChange={(e) => setSessionName(e.target.value)}
+                placeholder="Ephemeral session"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">TTL (hours, 1–168)</label>
+              <Input
+                value={sessionTtlHours}
+                onChange={(e) => setSessionTtlHours(e.target.value.replace(/[^0-9]/g, ""))}
+                placeholder="24"
+              />
+              <p className="text-[0.6875rem] text-muted-foreground">
+                Key becomes invalid after this window. Default 24h.
+              </p>
+            </div>
+          </div>
+          <ScopeSelector
+            scopes={sessionScopes}
+            preset={sessionPreset}
+            onApplyPreset={(p) => applyPreset(p, setSessionScopes, setSessionPreset)}
+            onToggleScope={(s) => toggleScope(s, sessionScopes, setSessionScopes, setSessionPreset)}
+          />
+        </div>
+      </CenterModal>
+
+      {/* ── Confirm dialogs ── */}
       <Confirm
         open={!!rotateTarget}
         onOpenChange={(o) => !o && setRotateTarget(null)}
@@ -660,6 +993,7 @@ export default function AccessPage() {
         }}
       />
 
+      {/* ── Reveal modal ── */}
       <CenterModal
         open={!!revealKey}
         onOpenChange={(open) => {
@@ -704,7 +1038,7 @@ export default function AccessPage() {
                   setMcpTest({ state: "idle", message: "" });
                 }}
               >
-                Done
+                I&apos;ve stored it
               </Button>
             </div>
           </div>
@@ -722,6 +1056,129 @@ export default function AccessPage() {
         )}
       </CenterModal>
     </>
+  );
+}
+
+// ── Shared sub-components ──────────────────────────────────────────────────
+
+function KeyActions({
+  k,
+  rotatePending,
+  revokePending,
+  onRotate,
+  onRevoke,
+  onDelete,
+  showRotate,
+}: {
+  k: { revokedAt: Date | null | string | undefined };
+  rotatePending: boolean;
+  revokePending: boolean;
+  onRotate: () => void;
+  onRevoke: () => void;
+  onDelete: () => void;
+  showRotate: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      {!k.revokedAt && (
+        <>
+          {showRotate && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={rotatePending}
+              onClick={onRotate}
+            >
+              Rotate
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={revokePending}
+            onClick={onRevoke}
+          >
+            Revoke
+          </Button>
+        </>
+      )}
+      <Button variant="ghost" size="sm" onClick={onDelete}>
+        Delete
+      </Button>
+    </div>
+  );
+}
+
+function ScopeSelector({
+  scopes,
+  preset,
+  onApplyPreset,
+  onToggleScope,
+}: {
+  scopes: Scope[];
+  preset: Preset;
+  onApplyPreset: (p: Preset) => void;
+  onToggleScope: (s: Scope) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <label className="text-xs text-muted-foreground">Preset</label>
+        <div className="grid grid-cols-2 gap-1 rounded-md bg-subtle p-0.5 md:grid-cols-4">
+          {([
+            { id: "full", label: "Full access" },
+            { id: "default", label: "Standard" },
+            { id: "read", label: "Read-only" },
+            { id: "custom", label: "Custom" },
+          ] as { id: Preset; label: string }[]).map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => onApplyPreset(p.id)}
+              className={
+                "focus-ring rounded px-2 py-1 text-[0.6875rem] transition-colors " +
+                (preset === p.id
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground")
+              }
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[0.6875rem] text-muted-foreground">
+          {preset === "full" && "Every scope. Use only for trusted local or single-user agents."}
+          {preset === "default" && "Read + write issues and comments; no user or project writes."}
+          {preset === "read" && "Read-only access for passive monitors or dashboards."}
+          {preset === "custom" && "Manually selected scopes."}
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-xs text-muted-foreground">Scopes ({scopes.length})</label>
+        <div className="grid grid-cols-2 gap-1.5 text-xs">
+          {ALL_SCOPES.map((s) => {
+            const on = scopes.includes(s);
+            return (
+              <button
+                type="button"
+                key={s}
+                onClick={() => onToggleScope(s)}
+                className={
+                  "focus-ring rounded-md border px-2 py-1 text-left font-mono text-[0.6875rem] " +
+                  (on
+                    ? "border-ember/50 bg-ember/10 text-foreground"
+                    : "border-border bg-background text-muted-foreground hover:border-border/80 hover:text-foreground")
+                }
+              >
+                {on ? "+ " : "  "}
+                {s}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -5,9 +5,21 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
 /**
- * Agents tab. Roster of workspace agents with status pill, capabilities,
- * current load (active runs), and a click-through to /agents/{profileKey}.
+ * Agents tab. Roster of workspace agents with status pill, runtime mode
+ * badge, last-seen freshness, capabilities, current load (active runs),
+ * and a click-through to /agents/{profileKey}.
  */
+
+function relativeTime(input: Date | string | null): string {
+  if (!input) return "no heartbeat";
+  const t = typeof input === "string" ? new Date(input) : input;
+  const ms = Date.now() - t.getTime();
+  if (ms < 5_000) return "just now";
+  if (ms < 60_000) return `${Math.max(0, Math.floor(ms / 1000))}s ago`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
+  return `${Math.floor(ms / 86_400_000)}d ago`;
+}
 
 export function AgentsTab({ slug }: { slug: string }) {
   const { data: agents, isLoading } = trpc.agent.list.useQuery({
@@ -27,12 +39,35 @@ export function AgentsTab({ slug }: { slug: string }) {
     loadByAgent.set(run.agentId, (loadByAgent.get(run.agentId) ?? 0) + 1);
   }
 
+  // Sort: PERSISTENT+ONLINE first, PERSISTENT+BUSY, EPHEMERAL (by lastHeartbeatAt desc), then OFFLINE
   const sorted = [...(agents ?? [])].sort((a, b) => {
-    // ONLINE > BUSY > OFFLINE; tiebreak by name.
-    const order = { ONLINE: 0, BUSY: 1, OFFLINE: 2 } as const;
-    const ao = order[a.status as keyof typeof order] ?? 3;
-    const bo = order[b.status as keyof typeof order] ?? 3;
-    if (ao !== bo) return ao - bo;
+    const modeRank = (mode: string) => (mode === "PERSISTENT" ? 0 : 1);
+    const statusRank = (status: string) => {
+      if (status === "ONLINE") return 0;
+      if (status === "BUSY") return 1;
+      return 2;
+    };
+    const aMode = a.runtimeMode ?? "PERSISTENT";
+    const bMode = b.runtimeMode ?? "PERSISTENT";
+
+    // PERSISTENT ONLINE/BUSY come before EPHEMERAL anything
+    if (aMode !== bMode) {
+      // If both are non-offline, mode rank first
+      const aIsActive = a.status === "ONLINE" || a.status === "BUSY";
+      const bIsActive = b.status === "ONLINE" || b.status === "BUSY";
+      // Persistent actives beat ephemeral actives
+      if (aIsActive && bIsActive) return modeRank(aMode) - modeRank(bMode);
+    }
+
+    const aStatusR = statusRank(a.status);
+    const bStatusR = statusRank(b.status);
+    if (aStatusR !== bStatusR) return aStatusR - bStatusR;
+
+    // Within same status, sort EPHEMERAL by recency
+    const at = a.lastHeartbeatAt ? new Date(a.lastHeartbeatAt).getTime() : 0;
+    const bt = b.lastHeartbeatAt ? new Date(b.lastHeartbeatAt).getTime() : 0;
+    if (at !== bt) return bt - at;
+
     return a.name.localeCompare(b.name);
   });
 
@@ -47,39 +82,63 @@ export function AgentsTab({ slug }: { slug: string }) {
         const load = loadByAgent.get(a.id) ?? 0;
         const cap = a.maxConcurrent;
         const atCap = cap > 0 && load >= cap;
+        const mode = a.runtimeMode ?? "PERSISTENT";
+        const modeLabel = mode === "PERSISTENT" ? "persistent" : "session";
+        const isOffline = a.status === "OFFLINE";
         return (
           <Link
             key={a.id}
             href={`/w/${slug}/agents/${a.profileKey}`}
-            className="flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem] hover:border-ember/40"
+            className="flex flex-col gap-0.5 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem] hover:border-ember/40"
           >
-            <PresenceDot status={a.status} />
-            <Bot className="h-3.5 w-3.5 shrink-0 text-ember" />
-            <span className="font-medium text-foreground">{a.name}</span>
-            <span className="font-mono text-[0.65625rem] text-muted-foreground">
-              @{a.profileKey}
-            </span>
-            <span className="ml-auto flex items-center gap-1.5">
-              {a.role !== "WORKER" && (
-                <span className="rounded-md border border-border bg-subtle px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-                  {a.role}
-                </span>
-              )}
-              <span
-                className={cn(
-                  "font-mono text-[0.65625rem]",
-                  atCap ? "text-amber-600" : "text-muted-foreground",
-                )}
-                title={
-                  cap > 0
-                    ? `${load} active / ${cap} max`
-                    : `${load} active (no cap)`
-                }
-              >
-                {cap > 0 ? `${load}/${cap}` : `${load}`}
+            <div className="flex items-center gap-2">
+              <PresenceDot status={a.status} />
+              <Bot className="h-3.5 w-3.5 shrink-0 text-ember" />
+              <span className="font-medium text-foreground">{a.name}</span>
+              <span className="font-mono text-[0.65625rem] text-muted-foreground">
+                @{a.profileKey}
               </span>
-              <ExternalLink className="h-3 w-3 text-muted-foreground" />
-            </span>
+              <span className="ml-auto flex items-center gap-1.5">
+                {/* Runtime mode pill */}
+                <span
+                  className={cn(
+                    "rounded border px-1 py-0 text-[0.5625rem] uppercase tracking-wider text-muted-foreground",
+                    mode === "PERSISTENT"
+                      ? "border-border bg-subtle/40"
+                      : "border-amber-500/30 bg-subtle/40",
+                  )}
+                >
+                  {modeLabel}
+                </span>
+                {a.role !== "WORKER" && (
+                  <span className="rounded-md border border-border bg-subtle px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                    {a.role}
+                  </span>
+                )}
+                <span
+                  className={cn(
+                    "font-mono text-[0.65625rem]",
+                    atCap ? "text-amber-600" : "text-muted-foreground",
+                  )}
+                  title={
+                    cap > 0
+                      ? `${load} active / ${cap} max`
+                      : `${load} active (no cap)`
+                  }
+                >
+                  {cap > 0 ? `${load}/${cap}` : `${load}`}
+                </span>
+                <ExternalLink className="h-3 w-3 text-muted-foreground" />
+              </span>
+            </div>
+            {/* Last-seen freshness when offline */}
+            {isOffline && (
+              <div className="pl-7 text-meta text-muted-foreground">
+                {a.lastHeartbeatAt
+                  ? `seen ${relativeTime(a.lastHeartbeatAt)}`
+                  : "no heartbeat"}
+              </div>
+            )}
           </Link>
         );
       })}
