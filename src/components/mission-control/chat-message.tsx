@@ -1,6 +1,7 @@
 "use client";
 import { Bot, User as UserIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ChatMarkdown } from "./chat-markdown";
 
 export interface ChatMessageRow {
   id: string;
@@ -60,10 +61,14 @@ export function ChatMessageBubble({
             {agentName}
           </div>
         )}
-        <div className="whitespace-pre-wrap break-words">
-          {msg.body}
-          {msg.isDraft && <span className="ml-1 inline-block animate-pulse">▍</span>}
-        </div>
+        {isUser ? (
+          <div className="whitespace-pre-wrap break-words">
+            {msg.body}
+            {msg.isDraft && <span className="ml-1 inline-block animate-pulse">▍</span>}
+          </div>
+        ) : (
+          <ChatMarkdown body={msg.body} />
+        )}
         <div className="mt-0.5 text-right text-[0.5625rem] text-muted-foreground/60">
           {relativeTime(msg.createdAt)}
         </div>

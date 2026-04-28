@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 interface ChatComposerProps {
   onSend: (body: string) => void;
   disabled?: boolean;
+  /** True while the send mutation is in-flight — shows a "sending…" hint. */
+  isPending?: boolean;
   placeholder?: string;
   /** When provided, shows a contextual banner above the composer. */
   banner?: string;
@@ -14,6 +16,7 @@ interface ChatComposerProps {
 export function ChatComposer({
   onSend,
   disabled = false,
+  isPending = false,
   placeholder = "Message agent…",
   banner,
 }: ChatComposerProps) {
@@ -68,14 +71,19 @@ export function ChatComposer({
           )}
           disabled={disabled}
         />
-        <button
-          type="submit"
-          disabled={disabled || !body.trim()}
-          className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-ember/15 text-ember hover:bg-ember/25 disabled:opacity-40"
-          title="Send (Enter)"
-        >
-          <Send className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex flex-col items-center gap-0.5">
+          <button
+            type="submit"
+            disabled={disabled || !body.trim()}
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-ember/15 text-ember hover:bg-ember/25 disabled:opacity-40"
+            title="Send (Enter)"
+          >
+            <Send className="h-3.5 w-3.5" />
+          </button>
+          {isPending && (
+            <span className="text-meta text-muted-foreground/60">sending…</span>
+          )}
+        </div>
       </form>
     </div>
   );
