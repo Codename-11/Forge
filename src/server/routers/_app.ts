@@ -28,6 +28,7 @@ import { initiativeRouter } from "./initiative";
 import { notificationRouter } from "./notification";
 import { pinRouter } from "./pin";
 import { relationRouter } from "./relation";
+import { runtimeRouter } from "./runtime";
 import { timeEntryRouter } from "./timeEntry";
 import { userRouter } from "./user";
 
@@ -56,6 +57,7 @@ export const appRouter = router({
   projectTemplate: projectTemplateRouter,
   recurring: recurringRouter,
   relation: relationRouter,
+  runtime: runtimeRouter,
   standup: standupRouter,
   status: statusRouter,
   template: issueTemplateRouter,

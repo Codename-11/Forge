@@ -2,12 +2,14 @@ import "server-only";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import {
+  AgentProvider,
   AgentStatus,
   CommentKind,
   CycleStatus,
   EventKind,
   InitiativeStatus,
   RelationKind,
+  RuntimeKind,
 } from "@prisma/client";
 import { nanoid } from "nanoid";
 import { db } from "@/server/db";
@@ -2621,6 +2623,180 @@ export const mcpTools = {
           createdAt: new Date().toISOString(),
         });
         return { messageId: message.id, threadId: thread.id, draftId: input.draftId };
+      });
+    },
+  },
+
+  // --------------------------------------------------------------------- Runtimes
+  // Runtime as a first-class primitive — see PLAN.md "Runtime model".
+  // `forge daemon` registers a LOCAL_DAEMON on start, then heartbeats
+  // every 60s. Hermes-style integrations register a REMOTE_HTTP runtime
+  // when their endpoint is provisioned.
+
+  "runtimes.register": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      name: z
+        .string()
+        .min(1)
+        .max(120)
+        .describe(
+          "Display name. Defaults at the daemon to os.hostname(); REMOTE_HTTP integrations pick whatever the operator wants.",
+        ),
+      kind: z
+        .nativeEnum(RuntimeKind)
+        .describe("LOCAL_DAEMON | REMOTE_HTTP | CLOUD."),
+      endpoint: z
+        .string()
+        .url()
+        .max(500)
+        .optional()
+        .describe(
+          "Webhook URL for REMOTE_HTTP. Omit / null for LOCAL_DAEMON (the daemon polls Forge via SSE).",
+        ),
+      providersAvailable: z
+        .array(z.nativeEnum(AgentProvider))
+        .max(16)
+        .default([])
+        .describe(
+          "Provider CLIs the runtime can host. The daemon reports these from PATH detection; REMOTE_HTTP runtimes set whatever their integration supports.",
+        ),
+    }),
+    async run(
+      input: {
+        name: string;
+        kind: RuntimeKind;
+        endpoint?: string;
+        providersAvailable: AgentProvider[];
+      },
+      ctx: McpContext,
+    ) {
+      // ownerId attribution: prefer the user the API key belongs to,
+      // otherwise fall back to null. AGENT-kind keys often have no
+      // userId; treating that as "owned by the workspace" is correct.
+      const ownerId = ctx.apiKey?.userId ?? ctx.userId ?? null;
+      const now = new Date();
+      return db.runtime.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          name: input.name,
+          kind: input.kind,
+          endpoint: input.endpoint || null,
+          providersAvailable: input.providersAvailable,
+          ownerId,
+          // ownerKeyPrefix is left null from MCP — set later via the
+          // tRPC `runtime.update` path or backfilled from `ApiKey.prefix`
+          // by a follow-up sweep when we wire the daemon's auth flow.
+          ownerKeyPrefix: null,
+          connectedAt: input.kind === RuntimeKind.LOCAL_DAEMON ? now : null,
+          heartbeatAt: input.kind === RuntimeKind.LOCAL_DAEMON ? now : null,
+        },
+        select: {
+          id: true,
+          name: true,
+          kind: true,
+          endpoint: true,
+          providersAvailable: true,
+          ownerId: true,
+          connectedAt: true,
+          heartbeatAt: true,
+          createdAt: true,
+        },
+      });
+    },
+  },
+
+  "runtimes.heartbeat": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      runtimeId: z
+        .string()
+        .min(1)
+        .max(40)
+        .describe("Runtime.id returned from runtimes.register."),
+    }),
+    async run(input: { runtimeId: string }, ctx: McpContext) {
+      const row = await db.runtime.findFirst({
+        where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
+        select: { id: true, archivedAt: true },
+      });
+      if (!row) throw new Error("Runtime not found in this workspace.");
+      if (row.archivedAt) throw new Error("Runtime is archived; cannot heartbeat.");
+      return db.runtime.update({
+        where: { id: row.id },
+        data: { heartbeatAt: new Date() },
+        select: { id: true, heartbeatAt: true },
+      });
+    },
+  },
+
+  // --------------------------------------------------------------------- Agent run usage
+  // Token / cost telemetry for an in-flight or completed AgentRun.
+  // Idempotent: latest call replaces the prior values, so agents send
+  // running totals (not deltas). Validates that the calling key's
+  // linkedAgentId owns the run so a key for agent A can't accidentally
+  // overwrite a run for agent B.
+
+  "runs.recordUsage": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      runId: z
+        .string()
+        .min(1)
+        .max(40)
+        .describe("AgentRun.id (from comments.upsertStatus / openOrTouchRun)."),
+      tokensIn: z.number().int().nonnegative().optional(),
+      tokensOut: z.number().int().nonnegative().optional(),
+      tokensCached: z.number().int().nonnegative().optional(),
+      costUsd: z
+        .number()
+        .nonnegative()
+        .optional()
+        .describe(
+          "USD cost the agent attributes to the run, e.g. 0.0123. Stored as Decimal(10,4).",
+        ),
+    }),
+    async run(
+      input: {
+        runId: string;
+        tokensIn?: number;
+        tokensOut?: number;
+        tokensCached?: number;
+        costUsd?: number;
+      },
+      ctx: McpContext,
+    ) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error(
+          "runs.recordUsage requires an API key with linkedAgentId set.",
+        );
+      }
+      const run = await db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        select: { id: true, agentId: true },
+      });
+      if (!run) throw new Error("AgentRun not found in this workspace.");
+      if (run.agentId !== linkedAgentId) {
+        throw new Error(
+          "AgentRun belongs to a different agent than the calling key.",
+        );
+      }
+      const data: Prisma.AgentRunUpdateInput = {};
+      if (input.tokensIn !== undefined) data.tokensIn = input.tokensIn;
+      if (input.tokensOut !== undefined) data.tokensOut = input.tokensOut;
+      if (input.tokensCached !== undefined) data.tokensCached = input.tokensCached;
+      if (input.costUsd !== undefined) data.costUsd = input.costUsd;
+      return db.agentRun.update({
+        where: { id: run.id },
+        data,
+        select: {
+          id: true,
+          tokensIn: true,
+          tokensOut: true,
+          tokensCached: true,
+          costUsd: true,
+        },
       });
     },
   },
