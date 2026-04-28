@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { PluginScope } from "@prisma/client";
+import { PluginScope, ApiKeyKind } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
 import { router, adminProcedure, workspaceProcedure } from "@/server/trpc";
 import { agentId as agentIdSchema } from "./agent";
@@ -125,6 +125,7 @@ export const accessRouter = router({
         id: true,
         name: true,
         prefix: true,
+        kind: true,
         scopes: true,
         projectIds: true,
         labelIds: true,
@@ -148,6 +149,9 @@ export const accessRouter = router({
         name: z.string().min(1).max(80),
         scopes: z.array(z.nativeEnum(PluginScope)).min(1),
         expiresInDays: z.number().int().min(1).max(365).optional(),
+        /// Optional override. If omitted: AGENT when linkedAgentId is set,
+        /// PERSONAL otherwise.
+        kind: z.nativeEnum(ApiKeyKind).optional(),
         ...narrowingInput,
       }),
     )
@@ -163,10 +167,13 @@ export const accessRouter = router({
         input.linkedAgentId,
       );
       const { raw, hashed, prefix } = generateApiKey();
+      const inferredKind: ApiKeyKind =
+        input.kind ?? (input.linkedAgentId ? "AGENT" : "PERSONAL");
       const row = await ctx.db.apiKey.create({
         data: {
           workspaceId: ctx.workspaceId,
           userId: ctx.session.user.id,
+          kind: inferredKind,
           name: input.name,
           hashedKey: hashed,
           prefix,
@@ -185,6 +192,7 @@ export const accessRouter = router({
         id: row.id,
         name: row.name,
         prefix: row.prefix,
+        kind: row.kind,
         scopes: row.scopes,
         projectIds: row.projectIds,
         labelIds: row.labelIds,
@@ -282,6 +290,92 @@ export const accessRouter = router({
     }),
 
   /**
+   * Create a user-owned personal access token (no agent link). Permanent
+   * until revoked. Suitable for local Claude Code sessions, scripts, or
+   * one-off integrations.
+   */
+  createPersonal: adminProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(80),
+        scopes: z.array(z.nativeEnum(PluginScope)).min(1),
+        projectIds: z.array(z.string().cuid()).default([]),
+        labelIds: z.array(z.string().cuid()).default([]),
+        initiativeIds: z.array(z.string().cuid()).default([]),
+        expiresInDays: z.number().int().min(1).max(365).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertIdsInWorkspace(ctx.db, ctx.workspaceId, {
+        projectIds: input.projectIds,
+        labelIds: input.labelIds,
+        initiativeIds: input.initiativeIds,
+      });
+      const { raw, hashed, prefix } = generateApiKey();
+      const row = await ctx.db.apiKey.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.session.user.id,
+          kind: "PERSONAL" as const,
+          name: input.name,
+          hashedKey: hashed,
+          prefix,
+          scopes: input.scopes,
+          projectIds: input.projectIds,
+          labelIds: input.labelIds,
+          initiativeIds: input.initiativeIds,
+          linkedAgentId: null,
+          expiresAt: input.expiresInDays
+            ? new Date(Date.now() + input.expiresInDays * 86_400_000)
+            : null,
+        },
+      });
+      return { ...row, rawKey: raw };
+    }),
+
+  /**
+   * Create a TTL-bounded session key. Expires automatically via `expiresAt`.
+   * Perfect for ephemeral sessions or one-off tasks.
+   */
+  createSession: adminProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(80),
+        scopes: z.array(z.nativeEnum(PluginScope)).min(1),
+        projectIds: z.array(z.string().cuid()).default([]),
+        labelIds: z.array(z.string().cuid()).default([]),
+        initiativeIds: z.array(z.string().cuid()).default([]),
+        ttlHours: z.number().int().min(1).max(168).default(24),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertIdsInWorkspace(ctx.db, ctx.workspaceId, {
+        projectIds: input.projectIds,
+        labelIds: input.labelIds,
+        initiativeIds: input.initiativeIds,
+      });
+      const { raw, hashed, prefix } = generateApiKey();
+      const expiresAt = new Date(Date.now() + input.ttlHours * 3_600_000);
+      const row = await ctx.db.apiKey.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.session.user.id,
+          kind: "SESSION" as const,
+          name: input.name,
+          hashedKey: hashed,
+          prefix,
+          scopes: input.scopes,
+          projectIds: input.projectIds,
+          labelIds: input.labelIds,
+          initiativeIds: input.initiativeIds,
+          linkedAgentId: null,
+          expiresAt,
+        },
+      });
+      return { ...row, rawKey: raw };
+    }),
+
+  /**
    * Rotate a key — revokes the existing row and issues a new one with the
    * same name + scopes + expiry window (if any). Returns the raw key once.
    * Consumers must update their stored credential.
@@ -302,6 +396,7 @@ export const accessRouter = router({
           data: {
             workspaceId: ctx.workspaceId,
             userId: prior.userId,
+            kind: prior.kind,
             name: prior.name,
             hashedKey: hashed,
             prefix,
@@ -325,6 +420,7 @@ export const accessRouter = router({
         id: next.id,
         name: next.name,
         prefix: next.prefix,
+        kind: next.kind,
         scopes: next.scopes,
         projectIds: next.projectIds,
         labelIds: next.labelIds,

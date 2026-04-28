@@ -210,6 +210,17 @@ enum AutoDispatchMode {
   CAPABILITY_MATCH
 }
 
+/// Classifies the intended use of an ApiKey. AGENT keys are tied to a
+/// registered persistent agent (linkedAgentId is set, full scopes).
+/// PERSONAL keys are user-owned with no agent link — read-only or scoped,
+/// permanent until revoked. SESSION keys are short-lived (TTL via
+/// expiresAt), narrow scope, and auto-purged.
+enum ApiKeyKind {
+  AGENT
+  PERSONAL
+  SESSION
+}
+
 /// Distinguishes a normal user/agent comment (BODY) from a single rolling
 /// "live status" comment per AgentRun (STATUS). STATUS comments are
 /// upserted via `comments.upsertStatus` and have a 1:1 link to the
@@ -936,6 +947,9 @@ model ApiKey {
   /// SHA-256 of the raw key. Raw key shown once at creation.
   hashedKey     String        @unique
   prefix        String
+  /// Classifies the intended use of this key (AGENT / PERSONAL / SESSION).
+  /// Default AGENT keeps backfill-safe for existing rows via migration.
+  kind          ApiKeyKind    @default(AGENT)
   scopes        PluginScope[]
   /// Optional narrowing: restrict this key to specific project ids.
   /// Empty array = no restriction.
