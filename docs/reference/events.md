@@ -34,6 +34,7 @@ what `subjectType` / `subjectId` it carries, and what the payload contains.
 | `ISSUE_STALLED`          | Stale-work watchdog fired                                              |
 | `AGENT_NOACK`            | Required-ack window elapsed without ack                                |
 | `ISSUE_SLA_BREACH`       | Per-issue SLA window elapsed                                           |
+| `CHAT_MESSAGE_POSTED`    | Chat message sent (role: USER or AGENT)                                |
 
 The `subjectType` / `subjectId` of each event identifies the primary
 entity:
@@ -48,6 +49,74 @@ entity:
   the agent is in the payload).
 - `MEMBERSHIP_*` → `subjectType: "membership"`.
 - `SKILL_INVOKED` / `PLUGIN_ERROR` → `subjectType: "plugin"`.
+- `CHAT_MESSAGE_POSTED` → two sub-channels; see below.
+
+## `CHAT_MESSAGE_POSTED`
+
+This event fires for both user and agent messages. It uses two different `subjectType`
+values that the SSE client discriminates on:
+
+### `subjectType: "chat-thread"` — persisted message
+
+Fires when a `ChatMessage` row is written (send or single-shot/finalized reply).
+
+```json
+{
+  "kind": "CHAT_MESSAGE_POSTED",
+  "subjectType": "chat-thread",
+  "subjectId": "<threadId>",
+  "payload": {
+    "threadId": "<threadId>",
+    "messageId": "<messageId>",
+    "agentId": "<agentId>",
+    "role": "USER",
+    "body": "Can you summarize AXI-31?",
+    "context": { "route": "/w/axiom/issues/AXI-31", "issueId": "iss_..." }
+  }
+}
+```
+
+For AGENT replies the `body` is the reply text; `context` is absent.
+`sourceRunId` is present when the agent linked the reply to an `AgentRun`.
+
+Agent dispatch (branch d in `src/server/audit.ts`) fires only when `role = "USER"` —
+a `WebhookDelivery` is enqueued to `agent:dispatch:{agentId}`. Agent replies do not
+trigger dispatch.
+
+### `subjectType: "chat-thread-stream"` — ephemeral streaming events
+
+Never persisted in `ActivityEvent`. Published Redis-only via `publish()` so the SSE
+client can render progressive deltas.
+
+```json
+// phase: started
+{
+  "kind": "CHAT_MESSAGE_POSTED",
+  "subjectType": "chat-thread-stream",
+  "payload": { "phase": "started", "threadId": "...", "agentId": "...", "draftId": "abc123" }
+}
+
+// phase: delta
+{
+  "payload": { "phase": "delta", "threadId": "...", "agentId": "...", "draftId": "abc123",
+               "delta": "Here's ", "seq": 0 }
+}
+
+// phase: finalized
+{
+  "payload": { "phase": "finalized", "threadId": "...", "agentId": "...",
+               "draftId": "abc123", "messageId": "msg_..." }
+}
+```
+
+The `draftId` carried through all three phases lets the client swap the draft bubble
+for the committed message row when `finalized` fires — no flicker, no duplication.
+
+::: warning
+`chat-thread-stream` events are best-effort SSE only. If the client reconnects during
+a streaming reply it will miss delta events. The `finalized` phase still persists the
+full `body` so the thread can be fully reconstructed from the DB after the fact.
+:::
 
 ## High-value payload shapes
 

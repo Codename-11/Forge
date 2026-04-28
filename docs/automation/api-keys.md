@@ -5,20 +5,37 @@ API keys carry coarse scope plus optional narrowing — and optionally a
 credential for everything outside the browser session: scripts, plugins,
 external services, and agent runtimes.
 
-## Two key types
+## `ApiKey.kind`
 
-Forge issues two kinds of keys, both with the same wire format and
-verification path:
+Every key has a `kind` that controls lifetime expectations and UI grouping. The
+wire format and auth path are identical for all kinds.
 
-- **Personal keys** — minted by a logged-in user from
-  `/w/<slug>/settings/api-keys`. Owned by that user, scoped to that user's
-  workspace membership. Use for one-off scripts, local dev, terminal access.
-- **Plugin keys** — minted under an approved plugin row via
-  `plugin.issueApiKey`. The requested scopes must be a subset of the
-  plugin's `manifest.scopes`. Use for production integrations.
+| Kind | Description | Typical use |
+|---|---|---|
+| `AGENT` | Linked to a specific agent via `linkedAgentId`. Permanent until revoked. | Hermes/runtime daemons, custom always-on bridges. |
+| `PERSONAL` | No agent link. Permanent until revoked. | Local Claude Code sessions, scripts, personal terminal access. |
+| `SESSION` | TTL-bounded via `expiresAt`. Auto-rejected after expiry. | Ephemeral Claude Code sessions, one-off Codex CLI runs. |
 
-Both kinds expose the same surface to consumers — the type matters only for
-ownership and display.
+`kind` is inferred automatically when using `access.create`: if `linkedAgentId` is
+provided, kind defaults to `AGENT`; otherwise `PERSONAL`. To create a session key,
+use `access.createSession` explicitly.
+
+::: tip
+Session keys are the right choice for anything you'd mint per-invocation. Set
+`ttlHours` (1–168) and let the key expire naturally rather than revoking it manually.
+:::
+
+## Two base key types
+
+Beyond `kind`, there is a structural distinction:
+
+- **Workspace keys** — minted from `/w/<slug>/settings/developer` (or via
+  `access.create*`). Owned by the creating user, scoped to that workspace. Covers
+  AGENT, PERSONAL, and SESSION kinds.
+- **Plugin keys** — minted under an approved plugin row via `plugin.issueApiKey`.
+  The requested scopes must be a subset of the plugin's `manifest.scopes`.
+
+Both expose the same wire surface to consumers.
 
 ## Format
 
@@ -204,6 +221,20 @@ curl -X POST https://forge.example/api/mcp/rpc \
     }
   }'
 ```
+
+## Creating keys programmatically
+
+Three tRPC mutations create workspace keys:
+
+- **`access.create`** — general-purpose. Pass `kind` explicitly or let it be
+  inferred from `linkedAgentId`. Accepts `expiresInDays` for optional TTL.
+- **`access.createPersonal`** — shorthand for `kind: PERSONAL` with no agent
+  link. Suitable for scripts and local dev access.
+- **`access.createSession`** — shorthand for `kind: SESSION` with a required
+  `ttlHours` (1–168, default 24). Auto-rejected after expiry.
+
+All three return `rawKey` in the response. Copy it immediately — the plaintext is
+shown exactly once and never stored.
 
 ## Practical advice
 
