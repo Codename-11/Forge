@@ -192,6 +192,17 @@ enum AgentRuntimeMode {
   EPHEMERAL
 }
 
+/// Where an agent runtime physically lives.
+///   LOCAL_DAEMON — `forge daemon` running on a user's machine, polls
+///                  Forge via SSE; no inbound webhook.
+///   REMOTE_HTTP  — webhook receiver (today's Hermes-style integration).
+///   CLOUD        — reserved for a future Forge-hosted runtime tier.
+enum RuntimeKind {
+  LOCAL_DAEMON
+  REMOTE_HTTP
+  CLOUD
+}
+
 /// Lifecycle of the AI triage suggestion attached to an issue at create
 /// time. Null = AI was disabled or skipped (agent-authored, etc.).
 enum AiTriageStatus {
@@ -298,6 +309,7 @@ model User {
   savedViews         SavedView[]
   timeEntries        TimeEntry[]
   chatThreads        ChatThread[]
+  runtimes           Runtime[]
 
   @@index([handle])
 }
@@ -454,6 +466,7 @@ model Workspace {
   agentRunEvents     AgentRunEvent[]
   chatThreads        ChatThread[]
   chatMessages       ChatMessage[]
+  runtimes           Runtime[]
 
   @@index([slug])
 }
@@ -1102,6 +1115,57 @@ model TimeEntry {
 }
 
 // ----------------------------------------------------------------------------
+// Runtimes (compute hosts for agents)
+// ----------------------------------------------------------------------------
+
+/// A runtime is the compute environment that hosts one or more agents.
+/// Distinct from `Agent` so the same agent identity can move between
+/// runtimes (e.g. a Hermes profile rehosted from one server to another).
+///
+/// LOCAL_DAEMON runtimes are registered by `forge daemon` on the user's
+/// machine and poll Forge over SSE; they don't expose an inbound URL.
+/// REMOTE_HTTP runtimes are the existing Hermes-style webhook receivers
+/// — `endpoint` carries the URL, `secret` the HMAC signing key.
+model Runtime {
+  id                 String          @id @default(cuid())
+  workspaceId        String
+  name               String
+  kind               RuntimeKind
+  /// Webhook URL for REMOTE_HTTP. Null for LOCAL_DAEMON (the daemon
+  /// polls Forge via SSE).
+  endpoint           String?
+  /// HMAC secret for outbound webhook signing (REMOTE_HTTP only).
+  secret             String?
+  /// Providers this runtime can host. For REMOTE_HTTP it's whatever the
+  /// operator declares; for LOCAL_DAEMON the daemon reports it from
+  /// PATH detection on registration + reconnect.
+  providersAvailable AgentProvider[] @default([])
+  /// Last successful runtime-level heartbeat. Distinct from per-agent
+  /// heartbeat: an idle runtime can be alive while no agent on it has
+  /// done anything recently.
+  heartbeatAt        DateTime?
+  /// Last connect time for LOCAL_DAEMON (when the SSE subscription
+  /// opened). Null for REMOTE_HTTP.
+  connectedAt        DateTime?
+  /// Optional auth-token-prefix for the daemon's `forge login` token.
+  /// Stored only for ops display; the underlying ApiKey row is the
+  /// source of truth.
+  ownerKeyPrefix     String?
+  /// User who registered this runtime.
+  ownerId            String?
+  archivedAt         DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  owner     User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  agents    Agent[]   @relation("AgentRuntime")
+
+  @@index([workspaceId, archivedAt])
+  @@index([ownerId])
+}
+
+// ----------------------------------------------------------------------------
 // Agents (MCP-first actors)
 // ----------------------------------------------------------------------------
 
@@ -1121,10 +1185,19 @@ model Agent {
   provider         AgentProvider    @default(HERMES)
   runtimeMode      AgentRuntimeMode @default(PERSISTENT)
   /// Outbound webhook for push dispatch (issue.assigned etc).
+  /// Legacy: kept in lockstep with `runtime.endpoint` for REMOTE_HTTP
+  /// runtimes during the Runtime-as-primitive transition. A future
+  /// migration will drop this column once Runtime is the sole source
+  /// of truth (and all dispatch code reads from `Runtime.endpoint`).
   webhookUrl       String?
   /// Optional HMAC secret for webhook signing; falls back to the
   /// workspace-level synthetic webhook secret when unset.
+  /// Legacy: see note on `webhookUrl` — slated for removal once
+  /// `Runtime.secret` is authoritative.
   webhookSecret    String?
+  /// Runtime that hosts this agent. Null = legacy / unbound. SetNull on
+  /// runtime delete so the agent row survives runtime churn.
+  runtimeId        String?
   /// Free-form capability tags (e.g. "ops", "research", "code-review").
   /// Consumed by `autoDispatchMode = CAPABILITY_MATCH`.
   capabilities     String[]         @default([])
@@ -1148,6 +1221,7 @@ model Agent {
   updatedAt        DateTime         @updatedAt
 
   workspace        Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runtime          Runtime?       @relation("AgentRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
   assignedIssues   Issue[]        @relation("IssueAssignedAgent")
   apiKeys          ApiKey[]       @relation("AgentApiKeys")
   authoredComments Comment[]      @relation("AgentAuthoredComments")
@@ -1157,6 +1231,7 @@ model Agent {
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
+  @@index([runtimeId])
 }
 
 /// Declarative routing layer consulted before the `AutoDispatchMode` logic
@@ -1224,6 +1299,17 @@ model AgentRun {
   /// Optional pointer at the AGENT_ASSIGNED ActivityEvent that triggered
   /// this run. Useful for ack-window reasoning later.
   assignmentEventId String?
+  /// Token-usage telemetry reported by the agent via `runs.recordUsage`.
+  /// Cumulative as reported — the latest call replaces the prior values
+  /// (idempotent), so agents should send running totals, not per-step
+  /// deltas. Null = agent did not report.
+  tokensIn          Int?
+  tokensOut         Int?
+  tokensCached      Int?
+  /// Cost the agent attributes to the run, in USD. Source-of-truth is
+  /// the agent's own pricing knowledge for v1; a server-side rate table
+  /// is a future cleanup.
+  costUsd           Decimal?       @db.Decimal(10, 4)
 
   workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue         Issue           @relation(fields: [issueId], references: [id], onDelete: Cascade)

@@ -79,7 +79,12 @@ export const agentRouter = router({
           ...(input.includeArchived ? {} : { archivedAt: null }),
         },
         orderBy: [{ status: "asc" }, { name: "asc" }],
-        include: { _count: { select: { assignedIssues: true } } },
+        include: {
+          _count: { select: { assignedIssues: true } },
+          runtime: {
+            select: { id: true, name: true, kind: true, heartbeatAt: true },
+          },
+        },
       }),
     ),
 
@@ -88,7 +93,12 @@ export const agentRouter = router({
     .query(async ({ ctx, input }) => {
       const agent = await ctx.db.agent.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
-        include: { _count: { select: { assignedIssues: true } } },
+        include: {
+          _count: { select: { assignedIssues: true } },
+          runtime: {
+            select: { id: true, name: true, kind: true, heartbeatAt: true },
+          },
+        },
       });
       if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
       return agent;
@@ -102,6 +112,17 @@ export const agentRouter = router({
           workspaceId_profileKey: {
             workspaceId: ctx.workspaceId,
             profileKey: input.profileKey,
+          },
+        },
+        include: {
+          runtime: {
+            select: {
+              id: true,
+              name: true,
+              kind: true,
+              heartbeatAt: true,
+              providersAvailable: true,
+            },
           },
         },
       }),
@@ -937,6 +958,191 @@ export const agentRouter = router({
           }),
         })),
         recent,
+      };
+    }),
+
+  /**
+   * Cross-source activity timeline for a single agent. Merges:
+   *
+   *   1. `Comment` rows authored by the agent (`authoringAgentId = agent.id`).
+   *   2. `ActivityEvent` rows whose payload.agentId matches the agent OR
+   *      whose subject is `agent` / `agent-run` for this agent. There is
+   *      no `actorApiKeyId` column on `ActivityEvent`, so the spec
+   *      ("originated by an ApiKey with linkedAgentId = agent.id") is
+   *      approximated via the `payload.agentId` convention used by every
+   *      MCP tool that records an event on an agent's behalf
+   *      (comments.create, comments.upsertStatus, agent-run open/event,
+   *      chat.appendMessage, etc.). Subsequent streams should keep
+   *      stamping `agentId` into payloads — that's the join key.
+   *   3. `AgentRunEvent` rows for any AgentRun owned by this agent.
+   *
+   * Each source is fetched independently with `before` / `limit`, then
+   * merged in JS and clipped back to `limit`. Pagination cursor is the
+   * timestamp of the last returned row — clients pass it back as
+   * `before` to fetch the next page. Equal-timestamp ties favour
+   * stability via a secondary id-DESC ordering inside each source.
+   */
+  unifiedTimeline: workspaceProcedure
+    .input(
+      z.object({
+        profileKey,
+        before: z.date().optional(),
+        limit: z.number().int().min(1).max(100).default(50),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const agent = await ctx.db.agent.findUnique({
+        where: {
+          workspaceId_profileKey: {
+            workspaceId: ctx.workspaceId,
+            profileKey: input.profileKey,
+          },
+        },
+        select: { id: true, profileKey: true, name: true, avatar: true },
+      });
+      if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const beforeFilter = input.before
+        ? { lt: input.before }
+        : undefined;
+
+      const [comments, events, runEvents] = await Promise.all([
+        // (1) Agent-authored comments.
+        ctx.db.comment.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            authoringAgentId: agent.id,
+            ...(beforeFilter ? { createdAt: beforeFilter } : {}),
+          },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: input.limit,
+          select: {
+            id: true,
+            issueId: true,
+            body: true,
+            kind: true,
+            currentStep: true,
+            createdAt: true,
+            issue: {
+              select: {
+                id: true,
+                number: true,
+                title: true,
+                workspace: { select: { key: true } },
+              },
+            },
+          },
+        }),
+        // (2) ActivityEvents touching this agent.
+        ctx.db.activityEvent.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            ...(beforeFilter ? { createdAt: beforeFilter } : {}),
+            OR: [
+              { subjectType: "agent", subjectId: agent.id },
+              {
+                subjectType: "agent-run",
+                payload: {
+                  path: ["agentId"],
+                  equals: agent.id,
+                } as Prisma.JsonFilter,
+              },
+              {
+                payload: {
+                  path: ["agentId"],
+                  equals: agent.id,
+                } as Prisma.JsonFilter,
+              },
+            ],
+          },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: input.limit,
+          select: {
+            id: true,
+            kind: true,
+            subjectType: true,
+            subjectId: true,
+            payload: true,
+            createdAt: true,
+            actor: { select: { id: true, name: true, image: true } },
+          },
+        }),
+        // (3) AgentRunEvents for any of the agent's runs.
+        ctx.db.agentRunEvent.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            run: { agentId: agent.id },
+            ...(beforeFilter ? { createdAt: beforeFilter } : {}),
+          },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: input.limit,
+          select: {
+            id: true,
+            runId: true,
+            kind: true,
+            payload: true,
+            createdAt: true,
+            run: {
+              select: {
+                id: true,
+                issueId: true,
+                currentStep: true,
+                status: true,
+                issue: {
+                  select: {
+                    id: true,
+                    number: true,
+                    title: true,
+                    workspace: { select: { key: true } },
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ]);
+
+      type Row =
+        | {
+            kind: "comment";
+            timestamp: Date;
+            payload: (typeof comments)[number];
+          }
+        | {
+            kind: "event";
+            timestamp: Date;
+            payload: (typeof events)[number];
+          }
+        | {
+            kind: "run-event";
+            timestamp: Date;
+            payload: (typeof runEvents)[number];
+          };
+
+      const merged: Row[] = [
+        ...comments.map(
+          (c): Row => ({ kind: "comment", timestamp: c.createdAt, payload: c }),
+        ),
+        ...events.map(
+          (e): Row => ({ kind: "event", timestamp: e.createdAt, payload: e }),
+        ),
+        ...runEvents.map(
+          (r): Row => ({
+            kind: "run-event",
+            timestamp: r.createdAt,
+            payload: r,
+          }),
+        ),
+      ].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+      const page = merged.slice(0, input.limit);
+      const nextBefore =
+        page.length === input.limit ? page[page.length - 1].timestamp : null;
+
+      return {
+        agent,
+        rows: page,
+        nextBefore,
       };
     }),
 });
