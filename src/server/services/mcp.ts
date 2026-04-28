@@ -2348,6 +2348,94 @@ export const mcpTools = {
       });
     },
   },
+
+  // --------------------------------------------------------------------- Chat
+  // Agent-side chat reply. Tied to the calling API key's linkedAgentId — the
+  // agent can only reply in threads where it is the addressee, mirroring
+  // the `chat.appendAgentMessage` tRPC mutation.
+  //
+  // Webhook flow: Forge fans out CHAT_MESSAGE_POSTED to the addressed
+  // agent's webhook. The agent processes the message, generates a reply,
+  // and calls this tool to commit it. Forge persists the reply, fans out
+  // CHAT_MESSAGE_POSTED with role=AGENT, and the client picks it up via
+  // realtime SSE — no separate streaming protocol needed for v1.
+  "chat.appendMessage": {
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({
+      threadId: z
+        .string()
+        .min(1)
+        .max(40)
+        .describe("ChatThread.id from the inbound webhook payload."),
+      body: z
+        .string()
+        .min(1)
+        .max(16_000)
+        .describe(
+          "Reply body. Markdown is rendered client-side; use fenced code blocks for code.",
+        ),
+      sourceRunId: z
+        .string()
+        .min(1)
+        .max(40)
+        .optional()
+        .describe(
+          "Optional AgentRun id to link the chat reply to a longer agent run for deep-linking.",
+        ),
+    }),
+    async run(
+      input: { threadId: string; body: string; sourceRunId?: string },
+      ctx: McpContext,
+    ) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error(
+          "chat.appendMessage requires an API key with linkedAgentId set.",
+        );
+      }
+      const thread = await db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId },
+        select: { id: true, agentId: true },
+      });
+      if (!thread) throw new Error("Chat thread not found in this workspace.");
+      if (thread.agentId !== linkedAgentId) {
+        throw new Error("Only the thread's agent may post replies.");
+      }
+      return db.$transaction(async (tx) => {
+        const message = await tx.chatMessage.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            threadId: thread.id,
+            role: "AGENT",
+            body: input.body,
+            sourceRunId: input.sourceRunId ?? null,
+          },
+        });
+        await tx.chatThread.update({
+          where: { id: thread.id },
+          data: { lastMessageAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: null,
+          entity: "ChatMessage",
+          entityId: message.id,
+          action: "create",
+          eventKind: EventKind.CHAT_MESSAGE_POSTED,
+          subjectType: "chat-thread",
+          subjectId: thread.id,
+          payload: {
+            threadId: thread.id,
+            messageId: message.id,
+            agentId: thread.agentId,
+            role: "AGENT",
+            sourceRunId: input.sourceRunId ?? null,
+          },
+        });
+        return { messageId: message.id, threadId: thread.id };
+      });
+    },
+  },
 } as const;
 
 export type McpToolName = keyof typeof mcpTools;
