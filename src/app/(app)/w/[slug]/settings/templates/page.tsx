@@ -1,277 +1,59 @@
 "use client";
-import { useState } from "react";
-import { toast } from "sonner";
-import { FileText } from "lucide-react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Topbar } from "@/components/topbar";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Dialog } from "@/components/ui/dialog";
-import { Confirm } from "@/components/ui/modal";
-import { Card } from "@/components/settings/card";
-import { EmptyState } from "@/components/settings/empty-state";
-import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
+import { IssueTemplatesPanel } from "./_issue-templates";
+import { ProjectTemplatesPanel } from "./_project-templates";
 
-const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
-type Priority = (typeof PRIORITIES)[number];
-
-type Form = {
-  id?: string;
-  name: string;
-  projectId: string;
-  titleTemplate: string;
-  descriptionTemplate: string;
-  defaultPriority: Priority;
-  labelIds: string[];
-};
-
-const empty: Form = {
-  name: "",
-  projectId: "",
-  titleTemplate: "",
-  descriptionTemplate: "",
-  defaultPriority: "NONE",
-  labelIds: [],
-};
+type TabKey = "issue" | "project";
 
 export default function TemplatesPage() {
-  const { data: templates, refetch } = trpc.template.list.useQuery();
-  const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
-  const { data: labels } = trpc.label.list.useQuery();
-  const [editing, setEditing] = useState<Form | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const tab: TabKey = searchParams.get("type") === "project" ? "project" : "issue";
 
-  const create = trpc.template.create.useMutation({
-    onSuccess: () => {
-      toast.success("Template created.");
-      refetch();
-      setEditing(null);
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const update = trpc.template.update.useMutation({
-    onSuccess: () => {
-      toast.success("Template saved.");
-      refetch();
-      setEditing(null);
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const remove = trpc.template.delete.useMutation({
-    onSuccess: () => {
-      toast.success("Template deleted.");
-      refetch();
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  const setTab = (next: TabKey) => {
+    const sp = new URLSearchParams(searchParams.toString());
+    if (next === "issue") sp.delete("type");
+    else sp.set("type", "project");
+    router.replace(`${pathname}${sp.toString() ? `?${sp.toString()}` : ""}`);
+  };
 
   return (
-    <>
+    <div className="flex min-h-0 flex-1 flex-col">
       <Topbar
-        title="Issue templates"
-        subtitle="Reusable starting points for new issues. Skip the blank page."
-        actions={
-          <Button variant="ember" size="sm" onClick={() => setEditing({ ...empty })}>
-            New template
-          </Button>
-        }
+        title="Templates"
+        subtitle="Reusable starting points for issues and projects."
       />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
-          <Card>
-            {(templates ?? []).map((t) => (
-              <li key={t.id} className="flex flex-wrap items-start gap-3 px-4 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{t.name}</span>
-                    <Badge>{t.defaultPriority}</Badge>
-                    {t.project && (
-                      <Badge color={t.project.color ?? undefined}>{t.project.key}</Badge>
-                    )}
-                  </div>
-                  <div className="mt-0.5 truncate text-[0.6875rem] text-muted-foreground">
-                    {t.titleTemplate}
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    setEditing({
-                      id: t.id,
-                      name: t.name,
-                      projectId: t.projectId ?? "",
-                      titleTemplate: t.titleTemplate,
-                      descriptionTemplate: t.descriptionTemplate ?? "",
-                      defaultPriority: t.defaultPriority as Priority,
-                      labelIds: t.labelIds,
-                    })
-                  }
-                >
-                  Edit
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setDeleteTarget({ id: t.id, name: t.name })}
-                >
-                  Delete
-                </Button>
-              </li>
-            ))}
-            {templates?.length === 0 && (
-              <EmptyState
-                icon={FileText}
-                title="No templates yet"
-                hint="Create one so new issues start with structure instead of a blank page."
-              />
-            )}
-          </Card>
-        </div>
-      </div>
-
-      <Dialog open={!!editing} onClose={() => setEditing(null)} className="max-w-xl">
-        {editing && (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!editing.name.trim() || !editing.titleTemplate.trim())
-                return toast.error("Name and title template required.");
-              const payload = {
-                name: editing.name.trim(),
-                projectId: editing.projectId || null,
-                titleTemplate: editing.titleTemplate.trim(),
-                descriptionTemplate: editing.descriptionTemplate.trim() || null,
-                defaultPriority: editing.defaultPriority,
-                labelIds: editing.labelIds,
-              };
-              if (editing.id) update.mutate({ id: editing.id, ...payload });
-              else create.mutate(payload);
-            }}
-            className="space-y-3 p-5"
-          >
-            <div className="text-sm font-semibold">
-              {editing.id ? "Edit template" : "New template"}
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Name</label>
-              <Input
-                value={editing.name}
-                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                autoFocus
-                placeholder="e.g. Bug report"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Title template</label>
-              <Input
-                value={editing.titleTemplate}
-                onChange={(e) => setEditing({ ...editing, titleTemplate: e.target.value })}
-                placeholder="Bug: …"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Description template</label>
-              <textarea
-                value={editing.descriptionTemplate}
-                onChange={(e) =>
-                  setEditing({ ...editing, descriptionTemplate: e.target.value })
-                }
-                rows={6}
-                className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
-                placeholder="## Steps to reproduce&#10;1. ...&#10;&#10;## Expected&#10;&#10;## Actual"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">Project</label>
-                <select
-                  value={editing.projectId}
-                  onChange={(e) => setEditing({ ...editing, projectId: e.target.value })}
-                  className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-                >
-                  <option value="">Any project</option>
-                  {projects?.items.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">Priority</label>
-                <select
-                  value={editing.defaultPriority}
-                  onChange={(e) =>
-                    setEditing({ ...editing, defaultPriority: e.target.value as Priority })
-                  }
-                  className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-                >
-                  {PRIORITIES.map((p) => (
-                    <option key={p}>{p}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Labels</label>
-              <div className="flex flex-wrap gap-1">
-                {(labels ?? []).map((l) => {
-                  const on = editing.labelIds.includes(l.id);
-                  return (
-                    <button
-                      key={l.id}
-                      type="button"
-                      onClick={() =>
-                        setEditing({
-                          ...editing,
-                          labelIds: on
-                            ? editing.labelIds.filter((x) => x !== l.id)
-                            : [...editing.labelIds, l.id],
-                        })
-                      }
-                      className={
-                        "focus-ring rounded-sm border px-1.5 py-0.5 text-[0.6875rem] " +
-                        (on ? "border-ember/50 bg-ember/10" : "border-transparent")
-                      }
-                    >
-                      <Badge color={l.color}>{l.name}</Badge>
-                    </button>
-                  );
-                })}
-                {labels?.length === 0 && (
-                  <span className="text-[0.6875rem] text-muted-foreground">
-                    Create labels in Settings → Labels.
-                  </span>
+      <div className="border-b border-border px-5 py-2">
+        <nav aria-label="Template type" className="flex gap-1">
+          {[
+            { key: "issue" as const, label: "Issue templates" },
+            { key: "project" as const, label: "Project templates" },
+          ].map((t) => {
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTab(t.key)}
+                className={cn(
+                  "focus-ring inline-flex h-7 items-center rounded-md px-2.5 text-[0.75rem] transition-colors",
+                  active
+                    ? "bg-subtle text-foreground"
+                    : "text-muted-foreground hover:bg-subtle/70 hover:text-foreground",
                 )}
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setEditing(null)}>
-                Cancel
-              </Button>
-              <Button type="submit" variant="ember" disabled={create.isPending || update.isPending}>
-                {editing.id ? "Save" : "Create"}
-              </Button>
-            </div>
-          </form>
-        )}
-      </Dialog>
-
-      <Confirm
-        open={!!deleteTarget}
-        onOpenChange={(v) => !v && setDeleteTarget(null)}
-        variant="destructive"
-        title={`Delete template "${deleteTarget?.name}"?`}
-        description="This action cannot be undone."
-        primaryLabel="Delete"
-        loading={remove.isPending}
-        onConfirm={async () => {
-          if (!deleteTarget) return;
-          await remove.mutateAsync({ id: deleteTarget.id });
-          setDeleteTarget(null);
-        }}
-      />
-    </>
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {tab === "issue" ? <IssueTemplatesPanel /> : <ProjectTemplatesPanel />}
+      </div>
+    </div>
   );
 }

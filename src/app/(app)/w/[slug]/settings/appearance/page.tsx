@@ -1,1 +1,4 @@
-export { default } from "../../../../settings/appearance/page";
+import { redirect } from "next/navigation";
+export default function Redirect() {
+  redirect("/settings/appearance");
+}
