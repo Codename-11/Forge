@@ -37,6 +37,8 @@ error shapes all flow from this router definition.
 | `template`        | `list`, `byId`, `create`, `update`, `delete` (issue templates)                                                   |
 | `projectTemplate` | `list`, `create`, `update`, `delete`                                                                             |
 | `agent`           | `list`, `byId`, `byProfileKey`, `create`, `update`, `archive`, `delete`, `testWebhook`, `heartbeat`, `pipeline`, `timeline`, `uptime`, `webhookHealth` |
+| `agentRun`        | `activeForIssue`, `events`, `activeAll`, `recentTerminal`, `heatmap`, `eventsInRange`, `recentEventCounts`, `coachDiagnosis`, `runsInRange`, `eta`, `abandon`, `redispatch`, `nudge` |
+| `chat`            | `threads`, `thread`, `send`, `appendAgentMessage`, `history`                                                     |
 | `event`           | `recent`, `unreadCount`                                                                                          |
 | `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                |
 | `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                      |
@@ -46,6 +48,8 @@ error shapes all flow from this router definition.
 | `relation`        | `add`, `remove`, `listForIssue`                                                                                  |
 | `time`            | `start`, `stop`, `log`, `list`, `summary`, `running`                                                             |
 | `attachment`      | `initUpload`, `finalize`, `list`, `getDownloadUrl`, `delete`                                                     |
+| `access`          | `list`, `create`, `update`, `revoke`, `delete`, `rotate`, `createPersonal`, `createSession`                      |
+| `integration`     | `list`, `byKind`, `applyToAgent`                                                                                 |
 
 ## Notable procedures
 
@@ -149,10 +153,65 @@ Cheap COUNT since `since` (defaults to 24 hours ago). The UI tracks
 unread badge cheap (a single indexed `COUNT(*)` per poll) and does not
 require a server-side read receipt model.
 
+### `chat.*`
+
+The chat router manages per-(workspace, user, agent) persistent threads.
+
+| Procedure | Type | Summary |
+|---|---|---|
+| `threads` | query | List the caller's threads with all agents. Returns up to 50, newest last-message first. |
+| `thread({ agentId })` | mutation | Upsert and open a thread. Returns `{ thread, agent, messages }` (last 50 messages). |
+| `send({ agentId, body, context? })` | mutation | Persist a USER message and trigger agent dispatch. `context` is the optional context snapshot (see [Chat](/agents/chat.html)). Returns `{ threadId, messageId }`. |
+| `appendAgentMessage({ threadId, body, sourceRunId? })` | mutation | Agent-only path. Requires the calling API key's `linkedAgentId` to match the thread's agent. Returns `{ messageId }`. |
+| `history({ threadId, before?, limit })` | query | Paginate older messages. `before` is a date cursor; `limit` max 100. Scoped to the caller's own threads. |
+
+### `agentRun.*` additions
+
+In addition to the original `activeForIssue`, `events`, `activeAll`, `recentTerminal`,
+and `heatmap` procedures, the following were added:
+
+| Procedure | Type | Summary |
+|---|---|---|
+| `recentEventCounts({ windowMinutes?, bucketSeconds? })` | query | Per-minute bucketed event counts for the activity sparkline in Mission Control. Default 30-minute window, 60-second buckets. |
+| `coachDiagnosis({ runId })` | query | Latest AI Coach comment for a run (or `null` when coaching is disabled). |
+| `runsInRange({ fromMinutesAgo?, limit? })` | query | All runs (active + terminal) overlapping a sliding window. Powers the swimlane/Gantt view. |
+| `eta({ runId })` | query | Predictive ETA based on median agent+label duration over the past 30 days. Returns `{ medianMs, sampleSize, etaMs }` or `null`. |
+| `eventsInRange({ from, to, limit? })` | query | `AgentRunEvent` rows in an explicit time range with run+agent+issue summary. Powers the timeline scrubber. |
+| `abandon({ runId, summary?, alsoUnassign? })` | mutation | Mark a run ABANDONED, optionally clear the issue assignment. |
+| `redispatch({ runId })` | mutation | Abandon the current run, re-queue the issue, and trigger auto-dispatch. |
+| `nudge({ runId, message? })` | mutation | Post a `@{profileKey} {message}` comment on the issue; the audit fan-out routes it to the agent's webhook. |
+
+### `access.*`
+
+Workspace API key management. Admin-gated for all mutations.
+
+| Procedure | Summary |
+|---|---|
+| `list` | List non-plugin keys for the workspace. |
+| `create` | Create a key with explicit `kind` (or infer from `linkedAgentId`). |
+| `createPersonal` | Shorthand for `kind: PERSONAL`. No agent link. Permanent until revoked. |
+| `createSession` | Shorthand for `kind: SESSION`. Requires `ttlHours` (1–168, default 24). Auto-expires. |
+| `update` | Edit name or narrowing arrays. Scopes and hash are immutable. |
+| `revoke` | Set `revokedAt`; immediately rejects all further calls. |
+| `delete` | Hard-delete a non-plugin key. |
+| `rotate` | Revoke and re-issue with the same name, scopes, and narrowing. Returns `rawKey` once. |
+
+### `integration.*`
+
+Read-only adapter manifest queries plus one mutation for tagging legacy agents.
+
+| Procedure | Summary |
+|---|---|
+| `list` | Return all adapter manifests merged with matching agents in this workspace. |
+| `byKind({ kind, presence? })` | Return one adapter manifest + its installed agents. `presence` disambiguates the two `CLAUDE` adapters. |
+| `applyToAgent({ agentId, kind, presence? })` | Stamp an existing agent with the adapter's `provider` and `defaultRuntimeMode`. |
+
 ## Cross-references
 
 - [/reference/mcp.html](/reference/mcp.html) — the agent-facing subset.
 - [/reference/events.html](/reference/events.html) — event kinds and
-  payloads consumed by `event.*` and `agent.timeline`.
+  payloads consumed by `event.*`, `agent.timeline`, and `chat.*`.
 - [/automation/api-keys.html](/automation/api-keys.html) — scopes that
   gate the MCP equivalents of these procedures.
+- [/agents/chat.html](/agents/chat.html) — chat surface documentation.
+- [/agents/integrations.html](/agents/integrations.html) — adapter manifest structure.

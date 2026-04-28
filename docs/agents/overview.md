@@ -231,3 +231,9 @@ they're prepended in front of the operator's actual content.
   agents drop, stall, or breach.
 - [AI Triage & Coach](/agents/ai-triage-and-coach.html) — the only first-party
   AI features, and where COACH-role agents come in.
+- [Chat](/agents/chat.html) — per-agent persistent chat threads, streaming replies,
+  and slash commands.
+- [Runtime Modes](/agents/runtime-modes.html) — PERSISTENT vs EPHEMERAL, heartbeat
+  sources, and the idle sweep.
+- [Integrations](/agents/integrations.html) — adapter manifests and key lifecycle
+  per runtime type.

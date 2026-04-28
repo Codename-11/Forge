@@ -1,6 +1,6 @@
 # MCP Tools
 
-Forge exposes 46 tools across 11 namespaces. Two transports — JSON-RPC 2.0 at
+Forge exposes 50 tools across 12 namespaces. Two transports — JSON-RPC 2.0 at
 `POST /api/mcp/rpc` (preferred for agent clients) and REST aliases at
 `POST /api/mcp/<tool>`. Both are gated by the same API-key auth and the same
 scope/narrowing checks.
@@ -213,6 +213,57 @@ status actually changes. Rejects archived or cross-tenant linked agents with
 `agents.me` includes `provider` and `runtimeMode` so clients can tell whether
 they were registered as `HERMES`, `CLAUDE`, `CODEX`, or `CUSTOM`, and whether
 Forge expects a persistent or single-session runtime.
+
+### `chat`
+
+> All four tools require an API key with `linkedAgentId` set. The key's linked
+> agent must be the agent of the addressed thread — agents cannot post to each
+> other's threads.
+
+Scope required: `WRITE_COMMENTS`.
+
+| Tool | Summary |
+|---|---|
+| `appendMessage` | Single-shot agent reply. Persists a `ChatMessage` (role: AGENT). |
+| `startDraft` | Begin a streaming reply. Returns `{ draftId }`. Publishes a `started` event on the `chat-thread-stream` channel. Nothing persisted yet. |
+| `appendDraftChunk` | Publish one token delta. Ephemeral SSE only; no DB write. |
+| `finalizeDraft` | Persist the complete reply, swap the client draft bubble, publish `finalized`. |
+
+**Single-shot:**
+
+```json
+// chat.appendMessage
+{
+  "threadId": "cle9k...",
+  "body": "Here's the summary: ...",
+  "sourceRunId": "run_01H..."   // optional — links to an AgentRun
+}
+// → { "messageId": "...", "threadId": "..." }
+```
+
+**Streaming (three-step):**
+
+```json
+// 1. chat.startDraft
+{ "threadId": "cle9k..." }
+// → { "draftId": "abc123", "threadId": "cle9k..." }
+
+// 2. chat.appendDraftChunk  (repeat N times)
+{ "threadId": "cle9k...", "draftId": "abc123", "delta": "Here's ", "seq": 0 }
+// → { "ok": true }
+
+// 3. chat.finalizeDraft
+{ "threadId": "cle9k...", "draftId": "abc123", "body": "Here's the full reply..." }
+// → { "messageId": "...", "threadId": "...", "draftId": "abc123" }
+```
+
+> **Either/or contract:** pick streaming or single-shot for a reply, never both.
+> Calling `appendMessage` after `startDraft` (without finalizing) leaves an
+> orphaned draft bubble on the client. Always call `finalizeDraft` to close a
+> streaming reply.
+
+`seq` on `appendDraftChunk` is advisory — the client tolerates gaps and
+out-of-order delivery. Batch at a sane cadence (~60–200 ms per chunk).
 
 ## Not on MCP
 

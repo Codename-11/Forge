@@ -263,6 +263,59 @@ the timestamp tolerance, and never log the secret. The constant-time compare
 matters; a naïve `===` leaks bytes.
 :::
 
+## Chat integration
+
+When a user sends a chat message addressed to a Hermes-backed agent, the flow is:
+
+1. Forge persists the `ChatMessage` (role: USER) and emits `CHAT_MESSAGE_POSTED`.
+2. `recordChange` (audit branch d in `src/server/audit.ts`) enqueues a
+   `WebhookDelivery` to `agent:dispatch:{agentId}`.
+3. The BullMQ worker resolves the synthetic URL to the agent's real `webhookUrl`
+   and POSTs the signed envelope.
+4. Hermes' `forge-dispatch` webhook handler receives the event, routes it to the
+   addressed profile, and runs the agent loop.
+5. If Hermes is wired to the Forge platform adapter
+   (`gateway/platforms/forge.py` in Bailey's fork at `~/.hermes/hermes-agent/`),
+   the response streams token-by-token:
+
+```
+Agent → chat.startDraft({ threadId })        → { draftId }
+Agent → chat.appendDraftChunk({ ..., delta }) → (repeat)
+Agent → chat.finalizeDraft({ ..., body })     → persisted ChatMessage
+```
+
+The client listens on the `chat-thread-stream` SSE channel and renders progressive
+deltas. When `finalizeDraft` fires, the draft bubble is swapped for the committed
+message without flicker (the `draftId` carries through for the swap).
+
+Agents that have not yet been wired to the platform adapter fall back to the single-shot
+path:
+
+```
+Agent → chat.appendMessage({ threadId, body }) → persisted ChatMessage
+```
+
+::: info Implementation note
+The Hermes chat integration relies on patches to Hermes core in Bailey's fork of
+NousResearch/hermes-agent at `~/.hermes/hermes-agent/`: specifically a `Platform` enum
+extension, `run.py` adapter-creation logic, and `webhook.py` re-stamp logic. The new
+platform adapter file (`gateway/platforms/forge.py`) is a clean addition. The core
+patches are specific to this fork and would need generalization before they could be
+contributed upstream. For internal Axiom-Labs use this is fine.
+:::
+
+See [Chat](/agents/chat.html) for the full chat surface documentation.
+
+## Presence (forge-presence skill)
+
+The `forge-presence` skill at `~/.hermes/skills/forge-presence/` provides cron-driven
+heartbeats for both the default Victor agent and installed profiles (Mizu, Mizuki, etc.).
+It calls `agents.heartbeat` via the MCP surface every minute, keeping `lastHeartbeatAt`
+fresh even when there are no active assignments.
+
+See [Runtime Modes](/agents/runtime-modes.html) for setup instructions and the full
+presence model.
+
 ## Cross-references
 
 - [Agents → Overview](/agents/overview.html) — model and lifecycle.
@@ -272,3 +325,5 @@ matters; a naïve `===` leaks bytes.
   and model selection.
 - [Concepts → Scopes & Tenancy](/concepts/scopes-and-tenancy.html) —
   `linkedAgentId` and the API key narrowing arrays.
+- [Chat](/agents/chat.html) — per-agent chat threads and the streaming reply path.
+- [Runtime Modes](/agents/runtime-modes.html) — PERSISTENT vs EPHEMERAL, forge-presence.

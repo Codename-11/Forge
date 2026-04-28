@@ -54,10 +54,17 @@ All tenant-scoped on `workspaceId`.
   cross-system handle (e.g. `victor`, `mizu`) and matches the Hermes
   profile directory name. Has `capabilities[]`, `webhookUrl` +
   `webhookSecret` for push dispatch, `status` (ONLINE/OFFLINE/BUSY),
-  `lastHeartbeatAt`, `maxConcurrent`. Issues point at an assigned agent
-  via `assignedAgentId` (independent of the human `claimedById`). ApiKeys
-  can point at an agent via `linkedAgentId` — so `issues.assigned` can
-  infer "my work" without the caller passing `profileKey`.
+  `lastHeartbeatAt`, `maxConcurrent`, `runtimeMode` (PERSISTENT |
+  EPHEMERAL), `provider` (HERMES | CLAUDE | CODEX | CUSTOM). Issues
+  point at an assigned agent via `assignedAgentId` (independent of the
+  human `claimedById`). ApiKeys can point at an agent via
+  `linkedAgentId` — so `issues.assigned` can infer "my work" without
+  the caller passing `profileKey`.
+- **ChatThread / ChatMessage** — per-(workspace, user, agent)
+  persistent chat surface. ChatMessages have `role` (USER | AGENT |
+  SYSTEM) and an optional `contextSnapshot` (route, slug, issueId,
+  pinnedRunIds, liveRunIds at send time). The Mission Control Chat
+  tab (chord 5) is the only consumer. See "Agent chat" below.
 
 ## Auto-dispatch
 
@@ -95,6 +102,66 @@ Mizu hold FULL scope and no narrowing; future sub-agents should be
 narrowed where possible (e.g., a per-initiative bot gets only that
 `initiativeId`). Set `linkedAgentId` on the key so `issues.assigned`
 can infer the agent without the caller supplying `profileKey`.
+
+`ApiKey.kind` (added 2026-04-27) splits keys by intent:
+- **AGENT** — linked via `linkedAgentId`, permanent until revoked.
+  Used by Hermes/runtime daemons.
+- **PERSONAL** — no agent link, permanent until revoked. For local
+  Claude Code, scripts, human personal access.
+- **SESSION** — TTL-bounded via `expiresAt`. Auto-purged when
+  expired. Created via `access.createSession({ ttlHours })`. For
+  ephemeral Claude Code sessions, one-off integrations.
+
+## Agent chat
+
+Per-(user, agent) chat threads accessible from Mission Control's
+Chat tab (chord 5). The send/reply path:
+
+1. Operator sends → `chat.send` mutation persists `ChatMessage` (role:
+   USER, includes `contextSnapshot`) and emits `CHAT_MESSAGE_POSTED`
+   (subjectType `chat-thread`).
+2. `audit.ts` fan-out branch (d) routes the event to the addressed
+   agent's `webhookUrl` via the per-agent dispatch shim — same
+   plumbing as comment @-mentions.
+3. The agent processes and replies via one of two MCP paths:
+   - **Single-shot:** `chat.appendMessage({ threadId, body })` — full
+     body in one call. Use when streaming isn't wired up.
+   - **Streaming:** `chat.startDraft({ threadId }) → { draftId }`,
+     then N × `chat.appendDraftChunk({ threadId, draftId, delta })`,
+     then `chat.finalizeDraft({ threadId, draftId, body })`. The
+     interim chunks publish on the `chat-thread-stream` Redis
+     channel (subjectType `chat-thread-stream`, payload.phase =
+     started | delta | finalized). Client renders progressive
+     deltas. Final body is persisted via the same flow as
+     single-shot, with `finalizedDraftId` in the payload so the
+     client swaps the draft bubble for the persisted message
+     without flicker.
+
+Slash commands in the composer (`src/lib/chat-slash-commands.ts`) are
+client-only: `/help`, `/clear`, `/info`, `/agents`, `/issue <KEY>`,
+`/status`. Local commands push a SYSTEM-role bubble to a transient
+`localMessages` array (cosmetic only, never persisted); prompt-dispatch
+commands transform input and call `sendM.mutate`.
+
+## Integrations / runtime adapters
+
+Static manifest at `src/server/integrations/adapters.ts` (NOT a Prisma
+table) keyed off the existing `AgentProvider` enum: HERMES, CLAUDE
+(twice — Code session and Desktop persistent), CODEX, CUSTOM. Each
+declares `defaultRuntimeMode`, `defaultKeyKind`, `presence` (daemon |
+session | remote-webhook), `setupMarkdown`, optional `mcpSnippet`.
+Powers `/settings/integrations` index page.
+
+The Hermes integration has a runtime-side companion skill at
+`~/.hermes/skills/forge-presence/` that calls Forge's MCP
+`agents.heartbeat` every minute via system cron. The new Forge
+platform adapter (also in `~/.hermes/hermes-agent/gateway/platforms/
+forge.py`, in Bailey's fork of NousResearch/hermes-agent) handles
+chat reply streaming via `chat.startDraft / appendDraftChunk /
+finalizeDraft`. Note: the platform adapter required a few core
+patches to Hermes (`Platform.FORGE` enum addition, `run.py` adapter
+creation, a `webhook.py` re-stamp block); these are clean inside our
+fork but are NOT yet upstream-mergeable.
 
 ## Conventions
 

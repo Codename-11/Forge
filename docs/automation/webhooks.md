@@ -36,6 +36,31 @@ credential — it is the only thing standing between your endpoint and a
 spoofed payload.
 :::
 
+## Event kinds
+
+For a full list of event kinds see [/reference/events.html](/reference/events.html). The
+agent-routed events that also trigger webhook delivery to the agent's `webhookUrl` are:
+
+| EventKind | When it fires | Agent dispatch |
+|---|---|---|
+| `AGENT_ASSIGNED` | Dispatcher or manual assignment | Yes — routed to assigned agent |
+| `ISSUE_QUEUED` | `queued` flips `true` | Yes — routed to assigned agent (if any) |
+| `COMMENT_CREATED` | New comment with agent @mention | Yes — per mentioned agent |
+| `ISSUE_PRIORITY_CHANGED` | Priority → HIGH or URGENT | Yes — routed to assigned agent |
+| `CHAT_MESSAGE_POSTED` | User sends a chat message | Yes — routed to addressed agent (USER role only; agent replies do not loop back) |
+
+### Chat dispatch (branch d)
+
+When a `CHAT_MESSAGE_POSTED` event fires with `subjectType = "chat-thread"` and
+`payload.role = "USER"`, `recordChange` in `src/server/audit.ts` enqueues a
+`WebhookDelivery` to the per-agent synthetic shim
+`agent:dispatch:{agentId}`. The worker resolves this to the agent's real `webhookUrl` at
+delivery time.
+
+Agent replies (`role = "AGENT"`) do not trigger dispatch — the event is still emitted
+and fans out to SSE subscribers, but no outbound webhook delivery is enqueued for the
+agent.
+
 ## Outbound envelope
 
 Every delivery is a single `POST` with a JSON body and three headers:

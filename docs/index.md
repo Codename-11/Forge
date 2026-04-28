@@ -41,10 +41,16 @@ features:
     details: Every row is workspaceId-scoped. API keys carry coarse scopes plus optional projectIds / labelIds / initiativeIds narrowing.
   - icon: ▤
     title: Plugins + MCP
-    details: 46 MCP tools across 11 namespaces. Hermes, Claude, Codex, and custom clients connect with scoped keys; plugins declare manifest scopes, expose skills, and subscribe to events via webhook or SSE.
+    details: 50 MCP tools across 12 namespaces. Hermes, Claude, Codex, and custom clients connect with scoped keys; plugins declare manifest scopes, expose skills, and subscribe to events via webhook or SSE.
   - icon: ◧
     title: Audit + activity
     details: Every mutation writes AuditLog and ActivityEvent in one transaction. Webhook delivery is durable; SSE fan-out is best-effort.
+  - icon: ◈
+    title: Agent chat + streaming
+    details: Per-agent persistent chat threads in Mission Control. Replies stream token-by-token via Redis pub/sub when the agent runtime supports it. Slash commands, markdown rendering, and context-grounded messages included.
+  - icon: ◉
+    title: Integrations
+    details: Five adapter manifests (Hermes, Claude Code, Claude Desktop, Codex CLI, Custom). AGENT / PERSONAL / SESSION key kinds match the right lifecycle to each runtime.
   - icon: ▢
     title: Warm, restrained UI
     details: Warm paper, graphite text, a single ember accent. Inter for prose, JetBrains Mono for identifiers. Dense but readable.

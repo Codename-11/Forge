@@ -2350,41 +2350,196 @@ Same session as scaffold (renamed Cairn → Forge first). Version bumped to `1.0
   (webhook delivery). Good candidate: a Hermes bridge that pushes events
   into `#hermes-agent` Discord.
 
-### 2026-04-27 — Mission Control chat: slash commands + streaming-draft bubble
+### 2026-04-27 — Agent chat, integrations, presence, nav refactor (full session)
 
-### Changes
+A long session that crossed the chat/agent surface end-to-end. Eleven
+commits landed; this entry covers the architectural arc rather than
+each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
+`d61cc03`, `29da50a`, `884aa8a`, `64fdbbd`, `104c75e`, `69a5659`.
 
-- Created `src/lib/chat-slash-commands.ts` — unchanged from pre-existing
-  stub (was already in place). The file has `SlashCommandContext`,
-  `SlashCommand`, `SLASH_COMMANDS` (`/help`, `/clear`, `/info`, `/agents`,
-  `/issue`, `/status`), `parseSlashCommand`, `matchSlashCommands`,
-  `isSlashInput`.
-- Updated `src/components/mission-control/chat-composer.tsx`:
-  - Added `slashContext?: SlashCommandContext` prop.
-  - Inline popover appears when `isSlashInput(body) && !body.includes(" ")`;
-    shows command name (mono) + description (muted). Arrow keys cycle
-    highlight, Enter/Tab accepts, Escape closes.
-  - Commands needing args (`/issue`) fill `/<name> ` and place cursor;
-    arg-less commands execute immediately.
-  - `submit()` intercepts slash commands before calling `onSend`.
-- Updated `src/components/mission-control/chat-thread.tsx`:
-  - Added `localMessages` state (`SYSTEM`-role cosmetic bubbles pushed by
-    slash commands; never hit the server).
-  - Built `slashContext` object wired to `appendLocal`, `clearLocal`, and
-    `handleSend`; passed to `ChatComposer`.
-  - Added `DraftBubble` state + SSE branch for `subjectType === "chat-thread-stream"`:
-    `started` creates the bubble, `delta` grows it, `finalized` sets a 800ms
-    timeout to clear it (persisted message replaces it naturally).
-  - `AgentDraftBubble` component: renders partial body through `<ChatMarkdown>`
-    with pulsing `▍` cursor; falls back to three-dot dots while body is empty.
-  - Draft bubble replaces the static `AgentThinkingBubble` while active — not
-    shown simultaneously.
-  - Auto-scroll now also triggers on `draft?.body` changes.
+### What shipped
+
+**Mission Control chat (`282ce7f`, polished through `69a5659`)**
+- `ChatThread` + `ChatMessage` Prisma models. Thread is unique per
+  `(workspaceId, userId, agentId)`. Migration `0016`.
+- New `chat` tRPC router: `threads`, `thread` (mutation, upserts),
+  `send`, `appendAgentMessage` (gated on `linkedAgentId`), `history`.
+- Chat tab in Mission Control (chord 5), three-pane: agent rail (left)
+  → thread (middle) → composer (bottom). Per-(user, agent) thread.
+- `ChatContextProvider` + `useChatContext` hook so pages can register
+  page-state (route, slug, issueId, selectedIds) into a context bundle
+  that ships with every send.
+- Audit fan-out branch (d) routes `CHAT_MESSAGE_POSTED` to the
+  addressed agent's `webhookUrl` via the per-agent dispatch shim —
+  same plumbing as comment @-mentions.
+
+**Chat reply streaming (`69a5659`)**
+- Three new MCP tools for stateless streaming drafts:
+  `chat.startDraft({ threadId }) → { draftId }`,
+  `chat.appendDraftChunk({ threadId, draftId, delta, seq? })`,
+  `chat.finalizeDraft({ threadId, draftId, body, sourceRunId? })`.
+- Drafts are NOT persisted. Deltas flow through Redis pub/sub on a
+  `chat-thread-stream` channel (subjectType discriminator, NOT a
+  real EventKind). Only the final body lands as a `ChatMessage` via
+  the existing fan-out path. Payload carries `finalizedDraftId` so
+  the client swaps the draft bubble for the persisted message
+  without flicker.
+- Single-shot `chat.appendMessage` (`64fdbbd`) stays as the fallback
+  for runtimes not yet wired to the streaming path.
+
+**Chat polish (`104c75e`)**
+- `chat-markdown.tsx` — hand-rolled lightweight markdown renderer
+  (no new deps; Forge had no markdown libs installed). Headings,
+  ordered/unordered lists, fenced code blocks with copy buttons,
+  inline bold/italic/code, auto-linkified URLs.
+- AGENT messages render through `<ChatMarkdown>`. USER and SYSTEM
+  stay plain `whitespace-pre-wrap`.
+- Thinking indicator: three staggered `animate-bounce` dots when
+  the latest message is USER and < 5min old. Stale hint after 60s.
+  Mutually exclusive with the streaming draft bubble.
+- Better empty thread state with example prompts.
+
+**Slash commands (`69a5659`)**
+- Pure-client registry at `src/lib/chat-slash-commands.ts` modeled
+  on `~/mission-control/lib/slash-commands.ts`.
+- `/help`, `/clear`, `/info`, `/agents`, `/issue <KEY>`, `/status`.
+- Inline popover above composer on `/`. Arrows cycle, Enter/Tab
+  accept, Escape closes. Args-needing commands fill `/<name> ` and
+  place cursor; arg-less execute immediately.
+- Local commands push a SYSTEM-role bubble to `localMessages` state
+  (cosmetic only, never persisted). Prompt-dispatch commands
+  (`/issue`, `/status`) transform input and call `sendM.mutate`.
+
+**Runtime mode honesty (`0515871`)**
+- `Agent.runtimeMode` (PERSISTENT | EPHEMERAL — already existed but
+  unused in UI) now surfaces in:
+  - Agents tab (sort + badge by mode + last-heartbeat).
+  - Chat header (mode badge + last-seen for offline persistent
+    agents).
+  - Chat composer (banner copy adapts: persistent-offline says
+    "queued, delivered on next heartbeat"; ephemeral says "session
+    — replies arrive on next session").
+  - Glance view (small p/s mono badge).
+- Mission Control Control tab (chord 6, OWNER/ADMIN only) — webhook
+  delivery queue with status filters, retry button, queue depth,
+  recent dispatches. Reads existing `admin.webhookDeliveries.list`
+  and `.retry`.
+
+**Access keys split (`0515871`)**
+- `ApiKeyKind` enum (AGENT | PERSONAL | SESSION). Migration `0017`
+  with backfill: existing rows get `AGENT` if `linkedAgentId` is
+  set, `PERSONAL` otherwise.
+- `access.createPersonal` and `access.createSession` (TTL-bounded)
+  mutations. Existing `access.create` infers kind from
+  `linkedAgentId` presence with optional override.
+- Settings → Access page reshaped into three sections (Registered
+  Agents, Personal Access Tokens, Session Keys) with separate
+  create flows, expiry badges, copy-once raw-key reveal.
+
+**Integrations adapter manifest (`0515871`)**
+- Static manifest at `src/server/integrations/adapters.ts` (NOT a
+  Prisma table — uses existing `AgentProvider` enum). Five
+  adapters: Hermes, Claude Code (session), Claude Desktop
+  (persistent), Codex CLI, Custom webhook. Each declares
+  `defaultRuntimeMode`, `defaultKeyKind`, `presence`,
+  `setupMarkdown`, optional `mcpSnippet`.
+- New `integration` tRPC router: `list`, `byKind`, `applyToAgent`.
+- `/settings/integrations` index page rendering each adapter as a
+  card with installed-agent badges and "Generate key" / "Manage
+  keys" links into the access page.
+
+**Hermes-side glue (out-of-repo, in `~/.hermes/`)**
+- `forge-presence` skill (`~/.hermes/skills/forge-presence/`):
+  `bin/heartbeat.sh <profile>` calls Forge's MCP `agents.heartbeat`;
+  `bin/setup.sh <profile>` installs a per-minute system crontab
+  entry. Supports both installed profile dirs
+  (`~/.hermes/profiles/<name>/forge.env`) AND the default agent at
+  `~/.hermes/forge.env` for Victor.
+- New `gateway/platforms/forge.py` platform adapter in the
+  hermes-agent fork. Uses `GatewayStreamConsumer` to call Forge's
+  draft-streaming MCP tools as tokens generate.
+- `~/.hermes/config.yaml` adds a `platforms.forge` block.
+- `~/.hermes/webhook_subscriptions.json` switches `deliver: "log"`
+  → `"forge"` with a new `forge_thread_id_path:
+  "payload.threadId"` field. Prompt template updated: agent no
+  longer calls `forge_chat_appendMessage` directly for chat events
+  (platform adapter handles delivery — avoids duplicate messages).
+- **Activation requires Hermes gateway restart.**
+- Custom-vs-official: the platform adapter file is a clean addition
+  using Hermes's `BasePlatformAdapter` extension point. The
+  `Platform.FORGE` enum addition + `run.py` adapter creation +
+  `webhook.py` re-stamp block ARE patches to Hermes core — internal
+  to Bailey's fork at `~/.hermes/hermes-agent/`, not yet
+  upstream-mergeable as-is.
+
+**Nav reorg (`d61cc03`)**
+- Sidebar: dropped "Admin" group entirely. New "Insights" group:
+  Analytics + Agents (Agents is a real surface now, not config).
+  Plugins + Admin portal removed from rail (live in Settings).
+- Settings navbar: dropped "Account" group from workspace scope
+  (account settings live ONLY at root `/settings/*` now, single
+  canonical home). Renamed "Developer" → "Integrations".
+- Templates merge: `/settings/templates` now renders a tabbed
+  parent (Issue templates / Project templates).
+  `/settings/project-templates` is a permanent redirect.
+- Duplicate-route cleanup: `/w/{slug}/settings/{account,appearance,
+  access,workspaces}` are now redirects to `/settings/*` so deep
+  links keep working but ambiguity is gone.
+
+### What I learned (write-down for future sessions)
+
+- **Prisma `cuid()` produces mixed v1 + 25-char hex IDs across
+  workspaces.** Zod's `.cuid()` only validates v1. All new id
+  inputs on routers should use `z.string().min(1).max(40)` matching
+  the pattern in `agentId` from the agent router. Fix in `eeb58ee`.
+- **The `/api/trpc/...` tRPC route does NOT honor `Authorization:
+  Bearer ...` for API key auth.** Only `/api/mcp/...` paths run
+  `authenticateApiKey()`. Runtime integrations should call MCP, not
+  tRPC, when authenticating with an API key.
+- **Forge already had a complete heartbeat sweep**
+  (`sweepIdleAgents` in `src/server/services/heartbeat.ts`) AND
+  auto-presence on webhook delivery (`recordAgentReachable`). The
+  gap was purely on the Hermes side: the runtime never called
+  `agent.heartbeat`. The `forge-presence` skill closes this with
+  one cron entry.
+- **MC's "streaming" was theatre.** `~/mission-control` passes
+  `stream: false` to Hermes, then wraps the full completion in a
+  single SSE chunk. So MC's chat is no faster/streamier than Forge's
+  was before this session. To get true token streaming we needed
+  to build Forge as a first-class Hermes platform adapter (Phase 3
+  of this work) — done modulo the Hermes restart.
 
 ### Verification
 
-- `pnpm typecheck` — clean.
-- `pnpm lint` (our files) — clean (pre-existing lint warnings unrelated).
+- `pnpm typecheck` — clean across all 11 commits.
+- `pnpm lint` — only pre-existing warnings in `issue-board.tsx`
+  (other team's code, unrelated to this session).
+- Smoke tests: Mizu and Victor both flipped ONLINE in real time
+  when forge-presence cron entries fired. Victor sent and received
+  a chat message end-to-end (single-shot path; the streaming path
+  needs the Hermes restart). MCP catalog includes all four chat
+  tools.
+- Migrations `0016_chat_thread_messages` and `0017_api_key_kind`
+  applied cleanly to the dev DB.
+
+### Known gaps / TODOs after this session
+
+- Hermes gateway needs `systemctl --user restart hermes-gateway` to
+  load the new `gateway/platforms/forge.py` adapter. Until then
+  chat uses the single-shot `chat.appendMessage` path; streaming is
+  built on the Forge side but not active end-to-end.
+- The `forge-dispatch` prompt template instructs the agent NOT to
+  call `forge_chat_appendMessage` (the platform adapter handles
+  delivery). If the agent ignores this and calls it anyway, you'll
+  see duplicate messages. Watch for this in early use; tighten the
+  prompt if needed.
+- Hermes-side `webhook_subscriptions.json` change is an additive
+  field (`forge_thread_id_path`) — vanilla NousResearch/hermes-agent
+  doesn't know about it. If you ever rebase the fork on upstream,
+  preserve this field.
+- The `Integration` adapter manifest has no UI to walk through the
+  full install flow yet — it just deep-links to `/settings/access`.
+  A guided wizard would be a nice follow-up.
 
 ## Known gaps / TODOs in code
 
