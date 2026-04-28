@@ -55,11 +55,29 @@ All tenant-scoped on `workspaceId`.
   profile directory name. Has `capabilities[]`, `webhookUrl` +
   `webhookSecret` for push dispatch, `status` (ONLINE/OFFLINE/BUSY),
   `lastHeartbeatAt`, `maxConcurrent`, `runtimeMode` (PERSISTENT |
-  EPHEMERAL), `provider` (HERMES | CLAUDE | CODEX | CUSTOM). Issues
-  point at an assigned agent via `assignedAgentId` (independent of the
-  human `claimedById`). ApiKeys can point at an agent via
-  `linkedAgentId` — so `issues.assigned` can infer "my work" without
-  the caller passing `profileKey`.
+  EPHEMERAL), `provider` (HERMES | CLAUDE | CODEX | CUSTOM), optional
+  `runtimeId` pointing at the host **Runtime**. Issues point at an
+  assigned agent via `assignedAgentId` (independent of the human
+  `claimedById`). ApiKeys can point at an agent via `linkedAgentId` —
+  so `issues.assigned` can infer "my work" without the caller passing
+  `profileKey`.
+- **Runtime** — the compute environment that hosts one or more agents
+  (added 2026-04-28, migration 0018). Distinct from `Agent.runtimeMode`
+  (which describes the agent's presence model). `kind` is
+  `LOCAL_DAEMON | REMOTE_HTTP | CLOUD`. `LOCAL_DAEMON` rows are
+  registered by the `forge` CLI's daemon via MCP `runtimes.register`;
+  `REMOTE_HTTP` wraps a webhook endpoint (Hermes-style). `heartbeatAt`
+  is bumped by the runtime itself (`runtimes.heartbeat` every 60s).
+  Existing webhook-bearing agents got a backfilled "(legacy webhook)"
+  REMOTE_HTTP runtime; `Agent.webhookUrl` / `webhookSecret` stay as
+  the source of truth for those rows until a future cleanup migration
+  makes Runtime authoritative.
+- **AgentRun** — execution record for an agent on an issue. Tracks
+  `currentStep`, status, and (since 2026-04-28) optional token usage
+  columns: `tokensIn`, `tokensOut`, `tokensCached`, `costUsd`. Agents
+  call `runs.recordUsage` once per finished step or at run completion;
+  the call is idempotent (replace, not add). Mission Control's RunRow
+  surfaces token counts as an `Xk tok` chip when populated.
 - **ChatThread / ChatMessage** — per-(workspace, user, agent)
   persistent chat surface. ChatMessages have `role` (USER | AGENT |
   SYSTEM) and an optional `contextSnapshot` (route, slug, issueId,
@@ -162,6 +180,43 @@ finalizeDraft`. Note: the platform adapter required a few core
 patches to Hermes (`Platform.FORGE` enum addition, `run.py` adapter
 creation, a `webhook.py` re-stamp block); these are clean inside our
 fork but are NOT yet upstream-mergeable.
+
+## `forge` CLI + local daemon
+
+`tools/forge-cli/` (own `package.json`, listed in `pnpm-workspace.yaml`
+which is gitignored — `pnpm install` from root populates both) ships a
+TypeScript ESM CLI:
+
+- `forge login --url --workspace --token` — writes
+  `~/.config/forge/auth.json` (mode 600). No OAuth device-code yet.
+- `forge whoami` — auth + linked agent + local runtime registration.
+- `forge daemon start [--fg] | stop | status` — auto-detects
+  `claude/codex/hermes/gemini/cursor-agent` on PATH, registers a
+  `LOCAL_DAEMON` Runtime via MCP `runtimes.register` (or restores a
+  cached id from `~/.config/forge/daemon.json`), opens
+  `/api/plugins/events` SSE, dispatches `CHAT_MESSAGE_POSTED` events
+  to `dispatch/claude-code.ts` (the only real adapter at v1), and
+  heartbeats every 60s.
+- `forge runtimes / agents / issues` — read-only, plus
+  `forge issue assign <key> <agent>`. The `runtimes` and `agents`
+  list commands fall back to local-only views since `runtimes.list`
+  / `agents.list` MCP tools aren't shipped.
+
+Build with `pnpm build:cli`. Run with `pnpm forge ...`. SSE endpoint is
+`/api/plugins/events` (NOT `/api/realtime` — that's session-cookie auth).
+MCP endpoint is `/api/mcp/rpc`.
+
+Claude adapter spawn:
+`claude --print --input-format stream-json --output-format stream-json
+--include-partial-messages --verbose --permission-mode bypassPermissions
+--append-system-prompt <chat-mode prompt>`. Override binary path with
+`FORGE_CLAUDE_BIN`. Missing binary → `[OFFLINE]` reply via
+`chat.finalizeDraft`, no crash.
+
+Known v1 gaps: chat dispatch sees only `{threadId, messageId, agentId,
+role}` from SSE; there's no `chat.getThread` MCP yet, so the prompt to
+the local CLI is a placeholder. AGENT_ASSIGNED handler stubs a
+placeholder comment.
 
 ## Conventions
 

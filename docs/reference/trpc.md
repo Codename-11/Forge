@@ -50,6 +50,7 @@ error shapes all flow from this router definition.
 | `attachment`      | `initUpload`, `finalize`, `list`, `getDownloadUrl`, `delete`                                                     |
 | `access`          | `list`, `create`, `update`, `revoke`, `delete`, `rotate`, `createPersonal`, `createSession`                      |
 | `integration`     | `list`, `byKind`, `applyToAgent`                                                                                 |
+| `runtime`         | `list`, `byId`, `register`, `heartbeat`, `archive`, `update`                                                     |
 
 ## Notable procedures
 
@@ -205,6 +206,44 @@ Read-only adapter manifest queries plus one mutation for tagging legacy agents.
 | `list` | Return all adapter manifests merged with matching agents in this workspace. |
 | `byKind({ kind, presence? })` | Return one adapter manifest + its installed agents. `presence` disambiguates the two `CLAUDE` adapters. |
 | `applyToAgent({ agentId, kind, presence? })` | Stamp an existing agent with the adapter's `provider` and `defaultRuntimeMode`. |
+
+### `runtime.*`
+
+CRUD for the `Runtime` primitive — the compute environment that hosts one
+or more agents. See [/agents/runtimes.html](/agents/runtimes.html) for the
+broader concept.
+
+| Procedure | Summary |
+|---|---|
+| `list` | All non-archived runtimes for the workspace, with `_count: { agents }` and `owner` summary. |
+| `byId({ id })` | Single runtime + its agents (id, name, profileKey, status, runtimeMode). |
+| `register` | Create a runtime. `{ name, kind, endpoint?, providersAvailable }`. Sets `ownerId` from session. Used by the `forge` daemon and by admins manually wiring a REMOTE_HTTP runtime. |
+| `heartbeat({ id })` | Bump `heartbeatAt`. The local daemon calls every 60s. |
+| `update({ id, name?, providersAvailable? })` | Edit metadata. Endpoint and secret are not editable post-creation (rotate by archive + re-register). |
+| `archive({ id })` | Soft-delete. Agents on the runtime keep their `runtimeId` but the runtime is hidden from the index. |
+
+### `agent.unifiedTimeline`
+
+Cursor-paginated merged timeline for a single agent — combines
+`Comment` rows authored by the agent, `ActivityEvent` rows about the
+agent, and `AgentRunEvent` rows for the agent's runs.
+
+```ts
+const page = await trpc.agent.unifiedTimeline.query({
+  profileKey: "victor",
+  before: undefined,
+  limit: 50,
+});
+// page.rows: Array<{ kind: "comment" | "event" | "run-event", timestamp: Date, payload: ... }>
+// page.nextBefore: Date | null
+```
+
+Cursor is `before` (lt on `createdAt`). Each source is fetched
+independently with `take: limit` and merged client-side; a returned
+page can be smaller than `limit` after the merge cuts off the trailing
+rows from the longest source. The `AgentTimeline` component handles
+this by gating "load more" on either `nextBefore == null` or zero new
+rows.
 
 ## Cross-references
 

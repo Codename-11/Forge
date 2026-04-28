@@ -2,6 +2,143 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-28 — Multica-inspired upgrades: Runtime + tokens + unified timeline + forge CLI
+
+Executed PLAN.md (committed cf7be7a) as four parallel streams: backend
+foundations (A), runtimes UI + token surfaces (B), unified agent
+timeline (C), and `forge` CLI + local daemon (D).
+
+### Changes
+
+- **Schema (migration 0018_runtime_and_token_usage):**
+  - New `RuntimeKind` enum and `Runtime` model with FKs to Workspace +
+    nullable `ownerId` on User. Carries `kind`, `endpoint?`, `secret?`,
+    `providersAvailable[]`, `heartbeatAt`, `connectedAt`, `archivedAt`.
+  - `Agent` gained nullable `runtimeId` + `runtime` relation
+    (`AgentRuntime`). `Agent.webhookUrl` / `webhookSecret` left in
+    place per plan; future cleanup migration will make Runtime
+    authoritative.
+  - `AgentRun` gained `tokensIn` / `tokensOut` / `tokensCached` /
+    `costUsd` (Decimal 10,4).
+  - Backfill: every Agent with a `webhookUrl` got a `(legacy webhook)`
+    REMOTE_HTTP runtime and `Agent.runtimeId` was set. On the dev DB
+    this touched 0 rows (no agents have webhookUrl set there); the SQL
+    is structurally correct for prod-style data.
+
+- **tRPC:**
+  - New `runtime.{list, byId, register, heartbeat, archive, update}`
+    router, registered on `_app.ts`.
+  - `agent.list` / `agent.byId` / `agent.byProfileKey` selects
+    extended to include `runtime { id, name, kind, heartbeatAt,
+    providersAvailable }`.
+  - New `agent.unifiedTimeline({ profileKey, before?, limit? })`
+    merges Comment, ActivityEvent, and AgentRunEvent rows for an
+    agent into a cursor-paginated timeline. Per-source fetch + merge
+    + slice; `nextBefore` is the cursor.
+
+- **MCP tools:**
+  - `runtimes.register({ name, kind, endpoint?, providersAvailable })`
+    — ADMIN-scoped. Sets `ownerId` from caller's `userId`.
+  - `runtimes.heartbeat({ runtimeId })` — ADMIN-scoped.
+  - `runs.recordUsage({ runId, tokensIn?, tokensOut?, tokensCached?,
+    costUsd? })` — WRITE_ISSUES-scoped. Validates `linkedAgentId`
+    matches the run's `agentId`. Idempotent (replace, not add).
+
+- **UI:**
+  - New `/settings/runtimes` index — card per runtime with kind badge,
+    providers, heartbeat (relative), owner, agent count. Rename via
+    `QuickForm`, archive via `Confirm`. Empty-state copy points
+    operators at `forge daemon start`.
+  - New `/settings/runtimes/[id]` detail — agents list +
+    "Connect a new daemon" recipe pane for empty `LOCAL_DAEMON` rows.
+  - Settings navbar gained a Runtimes link in the Integrations group.
+  - Agent detail page gained a small `RuntimeCard` (above webhook
+    health) with click-through to the runtime detail page.
+  - Agent detail page's "Recent activity" feed replaced with the new
+    `<AgentTimeline />` component — interleaves comment / event /
+    run-event rows. Manual cursor pagination because tRPC 11's
+    `useInfiniteQuery` requires a `cursor` field.
+  - Mission Control agents tab gained a `RuntimeChip` next to the
+    runtime-mode pill, click-through to runtime detail.
+  - Mission Control RunRow renders an `Xk tok` chip when AgentRun
+    token columns are populated. `agentRun.activeAll` already uses
+    `findMany` + `include` (not `select`), so token columns ride along
+    automatically — no router edit needed.
+
+- **`forge` CLI** (`tools/forge-cli/`, ESM TypeScript):
+  - Lives in a sub-package; root `pnpm-workspace.yaml` (gitignored)
+    includes it. Root scripts: `pnpm build:cli`, `pnpm forge`.
+  - Commands: `login`, `whoami`, `daemon {start|stop|status}`,
+    `runtimes/agents/issues` (read-only), `issue assign`.
+  - `forge daemon start` auto-detects
+    `claude/codex/hermes/gemini/cursor-agent` on PATH, registers (or
+    restores) a `LOCAL_DAEMON` Runtime, opens
+    `/api/plugins/events` SSE with bearer auth, heartbeats every 60s.
+  - Claude Code adapter (`dispatch/claude-code.ts`) spawns
+    `claude --print --input-format stream-json --output-format
+    stream-json --include-partial-messages --verbose
+    --permission-mode bypassPermissions
+    --append-system-prompt <chat-mode>`, parses
+    `content_block_delta` events, streams them through
+    `chat.startDraft / appendDraftChunk / finalizeDraft`. Override
+    binary path with `FORGE_CLAUDE_BIN`. Missing binary →
+    friendly `[OFFLINE]` reply.
+
+- **Docs:**
+  - New `docs/agents/runtimes.md` describing the Runtime primitive,
+    forge CLI/daemon flow, and v1 limitations.
+  - VitePress sidebar updated to surface the new page next to Hermes.
+  - `docs/reference/mcp.md` gained `runtimes` and `runs` namespaces;
+    namespace count bumped 12 → 14, tool count 50 → 53.
+  - `docs/reference/trpc.md` gained `runtime` to the catalog table
+    plus a notable section, and `agent.unifiedTimeline` got its own
+    notable section.
+
+- **Project context:**
+  - CLAUDE.md gained `Runtime` and `AgentRun` to the Primitives list,
+    plus an operational section on the `forge` CLI / local daemon.
+
+### Verification
+
+- `pnpm prisma migrate deploy` — clean (0018 applied; backfill ran;
+  touched 0 rows in dev DB because no agents had `webhookUrl`).
+- `pnpm prisma generate` — clean.
+- `pnpm typecheck` (root) — clean.
+- `pnpm build:cli` — produces `tools/forge-cli/dist/index.js`.
+- `node tools/forge-cli/dist/index.js --help` — usage prints fine.
+- Targeted `pnpm exec eslint` on all touched files — clean.
+- `pnpm lint` (full) — only pre-existing failures in
+  `src/components/issue-board.tsx` and
+  `src/components/mission-control/control-tab.tsx`.
+
+### Punted / known follow-ups
+
+- **`chat.getThread` MCP tool** — without it, the local daemon's chat
+  dispatch only sees the SSE event payload `{threadId, messageId,
+  agentId, role}`, not the message body. Adding the tool unlocks real
+  prompts to the local CLI. Currently the daemon sends a placeholder
+  prompt asking Claude to acknowledge.
+- **`runtimes.list` / `agents.list` MCP tools** — would let the CLI's
+  read-only commands work without falling back to local-only views.
+- **`AGENT_ASSIGNED` handler in the daemon** — stubbed; posts a
+  placeholder comment via `comments.create`. The full agent loop is a
+  follow-up.
+- **Mission Control RunTimeline context extension** (Stream C
+  optional deliverable) — skipped to avoid crossing into Stream B's
+  `RunRow` territory mid-stream. Cleanly punted; recommend a
+  `RunContextTimeline` wrapper component as follow-up.
+- **OAuth device-code flow for `forge login`** — v1 is prompt-or-flag
+  for token. Acceptable for the local-daemon-on-trusted-host case.
+- **Compiled CLI binary** — out of scope; ESM via Node only for v1.
+- **Provider adapters beyond Claude Code** — Codex, Gemini, Cursor
+  Agent stub a "[provider:X] not implemented" reply.
+- **Server-side cost rate table** — `costUsd` taken verbatim from the
+  agent. Future enhancement.
+- **`pnpm-workspace.yaml` is gitignored** — fresh clones must
+  reproduce the `tools/forge-cli` listing manually before
+  `pnpm install` picks it up. Either un-gitignore or have a script
+  manage it; deferred.
+
 ## 2026-04-27 — Restore historical Forge audit
 
 Restored the 2026-04-26 Forge cohesion/agentic/mobile audit markdown from

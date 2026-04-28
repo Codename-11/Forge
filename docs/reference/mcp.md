@@ -1,6 +1,6 @@
 # MCP Tools
 
-Forge exposes 50 tools across 12 namespaces. Two transports — JSON-RPC 2.0 at
+Forge exposes 53 tools across 14 namespaces. Two transports — JSON-RPC 2.0 at
 `POST /api/mcp/rpc` (preferred for agent clients) and REST aliases at
 `POST /api/mcp/<tool>`. Both are gated by the same API-key auth and the same
 scope/narrowing checks.
@@ -264,6 +264,33 @@ Scope required: `WRITE_COMMENTS`.
 
 `seq` on `appendDraftChunk` is advisory — the client tolerates gaps and
 out-of-order delivery. Batch at a sane cadence (~60–200 ms per chunk).
+
+### `runtimes`
+
+Scope required: `ADMIN`. Powers the `forge` CLI's local daemon registration
+and heartbeat loop. See [/agents/runtimes.html](/agents/runtimes.html) for
+the broader Runtime primitive.
+
+| Tool | Summary |
+|---|---|
+| `register` | Create (or restore) a Runtime row. `{ name, kind, endpoint?, providersAvailable }`. `ownerId` is set from the calling key's `userId`; AGENT-kind keys leave it null. |
+| `heartbeat` | Bump `Runtime.heartbeatAt`. `{ runtimeId }`. |
+
+**`register`** is intentionally not deduping server-side — the CLI caches
+its `runtimeId` in `~/.config/forge/daemon.json` and only re-registers if
+heartbeat returns a missing-row error.
+
+### `runs`
+
+Scope required: `WRITE_ISSUES`. The calling key must have `linkedAgentId`
+set, and the run's `agentId` must match.
+
+| Tool | Summary |
+|---|---|
+| `recordUsage` | Update token + cost columns on an `AgentRun`. `{ runId, tokensIn?, tokensOut?, tokensCached?, costUsd? }`. Idempotent — latest call replaces (cumulative as reported by the agent). |
+
+`costUsd` is taken verbatim from the agent for v1; a server-side
+rate table per model is a future enhancement.
 
 ## Not on MCP
 
