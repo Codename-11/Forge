@@ -5,13 +5,14 @@ import type { AgentStatus } from "@prisma/client";
 import {
   Activity,
   AlertTriangle,
-  ArrowRightLeft,
   Bot,
   ChevronLeft,
+  Cloud,
   ExternalLink,
+  Globe,
+  HardDrive,
   History,
-  Inbox,
-  MessageCircle,
+  Server,
   Settings2,
   UserCheck,
   Workflow,
@@ -22,6 +23,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, EmptyState, Section, SkeletonList } from "@/components/ui";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import AgentTimeline from "@/components/agents/agent-timeline";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -58,7 +60,7 @@ export default function AgentDetailPage() {
       utils.agent.byProfileKey.invalidate();
       utils.agent.uptime.invalidate();
       utils.agent.webhookHealth.invalidate();
-      utils.agent.timeline.invalidate();
+      utils.agent.unifiedTimeline.invalidate();
       utils.agent.pipeline.invalidate();
       utils.analytics.dispatch.summary.invalidate();
     },
@@ -138,11 +140,21 @@ export default function AgentDetailPage() {
                   <CurrentlyWorkingSection agentId={agent.id} />
                 </div>
                 <div className="space-y-4">
+                  <RuntimeCard agent={agent} />
                   <WebhookHealthCard agentId={agent.id} focus={healthFocus} />
                   <DispatchEligibilityCard agent={agent} focus={healthFocus} />
                 </div>
               </div>
-              <ActivitySection agentId={agent.id} />
+              <Section
+                title={
+                  <span className="flex items-center gap-2">
+                    <History className="h-3.5 w-3.5 text-muted-foreground" />
+                    Recent activity
+                  </span>
+                }
+              >
+                <AgentTimeline profileKey={agent.profileKey} />
+              </Section>
             </>
           )}
         </div>
@@ -770,6 +782,79 @@ function DeliveryStatusDot({
 
 // ---------------------------------------------------------------------------
 
+function RuntimeCard({ agent }: { agent: AgentRow }) {
+  const ws = useWorkspace();
+  const runtime = agent.runtime;
+  if (!runtime) return null;
+
+  const KindIcon =
+    runtime.kind === "LOCAL_DAEMON"
+      ? HardDrive
+      : runtime.kind === "REMOTE_HTTP"
+        ? Globe
+        : runtime.kind === "CLOUD"
+          ? Cloud
+          : Server;
+  const kindLabel =
+    runtime.kind === "LOCAL_DAEMON"
+      ? "local daemon"
+      : runtime.kind === "REMOTE_HTTP"
+        ? "remote webhook"
+        : "cloud";
+
+  return (
+    <Section
+      title={
+        <span className="flex items-center gap-2">
+          <Server className="h-3.5 w-3.5 text-muted-foreground" />
+          Runtime
+        </span>
+      }
+    >
+      <Card className="space-y-2 p-3 text-[0.75rem]">
+        <Link
+          href={`/w/${ws.slug}/settings/runtimes/${runtime.id}`}
+          className="focus-ring flex items-start gap-2 rounded-md hover:text-ember"
+        >
+          <KindIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium text-foreground">
+              {runtime.name}
+            </span>
+            <span className="block text-meta text-muted-foreground">
+              {kindLabel}
+            </span>
+          </span>
+          <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+        </Link>
+        <div className="flex items-baseline justify-between gap-3 text-meta text-muted-foreground">
+          <span>Heartbeat</span>
+          <span className="text-right text-foreground/80">
+            {runtime.heartbeatAt
+              ? `${relativeTime(runtime.heartbeatAt)} ago`
+              : "—"}
+          </span>
+        </div>
+        {runtime.providersAvailable.length > 0 && (
+          <div className="flex flex-wrap items-baseline justify-between gap-2 text-meta text-muted-foreground">
+            <span>Providers</span>
+            <span className="flex flex-wrap justify-end gap-1">
+              {runtime.providersAvailable.map((p) => (
+                <span
+                  key={p}
+                  className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+                >
+                  {p}
+                </span>
+              ))}
+            </span>
+          </div>
+        )}
+      </Card>
+    </Section>
+  );
+}
+
 function DispatchEligibilityCard({
   agent,
   focus,
@@ -879,270 +964,6 @@ function Row({
       <span className="text-right">{children}</span>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-
-function ActivitySection({ agentId }: { agentId: string }) {
-  const ws = useWorkspace();
-  const { data } = trpc.agent.timeline.useQuery({ agentId, limit: 30 });
-
-  return (
-    <Section
-      title={
-        <span className="flex items-center gap-2">
-          <History className="h-3.5 w-3.5 text-muted-foreground" />
-          Recent activity
-        </span>
-      }
-    >
-      {!data ? (
-        <SkeletonList rows={4} />
-      ) : data.events.length === 0 ? (
-        <EmptyState
-          variant="card"
-          icon={<History />}
-          title="No agent activity yet."
-        />
-      ) : (
-        <ul className="divide-y divide-border rounded-lg border border-border bg-card">
-          {data.events.map((e) => (
-            <li
-              key={e.id}
-              className="flex items-start gap-2 px-3 py-2 text-[0.75rem]"
-            >
-              <span className="mt-0.5 shrink-0">
-                <KindIcon kind={e.kind} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <EventSummary
-                  evt={e}
-                  slug={ws.slug}
-                  fallbackKey={ws.key}
-                />
-              </div>
-              <span className="shrink-0 text-meta text-muted-foreground">
-                {relativeTime(e.createdAt)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Section>
-  );
-}
-
-type TimelineEvent = RouterOutputs["agent"]["timeline"]["events"][number];
-
-function EventSummary({
-  evt,
-  slug,
-  fallbackKey,
-}: {
-  evt: TimelineEvent;
-  slug: string;
-  fallbackKey: string;
-}) {
-  const actor = evt.actor?.name ?? "system";
-  const issue = evt.issue;
-  const issueLink = issue ? (
-    <Link
-      href={`/w/${slug}/issues/${issue.id}`}
-      className="font-mono text-id text-muted-foreground hover:text-foreground hover:underline"
-    >
-      {formatIssueId(issue.workspace?.key ?? fallbackKey, issue.number)}
-    </Link>
-  ) : null;
-  let meta: React.ReactNode =
-    issue && evt.kind !== "AGENT_STATUS_CHANGED" ? issue.title : null;
-  const agentProfileKey =
-    evt.agent?.profileKey ??
-    readPayloadString(evt.payload, "agentProfileKey") ??
-    issue?.assignedAgent?.profileKey ??
-    null;
-  const agentHealthLink = agentProfileKey ? (
-    <Link
-      href={`/w/${slug}/agents/${encodeURIComponent(agentProfileKey)}?health=noack#dispatch-health`}
-      className="text-foreground hover:text-ember"
-    >
-      agent health
-    </Link>
-  ) : (
-    "agent health"
-  );
-
-  let headline: React.ReactNode = `${actor} · ${evt.kind}`;
-  switch (evt.kind) {
-    case "AGENT_ASSIGNED":
-      headline = (
-        <>
-          {actor} assigned {issueLink}
-          {evt.agent && (
-            <>
-              {" "}to{" "}
-              <span className="font-mono">@{evt.agent.profileKey}</span>
-            </>
-          )}
-        </>
-      );
-      break;
-    case "AGENT_STATUS_CHANGED":
-      headline = (
-        <>
-          {evt.agent?.name ?? actor} went{" "}
-          <span className="font-mono">{readPayloadString(evt.payload, "status") ?? "—"}</span>
-        </>
-      );
-      break;
-    case "AGENT_NOACK": {
-      const requiredAckSeconds = readPayloadNumber(
-        evt.payload,
-        "requiredAckSeconds",
-      );
-      headline = (
-        <>
-          Missed ack on {issueLink ?? "an issue"}
-          {agentProfileKey && (
-            <>
-              {" "}from <span className="font-mono">@{agentProfileKey}</span>
-            </>
-          )}
-        </>
-      );
-      meta = (
-        <>
-          Reason: no comment or status transition
-          {requiredAckSeconds != null ? ` within ${requiredAckSeconds}s` : ""}.
-          Recommended fix: check {agentHealthLink} and failed dispatch
-          deliveries.
-        </>
-      );
-      break;
-    }
-    case "ISSUE_STALLED": {
-      const slaMinutes = readPayloadNumber(evt.payload, "slaMinutes");
-      headline = (
-        <>
-          {issueLink ?? "An issue"} stalled
-          {agentProfileKey && (
-            <>
-              {" "}while assigned to{" "}
-              <span className="font-mono">@{agentProfileKey}</span>
-            </>
-          )}
-        </>
-      );
-      meta = (
-        <>
-          Reason: no movement
-          {slaMinutes != null ? ` inside the ${slaMinutes}m assignment SLA` : ""}.
-          Recommended fix: check latest status/comment and reassign if needed.
-        </>
-      );
-      break;
-    }
-    case "ISSUE_SLA_BREACH": {
-      const slaMinutes = readPayloadNumber(evt.payload, "slaMinutes");
-      const breachedByMinutes = readPayloadNumber(
-        evt.payload,
-        "breachedByMinutes",
-      );
-      headline = <>{issueLink ?? "An issue"} breached SLA</>;
-      meta = (
-        <>
-          Reason:{" "}
-          {breachedByMinutes != null
-            ? `${breachedByMinutes}m overdue`
-            : "past target"}
-          {slaMinutes != null ? ` against a ${slaMinutes}m SLA` : ""}.
-          Recommended fix: reprioritize, assign a clear owner, or escalate.
-        </>
-      );
-      break;
-    }
-    case "ISSUE_STATUS_CHANGED":
-      headline = (
-        <>
-          {actor} moved {issueLink}
-          {issue && (
-            <>
-              {" "}→{" "}
-              <span style={{ color: issue.status.color }}>
-                {issue.status.name}
-              </span>
-            </>
-          )}
-        </>
-      );
-      break;
-    case "ISSUE_QUEUED":
-      headline = (
-        <>
-          {actor} queued {issueLink} for an agent
-        </>
-      );
-      break;
-    case "COMMENT_CREATED":
-      headline = (
-        <>
-          {evt.agent ? (
-            <span className="font-mono">@{evt.agent.profileKey}</span>
-          ) : (
-            actor
-          )}{" "}
-          commented on {issueLink}
-        </>
-      );
-      break;
-  }
-
-  return (
-    <>
-      <div>{headline}</div>
-      {meta && (
-        <div className="line-clamp-2 text-meta text-muted-foreground">{meta}</div>
-      )}
-    </>
-  );
-}
-
-function KindIcon({ kind }: { kind: TimelineEvent["kind"] }) {
-  const cls = "h-3.5 w-3.5 text-muted-foreground";
-  switch (kind) {
-    case "AGENT_ASSIGNED":
-      return <UserCheck className={cls} />;
-    case "AGENT_NOACK":
-    case "ISSUE_STALLED":
-      return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
-    case "ISSUE_SLA_BREACH":
-      return <AlertTriangle className="h-3.5 w-3.5 text-danger" />;
-    case "AGENT_STATUS_CHANGED":
-      return <Activity className={cls} />;
-    case "AGENT_CREATED":
-    case "AGENT_UPDATED":
-    case "AGENT_DELETED":
-      return <Bot className={cls} />;
-    case "ISSUE_STATUS_CHANGED":
-      return <ArrowRightLeft className={cls} />;
-    case "ISSUE_QUEUED":
-      return <Inbox className={cls} />;
-    case "COMMENT_CREATED":
-      return <MessageCircle className={cls} />;
-    default:
-      return <History className={cls} />;
-  }
-}
-
-function readPayloadString(payload: unknown, key: string): string | null {
-  if (!payload || typeof payload !== "object") return null;
-  const v = (payload as Record<string, unknown>)[key];
-  return typeof v === "string" ? v : null;
-}
-
-function readPayloadNumber(payload: unknown, key: string): number | null {
-  if (!payload || typeof payload !== "object") return null;
-  const v = (payload as Record<string, unknown>)[key];
-  return typeof v === "number" && Number.isFinite(v) ? Math.round(v) : null;
 }
 
 // ---------------------------------------------------------------------------
