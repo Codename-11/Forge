@@ -29,7 +29,9 @@
     "docs:dev": "pnpm --dir docs --ignore-workspace dev",
     "docs:build": "pnpm --dir docs --ignore-workspace build",
     "docs:preview": "pnpm --dir docs --ignore-workspace preview",
-    "dev:all": "./scripts/dev-all.sh"
+    "dev:all": "./scripts/dev-all.sh",
+    "build:cli": "tsc -p tools/forge-cli",
+    "forge": "node tools/forge-cli/dist/index.js"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
