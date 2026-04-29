@@ -79,7 +79,17 @@ export default function RuntimeDetailPage() {
     onSuccess: () => {
       toast.success("Runtime archived.");
       void utils.runtime.list.invalidate();
+      void utils.runtime.byId.invalidate({ id });
       setArchiveOpen(false);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const unarchive = trpc.runtime.unarchive.useMutation({
+    onSuccess: () => {
+      toast.success("Runtime restored.");
+      void utils.runtime.list.invalidate();
+      void utils.runtime.byId.invalidate({ id });
     },
     onError: (e) => toast.error(e.message),
   });
@@ -117,13 +127,24 @@ export default function RuntimeDetailPage() {
               >
                 Rename
               </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setArchiveOpen(true)}
-              >
-                Archive
-              </Button>
+              {runtime.archivedAt ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => unarchive.mutate({ id })}
+                  disabled={unarchive.isPending}
+                >
+                  Unarchive
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setArchiveOpen(true)}
+                >
+                  Archive
+                </Button>
+              )}
             </>
           )
         }
@@ -134,6 +155,21 @@ export default function RuntimeDetailPage() {
             <SkeletonList rows={4} />
           ) : (
             <>
+              {runtime.archivedAt && (
+                <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-meta">
+                  <div className="font-medium text-foreground">
+                    This runtime is archived.
+                  </div>
+                  <div className="mt-0.5 text-muted-foreground">
+                    It is hidden from the active list and rejects
+                    heartbeats. Use{" "}
+                    <span className="font-medium text-foreground">
+                      Unarchive
+                    </span>{" "}
+                    in the toolbar to restore it.
+                  </div>
+                </div>
+              )}
               <Card as="div" className="divide-y-0 p-4">
                 <div className="flex flex-wrap items-start gap-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-border bg-subtle/50 text-foreground/80">

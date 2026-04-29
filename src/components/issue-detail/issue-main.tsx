@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
 import { usePasteUpload } from "@/components/attachments/use-paste-upload";
+import { useDropUpload } from "@/components/attachments/use-drop-upload";
+import { DropOverlay } from "@/components/attachments/drop-overlay";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 
@@ -94,19 +96,32 @@ function DescriptionBlock({
     value: draft,
     onChange: setDraft,
   });
+  const drop = useDropUpload({
+    targetType: "issue",
+    targetId: issueId,
+    value: draft,
+    onChange: setDraft,
+  });
 
   return (
     <section>
       <SectionLabel>Description</SectionLabel>
       {editing ? (
-        <div className="space-y-2">
+        <div
+          className="relative space-y-2"
+          onDragEnter={drop.onDragEnter}
+          onDragOver={drop.onDragOver}
+          onDragLeave={drop.onDragLeave}
+          onDrop={drop.onDrop}
+        >
+          <DropOverlay active={drop.isOver} label="Drop to attach to description" />
           <textarea
             autoFocus
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={paste.onPaste}
             rows={8}
-            placeholder="Description (Markdown-flavored). Paste screenshots to attach."
+            placeholder="Description (Markdown-flavored). Paste or drop files to attach."
             className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
           />
           <div className="flex gap-2">
@@ -176,6 +191,12 @@ function Comments({
     value: draft,
     onChange: setDraft,
   });
+  const drop = useDropUpload({
+    targetType: "issue",
+    targetId: issueId,
+    value: draft,
+    onChange: setDraft,
+  });
 
   // STATUS comments live separately from the chronological thread. We
   // surface the latest STATUS per-agent at the top so the issue page's
@@ -240,10 +261,15 @@ function Comments({
           if (!draft.trim()) return;
           createComment.mutate({ issueId, body: draft.trim() });
         }}
-        className="mt-4 space-y-2"
+        className="relative mt-4 space-y-2"
+        onDragEnter={drop.onDragEnter}
+        onDragOver={drop.onDragOver}
+        onDragLeave={drop.onDragLeave}
+        onDrop={drop.onDrop}
       >
+        <DropOverlay active={drop.isOver} label="Drop to attach to comment" />
         <textarea
-          placeholder="Leave a comment… (paste screenshots to attach)"
+          placeholder="Leave a comment… (paste or drop files to attach)"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onPaste={paste.onPaste}

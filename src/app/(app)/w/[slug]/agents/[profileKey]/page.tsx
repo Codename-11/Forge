@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Badge, Card, EmptyState, Section, SkeletonList } from "@/components/ui";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import AgentTimeline from "@/components/agents/agent-timeline";
+import { AgentContextCard } from "@/components/agents/agent-context-card";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -140,6 +141,7 @@ export default function AgentDetailPage() {
                   <CurrentlyWorkingSection agentId={agent.id} />
                 </div>
                 <div className="space-y-4">
+                  <AgentContextCard agentId={agent.id} />
                   <RuntimeCard agent={agent} />
                   <WebhookHealthCard agentId={agent.id} focus={healthFocus} />
                   <DispatchEligibilityCard agent={agent} focus={healthFocus} />
