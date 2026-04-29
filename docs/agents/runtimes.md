@@ -113,15 +113,20 @@ reply via `chat.finalizeDraft` — no daemon crash.
 
 ::: warning v1 limitations
 - Login takes URL + token directly (no OAuth device-code flow yet).
-- Chat dispatch fetches the message via SSE event payload only —
-  `chat.getThread` MCP isn't shipped, so the prompt to the local CLI
-  is a placeholder. Adding `chat.getThread` lets the daemon ground
-  on the actual user message.
+- Chat dispatch reads only `{threadId, messageId, agentId, role}`
+  from the SSE event payload, even though `chat.send` actually
+  publishes `body` and `context` too. Net effect: the local CLI gets
+  a placeholder prompt instead of the user's message. The fix is a
+  one-line widening of the typed payload in
+  `tools/forge-cli/src/daemon.ts`.
 - `AGENT_ASSIGNED` is a stub — the daemon logs the event and posts a
   placeholder comment. The full agent loop is a follow-up.
 - `runtimes.list` and `agents.list` MCP tools don't exist yet, so
   `forge runtimes list` and `forge agents list` fall back to local
   state and point the operator at the web UI.
+- `chat.getThread` MCP tool is not shipped. The single inbound chat
+  event is enough to reply to the *current* message, but the agent
+  has no way to read prior messages in the thread for grounding.
 :::
 
 ## Token usage on AgentRun
