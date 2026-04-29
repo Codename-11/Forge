@@ -113,11 +113,16 @@ timeline (C), and `forge` CLI + local daemon (D).
 
 ### Punted / known follow-ups
 
-- **`chat.getThread` MCP tool** — without it, the local daemon's chat
-  dispatch only sees the SSE event payload `{threadId, messageId,
-  agentId, role}`, not the message body. Adding the tool unlocks real
-  prompts to the local CLI. Currently the daemon sends a placeholder
-  prompt asking Claude to acknowledge.
+- **Stream D daemon is reading too narrow a slice of the chat SSE
+  payload.** `chat.send` actually publishes `{threadId, messageId,
+  agentId, role, body, context}` (see `src/server/routers/chat.ts:123`)
+  — the daemon's typed read in `tools/forge-cli/src/daemon.ts:256-258`
+  drops `body` and `context`, then the placeholder prompt is sent to
+  Claude. Fix is one-line: include `body` + `context` in the typed
+  payload and pass them through `handleChatDispatch`. A separate
+  `chat.getThread` MCP tool is still useful for *prior* messages /
+  thread history (the SSE event only carries the single new message),
+  but is no longer urgent for the basic dispatch path.
 - **`runtimes.list` / `agents.list` MCP tools** — would let the CLI's
   read-only commands work without falling back to local-only views.
 - **`AGENT_ASSIGNED` handler in the daemon** — stubbed; posts a
