@@ -1,41 +1,66 @@
 import chalk from "chalk";
 import { requireAuth } from "../auth.js";
-import { callTool, type AgentMe } from "../mcp.js";
+import { callTool } from "../mcp.js";
 
 /**
- * `forge agents list` — there's no `agents.list` MCP tool today, so we
- * can only reliably show the agent the calling key is linked to (via
- * agents.me). For the full workspace agent roster, the operator should
- * use the web UI at /w/<slug>/agents.
+ * `forge agents list` — backed by the `agents.list` MCP tool. Filterable
+ * by runtimeId for daemons enumerating their own roster. Adds a
+ * `--json` flag for piping into other tools.
  */
-export async function agentsListCommand(): Promise<void> {
-  const auth = await requireAuth();
-  const me = await callTool<AgentMe>(auth, "agents.me", {});
 
-  console.log(chalk.bold(`Agents (linked to this token)`));
-  console.log("");
-  if (me.isError || !me.data) {
-    console.log(
-      chalk.gray(
-        `  this token has no linkedAgentId. The web UI lists every agent in the workspace.`,
-      ),
-    );
-  } else {
-    const a = me.data;
-    console.log(`  ${chalk.cyan(a.profileKey.padEnd(16))} ${a.name}`);
-    console.log(
-      chalk.gray(
-        `    provider=${a.provider}  mode=${a.runtimeMode}  status=${a.status}`,
-      ),
-    );
-    if (a.capabilities?.length) {
-      console.log(chalk.gray(`    capabilities: ${a.capabilities.join(", ")}`));
-    }
+interface AgentRow {
+  id: string;
+  profileKey: string;
+  name: string;
+  status: string;
+  runtimeMode: string;
+  provider: string;
+  capabilities: string[];
+  archivedAt: string | null;
+  runtime: { id: string; name: string; kind: string } | null;
+}
+
+function pad(s: string, w: number): string {
+  if (s.length >= w) return s.slice(0, w);
+  return s + " ".repeat(w - s.length);
+}
+
+export async function agentsListCommand(opts: {
+  runtimeId?: string;
+  archived?: boolean;
+  json?: boolean;
+}): Promise<void> {
+  const auth = await requireAuth();
+  const r = await callTool<AgentRow[]>(auth, "agents.list", {
+    includeArchived: !!opts.archived,
+    ...(opts.runtimeId ? { runtimeId: opts.runtimeId } : {}),
+  });
+  if (r.isError) {
+    console.error(chalk.red(`agents.list failed: ${r.text}`));
+    process.exit(1);
   }
-  console.log("");
+  const rows = Array.isArray(r.data) ? r.data : [];
+
+  if (opts.json) {
+    console.log(JSON.stringify(rows, null, 2));
+    return;
+  }
+
   console.log(
-    chalk.gray(
-      `(For the full workspace roster, visit ${auth.url}/w/${auth.workspaceSlug}/agents — there is no agents.list MCP tool yet.)`,
+    chalk.bold(
+      `Agents (workspace=${auth.workspaceSlug}${opts.runtimeId ? `, runtime=${opts.runtimeId}` : ""})`,
     ),
   );
+  console.log("");
+  if (!rows.length) {
+    console.log(chalk.gray(`  (no agents)`));
+    return;
+  }
+  for (const a of rows) {
+    const runtime = a.runtime ? `${a.runtime.kind}:${a.runtime.name}` : "—";
+    const caps = a.capabilities?.length ? a.capabilities.join(",") : "—";
+    console.log(
+      `  ${chalk.cyan(pad(a.profileKey, 16))} ${pad(a.name, 24)} ${chalk.gray(pad(a.status, 8))} ${chalk.gray(pad(a.provider, 8))} ${chalk.gray(pad(a.runtimeMode, 12))} ${chalk.gray(`runtime=${runtime}`)}  ${chalk.gray(`caps=${caps}`)}`,
+    );
+  }
 }

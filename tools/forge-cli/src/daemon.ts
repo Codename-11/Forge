@@ -8,13 +8,28 @@ import chalk from "chalk";
 import { configDir, requireAuth, type AuthFile } from "./auth.js";
 import { callTool, type AgentMe } from "./mcp.js";
 import { dispatchChat, type AgentProviderId } from "./dispatch/index.js";
+import {
+  inlineAttachments,
+  loadIssueBundle,
+  loadMessageAttachments,
+  loadThreadBundle,
+} from "./dispatch/context.js";
+import {
+  handleAgentAssigned,
+  type AgentAssignedEvent,
+  type AgentAssignedPayload,
+} from "./dispatch/issue-loop.js";
+import type {
+  ChatMessageHistoryRow,
+  IssueBundle,
+} from "./dispatch/types.js";
 
 /**
  * Local daemon. Detects available agent CLIs, registers a Runtime in
  * Forge, opens an SSE subscription on `/api/plugins/events` (the
  * API-key-authed realtime stream — `/api/realtime` is session-only),
- * heartbeats every 60s, and routes inbound CHAT_MESSAGE_POSTED events
- * for the linked agent into the Claude Code adapter.
+ * heartbeats every 60s, and routes inbound CHAT_MESSAGE_POSTED + AGENT_ASSIGNED
+ * events for the linked agent into the matching adapter.
  *
  * State files (mode 600) live under ~/.config/forge/:
  *   - auth.json    — server URL + bearer token + workspace slug.
@@ -24,6 +39,8 @@ import { dispatchChat, type AgentProviderId } from "./dispatch/index.js";
  */
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
+/** Cap for the in-memory dedupe set of recently-handled event ids. */
+const SEEN_EVENT_LIMIT = 256;
 
 const DETECTABLE_CLIS: Array<{ bin: string; provider: AgentProviderId }> = [
   { bin: "claude", provider: "CLAUDE" },
@@ -149,8 +166,50 @@ interface RealtimeEvent {
   type?: string; // for the synthetic "ready" event
 }
 
+/** Widened typed view of the chat-message SSE payload. */
+interface ChatMessagePostedPayload {
+  threadId?: string;
+  messageId?: string;
+  agentId?: string;
+  role?: string;
+  body?: string;
+  context?: {
+    route?: string;
+    slug?: string;
+    issueId?: string;
+    selectedIds?: string[];
+    pinnedRunIds?: string[];
+    liveRunIds?: string[];
+  };
+  /** Stream-channel events carry phase; the persisted-message events do not. */
+  phase?: "started" | "delta" | "finalized";
+}
+
 function describeEvent(evt: RealtimeEvent): string {
   return `${evt.kind} ${evt.subjectType ?? ""}${evt.subjectId ? `#${evt.subjectId}` : ""}`;
+}
+
+/**
+ * Bounded LRU-ish set for recently-handled event ids. We track these
+ * to make AGENT_ASSIGNED handling idempotent against delivery retries.
+ */
+class SeenEvents {
+  private set = new Set<string>();
+  private order: string[] = [];
+
+  has(id: string): boolean {
+    return this.set.has(id);
+  }
+
+  add(id: string): void {
+    if (this.set.has(id)) return;
+    this.set.add(id);
+    this.order.push(id);
+    if (this.order.length > SEEN_EVENT_LIMIT) {
+      const drop = this.order.shift();
+      if (drop) this.set.delete(drop);
+    }
+  }
 }
 
 async function runDaemon(opts: { foreground: boolean }) {
@@ -182,6 +241,8 @@ async function runDaemon(opts: { foreground: boolean }) {
       ),
     );
   }
+
+  const seenEvents = new SeenEvents();
 
   // PID file (foreground only writes if requested too — `stop` works
   // either way).
@@ -227,7 +288,7 @@ async function runDaemon(opts: { foreground: boolean }) {
   es.onerror = (err) => {
     console.error(chalk.yellow("SSE error:"), err);
   };
-  es.onmessage = async (ev: MessageEvent) => {
+  es.onmessage = (ev: MessageEvent) => {
     let data: RealtimeEvent;
     try {
       data = JSON.parse(String(ev.data)) as RealtimeEvent;
@@ -242,9 +303,7 @@ async function runDaemon(opts: { foreground: boolean }) {
     }
 
     // Filter: events targeted at this runtime (payload.runtimeId match)
-    // OR chat events for the agent we're linked to. We don't yet know
-    // which arbitrary agents on this runtime exist (no list MCP), so
-    // chat dispatch is gated on agents.me.
+    // OR chat events for the agent we're linked to.
     const payloadRuntime = (data.payload as { runtimeId?: string } | undefined)
       ?.runtimeId;
     const targetsThisRuntime = payloadRuntime === runtimeId;
@@ -253,26 +312,52 @@ async function runDaemon(opts: { foreground: boolean }) {
       data.kind === "CHAT_MESSAGE_POSTED" &&
       data.subjectType === "chat-thread"
     ) {
-      const payload = data.payload as
-        | { agentId?: string; role?: string; threadId?: string }
-        | undefined;
+      const payload = (data.payload ?? {}) as ChatMessagePostedPayload;
       if (
-        payload?.role === "USER" &&
-        payload?.agentId &&
+        payload.role === "USER" &&
+        payload.agentId &&
         linkedAgent &&
         payload.agentId === linkedAgent.id
       ) {
-        await handleChatDispatch(auth, linkedAgent, payload, opts.foreground);
+        // Async dispatch — don't block the SSE handler.
+        void handleChatDispatch(auth, linkedAgent, payload, opts.foreground);
       }
       return;
     }
 
     if (data.kind === "AGENT_ASSIGNED") {
-      const payload = data.payload as
-        | { agentId?: string; previousAgentId?: string | null }
-        | undefined;
-      if (linkedAgent && payload?.agentId === linkedAgent.id) {
-        await handleAgentAssigned(auth, data, linkedAgent, opts.foreground);
+      const payload = (data.payload ?? {}) as AgentAssignedPayload;
+      if (linkedAgent && payload.agentId === linkedAgent.id) {
+        // Idempotence — same event id should fire once.
+        const eventId = data.id;
+        if (eventId) {
+          if (seenEvents.has(eventId)) {
+            if (opts.foreground) {
+              console.log(
+                chalk.gray(
+                  `  AGENT_ASSIGNED ${eventId} already handled; skipping retry`,
+                ),
+              );
+            }
+            return;
+          }
+          seenEvents.add(eventId);
+        }
+        const evt: AgentAssignedEvent = {
+          id: data.id,
+          workspaceId: data.workspaceId,
+          kind: data.kind,
+          subjectType: data.subjectType,
+          subjectId: data.subjectId,
+          payload,
+        };
+        // Async dispatch — keeps heartbeat / next-event handling alive.
+        void handleAgentAssigned({
+          auth,
+          agent: linkedAgent,
+          evt,
+          foreground: opts.foreground,
+        });
       } else if (targetsThisRuntime) {
         // For runtimes hosting multiple agents we can extend this; v1
         // only has the linked-agent path.
@@ -298,28 +383,78 @@ async function runDaemon(opts: { foreground: boolean }) {
 async function handleChatDispatch(
   auth: AuthFile,
   agent: AgentMe,
-  payload: { agentId?: string; role?: string; threadId?: string; messageId?: string },
+  payload: ChatMessagePostedPayload,
   foreground: boolean,
 ) {
   if (!payload.threadId) return;
+  const userMessage = payload.body ?? "";
+  if (!userMessage) {
+    if (foreground) {
+      console.warn(
+        chalk.yellow(
+          `  chat dispatch skipped: payload had no body (threadId=${payload.threadId})`,
+        ),
+      );
+    }
+    return;
+  }
   if (foreground) {
     console.log(
       chalk.cyan(`  → dispatching chat to ${agent.profileKey} (${agent.provider})`),
     );
   }
-  // We need the user message body. The SSE event currently only carries
-  // metadata (threadId, messageId, agentId) — the body is in the
-  // ChatMessage row. We can fetch it via... hmm, there's no
-  // chat.getMessage MCP tool. For v1 we send a minimal placeholder
-  // describing the prompt + suggesting the user re-prompts via the
-  // chat UI if they need richer context. Future: add a chat.getThread
-  // MCP tool.
-  //
-  // For now, we use the messageId in the prompt so the agent knows
-  // which message it's replying to and can hint to the operator.
-  const userMessage = payload.messageId
-    ? `(Forge daemon received chat dispatch for message ${payload.messageId}. The local daemon does not yet fetch message bodies — please ensure your message body is available via chat.getThread when that MCP tool ships, or paste the prompt into the issue if Claude needs the full text.)\n\nRespond with a brief acknowledgement so the operator knows the daemon path is alive.`
-    : "Forge daemon dispatched a chat message but no body was provided. Reply briefly.";
+
+  // Bundle thread context (history + workspace + linked-issue stub).
+  const bundle = await loadThreadBundle(auth, payload.threadId);
+  let threadHistory: ChatMessageHistoryRow[] = [];
+  let issueContext: IssueBundle | null = null;
+  if (bundle) {
+    // Bundle gives us newest-first; cap to ~30 for prompt budget.
+    threadHistory = (bundle.messages ?? []).slice(0, 30).filter((m) => {
+      // Drop the just-arrived message — we pass it as `userMessage` separately.
+      return m.id !== payload.messageId;
+    });
+  }
+
+  // If the user pinned an issue in their context snapshot, fetch the
+  // full issue bundle so Claude has it as system context.
+  if (payload.context?.issueId) {
+    issueContext = await loadIssueBundle(auth, payload.context.issueId);
+  }
+
+  // Inline image/PDF/text attachments — both on the linked issue (if any)
+  // and on recent chat messages in the thread.
+  const inlineRows: Array<{
+    id: string;
+    mimeType: string;
+    filename?: string | null;
+    sizeBytes?: number | null;
+  }> = [];
+  if (issueContext?.attachments?.length) {
+    for (const a of issueContext.attachments) {
+      const row = a as unknown as {
+        id: string;
+        mimeType: string;
+        filename?: string | null;
+        sizeBytes?: number | null;
+      };
+      inlineRows.push(row);
+    }
+  }
+  // Chat-message attachments — fetch via attachments.list per recent
+  // message id (capped to last 10 to stay in budget).
+  if (threadHistory.length) {
+    const recentIds = threadHistory.slice(0, 10).map((m) => m.id);
+    const chatAtt = await loadMessageAttachments(auth, recentIds);
+    inlineRows.push(...chatAtt);
+  }
+  // Also try the inbound message itself — the user may have attached
+  // images to the message we're responding to.
+  if (payload.messageId) {
+    const inbound = await loadMessageAttachments(auth, [payload.messageId]);
+    inlineRows.push(...inbound);
+  }
+  const attachments = await inlineAttachments(auth, inlineRows);
 
   await dispatchChat({
     auth,
@@ -332,33 +467,10 @@ async function handleChatDispatch(
     },
     userMessage,
     workspaceSlug: auth.workspaceSlug,
+    threadHistory,
+    issueContext,
+    attachments,
   });
-}
-
-async function handleAgentAssigned(
-  auth: AuthFile,
-  evt: RealtimeEvent,
-  agent: AgentMe,
-  foreground: boolean,
-) {
-  const issueId = evt.subjectId;
-  if (!issueId) return;
-  if (foreground) {
-    console.log(
-      chalk.cyan(`  → AGENT_ASSIGNED for ${agent.profileKey} on issue ${issueId}`),
-    );
-  }
-  // v1 stub: drop a placeholder comment so the operator knows the
-  // daemon picked up the assignment. Full agent loop (spawn claude,
-  // iterate, post progress comments, recordUsage) is a future stream.
-  try {
-    await callTool(auth, "comments.create", {
-      issueId,
-      body: `[forge-cli local daemon] Picked up assignment on ${os.hostname()}. The full agent work loop is not yet implemented in this daemon — please dispatch via Hermes or work this issue manually for now.`,
-    });
-  } catch (err) {
-    console.error(`[daemon] comments.create failed:`, err);
-  }
 }
 
 // ---------------------------------------------------------------- Commands

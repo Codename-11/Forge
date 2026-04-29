@@ -96,12 +96,14 @@ daemon
 // ---------------------------------------------------------------- listing
 const runtimes = program
   .command("runtimes")
-  .description("Runtime listing (best-effort; no runtimes.list MCP tool yet).");
+  .description("Runtime listing — backed by `runtimes.list` MCP.");
 runtimes
   .command("list")
-  .action(async () => {
+  .option("--json", "emit raw JSON instead of a table")
+  .option("--archived", "include archived runtimes")
+  .action(async (opts) => {
     try {
-      await runtimesListCommand();
+      await runtimesListCommand(opts);
     } catch (err) {
       console.error(chalk.red(err instanceof Error ? err.message : String(err)));
       process.exit(1);
@@ -110,12 +112,19 @@ runtimes
 
 const agents = program
   .command("agents")
-  .description("Agent listing (best-effort; no agents.list MCP tool yet).");
+  .description("Agent listing — backed by `agents.list` MCP.");
 agents
   .command("list")
-  .action(async () => {
+  .option("--json", "emit raw JSON instead of a table")
+  .option("--archived", "include archived agents")
+  .option("--runtime <id>", "filter to a single runtime")
+  .action(async (opts) => {
     try {
-      await agentsListCommand();
+      await agentsListCommand({
+        json: opts.json,
+        archived: opts.archived,
+        runtimeId: opts.runtime,
+      });
     } catch (err) {
       console.error(chalk.red(err instanceof Error ? err.message : String(err)));
       process.exit(1);
