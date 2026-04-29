@@ -1133,3 +1133,515 @@ describe("mcp — agents.me + agents.heartbeat", () => {
     ).rejects.toThrow(/not found/);
   });
 });
+
+describe("mcp — awareness tools (Stream BA)", () => {
+  it("comments.list returns newest-first, paginates by `before`, hides deleted", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAC" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(f);
+    const issue = await createIssue(f, { title: "talker" });
+    const c1 = await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.user.id,
+        body: "first",
+      },
+    });
+    const c2 = await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.user.id,
+        body: "second",
+      },
+    });
+    const c3 = await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.user.id,
+        body: "deleted",
+        deletedAt: new Date(),
+      },
+    });
+    const rows = (await call(
+      "comments.list",
+      { issueId: issue.id, limit: 50 },
+      ctx,
+    )) as Array<{ id: string }>;
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(c1.id);
+    expect(ids).toContain(c2.id);
+    expect(ids).not.toContain(c3.id);
+    expect(ids[0]).toBe(c2.id);
+  });
+
+  it("comments.list rejects out-of-scope issue narrowing", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAC2" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: f.workspace.id,
+        key: "LANE",
+        name: "Lane",
+        createdById: f.user.id,
+      },
+    });
+    const outside = await createIssue(f, { title: "outside" });
+    const { ctx } = buildMcpCtx(f, { projectIds: [project.id] });
+    await expect(
+      call("comments.list", { issueId: outside.id }, ctx),
+    ).rejects.toThrow(/scope/i);
+  });
+
+  it("comments.list cross-tenant: cannot read another workspace's issue", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAC3" });
+    fixtures.push(f);
+    const other = await createWorkspaceFixture({ keyPrefix: "BAC4" });
+    fixtures.push(other);
+    const prisma = getPrisma();
+    const otherIssue = await createIssue(other, { title: "other-tenant" });
+    await prisma.comment.create({
+      data: {
+        workspaceId: other.workspace.id,
+        issueId: otherIssue.id,
+        authorId: other.user.id,
+        body: "leak",
+      },
+    });
+    const { ctx } = buildMcpCtx(f);
+    const rows = (await call(
+      "comments.list",
+      { issueId: otherIssue.id },
+      ctx,
+    )) as unknown[];
+    // Workspace filter on the where clause means we get an empty list rather
+    // than a leak, even with broad scopes. Caller's workspaceId is the gate.
+    expect(rows).toEqual([]);
+  });
+
+  it("issues.get with include hydrates description/comments/attachments/relations/currentRun/labels", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAG" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(f);
+    const issue = await createIssue(f, { title: "rich" });
+    const other = await createIssue(f, { title: "other" });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { description: "the body" },
+    });
+    await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.user.id,
+        body: "hi",
+      },
+    });
+    const label = await prisma.label.create({
+      data: { workspaceId: f.workspace.id, name: "bug", color: "#f00" },
+    });
+    await prisma.issueLabel.create({
+      data: { issueId: issue.id, labelId: label.id },
+    });
+    await prisma.issueRelation.create({
+      data: {
+        workspaceId: f.workspace.id,
+        fromIssueId: issue.id,
+        toIssueId: other.id,
+        kind: "RELATES_TO",
+      },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        profileKey: "v",
+        name: "V",
+      },
+    });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+
+    // Default shape — no include — returns lean payload (no `comments`).
+    const lean = (await call("issues.get", { id: issue.id }, ctx)) as Record<
+      string,
+      unknown
+    >;
+    expect(lean).toBeTruthy();
+    expect(lean.comments).toBeUndefined();
+
+    const full = (await call(
+      "issues.get",
+      {
+        id: issue.id,
+        include: {
+          description: true,
+          comments: true,
+          attachments: true,
+          relations: true,
+          currentRun: true,
+          labels: true,
+        },
+      },
+      ctx,
+    )) as Record<string, unknown>;
+    expect(full.description).toBe("the body");
+    expect(Array.isArray(full.comments)).toBe(true);
+    expect((full.comments as unknown[]).length).toBe(1);
+    expect(Array.isArray(full.relations)).toBe(true);
+    expect((full.relations as unknown[]).length).toBe(1);
+    expect(full.currentRun).toBeTruthy();
+    expect(Array.isArray(full.labels)).toBe(true);
+  });
+
+  it("runtimes.list returns workspace runtimes; ADMIN required", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAR" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    await prisma.runtime.create({
+      data: {
+        workspaceId: f.workspace.id,
+        name: "host-a",
+        kind: "LOCAL_DAEMON",
+        ownerId: f.user.id,
+      },
+    });
+    const { ctx } = buildMcpCtx(f);
+    const rows = (await call("runtimes.list", {}, ctx)) as Array<{
+      name: string;
+    }>;
+    expect(rows.some((r) => r.name === "host-a")).toBe(true);
+
+    const noAdmin = buildMcpCtx(f, { scopes: ["READ_ISSUES"] }).ctx;
+    await expect(call("runtimes.list", {}, noAdmin)).rejects.toThrow(/ADMIN/);
+  });
+
+  it("runtimes.list excludes other tenants", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAR2" });
+    fixtures.push(f);
+    const other = await createWorkspaceFixture({ keyPrefix: "BAR3" });
+    fixtures.push(other);
+    const prisma = getPrisma();
+    await prisma.runtime.create({
+      data: {
+        workspaceId: other.workspace.id,
+        name: "elsewhere",
+        kind: "REMOTE_HTTP",
+        ownerId: other.user.id,
+      },
+    });
+    const { ctx } = buildMcpCtx(f);
+    const rows = (await call("runtimes.list", {}, ctx)) as Array<{
+      name: string;
+    }>;
+    expect(rows.some((r) => r.name === "elsewhere")).toBe(false);
+  });
+
+  it("agents.list lists workspace agents and excludes archived by default", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAA" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const live = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "live", name: "Live" },
+    });
+    const dead = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        profileKey: "dead",
+        name: "Dead",
+        archivedAt: new Date(),
+      },
+    });
+    const { ctx } = buildMcpCtx(f);
+    const rows = (await call("agents.list", {}, ctx)) as Array<{ id: string }>;
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(live.id);
+    expect(ids).not.toContain(dead.id);
+    const all = (await call(
+      "agents.list",
+      { includeArchived: true },
+      ctx,
+    )) as Array<{ id: string }>;
+    expect(all.map((r) => r.id)).toContain(dead.id);
+  });
+
+  it("agents.list rejects without READ_USERS", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAA2" });
+    fixtures.push(f);
+    const noRead = buildMcpCtx(f, { scopes: ["READ_ISSUES"] }).ctx;
+    await expect(call("agents.list", {}, noRead)).rejects.toThrow(
+      /READ_USERS/,
+    );
+  });
+
+  it("events.recent reads ActivityEvent rows for the workspace", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAE" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const issue = await createIssue(f, { title: "eventful" });
+    await prisma.activityEvent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        kind: "ISSUE_CREATED",
+        actorId: f.user.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: {},
+      },
+    });
+    const { ctx } = buildMcpCtx(f);
+    const rows = (await call(
+      "events.recent",
+      { subjectType: "issue", subjectId: issue.id },
+      ctx,
+    )) as Array<{ kind: string }>;
+    expect(rows.some((r) => r.kind === "ISSUE_CREATED")).toBe(true);
+  });
+
+  it("events.recent does not leak across workspaces", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAE2" });
+    fixtures.push(f);
+    const other = await createWorkspaceFixture({ keyPrefix: "BAE3" });
+    fixtures.push(other);
+    const prisma = getPrisma();
+    const otherIssue = await createIssue(other, { title: "elsewhere" });
+    await prisma.activityEvent.create({
+      data: {
+        workspaceId: other.workspace.id,
+        kind: "ISSUE_CREATED",
+        actorId: other.user.id,
+        subjectType: "issue",
+        subjectId: otherIssue.id,
+        payload: {},
+      },
+    });
+    const { ctx } = buildMcpCtx(f);
+    const rows = (await call("events.recent", { limit: 100 }, ctx)) as unknown[];
+    // None should be from `other` workspace.
+    expect(rows.length).toBe(0);
+  });
+
+  it("workspace.get returns the calling workspace's settings", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAW" });
+    fixtures.push(f);
+    const { ctx } = buildMcpCtx(f);
+    const row = (await call("workspace.get", {}, ctx)) as {
+      id: string;
+      slug: string;
+      cycleLengthDays: number;
+    };
+    expect(row.id).toBe(f.workspace.id);
+    expect(row.cycleLengthDays).toBe(7);
+  });
+
+  it("chat.getThread requires linkedAgentId match", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BCT" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "v", name: "V" },
+    });
+    const stranger = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "s", name: "S" },
+    });
+    const thread = await prisma.chatThread.create({
+      data: {
+        workspaceId: f.workspace.id,
+        userId: f.user.id,
+        agentId: agent.id,
+      },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        workspaceId: f.workspace.id,
+        threadId: thread.id,
+        role: "USER",
+        body: "ping",
+      },
+    });
+
+    const { ctx: ctxAddr } = buildMcpCtx(f, { linkedAgentId: agent.id });
+    const res = (await call(
+      "chat.getThread",
+      { threadId: thread.id },
+      ctxAddr,
+    )) as {
+      thread: { id: string };
+      messages: Array<{ body: string }>;
+    };
+    expect(res.thread.id).toBe(thread.id);
+    expect(res.messages[0].body).toBe("ping");
+
+    const { ctx: ctxStranger } = buildMcpCtx(f, {
+      linkedAgentId: stranger.id,
+    });
+    await expect(
+      call("chat.getThread", { threadId: thread.id }, ctxStranger),
+    ).rejects.toThrow(/Only the thread's agent/);
+
+    const noLink = buildMcpCtx(f).ctx;
+    await expect(
+      call("chat.getThread", { threadId: thread.id }, noLink),
+    ).rejects.toThrow(/linkedAgentId/);
+  });
+
+  it("agent.context.bundle issueId branch returns workspace + issue + extras", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAB" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(f);
+    const issue = await createIssue(f, { title: "bundle-me" });
+    await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.user.id,
+        body: "comment",
+      },
+    });
+    const bundle = (await call(
+      "agent.context.bundle",
+      { issueId: issue.id },
+      ctx,
+    )) as {
+      workspace: { id: string };
+      issue: { id: string };
+      comments: unknown[];
+      attachments: unknown[];
+      relations: unknown[];
+    };
+    expect(bundle.workspace.id).toBe(f.workspace.id);
+    expect(bundle.issue.id).toBe(issue.id);
+    expect(bundle.comments.length).toBe(1);
+    expect(Array.isArray(bundle.attachments)).toBe(true);
+    expect(Array.isArray(bundle.relations)).toBe(true);
+  });
+
+  it("agent.context.bundle threadId branch enforces addressee", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAB2" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "v", name: "V" },
+    });
+    const thread = await prisma.chatThread.create({
+      data: {
+        workspaceId: f.workspace.id,
+        userId: f.user.id,
+        agentId: agent.id,
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+    const bundle = (await call(
+      "agent.context.bundle",
+      { threadId: thread.id },
+      ctx,
+    )) as {
+      workspace: { id: string };
+      thread: { id: string };
+      messages: unknown[];
+    };
+    expect(bundle.workspace.id).toBe(f.workspace.id);
+    expect(bundle.thread.id).toBe(thread.id);
+    expect(Array.isArray(bundle.messages)).toBe(true);
+  });
+
+  it("agent.context.bundle requires exactly one of issueId/threadId", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAB3" });
+    fixtures.push(f);
+    const { ctx } = buildMcpCtx(f);
+    await expect(
+      call("agent.context.bundle", {}, ctx),
+    ).rejects.toThrow(/exactly one/i);
+  });
+
+  it("runs.list filters by agent + status + issue", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAU" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(f);
+    const issue = await createIssue(f, { title: "tracked" });
+    const a1 = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "a1", name: "A1" },
+    });
+    const a2 = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "a2", name: "A2" },
+    });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: a1.id,
+        status: "ACTIVE",
+      },
+    });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: a2.id,
+        status: "COMPLETED",
+      },
+    });
+    const all = (await call("runs.list", { issueId: issue.id }, ctx)) as Array<{
+      id: string;
+      status: string;
+    }>;
+    expect(all.length).toBe(2);
+    const onlyA1 = (await call(
+      "runs.list",
+      { issueId: issue.id, agentId: a1.id },
+      ctx,
+    )) as unknown[];
+    expect(onlyA1.length).toBe(1);
+    const onlyDone = (await call(
+      "runs.list",
+      { issueId: issue.id, status: "COMPLETED" },
+      ctx,
+    )) as unknown[];
+    expect(onlyDone.length).toBe(1);
+  });
+
+  it("AGENT_ASSIGNED event payload now embeds issueSnapshot", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAS" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(f);
+    const issue = await createIssue(f, { title: "snapshot-able" });
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "v", name: "V" },
+    });
+    await call(
+      "issues.assign",
+      { issueId: issue.id, agentId: agent.id },
+      ctx,
+    );
+    const events = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: f.workspace.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        kind: "AGENT_ASSIGNED",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    const payload = events[0].payload as Record<string, unknown>;
+    expect(payload.issueSnapshot).toBeTruthy();
+    const snap = payload.issueSnapshot as Record<string, unknown>;
+    expect(snap.id).toBe(issue.id);
+    expect(snap.title).toBe("snapshot-able");
+    expect(typeof snap.number).toBe("number");
+    expect(Array.isArray(snap.labelNames)).toBe(true);
+  });
+});

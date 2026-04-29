@@ -1,6 +1,6 @@
 # MCP Tools
 
-Forge exposes 53 tools across 14 namespaces. Two transports — JSON-RPC 2.0 at
+Forge exposes 68 tools across 18 namespaces. Two transports — JSON-RPC 2.0 at
 `POST /api/mcp/rpc` (preferred for agent clients) and REST aliases at
 `POST /api/mcp/<tool>`. Both are gated by the same API-key auth and the same
 scope/narrowing checks.
@@ -62,7 +62,7 @@ key contract.
 | Tool         | Summary                                                                      |
 |--------------|------------------------------------------------------------------------------|
 | `list`       | Paged list with filters: `status`, `priority`, `projectId`, `assignedAgentId`, `labelIds[]`, `queued`. |
-| `get`        | Fetch by `id` or workspace key (e.g. `WRK-42`).                              |
+| `get`        | Fetch by `id`. Optional `include` hydrates description / comments / attachments / relations / currentRun / labels in one round-trip. |
 | `create`     | `{ title, description?, projectId?, priority?, statusId?, labelIds? }` → full issue. |
 | `queue`      | Set `queued: true`. Dispatcher only sees queued + unassigned issues.         |
 | `transition` | Change status by `statusId`.                                                 |
@@ -85,11 +85,34 @@ no argument at all — in which case it uses the calling key's
 `linkedAgentId`. Keys without a linked agent that omit the argument get
 `400`.
 
+**`get` with `include`** — by default, `issues.get` returns the lean shape
+(status + project + assignees) for backward compat. Pass an `include` object
+to hydrate optional sections in one round-trip:
+
+```json
+{
+  "id": "cle9k...",
+  "include": {
+    "description": true,
+    "comments": true,            // or { "limit": 50 } — max 100, default 20
+    "attachments": true,
+    "relations": true,
+    "currentRun": true,          // most recent non-terminal AgentRun
+    "labels": true
+  }
+}
+```
+
+`currentRun` is the most recent AgentRun whose status is not `COMPLETED`
+or `ABANDONED` (so `ACTIVE` and `STALLED` qualify).
+
 ### `comments`
 
-| Tool     | Summary                                                |
-|----------|--------------------------------------------------------|
-| `create` | Post a comment on an issue. Other comment ops are tRPC-only. |
+| Tool             | Summary                                                                |
+|------------------|------------------------------------------------------------------------|
+| `create`         | Post a comment on an issue.                                            |
+| `upsertStatus`   | Idempotent rolling STATUS comment for the calling agent's run.         |
+| `list`           | Paginated history. `{ issueId, before?, limit? = 50 (max 200) }` — newest first, hides soft-deleted, includes `author` + `authoringAgent`. Scope: `READ_ISSUES`. |
 
 ### `projects`
 
@@ -159,7 +182,16 @@ no argument at all — in which case it uses the calling key's
 | `finalize`       | Register the uploaded blob as an Attachment row.                     |
 | `list`           | List attachments for a `(targetType, targetId)` pair.                |
 | `getDownloadUrl` | Get a presigned GET URL for browser/agent download.                  |
+| `getInline`      | Server-side bytes fetch — returns `{ id, mimeType, sizeBytes, filename, base64 }`. Default cap 1 MB; allowlist is image/*+pdf+text. |
 | `delete`         | Delete attachment + remove blob.                                     |
+
+**`getInline`** is for image-aware models that can't follow a presigned URL.
+Same scope checks as `getDownloadUrl` (`READ_ISSUES` plus subject-narrowing
+on the attached entity), then it streams the object out of MinIO and returns
+base64 bytes inline. Mime types outside `{image/png, image/jpeg, image/gif,
+image/webp, application/pdf, text/plain, text/markdown}` are rejected with a
+suggestion to fall back to `getDownloadUrl`. `maxBytes` defaults to
+`1_000_000` and is hard-capped at 25 MB to keep MCP responses bounded.
 
 ### `pins`
 
@@ -200,6 +232,7 @@ matching `issues.create`'s fallback). Scopes: `READ_ISSUES`,
 |-------------|----------------------------------------------------------------------|
 | `me`        | Returns the calling agent's row. Inferred from `ApiKey.linkedAgentId`. |
 | `heartbeat` | Update presence: `{ status?: ONLINE | BUSY | OFFLINE }`.             |
+| `list`      | Workspace agents. `{ includeArchived? = false, runtimeId? }` → `{ id, profileKey, name, status, runtimeMode, provider, capabilities, archivedAt, runtime: { id, name, kind } }[]`. Scope: `READ_USERS`. |
 
 **`me`** rejects keys without `linkedAgentId` set. The intended pattern is
 that agent runtimes carry a key linked to their own `Agent` row — the tool
@@ -228,6 +261,7 @@ Scope required: `WRITE_COMMENTS`.
 | `startDraft` | Begin a streaming reply. Returns `{ draftId }`. Publishes a `started` event on the `chat-thread-stream` channel. Nothing persisted yet. |
 | `appendDraftChunk` | Publish one token delta. Ephemeral SSE only; no DB write. |
 | `finalizeDraft` | Persist the complete reply, swap the client draft bubble, publish `finalized`. |
+| `getThread` | Read `{ thread, messages[] }` for a thread the calling agent is the addressee of. `{ threadId, before?, limit? = 50 (max 200) }`. Each message includes `id, role, body, contextSnapshot, sourceRunId, createdAt, finalizedDraftId`. |
 
 **Single-shot:**
 
@@ -275,6 +309,7 @@ the broader Runtime primitive.
 |---|---|
 | `register` | Create (or restore) a Runtime row. `{ name, kind, endpoint?, providersAvailable }`. `ownerId` is set from the calling key's `userId`; AGENT-kind keys leave it null. |
 | `heartbeat` | Bump `Runtime.heartbeatAt`. `{ runtimeId }`. |
+| `list` | List workspace runtimes. `{ kind?, includeArchived? = false }` → mirror of `trpc.runtime.list` shape, includes `_count: { agents }` + `owner` summary. |
 
 **`register`** is intentionally not deduping server-side — the CLI caches
 its `runtimeId` in `~/.config/forge/daemon.json` and only re-registers if
@@ -282,15 +317,43 @@ heartbeat returns a missing-row error.
 
 ### `runs`
 
-Scope required: `WRITE_ISSUES`. The calling key must have `linkedAgentId`
-set, and the run's `agentId` must match.
+`recordUsage` requires `WRITE_ISSUES` and an agent-linked key whose
+`linkedAgentId` matches the run's `agentId`. `list` requires `READ_ISSUES`.
 
 | Tool | Summary |
 |---|---|
 | `recordUsage` | Update token + cost columns on an `AgentRun`. `{ runId, tokensIn?, tokensOut?, tokensCached?, costUsd? }`. Idempotent — latest call replaces (cumulative as reported by the agent). |
+| `list` | List `AgentRun` rows for "my recent history" introspection. `{ agentId?, issueId?, status?, limit? = 50, before? }` → newest-first by `startedAt`. Each row includes scalars (status, currentStep, startedAt, finishedAt, lastEventAt, tokensIn, tokensOut, tokensCached, costUsd) plus `issue { id, number, title, workspace: { key } }` and `agent { id, profileKey }`. |
 
 `costUsd` is taken verbatim from the agent for v1; a server-side
 rate table per model is a future enhancement.
+
+### `events`
+
+Scope: `READ_ISSUES`. Reads `ActivityEvent` rows for the calling
+workspace.
+
+| Tool | Summary |
+|---|---|
+| `recent` | `{ subjectType?, subjectId?, kinds?, limit? = 50 (max 200), before? }` → newest-first by `createdAt`. Includes `actor { id, name, image }`. When `subjectType="issue"` + `subjectId` are set, the calling key's project/label narrowing is enforced on that issue. |
+
+### `workspace`
+
+Scope: `READ_ISSUES`.
+
+| Tool | Summary |
+|---|---|
+| `get` | Returns dispatch-time settings: `{ id, slug, key, name, cycleLengthDays, cycleCooldownDays, timeTrackingEnabled, attachmentQuotaMb, requiredAckSeconds, autoDispatch, autoDispatchMode }`. No member list. |
+
+### `agent` (composite context)
+
+Scope: `READ_ISSUES`. The single composite tool that saves agents 4–5
+round-trips on dispatch — bundles workspace + issue (or thread) + comments
++ attachments + relations + currentRun in one call.
+
+| Tool | Summary |
+|---|---|
+| `context.bundle` | `{ issueId? }` xor `{ threadId? }`. For `issueId`: returns `{ workspace, issue (full row), description, comments (last 50), attachments, relations, currentRun }`. For `threadId`: returns `{ workspace, thread, messages (last 50), agent (peer summary), linkedIssues (any issues mentioned in messages' contextSnapshots) }`. Addressee gating mirrors `chat.getThread` for the threadId branch; issue-narrowing applies for the issueId branch. |
 
 ## Not on MCP
 

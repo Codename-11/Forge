@@ -31,6 +31,53 @@ export function agentDispatchUrlFor(agentId: string): string {
 }
 
 /**
+ * Hydrate the small `issueSnapshot` blob we attach to every AGENT_ASSIGNED
+ * event payload — see `recordChange` for the wiring. Kept narrow on purpose:
+ * id + number + title + priority + statusId + projectId + labelNames are
+ * enough for an agent's webhook receiver to render a turn header and decide
+ * whether to act, without an extra `issues.get` round-trip. Returns null
+ * when the issue isn't in this workspace (defensive — recordChange callers
+ * already validated subject scope, but a missing row shouldn't crash audit).
+ */
+export interface IssueSnapshot {
+  id: string;
+  number: number;
+  title: string;
+  priority: string;
+  statusId: string;
+  projectId: string | null;
+  labelNames: string[];
+}
+
+async function loadIssueSnapshot(
+  tx: PrismaClient | Prisma.TransactionClient,
+  issueId: string,
+): Promise<IssueSnapshot | null> {
+  const row = await tx.issue.findUnique({
+    where: { id: issueId },
+    select: {
+      id: true,
+      number: true,
+      title: true,
+      priority: true,
+      statusId: true,
+      projectId: true,
+      labels: { select: { label: { select: { name: true } } } },
+    },
+  });
+  if (!row) return null;
+  return {
+    id: row.id,
+    number: row.number,
+    title: row.title,
+    priority: row.priority,
+    statusId: row.statusId,
+    projectId: row.projectId,
+    labelNames: row.labels.map((l) => l.label.name),
+  };
+}
+
+/**
  * Lazily upsert the synthetic Webhook row for a given dispatch url. One
  * row per (workspace, url). `events` is set to the union of agent-routed
  * kinds so that the worker's `webhook.active` gate stays meaningful.
@@ -110,6 +157,33 @@ export async function recordChange(
       userAgent: params.userAgent ?? undefined,
     },
   });
+
+  // Enrichment pass: AGENT_ASSIGNED events embed an `issueSnapshot` so the
+  // agent's webhook receiver gets enough context (number, title, priority,
+  // status, project, label names) to act without an immediate `issues.get`
+  // round-trip. Single producer site (here in recordChange) so every
+  // emitter — dispatcher, issue.create/update/bulkAssign, ai-triage, MCP
+  // issues.assign / reassign — gets the same shape automatically. Grep
+  // `issueSnapshot` in audit.ts to verify; this is the canonical site.
+  let payloadOut: Prisma.InputJsonValue =
+    (params.payload ?? {}) as Prisma.InputJsonValue;
+  if (
+    params.eventKind === EventKind.AGENT_ASSIGNED &&
+    params.subjectType === "issue"
+  ) {
+    const snapshot = await loadIssueSnapshot(tx, params.subjectId);
+    if (snapshot) {
+      const base =
+        params.payload && typeof params.payload === "object"
+          ? (params.payload as Record<string, Prisma.InputJsonValue>)
+          : {};
+      payloadOut = {
+        ...base,
+        issueSnapshot: snapshot,
+      } as unknown as Prisma.InputJsonValue;
+    }
+  }
+
   const event = await tx.activityEvent.create({
     data: {
       workspaceId: params.workspaceId,
@@ -117,7 +191,7 @@ export async function recordChange(
       actorId: params.actorId,
       subjectType: params.subjectType,
       subjectId: params.subjectId,
-      payload: params.payload ?? {},
+      payload: payloadOut,
     },
   });
 

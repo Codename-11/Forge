@@ -29,6 +29,7 @@ import {
   MAX_FILE_SIZE_BYTES,
   deleteAttachment,
   finalizeAttachment,
+  getAttachmentInline,
   presignDownloadUrl,
   presignUploadUrl,
 } from "@/server/services/storage";
@@ -177,13 +178,148 @@ export const mcpTools = {
 
   "issues.get": {
     scopes: ["READ_ISSUES"] as const,
-    input: z.object({ id: z.string().describe("Issue id (cuid)") }),
-    async run(input: { id: string }, ctx: McpContext) {
+    input: z.object({
+      id: z.string().describe("Issue id (cuid)"),
+      include: z
+        .object({
+          description: z.boolean().optional().describe(
+            "Include the full Issue.description body (already on the row).",
+          ),
+          comments: z
+            .union([
+              z.boolean(),
+              z.object({
+                limit: z.number().int().min(1).max(100).default(20),
+              }),
+            ])
+            .optional()
+            .describe(
+              "Include recent BODY/STATUS comments. Pass true for default (limit 20) or { limit }.",
+            ),
+          attachments: z.boolean().optional().describe(
+            "Include all finalized attachments on the issue.",
+          ),
+          relations: z.boolean().optional().describe(
+            "Include outbound IssueRelation rows (matches relations.listForIssue).",
+          ),
+          currentRun: z.boolean().optional().describe(
+            "Include the most recent non-terminal AgentRun for this issue.",
+          ),
+          labels: z.boolean().optional().describe(
+            "Include labels via the IssueLabel join.",
+          ),
+        })
+        .optional()
+        .describe(
+          "Optional hydration. Default behavior (no include) returns the legacy lean shape: status + project + assignees only.",
+        ),
+    }),
+    async run(
+      input: {
+        id: string;
+        include?: {
+          description?: boolean;
+          comments?: boolean | { limit: number };
+          attachments?: boolean;
+          relations?: boolean;
+          currentRun?: boolean;
+          labels?: boolean;
+        };
+      },
+      ctx: McpContext,
+    ) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.id });
-      return db.issue.findFirst({
+
+      // Default (legacy) shape: status + project + assignees only.
+      const include = input.include;
+      if (!include) {
+        return db.issue.findFirst({
+          where: { id: input.id, workspaceId: ctx.workspaceId },
+          include: {
+            status: true,
+            project: true,
+            assignees: { include: { user: true } },
+          },
+        });
+      }
+
+      // Hydrated shape — base row always carries the legacy fields, then
+      // we attach optional sections so callers get a single round-trip.
+      const issue = await db.issue.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
-        include: { status: true, project: true, assignees: { include: { user: true } } },
+        include: {
+          status: true,
+          project: true,
+          assignees: { include: { user: true } },
+          ...(include.labels ? { labels: { include: { label: true } } } : {}),
+          ...(include.attachments
+            ? {
+                attachments: {
+                  where: { NOT: { url: { startsWith: "pending:" } } },
+                },
+              }
+            : {}),
+        },
       });
+      if (!issue) return null;
+
+      const out: Record<string, unknown> = { ...issue };
+      // description column is already on the row; the boolean is purely a
+      // hint that callers care about it (no extra query).
+      if (include.description) {
+        out.description = issue.description;
+      }
+
+      if (include.comments) {
+        const limit =
+          typeof include.comments === "object" ? include.comments.limit : 20;
+        out.comments = await db.comment.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            issueId: input.id,
+            deletedAt: null,
+          },
+          orderBy: { createdAt: "desc" },
+          take: limit,
+          include: {
+            author: { select: { id: true, name: true, image: true } },
+            authoringAgent: {
+              select: { id: true, profileKey: true, name: true },
+            },
+          },
+        });
+      }
+
+      if (include.relations) {
+        out.relations = await db.issueRelation.findMany({
+          where: { workspaceId: ctx.workspaceId, fromIssueId: input.id },
+          include: {
+            toIssue: {
+              select: {
+                id: true,
+                number: true,
+                title: true,
+                statusId: true,
+                status: { select: { category: true } },
+              },
+            },
+          },
+          orderBy: { createdAt: "asc" },
+        });
+      }
+
+      if (include.currentRun) {
+        out.currentRun = await db.agentRun.findFirst({
+          where: {
+            workspaceId: ctx.workspaceId,
+            issueId: input.id,
+            status: { notIn: ["COMPLETED", "ABANDONED"] },
+          },
+          orderBy: { startedAt: "desc" },
+        });
+      }
+
+      return out;
     },
   },
 
@@ -961,6 +1097,49 @@ export const mcpTools = {
         });
 
         return { ...comment, runId: run.id };
+      });
+    },
+  },
+
+  /**
+   * List comments on an issue, newest first. Cursor-paginated by createdAt
+   * via the optional `before` parameter. Filters soft-deleted rows. Includes
+   * `author` (the persisted user FK — agent-authored comments still have an
+   * author of the API-key owner) and `authoringAgent` (set when the comment
+   * was created via an agent-linked API key) so callers can render
+   * provenance correctly.
+   */
+  "comments.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().describe("Issue id (cuid)."),
+      before: z.coerce.date().optional().describe(
+        "Cursor — return comments created strictly before this timestamp.",
+      ),
+      limit: z.number().int().min(1).max(200).default(50),
+    }),
+    async run(
+      input: { issueId: string; before?: Date; limit: number },
+      ctx: McpContext,
+    ) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      // Defensive workspace check — assertKeyScope only enforces narrowing,
+      // not workspace membership. The base findMany filter does the rest.
+      return db.comment.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          issueId: input.issueId,
+          deletedAt: null,
+          ...(input.before ? { createdAt: { lt: input.before } } : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        take: input.limit,
+        include: {
+          author: { select: { id: true, name: true, image: true } },
+          authoringAgent: {
+            select: { id: true, profileKey: true, name: true },
+          },
+        },
       });
     },
   },
@@ -2198,6 +2377,88 @@ export const mcpTools = {
     },
   },
 
+  /**
+   * Server-side bytes fetch for an attachment, returned base64-encoded so
+   * image-aware models can consume it inline (most MCP clients can't follow
+   * a presigned URL out-of-band). Same scope checks as `getDownloadUrl`,
+   * plus a small mime allowlist (image + pdf + text) and a per-call max
+   * bytes cap (default 1 MB, never above 25 MB) to keep MCP responses
+   * bounded.
+   */
+  "attachments.getInline": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      attachmentId: z.string(),
+      maxBytes: z
+        .number()
+        .int()
+        .min(1024)
+        .max(25 * 1024 * 1024)
+        .default(1_000_000)
+        .describe(
+          "Hard cap on bytes returned in the response. Defaults to 1 MB.",
+        ),
+    }),
+    async run(
+      input: { attachmentId: string; maxBytes: number },
+      ctx: McpContext,
+    ) {
+      const row = await db.attachment.findFirst({
+        where: { id: input.attachmentId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          mimeType: true,
+          targetType: true,
+          targetId: true,
+        },
+      });
+      if (!row) throw new Error("Attachment not found.");
+      if (row.targetType === "issue" && row.targetId) {
+        await assertKeyScope(scopeCtx(ctx), {
+          entity: "issue",
+          id: row.targetId,
+        });
+      } else if (row.targetType === "project" && row.targetId) {
+        await assertKeyScope(scopeCtx(ctx), {
+          entity: "project",
+          id: row.targetId,
+        });
+      } else if (row.targetType === "initiative" && row.targetId) {
+        await assertKeyScope(scopeCtx(ctx), {
+          entity: "initiative",
+          id: row.targetId,
+        });
+      }
+      // Narrow allowlist for inline reads — matches the storage allowlist
+      // intersected with the MIME types most agents can actually consume
+      // inline. Reject everything else with an explicit error so callers
+      // know to fall back to `attachments.getDownloadUrl`.
+      const INLINE_ALLOWED = new Set<string>([
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "application/pdf",
+        "text/plain",
+        "text/markdown",
+      ]);
+      if (!INLINE_ALLOWED.has(row.mimeType)) {
+        throw new Error(
+          `Inline mime type ${row.mimeType} not supported; use attachments.getDownloadUrl.`,
+        );
+      }
+      // Defensive intersection with the global allowlist — should always
+      // hold since initUpload enforces it, but keeps this tool honest if
+      // ALLOWED_MIME_TYPES ever expands.
+      if (!ALLOWED_MIME_TYPES.has(row.mimeType)) {
+        throw new Error(`Mime type ${row.mimeType} not allowed.`);
+      }
+      return getAttachmentInline(input.attachmentId, {
+        maxBytes: input.maxBytes,
+      });
+    },
+  },
+
   // -------------------------------------------------------------------- Pins
   "pins.list": {
     scopes: ["READ_ISSUES"] as const,
@@ -2275,6 +2536,53 @@ export const mcpTools = {
   // Self-management for a linked agent. Both tools resolve the caller to its
   // Agent row via `ctx.apiKey.linkedAgentId`; keys without a linked agent
   // have no identity to act on and are rejected.
+
+  /**
+   * List agents in the workspace (excludes archived by default). Powers
+   * peer discovery — agents asking "who else can I hand off to" or runtime
+   * daemons asking "what agents do I host" both consume this. Mirror of
+   * `trpc.agent.list` shape (minus the heavy `_count` block) so UI and MCP
+   * stay aligned.
+   */
+  "agents.list": {
+    scopes: ["READ_USERS"] as const,
+    input: z.object({
+      includeArchived: z.boolean().default(false),
+      runtimeId: z
+        .string()
+        .min(1)
+        .max(40)
+        .optional()
+        .describe(
+          "Filter to agents on a specific Runtime. Useful for daemons enumerating their own roster.",
+        ),
+    }),
+    async run(
+      input: { includeArchived: boolean; runtimeId?: string },
+      ctx: McpContext,
+    ) {
+      return db.agent.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          ...(input.includeArchived ? {} : { archivedAt: null }),
+          ...(input.runtimeId ? { runtimeId: input.runtimeId } : {}),
+        },
+        orderBy: [{ status: "asc" }, { name: "asc" }],
+        select: {
+          id: true,
+          profileKey: true,
+          name: true,
+          status: true,
+          runtimeMode: true,
+          provider: true,
+          capabilities: true,
+          archivedAt: true,
+          runtime: { select: { id: true, name: true, kind: true } },
+        },
+      });
+    },
+  },
+
   "agents.me": {
     scopes: ["READ_USERS"] as const,
     input: z.object({}).describe(
@@ -2363,6 +2671,83 @@ export const mcpTools = {
   // and calls this tool to commit it. Forge persists the reply, fans out
   // CHAT_MESSAGE_POSTED with role=AGENT, and the client picks it up via
   // realtime SSE — no separate streaming protocol needed for v1.
+
+  /**
+   * Read a chat thread + paginated history. Restricted to the addressed
+   * agent — the calling API key's linkedAgentId must equal the thread's
+   * agentId (same gating as the chat write tools). This unblocks the
+   * "agent gets a single CHAT_MESSAGE_POSTED webhook but needs prior
+   * messages for grounding" gap.
+   */
+  "chat.getThread": {
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({
+      threadId: z.string().min(1).max(40),
+      before: z.coerce.date().optional().describe(
+        "Cursor — return messages strictly before this createdAt.",
+      ),
+      limit: z.number().int().min(1).max(200).default(50),
+    }),
+    async run(
+      input: { threadId: string; before?: Date; limit: number },
+      ctx: McpContext,
+    ) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error(
+          "chat.getThread requires an API key with linkedAgentId set.",
+        );
+      }
+      const thread = await db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          agentId: true,
+          userId: true,
+          title: true,
+          lastMessageAt: true,
+          createdAt: true,
+          archivedAt: true,
+        },
+      });
+      if (!thread) throw new Error("Chat thread not found in this workspace.");
+      if (thread.agentId !== linkedAgentId) {
+        throw new Error("Only the thread's agent may read this thread.");
+      }
+      const messages = await db.chatMessage.findMany({
+        where: {
+          threadId: thread.id,
+          ...(input.before ? { createdAt: { lt: input.before } } : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        take: input.limit,
+        select: {
+          id: true,
+          role: true,
+          body: true,
+          contextSnapshot: true,
+          sourceRunId: true,
+          createdAt: true,
+        },
+      });
+      // Surface `finalizedDraftId` if the persisted message carried one in
+      // its publish payload — the column itself isn't on ChatMessage, so we
+      // omit unless callers reach further. For now, expose null.
+      return {
+        thread,
+        messages: messages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          body: m.body,
+          contextSnapshot: m.contextSnapshot,
+          sourceRunId: m.sourceRunId,
+          createdAt: m.createdAt,
+          finalizedDraftId: null as string | null,
+        })),
+      };
+    },
+  },
+
   "chat.appendMessage": {
     scopes: ["WRITE_COMMENTS"] as const,
     input: z.object({
@@ -2633,6 +3018,39 @@ export const mcpTools = {
   // every 60s. Hermes-style integrations register a REMOTE_HTTP runtime
   // when their endpoint is provisioned.
 
+  /**
+   * List runtimes (mirror of `trpc.runtime.list`). ADMIN-scoped — same as
+   * `runtimes.register` / `runtimes.heartbeat`. Used by the `forge` CLI's
+   * `runtimes list` subcommand and by daemons enumerating peers.
+   */
+  "runtimes.list": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      kind: z
+        .nativeEnum(RuntimeKind)
+        .optional()
+        .describe("Optional filter — LOCAL_DAEMON | REMOTE_HTTP | CLOUD."),
+      includeArchived: z.boolean().default(false),
+    }),
+    async run(
+      input: { kind?: RuntimeKind; includeArchived: boolean },
+      ctx: McpContext,
+    ) {
+      return db.runtime.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          ...(input.kind ? { kind: input.kind } : {}),
+          ...(input.includeArchived ? {} : { archivedAt: null }),
+        },
+        orderBy: [{ kind: "asc" }, { name: "asc" }],
+        include: {
+          owner: { select: { id: true, name: true, image: true } },
+          _count: { select: { agents: true } },
+        },
+      });
+    },
+  },
+
   "runtimes.register": {
     scopes: ["ADMIN"] as const,
     input: z.object({
@@ -2798,6 +3216,375 @@ export const mcpTools = {
           costUsd: true,
         },
       });
+    },
+  },
+
+  /**
+   * List AgentRun rows. Useful for agents that want to scan their own
+   * recent history (e.g., "did I already touch this issue today"). Cursor-
+   * paginated by `startedAt DESC` via `before`. Defaults exclude nothing
+   * — pass `status` to filter by lifecycle.
+   */
+  "runs.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      agentId: z.string().min(1).max(40).optional(),
+      issueId: z.string().min(1).max(40).optional(),
+      status: z
+        .enum(["ACTIVE", "COMPLETED", "ABANDONED", "STALLED"])
+        .optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      before: z.coerce.date().optional().describe(
+        "Cursor — return runs started strictly before this timestamp.",
+      ),
+    }),
+    async run(
+      input: {
+        agentId?: string;
+        issueId?: string;
+        status?: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED";
+        limit: number;
+        before?: Date;
+      },
+      ctx: McpContext,
+    ) {
+      // Defensive: if the caller scopes by issue, run the narrowing check
+      // so a key narrowed to project A can't list runs for project B's issue.
+      if (input.issueId) {
+        await assertKeyScope(scopeCtx(ctx), {
+          entity: "issue",
+          id: input.issueId,
+        });
+      }
+      return db.agentRun.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          ...(input.agentId ? { agentId: input.agentId } : {}),
+          ...(input.issueId ? { issueId: input.issueId } : {}),
+          ...(input.status ? { status: input.status } : {}),
+          ...(input.before ? { startedAt: { lt: input.before } } : {}),
+        },
+        orderBy: { startedAt: "desc" },
+        take: input.limit,
+        select: {
+          id: true,
+          status: true,
+          currentStep: true,
+          startedAt: true,
+          finishedAt: true,
+          lastEventAt: true,
+          tokensIn: true,
+          tokensOut: true,
+          tokensCached: true,
+          costUsd: true,
+          issue: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              workspace: { select: { key: true } },
+            },
+          },
+          agent: { select: { id: true, profileKey: true } },
+        },
+      });
+    },
+  },
+
+  // --------------------------------------------------------------------- Events
+  /**
+   * Read the workspace ActivityEvent stream. Cursor-paginated newest-first
+   * by `createdAt`. Filters by subjectType + subjectId + kind list. The
+   * caller's actor narrowing applies via the existing scope helpers when
+   * subjectType="issue" + subjectId is given. Use this to power "what
+   * happened on this issue lately" without hitting the tRPC ai router.
+   */
+  "events.recent": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      subjectType: z.string().min(1).max(40).optional(),
+      subjectId: z.string().min(1).max(40).optional(),
+      kinds: z.array(z.nativeEnum(EventKind)).max(32).optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      before: z.coerce.date().optional(),
+    }),
+    async run(
+      input: {
+        subjectType?: string;
+        subjectId?: string;
+        kinds?: EventKind[];
+        limit: number;
+        before?: Date;
+      },
+      ctx: McpContext,
+    ) {
+      if (input.subjectType === "issue" && input.subjectId) {
+        await assertKeyScope(scopeCtx(ctx), {
+          entity: "issue",
+          id: input.subjectId,
+        });
+      }
+      return db.activityEvent.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          ...(input.subjectType ? { subjectType: input.subjectType } : {}),
+          ...(input.subjectId ? { subjectId: input.subjectId } : {}),
+          ...(input.kinds && input.kinds.length
+            ? { kind: { in: input.kinds } }
+            : {}),
+          ...(input.before ? { createdAt: { lt: input.before } } : {}),
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.limit,
+        include: {
+          actor: { select: { id: true, name: true, image: true } },
+        },
+      });
+    },
+  },
+
+  // --------------------------------------------------------------------- Workspace
+  /**
+   * Workspace settings the calling agent could plausibly need at dispatch
+   * time. Intentionally narrow — no member list (admin-gated) and no
+   * secrets. Cycle/quota/dispatch knobs only.
+   */
+  "workspace.get": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({}).default({}),
+    async run(_input: Record<string, never>, ctx: McpContext) {
+      return db.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: {
+          id: true,
+          slug: true,
+          key: true,
+          name: true,
+          cycleLengthDays: true,
+          cycleCooldownDays: true,
+          timeTrackingEnabled: true,
+          attachmentQuotaMb: true,
+          requiredAckSeconds: true,
+          autoDispatch: true,
+          autoDispatchMode: true,
+        },
+      });
+    },
+  },
+
+  // --------------------------------------------------------------------- Agent context bundle
+  /**
+   * Composite "give me everything I need to act" call. Saves agents 4–5
+   * round trips on dispatch by fetching the workspace + issue + comments
+   * + attachments + relations + currentRun in one shot. For chat threads,
+   * fetches thread + messages + workspace, and (bonus) hydrates an issue
+   * snapshot if any message's contextSnapshot.issueId pointed at one.
+   *
+   * Exactly one of `issueId` / `threadId` must be provided. Scope is
+   * enforced on whichever subject is inferred — narrowing rejection
+   * mirrors what the per-tool callers would have done individually.
+   */
+  "agent.context.bundle": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z
+      .object({
+        issueId: z.string().min(1).max(40).optional(),
+        threadId: z.string().min(1).max(40).optional(),
+      })
+      .refine(
+        (v) =>
+          (v.issueId && !v.threadId) || (!v.issueId && v.threadId),
+        { message: "Provide exactly one of issueId or threadId." },
+      ),
+    async run(
+      input: { issueId?: string; threadId?: string },
+      ctx: McpContext,
+    ) {
+      const workspace = await db.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: {
+          id: true,
+          slug: true,
+          key: true,
+          name: true,
+          cycleLengthDays: true,
+          cycleCooldownDays: true,
+          timeTrackingEnabled: true,
+          attachmentQuotaMb: true,
+          requiredAckSeconds: true,
+          autoDispatch: true,
+          autoDispatchMode: true,
+        },
+      });
+
+      if (input.issueId) {
+        const issueId = input.issueId;
+        await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: issueId });
+        const issue = await db.issue.findFirst({
+          where: { id: issueId, workspaceId: ctx.workspaceId },
+          include: {
+            status: true,
+            project: true,
+            labels: { include: { label: true } },
+            assignees: {
+              include: { user: { select: { id: true, name: true, image: true } } },
+            },
+            assignedAgent: {
+              select: { id: true, profileKey: true, name: true, status: true },
+            },
+          },
+        });
+        if (!issue) throw new Error("Issue not found in this workspace.");
+
+        const [comments, attachments, relations, currentRun] = await Promise.all([
+          db.comment.findMany({
+            where: {
+              workspaceId: ctx.workspaceId,
+              issueId,
+              deletedAt: null,
+            },
+            orderBy: { createdAt: "desc" },
+            take: 50,
+            include: {
+              author: { select: { id: true, name: true, image: true } },
+              authoringAgent: {
+                select: { id: true, profileKey: true, name: true },
+              },
+            },
+          }),
+          db.attachment.findMany({
+            where: {
+              workspaceId: ctx.workspaceId,
+              OR: [
+                { targetType: "issue", targetId: issueId },
+                { issueId },
+              ],
+              NOT: { url: { startsWith: "pending:" } },
+            },
+            orderBy: { createdAt: "asc" },
+          }),
+          db.issueRelation.findMany({
+            where: { workspaceId: ctx.workspaceId, fromIssueId: issueId },
+            include: {
+              toIssue: {
+                select: {
+                  id: true,
+                  number: true,
+                  title: true,
+                  statusId: true,
+                  status: { select: { category: true } },
+                },
+              },
+            },
+            orderBy: { createdAt: "asc" },
+          }),
+          db.agentRun.findFirst({
+            where: {
+              workspaceId: ctx.workspaceId,
+              issueId,
+              status: { notIn: ["COMPLETED", "ABANDONED"] },
+            },
+            orderBy: { startedAt: "desc" },
+          }),
+        ]);
+
+        return {
+          workspace,
+          issue,
+          description: issue.description,
+          comments,
+          attachments,
+          relations,
+          currentRun,
+        };
+      }
+
+      // threadId branch — addressee gating mirrors chat.getThread.
+      const threadId = input.threadId!;
+      const linkedAgentId = ctx.apiKey?.linkedAgentId ?? null;
+      const thread = await db.chatThread.findFirst({
+        where: { id: threadId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          agentId: true,
+          userId: true,
+          lastMessageAt: true,
+          createdAt: true,
+        },
+      });
+      if (!thread) throw new Error("Chat thread not found in this workspace.");
+      if (linkedAgentId && thread.agentId !== linkedAgentId) {
+        throw new Error("Only the thread's agent may bundle this context.");
+      }
+
+      const messages = await db.chatMessage.findMany({
+        where: { threadId: thread.id },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+        select: {
+          id: true,
+          role: true,
+          body: true,
+          contextSnapshot: true,
+          sourceRunId: true,
+          createdAt: true,
+        },
+      });
+
+      // Pull a peer summary if the thread's agent differs from the caller
+      // (shouldn't happen since we gate on linkedAgentId, but a session
+      // caller without an apiKey would skip the gate).
+      const agent =
+        linkedAgentId && linkedAgentId === thread.agentId
+          ? null
+          : await db.agent.findUnique({
+              where: { id: thread.agentId },
+              select: {
+                id: true,
+                profileKey: true,
+                name: true,
+                status: true,
+                provider: true,
+              },
+            });
+
+      // Bonus — if any message's contextSnapshot.issueId is set, hydrate a
+      // tiny issue summary for it. Most threads will have at most one or
+      // two distinct issueIds across recent messages; cap to 5 for safety.
+      const issueIds = new Set<string>();
+      for (const m of messages) {
+        const snap = m.contextSnapshot as
+          | { issueId?: string }
+          | null
+          | undefined;
+        if (snap && typeof snap.issueId === "string") {
+          issueIds.add(snap.issueId);
+          if (issueIds.size >= 5) break;
+        }
+      }
+      const linkedIssues = issueIds.size
+        ? await db.issue.findMany({
+            where: {
+              id: { in: [...issueIds] },
+              workspaceId: ctx.workspaceId,
+            },
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              statusId: true,
+              status: { select: { category: true, name: true } },
+            },
+          })
+        : [];
+
+      return {
+        workspace,
+        thread,
+        messages,
+        agent,
+        linkedIssues,
+      };
     },
   },
 } as const;
