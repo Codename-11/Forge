@@ -64,6 +64,7 @@ export const ALLOWED_TARGET_TYPES: ReadonlySet<string> = new Set<string>([
   "project",
   "initiative",
   "cycle",
+  "chat-message",
 ]);
 
 // -- Client ------------------------------------------------------------------
@@ -459,6 +460,68 @@ export async function finalizeAttachment(params: {
     size: updated.size,
     targetType: updated.targetType,
     targetId: updated.targetId,
+  };
+}
+
+/**
+ * Server-side bytes fetch for an attachment. Used by the MCP
+ * `attachments.getInline` tool so image-aware models can receive image
+ * blobs in the response without going through a presigned URL round-trip
+ * (which most MCP clients can't follow inline). Returns base64-encoded
+ * bytes plus the row's mime type and size.
+ *
+ * The caller is responsible for scope/workspace checks and for enforcing
+ * a sensible max-bytes cap — this helper performs no policy of its own.
+ * It will throw if the row is unfinalized, missing, or larger than
+ * `maxBytes`.
+ */
+export async function getAttachmentInline(
+  attachmentId: string,
+  opts: { maxBytes: number },
+): Promise<{
+  id: string;
+  mimeType: string;
+  sizeBytes: number;
+  filename: string;
+  base64: string;
+}> {
+  const row = await db.attachment.findUniqueOrThrow({
+    where: { id: attachmentId },
+  });
+  if (!row.url || row.url.startsWith("pending:")) {
+    throw new Error("Attachment not finalized yet.");
+  }
+  if (row.size > opts.maxBytes) {
+    throw new Error(
+      `Attachment is ${row.size} bytes which exceeds maxBytes ${opts.maxBytes}.`,
+    );
+  }
+  const ws = await loadWorkspace(row.workspaceId);
+  const bucket = bucketNameFromSlug(ws.slug);
+  const s3 = getS3Client();
+  const obj = await s3.send(
+    new GetObjectCommand({ Bucket: bucket, Key: row.url }),
+  );
+  const body = obj.Body;
+  if (!body) {
+    throw new Error("Attachment has no body in object storage.");
+  }
+  // S3 SDK returns a Web/Node ReadableStream; transformToByteArray is the
+  // SDK's first-class helper and handles either flavour.
+  const bytes = await (
+    body as { transformToByteArray: () => Promise<Uint8Array> }
+  ).transformToByteArray();
+  if (bytes.byteLength > opts.maxBytes) {
+    throw new Error(
+      `Attachment object is ${bytes.byteLength} bytes which exceeds maxBytes ${opts.maxBytes}.`,
+    );
+  }
+  return {
+    id: row.id,
+    mimeType: row.mimeType,
+    sizeBytes: bytes.byteLength,
+    filename: row.filename,
+    base64: Buffer.from(bytes).toString("base64"),
   };
 }
 

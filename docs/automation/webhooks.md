@@ -43,7 +43,7 @@ agent-routed events that also trigger webhook delivery to the agent's `webhookUr
 
 | EventKind | When it fires | Agent dispatch |
 |---|---|---|
-| `AGENT_ASSIGNED` | Dispatcher or manual assignment | Yes — routed to assigned agent |
+| `AGENT_ASSIGNED` | Dispatcher or manual assignment | Yes — routed to assigned agent. Payload embeds `issueSnapshot: { id, number, title, priority, statusId, projectId, labelNames }` so the receiver can act without an immediate `issues.get`. |
 | `ISSUE_QUEUED` | `queued` flips `true` | Yes — routed to assigned agent (if any) |
 | `COMMENT_CREATED` | New comment with agent @mention | Yes — per mentioned agent |
 | `ISSUE_PRIORITY_CHANGED` | Priority → HIGH or URGENT | Yes — routed to assigned agent |
