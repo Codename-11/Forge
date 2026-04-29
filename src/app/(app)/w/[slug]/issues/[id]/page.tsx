@@ -3,6 +3,7 @@ import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { AgentStatus } from "@prisma/client";
+import { Paperclip } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
@@ -164,6 +165,26 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         left={
           <>
             <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">{issueKey}</span>
+            {issue.attachments.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  // Jump to the right rail's Attachments tab. The rail
+                  // reads `?tab=` from the URL and "attachments" is its
+                  // default, so clearing the param works either way.
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete("tab");
+                  router.replace(`${url.pathname}${url.search}${url.hash}`);
+                }}
+                title={`${issue.attachments.length} attachment${issue.attachments.length === 1 ? "" : "s"}`}
+                className="focus-ring inline-flex shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-muted-foreground hover:bg-subtle/60 hover:text-foreground"
+              >
+                <Paperclip className="h-3 w-3" />
+                <span className="font-mono text-[0.6875rem]">
+                  {issue.attachments.length}
+                </span>
+              </button>
+            )}
             {editingTitle ? (
               <form
                 onSubmit={(e) => {

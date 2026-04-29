@@ -1,0 +1,164 @@
+"use client";
+import {
+  Image as ImageIcon,
+  FileText,
+  FileArchive,
+  FileQuestion,
+  Download,
+} from "lucide-react";
+import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
+import { useAttachmentLightbox } from "@/components/attachments/attachment-lightbox";
+
+/**
+ * Compact filename + size + mime-aware glyph chip for attachments rendered
+ * inline (e.g. on chat bubbles, comments, anywhere a full grid tile would
+ * be too heavy). Click opens the existing AttachmentLightbox; the
+ * lightbox provider must be mounted somewhere in the tree.
+ *
+ * `download` icon hint on the right is decorative — the lightbox owns the
+ * actual download action. Keeping it here means the affordance reads as
+ * "this is a file you can save" without a second action button.
+ */
+
+export type AttachmentChipData = {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+};
+
+export function AttachmentChip({
+  attachment,
+  attachments,
+  target,
+  className,
+}: {
+  attachment: AttachmentChipData;
+  /** All attachments on the same target — paged through in the lightbox. */
+  attachments?: AttachmentChipData[];
+  /** Lightbox refetch hint after delete; safe to omit. */
+  target?: { type: string; id: string };
+  className?: string;
+}) {
+  const lightbox = useAttachmentLightbox();
+  const Icon = mimeIcon(attachment.mimeType);
+
+  const open = () => {
+    lightbox.open({
+      attachmentId: attachment.id,
+      attachments: attachments ?? [attachment],
+      target,
+    });
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={open}
+      title={`${attachment.filename} · ${prettyBytes(attachment.size)}`}
+      className={cn(
+        "inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-card/60 px-1.5 py-1 text-left transition-colors hover:border-ember/40 hover:bg-card",
+        className,
+      )}
+    >
+      <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
+      <span className="text-id min-w-0 flex-1 truncate font-mono text-foreground/90">
+        {attachment.filename}
+      </span>
+      <span className="text-meta shrink-0 text-muted-foreground">
+        {prettyBytes(attachment.size)}
+      </span>
+      <Download className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+    </button>
+  );
+}
+
+/**
+ * Image attachment thumbnail variant — square preview at ~80px that
+ * resolves a presigned URL on mount and falls back to the chip on error
+ * (so a 404 / storage misconfig never produces a broken-image icon).
+ */
+export function AttachmentThumb({
+  attachment,
+  attachments,
+  target,
+  className,
+}: {
+  attachment: AttachmentChipData;
+  attachments?: AttachmentChipData[];
+  target?: { type: string; id: string };
+  className?: string;
+}) {
+  const lightbox = useAttachmentLightbox();
+  const { data, error } = trpc.attachment.getDownloadUrl.useQuery(
+    { attachmentId: attachment.id },
+    { staleTime: 5 * 60_000, retry: false },
+  );
+  if (error) {
+    return (
+      <AttachmentChip
+        attachment={attachment}
+        attachments={attachments}
+        target={target}
+        className={className}
+      />
+    );
+  }
+  const open = () =>
+    lightbox.open({
+      attachmentId: attachment.id,
+      attachments: attachments ?? [attachment],
+      target,
+    });
+  return (
+    <button
+      type="button"
+      onClick={open}
+      title={`${attachment.filename} · ${prettyBytes(attachment.size)}`}
+      className={cn(
+        "block h-20 w-20 shrink-0 overflow-hidden rounded-md border border-border bg-background transition-shadow hover:ring-1 hover:ring-ember/40",
+        className,
+      )}
+    >
+      {data?.url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={data.url}
+          alt={attachment.filename}
+          loading="lazy"
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <span className="flex h-full w-full items-center justify-center text-muted-foreground">
+          <ImageIcon className="h-4 w-4" />
+        </span>
+      )}
+    </button>
+  );
+}
+
+export function isImageMime(mime: string): boolean {
+  return mime.startsWith("image/");
+}
+
+function mimeIcon(mime: string) {
+  const m = (mime || "").toLowerCase();
+  if (m.startsWith("image/")) return ImageIcon;
+  if (m === "application/pdf" || m.startsWith("text/") || m === "application/json")
+    return FileText;
+  if (
+    m === "application/zip" ||
+    m === "application/x-tar" ||
+    m === "application/gzip"
+  )
+    return FileArchive;
+  return FileQuestion;
+}
+
+function prettyBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}

@@ -48,8 +48,9 @@ const KIND_ICON: Record<RuntimeKind, typeof Server> = {
 export default function RuntimesPage() {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
+  const [includeArchived, setIncludeArchived] = useState(false);
   const { data: runtimes, isLoading } = trpc.runtime.list.useQuery({
-    includeArchived: false,
+    includeArchived,
   });
 
   const [renameTarget, setRenameTarget] = useState<{
@@ -82,6 +83,14 @@ export default function RuntimesPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const unarchive = trpc.runtime.unarchive.useMutation({
+    onSuccess: () => {
+      toast.success("Runtime restored.");
+      invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const rows = runtimes ?? [];
 
   return (
@@ -89,6 +98,20 @@ export default function RuntimesPage() {
       <Topbar
         title="Runtimes"
         subtitle="Compute environments that host agents."
+        actions={
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setIncludeArchived((v) => !v)}
+            title={
+              includeArchived
+                ? "Hide archived runtimes"
+                : "Show archived runtimes alongside active"
+            }
+          >
+            {includeArchived ? "Hide archived" : "Show archived"}
+          </Button>
+        }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-6 p-6">
@@ -96,10 +119,14 @@ export default function RuntimesPage() {
             <ul className="divide-y divide-border">
               {rows.map((rt) => {
                 const KindIcon = KIND_ICON[rt.kind];
+                const isArchived = Boolean(rt.archivedAt);
                 return (
                   <li
                     key={rt.id}
-                    className="flex flex-wrap items-start gap-3 px-4 py-3"
+                    className={cn(
+                      "flex flex-wrap items-start gap-3 px-4 py-3",
+                      isArchived && "opacity-60",
+                    )}
                   >
                     <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-subtle/50 text-foreground/80">
                       <KindIcon className="h-4 w-4" />
@@ -113,6 +140,14 @@ export default function RuntimesPage() {
                           {rt.name}
                         </Link>
                         <KindBadge kind={rt.kind} />
+                        {isArchived && (
+                          <span
+                            className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+                            title="Archived — hidden from active list, heartbeats rejected"
+                          >
+                            archived
+                          </span>
+                        )}
                         {rt.providersAvailable.length > 0 && (
                           <div className="flex flex-wrap items-center gap-1">
                             {rt.providersAvailable.map((p) => (
@@ -172,15 +207,26 @@ export default function RuntimesPage() {
                       >
                         Rename
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() =>
-                          setArchiveTarget({ id: rt.id, name: rt.name })
-                        }
-                      >
-                        Archive
-                      </Button>
+                      {isArchived ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => unarchive.mutate({ id: rt.id })}
+                          disabled={unarchive.isPending}
+                        >
+                          Unarchive
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            setArchiveTarget({ id: rt.id, name: rt.name })
+                          }
+                        >
+                          Archive
+                        </Button>
+                      )}
                     </div>
                   </li>
                 );
@@ -221,7 +267,7 @@ export default function RuntimesPage() {
         open={!!archiveTarget}
         onOpenChange={(v) => !v && setArchiveTarget(null)}
         title={`Archive ${archiveTarget?.name ?? "runtime"}?`}
-        description="The runtime is hidden from the active list. Agents pointing at it stay assigned, but new heartbeats are rejected. Restore via the database if needed — there's no UI for unarchive yet."
+        description='The runtime is hidden from the active list. Agents pointing at it stay assigned, but new heartbeats are rejected. Toggle "Show archived" above and use Unarchive to restore.'
         primaryLabel="Archive"
         loading={archive.isPending}
         onConfirm={async () => {

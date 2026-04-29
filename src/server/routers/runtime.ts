@@ -133,6 +133,30 @@ export const runtimeRouter = router({
       });
     }),
 
+  /**
+   * Inverse of `archive`. Clears `archivedAt` so the row reappears in
+   * the active list and can heartbeat again. Idempotent — calling on a
+   * row that's already active is a no-op (keeps existing `null`).
+   */
+  unarchive: workspaceProcedure
+    .input(z.object({ id: runtimeId }))
+    .mutation(async ({ ctx, input }) => {
+      const row = await ctx.db.runtime.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, archivedAt: true },
+      });
+      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+      if (!row.archivedAt) {
+        // Already active — nothing to do, but return the row so the
+        // caller can refresh its cached copy uniformly.
+        return ctx.db.runtime.findUniqueOrThrow({ where: { id: row.id } });
+      }
+      return ctx.db.runtime.update({
+        where: { id: row.id },
+        data: { archivedAt: null },
+      });
+    }),
+
   update: workspaceProcedure
     .input(
       z.object({
