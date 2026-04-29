@@ -2,6 +2,149 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-04-28 — Agent awareness: 10 new MCP tools + attachment UX + real daemon loop
+
+Follow-on to the morning's Multica-inspired push. Closed every Tier 1
+and Tier 2 gap from the awareness analysis except agent-to-agent
+delegation (Tier 3, deferred — needs more design).
+
+### Stream BA — backend MCP additions + AGENT_ASSIGNED enrichment
+
+10 new/extended tools in `src/server/services/mcp.ts`:
+- `comments.list({ issueId, before?, limit? })` — `READ_ISSUES`. Closes
+  the biggest gap: agents can now read the comment history they're
+  entering, not just write to it.
+- `runtimes.list({ kind?, includeArchived? })` — `ADMIN`. Replaces the
+  CLI's local-only fallback.
+- `agents.list({ runtimeId?, includeArchived? })` — `READ_USERS`. Peer
+  discovery; also unblocks the CLI's agents-list command.
+- `events.recent({ subjectType?, subjectId?, kinds?, before? })` —
+  `READ_ISSUES`. Historical activity grounding.
+- `chat.getThread({ threadId, before?, limit? })` — `WRITE_COMMENTS`,
+  caller's `linkedAgentId` must match `thread.agentId`. For
+  prior-message context.
+- `workspace.get` — `READ_ISSUES`. Settings/policy (no member list —
+  admin-gated).
+- `agent.context.bundle({ issueId? | threadId? })` — composite. One
+  call returns issue/thread + comments + attachments + relations +
+  currentRun + workspace. Saves 4–5 round trips on dispatch.
+- `attachments.getInline({ attachmentId, maxBytes? = 1MB })` —
+  base64 bytes for image-aware models. Mime allowlist: image/png,
+  image/jpeg, image/gif, image/webp, application/pdf, text/plain,
+  text/markdown. Default cap 1MB, hard cap 25MB.
+- `runs.list({ agentId?, issueId?, status?, before? })` — `READ_ISSUES`.
+- `issues.get` extended with optional `include` flags (`description`,
+  `comments`, `attachments`, `relations`, `currentRun`, `labels`).
+  Default response shape unchanged for backward compat.
+
+`AGENT_ASSIGNED` payload enrichment: every producer (dispatcher.ts,
+issue router, ai router, mcp tools — 7 sites total) now includes
+`payload.issueSnapshot = { id, number, title, priority, statusId,
+projectId, labelNames }`. Centralized in `audit.recordChange` via a
+`loadIssueSnapshot` helper, so future producers automatically get it.
+
+Storage: `chat-message` added to `ALLOWED_TARGET_TYPES` so attachments
+can hang off chat messages. `getAttachmentInline` helper added to
+`storage.ts` (uses S3 SDK `transformToByteArray`; no new deps).
+
+Tool count 53 → 68. Namespaces 14 → 18 (`workspace`, `events` new;
+`agent` and `runs` gained their own dedicated tools). 17 new tests in
+`mcp.test.ts`; all 53 in the file passing.
+
+### Stream UI — attachments + chat + runtime UX
+
+Five new attachment components under `src/components/attachments/`:
+`use-upload-target.ts` (shared upload primitive), `use-drop-upload.ts`
+(DnD hook with counter-based dragenter/leave), `drop-overlay.tsx`
+(visual overlay), `attachment-chip.tsx` (`<AttachmentChip>` +
+`<AttachmentThumb>` for image previews). The existing
+`use-paste-upload.ts` was refactored to delegate to the shared
+primitive — paste and drop now share the same upload code path.
+
+Issue body + comment composer in `issue-main.tsx` wrapped in the DnD
+overlay. Mission Control chat bubbles render attachments inline
+(images → existing `AttachmentLightbox`; non-images →
+`<AttachmentChip>`). Issue header gets a paperclip + count chip when
+the issue has attachments; click jumps the rail to the Attachments
+tab.
+
+Runtime UX:
+- `/settings/runtimes` index gains a "Show archived" toggle and
+  per-row Unarchive button. Archived rows render at `opacity-60` with
+  an "archived" badge.
+- Detail page topbar gets an Unarchive action when `archivedAt` is
+  set, plus a banner.
+- `runtime.unarchive({ id })` tRPC mutation added (idempotent).
+
+New `<AgentContextCard />` on the agent detail page renders "what
+this agent currently sees" for its most recent assignment. Uses only
+existing queries (`agent.pipeline` + `issue.byId`) so it shipped
+parallel to Stream BA without depending on the new tools.
+
+### Stream D2 — real daemon agent loop
+
+The CLI graduates from a placeholder-prompt skeleton to a real Claude
+Code agent loop. Three big changes consume Stream BA's awareness
+surface:
+
+1. **Chat dispatch** reads the actual user message body from the SSE
+   payload (the placeholder branch is gone), then calls
+   `agent.context.bundle({ threadId })` to ground Claude on prior
+   conversation. If `context.issueId` is set, the bundle's issue +
+   attachments ride along. Image attachments inline as Claude content
+   blocks via `attachments.getInline`; text/md decoded inline; PDFs
+   announced by filename + size.
+
+2. **`AGENT_ASSIGNED` handler** — full happy path in
+   `tools/forge-cli/src/dispatch/issue-loop.ts`: issueSnapshot framing
+   → context bundle → inline attachments → starter comment → spawn
+   Claude → progress comments at message boundaries (capped at 12) →
+   final summary → `runs.recordUsage` with token counts from Claude's
+   stream-json result events. Idempotent within process via a
+   bounded `SeenEvents` set (last 256 event ids).
+
+3. **`forge runtimes list` / `agents list`** now hit real MCP, with
+   table/JSON output and filters. Local-host runtime annotated as
+   "(this host)".
+
+Image content block shape for Claude Code stream-json input:
+`{ type: "image", source: { type: "base64", media_type, data } }`.
+
+`claude-code.ts` split into `runClaudeChat` + `runClaudeIssue` over a
+shared `runClaudeProcess` helper. Dispatch types live in
+`dispatch/types.ts`.
+
+### Verification
+
+- `pnpm typecheck` (root) — clean.
+- `pnpm build:cli` — clean.
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts` — 53
+  passing (including the 17 new awareness-tool tests).
+- Targeted `pnpm exec eslint` on all touched files — clean.
+- Smoke: production build + container deploy planned post-commit.
+
+### Punted / known follow-ups
+
+- **Agent-to-agent delegation** — Tier 3 from the analysis. Needs
+  design (sub-issues vs delegation token vs `tasks.delegate` tool).
+  Deliberately deferred; not blocking anyone.
+- **`statuses.list` MCP tool** — without it, the daemon can't auto-
+  transition issues to IN_PROGRESS on AGENT_ASSIGNED. Currently the
+  daemon skips the transition; issues stay in their current status
+  while the agent works. Small follow-up to expose `statuses.list` so
+  the daemon can map `category: "STARTED"` to the workspace's own
+  status row.
+- **PDF byte-inlining for Claude** — v1 announces filename + size
+  only. Once Claude Code's stream-json grows native PDF support,
+  switch to base64 inline.
+- **Provider coverage beyond Claude Code** — codex/hermes/gemini/
+  cursor-agent stubs still respond `[provider:X] not implemented`.
+- **OAuth device-code flow for `forge login`** — still v1; takes URL
+  + token via prompt or flag.
+- **Inline-content cap tuning** — daemon-side budget is 4MB total per
+  dispatch with 1MB per attachment. May need adjustment based on
+  real-world prompt sizes.
+
 ## 2026-04-28 — Multica-inspired upgrades: Runtime + tokens + unified timeline + forge CLI
 
 Executed PLAN.md (committed cf7be7a) as four parallel streams: backend
