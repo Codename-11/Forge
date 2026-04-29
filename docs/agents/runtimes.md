@@ -111,22 +111,33 @@ The daemon:
 Missing `claude` binary on PATH falls through to a friendly `[OFFLINE]`
 reply via `chat.finalizeDraft` — no daemon crash.
 
+### What the daemon does on dispatch
+
+- **`CHAT_MESSAGE_POSTED` (role=USER)** — reads `body` + `context`
+  directly from the SSE payload, calls `agent.context.bundle({
+  threadId })` for thread history + linked-issue summary +
+  workspace, inlines image / PDF / text attachments via
+  `attachments.getInline`, and spawns the provider adapter with the
+  bundle as system prompt and the user message as a content-block
+  array (image attachments pass as
+  `{type:"image",source:{type:"base64",...}}`).
+- **`AGENT_ASSIGNED`** — reads `payload.issueSnapshot` for fast
+  framing, bundles the full issue context (description / comments /
+  attachments / relations / current run / workspace), inlines
+  attachments, posts a starter comment, then spawns the provider
+  with the bundle. Posts progress comments at assistant message
+  boundaries (capped) and a final summary on exit. Calls
+  `runs.recordUsage` with the `usage` block parsed from claude's
+  `result` event. Idempotent against delivery retries via an
+  in-memory bounded set keyed by event id.
+
 ::: warning v1 limitations
 - Login takes URL + token directly (no OAuth device-code flow yet).
-- Chat dispatch reads only `{threadId, messageId, agentId, role}`
-  from the SSE event payload, even though `chat.send` actually
-  publishes `body` and `context` too. Net effect: the local CLI gets
-  a placeholder prompt instead of the user's message. The fix is a
-  one-line widening of the typed payload in
-  `tools/forge-cli/src/daemon.ts`.
-- `AGENT_ASSIGNED` is a stub — the daemon logs the event and posts a
-  placeholder comment. The full agent loop is a follow-up.
-- `runtimes.list` and `agents.list` MCP tools don't exist yet, so
-  `forge runtimes list` and `forge agents list` fall back to local
-  state and point the operator at the web UI.
-- `chat.getThread` MCP tool is not shipped. The single inbound chat
-  event is enough to reply to the *current* message, but the agent
-  has no way to read prior messages in the thread for grounding.
+- The AGENT_ASSIGNED loop only auto-runs for `CLAUDE` provider
+  agents; other providers receive a placeholder comment.
+- No automatic `IN_PROGRESS` status transition on dispatch — there's
+  no `statuses.list` MCP tool yet to discover the workspace's
+  category-mapped started status.
 :::
 
 ## Token usage on AgentRun

@@ -1,6 +1,14 @@
 import { callTool } from "../mcp.js";
 import type { AuthFile } from "../auth.js";
 import { runClaudeChat } from "./claude-code.js";
+import type {
+  ChatMessageHistoryRow,
+  DispatchAgent,
+  InlineAttachment,
+  IssueBundle,
+} from "./types.js";
+
+export type { ChatDispatchContext, IssueDispatchContext } from "./types.js";
 
 /**
  * Provider switch — given an agent's `provider` enum value, fan out to
@@ -14,14 +22,12 @@ export type AgentProviderId = "CLAUDE" | "CODEX" | "HERMES" | "CUSTOM";
 export interface DispatchChatArgs {
   auth: AuthFile;
   threadId: string;
-  agent: {
-    id: string;
-    profileKey: string;
-    name: string;
-    provider: AgentProviderId | string;
-  };
+  agent: DispatchAgent & { provider: AgentProviderId | string };
   userMessage: string;
   workspaceSlug?: string;
+  threadHistory?: ChatMessageHistoryRow[];
+  issueContext?: IssueBundle | null;
+  attachments?: InlineAttachment[];
 }
 
 export async function dispatchChat(args: DispatchChatArgs): Promise<void> {
@@ -34,6 +40,9 @@ export async function dispatchChat(args: DispatchChatArgs): Promise<void> {
         agent: args.agent,
         userMessage: args.userMessage,
         workspaceSlug: args.workspaceSlug,
+        threadHistory: args.threadHistory ?? [],
+        issueContext: args.issueContext ?? null,
+        attachments: args.attachments ?? [],
       });
     case "CODEX":
     case "HERMES":
@@ -70,3 +79,6 @@ async function stubReply(
     console.error(`[dispatch] stubReply error:`, err);
   }
 }
+
+/** Re-export for convenience — `daemon.ts` calls this for chat dispatch. */
+export type { ChatMessageHistoryRow, DispatchAgent, InlineAttachment, IssueBundle };
