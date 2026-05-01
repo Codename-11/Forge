@@ -1735,6 +1735,104 @@ describe("mcp — awareness tools (Stream BA)", () => {
     expect(snap.statusId).toBe(inProgress.id);
   });
 
+  it("per-agent dispatch shim does NOT receive untargeted events (regression: 2026-05-01)", async () => {
+    // Bug: the audit fan-out's broadcast subscribers query was matching
+    // every active webhook whose `events` array contained the kind,
+    // including the synthetic per-agent shim
+    // `agent:dispatch:<agentId>`. The shim subscribes to all five
+    // agent-routed kinds because the worker reads its URL suffix to
+    // dispatch — but it should only fire when the agent-targeted
+    // dispatch logic in audit.ts (branches a–d) explicitly adds it.
+    // Without the URL filter, Victor was paged on EVERY workspace
+    // event of those kinds. Regression test: an unmentioned comment
+    // on Bob's issue must not enqueue a delivery to Victor's shim.
+    const f = await createWorkspaceFixture({ keyPrefix: "PAS" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const bob = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        profileKey: "bob",
+        name: "Bob",
+        webhookUrl: "https://example.test/bob",
+        webhookSecret: "secret-bob",
+      },
+    });
+    const victor = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        profileKey: "victor",
+        name: "Victor",
+        webhookUrl: "https://example.test/victor",
+        webhookSecret: "secret-victor",
+      },
+    });
+    // Pre-create both per-agent shim rows (in production these are
+    // upserted on first targeted dispatch — we synthesize the same
+    // state directly).
+    await prisma.webhook.create({
+      data: {
+        workspaceId: f.workspace.id,
+        url: `agent:dispatch:${victor.id}`,
+        secret: "shim-victor",
+        events: [
+          "AGENT_ASSIGNED",
+          "ISSUE_QUEUED",
+          "COMMENT_CREATED",
+          "ISSUE_PRIORITY_CHANGED",
+          "CHAT_MESSAGE_POSTED",
+        ],
+        active: true,
+      },
+    });
+    const bobShim = await prisma.webhook.create({
+      data: {
+        workspaceId: f.workspace.id,
+        url: `agent:dispatch:${bob.id}`,
+        secret: "shim-bob",
+        events: [
+          "AGENT_ASSIGNED",
+          "ISSUE_QUEUED",
+          "COMMENT_CREATED",
+          "ISSUE_PRIORITY_CHANGED",
+          "CHAT_MESSAGE_POSTED",
+        ],
+        active: true,
+      },
+    });
+
+    const issue = await createIssue(f, { title: "bob's issue" });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: bob.id },
+    });
+
+    const { ctx } = buildMcpCtx(f);
+    // Plain comment on Bob's issue, no @mention of Victor.
+    await call(
+      "comments.create",
+      { issueId: issue.id, body: "moving to done — looks good" },
+      ctx,
+    );
+
+    const deliveries = await prisma.webhookDelivery.findMany({
+      where: {
+        webhook: { workspaceId: f.workspace.id },
+        event: { kind: "COMMENT_CREATED" },
+      },
+      include: { webhook: { select: { url: true } } },
+    });
+    const targetedUrls = deliveries.map((d) => d.webhook.url).sort();
+
+    // Victor's per-agent shim must NOT appear. Bob's shim is the
+    // generic agent-dispatch target the comment routes to.
+    expect(targetedUrls).not.toContain(`agent:dispatch:${victor.id}`);
+    // Bob may or may not appear depending on how the comment dispatch
+    // resolves — what we care about for the regression is that
+    // VICTOR (the unrelated agent) is excluded.
+    void bobShim;
+  });
+
   it("AGENT_ASSIGNED auto-transition skips already-started + terminal issues", async () => {
     const f = await createWorkspaceFixture({ keyPrefix: "AUS" });
     fixtures.push(f);
