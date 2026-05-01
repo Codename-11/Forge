@@ -433,6 +433,13 @@ model Workspace {
   /// 5 is a reasonable starting point for short loops; bump for slower
   /// agents. 0 disables the sweep.
   agentRunStaleMinutes       Int              @default(0)
+  /// Optional Status row id to auto-transition into on AGENT_ASSIGNED.
+  /// When set, the audit/event fan-out promotes assigned issues to this
+  /// status (must be in IN_PROGRESS category, validated at write time).
+  /// Skipped if the issue is already in IN_PROGRESS / IN_REVIEW or in a
+  /// terminal category (DONE / CANCELED). Null disables — agents must
+  /// transition client-side via statuses.list + issues.transition.
+  startedStatusId            String?
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
   deletedAt                  DateTime?
@@ -467,6 +474,7 @@ model Workspace {
   chatThreads        ChatThread[]
   chatMessages       ChatMessage[]
   runtimes           Runtime[]
+  startedStatus      Status?              @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
 }
@@ -530,8 +538,9 @@ model Status {
   position    Int
   isDefault   Boolean        @default(false)
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  issues    Issue[]
+  workspace            Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issues               Issue[]
+  workspaceStartedFor  Workspace[] @relation("WorkspaceStartedStatus")
 
   @@unique([workspaceId, name])
   @@index([workspaceId, category])

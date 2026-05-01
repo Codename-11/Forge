@@ -1685,4 +1685,124 @@ describe("mcp — awareness tools (Stream BA)", () => {
     expect(typeof snap.number).toBe("number");
     expect(Array.isArray(snap.labelNames)).toBe(true);
   });
+
+  it("AGENT_ASSIGNED auto-transitions to startedStatusId when set", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "AUT" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const inProgress = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: f.workspace.id, category: "IN_PROGRESS" },
+    });
+    await prisma.workspace.update({
+      where: { id: f.workspace.id },
+      data: { startedStatusId: inProgress.id },
+    });
+    const { ctx } = buildMcpCtx(f);
+    const issue = await createIssue(f, { title: "auto-transition" });
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "v", name: "V" },
+    });
+    const before = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+      select: { status: { select: { category: true } } },
+    });
+    expect(before.status?.category).not.toBe("IN_PROGRESS");
+
+    await call(
+      "issues.assign",
+      { issueId: issue.id, agentId: agent.id },
+      ctx,
+    );
+
+    const after = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+      select: { statusId: true, status: { select: { category: true } } },
+    });
+    expect(after.statusId).toBe(inProgress.id);
+    expect(after.status?.category).toBe("IN_PROGRESS");
+
+    const events = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: f.workspace.id,
+        subjectId: issue.id,
+        kind: "AGENT_ASSIGNED",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    const payload = events[0].payload as Record<string, unknown>;
+    expect(payload.autoTransitionedTo).toBe(inProgress.id);
+    const snap = payload.issueSnapshot as Record<string, unknown>;
+    expect(snap.statusId).toBe(inProgress.id);
+  });
+
+  it("AGENT_ASSIGNED auto-transition skips already-started + terminal issues", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "AUS" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const inProgress = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: f.workspace.id, category: "IN_PROGRESS" },
+    });
+    const done = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: f.workspace.id, category: "DONE" },
+    });
+    await prisma.workspace.update({
+      where: { id: f.workspace.id },
+      data: { startedStatusId: inProgress.id },
+    });
+    const { ctx } = buildMcpCtx(f);
+
+    // Already in IN_PROGRESS — should not double-transition.
+    const started = await createIssue(f, { title: "already started" });
+    await prisma.issue.update({
+      where: { id: started.id },
+      data: { statusId: inProgress.id },
+    });
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "v", name: "V" },
+    });
+    await call(
+      "issues.assign",
+      { issueId: started.id, agentId: agent.id },
+      ctx,
+    );
+    let events = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: f.workspace.id,
+        subjectId: started.id,
+        kind: "AGENT_ASSIGNED",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(
+      (events[0].payload as Record<string, unknown>).autoTransitionedTo,
+    ).toBeUndefined();
+
+    // Already DONE — should not reopen.
+    const closed = await createIssue(f, { title: "already done" });
+    await prisma.issue.update({
+      where: { id: closed.id },
+      data: { statusId: done.id },
+    });
+    await call(
+      "issues.assign",
+      { issueId: closed.id, agentId: agent.id },
+      ctx,
+    );
+    const after = await prisma.issue.findUniqueOrThrow({
+      where: { id: closed.id },
+      select: { statusId: true },
+    });
+    expect(after.statusId).toBe(done.id);
+    events = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: f.workspace.id,
+        subjectId: closed.id,
+        kind: "AGENT_ASSIGNED",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(
+      (events[0].payload as Record<string, unknown>).autoTransitionedTo,
+    ).toBeUndefined();
+  });
 });

@@ -39,6 +39,7 @@ export default function WorkspaceSettingsPage() {
     "hermes" | "openai" | "anthropic" | "custom"
   >("hermes");
   const [aiModel, setAiModel] = useState("");
+  const [startedStatusId, setStartedStatusId] = useState<string | null>(null);
 
   const { data: aiStatus, refetch: refetchAi } = trpc.ai.status.useQuery();
   const ensureCoach = trpc.ai.ensureCoach.useMutation({
@@ -71,6 +72,7 @@ export default function WorkspaceSettingsPage() {
         "hermes",
     );
     setAiModel(current.aiModel ?? "");
+    setStartedStatusId(current.startedStatusId ?? null);
   }, [current]);
 
   const update = trpc.workspace.update.useMutation({
@@ -347,6 +349,47 @@ export default function WorkspaceSettingsPage() {
           </Section>
 
           <Section
+            title="Auto-transition on assignment"
+            hint="When an agent is assigned to a queued/backlog issue, the server can flip the issue into a chosen IN_PROGRESS status atomically with the AGENT_ASSIGNED event. Lets agents skip the statuses.list + issues.transition round-trip on every dispatch."
+          >
+            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+              <Field
+                label="Started status"
+                hint="Pick the IN_PROGRESS-category status to transition into. Off = no auto-transition (agents handle it client-side). The transition is skipped when the issue is already in IN_PROGRESS / IN_REVIEW or in DONE / CANCELED."
+              >
+                <select
+                  value={startedStatusId ?? ""}
+                  onChange={(e) =>
+                    setStartedStatusId(
+                      e.target.value === "" ? null : e.target.value,
+                    )
+                  }
+                  disabled={!canEdit}
+                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
+                >
+                  <option value="">Off — agents handle transition client-side</option>
+                  {(current?.statuses ?? [])
+                    .filter((s) => s.category === "IN_PROGRESS")
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+              {startedStatusId && (
+                <div className="rounded-md border border-border bg-background/40 px-3 py-2 text-[0.6875rem] text-muted-foreground">
+                  When AGENT_ASSIGNED fires, the issue auto-transitions
+                  to this status. The event payload gains an{" "}
+                  <code>autoTransitionedTo</code> field so receivers can
+                  distinguish a server-driven transition from a
+                  pre-existing status.
+                </div>
+              )}
+            </div>
+          </Section>
+
+          <Section
             title="AI"
             hint="Forge-internal AI features. Calls Anthropic directly; no cross-system data sharing. Off by default."
           >
@@ -498,6 +541,7 @@ export default function WorkspaceSettingsPage() {
                     aiCoachEnabled,
                     aiProvider,
                     aiModel: aiModel.trim() ? aiModel.trim() : null,
+                    startedStatusId,
                   })
                 }
               >

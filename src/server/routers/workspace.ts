@@ -177,9 +177,31 @@ export const workspaceRouter = router({
         aiCoachEnabled: z.boolean().optional(),
         aiProvider: z.enum(["hermes", "openai", "anthropic", "custom"]).optional(),
         aiModel: z.string().min(1).max(80).nullable().optional(),
+        startedStatusId: z.string().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Validate startedStatusId belongs to this workspace and is in the
+      // IN_PROGRESS category. Setting null to disable is fine.
+      if (input.startedStatusId) {
+        const status = await ctx.db.status.findUnique({
+          where: { id: input.startedStatusId },
+          select: { workspaceId: true, category: true },
+        });
+        if (!status || status.workspaceId !== ctx.workspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "startedStatusId does not belong to this workspace.",
+          });
+        }
+        if (status.category !== "IN_PROGRESS") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "startedStatusId must point at an IN_PROGRESS-category status.",
+          });
+        }
+      }
       return ctx.db.workspace.update({
         where: { id: ctx.workspaceId },
         data: input,

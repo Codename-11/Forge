@@ -127,12 +127,25 @@ reply via `chat.finalizeDraft` — no daemon crash.
   attachments, **calls `statuses.list({ category: "IN_PROGRESS" })`
   and transitions the issue to the first matching status (skipped if
   the issue is already in IN_PROGRESS or IN_REVIEW; no-op when the
-  workspace has no IN_PROGRESS-category status)**, posts a starter
-  comment, then spawns the provider with the bundle. Posts progress
-  comments at assistant message boundaries (capped) and a final
-  summary on exit. Calls `runs.recordUsage` with the `usage` block
-  parsed from claude's `result` event. Idempotent against delivery
-  retries via an in-memory bounded set keyed by event id.
+  workspace has no IN_PROGRESS-category status, or when the workspace
+  already auto-transitioned server-side via `Workspace.startedStatusId`
+  — the daemon's check is idempotent)**, posts a starter comment,
+  then spawns the provider with the bundle. Posts progress comments
+  at assistant message boundaries (capped) and a final summary on
+  exit. Calls `runs.recordUsage` with the `usage` block parsed from
+  claude's `result` event. Idempotent against delivery retries via an
+  in-memory bounded set keyed by event id.
+
+::: tip Server-side auto-transition (Workspace.startedStatusId)
+When the workspace has `startedStatusId` set (admin → settings →
+workspace → "Auto-transition on assignment"), the AGENT_ASSIGNED
+audit fan-out flips the issue to that status atomically with the
+event write. Webhook payload gains an `autoTransitionedTo: <statusId>`
+field and `issueSnapshot.statusId` reflects the post-transition
+state. Agents (local daemon AND Hermes-driven Victor/Mizu) can skip
+the client-side `statuses.list` + `issues.transition` round-trip when
+they observe `autoTransitionedTo` in the payload.
+:::
 
 ::: warning v1 limitations
 - Login takes URL + token directly (no OAuth device-code flow yet).
