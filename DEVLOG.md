@@ -2,6 +2,65 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-01 — statuses.list MCP + daemon IN_PROGRESS auto-transition + Hermes runbook refresh
+
+Closes the last category-discovery gap so all agents — local
+forge-cli daemon and Hermes-driven Victor/Mizu — can transition
+issues to IN_PROGRESS without inventing status ids.
+
+### Changes
+
+- **Backend:** new `statuses.list({ category? })` MCP tool. `READ_ISSUES`-
+  scoped. Returns `{ id, name, category, color, position, isDefault }[]`
+  ordered by `position`. Optional `StatusCategory` filter (`BACKLOG |
+  TODO | IN_PROGRESS | IN_REVIEW | DONE | CANCELED`). 3 new tests
+  (56 total in mcp.test.ts, all passing).
+- **Daemon:** `tools/forge-cli/src/dispatch/issue-loop.ts` gains a
+  `maybeTransitionToInProgress` helper that runs between
+  context-bundle and inline-attachments. Calls `statuses.list({
+  category: "IN_PROGRESS" })`, prefers `isDefault` then first by
+  `position`, then `issues.transition`. Skipped when the issue is
+  already in IN_PROGRESS or IN_REVIEW; no-op when the workspace has
+  no IN_PROGRESS-category status. Best-effort — failures log and
+  proceed rather than abort the assignment.
+- **Hermes runbook** (`~/.hermes/skills/pm/forge/SKILL.md`) refreshed:
+  tool count 50 → 69, full namespace table, new "Awareness shortcut"
+  + "Status discovery" sub-sections, agent-queue loop now opens with
+  `agent.context.bundle` and includes the `statuses.list` →
+  `issues.transition` IN_PROGRESS pattern.
+- **`~/SYSTEM.md`** updated: tool count 50 → 69 (19 namespaces) with
+  the full new surface enumerated; note that HTTP MCP `tools/list`
+  hot-discovery means no Hermes restart is required.
+- **Docs:** `docs/reference/mcp.md` + `docs/agents/runtimes.md` reflect
+  the new statuses namespace and the daemon's auto-transition step.
+
+### Verification
+
+- `pnpm typecheck` — clean.
+- `pnpm build:cli` — clean.
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts` — 56/56.
+- Container rebuilt + redeployed.
+- Live MCP smoke: `tools/list` against Victor's key returns 69 tools;
+  `tools/call statuses.list { category: "IN_PROGRESS" }` returns the
+  AXI workspace's "In Progress" row (`#d97706`, position 2).
+- Mizu's key sees 69 tools too.
+
+### Punted / known follow-ups (still active)
+
+- **Agent-to-agent delegation** (Tier 3) — needs design (sub-issues vs
+  delegation token vs `tasks.delegate` MCP). Deferred.
+- **PDF byte-inlining for Claude** — daemon announces filename + size
+  only. Switch to base64 inline once Claude Code's stream-json grows
+  native PDF support.
+- **Provider coverage beyond Claude Code** — codex/hermes/gemini/
+  cursor-agent stubs still respond `[provider:X] not implemented`.
+- **OAuth device-code flow for `forge login`** — still token-prompt.
+- **Server-side auto-transition policy** — currently the daemon
+  transitions client-side. A `Workspace.startedStatusId` setting +
+  optional auto-transition on `AGENT_ASSIGNED` would let
+  Hermes-driven agents skip the round-trip entirely. Small follow-up
+  if Victor/Mizu start tripping over manual transitions.
+
 ## 2026-04-28 — Agent awareness: 10 new MCP tools + attachment UX + real daemon loop
 
 Follow-on to the morning's Multica-inspired push. Closed every Tier 1
