@@ -2,6 +2,65 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-01 — fix(audit): per-agent dispatch shim was paged on every workspace event (incident)
+
+Reported by Bailey: Victor was triggered on a status change for an
+issue he wasn't assigned to. Root-cause traced to the audit fan-out
+broadcast subscriber query.
+
+### What broke
+
+The synthetic per-agent dispatch shim row
+(`Webhook.url = "agent:dispatch:<agentId>"`) is created with a populated
+`events` array (`AGENT_ASSIGNED, ISSUE_QUEUED, COMMENT_CREATED,
+ISSUE_PRIORITY_CHANGED, CHAT_MESSAGE_POSTED`) so the worker can use it
+as a delivery target. The intent was that targeted dispatch logic
+(branches a–d in `recordChange`) explicitly adds it to
+`agentWebhookIds` only when the event is meant for that agent.
+
+But the broadcast subscriber query
+(`prisma.webhook.findMany({ events: { has: kind } })`) didn't filter
+out the synthetic shim URLs, so it matched **every** active per-agent
+shim for **every** event of those kinds in the workspace. The dedupe
+in the merge step didn't help — the per-agent shim was already in
+`subscribers` before targeted dispatch ran. Worker then resolved the
+agent from the URL suffix and POSTed to that agent's `webhookUrl`
+regardless of who the event was actually for.
+
+Confirmed in prod: Victor's shim
+(`agent:dispatch:6ea973a47af8fd626d298823d`) was active in the AXI
+workspace with all five kinds in its `events` array. Any unmentioned
+COMMENT_CREATED or AGENT_ASSIGNED on any other agent's issue would
+have paged Victor.
+
+### Fix
+
+`src/server/audit.ts:273` — added `NOT: { url: { startsWith:
+AGENT_DISPATCH_WEBHOOK_URL } }` to the subscriber query so it skips
+both the generic `agent:dispatch` shim and all per-agent
+`agent:dispatch:<id>` rows. Targeted dispatch in branches (a–d) still
+adds the right shim to `agentWebhookIds` explicitly. Real plugin
+webhook subscribers (`https://...` URLs) are unaffected.
+
+### Verification
+
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts` —
+  59/59 passing including the new regression test
+  ("per-agent dispatch shim does NOT receive untargeted events").
+- `pnpm typecheck` — clean.
+- Container rebuilt + redeployed.
+- No DB migration needed; the existing shim rows keep their `events`
+  arrays (the URL filter handles them at query time).
+
+### Why the daemon's idempotent transition didn't catch this
+
+The daemon's `maybeTransitionToInProgress` skips when the issue is
+already in IN_PROGRESS / IN_REVIEW. But it doesn't gate on "is this
+event actually for me" — it relies on the dispatch layer to only
+deliver targeted events. With the bug, the dispatch layer was
+delivering untargeted COMMENT_CREATED / AGENT_ASSIGNED, so the
+daemon's loop spun up on issues where Victor was a bystander.
+
 ## 2026-05-01 — Server-side auto-transition on AGENT_ASSIGNED (Workspace.startedStatusId)
 
 Builds on this morning's `statuses.list` + daemon client-side

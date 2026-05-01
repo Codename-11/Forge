@@ -270,11 +270,24 @@ export async function recordChange(
   // Fan-out to subscribed webhooks. Single batch query + createMany keeps
   // this off the per-webhook N+1 path. Filter on `events: { has }` so the
   // DB does the enum membership check in-index.
+  //
+  // IMPORTANT: exclude synthetic agent-dispatch shim rows
+  // (`agent:dispatch` + `agent:dispatch:<agentId>`) from this broadcast
+  // query. The shims declare a populated `events` array because the
+  // worker uses them as delivery targets, but they must only fire when
+  // the agent-targeted dispatch logic below (branches a–d) explicitly
+  // adds them to `agentWebhookIds`. Without this filter, a per-agent
+  // shim like `agent:dispatch:victor` matches the broadcast for ANY
+  // COMMENT_CREATED / AGENT_ASSIGNED / ISSUE_QUEUED / ISSUE_PRIORITY_CHANGED
+  // / CHAT_MESSAGE_POSTED in the workspace — paging Victor on issues
+  // he isn't assigned to and comments that don't mention him. (See
+  // 2026-05-01 incident note in DEVLOG.)
   const subscribers = await tx.webhook.findMany({
     where: {
       workspaceId: params.workspaceId,
       active: true,
       events: { has: params.eventKind },
+      NOT: { url: { startsWith: AGENT_DISPATCH_WEBHOOK_URL } },
     },
     select: { id: true },
   });
