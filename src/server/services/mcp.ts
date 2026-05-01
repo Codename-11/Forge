@@ -10,6 +10,7 @@ import {
   InitiativeStatus,
   RelationKind,
   RuntimeKind,
+  StatusCategory,
 } from "@prisma/client";
 import { nanoid } from "nanoid";
 import { db } from "@/server/db";
@@ -3367,6 +3368,45 @@ export const mcpTools = {
           requiredAckSeconds: true,
           autoDispatch: true,
           autoDispatchMode: true,
+        },
+      });
+    },
+  },
+
+  // --------------------------------------------------------------------- Statuses
+  /**
+   * List the workspace's status rows ordered by `position`. Optional
+   * `category` filter (BACKLOG | TODO | IN_PROGRESS | IN_REVIEW | DONE
+   * | CANCELED). Used by agents to discover the right `statusId` for an
+   * `issues.transition` call without inventing ids — e.g., the local
+   * `forge` daemon calls `statuses.list({ category: "IN_PROGRESS" })`
+   * on AGENT_ASSIGNED to flip the issue into work-in-progress before
+   * spawning Claude.
+   */
+  "statuses.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z
+      .object({
+        category: z.nativeEnum(StatusCategory).optional(),
+      })
+      .default({}),
+    async run(
+      input: { category?: StatusCategory },
+      ctx: McpContext,
+    ) {
+      return db.status.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          ...(input.category ? { category: input.category } : {}),
+        },
+        orderBy: { position: "asc" },
+        select: {
+          id: true,
+          name: true,
+          category: true,
+          color: true,
+          position: true,
+          isDefault: true,
         },
       });
     },

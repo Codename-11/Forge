@@ -1,6 +1,6 @@
 # MCP Tools
 
-Forge exposes 68 tools across 18 namespaces. Two transports — JSON-RPC 2.0 at
+Forge exposes 69 tools across 19 namespaces. Two transports — JSON-RPC 2.0 at
 `POST /api/mcp/rpc` (preferred for agent clients) and REST aliases at
 `POST /api/mcp/<tool>`. Both are gated by the same API-key auth and the same
 scope/narrowing checks.
@@ -344,6 +344,14 @@ Scope: `READ_ISSUES`.
 | Tool | Summary |
 |---|---|
 | `get` | Returns dispatch-time settings: `{ id, slug, key, name, cycleLengthDays, cycleCooldownDays, timeTrackingEnabled, attachmentQuotaMb, requiredAckSeconds, autoDispatch, autoDispatchMode }`. No member list. |
+
+### `statuses`
+
+Scope: `READ_ISSUES`.
+
+| Tool | Summary |
+|---|---|
+| `list` | `{ category? }`. Returns `{ id, name, category, color, position, isDefault }[]` ordered by `position`. Optional `category` filter (`BACKLOG | TODO | IN_PROGRESS | IN_REVIEW | DONE | CANCELED`). Used by agents to discover the right `statusId` for an `issues.transition` call without inventing ids — e.g., the local `forge` daemon calls `statuses.list({ category: "IN_PROGRESS" })` on `AGENT_ASSIGNED` to flip the issue into work-in-progress before spawning Claude. |
 
 ### `agent` (composite context)
 
