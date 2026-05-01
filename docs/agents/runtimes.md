@@ -124,12 +124,15 @@ reply via `chat.finalizeDraft` — no daemon crash.
 - **`AGENT_ASSIGNED`** — reads `payload.issueSnapshot` for fast
   framing, bundles the full issue context (description / comments /
   attachments / relations / current run / workspace), inlines
-  attachments, posts a starter comment, then spawns the provider
-  with the bundle. Posts progress comments at assistant message
-  boundaries (capped) and a final summary on exit. Calls
-  `runs.recordUsage` with the `usage` block parsed from claude's
-  `result` event. Idempotent against delivery retries via an
-  in-memory bounded set keyed by event id.
+  attachments, **calls `statuses.list({ category: "IN_PROGRESS" })`
+  and transitions the issue to the first matching status (skipped if
+  the issue is already in IN_PROGRESS or IN_REVIEW; no-op when the
+  workspace has no IN_PROGRESS-category status)**, posts a starter
+  comment, then spawns the provider with the bundle. Posts progress
+  comments at assistant message boundaries (capped) and a final
+  summary on exit. Calls `runs.recordUsage` with the `usage` block
+  parsed from claude's `result` event. Idempotent against delivery
+  retries via an in-memory bounded set keyed by event id.
 
 ::: warning v1 limitations
 - Login takes URL + token directly (no OAuth device-code flow yet).

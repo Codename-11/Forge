@@ -1444,6 +1444,47 @@ describe("mcp — awareness tools (Stream BA)", () => {
     expect(row.cycleLengthDays).toBe(7);
   });
 
+  it("statuses.list returns all statuses for the workspace ordered by position", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "STL" });
+    fixtures.push(f);
+    const { ctx } = buildMcpCtx(f);
+    const rows = (await call("statuses.list", {}, ctx)) as Array<{
+      id: string;
+      name: string;
+      category: string;
+      position: number;
+    }>;
+    expect(rows.length).toBeGreaterThan(0);
+    for (let i = 1; i < rows.length; i++) {
+      expect(rows[i].position).toBeGreaterThanOrEqual(rows[i - 1].position);
+    }
+  });
+
+  it("statuses.list filters by category when provided", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "STC" });
+    fixtures.push(f);
+    const { ctx } = buildMcpCtx(f);
+    const all = (await call("statuses.list", {}, ctx)) as Array<{
+      category: string;
+    }>;
+    const inProgress = (await call(
+      "statuses.list",
+      { category: "IN_PROGRESS" },
+      ctx,
+    )) as Array<{ category: string }>;
+    expect(inProgress.every((r) => r.category === "IN_PROGRESS")).toBe(true);
+    expect(inProgress.length).toBeLessThanOrEqual(all.length);
+  });
+
+  it("statuses.list rejects without READ_ISSUES scope", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "STX" });
+    fixtures.push(f);
+    const { ctx } = buildMcpCtx(f, { scopes: ["READ_USERS"] });
+    await expect(call("statuses.list", {}, ctx)).rejects.toThrow(
+      /Missing required scope: READ_ISSUES/,
+    );
+  });
+
   it("chat.getThread requires linkedAgentId match", async () => {
     const f = await createWorkspaceFixture({ keyPrefix: "BCT" });
     fixtures.push(f);

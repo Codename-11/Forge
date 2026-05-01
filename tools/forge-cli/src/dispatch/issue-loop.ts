@@ -26,10 +26,12 @@ import type { IssueBundle } from "./types.js";
  * DISPATCH_RECEIVED). We grab the runId from a follow-up
  * `agent.context.bundle` after the first comment posts.
  *
- * Auto-transition to IN_PROGRESS is INTENTIONALLY skipped in v1 — there's
- * no `statuses.list` MCP tool to discover the workspace's category-mapped
- * "started" status, and hardcoding a name would break for non-default
- * workspaces. Follow-up: a `statuses.list` MCP + an opt-in flag.
+ * Auto-transition to IN_PROGRESS happens between Step 1 and Step 2: the
+ * daemon calls `statuses.list({ category: "IN_PROGRESS" })`, picks the
+ * first status the workspace exposes, and calls `issues.transition` to
+ * flip the issue. Skipped when the issue is already in IN_PROGRESS or
+ * IN_REVIEW. If the workspace has no IN_PROGRESS-category status the
+ * step is a no-op (the agent still works the issue; status just stays).
  */
 
 export interface IssueSnapshotPayload {
@@ -112,6 +114,10 @@ export async function handleAgentAssigned(args: {
     }
     return;
   }
+
+  // Step 1.5 — auto-transition to IN_PROGRESS if the issue isn't already
+  // started. Skipped on workspaces with no IN_PROGRESS-category status.
+  await maybeTransitionToInProgress(auth, issueId, bundle, foreground);
 
   // Step 2 — inline attachments.
   const attachments = await inlineAttachments(
@@ -255,4 +261,87 @@ export async function handleAgentAssigned(args: {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+interface StatusRow {
+  id: string;
+  name: string;
+  category: string;
+  position: number;
+  isDefault: boolean;
+}
+
+/**
+ * Discover the workspace's IN_PROGRESS status row via `statuses.list`
+ * and call `issues.transition` if the issue isn't already started.
+ * Best-effort: any failure logs and returns; we'd rather work the
+ * issue with the wrong status than abort the whole assignment.
+ */
+async function maybeTransitionToInProgress(
+  auth: AuthFile,
+  issueId: string,
+  bundle: IssueBundle,
+  foreground: boolean,
+): Promise<void> {
+  const issue = bundle.issue as Record<string, unknown> & {
+    status?: { id: string; category: string };
+  };
+  const currentCategory = issue.status?.category;
+  if (currentCategory === "IN_PROGRESS" || currentCategory === "IN_REVIEW") {
+    if (foreground) {
+      console.log(
+        chalk.gray(
+          `    status already ${currentCategory}; skipping auto-transition`,
+        ),
+      );
+    }
+    return;
+  }
+
+  let started: StatusRow[] = [];
+  try {
+    const result = await callTool<StatusRow[]>(auth, "statuses.list", {
+      category: "IN_PROGRESS",
+    });
+    started = result.data ?? [];
+  } catch (err) {
+    console.error(`[issue-loop] statuses.list failed:`, err);
+    return;
+  }
+
+  if (started.length === 0) {
+    if (foreground) {
+      console.log(
+        chalk.gray(
+          `    no IN_PROGRESS-category status in workspace; leaving as-is`,
+        ),
+      );
+    }
+    return;
+  }
+
+  // Prefer the default status if it exists in the IN_PROGRESS category;
+  // otherwise the first one by position.
+  const target =
+    started.find((s) => s.isDefault) ?? started[0];
+
+  try {
+    await callTool(auth, "issues.transition", {
+      id: issueId,
+      statusId: target.id,
+    });
+    if (foreground) {
+      console.log(
+        chalk.cyan(`    transitioned to "${target.name}" (${target.id})`),
+      );
+    }
+    // Reflect the new status into the bundle so downstream code (system
+    // prompt, comments) reads the post-transition state.
+    if (issue.status) {
+      issue.status.id = target.id;
+      issue.status.category = target.category;
+    }
+  } catch (err) {
+    console.error(`[issue-loop] issues.transition failed:`, err);
+  }
 }
