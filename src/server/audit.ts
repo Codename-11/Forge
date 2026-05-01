@@ -78,6 +78,62 @@ async function loadIssueSnapshot(
 }
 
 /**
+ * Server-side auto-transition on AGENT_ASSIGNED. When the workspace has
+ * `startedStatusId` set and the assigned issue is currently in a
+ * BACKLOG / TODO category, flip the issue to that status row inside the
+ * same transaction as the audit/event write. Returns the new statusId
+ * if it transitioned, null otherwise. Skipped when:
+ *   - workspace has no `startedStatusId` (opt-in feature)
+ *   - target status missing or doesn't belong to the workspace
+ *   - target status is not in IN_PROGRESS category (defensive — should
+ *     have been validated at workspace.update time, but check again)
+ *   - issue is already in IN_PROGRESS / IN_REVIEW / DONE / CANCELED
+ */
+async function maybeAutoTransitionOnAssign(
+  tx: PrismaClient | Prisma.TransactionClient,
+  workspaceId: string,
+  issueId: string,
+): Promise<string | null> {
+  const ws = await tx.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { startedStatusId: true },
+  });
+  if (!ws?.startedStatusId) return null;
+
+  const [target, issue] = await Promise.all([
+    tx.status.findUnique({
+      where: { id: ws.startedStatusId },
+      select: { id: true, workspaceId: true, category: true },
+    }),
+    tx.issue.findUnique({
+      where: { id: issueId },
+      select: { id: true, statusId: true, status: { select: { category: true } } },
+    }),
+  ]);
+  if (!target || target.workspaceId !== workspaceId) return null;
+  if (target.category !== "IN_PROGRESS") return null;
+  if (!issue) return null;
+
+  const currentCat = issue.status?.category;
+  // Already started or terminal — nothing to do.
+  if (
+    currentCat === "IN_PROGRESS" ||
+    currentCat === "IN_REVIEW" ||
+    currentCat === "DONE" ||
+    currentCat === "CANCELED"
+  ) {
+    return null;
+  }
+  if (issue.statusId === target.id) return null;
+
+  await tx.issue.update({
+    where: { id: issueId },
+    data: { statusId: target.id },
+  });
+  return target.id;
+}
+
+/**
  * Lazily upsert the synthetic Webhook row for a given dispatch url. One
  * row per (workspace, url). `events` is set to the union of agent-routed
  * kinds so that the worker's `webhook.active` gate stays meaningful.
@@ -165,12 +221,27 @@ export async function recordChange(
   // emitter — dispatcher, issue.create/update/bulkAssign, ai-triage, MCP
   // issues.assign / reassign — gets the same shape automatically. Grep
   // `issueSnapshot` in audit.ts to verify; this is the canonical site.
+  //
+  // Server-side auto-transition: when the workspace has
+  // `startedStatusId` configured, AGENT_ASSIGNED also flips eligible
+  // issues into that status here — same transaction, before the snapshot
+  // loads, so the snapshot reflects the post-transition statusId. This
+  // makes the daemon's client-side maybeTransitionToInProgress a no-op
+  // for opted-in workspaces (it's idempotent — sees the issue already
+  // started and skips). When the auto-transition fires, payloadOut also
+  // gains an `autoTransitionedTo` field so receivers can tell apart a
+  // pre-existing started status from a server-driven transition.
   let payloadOut: Prisma.InputJsonValue =
     (params.payload ?? {}) as Prisma.InputJsonValue;
   if (
     params.eventKind === EventKind.AGENT_ASSIGNED &&
     params.subjectType === "issue"
   ) {
+    const transitionedTo = await maybeAutoTransitionOnAssign(
+      tx,
+      params.workspaceId,
+      params.subjectId,
+    );
     const snapshot = await loadIssueSnapshot(tx, params.subjectId);
     if (snapshot) {
       const base =
@@ -180,6 +251,7 @@ export async function recordChange(
       payloadOut = {
         ...base,
         issueSnapshot: snapshot,
+        ...(transitionedTo ? { autoTransitionedTo: transitionedTo } : {}),
       } as unknown as Prisma.InputJsonValue;
     }
   }
