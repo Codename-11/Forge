@@ -2,6 +2,96 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-01 — Server-side auto-transition on AGENT_ASSIGNED (Workspace.startedStatusId)
+
+Builds on this morning's `statuses.list` + daemon client-side
+transition by moving the work to the server. Now opt-in per workspace
+via the settings UI — when on, the AGENT_ASSIGNED audit fan-out flips
+eligible issues into the chosen IN_PROGRESS status atomically with
+the event row. Agents that observe `payload.autoTransitionedTo` skip
+their own client-side transition.
+
+### Changes
+
+- **Schema** (migration 0019_workspace_started_status_id):
+  `Workspace.startedStatusId` nullable FK to `Status` with `ON DELETE
+  SET NULL`. Reverse relation `Status.workspaceStartedFor`.
+  Single-column index. No backfill — existing workspaces stay null
+  (off) until an admin opts in.
+- **`recordChange` enrichment** (`src/server/audit.ts`):
+  `maybeAutoTransitionOnAssign` helper runs inside the same
+  transaction as the AGENT_ASSIGNED event row. Validates target
+  status belongs to the workspace + is in IN_PROGRESS category,
+  checks the issue is eligible (not already started, not terminal),
+  and does the `tx.issue.update`. The subsequent `loadIssueSnapshot`
+  reads the post-transition state, so the embedded `issueSnapshot`
+  reflects the new statusId. Payload also gains `autoTransitionedTo:
+  <statusId>` so receivers can distinguish a server-driven transition
+  from a pre-existing started status. All 7 AGENT_ASSIGNED producers
+  pick this up automatically (centralized via `recordChange`, same
+  pattern as `issueSnapshot`).
+- **Validation** (`src/server/routers/workspace.ts`): `workspace.update`
+  rejects cross-tenant status ids and non-IN_PROGRESS categories with
+  `BAD_REQUEST`.
+- **UI** (`/settings/workspace` page): new "Auto-transition on
+  assignment" Section with a status picker, filtered to the
+  workspace's IN_PROGRESS-category statuses. Empty option = "Off —
+  agents handle transition client-side". Information panel appears
+  when set, explaining the `autoTransitionedTo` field.
+- **Docs:**
+  - `docs/automation/webhooks.md` AGENT_ASSIGNED row mentions the
+    new `autoTransitionedTo` field.
+  - `docs/agents/runtimes.md` "What the daemon does on dispatch"
+    notes the daemon's client-side transition is idempotent (a no-op
+    when the workspace already auto-transitioned server-side), with
+    a tip box explaining the `Workspace.startedStatusId` flow.
+  - `~/.hermes/skills/pm/forge/SKILL.md` step 2 of the queue loop
+    tells agents to short-circuit their client-side transition when
+    they see `autoTransitionedTo` in the AGENT_ASSIGNED payload.
+  - `~/SYSTEM.md` Forge MCP surface entry describes the new payload
+    field.
+
+### Verification
+
+- `pnpm typecheck` — clean.
+- `pnpm prisma migrate deploy` — 0019 applied locally + in container
+  on redeploy.
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts` —
+  58/58 passing (2 new auto-transition tests: happy path + skip
+  for already-started/terminal issues).
+- Container rebuilt and live at https://forge.axiom-labs.dev.
+- Sandbox correctly blocked a direct SQL UPDATE to flip AXI on —
+  configuration change is for the operator (Bailey) to do via the
+  new settings UI.
+
+### Toggle path (for the operator)
+
+Visit `https://forge.axiom-labs.dev/w/<slug>/settings/workspace`,
+scroll to "Auto-transition on assignment", pick the IN_PROGRESS
+status, save. Repeat per workspace (AXI, PER, WRK).
+
+Or via SQL on docker-server:
+
+```sql
+-- Find the IN_PROGRESS status id for the workspace
+SELECT id, name FROM "Status"
+  WHERE "workspaceId" = (SELECT id FROM "Workspace" WHERE key='AXI')
+    AND category = 'IN_PROGRESS';
+
+-- Apply
+UPDATE "Workspace" SET "startedStatusId" = '<id from above>'
+  WHERE key = 'AXI';
+```
+
+### Punted / known follow-ups (still active)
+
+- **Agent-to-agent delegation** (Tier 3) — needs design.
+- **PDF byte-inlining**, **provider coverage**, **OAuth device-code**
+  — unchanged.
+- **DONE auto-transition** — the symmetric "auto-mark DONE when an
+  agent posts a completion comment" is intentionally NOT here. Done
+  is a human/agent decision, not a side-effect of any single signal.
+
 ## 2026-05-01 — statuses.list MCP + daemon IN_PROGRESS auto-transition + Hermes runbook refresh
 
 Closes the last category-discovery gap so all agents — local
