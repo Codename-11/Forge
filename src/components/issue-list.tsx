@@ -1,15 +1,24 @@
 "use client";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Inbox } from "lucide-react";
+import {
+  ArrowRightLeft,
+  Archive,
+  CalendarClock,
+  Inbox,
+  Tag,
+  UserCircle2,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
 import { EmptyState, Kbd, SkeletonList, useDensity } from "@/components/ui";
 import { Confirm, Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { BulkBar, type BulkBarAction } from "@/components/bulk-bar";
+import { SnoozeMenu } from "@/components/snooze-menu";
 import { trpc } from "@/lib/trpc";
+import { useHotkey } from "@/lib/keyboard";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import type { SavedViewFilters } from "@/lib/saved-view-filters";
@@ -82,26 +91,104 @@ export function IssueList({
   const density = useDensity();
   const compact = density === "compact";
 
+  // ---- Selection state --------------------------------------------------
+  // Mirrors the inbox's pattern: a single Set<string> with a sister
+  // ordered-id ref so Shift+Click ranges are stable, plus a hover/focus
+  // anchor for the `x` hotkey.
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const orderedIdsRef = useRef<string[]>([]);
+  const lastClickedRef = useRef<string | null>(null);
+  const hoveredRowRef = useRef<string | null>(null);
+
+  orderedIdsRef.current = filtered.map((i) => i.id);
+
+  const toggleSelected = useCallback(
+    (id: string, opts?: { range?: boolean }) => {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (opts?.range && lastClickedRef.current) {
+          const list = orderedIdsRef.current;
+          const a = list.indexOf(lastClickedRef.current);
+          const b = list.indexOf(id);
+          if (a >= 0 && b >= 0) {
+            const [lo, hi] = a < b ? [a, b] : [b, a];
+            for (let i = lo; i <= hi; i++) next.add(list[i]);
+            return next;
+          }
+        }
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      lastClickedRef.current = id;
+    },
+    [],
+  );
+
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
+
+  function toggleAll() {
+    if (selected.size === filtered.length) setSelected(new Set());
+    else setSelected(new Set(filtered.map((i) => i.id)));
+  }
+
+  // Hotkeys — `x` toggles the hovered row; `Esc` clears (only fires
+  // when bulk-select is enabled and a selection exists). Mirror the
+  // inbox's editable-target guard so we don't fire from inputs.
+  useHotkey(
+    "x",
+    () => {
+      if (!enableBulk) return;
+      const id = hoveredRowRef.current;
+      if (id) toggleSelected(id);
+    },
+    [toggleSelected, enableBulk],
+  );
+  useEffect(() => {
+    if (!enableBulk) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && selected.size > 0) {
+        const target = e.target as HTMLElement | null;
+        const isEditable =
+          target?.tagName === "INPUT" ||
+          target?.tagName === "TEXTAREA" ||
+          target?.isContentEditable;
+        if (isEditable) return;
+        e.preventDefault();
+        clearSelection();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [enableBulk, selected.size, clearSelection]);
+
+  const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false);
   const [labelPickerOpen, setLabelPickerOpen] = useState(false);
   const [assigneePickerOpen, setAssigneePickerOpen] = useState(false);
-  const selectedArray = Array.from(selected);
+  const [statusPickerOpen, setStatusPickerOpen] = useState(false);
+  const selectedArray = useMemo(() => Array.from(selected), [selected]);
 
-  const bulkStatus = trpc.issue.bulkStatus.useMutation({
-    onSuccess: () => {
-      toast.success(`Status changed for ${selectedArray.length} issue(s).`);
-      setSelected(new Set());
+  // ---- Bulk mutations (Phase 0 procs) ----------------------------------
+  const bulkTransition = trpc.issue.bulkTransition.useMutation({
+    onSuccess: (res) => {
+      toast.success(`Status changed on ${res.updated} issue(s).`);
+      clearSelection();
       utils.issue.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
 
-  const bulkSetLabels = trpc.issue.bulkSetLabels.useMutation({
+  const bulkAddLabel = trpc.issue.bulkAddLabel.useMutation({
     onSuccess: (res) => {
-      toast.success(
-        `Labels updated on ${res.updated} issue(s) (+${res.added} / −${res.removed}).`,
-      );
+      toast.success(`Added label to ${res.updated} issue(s).`);
+      utils.issue.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const bulkRemoveLabel = trpc.issue.bulkRemoveLabel.useMutation({
+    onSuccess: (res) => {
+      toast.success(`Removed label from ${res.updated} issue(s).`);
       utils.issue.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -110,7 +197,7 @@ export function IssueList({
   const bulkAssign = trpc.issue.bulkAssign.useMutation({
     onSuccess: (res) => {
       toast.success(`Assigned ${res.updated} issue(s).`);
-      setSelected(new Set());
+      clearSelection();
       utils.issue.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -119,38 +206,39 @@ export function IssueList({
   const bulkAssignAgent = trpc.issue.bulkAssignAgent.useMutation({
     onSuccess: (res) => {
       toast.success(`Agent updated on ${res.updated} issue(s).`);
-      setSelected(new Set());
+      clearSelection();
       utils.issue.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
 
-  const softDelete = trpc.issue.softDelete.useMutation({
-    onSuccess: () => {
+  const snoozeManyM = trpc.issue.snoozeMany.useMutation({
+    onSuccess: ({ updated }) => {
+      toast.success(`Snoozed ${updated} issue${updated === 1 ? "" : "s"}.`);
+      clearSelection();
       utils.issue.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
 
-  function toggle(id: string) {
-    setSelected((s) => {
-      const next = new Set(s);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-  function toggleAll() {
-    if (selected.size === filtered.length) setSelected(new Set());
-    else setSelected(new Set(filtered.map((i) => i.id)));
-  }
+  const bulkArchiveM = trpc.issue.bulkArchive.useMutation({
+    onSuccess: ({ updated }) => {
+      toast.success(`Archived ${updated} issue${updated === 1 ? "" : "s"}.`);
+      clearSelection();
+      setBulkArchiveOpen(false);
+      utils.issue.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
-  async function performBulkDelete() {
-    await Promise.all(selectedArray.map((id) => softDelete.mutateAsync({ id })));
-    toast.success(`Deleted ${selectedArray.length} issue(s).`);
-    setSelected(new Set());
-    setBulkDeleteOpen(false);
-  }
+  const bulkPending =
+    bulkTransition.isPending ||
+    bulkAddLabel.isPending ||
+    bulkRemoveLabel.isPending ||
+    bulkAssign.isPending ||
+    bulkAssignAgent.isPending ||
+    snoozeManyM.isPending ||
+    bulkArchiveM.isPending;
 
   // Per-label presence count across the current selection. Used by the
   // label picker to show a mixed-state indicator when only some of the
@@ -165,6 +253,63 @@ export function IssueList({
     }
     return counts;
   }, [filtered, selected]);
+
+  const bulkActions: BulkBarAction[] = [
+    {
+      id: "status",
+      label: "Status…",
+      icon: <ArrowRightLeft className="h-3 w-3" />,
+      title: "Move to status",
+      disabled: bulkPending,
+      onClick: () => setStatusPickerOpen(true),
+    },
+    {
+      id: "assign",
+      label: "Assign…",
+      icon: <UserCircle2 className="h-3 w-3" />,
+      title: "Assign selected",
+      disabled: bulkPending,
+      onClick: () => setAssigneePickerOpen(true),
+    },
+    {
+      id: "snooze",
+      label: null,
+      render: (cls) => (
+        <SnoozeMenu
+          onSelect={(until) =>
+            snoozeManyM.mutate({ ids: selectedArray, until })
+          }
+          trigger={
+            <button
+              type="button"
+              disabled={bulkPending}
+              title="Snooze selected"
+              className={cls}
+            >
+              <CalendarClock className="h-3 w-3" />
+              Snooze for…
+            </button>
+          }
+        />
+      ),
+    },
+    {
+      id: "label",
+      label: "Label…",
+      icon: <Tag className="h-3 w-3" />,
+      title: "Add or remove labels",
+      disabled: bulkPending,
+      onClick: () => setLabelPickerOpen(true),
+    },
+    {
+      id: "archive",
+      label: "Archive",
+      icon: <Archive className="h-3 w-3" />,
+      title: "Archive (soft delete) selected",
+      disabled: bulkPending,
+      onClick: () => setBulkArchiveOpen(true),
+    },
+  ];
 
   if (isLoading) {
     return (
@@ -198,70 +343,30 @@ export function IssueList({
 
   return (
     <div className="relative">
-      {enableBulk && (
+      {enableBulk && selected.size > 0 && (
+        <BulkBar
+          count={selected.size}
+          onClear={clearSelection}
+          actions={bulkActions}
+        />
+      )}
+      {enableBulk && selected.size === 0 && (
         <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-background/95 px-5 py-1.5 text-xs backdrop-blur">
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
-              checked={selected.size > 0 && selected.size === filtered.length}
+              checked={false}
               ref={(el) => {
-                if (el) el.indeterminate = selected.size > 0 && selected.size < filtered.length;
+                if (el) el.indeterminate = false;
               }}
               onChange={toggleAll}
               className="h-3.5 w-3.5 rounded border-border"
             />
-            <span className="text-muted-foreground">
-              {selected.size > 0 ? `${selected.size} selected` : "Select all"}
-            </span>
+            <span className="text-muted-foreground">Select all</span>
           </label>
-          {selected.size > 0 && (
-            <>
-              <select
-                className="focus-ring h-7 rounded-md border border-input bg-background px-2 text-xs"
-                disabled={bulkStatus.isPending}
-                defaultValue=""
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  bulkStatus.mutate({ ids: selectedArray, statusId: e.target.value });
-                  e.target.value = "";
-                }}
-              >
-                <option value="">Move to status…</option>
-                {statuses?.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setLabelPickerOpen(true)}
-                disabled={bulkSetLabels.isPending}
-              >
-                Labels
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setAssigneePickerOpen(true)}
-                disabled={bulkAssign.isPending || bulkAssignAgent.isPending}
-              >
-                Assign
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setBulkDeleteOpen(true)}>
-                Delete
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setSelected(new Set())}
-                className="ml-auto"
-              >
-                Clear
-              </Button>
-            </>
-          )}
+          <span className="text-meta text-muted-foreground/70">
+            <Kbd>x</Kbd> select hovered · Shift+Click for range
+          </span>
         </div>
       )}
       <div className="divide-y divide-border">
@@ -280,14 +385,28 @@ export function IssueList({
             <div
               key={issue.id}
               className={cn(rowCls, on && "bg-ember/5")}
+              onMouseEnter={() => (hoveredRowRef.current = issue.id)}
+              onMouseLeave={() => {
+                if (hoveredRowRef.current === issue.id)
+                  hoveredRowRef.current = null;
+              }}
             >
               {enableBulk && (
                 <input
                   type="checkbox"
                   checked={on}
-                  onChange={() => toggle(issue.id)}
+                  onClick={(e) => {
+                    if (e.shiftKey) {
+                      e.preventDefault();
+                      toggleSelected(issue.id, { range: true });
+                    }
+                  }}
+                  onChange={(e) => {
+                    if (!(e.nativeEvent as MouseEvent).shiftKey)
+                      toggleSelected(issue.id);
+                  }}
                   className="h-3.5 w-3.5 rounded border-border"
-                  aria-label="Select"
+                  aria-label="Select issue"
                 />
               )}
               <Link
@@ -347,16 +466,28 @@ export function IssueList({
       </div>
 
       <Confirm
-        open={bulkDeleteOpen}
-        onOpenChange={setBulkDeleteOpen}
+        open={bulkArchiveOpen}
+        onOpenChange={setBulkArchiveOpen}
         variant="destructive"
-        title={`Delete ${selectedArray.length} issue${selectedArray.length === 1 ? "" : "s"}?`}
-        description="The selected issues are soft-deleted and can be recovered by an admin. Type the count to confirm."
-        primaryLabel="Delete"
+        title={`Archive ${selectedArray.length} issue${selectedArray.length === 1 ? "" : "s"}?`}
+        description="Archived issues are soft-deleted — hidden from active lists but recoverable by an admin via the audit trail. Type the count to confirm."
+        primaryLabel="Archive"
         typeToConfirm={String(selectedArray.length)}
-        loading={softDelete.isPending}
-        onConfirm={performBulkDelete}
+        loading={bulkArchiveM.isPending}
+        onConfirm={() => bulkArchiveM.mutate({ ids: selectedArray })}
       />
+
+      {statusPickerOpen && (
+        <BulkStatusPicker
+          open={statusPickerOpen}
+          onOpenChange={setStatusPickerOpen}
+          statuses={statuses ?? []}
+          onPick={(statusId) => {
+            bulkTransition.mutate({ ids: selectedArray, statusId });
+            setStatusPickerOpen(false);
+          }}
+        />
+      )}
 
       {labelPickerOpen && (
         <BulkLabelPicker
@@ -365,18 +496,10 @@ export function IssueList({
           selectedCount={selectedArray.length}
           labelCounts={labelCounts}
           onAdd={(labelId) =>
-            bulkSetLabels.mutate({
-              issueIds: selectedArray,
-              add: [labelId],
-              remove: [],
-            })
+            bulkAddLabel.mutate({ ids: selectedArray, labelId })
           }
           onRemove={(labelId) =>
-            bulkSetLabels.mutate({
-              issueIds: selectedArray,
-              add: [],
-              remove: [labelId],
-            })
+            bulkRemoveLabel.mutate({ ids: selectedArray, labelId })
           }
         />
       )}
@@ -400,6 +523,57 @@ export function IssueList({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Bulk-mode status picker — minimal Picker over `status.list`. The
+ * server's `bulkTransition` enforces the workspace scope; we just need
+ * to emit the chosen id.
+ */
+function BulkStatusPicker({
+  open,
+  onOpenChange,
+  statuses,
+  onPick,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  statuses: Array<{
+    id: string;
+    name: string;
+    color: string;
+    category: string;
+  }>;
+  onPick: (statusId: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const items = statuses.filter((s) => !q || s.name.toLowerCase().includes(q));
+  return (
+    <Picker
+      open={open}
+      onOpenChange={onOpenChange}
+      placeholder="Move selected to status…"
+      items={items}
+      getKey={(s) => s.id}
+      onQueryChange={setQuery}
+      emptyLabel="No statuses match."
+      onSelect={(s) => onPick(s.id)}
+      renderItem={(s) => (
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden
+            className="inline-block h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: s.color }}
+          />
+          <span className="truncate">{s.name}</span>
+          <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+            {s.category.toLowerCase().replace(/_/g, " ")}
+          </span>
+        </div>
+      )}
+    />
   );
 }
 

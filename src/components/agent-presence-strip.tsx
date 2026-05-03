@@ -5,6 +5,7 @@ import { AlertTriangle, Bot } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { AgentQuickActions } from "@/components/agent-quick-actions";
+import { PinButton } from "@/components/pins/pin-button";
 import { EmptyState } from "@/components/ui";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -225,7 +226,12 @@ export default function AgentPresenceStrip() {
                 )}
               </div>
             </Link>
-            <div className="absolute right-1 top-1">
+            <div className="absolute right-1 top-1 flex items-center gap-0.5">
+              <PinButton
+                targetType="AGENT"
+                targetId={agent.id}
+                workspaceId={ws.id}
+              />
               <AgentQuickActions
                 agentId={agent.id}
                 profileKey={agent.profileKey}

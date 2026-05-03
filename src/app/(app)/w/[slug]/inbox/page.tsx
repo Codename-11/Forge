@@ -24,6 +24,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge, Card, EmptyState, Kbd, MOTION, Section, SkeletonList } from "@/components/ui";
 import { Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { BulkBar, type BulkBarAction } from "@/components/bulk-bar";
 import { ProjectChip } from "@/components/project-chip";
 import { RowQuickActions } from "@/components/row-quick-actions";
 import { SnoozeMenu } from "@/components/snooze-menu";
@@ -336,17 +337,19 @@ export default function InboxPage() {
           <BulkBar
             count={selected.size}
             onClear={clearSelection}
-            onMarkRead={() => markReadM.mutate()}
-            onSnooze={(until) =>
-              snoozeManyM.mutate({ ids: selectedArray, until })
-            }
-            onReassign={() => setReassignPickerOpen(true)}
-            disabled={
-              snoozeManyM.isPending ||
-              bulkAssignM.isPending ||
-              bulkAssignAgentM.isPending ||
-              markReadM.isPending
-            }
+            contentClassName="mx-auto max-w-5xl"
+            actions={inboxBulkActions({
+              count: selected.size,
+              disabled:
+                snoozeManyM.isPending ||
+                bulkAssignM.isPending ||
+                bulkAssignAgentM.isPending ||
+                markReadM.isPending,
+              onMarkRead: () => markReadM.mutate(),
+              onSnooze: (until) =>
+                snoozeManyM.mutate({ ids: selectedArray, until }),
+              onReassign: () => setReassignPickerOpen(true),
+            })}
           />
         )}
         <div className="mx-auto max-w-5xl space-y-8 p-5">
@@ -683,90 +686,65 @@ export default function InboxPage() {
 
 
 // ---------------------------------------------------------------------------
-// Bulk action bar
+// Bulk action bar — actions are configured here and rendered by the
+// shared <BulkBar /> component (`@/components/bulk-bar`). The inbox
+// uses three actions: mark-read, snooze (own popover via SnoozeMenu),
+// and reassign.
 // ---------------------------------------------------------------------------
 
-function BulkBar({
+function inboxBulkActions({
   count,
-  onClear,
+  disabled,
   onMarkRead,
   onSnooze,
   onReassign,
-  disabled,
 }: {
   count: number;
-  onClear: () => void;
+  disabled: boolean;
   onMarkRead: () => void;
   onSnooze: (until: Date | null) => void;
   onReassign: () => void;
-  disabled: boolean;
-}) {
-  return (
-    <div className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
-      <div className="mx-auto flex max-w-5xl items-center gap-3 px-5 py-2 text-[0.75rem]">
-        <span className="font-medium">
-          {count} selected
-        </span>
-        <button
-          type="button"
-          onClick={onClear}
-          title="Clear selection (Esc)"
-          className="text-meta inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
-        >
-          <X className="h-3 w-3" />
-          Clear selection
-        </button>
-        <span className="text-meta hidden items-center gap-1 text-muted-foreground/70 sm:inline-flex">
-          <Kbd>x</Kbd> select · <Kbd>Esc</Kbd> clear
-        </span>
-        <div className="ml-auto flex items-center gap-1.5">
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onMarkRead}
-            title="Mark read"
-            className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50"
-          >
-            <CheckCheck className="h-3 w-3" />
-            Mark read ({count})
-          </button>
-          <SnoozeMenu
-            onSelect={onSnooze}
-            trigger={
-              <button
-                type="button"
-                disabled={disabled}
-                title="Snooze selected"
-                className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50"
-              >
-                <CalendarClock className="h-3 w-3" />
-                Snooze for…
-              </button>
-            }
-          />
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onReassign}
-            title="Reassign selected"
-            className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50"
-          >
-            <UserCircle2 className="h-3 w-3" />
-            Reassign…
-          </button>
-          <button
-            type="button"
-            onClick={onClear}
-            title="Clear selection (Esc)"
-            className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
-          >
-            <Kbd>Esc</Kbd>
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+}): BulkBarAction[] {
+  return [
+    {
+      id: "mark-read",
+      label: `Mark read (${count})`,
+      icon: <CheckCheck className="h-3 w-3" />,
+      title: "Mark read",
+      disabled,
+      onClick: onMarkRead,
+    },
+    {
+      id: "snooze",
+      label: null,
+      // SnoozeMenu owns its own popover state; we render it as the
+      // trigger node so positioning works correctly.
+      render: (cls) => (
+        <SnoozeMenu
+          onSelect={onSnooze}
+          trigger={
+            <button
+              type="button"
+              disabled={disabled}
+              title="Snooze selected"
+              className={cls}
+            >
+              <CalendarClock className="h-3 w-3" />
+              Snooze for…
+            </button>
+          }
+        />
+      ),
+    },
+    {
+      id: "reassign",
+      label: "Reassign…",
+      icon: <UserCircle2 className="h-3 w-3" />,
+      title: "Reassign selected",
+      disabled,
+      onClick: onReassign,
+    },
+  ];
 }
 
 // ---------------------------------------------------------------------------

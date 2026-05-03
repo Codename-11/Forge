@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { useModKeyLabel } from "@/lib/platform";
 import { useChord, useHotkey } from "@/lib/keyboard";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
+import { PinnedSidebarSection } from "@/components/pins/pinned-sidebar-section";
 import { trpc } from "@/lib/trpc";
 
 /**
@@ -223,6 +224,20 @@ export function Sidebar({
     staleTime: 60_000,
   });
 
+  // Count pins (this-workspace + cross-workspace) so the "Pinned" header
+  // only renders when at least one row will appear under it. Each query
+  // is shared with the PinnedSidebarSection — same input, same cache key,
+  // no duplicate fetches.
+  const { data: wsPinsForCount } = trpc.pin.listAll.useQuery(
+    { workspaceId: workspace?.id ?? "" },
+    { enabled: !!workspace },
+  );
+  const { data: crossPinsForCount } = trpc.pin.listAll.useQuery({
+    workspaceId: null,
+  });
+  const hasPins =
+    (wsPinsForCount?.length ?? 0) + (crossPinsForCount?.length ?? 0) > 0;
+
   // Sprint nav lives on `g c` (chord). The previous bare-"c" hotkey
   // was dropped because it ate Ctrl+C copy on Linux/Windows where Ctrl
   // is the platform modifier — pressing Ctrl+C anywhere outside an
@@ -317,6 +332,30 @@ export function Sidebar({
             ))}
           </div>
         ))}
+
+        {/* Pinned items live below the workflow nav. The section + header
+            only render when the user has at least one pin (this workspace
+            or cross-workspace) so a fresh workspace doesn't show an empty
+            "Pinned" eyebrow. Header matches the rest of the nav-section
+            visual; in collapsed/icon-rail mode the label hides and only
+            the row icons remain. */}
+        {workspace && hasPins && (
+          <div className="flex flex-col gap-px">
+            <div
+              className={cn(
+                "px-2 pb-0.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/70",
+                collapsed ? "hidden" : "max-md:hidden",
+              )}
+            >
+              Pinned
+            </div>
+            <PinnedSidebarSection
+              workspaceId={workspace.id}
+              workspaceSlug={workspace.slug}
+              collapsed={collapsed}
+            />
+          </div>
+        )}
       </nav>
 
       {/* Footer block: utility surfaces (Docs + Settings) pinned to the

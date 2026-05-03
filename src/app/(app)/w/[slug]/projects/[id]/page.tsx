@@ -1,5 +1,5 @@
 "use client";
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
@@ -26,6 +26,7 @@ import { Confirm, QuickForm } from "@/components/ui/modal";
 import { EmptyState, Skeleton } from "@/components/ui";
 import { InitiativeChip } from "@/components/initiative-chip";
 import { CycleChip } from "@/components/cycle-chip";
+import { PinButton } from "@/components/pins/pin-button";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -74,6 +75,16 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     onError: (e) => toast.error(e.message),
   });
 
+  // Phase 1C — record this visit so it surfaces in the command palette's
+  // Recents rail. Server-side debounced 5s.
+  const trackM = trpc.recentItem.track.useMutation();
+  useEffect(() => {
+    if (project?.id) {
+      trackM.mutate({ targetType: "PROJECT", targetId: project.id });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id]);
+
   if (error) {
     return (
       <div className="flex h-full items-center justify-center p-8">
@@ -120,6 +131,11 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         subtitle={project.key}
         actions={
           <div className="flex items-center gap-2">
+            <PinButton
+              targetType="PROJECT"
+              targetId={project.id}
+              workspaceId={workspace.id}
+            />
             <Button
               variant="ember"
               size="sm"
