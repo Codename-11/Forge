@@ -4,8 +4,10 @@ import { toast } from "sonner";
 import {
   Paperclip,
   Upload,
+  Link2,
   FileText,
   File as FileIcon,
+  ExternalLink,
   Trash2,
   Loader2,
   AlertTriangle,
@@ -62,7 +64,16 @@ type Attachment = {
   mimeType: string;
   size: number;
   createdAt: Date | string;
+  /** Discriminator for LINK rows; mimeType === "text/url" works too. */
+  kind?: "FILE" | "LINK";
+  /** Set on LINK rows only. */
+  externalUrl?: string | null;
 };
+
+/** True when this row is an external-link attachment, not an upload. */
+function isLinkAttachment(a: Pick<Attachment, "mimeType" | "kind">): boolean {
+  return a.kind === "LINK" || a.mimeType === "text/url";
+}
 
 type Pending = {
   localId: string;
@@ -118,6 +129,16 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
 
   const initUpload = trpc.attachment.initUpload.useMutation();
   const finalize = trpc.attachment.finalize.useMutation();
+  const attachLink = trpc.attachment.attachLink.useMutation({
+    onSuccess: () => {
+      utils.attachment.list.invalidate({
+        targetType: "issue",
+        targetId: issueId,
+      });
+      utils.issue.byId.invalidate({ id: issueId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const deleteMut = trpc.attachment.delete.useMutation({
     onSuccess: () => {
       utils.attachment.list.invalidate({
@@ -133,6 +154,29 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
   const [isDragging, setDragging] = useState(false);
   const dragCountRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Inline link-attach form state. Toggled from the header; cleared on
+  // cancel and after a successful submit.
+  const [linkFormOpen, setLinkFormOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkTitle, setLinkTitle] = useState("");
+
+  const submitLink = useCallback(async () => {
+    const trimmedUrl = linkUrl.trim();
+    if (!trimmedUrl) return;
+    try {
+      await attachLink.mutateAsync({
+        targetType: "issue",
+        targetId: issueId,
+        url: trimmedUrl,
+        title: linkTitle.trim() || undefined,
+      });
+      setLinkUrl("");
+      setLinkTitle("");
+      setLinkFormOpen(false);
+    } catch {
+      // toast already fired via mutation onError
+    }
+  }, [attachLink, issueId, linkTitle, linkUrl]);
 
   const uploadOne = useCallback(
     async (file: File) => {
@@ -256,8 +300,77 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
           >
             <Upload className="h-3 w-3" /> Upload
           </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[0.6875rem]"
+            onClick={() => setLinkFormOpen((v) => !v)}
+            title="Attach an external link (Google Doc, GitHub PR, …)"
+          >
+            <Link2 className="h-3 w-3" /> Attach link
+          </Button>
         </div>
       </header>
+      {linkFormOpen && (
+        <div className="border-b border-border bg-card/40 px-3 py-2">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submitLink();
+            }}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <input
+              type="url"
+              required
+              autoFocus
+              value={linkUrl}
+              onChange={(e) => setLinkUrl(e.target.value)}
+              placeholder="https://docs.google.com/document/…"
+              className="min-w-[18rem] flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ember"
+            />
+            <input
+              type="text"
+              value={linkTitle}
+              onChange={(e) => setLinkTitle(e.target.value)}
+              placeholder="Optional title (defaults to hostname)"
+              maxLength={255}
+              className="min-w-[14rem] flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ember"
+            />
+            <Button
+              type="submit"
+              variant="default"
+              size="sm"
+              className="h-7 px-2 text-[0.6875rem]"
+              disabled={!linkUrl.trim() || attachLink.isPending}
+            >
+              {attachLink.isPending ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" /> Attaching…
+                </>
+              ) : (
+                <>
+                  <Link2 className="h-3 w-3" /> Attach
+                </>
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-[0.6875rem]"
+              onClick={() => {
+                setLinkFormOpen(false);
+                setLinkUrl("");
+                setLinkTitle("");
+              }}
+            >
+              Cancel
+            </Button>
+          </form>
+        </div>
+      )}
 
       <div
         className={cn(
@@ -366,10 +479,12 @@ function AttachmentTile({
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const lightbox = useAttachmentLightbox();
-  const isImage = isImageMime(attachment.mimeType);
+  const isLink = isLinkAttachment(attachment);
+  const isImage = !isLink && isImageMime(attachment.mimeType);
   // We still issue a presigned GET *only* for image thumbs in the grid
   // (cheap, cached). Non-image tiles render an icon and only resolve a
-  // URL on click via the lightbox.
+  // URL on click via the lightbox. LINK rows have no underlying object,
+  // so we skip the query entirely.
   const { data, error } = trpc.attachment.getDownloadUrl.useQuery(
     { attachmentId: attachment.id },
     { staleTime: 5 * 60_000, retry: false, enabled: isImage },
@@ -383,8 +498,25 @@ function AttachmentTile({
     }
   }, [error, onStorageMisconfig]);
   const thumbUrl = isImage ? data?.url : undefined;
+  const linkHost = isLink
+    ? (() => {
+        try {
+          return new URL(attachment.externalUrl ?? "").hostname.replace(
+            /^www\./i,
+            "",
+          );
+        } catch {
+          return "";
+        }
+      })()
+    : "";
 
-  const openInLightbox = () => {
+  const openTile = () => {
+    if (isLink) {
+      const href = attachment.externalUrl ?? "";
+      if (href) window.open(href, "_blank", "noopener,noreferrer");
+      return;
+    }
     lightbox.open({
       attachmentId: attachment.id,
       attachments: allAttachments.map((a) => ({
@@ -392,6 +524,8 @@ function AttachmentTile({
         filename: a.filename,
         mimeType: a.mimeType,
         size: a.size,
+        kind: a.kind,
+        externalUrl: a.externalUrl ?? null,
       })),
       target: { type: "issue", id: issueId },
       canDelete,
@@ -399,6 +533,19 @@ function AttachmentTile({
   };
 
   const body = useMemo(() => {
+    if (isLink) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-1 p-2 text-center">
+          <ExternalLink className="h-6 w-6 text-muted-foreground" />
+          <div className="line-clamp-2 text-[0.6875rem] font-medium">
+            {attachment.filename}
+          </div>
+          <div className="font-mono text-[0.6875rem] text-muted-foreground">
+            {linkHost || "external link"}
+          </div>
+        </div>
+      );
+    }
     if (isImage && thumbUrl) {
       return (
         // Presigned GET into an <img>; `object-fit: cover` for the thumb.
@@ -426,15 +573,27 @@ function AttachmentTile({
         </div>
       </div>
     );
-  }, [isImage, thumbUrl, attachment.filename, attachment.mimeType, attachment.size]);
+  }, [
+    isLink,
+    isImage,
+    thumbUrl,
+    attachment.filename,
+    attachment.mimeType,
+    attachment.size,
+    linkHost,
+  ]);
 
   return (
     <li className="group relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-background">
       <button
         type="button"
-        onClick={openInLightbox}
+        onClick={openTile}
         className="block h-full w-full text-left transition-shadow hover:ring-1 hover:ring-ember/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ember"
-        title={`${attachment.filename} · ${prettyBytes(attachment.size)} · click to preview`}
+        title={
+          isLink
+            ? `${attachment.filename} · ${attachment.externalUrl ?? "external link"} · click to open`
+            : `${attachment.filename} · ${prettyBytes(attachment.size)} · click to preview`
+        }
       >
         {body}
       </button>

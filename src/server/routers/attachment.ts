@@ -8,6 +8,7 @@ import {
   ALLOWED_TARGET_TYPES,
   MAX_FILE_SIZE_BYTES,
   StorageNotConfiguredError,
+  createLinkAttachment,
   deleteAttachment,
   finalizeAttachment,
   presignDownloadUrl,
@@ -66,6 +67,13 @@ const initUploadInput = z.object({
 
 const finalizeInput = z.object({
   attachmentId: z.string().cuid(),
+});
+
+const attachLinkInput = z.object({
+  targetType: targetTypeSchema,
+  targetId: z.string().cuid(),
+  url: z.string().url().max(2048),
+  title: z.string().max(255).optional(),
 });
 
 const listInput = z.object({
@@ -144,7 +152,80 @@ export const attachmentRouter = router({
       return finalized;
     }),
 
-  /** List attachments attached to a given target. */
+  /**
+   * Attach an external link (Google Doc, GitHub PR, Linear ticket, …)
+   * as a first-class Attachment row. No bytes hit MinIO. Mirrors the
+   * MCP `attachments.attachLink` tool — the storage helper enforces
+   * the FILE-shaped column population (filename = title ?? hostname,
+   * mimeType = "text/url", size = 0, url = externalUrl) so existing
+   * list/preview consumers keep working without schema-aware code.
+   */
+  attachLink: workspaceProcedure
+    .input(attachLinkInput)
+    .mutation(async ({ ctx, input }) => {
+      await assertTargetInWorkspace(ctx, input.targetType, input.targetId);
+      let row: Awaited<ReturnType<typeof createLinkAttachment>>;
+      try {
+        row = await createLinkAttachment({
+          workspaceId: ctx.workspaceId,
+          targetType: input.targetType,
+          targetId: input.targetId,
+          url: input.url,
+          title: input.title ?? null,
+        });
+      } catch (err) {
+        throw mapStorageError(err);
+      }
+      if (row.targetType === "issue") {
+        await ctx.db.$transaction(async (tx) => {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            entity: "Attachment",
+            entityId: row.id,
+            action: "attach",
+            after: {
+              id: row.id,
+              workspaceId: row.workspaceId,
+              targetType: row.targetType,
+              targetId: row.targetId,
+              filename: row.filename,
+              mimeType: row.mimeType,
+              size: row.size,
+              url: row.url,
+              externalUrl: row.externalUrl,
+              linkTitle: row.linkTitle,
+              kind: row.kind,
+              createdAt: row.createdAt.toISOString(),
+            },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "issue",
+            subjectId: row.targetId,
+            payload: {
+              attachment: {
+                id: row.id,
+                filename: row.filename,
+                mimeType: row.mimeType,
+                size: row.size,
+                kind: "LINK",
+                externalUrl: row.externalUrl,
+              },
+              change: "added",
+            },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        });
+      }
+      return row;
+    }),
+
+  /**
+   * List attachments attached to a given target. Returns finalized FILE
+   * rows AND LINK rows; LINK rows are distinguishable by
+   * `mimeType === "text/url"` (or the new `kind` column once clients
+   * select it).
+   */
   list: workspaceProcedure.input(listInput).query(async ({ ctx, input }) => {
     return ctx.db.attachment.findMany({
       where: {

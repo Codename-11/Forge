@@ -218,6 +218,50 @@ role}` from SSE; there's no `chat.getThread` MCP yet, so the prompt to
 the local CLI is a placeholder. AGENT_ASSIGNED handler stubs a
 placeholder comment.
 
+## Attachments
+
+Polymorphic via `targetType` + `targetId`. Two kinds: **FILE** (bytes
+in MinIO) and **LINK** (external URL — Google Doc, GitHub PR, web
+page). Always pick the right kind:
+
+- **Bytes → `attachments.initUpload`** (3-step):
+  1. `attachments.initUpload({ targetType, targetId, filename, mimeType, size })`
+     → `{ uploadUrl, attachmentId }`.
+  2. `PUT` the bytes to `uploadUrl` with header `Content-Type: <mimeType>`.
+  3. `attachments.finalize({ attachmentId })` flips the row ready and
+     emits `ISSUE_UPDATED`.
+- **External URL → `attachments.attachLink({ targetType, targetId, url, title? })`**
+  in one call. No upload, no MinIO object. `mimeType` becomes
+  `"text/url"`; `externalUrl` is the canonical pointer; `linkTitle`
+  defaults to the URL hostname.
+
+Allowed `targetType`: `issue`, `comment`, `project`, `initiative`,
+`cycle`, `chat-message`.
+
+Allowed FILE MIME types (rejected at `initUpload` if not in this list):
+`image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/svg+xml`,
+`application/pdf`, `text/plain`, `text/markdown`, `text/html`,
+`text/csv`, `text/xml`, `application/xml`, `application/json`,
+`application/x-yaml`, `text/yaml`, `application/msword`,
+`application/vnd.openxmlformats-officedocument.wordprocessingml.document`,
+`application/vnd.ms-excel`,
+`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`,
+`audio/mpeg`, `audio/wav`, `audio/ogg`, `audio/webm`, `video/mp4`,
+`video/webm`, `video/quicktime`, `application/zip`. **Don't** rename
+files to `.html.txt` etc. to bypass the list — `text/html` is
+allowed natively. The server defensively strips `.txt` workaround
+suffixes anyway.
+
+Reading: `attachments.list({ targetType, targetId })` returns FILE +
+LINK rows together. For FILE bytes inline (base64) use
+`attachments.getInline` (image/pdf/text family — html/csv/xml/json
+included; max 25 MB per call, default 1 MB). For everything else,
+`attachments.getDownloadUrl` returns a 15-minute presigned GET.
+LINK rows: read `externalUrl` directly from the `attachments.list`
+response.
+
+Size cap: **25 MB** per upload.
+
 ## Conventions
 
 - **Every tenant-scoped row** includes `workspaceId`. Access gated by

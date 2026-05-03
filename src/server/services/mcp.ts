@@ -28,6 +28,7 @@ import {
   ALLOWED_MIME_TYPES,
   ALLOWED_TARGET_TYPES,
   MAX_FILE_SIZE_BYTES,
+  createLinkAttachment,
   deleteAttachment,
   finalizeAttachment,
   getAttachmentInline,
@@ -2236,20 +2237,44 @@ export const mcpTools = {
   // -------------------------------------------------------------- Attachments
   "attachments.initUpload": {
     scopes: ["WRITE_ISSUES"] as const,
+    description: [
+      "Start a file upload to a Forge entity. Two-step flow:",
+      "  1. attachments.initUpload → { uploadUrl, attachmentId }",
+      "  2. HTTP PUT the bytes directly to uploadUrl (Content-Type must match mimeType)",
+      "  3. attachments.finalize → confirms the row.",
+      "",
+      `Allowed MIME types: ${[...ALLOWED_MIME_TYPES].sort().join(", ")}.`,
+      `Allowed target types: ${[...ALLOWED_TARGET_TYPES].sort().join(", ")}.`,
+      `Hard size cap: ${MAX_FILE_SIZE_BYTES} bytes (25 MB).`,
+      "",
+      "For URLs / external resources (Google Docs, GitHub PRs, Linear tickets, web pages),",
+      "use attachments.attachLink instead — no upload needed.",
+    ].join("\n"),
     input: z.object({
       targetType: z
         .string()
         .refine((v) => ALLOWED_TARGET_TYPES.has(v), {
           message: `targetType must be one of ${[...ALLOWED_TARGET_TYPES].join(", ")}`,
-        }),
-      targetId: z.string(),
-      filename: z.string().min(1).max(255),
+        })
+        .describe(
+          `One of ${[...ALLOWED_TARGET_TYPES].sort().join(", ")}. The Attachment will be attached to that entity.`,
+        ),
+      targetId: z.string().describe("Cuid of the target row in this workspace."),
+      filename: z.string().min(1).max(255).describe("Original filename including extension."),
       mimeType: z
         .string()
         .refine((v) => ALLOWED_MIME_TYPES.has(v), {
           message: "mimeType not allowed",
-        }),
-      size: z.number().int().positive().max(MAX_FILE_SIZE_BYTES),
+        })
+        .describe(
+          `Declared MIME type. Must be in the allowlist: ${[...ALLOWED_MIME_TYPES].sort().join(", ")}.`,
+        ),
+      size: z
+        .number()
+        .int()
+        .positive()
+        .max(MAX_FILE_SIZE_BYTES)
+        .describe(`Size in bytes. Hard cap: ${MAX_FILE_SIZE_BYTES} (25 MB).`),
     }),
     async run(
       input: {
@@ -2292,6 +2317,8 @@ export const mcpTools = {
 
   "attachments.finalize": {
     scopes: ["WRITE_ISSUES"] as const,
+    description:
+      "Step 3 of the upload flow. Call after the PUT to the presigned uploadUrl returns 200; flips the pending Attachment row to ready and emits ISSUE_UPDATED so plugins can react.",
     input: z.object({ attachmentId: z.string() }),
     async run(input: { attachmentId: string }, ctx: McpContext) {
       return finalizeAttachment({
@@ -2301,8 +2328,88 @@ export const mcpTools = {
     },
   },
 
+  /**
+   * Attach an external link as a first-class Attachment row. No bytes
+   * uploaded, no MinIO object created. The row's `kind = LINK` and
+   * `externalUrl` is the canonical pointer; `mimeType = "text/url"` so
+   * the lightbox / chip surfaces can route on it.
+   */
+  "attachments.attachLink": {
+    scopes: ["WRITE_ISSUES"] as const,
+    description: [
+      "Attach an external URL (Google Doc, GitHub PR, Linear ticket, web page, …)",
+      "as a first-class Attachment row on a Forge entity. No bytes are uploaded —",
+      "the URL is the entirety of the payload.",
+      "",
+      "Use this for any link to off-platform content. For uploading bytes (images,",
+      "PDFs, text/html, JSON, audio, video, …) use attachments.initUpload.",
+      "",
+      `Allowed target types: ${[...ALLOWED_TARGET_TYPES].sort().join(", ")}.`,
+    ].join("\n"),
+    input: z.object({
+      targetType: z
+        .string()
+        .refine((v) => ALLOWED_TARGET_TYPES.has(v), {
+          message: `targetType must be one of ${[...ALLOWED_TARGET_TYPES].join(", ")}`,
+        })
+        .describe(
+          `One of ${[...ALLOWED_TARGET_TYPES].sort().join(", ")}. The link Attachment will be attached to that entity.`,
+        ),
+      targetId: z.string().describe("Cuid of the target row in this workspace."),
+      url: z
+        .string()
+        .url()
+        .max(2048)
+        .describe(
+          "Absolute URL to attach. Must be parseable by URL(); typically https://… .",
+        ),
+      title: z
+        .string()
+        .max(255)
+        .optional()
+        .describe(
+          "Optional human label. Defaults to the URL hostname when omitted.",
+        ),
+    }),
+    async run(
+      input: {
+        targetType: string;
+        targetId: string;
+        url: string;
+        title?: string;
+      },
+      ctx: McpContext,
+    ) {
+      if (input.targetType === "issue") {
+        await assertKeyScope(scopeCtx(ctx), {
+          entity: "issue",
+          id: input.targetId,
+        });
+      } else if (input.targetType === "project") {
+        await assertKeyScope(scopeCtx(ctx), {
+          entity: "project",
+          id: input.targetId,
+        });
+      } else if (input.targetType === "initiative") {
+        await assertKeyScope(scopeCtx(ctx), {
+          entity: "initiative",
+          id: input.targetId,
+        });
+      }
+      return createLinkAttachment({
+        workspaceId: ctx.workspaceId,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        url: input.url,
+        title: input.title,
+      });
+    },
+  },
+
   "attachments.list": {
     scopes: ["READ_ISSUES"] as const,
+    description:
+      "Returns finalized FILE attachments AND LINK attachments for the given target, oldest first. LINK rows have mimeType = 'text/url' and an `externalUrl` field; FILE rows have a real MIME type and a presigned URL is fetched separately via attachments.getDownloadUrl.",
     input: z.object({
       targetType: z.string().refine((v) => ALLOWED_TARGET_TYPES.has(v)),
       targetId: z.string(),
@@ -2341,6 +2448,8 @@ export const mcpTools = {
 
   "attachments.getDownloadUrl": {
     scopes: ["READ_ISSUES"] as const,
+    description:
+      "Returns a 15-minute presigned GET URL for a FILE attachment. For LINK attachments the row's `externalUrl` is the canonical pointer — call attachments.list and read it directly.",
     input: z.object({ attachmentId: z.string() }),
     async run(input: { attachmentId: string }, ctx: McpContext) {
       const row = await db.attachment.findFirst({
@@ -2360,6 +2469,8 @@ export const mcpTools = {
 
   "attachments.delete": {
     scopes: ["WRITE_ISSUES"] as const,
+    description:
+      "Permanently delete an Attachment row. For FILE rows the underlying object in MinIO is removed too; for LINK rows only the row is dropped (the external resource is untouched).",
     input: z.object({ attachmentId: z.string() }),
     async run(input: { attachmentId: string }, ctx: McpContext) {
       const row = await db.attachment.findFirst({
@@ -2382,12 +2493,14 @@ export const mcpTools = {
    * Server-side bytes fetch for an attachment, returned base64-encoded so
    * image-aware models can consume it inline (most MCP clients can't follow
    * a presigned URL out-of-band). Same scope checks as `getDownloadUrl`,
-   * plus a small mime allowlist (image + pdf + text) and a per-call max
-   * bytes cap (default 1 MB, never above 25 MB) to keep MCP responses
+   * plus a small mime allowlist (image + pdf + text family) and a per-call
+   * max bytes cap (default 1 MB, never above 25 MB) to keep MCP responses
    * bounded.
    */
   "attachments.getInline": {
     scopes: ["READ_ISSUES"] as const,
+    description:
+      "Fetch attachment bytes inline as base64. Allowed MIME: image/png, image/jpeg, image/gif, image/webp, application/pdf, text/plain, text/markdown, text/html, text/csv, text/xml, application/xml, application/json. Anything else: use attachments.getDownloadUrl. Max 25 MB; default 1 MB cap per call. Not for LINK attachments.",
     input: z.object({
       attachmentId: z.string(),
       maxBytes: z
@@ -2442,6 +2555,11 @@ export const mcpTools = {
         "application/pdf",
         "text/plain",
         "text/markdown",
+        "text/html",
+        "text/csv",
+        "text/xml",
+        "application/xml",
+        "application/json",
       ]);
       if (!INLINE_ALLOWED.has(row.mimeType)) {
         throw new Error(
