@@ -7,6 +7,8 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import AgentPresenceStrip from "@/components/agent-presence-strip";
 import AgentPipeline from "@/components/agent-pipeline";
 import AgentTimeline from "@/components/agent-timeline";
+import { DispatchModeBadge } from "@/components/dispatch-mode-badge";
+import { trpc } from "@/lib/trpc";
 
 /**
  * Agents operational dashboard.
@@ -23,10 +25,21 @@ import AgentTimeline from "@/components/agent-timeline";
  */
 export default function AgentsPage() {
   const ws = useWorkspace();
+  const { data: workspace } = trpc.workspace.current.useQuery();
   return (
     <>
       <Topbar
-        title="Agents"
+        title={
+          <span className="flex items-center gap-2">
+            <span>Agents</span>
+            {workspace && (
+              <DispatchModeBadge
+                mode={workspace.autoDispatchMode}
+                showSettingsLink
+              />
+            )}
+          </span>
+        }
         subtitle="Live presence, pipeline, and recent activity."
         actions={
           <Link href={`/w/${ws.slug}/settings/agents`}>

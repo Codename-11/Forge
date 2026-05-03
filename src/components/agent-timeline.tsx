@@ -16,6 +16,10 @@ import {
 import { trpc } from "@/lib/trpc";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import {
+  DispatchReasonChip,
+  type DispatchReason,
+} from "@/components/dispatch-reason-chip";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { cn, relativeTime } from "@/lib/utils";
@@ -88,6 +92,40 @@ function readPayloadString(payload: unknown, key: string): string | null {
     if (typeof v === "string" && v.length > 0) return v;
   }
   return null;
+}
+
+/**
+ * Best-effort extraction of `DispatchReason` from an audit payload.
+ * `dispatcher.ts` mirrors the row-level `Issue.dispatchReason` blob
+ * onto the AGENT_ASSIGNED payload as `payload.dispatchReason`. Manual
+ * paths (issue.update, MCP issues.assign) embed the same shape.
+ *
+ * Returns null when the field is absent or malformed — the consumer
+ * skips the chip in that case rather than rendering a broken pill.
+ */
+function readDispatchReason(payload: unknown): DispatchReason | null {
+  if (!payload || typeof payload !== "object") return null;
+  const blob = (payload as Record<string, unknown>).dispatchReason;
+  if (!blob || typeof blob !== "object") return null;
+  const r = blob as Record<string, unknown>;
+  const mode = typeof r.mode === "string" ? r.mode : null;
+  const picked = typeof r.picked === "string" ? r.picked : null;
+  const reasonText = typeof r.reasonText === "string" ? r.reasonText : null;
+  const decidedAt = typeof r.decidedAt === "string" ? r.decidedAt : null;
+  const candidatesConsidered = Array.isArray(r.candidatesConsidered)
+    ? (r.candidatesConsidered.filter(
+        (c) => typeof c === "string",
+      ) as string[])
+    : [];
+  if (!mode || !picked || !reasonText || !decidedAt) return null;
+  return {
+    mode,
+    picked,
+    reasonText,
+    decidedAt,
+    candidatesConsidered,
+    ...(typeof r.ruleId === "string" ? { ruleId: r.ruleId } : {}),
+  };
 }
 
 function summarizeEvent(
@@ -383,6 +421,10 @@ export default function AgentTimeline() {
       <ul className="divide-y divide-border rounded-lg border border-border bg-card">
         {events.map((evt) => {
           const { headline, meta } = summarizeEvent(evt, ws.slug);
+          const reason =
+            evt.kind === "AGENT_ASSIGNED"
+              ? readDispatchReason(evt.payload)
+              : null;
           return (
             <li
               key={evt.id}
@@ -390,7 +432,15 @@ export default function AgentTimeline() {
             >
               <span className="mt-0.5 shrink-0">{iconFor(evt.kind)}</span>
               <div className="flex-1 min-w-0">
-                <div className="text-foreground">{headline}</div>
+                <div className="flex items-center gap-1.5 text-foreground">
+                  <span className="min-w-0 flex-1 truncate">{headline}</span>
+                  {reason && (
+                    <DispatchReasonChip
+                      reason={reason}
+                      className="shrink-0"
+                    />
+                  )}
+                </div>
                 {meta && (
                   <div className="text-meta truncate text-muted-foreground">
                     {meta}

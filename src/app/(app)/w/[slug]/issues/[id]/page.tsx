@@ -24,6 +24,10 @@ import { Breadcrumb } from "@/components/breadcrumb";
 import { ProjectChip } from "@/components/project-chip";
 import { InitiativeChip } from "@/components/initiative-chip";
 import { CycleChip } from "@/components/cycle-chip";
+import {
+  DispatchReasonChip,
+  type DispatchReason,
+} from "@/components/dispatch-reason-chip";
 import { IssueSiblingNav } from "@/components/issue-sibling-nav";
 import { useHotkey } from "@/lib/keyboard";
 
@@ -278,6 +282,15 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 }}
               />
             )}
+            {(() => {
+              // Phase 1C — surface "why was this agent picked?" inline
+              // with the existing chips when the dispatcher has stamped
+              // a reason on the issue. Coerce the JSON blob through a
+              // narrow validator (same shape `agent-timeline.tsx` uses)
+              // so a malformed payload doesn't crash the page.
+              const reason = coerceDispatchReason(issue.dispatchReason);
+              return reason ? <DispatchReasonChip reason={reason} /> : null;
+            })()}
             {editingTitle ? (
               <form
                 onSubmit={(e) => {
@@ -889,4 +902,37 @@ function AgentPickerModal({
       }}
     />
   );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Narrow `Issue.dispatchReason` (a `Json?` Prisma column) into the
+ * `DispatchReason` shape `<DispatchReasonChip />` accepts. Returns
+ * null when the column is absent or the blob is malformed — the
+ * caller skips rendering the chip in that case.
+ */
+function coerceDispatchReason(blob: unknown): DispatchReason | null {
+  if (!blob || typeof blob !== "object") return null;
+  const r = blob as Record<string, unknown>;
+  const mode = typeof r.mode === "string" ? r.mode : null;
+  const picked = typeof r.picked === "string" ? r.picked : null;
+  const reasonText = typeof r.reasonText === "string" ? r.reasonText : null;
+  const decidedAt = typeof r.decidedAt === "string" ? r.decidedAt : null;
+  const candidatesConsidered = Array.isArray(r.candidatesConsidered)
+    ? (r.candidatesConsidered.filter(
+        (c) => typeof c === "string",
+      ) as string[])
+    : [];
+  if (!mode || !picked || !reasonText || !decidedAt) return null;
+  return {
+    mode,
+    picked,
+    reasonText,
+    decidedAt,
+    candidatesConsidered,
+    ...(typeof r.ruleId === "string" ? { ruleId: r.ruleId } : {}),
+  };
 }

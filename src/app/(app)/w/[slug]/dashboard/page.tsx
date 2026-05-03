@@ -58,6 +58,10 @@ export default function DashboardPage() {
   const { data: access } = trpc.access.list.useQuery();
   const active = trpc.issue.list.useQuery({ includeDone: false, limit: 100 });
   const anyIssue = trpc.issue.list.useQuery({ includeDone: true, limit: 1 });
+  // Stalled column: server resolves the threshold from
+  // `Workspace.stalledThresholdDays` and filters snoozed rows. Avoids the
+  // hardcoded 3-day cutoff that used to live on this page.
+  const stalledQ = trpc.dashboard.stalledInProgress.useQuery({ limit: 8 });
 
   const isAdmin = me?.role === "OWNER" || me?.role === "ADMIN";
   const events = trpc.admin.events.useQuery({ limit: 8 }, { enabled: !!isAdmin, retry: false });
@@ -91,14 +95,8 @@ export default function DashboardPage() {
       .map((s) => ({ status: s, count: map.get(s.id) ?? 0 }));
   }, [active.data, statuses]);
 
-  const stalled = useMemo(() => {
-    const threshold = Date.now() - 3 * 86_400_000;
-    return (active.data?.items ?? [])
-      .filter((i) => i.status.category === "IN_PROGRESS")
-      .filter((i) => new Date(i.updatedAt).getTime() < threshold)
-      .sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime())
-      .slice(0, 8);
-  }, [active.data]);
+  const stalled = stalledQ.data?.items ?? [];
+  const stalledThresholdDays = stalledQ.data?.stalledThresholdDays ?? null;
 
   const recent = useMemo(
     () =>
@@ -245,8 +243,22 @@ export default function DashboardPage() {
               </Rows>
             </Column>
 
-            <Column title="Stalled" hint="In progress, quiet 3+ days">
-              <Rows loading={active.isLoading} empty="Nothing stalled. Momentum intact.">
+            <Column
+              title="Stalled"
+              hint={
+                stalledThresholdDays
+                  ? `In progress, quiet ${stalledThresholdDays}+ days`
+                  : "In progress, threshold disabled"
+              }
+            >
+              <Rows
+                loading={stalledQ.isLoading}
+                empty={
+                  stalledThresholdDays === 0
+                    ? "Stalled threshold disabled in workspace settings."
+                    : "Nothing stalled. Momentum intact."
+                }
+              >
                 {stalled.map((i) => (
                   <IssueRow
                     key={i.id}

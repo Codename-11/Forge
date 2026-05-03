@@ -120,20 +120,48 @@ export const dashboardRouter = router({
       //    workspace's `stalledThresholdDays` and aren't terminal. The
       //    threshold is settings-driven (workspace column added in this
       //    migration); 0 disables the bucket.
+      //
+      //    Phase 0 split (2026-05-02): the previous query implicitly
+      //    filtered by `assignees: { some: {} }` via fetchSlice's
+      //    workspace scope. That's been dropped so unassigned work
+      //    that's gone quiet also surfaces. We also expose an
+      //    `agentStalled` slice — issues with `assignedAgentId` set
+      //    where the agent has been silent past threshold — so the
+      //    Phase 1 dashboard can render them as a distinct lane.
+      //    Snoozed rows (snoozedUntil > now) are filtered from both
+      //    slices.
       const ws = await ctx.db.workspace.findUniqueOrThrow({
         where: { id: ctx.workspaceId },
         select: { stalledThresholdDays: true },
       });
       let stalled: Array<Awaited<ReturnType<typeof fetchSlice>>[number]> = [];
+      let agentStalled: Array<Awaited<ReturnType<typeof fetchSlice>>[number]> =
+        [];
       if (ws.stalledThresholdDays > 0) {
         const cutoff = new Date(
           Date.now() - ws.stalledThresholdDays * 24 * 60 * 60 * 1000,
         );
+        const now = new Date();
+        const notSnoozed = {
+          OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }],
+        };
         stalled = await fetchSlice(ctx.db, {
           workspaceId: ctx.workspaceId,
           where: {
             updatedAt: { lt: cutoff },
             status: { category: { notIn: ["DONE", "CANCELED"] } },
+            ...notSnoozed,
+          },
+          orderBy: [{ updatedAt: "asc" }],
+          take: limit,
+        });
+        agentStalled = await fetchSlice(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          where: {
+            updatedAt: { lt: cutoff },
+            assignedAgentId: { not: null },
+            status: { category: { notIn: ["DONE", "CANCELED"] } },
+            ...notSnoozed,
           },
           orderBy: [{ updatedAt: "asc" }],
           take: limit,
@@ -144,7 +172,55 @@ export const dashboardRouter = router({
         currentSprintSlice,
         unassignedInMyProjects,
         stalled,
+        agentStalled,
         activeCycle,
+        stalledThresholdDays: ws.stalledThresholdDays,
+      };
+    }),
+
+  /**
+   * In-progress issues that are quiet past `stalledThresholdDays`. Lifted
+   * out of `dashboard/page.tsx` (which previously hardcoded 3 days) so
+   * the threshold is settings-driven and consumers can't double-filter.
+   * Phase 1B: the dashboard "Stalled" column should consume this OR a
+   * `dashboard.suggestions.stalled` bucket — pick whichever fits.
+   *
+   * Returns a flat list of issues (status category IN_PROGRESS only —
+   * we want "started but quiet", not "untouched in backlog"), sorted
+   * by `updatedAt` ascending. Snoozed rows are excluded.
+   */
+  stalledInProgress: workspaceProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(50).default(8),
+        })
+        .default({ limit: 8 }),
+    )
+    .query(async ({ ctx, input }) => {
+      const ws = await ctx.db.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { stalledThresholdDays: true },
+      });
+      if (ws.stalledThresholdDays <= 0) {
+        return { items: [], stalledThresholdDays: 0 };
+      }
+      const cutoff = new Date(
+        Date.now() - ws.stalledThresholdDays * 24 * 60 * 60 * 1000,
+      );
+      const now = new Date();
+      const items = await fetchSlice(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        where: {
+          updatedAt: { lt: cutoff },
+          status: { category: "IN_PROGRESS" },
+          OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }],
+        },
+        orderBy: [{ updatedAt: "asc" }],
+        take: input.limit,
+      });
+      return {
+        items,
         stalledThresholdDays: ws.stalledThresholdDays,
       };
     }),

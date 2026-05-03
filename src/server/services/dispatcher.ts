@@ -5,6 +5,41 @@ import { recordChange } from "@/server/audit";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 
 /**
+ * Stamp a "manual assignment" `dispatchReason` blob onto an Issue row.
+ * Called by manual-assignment paths (issue.create / issue.update /
+ * issue.bulkAssignAgent / MCP issues.assign / reassign) so the
+ * attribution chip on the issue detail can render the same shape
+ * for both auto-dispatch and human picks. `actorId` is the user who
+ * performed the assignment; null = system / API key / agent.
+ *
+ * Returns the blob the caller can also embed on the AGENT_ASSIGNED
+ * payload if it wants the event mirror.
+ */
+export async function recordManualDispatchReason(
+  tx: PrismaClient | Prisma.TransactionClient,
+  args: {
+    issueId: string;
+    agentProfileKey: string;
+    actorId: string | null;
+  },
+): Promise<Prisma.InputJsonObject> {
+  const reasonBlob: Prisma.InputJsonObject = {
+    mode: "MANUAL",
+    candidatesConsidered: [args.agentProfileKey],
+    picked: args.agentProfileKey,
+    reasonText: args.actorId
+      ? "manual assignment"
+      : "manual assignment (system)",
+    decidedAt: new Date().toISOString(),
+  };
+  await tx.issue.update({
+    where: { id: args.issueId },
+    data: { dispatchReason: reasonBlob },
+  });
+  return reasonBlob;
+}
+
+/**
  * Auto-dispatcher for queued issues.
  *
  * Picks an eligible agent for an issue based on the workspace's
@@ -291,6 +326,11 @@ export async function maybeAutoDispatch(
  * `dispatch.mode` goes into the event payload alongside the rule id when
  * a rule fired — kept as a string literal so we don't have to extend the
  * `AutoDispatchMode` enum just to mark rule-driven dispatches.
+ *
+ * Also persists a compact `Issue.dispatchReason` blob so consumers can
+ * answer "why was X picked" without joining back to the AGENT_ASSIGNED
+ * event row. Same shape mirrored on the event payload so ActivityEvent
+ * subscribers can read it inline.
  */
 async function assignAndEmit(
   tx: PrismaClient | Prisma.TransactionClient,
@@ -308,9 +348,38 @@ async function assignAndEmit(
     where: { id: agentId },
     data: { lastDispatchedAt: new Date() },
   });
+
+  // Build the compact `dispatchReason` blob. Mirrors a subset of the
+  // event payload's `dispatch` field (mode + candidates + picked +
+  // reasonText) so a single column read answers "who was considered
+  // and who won". The full per-candidate detail still lives on the
+  // event payload for forensics.
+  const dispatchPayload = meta.dispatch as
+    | {
+        mode: string;
+        candidates?: Array<{ agentId: string; profileKey: string }>;
+        chosen?: { agentId: string; profileKey: string } | null;
+        reason?: string;
+      }
+    | undefined;
+  const candidatesConsidered =
+    dispatchPayload?.candidates?.map((c) => c.profileKey) ?? [];
+  const pickedProfile = dispatchPayload?.chosen?.profileKey ?? null;
+  const reasonBlob: Prisma.InputJsonObject = {
+    mode: meta.mode,
+    candidatesConsidered,
+    picked: pickedProfile ?? agentId,
+    reasonText: dispatchPayload?.reason ?? meta.reason,
+    decidedAt: new Date().toISOString(),
+    ...(meta.ruleId ? { ruleId: meta.ruleId } : {}),
+  };
+
   await tx.issue.update({
     where: { id: issueId },
-    data: { assignedAgentId: agentId },
+    data: {
+      assignedAgentId: agentId,
+      dispatchReason: reasonBlob,
+    },
   });
 
   await recordChange(tx, {
@@ -331,6 +400,9 @@ async function assignAndEmit(
       reason: meta.reason,
       ...(meta.ruleId ? { ruleId: meta.ruleId } : {}),
       ...(meta.dispatch ? { dispatch: meta.dispatch } : {}),
+      // Mirror the row-level blob so consumers reading the event don't
+      // have to re-query the issue.
+      dispatchReason: reasonBlob,
     },
   });
 

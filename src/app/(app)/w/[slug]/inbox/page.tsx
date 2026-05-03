@@ -1,7 +1,8 @@
 "use client";
 import type { AgentStatus } from "@prisma/client";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { toast } from "sonner";
 import {
   AlertTriangle,
   Inbox,
@@ -10,38 +11,54 @@ import {
   Sun,
   Target,
   ChevronRight,
+  ChevronDown,
   Zap,
   Bot,
+  CheckCheck,
+  CalendarClock,
+  UserCircle2,
+  X,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { Avatar } from "@/components/ui/avatar";
 import { Badge, Card, EmptyState, Kbd, MOTION, Section, SkeletonList } from "@/components/ui";
+import { Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { ProjectChip } from "@/components/project-chip";
+import { RowQuickActions } from "@/components/row-quick-actions";
+import { SnoozeMenu } from "@/components/snooze-menu";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useHotkey } from "@/lib/keyboard";
 import { workspaceColor } from "@/lib/workspace-color";
 
 /**
- * Unified "what's next" landing — the primary workspace home.
+ * Phase 1B inbox.
  *
- * Stack (top → bottom):
- *   1. Today's focus — one-line prompt with the count of unblocked,
- *      assigned issues in the current sprint.
- *   2. Workspace pulse — compact stat strip (open / in progress / done
- *      this week / active sprint).
- *   3. Assigned & unblocked list.
- *   4. Mentions list.
- *   5. Stalled > 7d list.
- *   6. Current sprint burn (single-workspace only).
+ * Top-to-bottom buckets, all bucket counts + per-row "new" highlighting
+ * driven by `inbox.get`'s `unreadSinceVisit` map and `lastVisitAt` (the
+ * timestamp of the *previous* visit — `inbox.visit` returns the new one,
+ * but the data we use for unread comparisons is captured before we bump
+ * it).
  *
- * The cross-workspace toggle in the topbar aggregates items 3-5 across
- * every workspace the caller belongs to. Items 1-2 and 6 stay scoped to
- * the current workspace even in "all workspaces" mode — workspace-level
- * rollups across tenants don't mean anything useful.
+ *   1. Assigned & unblocked        (humanStalled excluded — that bucket
+ *                                   gets its own section)
+ *   2. Mentions                    (read-only, no quick actions)
+ *   3. Stalled — yours             (humanStalled)
+ *   4. Stalled — agents            (agentStalled)
+ *   5. Snoozed                     (collapsible <details>, default closed)
+ *
+ * Bulk select sticky toolbar appears at the top of the page when ≥1 row
+ * is checked. Mark-read on the toolbar bumps `lastInboxVisitAt` to now
+ * (we re-anchor the unread cutoff; per-row read-state isn't tracked).
  */
+
+type BucketKey = "assigned" | "humanStalled" | "agentStalled";
+
 export default function InboxPage() {
   const workspace = useWorkspace();
+  const utils = trpc.useUtils();
   const [allWorkspaces, setAllWorkspaces] = useState(false);
 
   const { data, isLoading } = trpc.inbox.get.useQuery({ allWorkspaces });
@@ -53,8 +70,7 @@ export default function InboxPage() {
     { includeArchived: false },
     { enabled: !allWorkspaces },
   );
-  // Pulse numbers come from the standard issue list + status list —
-  // cheaper than adding a dedicated router for numbers we already have.
+  // Pulse numbers come from the standard issue list — same shape as before.
   const { data: active } = trpc.issue.list.useQuery({
     includeDone: false,
     limit: 200,
@@ -64,9 +80,43 @@ export default function InboxPage() {
     limit: 200,
   });
 
+  // Capture the *previous* visit timestamp so we can highlight rows that
+  // changed since then. `data.lastVisitAt` is exactly that — the server
+  // returns it from inbox.get without bumping it. We pin it on first
+  // arrival via a ref so subsequent refetches (after `visit`) don't blow
+  // it away mid-session.
+  const previousVisitRef = useRef<Date | null | undefined>(undefined);
+  const previousVisitAt: Date | null = useMemo(() => {
+    if (previousVisitRef.current !== undefined) return previousVisitRef.current;
+    if (data) {
+      const v = data.lastVisitAt ? new Date(data.lastVisitAt) : null;
+      previousVisitRef.current = v;
+      return v;
+    }
+    return null;
+  }, [data]);
+
+  // Bump lastInboxVisitAt on mount. Server-side debounce handles repeats
+  // within 5s; we just fire it once per page entry.
+  const visitM = trpc.inbox.visit.useMutation({
+    onSuccess: () => {
+      void utils.inbox.badge.invalidate();
+    },
+  });
+  const visitFiredRef = useRef(false);
+  useEffect(() => {
+    if (visitFiredRef.current) return;
+    if (!data) return;
+    visitFiredRef.current = true;
+    visitM.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  // Compute pulse stats and focus-in-cycle count (unchanged from prior).
   const pulse = useMemo(() => {
     const openCount = active?.items.length ?? 0;
-    const inProgress = active?.items.filter((i) => i.status.category === "IN_PROGRESS").length ?? 0;
+    const inProgress =
+      active?.items.filter((i) => i.status.category === "IN_PROGRESS").length ?? 0;
     const weekAgo = Date.now() - 7 * 86_400_000;
     const doneThisWeek =
       recentDone?.items.filter(
@@ -78,20 +128,8 @@ export default function InboxPage() {
 
   const focusInCycle = useMemo(() => {
     if (!data) return 0;
-    // Only count "in sprint" when we have a cycle row to compare against.
-    // Without one, fall back to the total unblocked count.
     if (!data.cycle) return data.counts.assignedUnblocked;
-    const cycleIssueIds = new Set<string>();
-    // `data.cycle` doesn't include its own issue list, so we approximate:
-    // any assigned+unblocked item with a `cycleId` equal to `data.cycle.id`.
-    // This is a best-effort count — server-side we could return this
-    // directly; keeping the page logic on the client for now avoids a
-    // router round-trip for a tiny number.
-    for (const i of data.assignedUnblocked) {
-      // `i` has no explicit cycle in the payload; fall back to counting all.
-      cycleIssueIds.add(i.id);
-    }
-    return cycleIssueIds.size;
+    return data.assignedUnblocked.length;
   }, [data]);
 
   const queueRows = !allWorkspaces ? (agentQueue ?? []) : [];
@@ -100,6 +138,152 @@ export default function InboxPage() {
   const assignedAgentIssues = queueRows.filter((i) => !!i.assignedAgent).length;
   const onlineAgents =
     agents?.filter((a) => a.status === "ONLINE" || a.status === "BUSY").length ?? 0;
+
+  // ---- Selection state ----------------------------------------------------
+  // Single Set<id> across all buckets; bulk actions fan out per id. Order
+  // is preserved via a sister array so Shift+Click ranges are stable.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const orderedIdsRef = useRef<string[]>([]);
+  const lastClickedRef = useRef<string | null>(null);
+  const hoveredRowRef = useRef<string | null>(null);
+
+  // Build a flat ordered id list from the current buckets so Shift-range
+  // selection has a stable visual order. Mentions are excluded — they're
+  // not selectable.
+  const orderedIds = useMemo(() => {
+    if (!data) return [];
+    const ids: string[] = [];
+    for (const i of data.assignedUnblocked) ids.push(i.id);
+    for (const i of data.humanStalled) ids.push(i.id);
+    for (const i of data.agentStalled) ids.push(i.id);
+    return ids;
+  }, [data]);
+  orderedIdsRef.current = orderedIds;
+
+  const toggleSelected = useCallback(
+    (id: string, opts?: { range?: boolean }) => {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (opts?.range && lastClickedRef.current) {
+          const list = orderedIdsRef.current;
+          const a = list.indexOf(lastClickedRef.current);
+          const b = list.indexOf(id);
+          if (a >= 0 && b >= 0) {
+            const [lo, hi] = a < b ? [a, b] : [b, a];
+            for (let i = lo; i <= hi; i++) next.add(list[i]);
+            return next;
+          }
+        }
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      lastClickedRef.current = id;
+    },
+    [],
+  );
+
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
+
+  // Hotkeys: `x` toggles the hovered row; `Esc` clears.
+  useHotkey(
+    "x",
+    () => {
+      const id = hoveredRowRef.current;
+      if (id) toggleSelected(id);
+    },
+    [toggleSelected],
+  );
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && selected.size > 0) {
+        const target = e.target as HTMLElement | null;
+        const isEditable =
+          target?.tagName === "INPUT" ||
+          target?.tagName === "TEXTAREA" ||
+          target?.isContentEditable;
+        if (isEditable) return;
+        e.preventDefault();
+        clearSelection();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected.size, clearSelection]);
+
+  // ---- Bulk mutations -----------------------------------------------------
+  const snoozeManyM = trpc.issue.snoozeMany.useMutation({
+    onSuccess: ({ updated }) => {
+      toast.success(
+        `Snoozed ${updated} issue${updated === 1 ? "" : "s"}.`,
+      );
+      clearSelection();
+      void utils.inbox.get.invalidate();
+      void utils.inbox.badge.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const bulkAssignM = trpc.issue.bulkAssign.useMutation({
+    onSuccess: ({ updated }) => {
+      toast.success(`Reassigned ${updated} issue${updated === 1 ? "" : "s"}.`);
+      clearSelection();
+      void utils.inbox.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const bulkAssignAgentM = trpc.issue.bulkAssignAgent.useMutation({
+    onSuccess: ({ updated }) => {
+      toast.success(`Reassigned ${updated} issue${updated === 1 ? "" : "s"}.`);
+      clearSelection();
+      void utils.inbox.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const markReadM = trpc.inbox.visit.useMutation({
+    onSuccess: () => {
+      toast.success("Inbox marked as read.");
+      // Bump the local previousVisit anchor so unread chips clear without
+      // requiring a full refetch — refetch happens in the background.
+      previousVisitRef.current = new Date();
+      void utils.inbox.get.invalidate();
+      void utils.inbox.badge.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // ---- Bulk picker open state --------------------------------------------
+  const [reassignPickerOpen, setReassignPickerOpen] = useState(false);
+  const selectedArray = useMemo(() => Array.from(selected), [selected]);
+
+  // ---- Per-row inline picker state (status, assignee) --------------------
+  const [statusPicker, setStatusPicker] = useState<{
+    issueId: string | null;
+  }>({ issueId: null });
+  const [assigneePicker, setAssigneePicker] = useState<{
+    issueId: string | null;
+  }>({ issueId: null });
+
+  const updateIssueM = trpc.issue.update.useMutation({
+    onSuccess: () => {
+      toast.success("Status updated.");
+      void utils.inbox.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const assignIssueM = trpc.issue.assign.useMutation({
+    onSuccess: () => {
+      toast.success("Assignees updated.");
+      void utils.inbox.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const assignAgentM = trpc.issue.update.useMutation({
+    onSuccess: () => {
+      toast.success("Agent updated.");
+      void utils.inbox.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   return (
     <>
@@ -148,6 +332,23 @@ export default function InboxPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {selected.size > 0 && (
+          <BulkBar
+            count={selected.size}
+            onClear={clearSelection}
+            onMarkRead={() => markReadM.mutate()}
+            onSnooze={(until) =>
+              snoozeManyM.mutate({ ids: selectedArray, until })
+            }
+            onReassign={() => setReassignPickerOpen(true)}
+            disabled={
+              snoozeManyM.isPending ||
+              bulkAssignM.isPending ||
+              bulkAssignAgentM.isPending ||
+              markReadM.isPending
+            }
+          />
+        )}
         <div className="mx-auto max-w-5xl space-y-8 p-5">
           {/* Rollups — always render so the page doesn't jump while loading. */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -185,12 +386,14 @@ export default function InboxPage() {
             </div>
           ) : data.assignedUnblocked.length === 0 &&
             data.mentions.length === 0 &&
-            data.stalled.length === 0 ? (
+            data.humanStalled.length === 0 &&
+            data.agentStalled.length === 0 &&
+            data.snoozed.length === 0 ? (
             <div className="rounded-lg border border-border bg-card/30 px-6 py-16">
               <EmptyState
                 variant="page"
                 icon={<Sun />}
-                title="Inbox zero"
+                title="Inbox zero — nothing's waiting"
                 description="When someone @mentions you, assigns work, or replies to a thread you're following, it lands here."
                 action={
                   <Link
@@ -205,49 +408,29 @@ export default function InboxPage() {
             </div>
           ) : (
             <>
-              <Section
-                title={
-                  <span className="flex items-center gap-2">
-                    <Inbox className="h-3.5 w-3.5 text-muted-foreground" />
-                    Assigned & unblocked
-                    <span className="font-mono text-[0.6875rem] text-muted-foreground">
-                      {data.counts.assignedUnblocked}
-                    </span>
+              <BucketSection
+                bucket="assigned"
+                title="Assigned & unblocked"
+                hint="Your assignments that aren't waiting on anything else."
+                icon={<Inbox className="h-3.5 w-3.5 text-muted-foreground" />}
+                count={data.counts.assignedUnblocked}
+                newCount={data.unreadSinceVisit.assignedUnblocked}
+                emptyTitle="Nothing in your queue."
+                emptyDescription={
+                  <span>
+                    Pick up something from Issues or press <Kbd>⇧C</Kbd> to create one.
                   </span>
                 }
-                hint="Your assignments that aren't waiting on anything else."
-              >
-                <Card as="ul">
-                  {data.assignedUnblocked.length === 0 ? (
-                    <EmptyState
-                      as="li"
-                      variant="card"
-                      icon={<Inbox />}
-                      title="Nothing in your queue."
-                      description={
-                        <span>
-                          Pick up something from Issues or press <Kbd>⇧C</Kbd> to create one.
-                        </span>
-                      }
-                    />
-                  ) : (
-                    data.assignedUnblocked.map((i) => (
-                      <IssueRow
-                        key={i.id}
-                        issue={{
-                          id: i.id,
-                          number: i.number,
-                          title: i.title,
-                          workspace: i.workspace,
-                          status: { name: i.status.name, color: i.status.color },
-                          updatedAt: i.updatedAt,
-                          project: i.project,
-                        }}
-                      />
-                    ))
-                  )}
-                </Card>
-              </Section>
+                emptyIcon={<Inbox />}
+                rows={data.assignedUnblocked}
+                slug={workspace.slug}
+                previousVisitAt={previousVisitAt}
+                selected={selected}
+                onToggle={toggleSelected}
+                onHover={(id) => (hoveredRowRef.current = id)}
+                onPickStatus={(id) => setStatusPicker({ issueId: id })}
+                onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
+              />
 
               <Section
                 title={
@@ -257,9 +440,12 @@ export default function InboxPage() {
                     <span className="font-mono text-[0.6875rem] text-muted-foreground">
                       {data.counts.mentions}
                     </span>
+                    {data.unreadSinceVisit.mentions > 0 && (
+                      <NewBadge count={data.unreadSinceVisit.mentions} />
+                    )}
                   </span>
                 }
-                hint="Comments that @mention you in the last 7 days (schema placeholder — user.lastInboxVisitAt not yet persisted)."
+                hint="Comments that @mention you, last 7 days."
               >
                 <Card as="ul">
                   {data.mentions.length === 0 ? (
@@ -271,79 +457,107 @@ export default function InboxPage() {
                       description="Comments that @mention you land here."
                     />
                   ) : (
-                    data.mentions.map((m) => (
-                      <li key={m.id} className="flex items-start gap-3 px-3 py-2 text-[0.75rem]">
-                        <WorkspaceBadge
-                          slug={m.issue.workspace.slug}
-                          wsKey={m.issue.workspace.key}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <Link
-                              href={`/w/${m.issue.workspace.slug}/issues/${m.issue.id}`}
-                              className="font-mono text-[0.6875rem] hover:underline"
-                            >
-                              {formatIssueId(m.issue.workspace.key, m.issue.number)}
-                            </Link>
-                            <span className="truncate">{m.issue.title}</span>
+                    data.mentions.map((m) => {
+                      const isNew =
+                        !!previousVisitAt &&
+                        new Date(m.createdAt) > previousVisitAt;
+                      return (
+                        <li
+                          key={m.id}
+                          className={cn(
+                            "flex items-start gap-3 px-3 py-2 text-[0.75rem]",
+                            isNew && "bg-ember/5",
+                          )}
+                        >
+                          {isNew && <NewDot />}
+                          <WorkspaceBadge
+                            slug={m.issue.workspace.slug}
+                            wsKey={m.issue.workspace.key}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <Link
+                                href={`/w/${m.issue.workspace.slug}/issues/${m.issue.id}`}
+                                className="text-id hover:underline"
+                              >
+                                {formatIssueId(m.issue.workspace.key, m.issue.number)}
+                              </Link>
+                              <span className="truncate">{m.issue.title}</span>
+                            </div>
+                            <div className="mt-0.5 line-clamp-2 text-muted-foreground">
+                              <span className="font-medium text-foreground">
+                                {m.author.name ?? "Someone"}
+                              </span>
+                              {" — "}
+                              {m.body}
+                            </div>
                           </div>
-                          <div className="mt-0.5 line-clamp-2 text-muted-foreground">
-                            <span className="font-medium text-foreground">
-                              {m.author.name ?? "Someone"}
-                            </span>
-                            {" — "}
-                            {m.body}
-                          </div>
-                        </div>
-                        <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
-                          {relativeTime(m.createdAt)}
-                        </span>
-                      </li>
-                    ))
+                          <span className="text-meta shrink-0 text-muted-foreground">
+                            {relativeTime(m.createdAt)}
+                          </span>
+                        </li>
+                      );
+                    })
                   )}
                 </Card>
               </Section>
 
-              <Section
-                title={
-                  <span className="flex items-center gap-2">
-                    <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />
-                    Stalled &gt; 7d
-                    <span className="font-mono text-[0.6875rem] text-muted-foreground">
-                      {data.counts.stalled}
-                    </span>
-                  </span>
+              <BucketSection
+                bucket="humanStalled"
+                title="Stalled — yours"
+                hint={
+                  data.stalledThresholdDays
+                    ? `Your work without activity for more than ${data.stalledThresholdDays}d.`
+                    : "Your work without recent activity."
                 }
-                hint="Your assignments without activity for more than a week."
-              >
-                <Card as="ul">
-                  {data.stalled.length === 0 ? (
-                    <EmptyState
-                      as="li"
-                      variant="card"
-                      icon={<AlertTriangle />}
-                      title="Nothing stalled."
-                      description="Work is moving. Nice."
-                    />
-                  ) : (
-                    data.stalled.map((i) => (
-                      <IssueRow
-                        key={i.id}
-                        issue={{
-                          id: i.id,
-                          number: i.number,
-                          title: i.title,
-                          workspace: i.workspace,
-                          status: { name: i.status.name, color: i.status.color },
-                          updatedAt: i.updatedAt,
-                          project: i.project,
-                        }}
-                        tone="warn"
-                      />
-                    ))
-                  )}
-                </Card>
-              </Section>
+                icon={<AlertTriangle className="h-3.5 w-3.5 text-warning" />}
+                count={data.counts.humanStalled}
+                newCount={data.unreadSinceVisit.humanStalled}
+                emptyTitle="Nothing stalled."
+                emptyDescription="Work is moving. Nice."
+                emptyIcon={<AlertTriangle />}
+                rows={data.humanStalled}
+                slug={workspace.slug}
+                previousVisitAt={previousVisitAt}
+                selected={selected}
+                onToggle={toggleSelected}
+                onHover={(id) => (hoveredRowRef.current = id)}
+                onPickStatus={(id) => setStatusPicker({ issueId: id })}
+                onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
+                tone="warn"
+              />
+
+              <BucketSection
+                bucket="agentStalled"
+                title="Agent runs stalled"
+                hint={
+                  data.stalledThresholdDays
+                    ? `Issues whose assigned agent has been silent for more than ${data.stalledThresholdDays}d.`
+                    : "Issues whose assigned agent has been silent."
+                }
+                icon={<Bot className="h-3.5 w-3.5 text-warning" />}
+                count={data.counts.agentStalled}
+                newCount={data.unreadSinceVisit.agentStalled}
+                emptyTitle="No agent runs stalled."
+                emptyDescription="Every assigned agent is moving."
+                emptyIcon={<Bot />}
+                rows={data.agentStalled}
+                slug={workspace.slug}
+                previousVisitAt={previousVisitAt}
+                selected={selected}
+                onToggle={toggleSelected}
+                onHover={(id) => (hoveredRowRef.current = id)}
+                onPickStatus={(id) => setStatusPicker({ issueId: id })}
+                onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
+                tone="warn"
+                showAgent
+              />
+
+              <SnoozedSection
+                rows={data.snoozed}
+                count={data.counts.snoozed}
+                slug={workspace.slug}
+              />
 
               {!allWorkspaces && (
                 <Section
@@ -365,7 +579,7 @@ export default function InboxPage() {
                           >
                             {data.cycle.name}
                           </Link>
-                          <div className="font-mono text-[0.6875rem] text-muted-foreground">
+                          <div className="text-id text-muted-foreground">
                             {data.cycle.done}/{data.cycle.total} done · {data.cycle.remaining}{" "}
                             remaining
                           </div>
@@ -405,12 +619,746 @@ export default function InboxPage() {
           )}
         </div>
       </div>
+
+      {/* Per-row pickers */}
+      {statusPicker.issueId && (
+        <StatusPickerModal
+          issueId={statusPicker.issueId}
+          open={!!statusPicker.issueId}
+          onOpenChange={(o) => !o && setStatusPicker({ issueId: null })}
+          onSelect={(statusId) => {
+            if (!statusPicker.issueId) return;
+            updateIssueM.mutate({ id: statusPicker.issueId, statusId });
+            setStatusPicker({ issueId: null });
+          }}
+        />
+      )}
+      {assigneePicker.issueId && (
+        <AssigneePickerModal
+          open={!!assigneePicker.issueId}
+          onOpenChange={(o) => !o && setAssigneePicker({ issueId: null })}
+          onPickUser={(userId) => {
+            if (!assigneePicker.issueId) return;
+            assignIssueM.mutate({
+              id: assigneePicker.issueId,
+              userIds: userId ? [userId] : [],
+            });
+            setAssigneePicker({ issueId: null });
+          }}
+          onPickAgent={(agentId) => {
+            if (!assigneePicker.issueId) return;
+            assignAgentM.mutate({
+              id: assigneePicker.issueId,
+              assignedAgentId: agentId,
+            });
+            setAssigneePicker({ issueId: null });
+          }}
+        />
+      )}
+
+      {/* Bulk reassign picker */}
+      {reassignPickerOpen && (
+        <AssigneePickerModal
+          open={reassignPickerOpen}
+          onOpenChange={setReassignPickerOpen}
+          onPickUser={(userId) => {
+            bulkAssignM.mutate({
+              issueIds: selectedArray,
+              claimedById: userId,
+            });
+            setReassignPickerOpen(false);
+          }}
+          onPickAgent={(agentId) => {
+            bulkAssignAgentM.mutate({
+              issueIds: selectedArray,
+              assignedAgentId: agentId,
+            });
+            setReassignPickerOpen(false);
+          }}
+        />
+      )}
     </>
   );
 }
 
+
 // ---------------------------------------------------------------------------
-// Rollup blocks
+// Bulk action bar
+// ---------------------------------------------------------------------------
+
+function BulkBar({
+  count,
+  onClear,
+  onMarkRead,
+  onSnooze,
+  onReassign,
+  disabled,
+}: {
+  count: number;
+  onClear: () => void;
+  onMarkRead: () => void;
+  onSnooze: (until: Date | null) => void;
+  onReassign: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
+      <div className="mx-auto flex max-w-5xl items-center gap-3 px-5 py-2 text-[0.75rem]">
+        <span className="font-medium">
+          {count} selected
+        </span>
+        <button
+          type="button"
+          onClick={onClear}
+          className="text-meta inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+        >
+          <X className="h-3 w-3" />
+          Clear selection
+        </button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onMarkRead}
+            className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50"
+          >
+            <CheckCheck className="h-3 w-3" />
+            Mark read
+          </button>
+          <SnoozeMenu
+            onSelect={onSnooze}
+            trigger={
+              <button
+                type="button"
+                disabled={disabled}
+                className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50"
+              >
+                <CalendarClock className="h-3 w-3" />
+                Snooze for…
+              </button>
+            }
+          />
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onReassign}
+            className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50"
+          >
+            <UserCircle2 className="h-3 w-3" />
+            Reassign…
+          </button>
+          <button
+            type="button"
+            onClick={onClear}
+            className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
+          >
+            <Kbd>Esc</Kbd>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Bucket section + row
+// ---------------------------------------------------------------------------
+
+type StalledIssueRow = {
+  id: string;
+  number: number;
+  title: string;
+  updatedAt: Date | string;
+  snoozedUntil?: Date | string | null;
+  workspace: { slug: string; key: string };
+  status: { id?: string; name: string; color: string };
+  project: { id: string; key: string; name: string; color: string | null } | null;
+  assignedAgent?: {
+    id: string;
+    name: string;
+    profileKey: string;
+    avatar: string | null;
+    status: AgentStatus;
+  } | null;
+};
+
+function BucketSection({
+  bucket,
+  title,
+  hint,
+  icon,
+  count,
+  newCount,
+  emptyTitle,
+  emptyDescription,
+  emptyIcon,
+  rows,
+  slug,
+  previousVisitAt,
+  selected,
+  onToggle,
+  onHover,
+  onPickStatus,
+  onPickAssignee,
+  tone,
+  showAgent,
+}: {
+  bucket: BucketKey;
+  title: string;
+  hint?: string;
+  icon: React.ReactNode;
+  count: number;
+  newCount: number;
+  emptyTitle: string;
+  emptyDescription: React.ReactNode;
+  emptyIcon: React.ReactNode;
+  rows: StalledIssueRow[];
+  slug: string;
+  previousVisitAt: Date | null;
+  selected: Set<string>;
+  onToggle: (id: string, opts?: { range?: boolean }) => void;
+  onHover: (id: string | null) => void;
+  onPickStatus: (id: string) => void;
+  onPickAssignee: (id: string) => void;
+  tone?: "warn";
+  showAgent?: boolean;
+}) {
+  return (
+    <Section
+      title={
+        <span className="flex items-center gap-2">
+          {icon}
+          {title}
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">{count}</span>
+          {newCount > 0 && <NewBadge count={newCount} />}
+        </span>
+      }
+      hint={hint}
+    >
+      <Card as="ul">
+        {rows.length === 0 ? (
+          <EmptyState
+            as="li"
+            variant="card"
+            icon={emptyIcon}
+            title={emptyTitle}
+            description={emptyDescription}
+          />
+        ) : (
+          rows.map((i) => (
+            <IssueRow
+              key={i.id}
+              issue={i}
+              tone={tone}
+              showAgent={!!showAgent}
+              isSelected={selected.has(i.id)}
+              isNew={!!previousVisitAt && new Date(i.updatedAt) > previousVisitAt}
+              onToggle={(opts) => onToggle(i.id, opts)}
+              onHover={(h) => onHover(h ? i.id : null)}
+              // RowQuickActions calls these with an HTMLElement anchor;
+              // we ignore it because our pickers are page-level modals.
+              onPickStatus={() => onPickStatus(i.id)}
+              onPickAssignee={() => onPickAssignee(i.id)}
+              bucket={bucket}
+              slug={slug}
+            />
+          ))
+        )}
+      </Card>
+    </Section>
+  );
+}
+
+function IssueRow({
+  issue,
+  tone,
+  showAgent,
+  isSelected,
+  isNew,
+  onToggle,
+  onHover,
+  onPickStatus,
+  onPickAssignee,
+  // bucket is passed for future per-bucket telemetry / styling — currently
+  // unused but a stable hook so we don't have to thread props later.
+  bucket: _bucket,
+  slug: _slug,
+}: {
+  issue: StalledIssueRow;
+  tone?: "warn";
+  showAgent: boolean;
+  isSelected: boolean;
+  isNew: boolean;
+  onToggle: (opts?: { range?: boolean }) => void;
+  onHover: (hovered: boolean) => void;
+  // Loose signature — `RowQuickActions` calls these with an HTMLElement
+  // anchor; the inbox callers drop it because our pickers are page-level.
+  onPickStatus: (anchor?: HTMLElement) => void;
+  onPickAssignee: (anchor?: HTMLElement) => void;
+  bucket: BucketKey;
+  slug: string;
+}) {
+  return (
+    <li
+      className={cn(
+        "group relative flex items-center gap-2 px-3 py-2 text-[0.75rem]",
+        isSelected ? "bg-ember/5" : "hover:bg-subtle/40",
+      )}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
+    >
+      {isNew && <NewDot />}
+      <input
+        type="checkbox"
+        checked={isSelected}
+        onClick={(e) => {
+          // Capture range modifier on click so toggle gets it. The change
+          // event below still fires normally.
+          if (e.shiftKey) {
+            e.preventDefault();
+            onToggle({ range: true });
+          }
+        }}
+        onChange={(e) => {
+          // No-op for shift-click (handled in onClick). Plain click toggles.
+          if (!(e.nativeEvent as MouseEvent).shiftKey) onToggle();
+        }}
+        className="h-3.5 w-3.5 shrink-0 rounded border-border"
+        aria-label="Select issue"
+      />
+      <WorkspaceBadge slug={issue.workspace.slug} wsKey={issue.workspace.key} />
+      <Link
+        href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
+        className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
+      >
+        <span className="text-id shrink-0 text-muted-foreground">
+          {formatIssueId(issue.workspace.key, issue.number)}
+        </span>
+        <span className="truncate">{issue.title}</span>
+      </Link>
+      {showAgent && issue.assignedAgent && (
+        <span
+          className="text-meta inline-flex shrink-0 items-center gap-1 text-muted-foreground"
+          title={`Assigned to ${issue.assignedAgent.name}`}
+        >
+          {issue.assignedAgent.avatar ? (
+            <span aria-hidden className="text-id">
+              {issue.assignedAgent.avatar}
+            </span>
+          ) : null}
+          <AgentPresenceDot status={issue.assignedAgent.status} size="sm" />
+          <span className="text-id">@{issue.assignedAgent.profileKey}</span>
+        </span>
+      )}
+      {issue.project && (
+        <ProjectChip
+          project={issue.project}
+          slug={issue.workspace.slug}
+          className="shrink-0 px-1.5 py-0.5"
+        />
+      )}
+      <span
+        className="text-id shrink-0 rounded px-1.5 py-0.5"
+        style={{
+          backgroundColor: `${issue.status.color}22`,
+          color: issue.status.color,
+        }}
+      >
+        {issue.status.name}
+      </span>
+      <span
+        className={cn(
+          "text-meta shrink-0",
+          tone === "warn" ? "text-warning" : "text-muted-foreground",
+        )}
+      >
+        {relativeTime(issue.updatedAt)}
+      </span>
+
+      {/* Inline quick actions — hover-revealed (always-visible when selected). */}
+      <RowQuickActions
+        issueId={issue.id}
+        snoozedUntil={issue.snoozedUntil}
+        hasAssignedAgent={!!issue.assignedAgent}
+        onPickStatus={onPickStatus}
+        onPickAssignee={onPickAssignee}
+        alwaysVisible={isSelected}
+        className="shrink-0"
+      />
+    </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Snoozed section — collapsible <details>
+// ---------------------------------------------------------------------------
+
+function SnoozedSection({
+  rows,
+  count,
+  slug: _slug,
+}: {
+  rows: StalledIssueRow[];
+  count: number;
+  slug: string;
+}) {
+  const utils = trpc.useUtils();
+  const unsnoozeM = trpc.issue.unsnooze.useMutation({
+    onSuccess: () => {
+      toast.success("Unsnoozed.");
+      void utils.inbox.get.invalidate();
+      void utils.inbox.badge.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (count === 0) return null;
+  return (
+    <details className="group rounded-lg border border-border bg-card/30">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
+        <CalendarClock className="h-3 w-3" />
+        <span>Snoozed</span>
+        <span className="font-mono normal-case tracking-normal text-muted-foreground/70">
+          {count}
+        </span>
+        <ChevronDown className="ml-auto h-3 w-3 transition-transform group-open:rotate-180" />
+      </summary>
+      <ul className="border-t border-border">
+        {rows.map((i) => (
+          <li
+            key={i.id}
+            className="flex items-center gap-2 px-3 py-2 text-[0.75rem] hover:bg-subtle/40"
+          >
+            <WorkspaceBadge slug={i.workspace.slug} wsKey={i.workspace.key} />
+            <Link
+              href={`/w/${i.workspace.slug}/issues/${i.id}`}
+              className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
+            >
+              <span className="text-id shrink-0 text-muted-foreground">
+                {formatIssueId(i.workspace.key, i.number)}
+              </span>
+              <span className="truncate">{i.title}</span>
+            </Link>
+            {i.snoozedUntil && (
+              <span className="text-meta shrink-0 text-muted-foreground">
+                until {relativeTime(i.snoozedUntil)}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                unsnoozeM.mutate({ id: i.id });
+              }}
+              disabled={unsnoozeM.isPending}
+              className="focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
+            >
+              <X className="h-3 w-3" />
+              Unsnooze
+            </button>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Status / Assignee picker modals
+// ---------------------------------------------------------------------------
+
+function StatusPickerModal({
+  issueId: _issueId,
+  open,
+  onOpenChange,
+  onSelect,
+}: {
+  issueId: string;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onSelect: (statusId: string) => void;
+}) {
+  const { data: statuses, isLoading } = trpc.status.list.useQuery();
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const items = (statuses ?? []).filter(
+    (s) => !q || s.name.toLowerCase().includes(q),
+  );
+  return (
+    <Picker
+      open={open}
+      onOpenChange={onOpenChange}
+      placeholder="Move to status…"
+      items={items}
+      getKey={(s) => s.id}
+      onQueryChange={setQuery}
+      loading={isLoading}
+      emptyLabel="No statuses match."
+      onSelect={(s) => onSelect(s.id)}
+      renderItem={(s) => (
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden
+            className="inline-block h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: s.color }}
+          />
+          <span className="truncate">{s.name}</span>
+          <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+            {s.category.toLowerCase().replace(/_/g, " ")}
+          </span>
+        </div>
+      )}
+    />
+  );
+}
+
+function AssigneePickerModal({
+  open,
+  onOpenChange,
+  onPickUser,
+  onPickAgent,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onPickUser: (userId: string | null) => void;
+  onPickAgent: (agentId: string | null) => void;
+}) {
+  const [tab, setTab] = useState<"human" | "agent">("human");
+  const [query, setQuery] = useState("");
+  const { data: members, isLoading: membersLoading } =
+    trpc.workspace.members.useQuery(undefined, { enabled: open && tab === "human" });
+  const { data: agents, isLoading: agentsLoading } = trpc.agent.list.useQuery(
+    { includeArchived: false },
+    { enabled: open && tab === "agent" },
+  );
+
+  type HumanRow =
+    | { kind: "unassign"; key: string }
+    | {
+        kind: "user";
+        key: string;
+        id: string;
+        name: string;
+        image: string | null;
+        email: string;
+      };
+  type AgentRow =
+    | { kind: "unassign"; key: string }
+    | {
+        kind: "agent";
+        key: string;
+        id: string;
+        name: string;
+        profileKey: string;
+        avatar: string | null;
+        status: AgentStatus;
+      };
+
+  const q = query.trim().toLowerCase();
+  const humanRows: HumanRow[] = [
+    { kind: "unassign", key: "__unassign" },
+    ...(members ?? [])
+      .filter((m) => {
+        if (!q) return true;
+        const n = m.user.name?.toLowerCase() ?? "";
+        const e = m.user.email?.toLowerCase() ?? "";
+        return n.includes(q) || e.includes(q);
+      })
+      .map(
+        (m): HumanRow => ({
+          kind: "user",
+          key: m.user.id,
+          id: m.user.id,
+          name: m.user.name ?? m.user.email ?? "Unknown",
+          image: m.user.image,
+          email: m.user.email ?? "",
+        }),
+      ),
+  ];
+  const agentRows: AgentRow[] = [
+    { kind: "unassign", key: "__unassign" },
+    ...(agents ?? [])
+      .filter((a) => {
+        if (!q) return true;
+        return (
+          a.name.toLowerCase().includes(q) ||
+          a.profileKey.toLowerCase().includes(q)
+        );
+      })
+      .map(
+        (a): AgentRow => ({
+          kind: "agent",
+          key: a.id,
+          id: a.id,
+          name: a.name,
+          profileKey: a.profileKey,
+          avatar: a.avatar,
+          status: a.status as AgentStatus,
+        }),
+      ),
+  ];
+
+  const tabStrip = (
+    <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5 text-[0.6875rem]">
+      <button
+        type="button"
+        onClick={() => {
+          setTab("human");
+          setQuery("");
+        }}
+        className={cn(
+          "focus-ring rounded px-2 py-0.5",
+          tab === "human"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        Humans
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setTab("agent");
+          setQuery("");
+        }}
+        className={cn(
+          "focus-ring rounded px-2 py-0.5",
+          tab === "agent"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        Agents
+      </button>
+    </div>
+  );
+
+  if (tab === "human") {
+    return (
+      <Picker<HumanRow>
+        open={open}
+        onOpenChange={onOpenChange}
+        placeholder="Assign to a workspace member…"
+        items={humanRows}
+        getKey={(r) => r.key}
+        onQueryChange={setQuery}
+        loading={membersLoading}
+        emptyLabel="No members match."
+        onSelect={(r) => {
+          if (r.kind === "unassign") onPickUser(null);
+          else onPickUser(r.id);
+          onOpenChange(false);
+        }}
+        renderItem={(r) => {
+          if (r.kind === "unassign") {
+            return (
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-2 w-2 rounded-full bg-muted" />
+                <span className="text-muted-foreground">Unassign</span>
+              </div>
+            );
+          }
+          return (
+            <div className="flex items-center gap-2">
+              <Avatar name={r.name} image={r.image} size={18} />
+              <span className="truncate">{r.name}</span>
+              {r.email && (
+                <span className="text-id ml-auto truncate text-muted-foreground">
+                  {r.email}
+                </span>
+              )}
+            </div>
+          );
+        }}
+        footer={
+          <div className="flex items-center justify-between gap-2">
+            {tabStrip}
+            <span>Human assignment sets the issue&apos;s claim.</span>
+          </div>
+        }
+      />
+    );
+  }
+
+  return (
+    <Picker<AgentRow>
+      open={open}
+      onOpenChange={onOpenChange}
+      placeholder="Assign to an agent…"
+      items={agentRows}
+      getKey={(r) => r.key}
+      onQueryChange={setQuery}
+      loading={agentsLoading}
+      emptyLabel="No active agents match."
+      onSelect={(r) => {
+        if (r.kind === "unassign") onPickAgent(null);
+        else onPickAgent(r.id);
+        onOpenChange(false);
+      }}
+      renderItem={(r) => {
+        if (r.kind === "unassign") {
+          return (
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-muted" />
+              <span className="text-muted-foreground">Unassign agent</span>
+            </div>
+          );
+        }
+        return (
+          <div className="flex items-center gap-2">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-subtle text-[0.6875rem]">
+              {r.avatar ? (
+                <span aria-hidden>{r.avatar}</span>
+              ) : (
+                <span className="font-medium text-muted-foreground">
+                  {r.name.slice(0, 1).toUpperCase()}
+                </span>
+              )}
+            </span>
+            <AgentPresenceDot status={r.status} />
+            <span className="truncate">{r.name}</span>
+            <span className="text-id ml-auto text-muted-foreground">
+              @{r.profileKey}
+            </span>
+          </div>
+        );
+      }}
+      footer={
+        <div className="flex items-center justify-between gap-2">
+          {tabStrip}
+          <span>Agent assignment fires the AGENT_ASSIGNED webhook.</span>
+        </div>
+      }
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Visual primitives
+// ---------------------------------------------------------------------------
+
+function NewBadge({ count }: { count: number }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-ember/30 bg-ember/10 px-1.5 py-0 text-[0.625rem] font-medium uppercase tracking-wider text-ember">
+      {count} new
+    </span>
+  );
+}
+
+function NewDot() {
+  return (
+    <span
+      aria-hidden
+      title="New since your last visit"
+      className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-ember"
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Rollup blocks (unchanged structure, kept inline so we don't reach for an
+// extracted file just for this page).
 // ---------------------------------------------------------------------------
 
 function FocusRollup({
@@ -504,7 +1452,7 @@ function PulseRollup({
 }
 
 // ---------------------------------------------------------------------------
-// Agent queue
+// Agent queue (unchanged from prior design)
 // ---------------------------------------------------------------------------
 
 type AgentQueueIssue = {
@@ -577,7 +1525,7 @@ function AgentQueueSection({
                   href={`/w/${slug}/issues/${issue.id}`}
                   className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
                 >
-                  <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
+                  <span className="text-id shrink-0 text-muted-foreground">
                     {formatIssueId(workspaceKey, issue.number)}
                   </span>
                   <span className="truncate">{issue.title}</span>
@@ -664,71 +1612,12 @@ function Stat({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Item rows
-// ---------------------------------------------------------------------------
-
-function IssueRow({
-  issue,
-  tone,
-}: {
-  issue: {
-    id: string;
-    number: number;
-    title: string;
-    workspace: { slug: string; key: string };
-    status: { name: string; color: string };
-    updatedAt: Date | string;
-    project?: { id: string; key: string; name: string; color: string | null } | null;
-  };
-  tone?: "warn";
-}) {
-  return (
-    <li className="flex items-center gap-3 px-3 py-2 text-[0.75rem] hover:bg-subtle/40">
-      <WorkspaceBadge slug={issue.workspace.slug} wsKey={issue.workspace.key} />
-      <Link
-        href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
-        className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
-      >
-        <span className="text-id shrink-0 text-muted-foreground">
-          {formatIssueId(issue.workspace.key, issue.number)}
-        </span>
-        <span className="truncate">{issue.title}</span>
-      </Link>
-      {issue.project && (
-        <ProjectChip
-          project={issue.project}
-          slug={issue.workspace.slug}
-          className="shrink-0 px-1.5 py-0.5"
-        />
-      )}
-      <span
-        className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[0.6875rem]"
-        style={{
-          backgroundColor: `${issue.status.color}22`,
-          color: issue.status.color,
-        }}
-      >
-        {issue.status.name}
-      </span>
-      <span
-        className={cn(
-          "text-meta shrink-0",
-          tone === "warn" ? "text-danger" : "text-muted-foreground",
-        )}
-      >
-        {relativeTime(issue.updatedAt)}
-      </span>
-    </li>
-  );
-}
-
 function WorkspaceBadge({ slug, wsKey }: { slug: string; wsKey: string }) {
   const c = workspaceColor(wsKey);
   return (
     <Link
       href={`/w/${slug}/inbox`}
-      className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[0.6875rem] font-semibold"
+      className="text-id grid h-5 w-5 shrink-0 place-items-center rounded-sm font-semibold"
       style={{
         backgroundColor: c.bg,
         color: c.fg,
