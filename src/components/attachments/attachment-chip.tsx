@@ -5,6 +5,7 @@ import {
   FileArchive,
   FileQuestion,
   Download,
+  ExternalLink,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,11 @@ import { useAttachmentLightbox } from "@/components/attachments/attachment-light
  * be too heavy). Click opens the existing AttachmentLightbox; the
  * lightbox provider must be mounted somewhere in the tree.
  *
+ * For LINK-kind attachments (mimeType === "text/url" or kind === "LINK")
+ * the chip routes click through to `window.open(externalUrl)` instead of
+ * the lightbox, and surfaces the URL hostname rather than a byte count
+ * in the trailing slot.
+ *
  * `download` icon hint on the right is decorative — the lightbox owns the
  * actual download action. Keeping it here means the affordance reads as
  * "this is a file you can save" without a second action button.
@@ -26,7 +32,26 @@ export type AttachmentChipData = {
   filename: string;
   mimeType: string;
   size: number;
+  /** Optional discriminator for LINK rows. mimeType === "text/url" works too. */
+  kind?: "FILE" | "LINK";
+  /** Set on LINK rows; the canonical external URL. */
+  externalUrl?: string | null;
 };
+
+/** True if this attachment row is a LINK (not a byte upload). */
+function isLinkAttachment(a: AttachmentChipData): boolean {
+  return a.kind === "LINK" || a.mimeType === "text/url";
+}
+
+/** Best-effort hostname extraction for LINK chips' trailing slot. */
+function safeHostname(url: string | null | undefined): string {
+  if (!url) return "";
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "");
+  } catch {
+    return "";
+  }
+}
 
 export function AttachmentChip({
   attachment,
@@ -43,8 +68,20 @@ export function AttachmentChip({
 }) {
   const lightbox = useAttachmentLightbox();
   const Icon = mimeIcon(attachment.mimeType);
+  const isLink = isLinkAttachment(attachment);
+  const linkHost = isLink ? safeHostname(attachment.externalUrl ?? null) : "";
 
   const open = () => {
+    if (isLink) {
+      // LINK rows skip the lightbox entirely — the canonical interaction
+      // is "open the page in a new tab". Lightbox would render an
+      // iframe-via-presigned-url that doesn't apply here.
+      const href = attachment.externalUrl ?? "";
+      if (href) {
+        window.open(href, "_blank", "noopener,noreferrer");
+      }
+      return;
+    }
     lightbox.open({
       attachmentId: attachment.id,
       attachments: attachments ?? [attachment],
@@ -56,7 +93,11 @@ export function AttachmentChip({
     <button
       type="button"
       onClick={open}
-      title={`${attachment.filename} · ${prettyBytes(attachment.size)}`}
+      title={
+        isLink
+          ? `${attachment.filename} · ${attachment.externalUrl ?? "external link"}`
+          : `${attachment.filename} · ${prettyBytes(attachment.size)}`
+      }
       className={cn(
         "inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-card/60 px-1.5 py-1 text-left transition-colors hover:border-ember/40 hover:bg-card",
         className,
@@ -67,9 +108,13 @@ export function AttachmentChip({
         {attachment.filename}
       </span>
       <span className="text-meta shrink-0 text-muted-foreground">
-        {prettyBytes(attachment.size)}
+        {isLink ? linkHost || "link" : prettyBytes(attachment.size)}
       </span>
-      <Download className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+      {isLink ? (
+        <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+      ) : (
+        <Download className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+      )}
     </button>
   );
 }
@@ -144,6 +189,7 @@ export function isImageMime(mime: string): boolean {
 
 function mimeIcon(mime: string) {
   const m = (mime || "").toLowerCase();
+  if (m === "text/url") return ExternalLink;
   if (m.startsWith("image/")) return ImageIcon;
   if (m === "application/pdf" || m.startsWith("text/") || m === "application/json")
     return FileText;

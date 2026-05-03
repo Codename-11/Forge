@@ -56,7 +56,16 @@ export type AttachmentLite = {
   filename: string;
   mimeType: string;
   size: number;
+  /** Discriminates LINK rows from FILE rows. mimeType === "text/url" works too. */
+  kind?: "FILE" | "LINK";
+  /** Canonical external URL for LINK rows. */
+  externalUrl?: string | null;
 };
+
+/** True for LINK-kind rows; checked by the preview branch + chip. */
+function isLinkAttachment(a: AttachmentLite): boolean {
+  return a.kind === "LINK" || a.mimeType === "text/url";
+}
 
 type OpenArgs = {
   attachmentId: string;
@@ -168,17 +177,21 @@ function Lightbox({
     if (next) onSetActiveId(next.id);
   }, [attachments, hasPaging, index, onSetActiveId, total]);
 
-  // Presigned URL for the active attachment. The 5-min staleTime lets
-  // arrow-paging stay snappy without re-presigning each step.
+  // LINK attachments don't have an underlying object — the canonical
+  // pointer is `externalUrl`. We skip the presigned-GET roundtrip for
+  // them and use the external URL directly for download/open/copy.
+  const isLink = current ? isLinkAttachment(current) : false;
+  // Presigned URL for the active FILE attachment. The 5-min staleTime
+  // lets arrow-paging stay snappy without re-presigning each step.
   const { data, error, isLoading } = trpc.attachment.getDownloadUrl.useQuery(
     { attachmentId: current?.id ?? "" },
     {
-      enabled: !!current?.id,
+      enabled: !!current?.id && !isLink,
       staleTime: 5 * 60_000,
       retry: false,
     },
   );
-  const url = data?.url;
+  const url = isLink ? (current?.externalUrl ?? "") : data?.url;
 
   // Delete plumbing — confirm modal stacks on top of the lightbox.
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -210,6 +223,12 @@ function Lightbox({
   // Action handlers ------------------------------------------------------
   const onDownload = React.useCallback(() => {
     if (!url || !current) return;
+    // LINK rows have no bytes to download — fall through to "open in tab"
+    // semantics so the keyboard shortcut still does the obvious thing.
+    if (isLink) {
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
     // Anchor with `download` attribute forces save instead of in-tab open
     // for previewable types; honors the original filename.
     const a = document.createElement("a");
@@ -219,7 +238,7 @@ function Lightbox({
     document.body.appendChild(a);
     a.click();
     a.remove();
-  }, [url, current]);
+  }, [url, current, isLink]);
 
   const onOpenInTab = React.useCallback(() => {
     if (!url) return;
@@ -445,10 +464,23 @@ function Preview({
   url: string;
   onDownload: () => void;
 }) {
+  // LINK rows: render the external URL in a sandboxed iframe with a
+  // visible "Open in new tab" affordance. Many sites refuse framing
+  // (X-Frame-Options DENY / CSP frame-ancestors), in which case the
+  // iframe stays blank — the affordance lets the user escape to a
+  // real tab without hunting in the footer.
+  if (isLinkAttachment(attachment)) {
+    return <LinkPreview attachment={attachment} />;
+  }
   const kind = classifyMime(attachment.mimeType, attachment.filename);
 
   if (kind === "image") return <ImagePreview url={url} alt={attachment.filename} />;
   if (kind === "pdf") return <PdfPreview url={url} filename={attachment.filename} />;
+  // Render uploaded HTML attachments in the same sandboxed iframe used for
+  // external links. No `allow-scripts` — agents can ship arbitrary HTML and
+  // we don't want it executing in the Forge origin.
+  if (kind === "html")
+    return <HtmlPreview url={url} filename={attachment.filename} />;
   if (kind === "video") return <VideoPreview url={url} mime={attachment.mimeType} />;
   if (kind === "audio")
     return <AudioPreview url={url} filename={attachment.filename} mime={attachment.mimeType} />;
@@ -463,6 +495,66 @@ function Preview({
     );
 
   return <NoPreview attachment={attachment} onDownload={onDownload} />;
+}
+
+function LinkPreview({ attachment }: { attachment: AttachmentLite }) {
+  const href = attachment.externalUrl ?? "";
+  const onOpen = () => {
+    if (href) window.open(href, "_blank", "noopener,noreferrer");
+  };
+  return (
+    <div className="flex h-full w-full max-w-5xl flex-col gap-2">
+      <div className="flex shrink-0 items-center justify-between gap-3 rounded-md border border-border/30 bg-card px-3 py-2 text-foreground">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-medium">
+            {attachment.filename}
+          </div>
+          <div className="text-meta truncate text-muted-foreground">
+            {href || "external link"}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onOpen}
+          disabled={!href}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-ember px-2.5 py-1 text-xs font-medium text-ember-foreground transition-colors hover:bg-ember/90 disabled:pointer-events-none disabled:opacity-40"
+        >
+          <ExternalLink className="h-3.5 w-3.5" /> Open in new tab
+        </button>
+      </div>
+      {href ? (
+        <iframe
+          src={href}
+          title={attachment.filename}
+          // Intentionally minimal: no `allow-scripts`, no `allow-same-origin`.
+          // Many target sites will refuse framing (X-Frame-Options /
+          // frame-ancestors) — the "Open in new tab" CTA above is the
+          // escape hatch.
+          sandbox="allow-popups allow-forms"
+          className="min-h-0 flex-1 rounded-md border border-border/30 bg-background shadow-2xl"
+        />
+      ) : (
+        <UnavailableCard
+          filename={attachment.filename}
+          message="No external URL on this link attachment."
+        />
+      )}
+    </div>
+  );
+}
+
+function HtmlPreview({ url, filename }: { url: string; filename: string }) {
+  return (
+    <iframe
+      src={url}
+      title={filename}
+      // Sandbox uploaded HTML: no scripts, no same-origin. Agents can
+      // attach arbitrary HTML reports — this gives them safe rendering
+      // without giving the doc access to the Forge origin.
+      sandbox="allow-popups allow-forms"
+      className="h-full w-full rounded-md border border-border/30 bg-background shadow-2xl"
+    />
+  );
 }
 
 function ImagePreview({ url, alt }: { url: string; alt: string }) {
@@ -672,19 +764,24 @@ function UnavailableCard({
 /* ------------------------------------------------------------------ */
 
 function KindGlyph({ mime }: { mime: string }) {
+  if (mime === "text/url") {
+    return <ExternalLink className="h-4 w-4 shrink-0 text-background/70" />;
+  }
   const kind = classifyMime(mime, "");
   const Icon =
     kind === "image"
       ? ImageIcon
       : kind === "pdf"
         ? FileText
-        : kind === "video"
-          ? Video
-          : kind === "audio"
-            ? Music
-            : kind === "text"
-              ? FileText
-              : FileIcon;
+        : kind === "html"
+          ? FileText
+          : kind === "video"
+            ? Video
+            : kind === "audio"
+              ? Music
+              : kind === "text"
+                ? FileText
+                : FileIcon;
   return <Icon className="h-4 w-4 shrink-0 text-background/70" />;
 }
 
@@ -720,23 +817,28 @@ function ActionButton({
   );
 }
 
-type Kind = "image" | "pdf" | "video" | "audio" | "text" | "other";
+type Kind = "image" | "pdf" | "html" | "video" | "audio" | "text" | "other";
 
 function classifyMime(mime: string, filename: string): Kind {
   const m = (mime || "").toLowerCase();
   const f = (filename || "").toLowerCase();
   if (m.startsWith("image/")) return "image";
   if (m === "application/pdf" || f.endsWith(".pdf")) return "pdf";
+  // HTML uploads route to the sandboxed iframe preview — keep ahead of
+  // the generic `text/*` branch so we don't render `<html>` as raw text.
+  if (m === "text/html" || f.endsWith(".html") || f.endsWith(".htm"))
+    return "html";
   if (m.startsWith("video/")) return "video";
   if (m.startsWith("audio/")) return "audio";
   if (m.startsWith("text/")) return "text";
   if (m === "application/json" || m === "application/xml") return "text";
+  if (m === "application/x-yaml" || m === "text/yaml") return "text";
   if (m === "application/javascript" || m === "application/typescript") return "text";
   // Filename-extension fallback for the long tail.
   const ext = f.split(".").pop() ?? "";
   const textExts = new Set([
     "md", "markdown", "txt", "log", "csv", "tsv", "yaml", "yml",
-    "json", "xml", "html", "css", "js", "jsx", "ts", "tsx",
+    "json", "xml", "css", "js", "jsx", "ts", "tsx",
     "py", "rb", "go", "rs", "java", "c", "h", "cpp", "hpp",
     "sql", "sh", "bash", "env", "toml", "ini", "conf", "lock",
     "prisma", "graphql", "gql", "vue", "svelte",

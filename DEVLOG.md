@@ -3385,6 +3385,115 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
   full install flow yet — it just deep-links to `/settings/access`.
   A guided wizard would be a nice follow-up.
 
+## 2026-05-03 — feat(attachments): expand MIME allowlist + external links + agent docs
+
+A live agent uploaded an HTML file as `report.html.txt` to bypass the
+storage MIME allowlist (which lacked `text/html`), then re-uploaded as
+`text/plain` to make it work. Two underlying problems: the allowlist
+was too narrow for everyday agent output, and there was no native way
+to attach a URL (Google Doc, GitHub PR, Linear ticket) without uploading
+bytes. Single-shot deploy.
+
+### Shape
+
+- **Schema** — Migration `0024_attachment_kind_link`. Adds
+  `AttachmentKind` enum (`FILE | LINK`), `Attachment.kind` (default
+  `FILE`, existing rows backfill), `Attachment.externalUrl` and
+  `Attachment.linkTitle` (both nullable). LINK rows still populate the
+  FILE-shaped columns (`filename = linkTitle ?? hostname`,
+  `mimeType = "text/url"`, `size = 0`, `url = externalUrl`) so existing
+  selectors keep working without schema-aware branching.
+- **Storage allowlist expansion** —
+  `src/server/services/storage.ts`: added `text/html`, `text/csv`,
+  `text/xml`, `application/xml`, `application/json`,
+  `application/x-yaml`, `text/yaml`, `audio/mpeg`, `audio/wav`,
+  `audio/ogg`, `audio/webm`, `video/mp4`, `video/webm`,
+  `video/quicktime` to `ALLOWED_MIME_TYPES`. New helper
+  `normalizeUploadFilename(filename, mimeType)` defensively strips a
+  trailing `.txt` from filenames whose inner extension is in
+  `{html, json, csv, xml, yaml, yml, md}` AND declared
+  `mimeType === "text/plain"` — handles agents that learned the
+  `.html.txt` workaround. Called inside `presignUploadUrl` before the
+  DB insert; never throws.
+- **MCP** — `src/server/services/mcp.ts`: every `attachments.*` tool
+  now has a `description` field (consumed by the new
+  `tools/list` descriptor in `/api/mcp/rpc/route.ts` — falls back to
+  the legacy auto-generated string when absent). New tool
+  `attachments.attachLink({ targetType, targetId, url, title? })`
+  scoped `WRITE_ISSUES`, validates the URL via
+  `z.string().url()`, derives `hostname` for the default title,
+  creates a `kind = LINK` Attachment row. `attachments.list`
+  description updated; `attachments.getInline` allowlist expanded to
+  include `text/html`, `text/csv`, `text/xml`, `application/xml`,
+  `application/json`.
+- **tRPC** — `src/server/routers/attachment.ts`: new `attachLink`
+  mutation mirroring the MCP path, both call into a shared
+  `createLinkAttachment` helper in `storage.ts`. Emits
+  `ISSUE_UPDATED` via `recordChange` when the target is an issue
+  (matches the existing FILE finalize fan-out).
+- **UI** — Lightbox: extended `AttachmentLite` with `kind?` and
+  `externalUrl?`; LINK rows skip the presigned-GET roundtrip and
+  render in a `LinkPreview` component (sandboxed iframe + prominent
+  "Open in new tab" CTA — many sites refuse framing). HTML uploads
+  render in a sandboxed iframe via the presigned URL with **no**
+  `allow-scripts` / `allow-same-origin`. Chip: external-link icon
+  for `mimeType === "text/url"`, hostname in the trailing slot
+  instead of byte count, click opens the URL in a new tab without
+  going through the lightbox. Issue panel: new "Attach link" header
+  button toggles an inline form (URL + optional title) that calls
+  `attachLink`; LINK tiles render an external-link icon + hostname
+  in place of the file thumb. `AttachmentChipData` and
+  `AttachmentLite` extended with optional `kind` + `externalUrl` so
+  callers in `chat-message.tsx` and `attachment-renderer.tsx` keep
+  compiling — markdown inline refs explicitly stamp
+  `kind: "FILE"`.
+- **Docs** — New "## Attachments" section in
+  `/home/bailey/forge/CLAUDE.md` (before "## Conventions"). Lists
+  the full MIME allowlist, both attach flows, target types, size
+  cap, and the inline/getDownloadUrl decision rule.
+
+### Verification
+
+- `pnpm typecheck` — clean.
+- `pnpm lint` — only pre-existing errors in `issue-board.tsx` (4 ×
+  `@typescript-eslint/no-explicit-any`) and `control-tab.tsx` (1 ×
+  `react-hooks/rules-of-hooks`); confirmed unchanged before/after this
+  patch via `git stash`.
+- `pnpm test` — 208 passing, 6 failing. All 6 failures are MinIO
+  `ECONNREFUSED ::1:59000` in the storage / attachment router test
+  suites — environmental, pre-existing (the test runner expects MinIO
+  on host port 59000 which isn't bound in this dev env).
+- Migration applied cleanly to the dev Postgres at `localhost:55432`
+  via `pnpm prisma migrate deploy`.
+
+### Files touched
+
+- `prisma/schema.prisma`
+- `prisma/migrations/0024_attachment_kind_link/migration.sql` (new)
+- `src/server/services/storage.ts`
+- `src/server/services/mcp.ts`
+- `src/server/routers/attachment.ts`
+- `src/app/api/mcp/rpc/route.ts`
+- `src/components/attachments/attachment-chip.tsx`
+- `src/components/attachments/attachment-lightbox.tsx`
+- `src/components/attachments/issue-attachments-panel.tsx`
+- `src/components/markdown/attachment-renderer.tsx`
+- `CLAUDE.md`
+- `DEVLOG.md`
+
+### Follow-ups
+
+- The MinIO test suite is pre-existing tech debt (local-only port
+  `59000` not bound in this dev env). Worth fixing the docker compose
+  fixture so unit tests can run end-to-end without external state.
+- LINK attachments don't carry favicon / OG-preview metadata yet —
+  the chip just shows hostname. A future pass could fetch and cache
+  OG images server-side for richer link cards.
+- Inline markdown tokens still only resolve FILE refs
+  (`[label](forge-attachment:cuid)`); a `forge-link:url` token
+  could let comments embed bare LINK chips without a separate
+  Attachment row.
+
 ## Known gaps / TODOs in code
 
 - `auth.ts` assumes `nodemailer` provider; install and configure SMTP.

@@ -38,6 +38,11 @@ export const DOWNLOAD_URL_TTL_SECONDS = 15 * 60;
 /**
  * Mime allowlist. Reject anything not in here during `initUpload`.
  * Grouped for readability.
+ *
+ * Expanded 2026-05-03 to include text/html + structured-data types
+ * (csv/xml/json/yaml) and common audio/video containers — agents were
+ * working around the previous narrow allowlist (notably the missing
+ * text/html entry) by renaming files to `.html.txt`.
  */
 export const ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set<string>([
   // Images
@@ -50,10 +55,26 @@ export const ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set<string>([
   "application/pdf",
   "text/plain",
   "text/markdown",
+  "text/html",
+  "text/csv",
+  "text/xml",
+  "application/xml",
+  "application/json",
+  "application/x-yaml",
+  "text/yaml",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  // Audio
+  "audio/mpeg",
+  "audio/wav",
+  "audio/ogg",
+  "audio/webm",
+  // Video
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
   // Archives
   "application/zip",
 ]);
@@ -306,6 +327,45 @@ function storageKeyFor(
   return `${targetType}/${targetId}/${uid}-${safeName}`;
 }
 
+/**
+ * Extensions an agent might double-suffix (e.g. `report.html.txt`)
+ * to bypass the legacy MIME allowlist. The expanded allowlist makes
+ * this unnecessary, but we still strip the trailing `.txt` defensively
+ * so older agents that learned the workaround don't keep producing
+ * weirdly-named files. Only triggers when the declared MIME is
+ * `text/plain` AND the inner extension is structurally text-like.
+ */
+const TXT_WORKAROUND_INNER_EXTS: ReadonlySet<string> = new Set<string>([
+  "html",
+  "json",
+  "csv",
+  "xml",
+  "yaml",
+  "yml",
+  "md",
+]);
+
+/**
+ * Detect and strip the `.txt` workaround suffix on filenames whose
+ * inner extension is one we now natively support. Returns the cleaned
+ * filename if the pattern matches, otherwise the original. Never
+ * throws; never rejects — this is purely cosmetic restoration so
+ * agents that learned the bypass don't keep producing `.html.txt`
+ * entries in object storage.
+ */
+export function normalizeUploadFilename(
+  filename: string,
+  mimeType: string,
+): string {
+  if (mimeType !== "text/plain") return filename;
+  const lower = filename.toLowerCase();
+  if (!lower.endsWith(".txt")) return filename;
+  const stem = filename.slice(0, -4);
+  const innerExt = stem.split(".").pop()?.toLowerCase() ?? "";
+  if (!TXT_WORKAROUND_INNER_EXTS.has(innerExt)) return filename;
+  return stem;
+}
+
 // -- Primary operations ------------------------------------------------------
 
 export interface PresignUploadInput {
@@ -337,7 +397,12 @@ export async function presignUploadUrl(
   if (!ALLOWED_MIME_TYPES.has(input.mimeType)) {
     throw new Error(`Mime type not allowed: ${input.mimeType}`);
   }
-  if (!input.filename || input.filename.length > 255) {
+  // Defensive: if the caller is an agent that learned the legacy
+  // `.html.txt` workaround, restore the natural extension. The expanded
+  // allowlist means this should be rare going forward, but we don't want
+  // ghost `.html.txt` files in object storage either.
+  const normalizedFilename = normalizeUploadFilename(input.filename, input.mimeType);
+  if (!normalizedFilename || normalizedFilename.length > 255) {
     throw new Error("Filename must be 1-255 characters.");
   }
   if (input.size <= 0 || input.size > MAX_FILE_SIZE_BYTES) {
@@ -359,7 +424,7 @@ export async function presignUploadUrl(
   // Ensure bucket exists (idempotent; cheap after first call).
   await ensureWorkspaceBucket(input.workspaceId);
 
-  const storageKey = storageKeyFor(targetType, targetId, input.filename);
+  const storageKey = storageKeyFor(targetType, targetId, normalizedFilename);
   // Presign against the public endpoint so the URL is reachable from
   // the browser. SDK ops (bucket ensure above) still use the internal
   // client — that path doesn't leave the Docker bridge.
@@ -379,7 +444,7 @@ export async function presignUploadUrl(
       targetType,
       targetId,
       ...(targetType === "issue" ? { issueId: targetId } : {}),
-      filename: input.filename,
+      filename: normalizedFilename,
       mimeType: input.mimeType,
       size: input.size,
       url: "", // pending — finalized after client PUT completes
@@ -627,4 +692,99 @@ export async function deleteWorkspaceBucket(workspaceId: string): Promise<void> 
       const code = (err as { name?: string })?.name;
       if (code !== "NoSuchBucket") throw err;
     });
+}
+
+// -- External link attachments ----------------------------------------------
+
+/**
+ * MIME marker we stamp on LINK-kind Attachment rows. Picked so that
+ * the lightbox / chip can route on `mimeType === "text/url"` without a
+ * separate `kind` selection — and so callers that already select
+ * `mimeType` keep working.
+ */
+export const LINK_ATTACHMENT_MIME = "text/url";
+
+export interface CreateLinkAttachmentInput {
+  workspaceId: string;
+  targetType: string;
+  targetId: string;
+  url: string;
+  title?: string | null;
+}
+
+export interface CreateLinkAttachmentResult {
+  id: string;
+  workspaceId: string;
+  targetType: string;
+  targetId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  externalUrl: string;
+  linkTitle: string;
+  kind: "LINK";
+  createdAt: Date;
+}
+
+/**
+ * Parse the URL and extract a friendly hostname for fallback display.
+ * Strips a leading `www.` and lowercases the host. Throws on URLs the
+ * runtime can't parse — caller should validate up front (e.g. zod).
+ */
+function hostnameOf(url: string): string {
+  const u = new URL(url);
+  return u.hostname.replace(/^www\./i, "").toLowerCase();
+}
+
+/**
+ * Create an external-link Attachment row. No bytes hit MinIO — the
+ * URL is the entirety of the payload. We still populate the FILE-shaped
+ * columns (filename / mimeType / size / url) so existing list/preview
+ * callers that select those fields keep working without schema-aware
+ * branching.
+ */
+export async function createLinkAttachment(
+  input: CreateLinkAttachmentInput,
+): Promise<CreateLinkAttachmentResult> {
+  const { targetType, targetId } = assertTargetShape(
+    input.targetType,
+    input.targetId,
+  );
+  // URL parsing is the only validation we do — caller supplies the
+  // workspace scope check.
+  const host = hostnameOf(input.url);
+  const linkTitle = (input.title ?? "").trim() || host;
+  if (linkTitle.length > 255) {
+    throw new Error("Link title must be 255 characters or less.");
+  }
+  const row = await db.attachment.create({
+    data: {
+      workspaceId: input.workspaceId,
+      targetType,
+      targetId,
+      ...(targetType === "issue" ? { issueId: targetId } : {}),
+      kind: "LINK",
+      filename: linkTitle,
+      mimeType: LINK_ATTACHMENT_MIME,
+      size: 0,
+      url: input.url,
+      externalUrl: input.url,
+      linkTitle,
+    },
+  });
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    targetType: row.targetType ?? targetType,
+    targetId: row.targetId ?? targetId,
+    filename: row.filename,
+    mimeType: row.mimeType,
+    size: row.size,
+    url: row.url,
+    externalUrl: row.externalUrl ?? input.url,
+    linkTitle: row.linkTitle ?? linkTitle,
+    kind: "LINK",
+    createdAt: row.createdAt,
+  };
 }

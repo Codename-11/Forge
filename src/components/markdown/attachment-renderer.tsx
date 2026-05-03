@@ -179,6 +179,11 @@ function inlineListToAttachments(
     // mime sniffing and falls back to the filename if mime is empty.
     mimeType: it.isImage ? "image/*" : "",
     size: 0,
+    // Inline markdown refs only point at FILE attachments today —
+    // `[label](forge-attachment:cuid)` is the only token shape. Kept
+    // explicit so future LINK-token support drops in cleanly.
+    kind: "FILE" as const,
+    externalUrl: null,
   }));
 }
 

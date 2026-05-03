@@ -51,9 +51,15 @@ function toolDescriptor(name: McpToolName) {
     target: "jsonSchema7",
     $refStrategy: "none",
   });
+  // Tools may optionally export a richer `description` field; fall back
+  // to the auto-generated scope-only summary when one isn't supplied.
+  const customDesc = (t as { description?: string }).description;
+  const description = customDesc
+    ? `${customDesc}\n\nRequired scopes: ${t.scopes.join(", ")}.`
+    : `Forge tool. Required scopes: ${t.scopes.join(", ")}.`;
   return {
     name,
-    description: `Forge tool. Required scopes: ${t.scopes.join(", ")}.`,
+    description,
     inputSchema,
   };
 }

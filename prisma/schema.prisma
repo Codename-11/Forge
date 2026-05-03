@@ -886,23 +886,45 @@ model Comment {
 /// "cycle" | "comment"; `targetId` references the owning row.
 /// `issueId` is preserved as a nullable FK for backward compatibility while
 /// new code migrates to the targetType/targetId pair.
+///
+/// `kind` distinguishes uploaded bytes (FILE — backed by an object in
+/// MinIO via `url`) from external links (LINK — `externalUrl` points
+/// at a Google Doc / GitHub PR / arbitrary web resource; no MinIO
+/// object). For LINK rows the `filename` / `mimeType` / `size` / `url`
+/// fields are still populated (filename = linkTitle ?? hostname,
+/// mimeType = "text/url", size = 0, url = externalUrl) so existing
+/// callers that only select those columns keep working without churn.
 model Attachment {
-  id          String   @id @default(cuid())
+  id          String         @id @default(cuid())
   workspaceId String
   issueId     String?
   targetType  String?
   targetId    String?
+  kind        AttachmentKind @default(FILE)
   filename    String
   mimeType    String
   size        Int
   url         String
-  createdAt   DateTime @default(now())
+  /// Set when `kind = LINK` — the canonical external URL the agent /
+  /// user attached. Null for FILE rows.
+  externalUrl String?
+  /// Optional human-readable label for LINK rows. Defaults to the URL
+  /// hostname when the caller doesn't supply one. Null for FILE rows.
+  linkTitle   String?
+  createdAt   DateTime       @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue     Issue?    @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
   @@index([issueId])
   @@index([workspaceId, targetType, targetId])
+}
+
+/// Distinguishes uploaded byte attachments (FILE) from external-link
+/// attachments (LINK) on the polymorphic `Attachment` model.
+enum AttachmentKind {
+  FILE
+  LINK
 }
 
 // ----------------------------------------------------------------------------
