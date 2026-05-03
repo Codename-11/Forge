@@ -788,3 +788,72 @@ export async function createLinkAttachment(
     createdAt: row.createdAt,
   };
 }
+
+/**
+ * Best-effort fetch of an external URL's HTML `<title>` for use as a
+ * default link-attachment label. Network bound — caps at 5s and 64 KB.
+ *
+ * Returns `{}` on any error (timeout, non-2xx, non-HTML, parse miss).
+ * Callers should fall back to hostname when the title is absent.
+ *
+ * Favicon is computed deterministically client-side as
+ * `${origin}/favicon.ico`; we don't probe it here.
+ */
+export async function fetchLinkMetadata(
+  url: string,
+): Promise<{ title?: string }> {
+  const ac = new AbortController();
+  const timeout = setTimeout(() => ac.abort(), 5000);
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: ac.signal,
+      // Identify ourselves so target servers can decide whether to serve us.
+      headers: {
+        "User-Agent": "ForgeLinkPreview/1.0 (+https://forge.axiom-labs.dev)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+    });
+    if (!res.ok || !res.body) return {};
+    // Stream up to 64 KB. <title> almost always lives in the first few KB
+    // of <head>, so this is plenty of headroom even for chunky CMS pages.
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8", { fatal: false });
+    let buf = "";
+    let bytesRead = 0;
+    const cap = 64 * 1024;
+    while (bytesRead < cap) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      bytesRead += value.byteLength;
+      buf += decoder.decode(value, { stream: true });
+      // Early exit once we have a closing </title>.
+      if (/<\/title>/i.test(buf)) break;
+    }
+    try {
+      reader.cancel().catch(() => void 0);
+    } catch {
+      // Ignore — we already have what we need.
+    }
+    const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(buf);
+    if (!m) return {};
+    // Decode the most common HTML entities so titles don't render as
+    // "Foo &amp; Bar". Anything more exotic falls through unmolested.
+    const title = m[1]
+      .replace(/\s+/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, " ")
+      .trim();
+    if (!title) return {};
+    return { title: title.slice(0, 255) };
+  } catch {
+    return {};
+  } finally {
+    clearTimeout(timeout);
+  }
+}

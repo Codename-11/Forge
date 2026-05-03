@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, afterEach, beforeAll } from "vitest";
+import { it, expect, afterAll, afterEach, beforeAll } from "vitest";
 import { attachmentRouter } from "@/server/routers/attachment";
 import {
   _resetS3ClientForTests,
@@ -11,8 +11,14 @@ import {
   disconnectPrisma,
   type TestFixture,
 } from "./helpers";
+import { describeIfMinio } from "./minio-probe";
 
 const fixtures: TestFixture[] = [];
+
+// Probe MinIO once per file. When the dev container isn't running, swap
+// `describe` for `describe.skip` so the suite reports "skipped" instead
+// of dozens of ECONNREFUSED failures.
+const { describe } = await describeIfMinio();
 
 beforeAll(() => {
   process.env.S3_ENDPOINT = process.env.S3_ENDPOINT ?? "http://localhost:9000";

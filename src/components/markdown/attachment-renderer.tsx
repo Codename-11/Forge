@@ -7,10 +7,12 @@ import {
   Paperclip,
   AlertTriangle,
   Bot,
+  ExternalLink,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { useAttachmentLightbox, type AttachmentLite } from "@/components/attachments/attachment-lightbox";
+import { LinkFavicon } from "@/components/attachments/attachment-chip";
 
 /**
  * Inline attachment + reference renderer.
@@ -22,15 +24,23 @@ import { useAttachmentLightbox, type AttachmentLite } from "@/components/attachm
  *
  *   - ![alt](forge-attachment:cuid)       → inline <img>
  *   - [filename.ext](forge-attachment:cuid) → file chip link
+ *   - [label](forge-link:https://…)       → external-link chip with favicon
  *   - bare `KEY-NN`                        → link to issue page
  *   - bare `@profileKey`                   → agent mention chip
  *
- * Issue + mention detection happens as a second pass on text segments
- * so attachment tokens (which use brackets and parens) take precedence
- * and aren't accidentally re-tokenized.
+ * The `forge-attachment` pass runs first (CUID-anchored) so it always
+ * claims its own tokens before the second pass scans for forge-link +
+ * issue refs + mentions. forge-link only matches http/https URLs;
+ * anything else falls through as plain text.
  */
 
 const TOKEN_RE = /(!?)\[([^\]]*)\]\(forge-attachment:([a-z0-9]{20,})\)/gi;
+
+// External-link chip: `[label](forge-link:https://...)`. Only matches
+// http(s); other schemes silently fall through as plain text. Trailing
+// `\)` is excluded from the URL so a real closing paren in the URL
+// would need percent-encoding — same constraint as standard markdown.
+const FORGE_LINK_RE = /\[([^\]]*)\]\(forge-link:(https?:\/\/[^\s)]+)\)/gi;
 
 // Issue refs and agent mentions are matched on word boundaries so
 // `forklift-mention` doesn't match `@mention`, and `axion-42` doesn't
@@ -41,6 +51,7 @@ type Segment =
   | { type: "text"; value: string }
   | { type: "image"; alt: string; attachmentId: string }
   | { type: "link"; label: string; attachmentId: string }
+  | { type: "linkChip"; label: string; url: string }
   | { type: "issueRef"; key: string }
   | { type: "mention"; profileKey: string };
 
@@ -65,11 +76,45 @@ function tokenize(body: string): Segment[] {
 }
 
 /**
- * Second-pass tokenizer: splits raw text into [text, issueRef, mention]
- * segments. Run after the attachment-token pass so urls/markdown links
- * have already been claimed.
+ * Second-pass tokenizer: splits raw text into [text, linkChip, issueRef,
+ * mention] segments. Run after the attachment-token pass so
+ * `forge-attachment:` tokens have already been claimed and won't be
+ * re-tokenized as `forge-link:` (different prefix anyway, but ordering
+ * keeps the contract explicit).
+ *
+ * Pass A claims `[label](forge-link:https://…)` chips; Pass B handles
+ * KEY-NN and @profileKey on the leftover text.
  */
 function tokenizeText(text: string): Segment[] {
+  // Pass A: forge-link chips. Split text on link tokens, then run the
+  // ref/mention pass on the remaining text-only spans.
+  const linkSegs: Segment[] = [];
+  let last = 0;
+  FORGE_LINK_RE.lastIndex = 0;
+  for (const m of text.matchAll(FORGE_LINK_RE)) {
+    const idx = m.index ?? 0;
+    if (idx > last) {
+      linkSegs.push(...tokenizeRefsAndMentions(text.slice(last, idx)));
+    }
+    const label = (m[1] ?? "").trim();
+    const url = m[2] ?? "";
+    // Belt-and-suspenders scheme guard — the regex already enforces
+    // http(s), but we re-check before constructing the segment so any
+    // future regex relaxation can't sneak through `javascript:` etc.
+    if (/^https?:\/\//i.test(url)) {
+      linkSegs.push({ type: "linkChip", label: label || hostnameOf(url), url });
+    } else {
+      linkSegs.push({ type: "text", value: m[0] });
+    }
+    last = idx + m[0].length;
+  }
+  if (last < text.length) {
+    linkSegs.push(...tokenizeRefsAndMentions(text.slice(last)));
+  }
+  return linkSegs.length ? linkSegs : [{ type: "text", value: text }];
+}
+
+function tokenizeRefsAndMentions(text: string): Segment[] {
   const segs: Segment[] = [];
   let last = 0;
   REF_RE.lastIndex = 0;
@@ -85,6 +130,14 @@ function tokenizeText(text: string): Segment[] {
   }
   if (last < text.length) segs.push({ type: "text", value: text.slice(last) });
   return segs.length ? segs : [{ type: "text", value: text }];
+}
+
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "");
+  } catch {
+    return "link";
+  }
 }
 
 /**
@@ -147,6 +200,14 @@ export function MarkdownWithAttachments({
               attachmentId={s.attachmentId}
               label={s.label}
               inlineList={inlineList}
+            />
+          );
+        if (s.type === "linkChip")
+          return (
+            <InlineForgeLink
+              key={`fl-${i}-${s.url}`}
+              label={s.label}
+              url={s.url}
             />
           );
         if (s.type === "issueRef")
@@ -306,6 +367,28 @@ function InlineAgentMention({ profileKey }: { profileKey: string }) {
     >
       <Bot className="h-3 w-3" />@{profileKey}
     </span>
+  );
+}
+
+/**
+ * `[label](forge-link:https://…)` chip. Visually mirrors
+ * `InlineAttachmentLink` so chat/comments stay consistent. Click opens
+ * the URL in a new tab — no DB lookup, no lightbox. Favicon falls back
+ * to a lucide ExternalLink glyph if the host doesn't serve `/favicon.ico`.
+ */
+function InlineForgeLink({ label, url }: { label: string; url: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={`${label} — ${url}`}
+      className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.6875rem] hover:border-ember/40 hover:bg-subtle"
+    >
+      <LinkFavicon url={url} size={12} />
+      <span className="truncate">{label}</span>
+      <ExternalLink className="h-3 w-3 text-muted-foreground/60" />
+    </a>
   );
 }
 

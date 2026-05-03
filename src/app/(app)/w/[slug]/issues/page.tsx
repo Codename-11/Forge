@@ -236,7 +236,7 @@ export default function IssuesPage() {
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {wsLoading ? null : isWorkspaceEmpty ? (
           <div className="flex h-full items-center justify-center px-6">
             <EmptyState

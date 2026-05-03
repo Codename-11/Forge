@@ -167,7 +167,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex items-center gap-1 border-b border-border bg-background px-4 text-xs">
           <ProjectTabButton active={tab === "overview"} onClick={() => setTab("overview")}>
             Overview
@@ -180,7 +180,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           </ProjectTabButton>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {tab === "overview" && (
             <div className="h-full overflow-y-auto">
               <OverviewTab projectId={project.id} workspaceSlug={slug} />

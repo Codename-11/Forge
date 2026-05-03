@@ -30,6 +30,7 @@ import {
   MAX_FILE_SIZE_BYTES,
   createLinkAttachment,
   deleteAttachment,
+  fetchLinkMetadata,
   finalizeAttachment,
   getAttachmentInline,
   presignDownloadUrl,
@@ -2396,12 +2397,21 @@ export const mcpTools = {
           id: input.targetId,
         });
       }
+      // If the caller didn't supply a label, try to scrape <title> from
+      // the target page so the chip is meaningful out of the box. Fail
+      // soft — createLinkAttachment falls back to hostname when title is
+      // null/undefined.
+      let resolvedTitle = input.title;
+      if (resolvedTitle === undefined) {
+        const meta = await fetchLinkMetadata(input.url);
+        resolvedTitle = meta.title;
+      }
       return createLinkAttachment({
         workspaceId: ctx.workspaceId,
         targetType: input.targetType,
         targetId: input.targetId,
         url: input.url,
-        title: input.title,
+        title: resolvedTitle,
       });
     },
   },
