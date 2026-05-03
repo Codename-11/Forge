@@ -2,6 +2,140 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-03 — feat(ui): inbox + agents + stalled revamp (multi-agent)
+
+Follow-up audit on the UX revamp surfaced three more gaps: (1) Inbox was
+read-only — feed, not workqueue (no inline actions, no read/unread, no
+snooze, no bulk, same items re-surface every visit). (2) Agents had only
+coarse ONLINE/BUSY/OFFLINE force-toggles — no run pause/cancel/redirect,
+no failed-run lane, no heartbeat-lag warning, no dispatch policy
+visibility, no "why was X picked" attribution. (3) Stalled-item handling
+had a real bug: `Workspace.stalledThresholdDays` (shipped yesterday) was
+honored only by `dashboard.suggestions`; inbox hardcoded 7d, dashboard
+"Stalled" column hardcoded 3d, and both filtered out agent-assigned
+issues — exactly the case you'd most want to escalate.
+
+Same coordinated-team shape as yesterday: Phase 0 sequential (committed
+on master to avoid the worktree-base race), Phase 1B/1C parallel
+worktrees, Phase 2 integration + squash.
+
+### Shape
+
+- **Stalled** — `Workspace.stalledThresholdDays` is now the single
+  source of truth across inbox + dashboard. Hardcoded 7d / 3d filters
+  removed. `Issue.snoozedUntil DateTime?` (indexed) lets users mark
+  items "intentionally on hold" — filtered out of stalled buckets and
+  inbox surfaces while `snoozedUntil > now()`. Agent-stalled work is
+  now visible: dropped the `assignees: { some: { userId } }` filter,
+  buckets split into `humanStalled` and `agentStalled` (an issue with
+  `assignedAgentId` set whose agent has been silent past threshold).
+- **Inbox** — full rewrite. New buckets: assigned & unblocked,
+  mentions, human-stalled, agent-stalled (warm warning tone, agent
+  presence chip per row), snoozed (collapsed by default with inline
+  unsnooze). `User.lastInboxVisitAt` actually persisted now (was
+  stubbed out before, with a comment noting the gap). Per-bucket
+  `{count} new` ember pill + per-row ember dot when
+  `updatedAt > previousVisitAt`. `inbox.visit` fires on mount,
+  debounced server-side. Per-row `<RowQuickActions />` (status pick,
+  assignee pick, snooze, nudge, mark-read) revealed on hover.
+  Sticky bulk-action toolbar when ≥1 row selected: Mark read,
+  Snooze for…, Reassign…, Cancel; checkbox per row, Shift+click
+  range-select, `x`/`Esc` hotkeys. Mentions intentionally not
+  bulk-selectable (conversational, one-step-removed).
+- **Agents** — `<RunControlMenu />` on each in-flight pipeline row
+  (pause / cancel / redirect-to-…). Pending control state shows as
+  inline badge ("pause requested" / "cancel requested") so the user
+  sees the request is in flight before the runtime acknowledges.
+  New "Failed (24h)" lane for `ABANDONED + STALLED` runs (no `FAILED`
+  enum value exists; using what the schema actually emits). New
+  heartbeat-lag warning on persistent agents — warm "Lag" pill at
+  `agentHeartbeatWarnMinutes` (default 5), critical "Down" pill at
+  `agentHeartbeatCriticalMinutes` (default 30). Both Workspace
+  columns, settings-driven per Bailey's rule. Ephemeral-runtime
+  agents skipped (only beat when running). `<DispatchModeBadge />`
+  in agents page header — shows the active `autoDispatchMode`
+  (manual / round-robin / capability / priority), gear → settings.
+  `<DispatchReasonChip />` on AGENT_ASSIGNED timeline rows and on
+  the issue detail topbar (next to ProjectChip cluster) — tooltip
+  shows mode, candidates considered with winner highlighted, and
+  the picker's reasonText. Dispatch attribution recorded in
+  `Issue.dispatchReason Json?` on every assignment (manual or auto)
+  and mirrored into the AGENT_ASSIGNED audit payload.
+
+### Run-control protocol
+
+`AgentRun.controlState AgentRunControlState` (NONE | PAUSE_REQUESTED |
+CANCEL_REQUESTED) is the source of truth, written by the new procs
+`agentRun.requestPause / requestCancel / requestRedirect`. Each writes
+the state, fires an `AGENT_RUN_CONTROL_REQUESTED` audit event, and
+POSTs an `AGENT_RUN_CONTROL` webhook to the agent's `webhookUrl`
+(best-effort, same plumbing as comment fan-out). Runtimes that haven't
+adopted the protocol yet just don't act on it; the UI shows
+"requested" state until the runtime acknowledges via heartbeat or
+status update. Redirect = cancel + reassign (which already triggers
+the existing AGENT_ASSIGNED dispatch chain).
+
+### New procedures
+
+`issue.snooze`, `issue.unsnooze`, `issue.snoozeMany` (bulk wrapper
+added in 1B), `issue.nudge` (creates a comment tagging assignees —
+existing comment fan-out reaches agents, no separate webhook),
+`inbox.visit` (debounced 5s server-side), `agentRun.requestPause`,
+`agentRun.requestCancel`, `agentRun.requestRedirect`. Modified:
+`inbox.list` honors `stalledThresholdDays`, splits stalled into
+human + agent + snoozed buckets, returns `unreadSinceVisit` per
+bucket and `lastVisitAt` (previous timestamp) for client-side
+unread rendering. `dashboard.suggestions` drops human-only filter
+on stalled bucket. New `dashboard.stalledInProgress` proc to drive
+the Stalled column server-side (kills the hardcoded 3d filter).
+
+### Migrations
+
+- `0021_inbox_agents_stalled` — Issue.snoozedUntil + index,
+  User.lastInboxVisitAt, Issue.dispatchReason Json?, AgentRun
+  control state columns + AgentRunControlState enum + new EventKind
+  values (ISSUE_SNOOZED, ISSUE_UNSNOOZED, ISSUE_NUDGED,
+  AGENT_RUN_CONTROL_REQUESTED).
+- `0022_workspace_heartbeat_thresholds` — Workspace
+  agentHeartbeatWarnMinutes (5), agentHeartbeatCriticalMinutes (30).
+
+### Coordination notes
+
+- Worktree-base race struck again — both 1B and 1C branched from the
+  prior commit (`ca2401e`) instead of the Phase 0 commit (`5d20e8e`),
+  even though Phase 0 committed cleanly on master before the
+  worktrees were spawned. Both agents self-corrected this time
+  (1B merged master into worktree, 1C rebased onto master). No
+  manual integration cleanup needed. Repeating issue — likely the
+  worktree creation snapshots `master` ref slightly before the
+  caller observes the new commit. Workaround for next run: explicit
+  `git worktree pull` instruction in the brief, or have Phase 0
+  push to a dedicated integration branch the worktrees check out.
+- Phase 0 agent stalled at the very end (watchdog timeout) right
+  before the `git commit`. Picked up the in-tree work and
+  committed manually — typecheck + lint were clean, migration
+  applied, no rework needed.
+- `RunControlMenu`'s "redirect" option: on schemas without a
+  `FAILED` AgentRunStatus, the failed lane filters on `ABANDONED +
+  STALLED`. A future migration could add `FAILED` proper if the
+  semantic split matters.
+
+### Verification
+
+- `pnpm typecheck` clean
+- `pnpm lint` baseline only (5 errors, all pre-existing in
+  `issue-board.tsx` + `mission-control/control-tab.tsx`)
+- `pnpm test` 208/214 pass — same 6 MinIO `ECONNREFUSED ::1:59000`
+  failures as yesterday. Storage/attachment-only, not regressions,
+  none of the failing files touched.
+
+### Single commit
+
+Phase 0 + 1B + 1C squashed to one commit on master. Pushed.
+Container rebuilt (`docker compose up -d --build forge`); migrations
+0021 + 0022 applied automatically on container boot. Live at
+`forge.axiom-labs.dev`.
+
 ## 2026-05-02 — feat(ui): UX revamp — overview, navigation, discovery, triage (multi-agent)
 
 Bailey flagged the app was issue-centric with weak project context, no

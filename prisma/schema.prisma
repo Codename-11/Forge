@@ -108,6 +108,21 @@ enum EventKind {
   AGENT_RUN_COMPLETED
   AGENT_RUN_STALLED
   CHAT_MESSAGE_POSTED
+  ISSUE_SNOOZED
+  ISSUE_UNSNOOZED
+  ISSUE_NUDGED
+  AGENT_RUN_CONTROL_REQUESTED
+}
+
+/// Operator-requested control on an in-flight AgentRun. NONE is the
+/// default steady state; PAUSE_REQUESTED / CANCEL_REQUESTED are
+/// pending signals the agent's own runtime is expected to honor on
+/// its next loop tick. Cleared by the runtime when it acts (or by
+/// a follow-up `requestPause` flipping back to NONE).
+enum AgentRunControlState {
+  NONE
+  PAUSE_REQUESTED
+  CANCEL_REQUESTED
 }
 
 enum ChatRole {
@@ -289,6 +304,11 @@ model User {
   /// "member" / invite is skippable). Stored as string ids matching
   /// the OnboardingStep.id values.
   onboardingSkippedSteps String[]  @default([])
+  /// Last time the user opened the Inbox surface. Drives "new since
+  /// last visit" badging in inbox buckets — issues whose `updatedAt`
+  /// is greater than this timestamp count as unread for that user.
+  /// Bumped via `inbox.visit` (debounced 5s server-side).
+  lastInboxVisitAt       DateTime?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
@@ -296,21 +316,22 @@ model User {
   sessions    Session[]
   memberships Membership[]
 
-  authoredIssues     Issue[]             @relation("IssueAuthor")
-  assignedIssues     IssueAssignee[]
-  comments           Comment[]
-  auditEntries       AuditLog[]
-  events             ActivityEvent[]
-  notificationStates NotificationState[]
-  createdProjects    Project[]           @relation("ProjectCreator")
-  apiKeys            ApiKey[]
-  claimedIssues      Issue[]             @relation("IssueClaimedBy")
-  recurringCreated   RecurringIssue[]    @relation("RecurringCreator")
-  savedViews         SavedView[]
-  issueSavedViews    IssueSavedView[]
-  timeEntries        TimeEntry[]
-  chatThreads        ChatThread[]
-  runtimes           Runtime[]
+  authoredIssues       Issue[]             @relation("IssueAuthor")
+  assignedIssues       IssueAssignee[]
+  comments             Comment[]
+  auditEntries         AuditLog[]
+  events               ActivityEvent[]
+  notificationStates   NotificationState[]
+  createdProjects      Project[]           @relation("ProjectCreator")
+  apiKeys              ApiKey[]
+  claimedIssues        Issue[]             @relation("IssueClaimedBy")
+  recurringCreated     RecurringIssue[]    @relation("RecurringCreator")
+  savedViews           SavedView[]
+  issueSavedViews      IssueSavedView[]
+  timeEntries          TimeEntry[]
+  chatThreads          ChatThread[]
+  runtimes             Runtime[]
+  controlRequestedRuns AgentRun[]          @relation("AgentRunControlRequester")
 
   @@index([handle])
 }
@@ -446,6 +467,15 @@ model Workspace {
   /// driven so admins can tune the workspace's idle definition without
   /// editing handler code. 0 disables the bucket.
   stalledThresholdDays       Int              @default(7)
+  /// Minutes since `Agent.lastHeartbeatAt` after which a PERSISTENT
+  /// agent's presence row surfaces a warning chip on the agents page.
+  /// EPHEMERAL agents only heartbeat while running, so the warning is
+  /// suppressed for them. 0 disables the warning entirely.
+  agentHeartbeatWarnMinutes     Int              @default(5)
+  /// Minutes since `Agent.lastHeartbeatAt` after which a PERSISTENT
+  /// agent's presence row escalates to the critical (danger) tier.
+  /// Should be > `agentHeartbeatWarnMinutes`. 0 disables critical.
+  agentHeartbeatCriticalMinutes Int              @default(30)
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
   deletedAt                  DateTime?
@@ -481,7 +511,7 @@ model Workspace {
   chatThreads        ChatThread[]
   chatMessages       ChatMessage[]
   runtimes           Runtime[]
-  startedStatus      Status?              @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
+  startedStatus      Status?             @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
 }
@@ -545,9 +575,9 @@ model Status {
   position    Int
   isDefault   Boolean        @default(false)
 
-  workspace            Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  issues               Issue[]
-  workspaceStartedFor  Workspace[] @relation("WorkspaceStartedStatus")
+  workspace           Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issues              Issue[]
+  workspaceStartedFor Workspace[] @relation("WorkspaceStartedStatus")
 
   @@unique([workspaceId, name])
   @@index([workspaceId, category])
@@ -608,6 +638,19 @@ model Issue {
   /// Explicit agent assignment. Independent of `claimedById` (human claim).
   /// Set by users or the auto-dispatcher; cleared on unassign.
   assignedAgentId     String?
+  /// User-set "on hold" timestamp. When non-null AND in the future, the
+  /// issue is hidden from inbox / stalled buckets — operators have asked
+  /// the system to stop nagging them about it until then. Cleared via
+  /// `issue.unsnooze`. Auto-clears on read in consumers (no background
+  /// sweep — comparison is `snoozedUntil > now()` everywhere).
+  snoozedUntil        DateTime?
+  /// Opaque blob recording the most recent dispatcher decision for this
+  /// issue, mirroring what's emitted on the AGENT_ASSIGNED payload but
+  /// pinned to the row for cheap "why was X picked" attribution. Shape:
+  /// { mode, candidatesConsidered: string[], picked: string,
+  ///   reasonText: string, decidedAt: DateTime }. See
+  /// `src/server/services/dispatcher.ts` for the producer.
+  dispatchReason      Json?
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
   deletedAt           DateTime?
@@ -639,6 +682,7 @@ model Issue {
   @@index([workspaceId, cycleId])
   @@index([workspaceId, assignedAgentId])
   @@index([workspaceId, aiTriageStatus])
+  @@index([snoozedUntil])
 }
 
 /// Reusable project blueprints shown in the "Starter templates" picker.
@@ -1328,39 +1372,54 @@ model DispatchRule {
 /// can exist over an issues lifetime if it is re-dispatched. The single
 /// 1:1 STATUS Comment for this run is referenced via Comment.runId.
 model AgentRun {
-  id                String         @id @default(cuid())
-  workspaceId       String
-  issueId           String
-  agentId           String
-  status            AgentRunStatus @default(ACTIVE)
-  startedAt         DateTime       @default(now())
+  id                   String               @id @default(cuid())
+  workspaceId          String
+  issueId              String
+  agentId              String
+  status               AgentRunStatus       @default(ACTIVE)
+  startedAt            DateTime             @default(now())
   /// Updated on every appended AgentRunEvent — what the watchdog reads.
-  lastEventAt       DateTime       @default(now())
-  finishedAt        DateTime?
+  lastEventAt          DateTime             @default(now())
+  finishedAt           DateTime?
   /// Compact label rendered by the live pulse strip ("running tests").
-  currentStep       String?
+  currentStep          String?
   /// Optional final summary populated when the agent reports completion.
-  summary           String?        @db.Text
+  summary              String?              @db.Text
   /// Optional pointer at the AGENT_ASSIGNED ActivityEvent that triggered
   /// this run. Useful for ack-window reasoning later.
-  assignmentEventId String?
+  assignmentEventId    String?
   /// Token-usage telemetry reported by the agent via `runs.recordUsage`.
   /// Cumulative as reported — the latest call replaces the prior values
   /// (idempotent), so agents should send running totals, not per-step
   /// deltas. Null = agent did not report.
-  tokensIn          Int?
-  tokensOut         Int?
-  tokensCached      Int?
+  tokensIn             Int?
+  tokensOut            Int?
+  tokensCached         Int?
   /// Cost the agent attributes to the run, in USD. Source-of-truth is
   /// the agent's own pricing knowledge for v1; a server-side rate table
   /// is a future cleanup.
-  costUsd           Decimal?       @db.Decimal(10, 4)
+  costUsd              Decimal?             @db.Decimal(10, 4)
+  /// Operator-requested control signal. NONE is the steady state;
+  /// PAUSE_REQUESTED / CANCEL_REQUESTED are pending instructions for
+  /// the agent's runtime to honor on its next loop tick. The runtime
+  /// is responsible for resetting to NONE once it acts (or for
+  /// transitioning the run to an appropriate terminal state on
+  /// CANCEL). Webhook fan-out via `recordChange` carries the same
+  /// payload to the agent's `webhookUrl`.
+  controlState         AgentRunControlState @default(NONE)
+  /// When the most recent control was requested. Null when
+  /// `controlState = NONE` (no signal pending).
+  controlRequestedAt   DateTime?
+  /// User who requested the control. SetNull on user delete so the
+  /// run row survives membership churn.
+  controlRequestedById String?
 
-  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  issue         Issue           @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  agent         Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  events        AgentRunEvent[]
-  statusComment Comment?        @relation("AgentRunStatusComment")
+  workspace          Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue              Issue           @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  agent              Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  controlRequestedBy User?           @relation("AgentRunControlRequester", fields: [controlRequestedById], references: [id], onDelete: SetNull)
+  events             AgentRunEvent[]
+  statusComment      Comment?        @relation("AgentRunStatusComment")
 
   @@index([workspaceId, status, lastEventAt])
   @@index([issueId, startedAt])

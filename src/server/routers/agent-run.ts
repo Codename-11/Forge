@@ -1,7 +1,10 @@
 import { z } from "zod";
-import { AgentRunStatus, EventKind } from "@prisma/client";
+import { TRPCError } from "@trpc/server";
+import { AgentRunControlState, AgentRunStatus, EventKind } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
+import { recordChange } from "@/server/audit";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
+import { deliverWebhook } from "@/server/services/plugin-runtime";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // a loose validator instead of `.cuid()` so both shapes pass.
@@ -404,6 +407,237 @@ export const agentRunRouter = router({
     }),
 
   /**
+   * List runs in the workspace, filtered by status / agent. Powers the
+   * Failed-Run lane in Phase 1's Agents UI. Bounded at 100 — wider
+   * paging is a future addition.
+   */
+  list: workspaceProcedure
+    .input(
+      z
+        .object({
+          status: z.array(z.nativeEnum(AgentRunStatus)).max(4).optional(),
+          agentId: idString.optional(),
+          limit: z.number().int().min(1).max(100).default(30),
+        })
+        .default({ limit: 30 }),
+    )
+    .query(async ({ ctx, input }) => {
+      return ctx.db.agentRun.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          ...(input.status?.length ? { status: { in: input.status } } : {}),
+          ...(input.agentId ? { agentId: input.agentId } : {}),
+        },
+        orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
+        take: input.limit,
+        include: {
+          agent: {
+            select: {
+              id: true,
+              name: true,
+              profileKey: true,
+              avatar: true,
+              status: true,
+            },
+          },
+          issue: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              status: {
+                select: { id: true, name: true, category: true, color: true },
+              },
+              workspace: { select: { key: true, slug: true } },
+            },
+          },
+          statusComment: {
+            select: { id: true, body: true, currentStep: true, updatedAt: true },
+          },
+        },
+      });
+    }),
+
+  /**
+   * Operator-requested pause on an active run. Stamps the AgentRun
+   * with `controlState = PAUSE_REQUESTED` and pings the agent's
+   * webhook (best-effort, non-blocking) so the runtime can act on
+   * its next loop tick. The runtime is responsible for resetting
+   * `controlState` to NONE once it acts.
+   */
+  requestPause: workspaceProcedure
+    .input(z.object({ runId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      return requestRunControl(ctx, {
+        runId: input.runId,
+        control: "pause",
+        nextState: AgentRunControlState.PAUSE_REQUESTED,
+      });
+    }),
+
+  /**
+   * Operator-requested cancel on an active run. Same plumbing as
+   * `requestPause`; the runtime decides whether the run terminates
+   * cleanly (ABANDONED) or requires further intervention.
+   */
+  requestCancel: workspaceProcedure
+    .input(z.object({ runId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      return requestRunControl(ctx, {
+        runId: input.runId,
+        control: "cancel",
+        nextState: AgentRunControlState.CANCEL_REQUESTED,
+      });
+    }),
+
+  /**
+   * Composite "redirect to another agent": cancels the current run
+   * (control signal sent to the original agent) AND reassigns the
+   * issue to `toAgentId`. The reassignment fires its own
+   * `AGENT_ASSIGNED` audit event via the existing chain — we don't
+   * duplicate it here. Single audit row written:
+   * AGENT_RUN_CONTROL_REQUESTED with `control = "redirect"` so the
+   * activity stream reads cleanly.
+   */
+  requestRedirect: workspaceProcedure
+    .input(
+      z.object({
+        runId: idString,
+        toAgentId: idString,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        const run = await tx.agentRun.findFirst({
+          where: { id: input.runId, workspaceId: ctx.workspaceId },
+          select: {
+            id: true,
+            issueId: true,
+            agentId: true,
+            agent: {
+              select: { id: true, profileKey: true, webhookUrl: true, webhookSecret: true },
+            },
+          },
+        });
+        if (!run) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Run not found." });
+        }
+        // Validate the target agent lives in this workspace.
+        const target = await tx.agent.findFirst({
+          where: { id: input.toAgentId, workspaceId: ctx.workspaceId },
+          select: { id: true, profileKey: true },
+        });
+        if (!target) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Target agent not found in this workspace.",
+          });
+        }
+
+        // Stamp cancel-requested on the run so the original agent's
+        // runtime sees the signal on its next loop tick.
+        await tx.agentRun.update({
+          where: { id: run.id },
+          data: {
+            controlState: AgentRunControlState.CANCEL_REQUESTED,
+            controlRequestedAt: new Date(),
+            controlRequestedById: ctx.session.user.id,
+          },
+        });
+
+        // Reassign the issue. This goes through the same path as a
+        // direct issue.update assignedAgentId change — it would normally
+        // also stamp dispatchReason + emit AGENT_ASSIGNED via
+        // recordChange. We replicate that here in-transaction so the
+        // audit stream stays consistent.
+        const before = await tx.issue.findUniqueOrThrow({
+          where: { id: run.issueId },
+          select: { id: true, assignedAgentId: true },
+        });
+        const reasonBlob = {
+          mode: "MANUAL_REDIRECT",
+          candidatesConsidered: [target.profileKey],
+          picked: target.profileKey,
+          reasonText: `redirect from run ${run.id}`,
+          decidedAt: new Date().toISOString(),
+        };
+        await tx.issue.update({
+          where: { id: run.issueId },
+          data: {
+            assignedAgentId: target.id,
+            dispatchReason: reasonBlob,
+          },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Issue",
+          entityId: run.issueId,
+          action: "assign-agent",
+          before: { assignedAgentId: before.assignedAgentId },
+          after: { assignedAgentId: target.id },
+          eventKind: EventKind.AGENT_ASSIGNED,
+          subjectType: "issue",
+          subjectId: run.issueId,
+          payload: {
+            agentId: target.id,
+            previousAgentId: before.assignedAgentId,
+            redirectedFromRunId: run.id,
+            dispatchReason: reasonBlob,
+          },
+        });
+
+        // Single audit/event for the control action itself.
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "AgentRun",
+          entityId: run.id,
+          action: "control-request",
+          eventKind: EventKind.AGENT_RUN_CONTROL_REQUESTED,
+          subjectType: "agent-run",
+          subjectId: run.id,
+          payload: {
+            control: "redirect",
+            runId: run.id,
+            toAgentId: target.id,
+            issueId: run.issueId,
+          },
+        });
+
+        // Best-effort webhook ping to the original agent so it knows
+        // its run was redirected. Same shape as pause/cancel.
+        const url = run.agent.webhookUrl;
+        const secret = run.agent.webhookSecret;
+        if (url && secret) {
+          void deliverWebhook({
+            url,
+            secret,
+            timeoutMs: 5000,
+            body: {
+              id: `run-control-${run.id}-redirect-${Date.now()}`,
+              kind: "AGENT_RUN_CONTROL",
+              subjectType: "agent-run",
+              subjectId: run.id,
+              payload: {
+                control: "redirect",
+                runId: run.id,
+                issueId: run.issueId,
+                toAgentId: target.id,
+                workspaceId: ctx.workspaceId,
+              },
+              createdAt: new Date().toISOString(),
+            },
+          }).catch(() => {
+            // Webhook delivery is best-effort; failures are absorbed.
+          });
+        }
+
+        return { ok: true, redirectedTo: target.id };
+      });
+    }),
+
+  /**
    * Nudge an agent on an active run by posting an @mention comment on
    * the issue. The audit fan-out routes the comment to the agent's webhook.
    */
@@ -451,3 +685,118 @@ export const agentRunRouter = router({
       });
     }),
 });
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared plumbing for `requestPause` / `requestCancel`. Stamps the run
+ * with the new control state, writes a single
+ * `AGENT_RUN_CONTROL_REQUESTED` audit/event row, and best-effort POSTs
+ * the agent's webhook so the runtime can react out-of-band.
+ *
+ * No-op when the run is in a terminal state (COMPLETED / ABANDONED /
+ * STALLED) — there's no live runtime to react.
+ */
+async function requestRunControl(
+  ctx: {
+    db: typeof import("@/server/db").db;
+    workspaceId: string;
+    session: { user: { id: string } };
+  },
+  args: {
+    runId: string;
+    control: "pause" | "cancel";
+    nextState: AgentRunControlState;
+  },
+): Promise<{ ok: true; runId: string; control: "pause" | "cancel" }> {
+  const run = await ctx.db.agentRun.findFirst({
+    where: { id: args.runId, workspaceId: ctx.workspaceId },
+    select: {
+      id: true,
+      issueId: true,
+      status: true,
+      controlState: true,
+      agent: {
+        select: {
+          id: true,
+          profileKey: true,
+          webhookUrl: true,
+          webhookSecret: true,
+        },
+      },
+    },
+  });
+  if (!run) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Run not found." });
+  }
+  if (run.status !== AgentRunStatus.ACTIVE) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Run is ${run.status}; control signals only apply to ACTIVE runs.`,
+    });
+  }
+  // Idempotent: stamping the same state twice is a no-op besides
+  // bumping `controlRequestedAt`. Keeps the chip's optimistic UI sane.
+  await ctx.db.$transaction(async (tx) => {
+    await tx.agentRun.update({
+      where: { id: run.id },
+      data: {
+        controlState: args.nextState,
+        controlRequestedAt: new Date(),
+        controlRequestedById: ctx.session.user.id,
+      },
+    });
+    await recordChange(tx, {
+      workspaceId: ctx.workspaceId,
+      actorId: ctx.session.user.id,
+      entity: "AgentRun",
+      entityId: run.id,
+      action: "control-request",
+      before: { controlState: run.controlState },
+      after: { controlState: args.nextState },
+      eventKind: EventKind.AGENT_RUN_CONTROL_REQUESTED,
+      subjectType: "agent-run",
+      subjectId: run.id,
+      payload: {
+        control: args.control,
+        runId: run.id,
+        issueId: run.issueId,
+        agentId: run.agent.id,
+      },
+    });
+  });
+
+  // Best-effort outbound webhook to the agent's runtime — same plumbing
+  // as the test-connection action. Failures are absorbed; the audit/
+  // event row is the durable record. The agent's runtime can also pick
+  // up the new `controlState` via MCP read on its next poll.
+  const url = run.agent.webhookUrl;
+  const secret = run.agent.webhookSecret;
+  if (url && secret) {
+    void deliverWebhook({
+      url,
+      secret,
+      timeoutMs: 5000,
+      body: {
+        id: `run-control-${run.id}-${args.control}-${Date.now()}`,
+        kind: "AGENT_RUN_CONTROL",
+        subjectType: "agent-run",
+        subjectId: run.id,
+        payload: {
+          control: args.control,
+          runId: run.id,
+          issueId: run.issueId,
+          agentId: run.agent.id,
+          workspaceId: ctx.workspaceId,
+        },
+        createdAt: new Date().toISOString(),
+      },
+    }).catch(() => {
+      // Webhook delivery is best-effort.
+    });
+  }
+
+  return { ok: true, runId: run.id, control: args.control };
+}

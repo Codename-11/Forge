@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, Priority, RelationKind, StatusCategory, WorkItemKind } from "@prisma/client";
+import { EventKind, Prisma, Priority, RelationKind, StatusCategory, WorkItemKind } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { assertKeyScope, buildKeyScopeWhere } from "@/server/services/api-key-auth";
-import { maybeAutoDispatch } from "@/server/services/dispatcher";
+import {
+  maybeAutoDispatch,
+  recordManualDispatchReason,
+} from "@/server/services/dispatcher";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
 import { finishRunsForIssue, recordAgentAction } from "@/server/services/agent-run";
@@ -58,6 +61,13 @@ const filterSchema = z.object({
   blocked: z.boolean().optional(),
   /** Window: only issues updated within the last N days. */
   updatedSince: z.enum(UPDATED_SINCE_VALUES).optional(),
+  /**
+   * Filter out issues whose `snoozedUntil` is still in the future. Default
+   * `false` keeps the public schema permissive (consumers asking for "all
+   * issues" expect snoozed ones to be visible). Stalled-style consumers
+   * (inbox, dashboard suggestions) pass `true`.
+   */
+  excludeSnoozed: z.boolean().default(false),
 
   limit: z.number().min(1).max(500).default(50),
   cursor: cursorSchema,
@@ -181,6 +191,14 @@ export const issueRouter = router({
               : {}),
           ...(input.updatedSince
             ? { updatedAt: { gte: updatedSinceToDate(input.updatedSince) } }
+            : {}),
+          ...(input.excludeSnoozed
+            ? {
+                OR: [
+                  { snoozedUntil: null },
+                  { snoozedUntil: { lte: new Date() } },
+                ],
+              }
             : {}),
           ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
           ...(blockedConstraint ?? {}),
@@ -376,6 +394,18 @@ export const issueRouter = router({
           userAgent: ctx.userAgent,
         });
         if (input.assignedAgentId) {
+          // Stamp a manual `dispatchReason` blob so the attribution
+          // chip can render even when an operator picked the agent
+          // directly (rather than the auto-dispatcher).
+          const agentRow = await tx.agent.findUniqueOrThrow({
+            where: { id: input.assignedAgentId },
+            select: { profileKey: true },
+          });
+          const reasonBlob = await recordManualDispatchReason(tx, {
+            issueId: issue.id,
+            agentProfileKey: agentRow.profileKey,
+            actorId: ctx.session.user.id,
+          });
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
@@ -389,6 +419,7 @@ export const issueRouter = router({
             payload: {
               agentId: input.assignedAgentId,
               previousAgentId: null,
+              dispatchReason: reasonBlob,
             },
             ip: ctx.ip,
             userAgent: ctx.userAgent,
@@ -558,6 +589,31 @@ export const issueRouter = router({
         // parsing `payload` for every generic ISSUE_UPDATED.
         const agentProvided = Object.prototype.hasOwnProperty.call(patch, "assignedAgentId");
         if (agentProvided && (patch.assignedAgentId ?? null) !== (before.assignedAgentId ?? null)) {
+          // Manual assignment / unassignment — stamp a `dispatchReason`
+          // when an agent is being set, clear it on unassign.
+          let manualReason: Record<string, unknown> | null = null;
+          if (patch.assignedAgentId) {
+            const agentRow = await tx.agent.findUniqueOrThrow({
+              where: { id: patch.assignedAgentId },
+              select: { profileKey: true },
+            });
+            manualReason = (await recordManualDispatchReason(tx, {
+              issueId: id,
+              agentProfileKey: agentRow.profileKey,
+              actorId: ctx.session.user.id,
+            })) as Record<string, unknown>;
+          } else {
+            // Cleared assignment — drop the previous reason.
+            await tx.issue.update({
+              where: { id },
+              data: { dispatchReason: Prisma.JsonNull },
+            });
+          }
+          const assignmentPayload: Prisma.InputJsonObject = {
+            agentId: patch.assignedAgentId ?? null,
+            previousAgentId: before.assignedAgentId,
+            ...(manualReason ? { dispatchReason: manualReason as Prisma.InputJsonObject } : {}),
+          };
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
@@ -569,10 +625,7 @@ export const issueRouter = router({
             eventKind: EventKind.AGENT_ASSIGNED,
             subjectType: "issue",
             subjectId: id,
-            payload: {
-              agentId: patch.assignedAgentId ?? null,
-              previousAgentId: before.assignedAgentId,
-            },
+            payload: assignmentPayload,
             ip: ctx.ip,
             userAgent: ctx.userAgent,
           });
@@ -902,10 +955,38 @@ export const issueRouter = router({
         const validIds = issues.map((i) => i.id);
         if (validIds.length === 0) return { updated: 0 };
 
+        // Resolve the bulk-set agent's profileKey once for the
+        // dispatchReason stamp (only when assigning, not on clear).
+        let agentProfileKey: string | null = null;
+        if (input.assignedAgentId) {
+          const a = await tx.agent.findUnique({
+            where: { id: input.assignedAgentId },
+            select: { profileKey: true },
+          });
+          agentProfileKey = a?.profileKey ?? null;
+        }
+
         await tx.issue.updateMany({
           where: { id: { in: validIds }, workspaceId: ctx.workspaceId },
-          data: { assignedAgentId: input.assignedAgentId },
+          data: {
+            assignedAgentId: input.assignedAgentId,
+            ...(input.assignedAgentId ? {} : { dispatchReason: Prisma.JsonNull }),
+          },
         });
+
+        // Per-issue dispatchReason stamp (auto-dispatch sets it
+        // per-row; mirror that for manual bulk assignment so
+        // attribution stays consistent regardless of code path).
+        let manualReason: Prisma.InputJsonObject | null = null;
+        if (input.assignedAgentId && agentProfileKey) {
+          for (const row of issues) {
+            manualReason = await recordManualDispatchReason(tx, {
+              issueId: row.id,
+              agentProfileKey,
+              actorId: ctx.session.user.id,
+            });
+          }
+        }
 
         const CHUNK = 50;
         for (let i = 0; i < validIds.length; i += CHUNK) {
@@ -925,6 +1006,7 @@ export const issueRouter = router({
               payload: {
                 agentId: input.assignedAgentId,
                 previousAgentId: row.assignedAgentId,
+                ...(manualReason ? { dispatchReason: manualReason } : {}),
               },
               ip: ctx.ip,
               userAgent: ctx.userAgent,
@@ -1179,6 +1261,284 @@ export const issueRouter = router({
           : null;
 
       return { prev: shape(prev), next: shape(next) };
+    }),
+
+  /**
+   * Snooze an issue until the given timestamp. While `snoozedUntil` is
+   * in the future, inbox + stalled buckets exclude the row (the operator
+   * has explicitly asked the system to stop nagging them). Settings-
+   * driven consumers (issue.list with `excludeSnoozed: true`) honor the
+   * same gate. Snoozing past now is rejected — the front-end is
+   * expected to provide a future date.
+   */
+  snooze: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        until: z.coerce.date(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.until.getTime() <= Date.now()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "snoozedUntil must be a future timestamp.",
+        });
+      }
+      return ctx.db.$transaction(async (tx) => {
+        const before = await tx.issue.findFirstOrThrow({
+          where: {
+            id: input.id,
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true, snoozedUntil: true },
+        });
+        const updated = await tx.issue.update({
+          where: { id: before.id },
+          data: { snoozedUntil: input.until },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Issue",
+          entityId: before.id,
+          action: "snooze",
+          before: { snoozedUntil: before.snoozedUntil },
+          after: { snoozedUntil: input.until },
+          eventKind: EventKind.ISSUE_SNOOZED,
+          subjectType: "issue",
+          subjectId: before.id,
+          payload: { until: input.until.toISOString() },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+        return updated;
+      });
+    }),
+
+  /**
+   * Clear the snooze flag on an issue, returning it to the inbox /
+   * stalled buckets. No-op when the issue isn't currently snoozed
+   * (still emits ISSUE_UNSNOOZED so the activity stream reads cleanly).
+   */
+  unsnooze: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        const before = await tx.issue.findFirstOrThrow({
+          where: {
+            id: input.id,
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true, snoozedUntil: true },
+        });
+        const updated = await tx.issue.update({
+          where: { id: before.id },
+          data: { snoozedUntil: null },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Issue",
+          entityId: before.id,
+          action: "unsnooze",
+          before: { snoozedUntil: before.snoozedUntil },
+          after: { snoozedUntil: null },
+          eventKind: EventKind.ISSUE_UNSNOOZED,
+          subjectType: "issue",
+          subjectId: before.id,
+          payload: {
+            previousSnoozedUntil: before.snoozedUntil?.toISOString() ?? null,
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+        return updated;
+      });
+    }),
+
+  /**
+   * Bulk snooze — sets `snoozedUntil` on every selected issue. `until: null`
+   * clears the snooze (equivalent to calling `unsnooze` for each id). Used
+   * by the inbox bulk-action toolbar so the operator can snooze a whole
+   * selection without firing N round-trips.
+   *
+   * Audit + ISSUE_SNOOZED / ISSUE_UNSNOOZED events are written per issue so
+   * downstream consumers (activity stream, webhook bus) treat each row as
+   * a discrete snooze — same shape as the singleton `snooze` / `unsnooze`.
+   */
+  snoozeMany: workspaceProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string().cuid()).min(1).max(200),
+        until: z.coerce.date().nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.until && input.until.getTime() <= Date.now()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "snoozedUntil must be a future timestamp.",
+        });
+      }
+      return ctx.db.$transaction(async (tx) => {
+        const rows = await tx.issue.findMany({
+          where: {
+            id: { in: input.ids },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true, snoozedUntil: true },
+        });
+        const validIds = rows.map((r) => r.id);
+        if (validIds.length === 0) return { updated: 0 };
+
+        await tx.issue.updateMany({
+          where: { id: { in: validIds }, workspaceId: ctx.workspaceId },
+          data: { snoozedUntil: input.until },
+        });
+
+        for (const row of rows) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            entity: "Issue",
+            entityId: row.id,
+            action: input.until ? "snooze" : "unsnooze",
+            before: { snoozedUntil: row.snoozedUntil },
+            after: { snoozedUntil: input.until },
+            eventKind: input.until
+              ? EventKind.ISSUE_SNOOZED
+              : EventKind.ISSUE_UNSNOOZED,
+            subjectType: "issue",
+            subjectId: row.id,
+            payload: input.until
+              ? { until: input.until.toISOString() }
+              : {
+                  previousSnoozedUntil: row.snoozedUntil?.toISOString() ?? null,
+                },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
+        return { updated: validIds.length };
+      });
+    }),
+
+  /**
+   * "Gentle nudge" — appends a comment to the issue tagging the
+   * assigned agent (when present), which the existing comment fan-out
+   * routes to the agent's webhookUrl as a COMMENT_CREATED with a
+   * `mentions` array. Default body cites the days-since-update so the
+   * agent has context. We piggy-back on comment.create's plumbing
+   * (mention resolution, audit fan-out) rather than duplicate it.
+   *
+   * Per Phase 0 brief: nudge does NOT add a separate webhook event —
+   * comment fan-out already reaches the assigned agent.
+   */
+  nudge: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        body: z.string().min(1).max(2000).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        const issue = await tx.issue.findFirstOrThrow({
+          where: {
+            id: input.id,
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: {
+            id: true,
+            updatedAt: true,
+            assignedAgent: { select: { id: true, profileKey: true } },
+          },
+        });
+        const daysSince = Math.max(
+          1,
+          Math.round(
+            (Date.now() - issue.updatedAt.getTime()) / (24 * 60 * 60 * 1000),
+          ),
+        );
+        const mention = issue.assignedAgent
+          ? `@${issue.assignedAgent.profileKey} `
+          : "";
+        const body =
+          input.body ??
+          `${mention}Gentle nudge — this issue has been quiet for ${daysSince} day${daysSince === 1 ? "" : "s"}.`;
+
+        const comment = await tx.comment.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            issueId: issue.id,
+            authorId: ctx.session.user.id,
+            body,
+          },
+        });
+
+        // Build the mentions array the same way comment.create does so
+        // the audit fan-out branch (c) routes to the assigned agent's
+        // webhook. We only auto-mention the assigned agent here; if
+        // the operator wrote a custom body with explicit @mentions
+        // they'll be picked up by comment.create's normal flow next
+        // time — for nudge we keep it predictable.
+        const mentions = issue.assignedAgent
+          ? [
+              {
+                agentId: issue.assignedAgent.id,
+                profileKey: issue.assignedAgent.profileKey,
+              },
+            ]
+          : [];
+
+        // Both events fire: COMMENT_CREATED (so the comment shows up
+        // in the activity stream + reaches the agent's webhook) and
+        // ISSUE_NUDGED (so consumers can distinguish a nudge from a
+        // freeform comment without parsing the body).
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Comment",
+          entityId: comment.id,
+          action: "create",
+          after: comment,
+          eventKind: EventKind.COMMENT_CREATED,
+          subjectType: "issue",
+          subjectId: issue.id,
+          payload: {
+            commentId: comment.id,
+            issueId: issue.id,
+            preview: body.slice(0, 120),
+            mentions,
+            isNudge: true,
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Issue",
+          entityId: issue.id,
+          action: "nudge",
+          eventKind: EventKind.ISSUE_NUDGED,
+          subjectType: "issue",
+          subjectId: issue.id,
+          payload: {
+            commentId: comment.id,
+            daysSinceUpdate: daysSince,
+            agentId: issue.assignedAgent?.id ?? null,
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+        return { ok: true, commentId: comment.id, daysSinceUpdate: daysSince };
+      });
     }),
 });
 
