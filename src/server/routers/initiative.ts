@@ -77,13 +77,81 @@ export const unlinkProjectInput = z.object({
 
 export const initiativeRouter = router({
   list: workspaceProcedure.input(listInput).query(async ({ ctx, input }) => {
-    return ctx.db.initiative.findMany({
+    const initiatives = await ctx.db.initiative.findMany({
       where: {
         workspaceId: ctx.workspaceId,
         ...(input.status ? { status: input.status } : {}),
       },
       orderBy: [{ position: "asc" }, { createdAt: "asc" }],
       include: { _count: { select: { projects: true } } },
+    });
+    if (initiatives.length === 0) return [];
+
+    // Roll up issue counts per initiative in a single grouped query
+    // (replaces the per-card `issue.list` N+1 the old card was doing).
+    // We aggregate by `project.initiativeId` and split into total vs.
+    // done/canceled buckets so the card can render `done/total · pct`
+    // without a second roundtrip.
+    const grouped = await ctx.db.issue.groupBy({
+      by: ["projectId", "statusId"],
+      where: {
+        workspaceId: ctx.workspaceId,
+        deletedAt: null,
+        project: {
+          initiativeId: { in: initiatives.map((i) => i.id) },
+        },
+      },
+      _count: { _all: true },
+    });
+
+    // Resolve project → initiative + status → terminal-or-not in one go.
+    const projectIds = Array.from(
+      new Set(grouped.map((g) => g.projectId).filter(Boolean) as string[]),
+    );
+    const projects = projectIds.length
+      ? await ctx.db.project.findMany({
+          where: { id: { in: projectIds }, workspaceId: ctx.workspaceId },
+          select: { id: true, initiativeId: true },
+        })
+      : [];
+    const projectInitiative = new Map(
+      projects.map((p) => [p.id, p.initiativeId] as const),
+    );
+
+    const statusIds = Array.from(new Set(grouped.map((g) => g.statusId)));
+    const statuses = statusIds.length
+      ? await ctx.db.status.findMany({
+          where: { id: { in: statusIds }, workspaceId: ctx.workspaceId },
+          select: { id: true, category: true },
+        })
+      : [];
+    const isTerminal = new Map(
+      statuses.map(
+        (s) => [s.id, s.category === "DONE" || s.category === "CANCELED"] as const,
+      ),
+    );
+
+    const totals = new Map<string, { total: number; done: number }>();
+    for (const row of grouped) {
+      if (!row.projectId) continue;
+      const initiativeId = projectInitiative.get(row.projectId);
+      if (!initiativeId) continue;
+      const cell = totals.get(initiativeId) ?? { total: 0, done: 0 };
+      cell.total += row._count._all;
+      if (isTerminal.get(row.statusId)) cell.done += row._count._all;
+      totals.set(initiativeId, cell);
+    }
+
+    return initiatives.map((i) => {
+      const t = totals.get(i.id) ?? { total: 0, done: 0 };
+      return {
+        ...i,
+        _count: {
+          ...i._count,
+          issues: t.total,
+          doneIssues: t.done,
+        },
+      };
     });
   }),
 
@@ -259,6 +327,32 @@ export const initiativeRouter = router({
       return after;
     });
   }),
+
+  /**
+   * Counterpart to `initiative.get(id)`'s `projects[]`: given a project id,
+   * return the linked initiative (if any). Phase 1 uses this to render an
+   * `InitiativeChip` on the project detail page without having to load the
+   * full initiative tree. Tenant-scoped — cross-workspace lookups return
+   * null rather than throwing.
+   */
+  linkedFor: workspaceProcedure
+    .input(z.object({ projectId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const project = await ctx.db.project.findFirst({
+        where: {
+          id: input.projectId,
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+        },
+        select: { initiativeId: true },
+      });
+      if (!project || !project.initiativeId) return { initiative: null };
+      const initiative = await ctx.db.initiative.findFirst({
+        where: { id: project.initiativeId, workspaceId: ctx.workspaceId },
+        select: { id: true, slug: true, name: true, status: true },
+      });
+      return { initiative: initiative ?? null };
+    }),
 
   unlinkProject: workspaceProcedure.input(unlinkProjectInput).mutation(async ({ ctx, input }) => {
     return ctx.db.$transaction(async (tx) => {

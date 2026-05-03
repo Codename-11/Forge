@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { Confirm } from "@/components/ui/modal";
+import { ProjectChip } from "@/components/project-chip";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -293,21 +294,19 @@ export default function InitiativeDetailPage({
                 {linkedProjects.map((p) => (
                   <li
                     key={p.id}
-                    className="flex items-center gap-2 px-3 py-2 text-xs"
+                    className="flex items-center gap-2 px-3 py-2"
                   >
-                    <span
-                      className="inline-block h-3 w-3 rounded-sm"
-                      style={{ backgroundColor: p.color ?? "#78716c" }}
-                    />
-                    <Link
-                      href={`/w/${ws.slug}/projects/${p.id}`}
-                      className="min-w-0 flex-1 truncate hover:text-ember"
-                    >
-                      <span className="text-id text-muted-foreground">
-                        {p.key}
-                      </span>{" "}
-                      {p.name}
-                    </Link>
+                    <div className="min-w-0 flex-1">
+                      <ProjectChip
+                        project={{
+                          id: p.id,
+                          key: p.key,
+                          name: p.name,
+                          color: p.color,
+                          icon: p.icon,
+                        }}
+                      />
+                    </div>
                     <Button
                       variant="ghost"
                       size="sm"

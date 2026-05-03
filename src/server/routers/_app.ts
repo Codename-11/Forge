@@ -19,8 +19,10 @@ import { issueTemplateRouter } from "./issue-template";
 import { projectTemplateRouter } from "./project-template";
 import { recurringRouter } from "./recurring";
 import { viewRouter } from "./view";
+import { savedViewRouter } from "./saved-view";
 import { standupRouter } from "./standup";
 import { cycleRouter } from "./cycle";
+import { dashboardRouter } from "./dashboard";
 import { dispatchRuleRouter } from "./dispatch-rule";
 import { eventRouter } from "./event";
 import { inboxRouter } from "./inbox";
@@ -43,6 +45,7 @@ export const appRouter = router({
   attachment: attachmentRouter,
   comment: commentRouter,
   cycle: cycleRouter,
+  dashboard: dashboardRouter,
   dispatchRule: dispatchRuleRouter,
   event: eventRouter,
   inbox: inboxRouter,
@@ -58,6 +61,7 @@ export const appRouter = router({
   recurring: recurringRouter,
   relation: relationRouter,
   runtime: runtimeRouter,
+  savedView: savedViewRouter,
   standup: standupRouter,
   status: statusRouter,
   template: issueTemplateRouter,

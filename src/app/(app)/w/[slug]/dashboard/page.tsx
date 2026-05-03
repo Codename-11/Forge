@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Check,
   ChevronLeft,
+  ChevronRight,
   CircleDashed,
   Clock3,
   Globe,
@@ -13,14 +14,17 @@ import {
   Mail,
   Plus,
   Rocket,
+  Sparkles,
   UserPlus,
   X,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CycleChip } from "@/components/cycle-chip";
+import { ProjectChip } from "@/components/project-chip";
 import { trpc } from "@/lib/trpc";
-import { formatIssueId, relativeTime } from "@/lib/utils";
+import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -148,16 +152,38 @@ export default function DashboardPage() {
             skippedSteps={account?.onboardingSkippedSteps ?? []}
           />
 
-          <section>
-            <SectionHeader title="Focus today" hint="Assigned to you, priority first." />
-            <FocusGrid
-              issues={focus}
-              isLoading={active.isLoading || !me}
+          {focus.length === 0 && !(active.isLoading || !me) ? (
+            // Focus is empty — Suggestions becomes the primary "what to do
+            // next" surface. The "Nothing on your plate" stub is gone; the
+            // Suggestions strip is a real handoff with discoverable work.
+            <SuggestionsStrip
+              variant="primary"
               workspaceKey={workspaceKey}
-              tz={prefs.timezone ?? null}
               slug={slug}
             />
-          </section>
+          ) : (
+            <section>
+              <SectionHeader
+                title="Focus today"
+                hint="Assigned to you, priority first."
+              />
+              <FocusGrid
+                issues={focus}
+                isLoading={active.isLoading || !me}
+                workspaceKey={workspaceKey}
+                tz={prefs.timezone ?? null}
+                slug={slug}
+              />
+            </section>
+          )}
+
+          {focus.length > 0 && (
+            <SuggestionsStrip
+              variant="secondary"
+              workspaceKey={workspaceKey}
+              slug={slug}
+            />
+          )}
 
           <StandupTile slug={slug} />
 
@@ -323,27 +349,10 @@ function FocusGrid({
       </div>
     );
   }
-  if (issues.length === 0) {
-    return (
-      <div className="rounded-lg border border-dashed border-border bg-card/30 p-8 text-center">
-        <div className="text-sm font-medium">Nothing on your plate.</div>
-        <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
-          Either you&apos;re all caught up, or nothing has found its way to you. Pick something up
-          or open a new issue.
-        </p>
-        <div className="mt-4 flex justify-center gap-2">
-          <Link href={`/w/${slug}/issues`}>
-            <Button variant="outline" size="sm">
-              Browse open issues
-            </Button>
-          </Link>
-          <Button data-quick-create variant="ember" size="sm">
-            New issue
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  // Empty state intentionally elided — the page promotes the Suggestions
+  // strip into Focus's slot when `focus.length === 0`, so we never render
+  // FocusGrid with zero issues. (See the conditional on DashboardPage.)
+  if (issues.length === 0) return null;
   return (
     <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
       {issues.map((issue) => (
@@ -934,6 +943,309 @@ function StandupCount({
       <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
       <span className="text-muted-foreground">{label}</span>
       <span className="ml-auto font-mono tabular-nums">{n}</span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Suggestions strip (Phase 1C)
+// ---------------------------------------------------------------------------
+
+/**
+ * "What should I do next" — three buckets surfaced from
+ * `dashboard.suggestions`: current sprint slice, unassigned-in-my-projects,
+ * and stalled.
+ *
+ * Two visual modes:
+ *   - `primary`   — Focus Today is empty, Suggestions takes the top slot.
+ *                   Larger header, normal card tint, top of page.
+ *   - `secondary` — Focus Today has items, Suggestions stays below as a
+ *                   discoverability strip. Smaller header, dimmer cards,
+ *                   wrapped in a `<details>` so a busy operator can collapse
+ *                   it. Defaults to open so it actually surfaces work.
+ *
+ * Empty groups render nothing (no "no items" stub clutter). All three
+ * buckets empty + `primary` → a single "you're caught up" CTA pointing at
+ * the project create flow.
+ *
+ * The fetch limit comes from the server defaults (top-N per bucket) — no
+ * `take`/`limit` magic number passed from the client. This way bumping the
+ * server default scales every consumer.
+ */
+function SuggestionsStrip({
+  variant,
+  workspaceKey,
+  slug,
+}: {
+  variant: "primary" | "secondary";
+  workspaceKey: string;
+  slug: string;
+}) {
+  const { data, isLoading } = trpc.dashboard.suggestions.useQuery();
+
+  if (isLoading || !data) {
+    if (variant === "secondary") return null;
+    return (
+      <section>
+        <SectionHeader title="Suggestions" hint="Pick something to start." />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-40 animate-pulse rounded-lg border border-border bg-card/40"
+            />
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  const sprint = data.currentSprintSlice;
+  const unassigned = data.unassignedInMyProjects;
+  const stalled = data.stalled;
+  const allEmpty = sprint.length === 0 && unassigned.length === 0 && stalled.length === 0;
+
+  if (allEmpty) {
+    if (variant === "secondary") return null;
+    return (
+      <section className="rounded-lg border border-dashed border-border bg-card/30 p-8 text-center">
+        <div className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-subtle text-muted-foreground">
+          <Sparkles className="h-4 w-4" />
+        </div>
+        <div className="mt-3 text-sm font-medium">You&apos;re caught up.</div>
+        <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+          No assigned work, no orphan issues in your projects, nothing
+          stalled. Start a new project to keep momentum.
+        </p>
+        <div className="mt-4 flex justify-center gap-2">
+          <Link href={`/w/${slug}/projects`}>
+            <Button variant="ember" size="sm" className="gap-1.5">
+              <Rocket className="h-3.5 w-3.5" />
+              Start a new project
+            </Button>
+          </Link>
+          <Button data-quick-create variant="outline" size="sm" className="gap-1.5">
+            <Plus className="h-3.5 w-3.5" />
+            New issue
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  if (variant === "secondary") {
+    // Dimmer, collapsible. Subordinate to Focus Today.
+    return (
+      <details className="group rounded-lg border border-border bg-card/30" open>
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
+          <Sparkles className="h-3 w-3" />
+          <span>Suggestions</span>
+          <span className="font-mono normal-case tracking-normal text-muted-foreground/70">
+            sprint · projects · stalled
+          </span>
+          <ChevronRight className="ml-auto h-3 w-3 transition-transform group-open:rotate-90" />
+        </summary>
+        <div className="grid grid-cols-1 gap-3 border-t border-border p-4 lg:grid-cols-3">
+          {sprint.length > 0 && (
+            <SuggestionsCard
+              header={
+                data.activeCycle ? (
+                  <CycleChip
+                    cycle={{
+                      id: data.activeCycle.id,
+                      name: data.activeCycle.name,
+                      status: "ACTIVE",
+                    }}
+                    slug={slug}
+                  />
+                ) : (
+                  <FallbackHeader label="Current sprint" />
+                )
+              }
+              items={sprint}
+              workspaceKey={workspaceKey}
+              slug={slug}
+              dim
+            />
+          )}
+          {unassigned.length > 0 && (
+            <SuggestionsCard
+              header={<FallbackHeader label="Unassigned in your projects" />}
+              items={unassigned}
+              workspaceKey={workspaceKey}
+              slug={slug}
+              showProjectChip
+              dim
+            />
+          )}
+          {stalled.length > 0 && (
+            <SuggestionsCard
+              header={
+                <FallbackHeader
+                  label="Stalled"
+                  hint={
+                    data.stalledThresholdDays
+                      ? `> ${data.stalledThresholdDays}d quiet`
+                      : undefined
+                  }
+                />
+              }
+              items={stalled}
+              workspaceKey={workspaceKey}
+              slug={slug}
+              showStalledTimestamp
+              dim
+            />
+          )}
+        </div>
+      </details>
+    );
+  }
+
+  // Primary mode — Focus is empty, Suggestions IS the page's top content.
+  return (
+    <section>
+      <SectionHeader
+        title="Pick something to start"
+        hint="Suggestions from the active sprint, your projects, and stalled work."
+      />
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        {sprint.length > 0 && (
+          <SuggestionsCard
+            header={
+              data.activeCycle ? (
+                <CycleChip
+                  cycle={{
+                    id: data.activeCycle.id,
+                    name: data.activeCycle.name,
+                    status: "ACTIVE",
+                  }}
+                  slug={slug}
+                />
+              ) : (
+                <FallbackHeader label="Current sprint" />
+              )
+            }
+            items={sprint}
+            workspaceKey={workspaceKey}
+            slug={slug}
+          />
+        )}
+        {unassigned.length > 0 && (
+          <SuggestionsCard
+            header={<FallbackHeader label="Unassigned in your projects" />}
+            items={unassigned}
+            workspaceKey={workspaceKey}
+            slug={slug}
+            showProjectChip
+          />
+        )}
+        {stalled.length > 0 && (
+          <SuggestionsCard
+            header={
+              <FallbackHeader
+                label="Stalled"
+                hint={
+                  data.stalledThresholdDays
+                    ? `> ${data.stalledThresholdDays}d quiet`
+                    : undefined
+                }
+              />
+            }
+            items={stalled}
+            workspaceKey={workspaceKey}
+            slug={slug}
+            showStalledTimestamp
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+type SuggestionItem = {
+  id: string;
+  number: number;
+  title: string;
+  priority: string;
+  updatedAt: Date | string;
+  status: { id: string; name: string; category: string; color: string };
+  project: { id: string; key: string; name: string; color: string | null; icon: string | null } | null;
+};
+
+function FallbackHeader({ label, hint }: { label: string; hint?: string }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="truncate text-xs font-semibold text-foreground/90">
+        {label}
+      </span>
+      {hint && <span className="text-meta text-muted-foreground/70">{hint}</span>}
+    </div>
+  );
+}
+
+function SuggestionsCard({
+  header,
+  items,
+  workspaceKey,
+  slug,
+  showProjectChip = false,
+  showStalledTimestamp = false,
+  dim = false,
+}: {
+  header: React.ReactNode;
+  items: SuggestionItem[];
+  workspaceKey: string;
+  slug: string;
+  showProjectChip?: boolean;
+  showStalledTimestamp?: boolean;
+  dim?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-2 rounded-lg border border-border p-3",
+        dim ? "bg-card/30" : "bg-card/40",
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-2">{header}</div>
+      <ul className="flex flex-col">
+        {items.map((issue) => (
+          <li key={issue.id}>
+            <Link
+              href={`/w/${slug}/issues/${issue.id}`}
+              className="group flex items-center gap-2 rounded-md py-1 hover:bg-subtle/50"
+            >
+              <span className="w-5 shrink-0 text-center font-mono text-[0.6875rem] text-muted-foreground">
+                {PRIORITY_GLYPH[issue.priority] ?? "—"}
+              </span>
+              {showProjectChip && issue.project ? (
+                <ProjectChip
+                  project={issue.project}
+                  slug={slug}
+                  className="shrink-0 px-1.5 py-0.5"
+                />
+              ) : null}
+              <span className="text-id shrink-0 text-muted-foreground">
+                {formatIssueId(workspaceKey, issue.number)}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-xs">{issue.title}</span>
+              {showStalledTimestamp ? (
+                <span className="text-meta shrink-0 text-muted-foreground">
+                  {relativeTime(issue.updatedAt)}
+                </span>
+              ) : (
+                <Badge
+                  className="ml-auto shrink-0"
+                  color={issue.status.color}
+                >
+                  {issue.status.name}
+                </Badge>
+              )}
+            </Link>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

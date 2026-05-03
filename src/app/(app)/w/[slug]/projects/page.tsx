@@ -14,6 +14,10 @@ import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 
+/// Inline preview count for starter templates surfaced on the empty
+/// state. Keep small so the page still feels uncluttered.
+const INLINE_TEMPLATE_PREVIEW = 3;
+
 export default function ProjectsPage() {
   const workspace = useWorkspace();
   const slug = workspace.slug;
@@ -25,6 +29,42 @@ export default function ProjectsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const existingKeys = new Set((data?.items ?? []).map((p) => p.key));
   const isEmpty = data?.items.length === 0;
+
+  // Inline starter previews on the empty state. Only loaded once we
+  // know the workspace is empty — no template fetch on first paint
+  // when the user already has projects.
+  const { data: starters } = trpc.projectTemplate.list.useQuery(undefined, {
+    enabled: isEmpty,
+  });
+  const previewStarters = (starters ?? []).slice(0, INLINE_TEMPLATE_PREVIEW);
+  const create = trpc.project.create.useMutation();
+  const [pendingTemplate, setPendingTemplate] = useState<string | null>(null);
+
+  async function quickAddTemplate(s: {
+    id: string;
+    name: string;
+    suggestedKey: string;
+    description: string | null;
+    color: string | null;
+    icon: string | null;
+  }) {
+    setPendingTemplate(s.id);
+    try {
+      await create.mutateAsync({
+        key: s.suggestedKey,
+        name: s.name,
+        description: s.description ?? undefined,
+        color: s.color ?? undefined,
+        icon: s.icon ?? undefined,
+      });
+      toast.success(`Created ${s.name}.`);
+      refetch();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to create project.");
+    } finally {
+      setPendingTemplate(null);
+    }
+  }
 
   // Context-aware quick-create hands off to the shared dialog via `?new`.
   useEffect(() => {
@@ -63,27 +103,97 @@ export default function ProjectsPage() {
             ))}
           </ul>
         ) : isEmpty ? (
-          <EmptyState
-            variant="page"
-            icon={<Folder />}
-            title="No projects yet"
-            description={
-              <span>
-                Start from scratch, or pick from the suggested starter
-                templates. Press <Kbd>⇧C</Kbd> from anywhere to quick-create.
-              </span>
-            }
-            action={
-              <>
-                <Button variant="ember" size="sm" onClick={() => setCreateOpen(true)}>
-                  <Plus className="h-3.5 w-3.5" /> New project
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => setStarterOpen(true)}>
-                  Browse templates
-                </Button>
-              </>
-            }
-          />
+          <div className="mx-auto max-w-xl py-10">
+            <EmptyState
+              variant="page"
+              icon={<Folder />}
+              title="No projects yet"
+              description={
+                <span className="block space-y-2">
+                  <span className="block">
+                    Projects group related issues and roll up to initiatives.
+                  </span>
+                  <span className="block text-meta text-muted-foreground">
+                    Start blank, or kick off from a template. Press{" "}
+                    <Kbd>⇧C</Kbd> from anywhere to quick-create.
+                  </span>
+                </span>
+              }
+              action={
+                <>
+                  <Button variant="ember" size="sm" onClick={() => setCreateOpen(true)}>
+                    <Plus className="h-3.5 w-3.5" /> New project
+                  </Button>
+                  {previewStarters.length === 0 && (starters?.length ?? 0) === 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setStarterOpen(true)}
+                    >
+                      Browse templates
+                    </Button>
+                  )}
+                </>
+              }
+            />
+            {previewStarters.length > 0 && (
+              <div className="mt-6 space-y-2">
+                <div className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Starter templates
+                </div>
+                <ul className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  {previewStarters.map((s) => (
+                    <li key={s.id}>
+                      <button
+                        type="button"
+                        disabled={pendingTemplate === s.id}
+                        onClick={() => quickAddTemplate(s)}
+                        className={cn(
+                          "block w-full rounded-lg border border-border bg-card/40 p-3 text-left",
+                          "hover:border-ember/40 disabled:opacity-50",
+                          MOTION.base,
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            aria-hidden="true"
+                            className="inline-block h-2.5 w-2.5 rounded-sm"
+                            style={{ backgroundColor: s.color ?? "#78716c" }}
+                          />
+                          {s.icon && <span aria-hidden="true">{s.icon}</span>}
+                          <span className="truncate text-sm font-medium">
+                            {s.name}
+                          </span>
+                          <span className="ml-auto text-id text-muted-foreground">
+                            {s.suggestedKey}
+                          </span>
+                        </div>
+                        {s.description && (
+                          <p className="mt-1 line-clamp-2 text-meta text-muted-foreground">
+                            {s.description}
+                          </p>
+                        )}
+                        <p className="mt-2 text-meta text-muted-foreground">
+                          {pendingTemplate === s.id ? "Adding…" : "Tap to add →"}
+                        </p>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {(starters?.length ?? 0) > previewStarters.length && (
+                  <div className="text-right">
+                    <button
+                      type="button"
+                      onClick={() => setStarterOpen(true)}
+                      className="text-meta text-muted-foreground hover:text-ember"
+                    >
+                      See all {starters?.length} templates →
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         ) : (
           <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
             {(data?.items ?? []).map((p) => (

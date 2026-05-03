@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import type { SavedViewFilters } from "@/lib/saved-view-filters";
 
 /**
  * Status-column kanban board. Drag-and-drop is intentionally left as a
@@ -18,6 +19,7 @@ export function IssueBoard({
   assigneeId,
   cycleId,
   initiativeId,
+  extraFilters,
 }: {
   workspaceKey: string;
   projectId?: string;
@@ -26,6 +28,8 @@ export function IssueBoard({
   cycleId?: string | null;
   /** Tri-state: `undefined` = any; `null` = no initiative; string = id. */
   initiativeId?: string | null;
+  /** Phase 1D saved-view projection. Spread into `issue.list`. */
+  extraFilters?: SavedViewFilters;
 }) {
   const { data: statuses } = trpc.status.list.useQuery();
   const { data: issues } = trpc.issue.list.useQuery({
@@ -35,6 +39,7 @@ export function IssueBoard({
     assigneeId,
     cycleId,
     initiativeId,
+    ...(extraFilters ?? {}),
   });
   const ws = useMaybeWorkspace();
   const base = ws ? `/w/${ws.slug}` : "";

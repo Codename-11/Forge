@@ -2,6 +2,123 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-02 — feat(ui): UX revamp — overview, navigation, discovery, triage (multi-agent)
+
+Bailey flagged the app was issue-centric with weak project context, no
+discovery path from the home view (Focus Today shows assigned-only and
+dead-ends to "Nothing on your plate" with one assignment), and orphaned
+initiatives. Audit confirmed: project pages were filtered issue lists with
+metadata at the top, issue detail had no breadcrumb back to project,
+initiatives never linked from project/issue surfaces, no saved views, no
+sibling-issue nav.
+
+Single landing run, coordinated agent team. Phase 0 sequential (shared
+primitives + tRPC + schema). Phase 1 four parallel worktree agents
+(project / issue / discovery / triage). Phase 2 integration + squash to
+one commit per Bailey's request.
+
+### Shape
+
+- **Project page** — overview is the new default tab (`?view=overview`),
+  list and board preserved verbatim. Overview consumes a single
+  `project.overview` rollup query: status counts (5-stat strip, blocked
+  goes `text-warning` when > 0), linked initiative chip + "Link to an
+  initiative" inline picker when null, current sprint slice (top 5,
+  CycleChip + "ends Xd ago" + "View all in sprint →"), members
+  (avatar + handle + open count, sorted desc), recent activity (top 10
+  ActivityEvents joined to their issue subjects). Project list empty
+  state warmed: explanation copy + inline 3-up template cards instead
+  of a separate Browse Templates button.
+- **Issue detail** — topbar Breadcrumb (`Projects › <name> › <KEY>`,
+  fallback `Issues › <KEY>` when projectless). InitiativeChip + CycleChip
+  surfaced inline beside the key + paperclip group (display only —
+  right-rail dropdowns kept as the mutation surface). IssueSiblingNav on
+  the actions slot, scope = project (else cycle else hidden), `[`/`]`
+  hotkeys via `useHotkey`. Focus mode (`/focus/[id]`) intentionally
+  skipped — chrome-less by design.
+- **Dashboard** — Suggestions strip below Focus Today, three subgroups
+  consuming `dashboard.suggestions`: current sprint (CycleChip header),
+  unassigned in your projects (ProjectChip per row), stalled
+  (`updatedAt < now - Workspace.stalledThresholdDays`, default 7).
+  Modal flips on Focus emptiness: when Focus Today has any issues the
+  strip is collapsed/dimmed (`bg-card/30`); when Focus is empty the
+  strip is promoted to primary content with a "Pick something to start"
+  header, replacing the old dead-end empty state. All-three-buckets
+  empty + Focus-empty falls through to a "You're caught up" CTA pointing
+  at `/projects`. Inbox polish: ProjectChip swapped for plain badges in
+  IssueRow + AgentQueue, "Browse suggestions in dashboard ›" link on
+  inbox-zero.
+- **/issues triage** — quick-filter chip bar (Unassigned / My backlog /
+  Blocked / Recently updated) + per-user saved-views row. Saved views
+  are tenant + user scoped (`IssueSavedView` Prisma model, composite
+  unique on `(userId, workspaceId, name)`), reorderable, with a
+  ⋯ menu for Rename / Update with current filters / Delete. Active
+  view is reflected in `?view=<id>` for deep-linking; editing a filter
+  un-tints the active view chip. Filter shape lives in
+  `src/lib/saved-view-filters.ts` as a Zod schema, validated at the
+  router boundary so the `IssueSavedView.filters` Json blob doesn't
+  drift. "My backlog" resolves backlog statuses dynamically from the
+  workspace's own `status.list` (filtered to `BACKLOG`/`TODO`
+  categories) — no hardcoded status ids.
+- **Initiatives** — `initiative.list` rolled up `_count.issues` and
+  `_count.doneIssues` server-side to kill the per-card N+1 each
+  initiative-card was previously firing. List empty state warmed.
+  Initiative detail page swaps plain-text linked-projects for
+  `<ProjectChip />`.
+
+### Shared primitives (Phase 0)
+
+- `<Breadcrumb />`, `<ProjectChip />`, `<InitiativeChip />`,
+  `<CycleChip />`, `<IssueSiblingNav />` in `src/components/`. All
+  resolve workspace slug via `useMaybeWorkspace()` with optional `slug`
+  override prop for RSC/email contexts. Visual differentiation via
+  glyph (Folder vs Diamond vs Repeat); CycleChip pulses an `bg-ember`
+  dot when status is `ACTIVE`.
+- New procedures: `issue.siblings({ issueId, scope })`,
+  `project.overview({ id })`, `dashboard.suggestions({ limit })`,
+  `initiative.linkedFor({ projectId })`, `savedView.{list, create,
+  update, delete, reorder}`.
+- Migration `0020_ux_revamp_phase0`: new `IssueSavedView` model +
+  `Workspace.stalledThresholdDays Int @default(7)` (Bailey's
+  settings-driven rule — no magic numbers in handlers).
+
+### Coordination notes for next time
+
+- Worktree base race: when Phase 1 agents launched in parallel just
+  after Phase 0's commit landed on master, three of four worktrees got
+  the right base (`29f4516`); one branched from `1e7c2d7`
+  (pre-Phase-0). The drifted agent (1A) re-implemented chip primitives
+  and `project.overview`. Self-correction worked partially (1B/1C/1D
+  all rebased themselves onto Phase 0 mid-run); 1A didn't notice. At
+  integration: `git checkout --ours` on the four conflicted files to
+  keep Phase 0's polished versions, then patched 1A's consumer code
+  (`workspaceSlug` → `slug`, dropped `size` prop, accepted Phase 0's
+  `currentCycleSlice` field names + augmented the rollup with `total`
+  / `endsAt` / full status objects + activity issue join). Lesson: when
+  fanning out parallel worktree agents that depend on a sequential
+  base commit, verify each agent's worktree HEAD before they start
+  work, or have the base agent push to a dedicated integration branch
+  the worktrees explicitly check out.
+- Filter shape in `IssueSavedView.filters` deliberately stayed `Json`
+  in the DB; validation enforced at the router boundary via
+  `SavedViewFiltersSchema`. Lets the schema evolve without DDL churn.
+
+### Verification
+
+- `pnpm typecheck` clean.
+- `pnpm lint` baseline only (4 errors in `issue-board.tsx`, 1 in
+  `mission-control/control-tab.tsx`, all pre-existing from `0515871`).
+  No new errors or warnings in revamp files.
+- `pnpm test` — 208 pass, 6 fail. The 6 are MinIO storage/attachment
+  tests failing with `ECONNREFUSED ::1:59000` — local MinIO not
+  running; not regressions, none of the failing files were touched.
+  All routers covered by tests (issue, initiative, cycle, etc.) pass.
+
+### Single commit
+
+Per Bailey's request, all of Phase 0 + 1A–D + integration fixes
+squashed to one commit on `master`. Not pushed.
+
 ## 2026-05-01 — fix(audit): per-agent dispatch shim was paged on every workspace event (incident)
 
 Reported by Bailey: Victor was triggered on a status change for an

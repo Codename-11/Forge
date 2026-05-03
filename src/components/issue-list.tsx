@@ -12,6 +12,7 @@ import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import type { SavedViewFilters } from "@/lib/saved-view-filters";
 
 const priorityGlyph: Record<string, string> = {
   URGENT: "!!!",
@@ -30,7 +31,9 @@ export function IssueList({
   query,
   cycleId,
   initiativeId,
+  extraFilters,
   emptyHint,
+  emptyOverride,
   enableBulk = true,
 }: {
   workspaceKey: string;
@@ -43,7 +46,20 @@ export function IssueList({
   cycleId?: string | null;
   /** Tri-state: `undefined` = any; `null` = no initiative; string = id. */
   initiativeId?: string | null;
+  /**
+   * Phase 1D saved-view filter projection. Spread into `issue.list` after
+   * the singleton legacy props so they remain authoritative. Use this
+   * instead of calling `issue.list` directly when the caller has a
+   * `SavedViewFilters` blob to apply.
+   */
+  extraFilters?: SavedViewFilters;
   emptyHint?: React.ReactNode;
+  /**
+   * When provided, replaces the default empty-state for this list. The
+   * /issues page passes a "no issues match this view" state when filters
+   * are active.
+   */
+  emptyOverride?: React.ReactNode;
   enableBulk?: boolean;
 }) {
   const { data, isLoading } = trpc.issue.list.useQuery({
@@ -54,6 +70,7 @@ export function IssueList({
     query,
     cycleId,
     initiativeId,
+    ...(extraFilters ?? {}),
   });
   const { data: statuses } = trpc.status.list.useQuery();
   const utils = trpc.useUtils();
@@ -158,6 +175,9 @@ export function IssueList({
   }
 
   if (filtered.length === 0) {
+    if (emptyOverride !== undefined) {
+      return <>{emptyOverride}</>;
+    }
     return (
       <div className="flex h-60 items-center justify-center">
         <EmptyState
