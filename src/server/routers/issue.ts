@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, Priority, RelationKind, WorkItemKind } from "@prisma/client";
+import { EventKind, Priority, RelationKind, StatusCategory, WorkItemKind } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { assertKeyScope, buildKeyScopeWhere } from "@/server/services/api-key-auth";
@@ -9,10 +9,12 @@ import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
 import { finishRunsForIssue, recordAgentAction } from "@/server/services/agent-run";
 import { agentId as agentIdSchema } from "./agent";
+import { UPDATED_SINCE_VALUES, updatedSinceToDate } from "@/lib/saved-view-filters";
 
 const cursorSchema = z.string().optional();
 
 const filterSchema = z.object({
+  // -- Singleton filters (kept for back-compat with existing call-sites). --
   projectId: z.string().cuid().optional(),
   statusId: z.string().cuid().optional(),
   assigneeId: z.string().cuid().optional(),
@@ -35,6 +37,28 @@ const filterSchema = z.object({
    * to pin; pass `null` to match issues with no agent assigned.
    */
   assignedAgentId: agentIdSchema.nullable().optional(),
+
+  // -- Array / projection filters (Phase 1D saved-views). --------------------
+  // Any-of semantics. AND'd with singleton equivalents above when both pass.
+  projectIds: z.array(z.string().cuid()).max(100).optional(),
+  statusIds: z.array(z.string().cuid()).max(100).optional(),
+  statusCategories: z.array(z.nativeEnum(StatusCategory)).max(8).optional(),
+  assigneeIds: z.array(z.string().cuid()).max(100).optional(),
+  labelIds: z.array(z.string().cuid()).max(100).optional(),
+  initiativeIds: z.array(z.string().cuid()).max(100).optional(),
+  cycleIds: z.array(z.string().cuid()).max(100).optional(),
+  priorities: z.array(z.nativeEnum(Priority)).max(8).optional(),
+  /** Match issues whose project has no initiative (or no project at all). */
+  withoutInitiative: z.boolean().optional(),
+  /** Match issues with no cycle assignment. */
+  withoutCycle: z.boolean().optional(),
+  /** Match issues with no human assignees AND no agent. */
+  unassigned: z.boolean().optional(),
+  /** Match issues blocked by an open dependency. */
+  blocked: z.boolean().optional(),
+  /** Window: only issues updated within the last N days. */
+  updatedSince: z.enum(UPDATED_SINCE_VALUES).optional(),
+
   limit: z.number().min(1).max(500).default(50),
   cursor: cursorSchema,
 });
@@ -47,7 +71,7 @@ export const issueRouter = router({
       // Compose optional OR clauses under AND so multiple predicates that
       // each need OR (query, initiativeId=null) don't clobber each other.
       const andClauses: Array<Record<string, unknown>> = [];
-      if (input.initiativeId === null) {
+      if (input.initiativeId === null || input.withoutInitiative === true) {
         andClauses.push({
           OR: [{ projectId: null }, { project: { initiativeId: null } }],
         });
@@ -60,15 +84,88 @@ export const issueRouter = router({
           ],
         });
       }
+
+      // `unassigned` = no human assignees AND no agent. Implemented as a
+      // single AND so it composes with explicit assigneeIds / assignedAgentId.
+      if (input.unassigned === true) {
+        andClauses.push({
+          AND: [{ assignees: { none: {} } }, { assignedAgentId: null }],
+        });
+      }
+
+      // Status: combine `statusIds[]` and `statusCategories[]` under OR
+      // when both are present so saved views can pin "any of {Backlog} OR
+      // exact id Foo" without needing two views. When only one is set we
+      // emit the simpler clause.
+      let statusClause: Record<string, unknown> | null = null;
+      if (input.statusIds?.length && input.statusCategories?.length) {
+        statusClause = {
+          OR: [
+            { statusId: { in: input.statusIds } },
+            { status: { category: { in: input.statusCategories } } },
+          ],
+        };
+      } else if (input.statusIds?.length) {
+        statusClause = { statusId: { in: input.statusIds } };
+      } else if (input.statusCategories?.length) {
+        statusClause = { status: { category: { in: input.statusCategories } } };
+      }
+      if (statusClause) andClauses.push(statusClause);
+
+      // Cycle: array form. The `withoutCycle` boolean appends a `cycleId
+      // IS NULL` branch under OR so a saved view can express "in sprint
+      // X OR uncycled" if it ever wants to. The single `cycleId` field
+      // (above) keeps prior behavior.
+      if (input.cycleIds?.length || input.withoutCycle === true) {
+        const ors: Array<Record<string, unknown>> = [];
+        if (input.cycleIds?.length) ors.push({ cycleId: { in: input.cycleIds } });
+        if (input.withoutCycle === true) ors.push({ cycleId: null });
+        andClauses.push({ OR: ors });
+      }
+
+      // Initiative array: joins through project.initiativeId. The
+      // `withoutInitiative` toggle is already handled above; this branch
+      // adds the explicit-id case.
+      if (input.initiativeIds?.length) {
+        andClauses.push({
+          project: { initiativeId: { in: input.initiativeIds } },
+        });
+      }
+
+      // `blocked: true` resolves the blocked-set up front and constrains
+      // the row id. Skipped when false/undefined to keep the unblocked
+      // path on a single query.
+      let blockedConstraint: Record<string, unknown> | null = null;
+      if (input.blocked === true) {
+        const blocked = await findBlockedIssueIds(ctx);
+        if (blocked.size === 0) {
+          // Nothing blocked → return early with an empty page.
+          return { items: [], nextCursor: undefined };
+        }
+        blockedConstraint = { id: { in: [...blocked] } };
+      }
+
       const rows = await ctx.db.issue.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           deletedAt: null,
           ...keyWhere,
           ...(input.projectId ? { projectId: input.projectId } : {}),
+          ...(input.projectIds?.length
+            ? { projectId: { in: input.projectIds } }
+            : {}),
           ...(input.statusId ? { statusId: input.statusId } : {}),
           ...(input.assigneeId ? { assignees: { some: { userId: input.assigneeId } } } : {}),
+          ...(input.assigneeIds?.length
+            ? { assignees: { some: { userId: { in: input.assigneeIds } } } }
+            : {}),
+          ...(input.labelIds?.length
+            ? { labels: { some: { labelId: { in: input.labelIds } } } }
+            : {}),
           ...(input.priority ? { priority: input.priority } : {}),
+          ...(input.priorities?.length
+            ? { priority: { in: input.priorities } }
+            : {}),
           ...(input.cycleId === null
             ? { cycleId: null }
             : input.cycleId
@@ -82,7 +179,11 @@ export const issueRouter = router({
             : input.assignedAgentId
               ? { assignedAgentId: input.assignedAgentId }
               : {}),
+          ...(input.updatedSince
+            ? { updatedAt: { gte: updatedSinceToDate(input.updatedSince) } }
+            : {}),
           ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
+          ...(blockedConstraint ?? {}),
           ...(andClauses.length ? { AND: andClauses } : {}),
         },
         take: input.limit + 1,
@@ -1006,6 +1107,78 @@ export const issueRouter = router({
         include: { status: true, project: true },
       });
       return { claimed: updated };
+    }),
+
+  /**
+   * Prev/next sibling lookup for the issue-detail keyboard nav (`[` / `]`).
+   * Siblings share the issue's project (when scope = "project") or its
+   * cycle (when scope = "cycle"); ordered by issue number ascending so
+   * the chevron walk reads in the natural identifier order
+   * (AXI-41 → AXI-42 → AXI-43). Soft-deleted issues are excluded on both
+   * sides. Returns `null` for either end when none exists. Tenant-scoped:
+   * a member can't peek into siblings of a different workspace.
+   *
+   * Why number, not createdAt: number is monotonic per workspace and is
+   * the visible identifier — users who hit `]` expect "the next one in
+   * the list" to match the issue key sequence they already see.
+   * `issue.list` orders by priority/createdAt for the queue surface, but
+   * a detail-page keyboard walk wants identifier order.
+   */
+  siblings: workspaceProcedure
+    .input(
+      z.object({
+        issueId: z.string().cuid(),
+        scope: z.enum(["project", "cycle"]),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const current = await ctx.db.issue.findFirst({
+        where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+        select: {
+          id: true,
+          number: true,
+          projectId: true,
+          cycleId: true,
+        },
+      });
+      if (!current) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const scopeWhere =
+        input.scope === "project"
+          ? { projectId: current.projectId ?? null }
+          : { cycleId: current.cycleId ?? null };
+
+      const baseWhere = {
+        workspaceId: ctx.workspaceId,
+        deletedAt: null,
+        ...scopeWhere,
+      } as const;
+
+      const [prev, next] = await Promise.all([
+        ctx.db.issue.findFirst({
+          where: { ...baseWhere, number: { lt: current.number } },
+          orderBy: { number: "desc" },
+          select: { id: true, number: true, title: true, workspace: { select: { key: true } } },
+        }),
+        ctx.db.issue.findFirst({
+          where: { ...baseWhere, number: { gt: current.number } },
+          orderBy: { number: "asc" },
+          select: { id: true, number: true, title: true, workspace: { select: { key: true } } },
+        }),
+      ]);
+
+      const shape = (
+        row: { id: string; number: number; title: string; workspace: { key: string } } | null,
+      ) =>
+        row
+          ? {
+              id: row.id,
+              key: `${row.workspace.key}-${row.number}`,
+              title: row.title,
+            }
+          : null;
+
+      return { prev: shape(prev), next: shape(next) };
     }),
 });
 

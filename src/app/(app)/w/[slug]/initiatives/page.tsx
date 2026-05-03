@@ -117,9 +117,10 @@ export default function InitiativesPage() {
             title="No initiatives yet"
             description={
               <span>
-                Initiatives group related projects under a strategic theme —
-                quarterly bets, epics, or long-lived programs. Press{" "}
-                <Kbd>⇧C</Kbd> to quick-create.
+                Initiatives group projects under a higher-level theme or
+                quarterly bet. Use them when several projects share a goal
+                you want to roll up at a glance. Press <Kbd>⇧C</Kbd> for
+                quick create.
               </span>
             }
             action={

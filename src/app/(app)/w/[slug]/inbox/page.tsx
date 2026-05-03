@@ -16,6 +16,7 @@ import {
 import { Topbar } from "@/components/topbar";
 import { Badge, Card, EmptyState, Kbd, MOTION, Section, SkeletonList } from "@/components/ui";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { ProjectChip } from "@/components/project-chip";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -191,6 +192,15 @@ export default function InboxPage() {
                 icon={<Sun />}
                 title="Inbox zero"
                 description="When someone @mentions you, assigns work, or replies to a thread you're following, it lands here."
+                action={
+                  <Link
+                    href={`/w/${workspace.slug}/dashboard`}
+                    className="text-meta inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                  >
+                    Browse suggestions in dashboard
+                    <ChevronRight className="h-3 w-3" />
+                  </Link>
+                }
               />
             </div>
           ) : (
@@ -231,6 +241,7 @@ export default function InboxPage() {
                           workspace: i.workspace,
                           status: { name: i.status.name, color: i.status.color },
                           updatedAt: i.updatedAt,
+                          project: i.project,
                         }}
                       />
                     ))
@@ -325,6 +336,7 @@ export default function InboxPage() {
                           workspace: i.workspace,
                           status: { name: i.status.name, color: i.status.color },
                           updatedAt: i.updatedAt,
+                          project: i.project,
                         }}
                         tone="warn"
                       />
@@ -504,7 +516,7 @@ type AgentQueueIssue = {
   claimExpiresAt: Date | string | null;
   unblocked: boolean;
   status: { name: string; color: string };
-  project: { key: string; color: string | null } | null;
+  project: { id: string; key: string; name: string; color: string | null } | null;
   claimedBy: { name: string | null; email: string | null } | null;
   assignedAgent: {
     id: string;
@@ -572,7 +584,16 @@ function AgentQueueSection({
                 </Link>
                 <Badge color={issue.status.color}>{issue.status.name}</Badge>
                 {issue.project && (
-                  <Badge color={issue.project.color ?? undefined}>{issue.project.key}</Badge>
+                  <ProjectChip
+                    project={{
+                      id: issue.project.id,
+                      key: issue.project.key,
+                      name: issue.project.name,
+                      color: issue.project.color,
+                    }}
+                    slug={slug}
+                    className="shrink-0 px-1.5 py-0.5"
+                  />
                 )}
               </div>
               <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[0.6875rem] text-muted-foreground">
@@ -658,6 +679,7 @@ function IssueRow({
     workspace: { slug: string; key: string };
     status: { name: string; color: string };
     updatedAt: Date | string;
+    project?: { id: string; key: string; name: string; color: string | null } | null;
   };
   tone?: "warn";
 }) {
@@ -668,11 +690,18 @@ function IssueRow({
         href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
         className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
       >
-        <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
+        <span className="text-id shrink-0 text-muted-foreground">
           {formatIssueId(issue.workspace.key, issue.number)}
         </span>
         <span className="truncate">{issue.title}</span>
       </Link>
+      {issue.project && (
+        <ProjectChip
+          project={issue.project}
+          slug={issue.workspace.slug}
+          className="shrink-0 px-1.5 py-0.5"
+        />
+      )}
       <span
         className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[0.6875rem]"
         style={{
@@ -684,7 +713,7 @@ function IssueRow({
       </span>
       <span
         className={cn(
-          "shrink-0 font-mono text-[0.6875rem]",
+          "text-meta shrink-0",
           tone === "warn" ? "text-danger" : "text-muted-foreground",
         )}
       >

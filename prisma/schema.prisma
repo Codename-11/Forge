@@ -307,6 +307,7 @@ model User {
   claimedIssues      Issue[]             @relation("IssueClaimedBy")
   recurringCreated   RecurringIssue[]    @relation("RecurringCreator")
   savedViews         SavedView[]
+  issueSavedViews    IssueSavedView[]
   timeEntries        TimeEntry[]
   chatThreads        ChatThread[]
   runtimes           Runtime[]
@@ -440,6 +441,11 @@ model Workspace {
   /// terminal category (DONE / CANCELED). Null disables — agents must
   /// transition client-side via statuses.list + issues.transition.
   startedStatusId            String?
+  /// Issues with `updatedAt` older than this threshold (in days) are
+  /// considered "stalled" by the dashboard suggestions bucket. Settings-
+  /// driven so admins can tune the workspace's idle definition without
+  /// editing handler code. 0 disables the bucket.
+  stalledThresholdDays       Int              @default(7)
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
   deletedAt                  DateTime?
@@ -463,6 +469,7 @@ model Workspace {
   projectTemplates   ProjectTemplate[]
   recurring          RecurringIssue[]
   savedViews         SavedView[]
+  issueSavedViews    IssueSavedView[]
   cycles             Cycle[]
   initiatives        Initiative[]
   issueRelations     IssueRelation[]
@@ -715,6 +722,35 @@ model SavedView {
   user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, userId])
+}
+
+/// Per-user issue saved view — distinct from the (legacy) SavedView model
+/// which mixes workspace-shared and user-private rows. Each row here is
+/// always owned by exactly one user; ordering is explicit via
+/// `orderIndex` so the UI can drag-reorder. The `filters` payload shape
+/// is opaque at the schema layer (a Phase 1 D-agent owns the zod for it)
+/// so future filter primitives don't require a migration.
+model IssueSavedView {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  name        String
+  /// Opaque filter blob. Shape lives client-side / in zod; the server
+  /// just round-trips it. See Phase 1 for the canonical schema.
+  filters     Json
+  /// Optional sort key the consuming list applies. Null = list default.
+  sortKey     String?
+  /// Lower = earlier in the saved-views list. Stable across mutates.
+  orderIndex  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId, name])
+  @@index([workspaceId, userId])
+  @@index([userId, orderIndex])
 }
 
 model IssueAssignee {

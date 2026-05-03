@@ -20,6 +20,11 @@ import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
 import { AiTriageCard } from "@/components/ai-triage-card";
+import { Breadcrumb } from "@/components/breadcrumb";
+import { ProjectChip } from "@/components/project-chip";
+import { InitiativeChip } from "@/components/initiative-chip";
+import { CycleChip } from "@/components/cycle-chip";
+import { IssueSiblingNav } from "@/components/issue-sibling-nav";
 import { useHotkey } from "@/lib/keyboard";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
@@ -47,6 +52,19 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const { data: members } = trpc.workspace.members.useQuery();
   const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
   const { data: allLabels } = trpc.label.list.useQuery();
+  // Phase 1B: surface project's linked initiative and the issue's cycle as
+  // chips. Both queries are skipped when the underlying id is null so we
+  // don't hit the server on issues that don't have either link.
+  const projectId = issue?.projectId ?? null;
+  const cycleId = issue?.cycleId ?? null;
+  const { data: linkedInitiative } = trpc.initiative.linkedFor.useQuery(
+    { projectId: projectId ?? "" },
+    { enabled: !!projectId, staleTime: 60_000 },
+  );
+  const { data: cycleData } = trpc.cycle.get.useQuery(
+    { id: cycleId ?? "" },
+    { enabled: !!cycleId, staleTime: 60_000 },
+  );
   const timePrefs = useTimePrefs();
   const utils = trpc.useUtils();
 
@@ -121,6 +139,33 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   // free for the user-assignee picker + as the `g a` nav leader second key.
   useHotkey("shift+a", () => setAgentPickerOpen(true), []);
 
+  // Phase 1B: sibling navigation. Scope picks which list defines siblings —
+  // project membership wins; cycle membership is the fallback for issues
+  // without a project. If neither, the nav is hidden and hotkeys no-op.
+  const siblingScope: "project" | "cycle" | null = projectId
+    ? "project"
+    : cycleId
+      ? "cycle"
+      : null;
+  const { data: siblings } = trpc.issue.siblings.useQuery(
+    { issueId: id, scope: siblingScope ?? "project" },
+    { enabled: !!siblingScope, staleTime: 30_000 },
+  );
+  useHotkey(
+    "[",
+    () => {
+      if (siblings?.prev) router.push(`/w/${slug}/issues/${siblings.prev.id}`);
+    },
+    [siblings?.prev?.id, slug],
+  );
+  useHotkey(
+    "]",
+    () => {
+      if (siblings?.next) router.push(`/w/${slug}/issues/${siblings.next.id}`);
+    },
+    [siblings?.next?.id, slug],
+  );
+
   if (error)
     return (
       <div className="flex flex-1 items-center justify-center p-8">
@@ -138,11 +183,31 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
   const issueKey = ws ? formatIssueId(ws.key, issue.number) : "Issue";
 
+  // Phase 1B: replace the title-only header with a real path. Project →
+  // issue when the issue is grouped; otherwise fall back to the issues
+  // index. The trailing issue-key segment is non-link (current page) and
+  // renders in mono via `BreadcrumbItem.mono`.
+  const breadcrumbItems = issue.project
+    ? [
+        { label: "Projects", href: `/w/${slug}/projects` },
+        {
+          label: issue.project.name,
+          href: `/w/${slug}/projects/${issue.project.id}`,
+        },
+        { label: issueKey, mono: true },
+      ]
+    : [
+        { label: "Issues", href: `/w/${slug}/issues` },
+        { label: issueKey, mono: true },
+      ];
+
   return (
     <>
       <Topbar
-        title={issueKey}
-        subtitle={<span className="font-mono text-[0.6875rem]">{issue.status.name}</span>}
+        title={
+          <Breadcrumb className="font-normal" items={breadcrumbItems} />
+        }
+        subtitle={<span className="font-mono">{issue.status.name}</span>}
         actions={
           <>
             <PinToggleButton issueId={issue.id} />
@@ -164,7 +229,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
       <IssueDetailTopbar
         left={
           <>
-            <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">{issueKey}</span>
+            <span className="text-id shrink-0 text-muted-foreground">{issueKey}</span>
             {issue.attachments.length > 0 && (
               <button
                 type="button"
@@ -180,10 +245,38 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 className="focus-ring inline-flex shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-muted-foreground hover:bg-subtle/60 hover:text-foreground"
               >
                 <Paperclip className="h-3 w-3" />
-                <span className="font-mono text-[0.6875rem]">
-                  {issue.attachments.length}
-                </span>
+                <span className="text-id">{issue.attachments.length}</span>
               </button>
+            )}
+            {issue.project && (
+              <ProjectChip
+                project={{
+                  id: issue.project.id,
+                  key: issue.project.key,
+                  name: issue.project.name,
+                  color: issue.project.color,
+                  icon: issue.project.icon,
+                }}
+              />
+            )}
+            {linkedInitiative?.initiative && (
+              <InitiativeChip
+                initiative={{
+                  id: linkedInitiative.initiative.id,
+                  slug: linkedInitiative.initiative.slug,
+                  name: linkedInitiative.initiative.name,
+                  status: linkedInitiative.initiative.status,
+                }}
+              />
+            )}
+            {cycleData && (
+              <CycleChip
+                cycle={{
+                  id: cycleData.id,
+                  name: cycleData.name,
+                  status: cycleData.status,
+                }}
+              />
             )}
             {editingTitle ? (
               <form
@@ -250,6 +343,11 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             />
             <AgentChip current={issue.assignedAgent} onOpen={() => setAgentPickerOpen(true)} />
           </div>
+        }
+        actions={
+          siblingScope ? (
+            <IssueSiblingNav issueId={issue.id} scope={siblingScope} />
+          ) : null
         }
       />
 

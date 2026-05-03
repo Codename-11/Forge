@@ -1,8 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useMemo } from "react";
 import { InitiativeStatus } from "@prisma/client";
-import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { MOTION } from "@/lib/motion";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -11,8 +9,9 @@ import { useWorkspace } from "@/hooks/use-workspace";
  * Single-initiative card used on the list page. Shows name, color dot,
  * target date, linked project count, and rolled-up issue completion.
  *
- * Completion rollup queries `issue.list` filtered to this initiative —
- * keeps the router simple and lets the tRPC cache serve repeat renders.
+ * Counts come pre-rolled from `initiative.list` (Phase 1D) — no per-
+ * card `issue.list` roundtrip. Cards render synchronously with the rest
+ * of the grid and don't churn the tRPC cache when the list grows.
  */
 export function InitiativeCard({
   initiative,
@@ -30,7 +29,12 @@ export function InitiativeCard({
     targetDate: Date | string | null;
     color: string | null;
     status: InitiativeStatus;
-    _count: { projects: number };
+    /**
+     * `issues` and `doneIssues` are projected by `initiative.list`. They
+     * fall back to 0 so this component still renders if a caller
+     * supplies a partial shape (legacy `initiative.get` etc.).
+     */
+    _count: { projects: number; issues?: number; doneIssues?: number };
   };
   draggable?: boolean;
   onDragStart?: (id: string) => void;
@@ -39,22 +43,9 @@ export function InitiativeCard({
   isDragTarget?: boolean;
 }) {
   const ws = useWorkspace();
-  const { data: issues } = trpc.issue.list.useQuery(
-    { initiativeId: initiative.id, includeDone: true, limit: 100 },
-    { enabled: initiative._count.projects > 0 },
-  );
-
-  const stats = useMemo(() => {
-    const items = issues?.items ?? [];
-    const done = items.filter(
-      (i) =>
-        i.status.category === "DONE" || i.status.category === "CANCELED",
-    ).length;
-    return { done, total: items.length };
-  }, [issues]);
-
-  const completion =
-    stats.total === 0 ? 0 : Math.round((stats.done / stats.total) * 100);
+  const total = initiative._count.issues ?? 0;
+  const done = initiative._count.doneIssues ?? 0;
+  const completion = total === 0 ? 0 : Math.round((done / total) * 100);
 
   return (
     <Link
@@ -94,15 +85,15 @@ export function InitiativeCard({
           {initiative.description}
         </p>
       )}
-      <div className="mt-3 flex items-center gap-3 text-[0.6875rem] text-muted-foreground">
+      <div className="text-meta mt-3 flex items-center gap-3 text-muted-foreground">
         <span>
           {initiative._count.projects} project
           {initiative._count.projects === 1 ? "" : "s"}
         </span>
         <span>·</span>
         <span>
-          {stats.total > 0
-            ? `${stats.done}/${stats.total} · ${completion}%`
+          {total > 0
+            ? `${done}/${total} · ${completion}%`
             : "no issues yet"}
         </span>
         {initiative.targetDate && (
