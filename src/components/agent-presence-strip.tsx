@@ -140,9 +140,9 @@ export default function AgentPresenceStrip() {
           : null;
         const beatTitle =
           severity === "critical"
-            ? `No heartbeat in ${beatAgeMin ?? "?"}m — agent may be down (threshold: ${criticalMinutes}m)`
+            ? `Last heartbeat ${beatAgeMin ?? "?"} min ago — critical threshold ${criticalMinutes}m`
             : severity === "warn"
-              ? `No heartbeat in ${beatAgeMin ?? "?"}m — runtime may be lagging (threshold: ${warnMinutes}m)`
+              ? `Last heartbeat ${beatAgeMin ?? "?"} min ago — warn threshold ${warnMinutes}m`
               : undefined;
 
         return (

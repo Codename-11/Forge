@@ -710,20 +710,25 @@ function BulkBar({
         <button
           type="button"
           onClick={onClear}
+          title="Clear selection (Esc)"
           className="text-meta inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
         >
           <X className="h-3 w-3" />
           Clear selection
         </button>
+        <span className="text-meta hidden items-center gap-1 text-muted-foreground/70 sm:inline-flex">
+          <Kbd>x</Kbd> select · <Kbd>Esc</Kbd> clear
+        </span>
         <div className="ml-auto flex items-center gap-1.5">
           <button
             type="button"
             disabled={disabled}
             onClick={onMarkRead}
+            title="Mark read"
             className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50"
           >
             <CheckCheck className="h-3 w-3" />
-            Mark read
+            Mark read ({count})
           </button>
           <SnoozeMenu
             onSelect={onSnooze}
@@ -731,6 +736,7 @@ function BulkBar({
               <button
                 type="button"
                 disabled={disabled}
+                title="Snooze selected"
                 className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50"
               >
                 <CalendarClock className="h-3 w-3" />
@@ -742,6 +748,7 @@ function BulkBar({
             type="button"
             disabled={disabled}
             onClick={onReassign}
+            title="Reassign selected"
             className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50"
           >
             <UserCircle2 className="h-3 w-3" />
@@ -750,6 +757,7 @@ function BulkBar({
           <button
             type="button"
             onClick={onClear}
+            title="Clear selection (Esc)"
             className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
           >
             <Kbd>Esc</Kbd>
@@ -772,7 +780,7 @@ type StalledIssueRow = {
   updatedAt: Date | string;
   snoozedUntil?: Date | string | null;
   workspace: { slug: string; key: string };
-  status: { id?: string; name: string; color: string };
+  status: { id?: string; name: string; color: string; category?: string };
   project: { id: string; key: string; name: string; color: string | null } | null;
   assignedAgent?: {
     id: string;
@@ -964,6 +972,11 @@ function IssueRow({
           backgroundColor: `${issue.status.color}22`,
           color: issue.status.color,
         }}
+        title={
+          issue.status.category
+            ? `${issue.status.name} · ${issue.status.category}`
+            : issue.status.name
+        }
       >
         {issue.status.name}
       </span>
@@ -1041,8 +1054,23 @@ function SnoozedSection({
               <span className="truncate">{i.title}</span>
             </Link>
             {i.snoozedUntil && (
-              <span className="text-meta shrink-0 text-muted-foreground">
-                until {relativeTime(i.snoozedUntil)}
+              <span
+                className="text-meta shrink-0 text-muted-foreground"
+                title={`Snoozed until ${new Date(
+                  i.snoozedUntil,
+                ).toLocaleString(undefined, {
+                  weekday: "short",
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                })}`}
+              >
+                until{" "}
+                {new Date(i.snoozedUntil).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}
               </span>
             )}
             <button
@@ -1340,7 +1368,10 @@ function AssigneePickerModal({
 
 function NewBadge({ count }: { count: number }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-ember/30 bg-ember/10 px-1.5 py-0 text-[0.625rem] font-medium uppercase tracking-wider text-ember">
+    <span
+      title={`${count} item${count === 1 ? "" : "s"} updated since your last visit`}
+      className="inline-flex items-center gap-1 rounded-full border border-ember/30 bg-ember/10 px-1.5 py-0 text-[0.625rem] font-medium uppercase tracking-wider text-ember"
+    >
       {count} new
     </span>
   );
@@ -1349,8 +1380,7 @@ function NewBadge({ count }: { count: number }) {
 function NewDot() {
   return (
     <span
-      aria-hidden
-      title="New since your last visit"
+      title="Updated since your last visit"
       className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-ember"
     />
   );

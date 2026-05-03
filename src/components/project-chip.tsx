@@ -86,7 +86,7 @@ export function ProjectChip({
   }
 
   return (
-    <Link href={href} className={chipClass} title={`${project.key} · ${project.name}`}>
+    <Link href={href} className={chipClass} title={`${project.name} (open in project)`}>
       {body}
     </Link>
   );

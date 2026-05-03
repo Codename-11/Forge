@@ -69,6 +69,7 @@ export function DispatchReasonChip({
         type="button"
         aria-label="Show dispatch reason"
         aria-expanded={open}
+        title={`Dispatched to @${reason.picked} — ${reason.reasonText}`}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();

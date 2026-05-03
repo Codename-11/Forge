@@ -114,6 +114,11 @@ export function SnoozeMenu({
         <button
           type="button"
           aria-label={isSnoozed ? "Edit snooze" : "Snooze"}
+          title={
+            isSnoozed && snoozedDate
+              ? `Snoozed until ${formatLongDate(snoozedDate)}`
+              : "Snooze"
+          }
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={(e) => {
