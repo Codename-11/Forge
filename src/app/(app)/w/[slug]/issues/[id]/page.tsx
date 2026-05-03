@@ -16,6 +16,7 @@ import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { PinToggleButton } from "@/components/pins/pin-toggle-button";
+import { PinButton } from "@/components/pins/pin-button";
 import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
@@ -142,6 +143,20 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   // Capital A opens the agent picker. Lowercase `a` is intentionally left
   // free for the user-assignee picker + as the `g a` nav leader second key.
   useHotkey("shift+a", () => setAgentPickerOpen(true), []);
+
+  // Phase 1C — record this visit so it surfaces in the command palette's
+  // Recents rail. Server-side debounced 5s; the keyed effect re-fires
+  // when the user navigates to a different issue inside this same mount
+  // (sibling-nav with `[`/`]`).
+  const trackM = trpc.recentItem.track.useMutation();
+  useEffect(() => {
+    if (issue?.id) {
+      trackM.mutate({ targetType: "ISSUE", targetId: issue.id });
+    }
+    // trackM is a tRPC mutation handle — stable across renders. Including
+    // it would loop on every re-render via the useMutation identity churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [issue?.id]);
 
   // Phase 1B: sibling navigation. Scope picks which list defines siblings —
   // project membership wins; cycle membership is the fallback for issues
@@ -291,6 +306,17 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               const reason = coerceDispatchReason(issue.dispatchReason);
               return reason ? <DispatchReasonChip reason={reason} /> : null;
             })()}
+            {/* Phase 1A: per-workspace pin toggle. Lives next to the
+                chip cluster so it visually groups with the issue's other
+                metadata. The legacy `<PinToggleButton>` higher up in the
+                Topbar actions still drives the cross-workspace strip
+                (issue-only, p shortcut). */}
+            <PinButton
+              targetType="ISSUE"
+              targetId={issue.id}
+              workspaceId={workspace.id}
+            />
+
             {editingTitle ? (
               <form
                 onSubmit={(e) => {

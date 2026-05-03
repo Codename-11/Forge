@@ -2461,19 +2461,24 @@ export const mcpTools = {
   },
 
   // -------------------------------------------------------------------- Pins
+  // Backed by the polymorphic Pin table (migration 0023). The legacy
+  // shape — flat ordered list of accessible Issue rows — is preserved
+  // by filtering Pin to `workspaceId IS NULL, targetType = 'ISSUE'`,
+  // which is what the cross-workspace topbar strip and Hermes consume.
   "pins.list": {
     scopes: ["READ_ISSUES"] as const,
     input: z.object({}).default({}),
     async run(_: unknown, ctx: McpContext) {
       const userId = await resolveActorId(ctx);
-      const user = await db.user.findUniqueOrThrow({
-        where: { id: userId },
-        select: { pinnedIssueIds: true },
+      const pins = await db.pin.findMany({
+        where: { userId, workspaceId: null, targetType: "ISSUE" },
+        orderBy: [{ orderIndex: "asc" }, { createdAt: "asc" }],
+        select: { targetId: true },
       });
-      if (user.pinnedIssueIds.length === 0) return [];
+      if (pins.length === 0) return [];
       const issues = await db.issue.findMany({
         where: {
-          id: { in: user.pinnedIssueIds },
+          id: { in: pins.map((p) => p.targetId) },
           deletedAt: null,
           workspace: {
             deletedAt: null,
@@ -2492,8 +2497,8 @@ export const mcpTools = {
         },
       });
       const byId = new Map(issues.map((i) => [i.id, i]));
-      return user.pinnedIssueIds
-        .map((id) => byId.get(id))
+      return pins
+        .map((p) => byId.get(p.targetId))
         .filter((x): x is NonNullable<typeof x> => x !== undefined);
     },
   },
@@ -2525,9 +2530,21 @@ export const mcpTools = {
           throw new Error("One or more pinned issues are not accessible.");
         }
       }
-      await db.user.update({
-        where: { id: userId },
-        data: { pinnedIssueIds: ids },
+      await db.$transaction(async (tx) => {
+        await tx.pin.deleteMany({
+          where: { userId, workspaceId: null, targetType: "ISSUE" },
+        });
+        if (ids.length > 0) {
+          await tx.pin.createMany({
+            data: ids.map((id, i) => ({
+              userId,
+              workspaceId: null,
+              targetType: "ISSUE" as const,
+              targetId: id,
+              orderIndex: i,
+            })),
+          });
+        }
       });
       return { pinnedIssueIds: ids };
     },

@@ -131,6 +131,20 @@ enum ChatRole {
   SYSTEM
 }
 
+/// Polymorphic target for personal pins + recent-item tracking.
+/// Each value names an entity kind in the system that can be pinned
+/// to the sidebar or surfaced in the recent-items rail. Adding a
+/// new value requires a Pin/RecentItem hydration branch in the
+/// corresponding router.
+enum PinTargetType {
+  ISSUE
+  PROJECT
+  INITIATIVE
+  SAVED_VIEW
+  CYCLE
+  AGENT
+}
+
 enum NotificationSeverity {
   INFO
   SUCCESS
@@ -293,8 +307,6 @@ model User {
   textSize               String?
   /// Workspace id remembered across logins; UI loads this one by default.
   lastWorkspaceId        String?
-  /// Ordered list of pinned issue ids (max 3 enforced server-side).
-  pinnedIssueIds         String[]  @default([])
   /// Server-persisted onboarding state. Null = not dismissed; the
   /// localStorage flag (browser-scoped) controls the per-session
   /// resume-pill behavior. When set, the OnboardingCard is hidden
@@ -332,6 +344,8 @@ model User {
   chatThreads          ChatThread[]
   runtimes             Runtime[]
   controlRequestedRuns AgentRun[]          @relation("AgentRunControlRequester")
+  pins                 Pin[]
+  recentItems          RecentItem[]
 
   @@index([handle])
 }
@@ -511,6 +525,8 @@ model Workspace {
   chatThreads        ChatThread[]
   chatMessages       ChatMessage[]
   runtimes           Runtime[]
+  pins               Pin[]
+  recentItems        RecentItem[]
   startedStatus      Status?             @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
@@ -1480,4 +1496,61 @@ model ChatMessage {
 
   @@index([threadId, createdAt])
   @@index([workspaceId, createdAt])
+}
+
+// ----------------------------------------------------------------------------
+// Pinning + recents (per-user UX surfaces)
+// ----------------------------------------------------------------------------
+
+/// Polymorphic per-user pin. Replaces the legacy `User.pinnedIssueIds`
+/// string-array column (dropped in migration 0023). Each row pins one
+/// entity (Issue / Project / Initiative / SavedView / Cycle / Agent)
+/// for the owning user.
+///
+/// `workspaceId` is nullable — null means a "cross-workspace" pin
+/// (the existing topbar-strip semantic where the user pinned an issue
+/// from any workspace they're in). Non-null means the pin is scoped
+/// to that workspace's sidebar.
+///
+/// `targetId` is intentionally NOT a foreign key — the table is
+/// polymorphic across multiple targetType tables. Hydration in the
+/// pin router silently skips dead targets so soft-deleted rows stay
+/// inert without breaking listings.
+model Pin {
+  id          String        @id @default(cuid())
+  userId      String
+  workspaceId String?
+  targetType  PinTargetType
+  targetId    String
+  /// Lower = earlier in the rendered pin list. Stable across mutates
+  /// within a (userId, workspaceId) scope.
+  orderIndex  Int           @default(0)
+  createdAt   DateTime      @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId, targetType, targetId])
+  @@index([userId, workspaceId, orderIndex])
+  @@index([userId, targetType, targetId])
+}
+
+/// LRU-ish per-(user, workspace, target) recent-item record. Upserted
+/// on every visit; `visitedAt` becomes the recency key. Used by the
+/// command palette empty-state and the recent-items rail. Server-side
+/// debounce skips re-upserts within 5 seconds to keep navigations
+/// from spamming writes.
+model RecentItem {
+  id          String        @id @default(cuid())
+  userId      String
+  workspaceId String
+  targetType  PinTargetType
+  targetId    String
+  visitedAt   DateTime      @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId, targetType, targetId])
+  @@index([userId, workspaceId, visitedAt(sort: Desc)])
 }

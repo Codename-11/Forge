@@ -1,5 +1,5 @@
 "use client";
-import { use, useMemo, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { Confirm } from "@/components/ui/modal";
 import { ProjectChip } from "@/components/project-chip";
+import { PinButton } from "@/components/pins/pin-button";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -87,6 +88,16 @@ export default function InitiativeDetailPage({
   const [descDraft, setDescDraft] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
 
+  // Phase 1C — record this visit so it surfaces in the command palette's
+  // Recents rail. Server-side debounced 5s.
+  const trackM = trpc.recentItem.track.useMutation();
+  useEffect(() => {
+    if (initiative?.id) {
+      trackM.mutate({ targetType: "INITIATIVE", targetId: initiative.id });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initiative?.id]);
+
   const stats = useMemo(() => {
     const items = rolledIssues?.items ?? [];
     const done = items.filter(
@@ -155,6 +166,11 @@ export default function InitiativeDetailPage({
         subtitle={initiative.slug}
         actions={
           <>
+            <PinButton
+              targetType="INITIATIVE"
+              targetId={initiative.id}
+              workspaceId={ws.id}
+            />
             <Button
               variant="ghost"
               size="sm"

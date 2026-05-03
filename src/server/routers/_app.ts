@@ -29,6 +29,8 @@ import { inboxRouter } from "./inbox";
 import { initiativeRouter } from "./initiative";
 import { notificationRouter } from "./notification";
 import { pinRouter } from "./pin";
+import { recentItemRouter } from "./recent-item";
+import { commandPaletteRouter } from "./command-palette";
 import { relationRouter } from "./relation";
 import { runtimeRouter } from "./runtime";
 import { timeEntryRouter } from "./timeEntry";
@@ -55,6 +57,8 @@ export const appRouter = router({
   issue: issueRouter,
   label: labelRouter,
   pin: pinRouter,
+  recentItem: recentItemRouter,
+  commandPalette: commandPaletteRouter,
   plugin: pluginRouter,
   project: projectRouter,
   projectTemplate: projectTemplateRouter,

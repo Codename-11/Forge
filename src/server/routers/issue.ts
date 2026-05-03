@@ -1540,6 +1540,305 @@ export const issueRouter = router({
         return { ok: true, commentId: comment.id, daysSinceUpdate: daysSince };
       });
     }),
+
+  /**
+   * Bulk status transition. Distinct from the legacy `bulkStatus`
+   * (which is a thin `updateMany` with no audit/event side effects).
+   * Fires `recordChange(ISSUE_STATUS_CHANGED)` per row so subscribers
+   * (webhooks, dispatch escalation, agent run lifecycle) react the
+   * same way they would for single-issue transitions. Honors
+   * lifecycle timestamps (`startedAt`, `completedAt`, `canceledAt`)
+   * based on the destination category, mirroring the single-issue
+   * `update` proc.
+   */
+  bulkTransition: workspaceProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string().cuid()).max(500),
+        statusId: z.string().cuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.ids.length === 0) return { updated: 0 };
+      // Tenant-scope guard for the destination status.
+      const status = await ctx.db.status.findFirst({
+        where: { id: input.statusId, workspaceId: ctx.workspaceId },
+        select: { id: true, category: true },
+      });
+      if (!status) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Status not found in this workspace.",
+        });
+      }
+
+      return ctx.db.$transaction(async (tx) => {
+        const issues = await tx.issue.findMany({
+          where: {
+            id: { in: input.ids },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: {
+            id: true,
+            statusId: true,
+            startedAt: true,
+            completedAt: true,
+            canceledAt: true,
+          },
+        });
+        // Skip rows already in this status — no-op transitions shouldn't
+        // emit audit/event noise.
+        const moving = issues.filter((i) => i.statusId !== input.statusId);
+        if (moving.length === 0) return { updated: 0 };
+
+        const lifecyclePatch: {
+          startedAt?: Date | null;
+          completedAt?: Date | null;
+          canceledAt?: Date | null;
+        } = {};
+        // For DONE/CANCELED, set the appropriate stamp. Per-row branch:
+        // updateMany doesn't support per-row conditional writes for
+        // startedAt (only set when null), so we apply it row-by-row in
+        // the audit loop and use updateMany only for the constant fields.
+        if (status.category === "DONE") lifecyclePatch.completedAt = new Date();
+        if (status.category === "CANCELED") lifecyclePatch.canceledAt = new Date();
+        if (status.category !== "DONE") lifecyclePatch.completedAt = null;
+        if (status.category !== "CANCELED") lifecyclePatch.canceledAt = null;
+
+        await tx.issue.updateMany({
+          where: { id: { in: moving.map((i) => i.id) }, workspaceId: ctx.workspaceId },
+          data: { statusId: input.statusId, ...lifecyclePatch },
+        });
+
+        // startedAt is conditional ("only set when null") — handled per
+        // row so we don't reset an already-running issue's clock.
+        if (status.category === "IN_PROGRESS") {
+          for (const row of moving) {
+            if (!row.startedAt) {
+              await tx.issue.update({
+                where: { id: row.id },
+                data: { startedAt: new Date() },
+              });
+            }
+          }
+        }
+
+        const CHUNK = 50;
+        for (let i = 0; i < moving.length; i += CHUNK) {
+          const chunk = moving.slice(i, i + CHUNK);
+          for (const row of chunk) {
+            await recordChange(tx, {
+              workspaceId: ctx.workspaceId,
+              actorId: ctx.session.user.id,
+              entity: "Issue",
+              entityId: row.id,
+              action: "bulk-transition",
+              before: { statusId: row.statusId },
+              after: { statusId: input.statusId },
+              eventKind: EventKind.ISSUE_STATUS_CHANGED,
+              subjectType: "issue",
+              subjectId: row.id,
+              payload: {
+                statusId: input.statusId,
+                previousStatusId: row.statusId,
+              },
+              ip: ctx.ip,
+              userAgent: ctx.userAgent,
+            });
+          }
+        }
+
+        return { updated: moving.length };
+      });
+    }),
+
+  /**
+   * Bulk add a single label to many issues. Idempotent — issues that
+   * already carry the label are skipped (composite @@id on IssueLabel
+   * + skipDuplicates). Fires ISSUE_UPDATED audit per row; we don't
+   * have a dedicated `ISSUE_LABEL_ADDED` enum value, so subscribers
+   * key off the action="bulk-add-label" + payload.labelId pair, same
+   * as `bulkSetLabels` does.
+   */
+  bulkAddLabel: workspaceProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string().cuid()).max(500),
+        labelId: z.string().cuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.ids.length === 0) return { updated: 0, added: 0 };
+      const label = await ctx.db.label.findFirst({
+        where: { id: input.labelId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!label) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Label not found in this workspace.",
+        });
+      }
+      return ctx.db.$transaction(async (tx) => {
+        const issues = await tx.issue.findMany({
+          where: {
+            id: { in: input.ids },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true },
+        });
+        const validIds = issues.map((i) => i.id);
+        if (validIds.length === 0) return { updated: 0, added: 0 };
+
+        const res = await tx.issueLabel.createMany({
+          data: validIds.map((issueId) => ({ issueId, labelId: input.labelId })),
+          skipDuplicates: true,
+        });
+
+        const CHUNK = 50;
+        for (let i = 0; i < validIds.length; i += CHUNK) {
+          const chunk = validIds.slice(i, i + CHUNK);
+          for (const issueId of chunk) {
+            await recordChange(tx, {
+              workspaceId: ctx.workspaceId,
+              actorId: ctx.session.user.id,
+              entity: "Issue",
+              entityId: issueId,
+              action: "bulk-add-label",
+              after: { labelId: input.labelId },
+              eventKind: EventKind.ISSUE_UPDATED,
+              subjectType: "issue",
+              subjectId: issueId,
+              payload: { labelId: input.labelId, op: "add" },
+              ip: ctx.ip,
+              userAgent: ctx.userAgent,
+            });
+          }
+        }
+        return { updated: validIds.length, added: res.count };
+      });
+    }),
+
+  /**
+   * Bulk remove a single label from many issues. Mirror of
+   * `bulkAddLabel` for the inverse operation.
+   */
+  bulkRemoveLabel: workspaceProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string().cuid()).max(500),
+        labelId: z.string().cuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.ids.length === 0) return { updated: 0, removed: 0 };
+      const label = await ctx.db.label.findFirst({
+        where: { id: input.labelId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!label) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Label not found in this workspace.",
+        });
+      }
+      return ctx.db.$transaction(async (tx) => {
+        const issues = await tx.issue.findMany({
+          where: {
+            id: { in: input.ids },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true },
+        });
+        const validIds = issues.map((i) => i.id);
+        if (validIds.length === 0) return { updated: 0, removed: 0 };
+
+        const res = await tx.issueLabel.deleteMany({
+          where: {
+            issueId: { in: validIds },
+            labelId: input.labelId,
+          },
+        });
+
+        const CHUNK = 50;
+        for (let i = 0; i < validIds.length; i += CHUNK) {
+          const chunk = validIds.slice(i, i + CHUNK);
+          for (const issueId of chunk) {
+            await recordChange(tx, {
+              workspaceId: ctx.workspaceId,
+              actorId: ctx.session.user.id,
+              entity: "Issue",
+              entityId: issueId,
+              action: "bulk-remove-label",
+              before: { labelId: input.labelId },
+              eventKind: EventKind.ISSUE_UPDATED,
+              subjectType: "issue",
+              subjectId: issueId,
+              payload: { labelId: input.labelId, op: "remove" },
+              ip: ctx.ip,
+              userAgent: ctx.userAgent,
+            });
+          }
+        }
+        return { updated: validIds.length, removed: res.count };
+      });
+    }),
+
+  /**
+   * Bulk archive (soft-delete) many issues. The Issue schema uses
+   * `deletedAt` for soft-delete (no `archivedAt` column on Issue), so
+   * "archive" here is the same column the single-issue `softDelete`
+   * proc writes to. Per-row ISSUE_DELETED audit fires so subscribers
+   * downstream see each issue go away independently.
+   */
+  bulkArchive: workspaceProcedure
+    .input(z.object({ ids: z.array(z.string().cuid()).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.ids.length === 0) return { updated: 0 };
+      return ctx.db.$transaction(async (tx) => {
+        const issues = await tx.issue.findMany({
+          where: {
+            id: { in: input.ids },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true },
+        });
+        const validIds = issues.map((i) => i.id);
+        if (validIds.length === 0) return { updated: 0 };
+
+        const now = new Date();
+        await tx.issue.updateMany({
+          where: { id: { in: validIds }, workspaceId: ctx.workspaceId },
+          data: { deletedAt: now },
+        });
+
+        const CHUNK = 50;
+        for (let i = 0; i < validIds.length; i += CHUNK) {
+          const chunk = validIds.slice(i, i + CHUNK);
+          for (const issueId of chunk) {
+            await recordChange(tx, {
+              workspaceId: ctx.workspaceId,
+              actorId: ctx.session.user.id,
+              entity: "Issue",
+              entityId: issueId,
+              action: "bulk-archive",
+              after: { deletedAt: now },
+              eventKind: EventKind.ISSUE_DELETED,
+              subjectType: "issue",
+              subjectId: issueId,
+              payload: { archivedAt: now.toISOString() },
+              ip: ctx.ip,
+              userAgent: ctx.userAgent,
+            });
+          }
+        }
+        return { updated: validIds.length };
+      });
+    }),
 });
 
 // -- Helpers ----------------------------------------------------------------

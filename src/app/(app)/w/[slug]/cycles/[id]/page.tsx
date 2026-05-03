@@ -1,5 +1,5 @@
 "use client";
-import { use } from "react";
+import { use, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
@@ -8,6 +8,7 @@ import { EmptyState, SkeletonList } from "@/components/ui";
 import { CycleSummaryCard } from "@/components/cycles/cycle-summary-card";
 import { CyclePlanningBoard } from "@/components/cycles/cycle-planning-board";
 import { CycleBacklogPanel } from "@/components/cycles/cycle-backlog-panel";
+import { PinButton } from "@/components/pins/pin-button";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -44,6 +45,16 @@ export default function CycleDetailPage({ params }: { params: Promise<{ id: stri
     onError: (e) => toast.error(e.message),
   });
 
+  // Phase 1C — record this visit so it surfaces in the command palette's
+  // Recents rail. Server-side debounced 5s.
+  const trackM = trpc.recentItem.track.useMutation();
+  useEffect(() => {
+    if (cycle?.id) {
+      trackM.mutate({ targetType: "CYCLE", targetId: cycle.id });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cycle?.id]);
+
   if (error) {
     return (
       <div className="flex h-full items-center justify-center p-8">
@@ -73,9 +84,16 @@ export default function CycleDetailPage({ params }: { params: Promise<{ id: stri
         title={cycle.name}
         subtitle={cycle.status}
         actions={
-          <Button variant="ghost" size="sm" onClick={() => router.push(`/w/${ws.slug}/cycles`)}>
-            All sprints
-          </Button>
+          <>
+            <PinButton
+              targetType="CYCLE"
+              targetId={cycle.id}
+              workspaceId={ws.id}
+            />
+            <Button variant="ghost" size="sm" onClick={() => router.push(`/w/${ws.slug}/cycles`)}>
+              All sprints
+            </Button>
+          </>
         }
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">

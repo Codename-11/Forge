@@ -6,6 +6,8 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Confirm, QuickForm } from "@/components/ui/modal";
+import { PinButton } from "@/components/pins/pin-button";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import {
   isEmptyFilters,
   safeParseFilters,
@@ -39,6 +41,7 @@ export function SavedViewsBar({
   onCreate: () => void;
 }) {
   const utils = trpc.useUtils();
+  const ws = useMaybeWorkspace();
   const { data: views } = trpc.savedView.list.useQuery();
 
   const update = trpc.savedView.update.useMutation({
@@ -195,6 +198,19 @@ export function SavedViewsBar({
                         {v.name}
                       </span>
                     </button>
+                    {/* Phase 1A: per-workspace pin toggle. Lives between
+                        the chip body and the ⋯ menu so it's discoverable
+                        without expanding the menu. Skipped when the
+                        workspace context isn't available (e.g. SSR
+                        previews). */}
+                    {ws && (
+                      <PinButton
+                        targetType="SAVED_VIEW"
+                        targetId={v.id}
+                        workspaceId={ws.id}
+                        className="ml-0.5 h-6 w-5 rounded-full"
+                      />
+                    )}
                     <button
                       type="button"
                       onClick={(e) => {

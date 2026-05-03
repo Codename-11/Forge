@@ -2,6 +2,106 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-03 — feat(ui): pinning + bulk actions + command palette (multi-agent)
+
+Follow-up after the inbox/agents/stalled revamp + tooltip polish landed.
+Audit identified pinning was issue-only (max 3, stored as
+`User.pinnedIssueIds string[]`), `/issues` had no bulk-select, and there
+was no command-palette / quick-switcher / recent-items tracking. Same
+multi-agent shape: Phase 0 sequential (committed on master to dodge the
+worktree-base race), Phase 1A/B/C parallel worktrees, Phase 2 squash.
+
+### Shape
+
+- **Pinning** — polymorphic `Pin { userId, workspaceId?, targetType,
+  targetId, orderIndex }` with target enum
+  `ISSUE | PROJECT | INITIATIVE | SAVED_VIEW | CYCLE | AGENT`. Migration
+  backfills `User.pinnedIssueIds` into `Pin` rows
+  (workspaceId=NULL, targetType=ISSUE, ordered) then drops the array
+  column. **Legacy MCP backward-compat preserved** — `pin.list`,
+  `pin.set`, `pin.toggle` keep their old issue-only signatures, just
+  re-implemented on top of the new table; new generic procs ship
+  alongside as `pin.listAll`, `pin.toggleEntity`, `pin.add`,
+  `pin.remove`, `pin.reorder`. Hermes runtime + MCP tools keep working.
+- **Pin surfaces** — sidebar gains a "Pinned" section above the
+  Docs/Settings footer, conditionally rendered (no eyebrow on a fresh
+  workspace). Topbar pin strip refactored to render six type-specific
+  chip variants (issue, project, initiative, saved-view, cycle, agent),
+  3-pin cap kept. `<PinButton />` on issue detail topbar (per-workspace
+  pin), project header, initiative header, cycle header, saved-view
+  chip, agent presence card.
+- **Bulk actions** — extended the inbox `BulkBar` pattern to `/issues`
+  and the project page's List tab. Refactored `BulkBar` into a shared
+  `src/components/bulk-bar.tsx` with `count / onClear / actions[]`
+  API; inbox now imports the same component. New bulk procs:
+  `issue.bulkTransition`, `bulkAddLabel`, `bulkRemoveLabel`,
+  `bulkArchive`. Existing `snoozeMany`, `bulkAssign`,
+  `bulkAssignAgent` reused. Action set: Status / Assign /
+  Snooze / Label (mixed-state add/remove) / Archive (confirm-gated).
+  Board view intentionally skipped (drag-drop covers the highest-
+  frequency op; checkbox-on-cards is visually noisy).
+- **Command palette** — Cmd+K via `useHotkey`, reuses existing Dialog
+  primitive. Mounted in app shell layout. Search results grouped by
+  type (Issues, Projects, Initiatives, Saved Views, Sprints, Agents,
+  Actions); empty-input state shows pinned + recents rails plus a
+  static actions list. 150ms debounce. Inline spinner during search.
+  "No matches" → "Create issue '{query}' →" affordance that calls
+  `issue.create` with the query as title. Keyboard nav: ↑/↓ across
+  visible rows, Enter to dispatch, Esc to close. Cross-workspace
+  toggle skipped (workspace badge on results when scope differs).
+- **Recent items** — `RecentItem { userId, workspaceId, targetType,
+  targetId, visitedAt }` upserted on entity-page mount via
+  `recentItem.track`, server-side debounced 5s. Surfaced in the
+  command palette's empty-state rail; primitive is the shared
+  `<RecentItemsRail />`.
+
+### New procs
+
+`pin.listAll`, `pin.add`, `pin.remove`, `pin.toggleEntity`,
+`pin.reorder` (legacy procs kept). `recentItem.list`, `recentItem.track`.
+`commandPalette.search` (per-type buckets, ILIKE fuzzy,
+KEY-N pattern recognition). `issue.bulkTransition`,
+`issue.bulkAddLabel`, `issue.bulkRemoveLabel`, `issue.bulkArchive`
+(uses `Issue.deletedAt` for soft-delete; emits `ISSUE_UPDATED` with
+`action="bulk-add-label"` discriminator instead of new EventKind values
+to avoid migration churn).
+
+### Migration `0023_pins_and_recents`
+
+`PinTargetType` enum + `Pin` model + `RecentItem` model + cascade FKs.
+Backfill via `unnest(pinnedIssueIds) WITH ORDINALITY` preserves
+ordering as `orderIndex = ord - 1`. Then drops `User.pinnedIssueIds`.
+
+### Coordination notes
+
+- Worktree-base race struck again on all three Phase 1 agents — every
+  one branched from `54a167d` (one commit short of Phase 0 `42d8660`).
+  All three self-corrected by rebasing onto master before working,
+  same self-correction we saw in the prior revamp. The brief explicitly
+  told them to verify `git log` and rebase if needed; that worked.
+  Worth automating in the harness eventually — every parallel-worktree
+  run with a sequential Phase 0 prerequisite hits this.
+- One small bug at integration: 1A flagged that `<PinnedSidebarSection />`
+  routed AGENT pins to `/agents/{id}` but the route segment is
+  `[profileKey]`. The hydrated AGENT target in `pin.ts` already includes
+  `profileKey` — fixed inline at integration (one-line edit). 1A could
+  have fixed it but obeyed the "don't reinvent Phase 0 components"
+  guardrail; that's the right default — flag it, not fix it.
+
+### Verification
+
+- `pnpm typecheck` clean
+- `pnpm lint` baseline (5 errors, all pre-existing in `issue-board.tsx`
+  + `mission-control/control-tab.tsx`)
+- `pnpm test` 208/214 — same 6 MinIO `ECONNREFUSED ::1:59000` failures
+  as the last two days, environmental, no touched files.
+
+### Single commit
+
+Phase 0 + 1A + 1B + 1C squashed to one commit on master. Pushed.
+Container rebuilt; migration 0023 applied on container boot. Live
+at `forge.axiom-labs.dev`.
+
 ## 2026-05-03 — feat(ui): inbox + agents + stalled revamp (multi-agent)
 
 Follow-up audit on the UX revamp surfaced three more gaps: (1) Inbox was
