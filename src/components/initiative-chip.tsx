@@ -60,16 +60,20 @@ export function InitiativeChip({
     className,
   );
 
+  const titleText = initiative.status
+    ? `${initiative.name} · ${initiative.status}`
+    : initiative.name;
+
   if (!href) {
     return (
-      <span className={chipClass} title={initiative.name}>
+      <span className={chipClass} title={titleText}>
         {body}
       </span>
     );
   }
 
   return (
-    <Link href={href} className={chipClass} title={initiative.name}>
+    <Link href={href} className={chipClass} title={titleText}>
       {body}
     </Link>
   );

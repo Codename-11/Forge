@@ -58,16 +58,20 @@ export function CycleChip({
     className,
   );
 
+  const titleText = `Sprint: ${cycle.name}${
+    cycle.status === "ACTIVE" ? " (active)" : ""
+  }`;
+
   if (!href) {
     return (
-      <span className={chipClass} title={cycle.name}>
+      <span className={chipClass} title={titleText}>
         {body}
       </span>
     );
   }
 
   return (
-    <Link href={href} className={chipClass} title={cycle.name}>
+    <Link href={href} className={chipClass} title={titleText}>
       {body}
     </Link>
   );

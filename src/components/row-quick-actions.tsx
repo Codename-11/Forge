@@ -112,6 +112,7 @@ export function RowQuickActions({
         <button
           type="button"
           aria-label="Change status"
+          title="Change status"
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -126,6 +127,7 @@ export function RowQuickActions({
         <button
           type="button"
           aria-label="Change assignee"
+          title="Reassign"
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -144,8 +146,8 @@ export function RowQuickActions({
         aria-label="Nudge assignee"
         title={
           hasAssignedAgent
-            ? "Nudge — pings the assigned agent via comment"
-            : "Nudge — adds a quiet check-in comment"
+            ? "Send nudge — adds a comment tagging the assigned agent"
+            : "Send nudge — adds a comment tagging the assignee"
         }
         disabled={nudgeM.isPending || isSnoozed}
         onClick={(e) => {
@@ -161,7 +163,7 @@ export function RowQuickActions({
       <button
         type="button"
         aria-label="Mark inbox read"
-        title="Mark inbox as visited"
+        title="Mark read (clears NEW marker)"
         disabled={visitM.isPending}
         onClick={(e) => {
           e.preventDefault();

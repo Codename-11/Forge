@@ -114,6 +114,13 @@ export const agentRunRouter = router({
           statusComment: {
             select: { id: true, body: true, currentStep: true, updatedAt: true },
           },
+          // Joined so the pipeline UI can attribute pending control
+          // requests ("pause requested by X 2m ago"). SetNull on user
+          // delete means this can be null even with a non-NONE
+          // controlState.
+          controlRequestedBy: {
+            select: { id: true, name: true, image: true },
+          },
         },
       });
     }),

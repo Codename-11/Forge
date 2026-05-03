@@ -184,6 +184,10 @@ export default function AgentPipeline() {
                             }
                           : null
                       }
+                      controlRequestedAt={run?.controlRequestedAt ?? null}
+                      controlRequestedByName={
+                        run?.controlRequestedBy?.name ?? null
+                      }
                     />
                   );
                 })}
@@ -253,11 +257,16 @@ function IssueCard({
   wsSlug,
   wsKey,
   run,
+  controlRequestedAt,
+  controlRequestedByName,
 }: {
   issue: PipelineIssue;
   wsSlug: string;
   wsKey: string;
   run?: RunControlMenuRun | null;
+  /** When set, used for the pending-control badge tooltip. */
+  controlRequestedAt?: Date | string | null;
+  controlRequestedByName?: string | null;
 }) {
   const controlBadge =
     run && run.controlState === "PAUSE_REQUESTED"
@@ -265,6 +274,15 @@ function IssueCard({
       : run && run.controlState === "CANCEL_REQUESTED"
         ? "cancel requested"
         : null;
+  const controlBadgeTitle = controlBadge
+    ? controlRequestedAt
+      ? `Requested ${relativeTime(controlRequestedAt)}${
+          controlRequestedByName ? ` by ${controlRequestedByName}` : ""
+        }`
+      : controlRequestedByName
+        ? `Requested by ${controlRequestedByName}`
+        : "Control request pending"
+    : undefined;
 
   return (
     <div className="relative">
@@ -282,7 +300,10 @@ function IssueCard({
             </span>
           )}
           {controlBadge && (
-            <span className="rounded-sm bg-warning/10 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-warning">
+            <span
+              title={controlBadgeTitle}
+              className="rounded-sm bg-warning/10 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-warning"
+            >
               {controlBadge}
             </span>
           )}

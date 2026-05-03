@@ -140,7 +140,11 @@ export function RunControlMenu({
           "focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent",
           open && "bg-subtle text-foreground",
         )}
-        title={isActive ? "Run controls" : `Run is ${run.status.toLowerCase()}`}
+        title={
+          isActive
+            ? "Run controls — Pause / Cancel / Redirect"
+            : `Run is ${run.status.toLowerCase()}`
+        }
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
@@ -161,6 +165,7 @@ export function RunControlMenu({
             type="button"
             role="menuitem"
             disabled={pausePending || anyMutationPending}
+            title="Pause this run — runtime will stop at next safe point"
             onClick={() => {
               close();
               pauseM.mutate({ runId: run.id });
@@ -174,6 +179,7 @@ export function RunControlMenu({
             type="button"
             role="menuitem"
             disabled={cancelPending || anyMutationPending}
+            title="Cancel this run — runtime will abort"
             onClick={() => {
               close();
               cancelM.mutate({ runId: run.id });
@@ -190,6 +196,7 @@ export function RunControlMenu({
             type="button"
             role="menuitem"
             disabled={anyMutationPending}
+            title="Hand off to another agent — current run cancels"
             onClick={() => setRedirectOpen((v) => !v)}
             className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-[0.75rem] hover:bg-subtle disabled:opacity-40 disabled:hover:bg-transparent"
           >
