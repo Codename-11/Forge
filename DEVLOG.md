@@ -2,6 +2,105 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-03 — Attachments follow-ups + project scroll fix
+
+Single coordinated deploy. Five small fixes squashed to one commit, no
+schema changes, no migration.
+
+### What changed
+
+- **Project overview scroll fix.** The project detail page's tab
+  container at `/w/[slug]/projects/[id]` had `min-h-0 flex-1
+  overflow-hidden` *without* `flex flex-col`, so the children's
+  `flex-1` collapsed to auto and the inner `<div className="h-full
+  overflow-y-auto">` inherited 0 height — scroll was unreachable. Added
+  `flex flex-col` to both the outer tab wrapper and the inner content
+  wrapper. Same anti-pattern surfaced on `/w/[slug]/issues` where the
+  list-view's `<div className="h-full overflow-y-auto">` was inside an
+  identical broken parent — fixed there too. Cycles detail + cycles
+  index also use `min-h-0 flex-1 overflow-hidden` but are
+  intentionally horizontal flex rows (CyclePlanningBoard +
+  CycleBacklogPanel) — left alone. Other pages with `min-h-0 flex-1
+  overflow-y-auto` (settings, dashboard, initiatives, …) are scroll
+  containers around content-height children — not affected.
+- **Server-scraped link titles + favicons.** Added
+  `fetchLinkMetadata(url)` to `src/server/services/storage.ts`: native
+  fetch with `AbortController` + 5s timeout, follows redirects, reads
+  up to 64 KB of body, parses `<title>` via regex, decodes the common
+  HTML entities. Returns `{}` on any error. The tRPC `attachment.attachLink`
+  mutation and the MCP `attachments.attachLink` tool both call it when
+  the caller doesn't supply a title; createLinkAttachment falls back to
+  hostname when the scrape returns nothing. New `LinkFavicon` component
+  in `attachment-chip.tsx` computes `${origin}/favicon.ico`
+  deterministically and falls back to the lucide ExternalLink icon on
+  image-load error — no broken-image rectangles. Used in the LINK chip
+  variant of `<AttachmentChip />` and (at 20px) in the lightbox's
+  LinkPreview header alongside the hostname.
+- **`forge-link` markdown token.** New token shape
+  `[label](forge-link:https://…)` in the markdown attachment renderer.
+  Pass A in `tokenizeText` claims forge-link chips, Pass B handles the
+  existing KEY-NN + @profileKey pass on the leftover spans. Order
+  guarantee: `forge-attachment:cuid` runs first (regex anchored to a
+  CUID) so it always claims its own tokens before forge-link sees the
+  text. Scheme is enforced as http/https at both the regex and a
+  belt-and-suspenders check before constructing the segment — anything
+  else falls through as plain text. New `<InlineForgeLink />` chip
+  visually mirrors `<InlineAttachmentLink />` (border, bg-card/40,
+  hover-ember) so chat/comments stay consistent; opens the URL in a
+  new tab on click, no DB lookup, no lightbox.
+- **MinIO test auto-skip.** Storage + attachment-router suites failed
+  with `ECONNREFUSED ::1:59000` whenever the dev MinIO container
+  wasn't running — six pre-existing failures across the last two
+  DEVLOG entries. New `src/server/routers/__tests__/minio-probe.ts`
+  exposes `describeIfMinio()`, which probes
+  `${S3_ENDPOINT}/minio/health/live` once per file (1.5s timeout) and
+  swaps `describe` for `describe.skip` on probe failure. Both
+  `storage.test.ts` and `attachment.test.ts` await it at module top
+  and use the returned describe. Probe runs once per file, cached.
+  Brought up `forge-dev-minio` via `docker compose -f docker/docker-compose.yml
+  up -d minio` for this session — both suites now pass cleanly.
+- **No new dependencies, no schema change, no migration.**
+
+### Files touched
+
+- `src/app/(app)/w/[slug]/projects/[id]/page.tsx` — flex flex-col on
+  tab container.
+- `src/app/(app)/w/[slug]/issues/page.tsx` — flex flex-col on
+  list/board content container.
+- `src/server/services/storage.ts` — `fetchLinkMetadata` helper.
+- `src/server/services/mcp.ts` — `attachments.attachLink` calls
+  fetchLinkMetadata when title omitted.
+- `src/server/routers/attachment.ts` — same for the tRPC mutation.
+- `src/components/attachments/attachment-chip.tsx` — `LinkFavicon`
+  component + LINK-variant chip uses it.
+- `src/components/attachments/attachment-lightbox.tsx` — LinkPreview
+  header shows favicon + hostname.
+- `src/components/markdown/attachment-renderer.tsx` — forge-link
+  tokenization + `<InlineForgeLink />` chip.
+- `src/server/routers/__tests__/minio-probe.ts` — new helper.
+- `src/server/services/__tests__/storage.test.ts`,
+  `src/server/routers/__tests__/attachment.test.ts` — use describeIfMinio.
+
+### Verification
+
+- `pnpm typecheck` clean.
+- `pnpm lint` baseline only (5 pre-existing errors in
+  `issue-board.tsx` + `mission-control/control-tab.tsx`, same as the
+  last two days).
+- `pnpm test` 214/214 passing — the 6 MinIO failures from yesterday
+  cleared because dev MinIO was brought up before the run. With the
+  new skip helper, future runs without MinIO will report "skipped"
+  instead of "failed".
+
+### Migration
+
+None. No schema changes.
+
+### Single commit
+
+Squashed to one commit on master. Pushed. Container rebuilt; live at
+`forge.axiom-labs.dev`.
+
 ## 2026-05-03 — feat(ui): pinning + bulk actions + command palette (multi-agent)
 
 Follow-up after the inbox/agents/stalled revamp + tooltip polish landed.

@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import {
   Image as ImageIcon,
   FileText,
@@ -10,6 +11,52 @@ import {
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useAttachmentLightbox } from "@/components/attachments/attachment-lightbox";
+
+/**
+ * Tiny favicon glyph for LINK attachments. Computes
+ * `${origin}/favicon.ico` deterministically (no DB lookup, no probe) and
+ * falls back to the lucide ExternalLink icon on any image-load failure
+ * — so a missing favicon never produces a broken-image rectangle.
+ */
+export function LinkFavicon({
+  url,
+  className,
+  size = 12,
+}: {
+  url: string | null | undefined;
+  className?: string;
+  size?: number;
+}) {
+  const [errored, setErrored] = useState(false);
+  let origin = "";
+  try {
+    if (url) origin = new URL(url).origin;
+  } catch {
+    // Bad URL → render fallback.
+  }
+  if (!origin || errored) {
+    return (
+      <ExternalLink
+        className={cn("shrink-0 text-muted-foreground/60", className)}
+        style={{ width: size, height: size }}
+        aria-hidden
+      />
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`${origin}/favicon.ico`}
+      alt=""
+      width={size}
+      height={size}
+      loading="lazy"
+      onError={() => setErrored(true)}
+      className={cn("shrink-0 rounded-sm", className)}
+      style={{ width: size, height: size }}
+    />
+  );
+}
 
 /**
  * Compact filename + size + mime-aware glyph chip for attachments rendered
@@ -103,7 +150,11 @@ export function AttachmentChip({
         className,
       )}
     >
-      <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
+      {isLink ? (
+        <LinkFavicon url={attachment.externalUrl} size={12} />
+      ) : (
+        <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
+      )}
       <span className="text-id min-w-0 flex-1 truncate font-mono text-foreground/90">
         {attachment.filename}
       </span>

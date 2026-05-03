@@ -23,6 +23,7 @@ import { useModalBehavior } from "@/components/ui/modal/use-modal-behavior";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { MOTION } from "@/lib/motion";
+import { LinkFavicon } from "@/components/attachments/attachment-chip";
 
 /**
  * Forge attachment lightbox — first-class file interaction surface.
@@ -499,18 +500,25 @@ function Preview({
 
 function LinkPreview({ attachment }: { attachment: AttachmentLite }) {
   const href = attachment.externalUrl ?? "";
+  let host = "";
+  try {
+    if (href) host = new URL(href).hostname.replace(/^www\./i, "");
+  } catch {
+    // Bad URL — leave host blank, header just shows the title.
+  }
   const onOpen = () => {
     if (href) window.open(href, "_blank", "noopener,noreferrer");
   };
   return (
     <div className="flex h-full w-full max-w-5xl flex-col gap-2">
       <div className="flex shrink-0 items-center justify-between gap-3 rounded-md border border-border/30 bg-card px-3 py-2 text-foreground">
+        <LinkFavicon url={href} size={20} />
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-medium">
             {attachment.filename}
           </div>
           <div className="text-meta truncate text-muted-foreground">
-            {href || "external link"}
+            {host || href || "external link"}
           </div>
         </div>
         <button

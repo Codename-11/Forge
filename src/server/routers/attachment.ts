@@ -10,6 +10,7 @@ import {
   StorageNotConfiguredError,
   createLinkAttachment,
   deleteAttachment,
+  fetchLinkMetadata,
   finalizeAttachment,
   presignDownloadUrl,
   presignUploadUrl,
@@ -164,6 +165,15 @@ export const attachmentRouter = router({
     .input(attachLinkInput)
     .mutation(async ({ ctx, input }) => {
       await assertTargetInWorkspace(ctx, input.targetType, input.targetId);
+      // Caller didn't provide a label → try to scrape <title> off the
+      // target page so the chip is meaningful. Fail soft: any error
+      // leaves resolvedTitle null and createLinkAttachment falls back
+      // to hostname.
+      let resolvedTitle: string | null = input.title ?? null;
+      if (resolvedTitle === null) {
+        const meta = await fetchLinkMetadata(input.url);
+        if (meta.title) resolvedTitle = meta.title;
+      }
       let row: Awaited<ReturnType<typeof createLinkAttachment>>;
       try {
         row = await createLinkAttachment({
@@ -171,7 +181,7 @@ export const attachmentRouter = router({
           targetType: input.targetType,
           targetId: input.targetId,
           url: input.url,
-          title: input.title ?? null,
+          title: resolvedTitle,
         });
       } catch (err) {
         throw mapStorageError(err);
