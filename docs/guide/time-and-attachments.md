@@ -117,11 +117,15 @@ URL is issued.
 |---|---|
 | Images | PNG, JPEG, GIF, WebP, SVG |
 | Documents | PDF, plain text, Markdown, DOCX, XLSX |
+| Web | HTML, JSON, CSV, XML, YAML |
+| Audio | MP3, WAV, OGG, M4A |
+| Video | MP4, WebM, QuickTime |
 | Archives | ZIP |
 
-Files with a MIME type outside this set are rejected at init-upload. If
-you need additional types for a specific deployment, the allowlist is in
-`src/server/services/attachments.ts`.
+Files with a MIME type outside this set are rejected at init-upload. The
+allowlist lives in `src/server/services/storage.ts` (`ALLOWED_MIME_TYPES`).
+Adding a new type means adding the entry there and any preview/render
+support the UI needs.
 
 ::: warning
 SVG is allowed but rendered carefully — it's served with a sandbox CSP
@@ -181,12 +185,54 @@ The URL is single-use in spirit (anyone with it can fetch within the
 window) but is not single-use in MinIO. If you need stricter access,
 mediate through your own auth layer.
 
+### External link attachments
+
+Not every attachment is bytes. The `attachments.attachLink` tool (and
+its tRPC sibling `attachment.attachLink`) records an external URL —
+Google Doc, GitHub PR, Notion page, anything web-addressable — as a
+first-class attachment row without uploading any object to MinIO.
+
+The schema distinguishes them via `Attachment.kind` (`FILE` | `LINK`).
+LINK rows populate `externalUrl` (the canonical URL) and `linkTitle`
+(human label, defaults to URL hostname). The legacy file-shaped columns
+(`filename`, `mimeType`, `size`, `url`) are still populated for backward
+compat (`mimeType = "text/url"`, `size = 0`, `url = externalUrl`) so
+existing consumers don't have to know the difference.
+
+When the caller doesn't supply a title, Forge does a best-effort scrape
+of the page's `<title>` (server-side fetch with 5s timeout, follows
+redirects, reads up to 64 KB). On scrape failure the LINK chip falls
+back to the URL hostname.
+
+LINK chips on issues / comments / projects render with a deterministic
+favicon (origin + `/favicon.ico`, with a Lucide `ExternalLink` fallback
+on image-load error) and the hostname inline. Clicking opens the URL
+in a new tab.
+
+### `forge-link` markdown token
+
+Inside any rendered markdown body (issue descriptions, comments,
+notes), the token shape:
+
+```
+[label](forge-link:https://example.com)
+```
+
+renders as an inline `<InlineForgeLink />` chip — same border, hover-
+ember, and click-to-open behavior as a LINK attachment chip, but with
+no DB lookup involved. It's the markdown-native way to interleave
+external references in body text without forcing a real Attachment row.
+
+The scheme is restricted to `http` / `https` at both regex and code
+level. Anything else falls through as plain text, by design.
+
 ### MCP tools
 
 | Tool | Purpose |
 |---|---|
 | `attachments.initUpload` | Begin upload; returns presigned PUT |
 | `attachments.finalize` | Confirm upload; flips row to READY |
+| `attachments.attachLink` | Attach an external URL (LINK kind) |
 | `attachments.getDownloadUrl` | Issue a presigned GET |
 | `attachments.list` | List attachments for a target |
 | `attachments.delete` | Remove (soft-delete + MinIO cleanup) |

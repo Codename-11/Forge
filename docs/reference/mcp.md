@@ -180,10 +180,19 @@ or `ABANDONED` (so `ACTIVE` and `STALLED` qualify).
 |------------------|----------------------------------------------------------------------|
 | `initUpload`     | Get a presigned MinIO/S3 PUT URL. Returns `{ uploadUrl, key }`.      |
 | `finalize`       | Register the uploaded blob as an Attachment row.                     |
+| `attachLink`     | Record an external URL (LINK kind). No bytes uploaded.               |
 | `list`           | List attachments for a `(targetType, targetId)` pair.                |
 | `getDownloadUrl` | Get a presigned GET URL for browser/agent download.                  |
 | `getInline`      | Server-side bytes fetch — returns `{ id, mimeType, sizeBytes, filename, base64 }`. Default cap 1 MB; allowlist is image/*+pdf+text. |
 | `delete`         | Delete attachment + remove blob.                                     |
+
+**`attachLink`** input: `{ targetType, targetId, externalUrl, linkTitle? }`.
+`targetType` is one of `"issue" | "initiative" | "cycle" | "comment"`.
+`externalUrl` must be `http(s)://`. When `linkTitle` is omitted, Forge
+attempts a server-side scrape of the page's `<title>` (5 s timeout,
+follows redirects, reads up to 64 KB). On scrape failure the row's
+display falls back to URL hostname. Output is the new `Attachment` row
+(`kind = LINK`, `mimeType = "text/url"`, `size = 0`).
 
 **`getInline`** is for image-aware models that can't follow a presigned URL.
 Same scope checks as `getDownloadUrl` (`READ_ISSUES` plus subject-narrowing
@@ -199,6 +208,36 @@ suggestion to fall back to `getDownloadUrl`. `maxBytes` defaults to
 |--------|---------------------------------------------------------------|
 | `list` | List the caller's pinned issues.                              |
 | `set`  | Set the full pinned set (idempotent — pass the desired list). |
+
+`pins.list` and `pins.set` preserve their issue-only signatures for
+backward compat with existing Hermes/agent runtimes. The polymorphic
+pin surface (`PROJECT`, `INITIATIVE`, `SAVED_VIEW`, `CYCLE`, `AGENT`)
+is tRPC-only via `pin.listAll` / `pin.add` / `pin.remove` /
+`pin.toggleEntity` / `pin.reorder` — see
+[/reference/trpc.html](/reference/trpc.html).
+
+### `notes`
+
+Per-(workspace, user) markdown scratchpad. Each tool operates **only**
+on the calling actor's own notes — agents leave notes for *themselves*,
+not for the operator. To leave a note for someone else, use
+`comments.create` on the relevant issue (their inbox picks up the
+@-mention via the existing fan-out).
+
+| Tool            | Scope          | Summary                                                                |
+|-----------------|----------------|------------------------------------------------------------------------|
+| `notes.create`  | `WRITE_ISSUES` | Create a personal note. Inputs: `{ title?, body, pinned? }`.            |
+| `notes.list`    | `READ_ISSUES`  | List the caller's own notes. Inputs: `{ archived?, limit? }`.           |
+| `notes.update`  | `WRITE_ISSUES` | Patch one of the caller's notes. Inputs: `{ id, title?, body?, pinned? }`. |
+| `notes.archive` | `WRITE_ISSUES` | Soft-archive one of the caller's notes. Inputs: `{ id }`.               |
+
+Returns the resulting `Note` row(s). Cross-actor mutation is blocked
+at the resolver — passing an `id` owned by another user yields a
+"Note not found" error rather than leaking that the row exists.
+
+There is no `notes.unarchive` MCP tool by design — agents shouldn't be
+resurrecting archived notes silently. The human-only `note.unarchive`
+tRPC proc covers that case.
 
 ### `analytics`
 

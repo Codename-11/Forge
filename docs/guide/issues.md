@@ -113,20 +113,61 @@ await trpc.issues.create.mutate({
 When you select multiple rows on the Issues list, the action bar exposes
 bulk operations that are also available on the API surface:
 
-- `issues.bulkStatus` — move N issues to a target status
-- `issues.bulkSetLabels` — add/remove a label across N issues
-- `issues.bulkAssign` — set `claimedById` across N issues
-- `issues.bulkAssignAgent` — set `assignedAgentId` across N issues
+- `issue.bulkTransition` — move N issues to a target status
+- `issue.bulkAddLabel` / `issue.bulkRemoveLabel` — add/remove a label
+  across N issues (mixed-state aware: rows that already have/don't
+  have the label are no-ops)
+- `issue.bulkAssign` — set `claimedById` across N issues
+- `issue.bulkAssignAgent` — set `assignedAgentId` across N issues
+- `issue.bulkArchive` — confirmation-gated soft-delete via
+  `Issue.deletedAt`
+- `issue.snoozeMany` — set `snoozedUntil` across N issues
 
 Each bulk call writes a single audit envelope per issue and fans out one
 event per issue, so consumers see N coherent updates rather than one
 opaque batch.
+
+### Selection chords
+
+| Chord | Action |
+|---|---|
+| <kbd>x</kbd> | Toggle selection on the row your cursor is over |
+| <kbd>⇧X</kbd> | Select range from the last selected row to the cursor |
+| <kbd>esc</kbd> | Clear selection |
+
+Selection is shared with the Inbox bulk bar — the same `<BulkBar />`
+primitive renders on both surfaces. The Issues board view intentionally
+skips bulk-select; drag-and-drop covers the highest-frequency op and
+checkbox-on-cards is visually noisy.
 
 ::: tip
 For very large bulk operations (hundreds of issues), use the MCP REST
 endpoints and chunk into batches of ~50 to stay under request size
 limits.
 :::
+
+## Snooze
+
+`Issue.snoozedUntil DateTime?` lets you mark an issue "intentionally on
+hold until later." While `snoozedUntil > now()`, the issue is filtered
+out of:
+
+- Every Inbox bucket (Queue, Mentions, Stalled).
+- The dashboard "Stalled" column.
+- The dashboard suggestions strip.
+
+When `snoozedUntil` falls into the past, the row resurfaces wherever
+its actual state lands it (typically Stalled or Queue). There's no
+background sweep — comparison is `snoozedUntil > now()` everywhere
+that filters.
+
+Set snooze from a row's quick-action menu (Snooze for…) or via tRPC:
+
+```ts
+await trpc.issue.snooze.mutate({ id, until });
+await trpc.issue.unsnooze.mutate({ id });
+await trpc.issue.snoozeMany.mutate({ ids, until });
+```
 
 ## AI triage state
 

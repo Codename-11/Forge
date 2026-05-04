@@ -346,6 +346,7 @@ model User {
   controlRequestedRuns AgentRun[]          @relation("AgentRunControlRequester")
   pins                 Pin[]
   recentItems          RecentItem[]
+  notes                Note[]
 
   @@index([handle])
 }
@@ -527,6 +528,7 @@ model Workspace {
   runtimes           Runtime[]
   pins               Pin[]
   recentItems        RecentItem[]
+  notes              Note[]
   startedStatus      Status?             @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
@@ -1575,4 +1577,31 @@ model RecentItem {
 
   @@unique([userId, workspaceId, targetType, targetId])
   @@index([userId, workspaceId, visitedAt(sort: Desc)])
+}
+
+// ----------------------------------------------------------------------------
+// Quick Notes (per-user markdown scratchpad)
+// ----------------------------------------------------------------------------
+
+/// Per-(workspace, user) markdown note. Surfaced via the dashboard
+/// `<QuickNotesWidget />` and the `notes.*` MCP namespace so agents can
+/// leave themselves reasoning scratchpads. Pinned notes float to the top;
+/// `archivedAt` is the soft-delete path (hard delete is rare). Convert
+/// to a full Issue via `note.convertToIssue` — the source note is left
+/// in place so the user can archive it separately.
+model Note {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  title       String?
+  body        String    @db.Text
+  pinned      Boolean   @default(false)
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, userId, archivedAt, pinned, updatedAt])
 }

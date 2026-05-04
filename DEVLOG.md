@@ -2,6 +2,148 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-04 — Quick Notes + docs refresh
+
+Three packs in one coordinated deploy: a new Quick Notes primitive
+end-to-end, a docs sweep covering features shipped since 2026-04-26,
+and a small density-utility cleanup on the dashboard. One squashed
+commit on master, container rebuilt, migration 0025 applied on boot.
+
+### Pack A — Quick Notes
+
+- **Schema** — new `Note` model on the dashboard for per-(workspace,
+  user) markdown scratchpad rows. Migration `0025_note` adds the
+  table + a single composite index `(workspaceId, userId,
+  archivedAt, pinned, updatedAt)` covering the default sort. Soft-
+  delete via `archivedAt`; `pinned` floats rows in the widget. Back-
+  relations on `User.notes` and `Workspace.notes`.
+- **tRPC `note.*`** — `list`, `create`, `update`, `archive`,
+  `unarchive`, `delete`, `convertToIssue`. All `workspaceProcedure`-
+  scoped and filtered to `userId = ctx.session.user.id` so cross-
+  user reads/writes are impossible at the router layer (a stranger's
+  id yields "Note not found"). `convertToIssue` spawns a real Issue
+  using the same default-status + last-number+1 pattern as
+  `issue.create`, with `from: "note"` + `noteId` in the
+  `ISSUE_CREATED` audit payload for provenance. The source note is
+  intentionally NOT auto-archived — the user can decide.
+- **MCP `notes.*`** — `notes.create` / `notes.list` / `notes.update`
+  / `notes.archive`, scoped `WRITE_ISSUES` for writes and
+  `READ_ISSUES` for reads (matching the comment surface). Each tool
+  resolves the actor via `resolveActorId` and gates `userId == actor`
+  at every read and write — agents leave notes for *themselves*, not
+  the operator. There is no `notes.unarchive` MCP tool by design
+  (agents shouldn't silently resurrect archived notes); the human-
+  only `note.unarchive` tRPC proc covers that case.
+- **Dashboard widget** — new `<QuickNotesWidget />` mounted between
+  GreetingBar and OnboardingCard on `/w/[slug]/dashboard`.
+  Collapsible card. Inline add row with optional title + auto-grow
+  textarea (Enter to save when no title, ⌘Enter for multi-line, Esc
+  to cancel). Each note row has a pin glyph (click to toggle), an
+  inline-editable title (click to rename), an expandable body
+  rendered via `<MarkdownWithAttachments />`, and hover-revealed
+  trailing actions: convert-to-issue (FilePlus), archive
+  (Archive), and — for archived rows only — hard delete. Native
+  HTML `title=` tooltips on every action chip per CLAUDE.md.
+  Server-state only — no localStorage.
+- **Hotkey `n`** — focuses the add input on dashboard. Suppressed
+  when typing in any input/textarea (default `useHotkey` behavior).
+  No conflict with the existing `g n` chord (initiatives) since
+  `useChord` arms only after a `g` press.
+- **Tests** — `note.test.ts` covers the lifecycle + per-user
+  isolation + convertToIssue. `mcp.test.ts` adds a notes scoping
+  test confirming a second user's notes are invisible and that
+  cross-actor mutation throws.
+
+### Pack B — docs refresh
+
+Three new guide pages, one new sidebar group entry, a half-dozen
+existing pages updated.
+
+- **New** — `docs/guide/inbox.md` (full Inbox surface — Pulse, Queue,
+  Mentions, Stalled, Snoozed, last-visit unread, inline + bulk
+  actions, `g i` chord). `docs/guide/quick-notes.md` (this run's
+  feature). `docs/guide/saved-views.md` (per-user IssueSavedView,
+  pinning to sidebar, view vs filter distinction).
+- **Updated** — `docs/.vitepress/config.ts` sidebar adds the three
+  new pages under "Working in Forge" (Inbox first, Quick Notes +
+  Saved Views after Issues). `docs/guide/issues.md` rewrites the
+  Bulk operations section to match the actual procs (`bulkTransition`,
+  `bulkAddLabel`, `bulkRemoveLabel`, `bulkAssign`, `bulkAssignAgent`,
+  `bulkArchive`, `snoozeMany`) and adds a Snooze section. `docs/guide/keyboard.md`
+  documents `n` (Notes), `x` / `⇧X` (Bulk select), Pins on
+  project/initiative pages, and the command palette buckets +
+  pinned/recents rails. `docs/guide/projects-and-initiatives.md`
+  adds the Project Overview tab section. `docs/guide/time-and-attachments.md`
+  expands the Allowed MIME types table (HTML, JSON, CSV, XML, YAML,
+  audio, video) and documents `attachLink` + `[label](forge-link:URL)`.
+  `docs/agents/overview.md` adds the Agent run controls (pause /
+  cancel / redirect, `controlState`). `docs/agents/dispatch-rules.md`
+  notes that auto-dispatch respects `controlState`. `docs/concepts/primitives.md`
+  adds Pin / RecentItem / IssueSavedView / Note primitive entries.
+  `docs/reference/mcp.md` adds `attachments.attachLink` and the
+  `notes.*` namespace; `docs/reference/trpc.md` adds the
+  `note`, `pin`, `recentItem`, `commandPalette`, `inbox`,
+  `dashboard`, `notification`, and `savedView` rows in the catalog
+  plus a Notable procedures block for `note.*`, `attachment.attachLink`,
+  `pin.*`, and `recentItem.*`.
+
+### Pack C — density-utility cleanup
+
+Tiny — only one cleanly-applicable swap on the dashboard's
+`IssueRow` trailing-time span (`text-[0.6875rem]` → `text-meta`).
+The other hardcoded `text-[0.6875rem]` instances on the page are
+either uppercase eyebrows (correct per CLAUDE.md), priority
+glyphs (mono identifier — `text-id` already covers similar uses),
+or kbd hints. `<QuickNotesWidget />` was written from the start
+with `.text-meta` and `.text-id` where appropriate.
+
+### Migration `0025_note`
+
+Single CREATE TABLE + composite index + two cascade FKs. No enum
+churn, no backfill, no data migration. Applied cleanly on the
+dev DB; the prod migrate-deploy on container boot is a one-statement
+add.
+
+### Files touched
+
+- Schema / migration: `prisma/schema.prisma`,
+  `prisma/migrations/0025_note/migration.sql`.
+- Server: `src/server/routers/note.ts` (new),
+  `src/server/routers/_app.ts`, `src/server/services/mcp.ts`.
+- Client: `src/components/quick-notes-widget.tsx` (new),
+  `src/app/(app)/w/[slug]/dashboard/page.tsx`.
+- Tests: `src/server/routers/__tests__/note.test.ts` (new),
+  `src/server/services/__tests__/mcp.test.ts`.
+- Docs: `docs/.vitepress/config.ts`,
+  `docs/guide/inbox.md` (new), `docs/guide/quick-notes.md` (new),
+  `docs/guide/saved-views.md` (new),
+  `docs/guide/issues.md`, `docs/guide/keyboard.md`,
+  `docs/guide/projects-and-initiatives.md`,
+  `docs/guide/time-and-attachments.md`,
+  `docs/agents/overview.md`, `docs/agents/dispatch-rules.md`,
+  `docs/concepts/primitives.md`,
+  `docs/reference/mcp.md`, `docs/reference/trpc.md`.
+
+### Verification
+
+- `pnpm typecheck` clean.
+- `pnpm lint` baseline only (5 pre-existing errors in
+  `issue-board.tsx` + `mission-control/control-tab.tsx`, same as
+  the last several days). New files clean.
+- `pnpm test` 218/218 passing — three new note tests + one new
+  mcp note tests + the full pre-existing 214. MinIO was up so the
+  attachment / storage suites ran (with the existing CORS
+  apply-failure stderr noise from `applyBucketCors`, which is
+  harmless and pre-existing).
+- `pnpm docs:build` succeeds — VitePress emits client + server
+  bundles in ~9s.
+
+### Single commit
+
+Squashed to one commit on master. Pushed. Container rebuilt;
+migration 0025 applied on container boot. Live at
+`forge.axiom-labs.dev`.
+
 ## 2026-05-03 — Attachments follow-ups + project scroll fix
 
 Single coordinated deploy. Five small fixes squashed to one commit, no

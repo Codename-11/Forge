@@ -1904,3 +1904,59 @@ describe("mcp — awareness tools (Stream BA)", () => {
     ).toBeUndefined();
   });
 });
+
+describe("mcp — notes (per-actor scoping)", () => {
+  it("notes.create + notes.list + notes.update + notes.archive operate only on the caller's own notes", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "MN" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(f);
+
+    const created = (await call(
+      "notes.create",
+      { body: "Remember to check the CI cache hit rate" },
+      ctx,
+    )) as { id: string; userId: string; pinned: boolean };
+    expect(created.id).toBeTruthy();
+    expect(created.userId).toBe(f.user.id);
+
+    const listed = (await call("notes.list", {}, ctx)) as Array<{ id: string }>;
+    expect(listed.find((n) => n.id === created.id)).toBeTruthy();
+
+    const updated = (await call(
+      "notes.update",
+      { id: created.id, pinned: true },
+      ctx,
+    )) as { pinned: boolean };
+    expect(updated.pinned).toBe(true);
+
+    // Plant a row owned by the second user — should be invisible.
+    const otherNote = await prisma.note.create({
+      data: {
+        workspaceId: f.workspace.id,
+        userId: f.secondUser.id,
+        body: "Another user's note",
+      },
+    });
+    const reList = (await call("notes.list", {}, ctx)) as Array<{ id: string }>;
+    expect(reList.find((n) => n.id === otherNote.id)).toBeUndefined();
+
+    // Cross-actor update should be blocked at the resolver.
+    await expect(
+      call("notes.update", { id: otherNote.id, pinned: true }, ctx),
+    ).rejects.toThrow(/Note not found/);
+
+    // Archive flips the row out of the default list.
+    await call("notes.archive", { id: created.id }, ctx);
+    const afterArchive = (await call("notes.list", {}, ctx)) as Array<{
+      id: string;
+    }>;
+    expect(afterArchive.find((n) => n.id === created.id)).toBeUndefined();
+    const archived = (await call(
+      "notes.list",
+      { archived: true },
+      ctx,
+    )) as Array<{ id: string }>;
+    expect(archived.find((n) => n.id === created.id)).toBeTruthy();
+  });
+});

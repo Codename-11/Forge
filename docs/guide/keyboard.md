@@ -65,6 +65,14 @@ open any page, run any action, jump to any issue or project by key, and
 trigger most workspace-level commands. If you forget a chord, open the
 palette and type — the matching command shows its chord next to it.
 
+Results in the palette are **type-grouped** into buckets (Issues,
+Projects, Initiatives, Saved Views, Sprints, Agents, Actions). The
+empty-input state shows two rails: **Pinned** (your sidebar pins) and
+**Recents** (entities you've recently visited, tracked server-side via
+`recentItem.track`). When the search returns no matches, the palette
+offers a one-key "Create issue '{query}' →" affordance — Enter creates
+the issue with the query text as title.
+
 ### Create
 
 | Chord | Action |
@@ -95,10 +103,40 @@ can hand the issue to a specific agent without leaving the page.
 
 | Chord | Action |
 |---|---|
-| <kbd>p</kbd> | Toggle pin (in issue detail) |
+| <kbd>p</kbd> | Toggle pin (in issue / project / initiative detail) |
 
-Pin an issue to surface it on your inbox. Pins are per-user. Pin
-arbitrary issues you're tracking even if you're not assigned.
+Pin an entity to surface it under the **Pinned** sidebar section. Pins
+are per-user, polymorphic across `Issue`, `Project`, `Initiative`,
+`SavedView`, `Cycle`, and `Agent` — the <kbd>p</kbd> chord works on
+every entity-detail page that exposes a `<PinButton />` in the header.
+
+The cross-workspace topbar pin strip preserves the legacy 3-pin cap
+for issues; the sidebar **Pinned** section has no cap. Pinned items
+also surface in the command palette empty-state rail.
+
+### Notes
+
+| Chord | Action |
+|---|---|
+| <kbd>n</kbd> | Focus the Quick Notes add input (on the dashboard) |
+
+Capture a personal markdown note without first deciding which issue
+it belongs to. Press <kbd>Enter</kbd> to save (single-line capture
+when no title is set) or <kbd>⌘ Enter</kbd> for multi-line. See
+[Quick Notes](/guide/quick-notes.html) for the full surface.
+
+### Bulk
+
+| Chord | Action |
+|---|---|
+| <kbd>x</kbd> | Toggle selection on the row your cursor is over |
+| <kbd>⇧X</kbd> | Select range from the last selected row to the cursor |
+
+Available on `/issues`, the project page's List tab, and the Inbox
+buckets that support multi-action. Selection state powers the
+sticky `<BulkBar />` at the bottom of the viewport. See
+[Issues → Bulk operations](/guide/issues.html#bulk-operations) for
+the action set.
 
 ### Time
 
