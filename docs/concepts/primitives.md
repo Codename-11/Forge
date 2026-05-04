@@ -179,6 +179,47 @@ support both human (`authoringUserId`) and agent (`authoringAgentId`)
 attribution — never both, exactly one. Agent-authored comments are how
 [AI Coach](/agents/ai-triage-and-coach.html) reaches the issue thread.
 
+## Pin
+
+Per-user, polymorphic pin. Each row pins one entity (Issue / Project /
+Initiative / SavedView / Cycle / Agent) for the owning user. Surfaces
+the entity in the **Pinned** sidebar section and in the command
+palette empty-state rail. `workspaceId` is nullable — null means a
+"cross-workspace" pin (the legacy topbar-strip semantic where the user
+pinned an issue from any workspace they're in). `targetId` is **not**
+a foreign key (the table is polymorphic across multiple targetType
+tables); hydration silently drops dead targets.
+
+The legacy `User.pinnedIssueIds String[]` column was dropped in
+migration 0023 — all pin reads/writes now go through this table.
+
+## RecentItem
+
+Per-(user, workspace, target) LRU-ish row. Upserted on every entity-
+detail mount via `recentItem.track`; `visitedAt` becomes the recency
+key. Powers the command palette empty-state rail and the recent-items
+component. Server-side debounced 5 seconds — fast nav (back/forward)
+doesn't spam writes.
+
+## IssueSavedView
+
+Per-user named filter preset for `/issues`. Distinct from the legacy
+`SavedView` model (which mixes workspace-shared and user-private
+rows). Each `IssueSavedView` is owned by exactly one user; `filters`
+is an opaque JSON blob (shape lives client-side / in zod), `sortKey`
+is an optional sort hint, `orderIndex` is the explicit chip-rail
+ordering. See [Saved Views](/guide/saved-views.html).
+
+## Note
+
+Per-(workspace, user) markdown scratchpad. Surfaced via the dashboard
+`<QuickNotesWidget />` and the `notes.*` MCP namespace. Pinned notes
+float to the top; `archivedAt` is the soft-delete path. Notes are
+**personal** — agents leave notes for *themselves*, not for the
+operator. The `note.convertToIssue` mutation spawns a real Issue from
+a note's body without auto-archiving the source. See
+[Quick Notes](/guide/quick-notes.html).
+
 ## Junctions
 
 Two many-to-many junctions are worth naming for completeness:

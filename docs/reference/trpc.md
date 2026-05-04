@@ -29,7 +29,7 @@ error shapes all flow from this router definition.
 |-------------------|-----------------------------------------------------------------------------------------------------------------|
 | `workspace`       | `list`, `current`, `create`, `listMembers`, `addMember`, `setMemberRole`, `removeMember` (admin)                |
 | `project`         | `list`, `byId`, `create`, `update`, `archive`                                                                    |
-| `issue`           | `list`, `byId`, `create`, `update`, `assign`, `softDelete`, `bulkStatus`, `bulkSetLabels`, `bulkAssign`, `bulkAssignAgent` |
+| `issue`           | `list`, `byId`, `create`, `update`, `assign`, `softDelete`, `snooze`, `unsnooze`, `snoozeMany`, `nudge`, `bulkTransition`, `bulkAddLabel`, `bulkRemoveLabel`, `bulkAssign`, `bulkAssignAgent`, `bulkArchive` |
 | `comment`         | `create`, `update`, `softDelete`                                                                                 |
 | `analytics`       | `summary`, `statusDistribution`, `throughput`, `cycleTime`, `slaBreaches`, `dispatch.summary`, `dispatch.timeseries` |
 | `plugin`          | `list`, `register`, `approve`, `suspend`, `issueApiKey`, `revokeApiKey`                                          |
@@ -47,10 +47,18 @@ error shapes all flow from this router definition.
 | `initiative`      | `list`, `byId`, `create`, `update`, `linkProject`, `unlinkProject`                                               |
 | `relation`        | `add`, `remove`, `listForIssue`                                                                                  |
 | `time`            | `start`, `stop`, `log`, `list`, `summary`, `running`                                                             |
-| `attachment`      | `initUpload`, `finalize`, `list`, `getDownloadUrl`, `delete`                                                     |
+| `attachment`      | `initUpload`, `finalize`, `attachLink`, `list`, `getDownloadUrl`, `delete`                                       |
 | `access`          | `list`, `create`, `update`, `revoke`, `delete`, `rotate`, `createPersonal`, `createSession`                      |
 | `integration`     | `list`, `byKind`, `applyToAgent`                                                                                 |
 | `runtime`         | `list`, `byId`, `register`, `heartbeat`, `archive`, `update`                                                     |
+| `pin`             | `list`, `set`, `toggle` (legacy issue-only); `listAll`, `add`, `remove`, `toggleEntity`, `reorder` (polymorphic) |
+| `recentItem`      | `list`, `track`                                                                                                  |
+| `commandPalette`  | `search`                                                                                                         |
+| `savedView`       | `list`, `create`, `update`, `delete`                                                                             |
+| `note`            | `list`, `create`, `update`, `archive`, `unarchive`, `delete`, `convertToIssue`                                   |
+| `inbox`           | `list`, `badge`, `visit`                                                                                         |
+| `dashboard`       | `suggestions`, `stalledInProgress`                                                                               |
+| `notification`    | `list`, `markRead`, `markAllRead`, `dismiss`                                                                     |
 
 ## Notable procedures
 
@@ -244,6 +252,57 @@ page can be smaller than `limit` after the merge cuts off the trailing
 rows from the longest source. The `AgentTimeline` component handles
 this by gating "load more" on either `nextBefore == null` or zero new
 rows.
+
+### `note.*`
+
+Per-(workspace, user) markdown scratchpad. The dashboard
+`<QuickNotesWidget />` is the sole human consumer; the MCP namespace
+`notes.*` mirrors a narrower agent-facing subset (no `unarchive`, no
+`delete`, no `convertToIssue` — those are human-only).
+
+| Procedure | Summary |
+|---|---|
+| `list({ archived?, limit? })` | Caller's notes ordered by `(pinned desc, updatedAt desc)`. Default unarchived. |
+| `create({ title?, body, pinned? })` | Create a note for the calling user. |
+| `update({ id, title?, body?, pinned? })` | Patch a note the caller owns. `title: null` clears the title. |
+| `archive({ id })` | Soft-archive. |
+| `unarchive({ id })` | Reverse archive. |
+| `delete({ id })` | Hard-delete. Prefer `archive` — this is the cleanup path. |
+| `convertToIssue({ id, projectId? })` | Spawn an Issue with `title = note.title \|\| first line of body` and `description = body`. The note is left in place. Returns `{ issueId, issueKey, number }`. |
+
+### `attachment.attachLink`
+
+Records an external URL as an `Attachment` with `kind = LINK`. Same
+input shape as the MCP `attachments.attachLink` tool: `{ targetType,
+targetId, externalUrl, linkTitle? }`. When `linkTitle` is omitted,
+Forge attempts a best-effort scrape of the page's `<title>` (5s
+timeout, follows redirects, reads up to 64 KB) before falling back to
+the URL hostname.
+
+### `pin.*` (polymorphic)
+
+The legacy issue-only procs (`list`, `set`, `toggle`) are preserved
+verbatim for backward compat with existing Hermes/agent runtimes. New
+consumers use the polymorphic surface:
+
+| Procedure | Summary |
+|---|---|
+| `listAll({ workspaceId? })` | All pins for the caller, hydrated to small "card" objects. Dead targets are silently dropped. |
+| `add({ targetType, targetId, workspaceId? })` | Add a pin. |
+| `remove({ id })` | Remove by Pin id. |
+| `toggleEntity({ targetType, targetId, workspaceId? })` | Convenience: add if absent, remove if present. |
+| `reorder({ ids })` | Set `orderIndex` based on the array position. |
+
+`targetType` is `PinTargetType` (`ISSUE` / `PROJECT` / `INITIATIVE` /
+`SAVED_VIEW` / `CYCLE` / `AGENT`). `workspaceId` may be null for
+cross-workspace pins (the legacy topbar-strip semantic).
+
+### `recentItem.*`
+
+| Procedure | Summary |
+|---|---|
+| `list({ limit? })` | Most-recently-visited entities for the caller in this workspace, hydrated. |
+| `track({ targetType, targetId })` | Upsert a row. Server-side debounced 5s — fast nav doesn't spam writes. |
 
 ## Cross-references
 

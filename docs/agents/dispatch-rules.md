@@ -76,6 +76,15 @@ rule that targets an offline agent is fine; the rule just won't fire while
 the agent is offline.
 :::
 
+::: info Run controls and dispatch
+The dispatcher also respects active `AgentRun.controlState`. An agent
+with a `PAUSE_REQUESTED` or `CANCEL_REQUESTED` run is treated as
+ineligible for new work until the runtime acks the request and the
+state returns to `NONE`. Operators can pause an agent in flight without
+worrying that auto-dispatch will silently route more work to it. See
+[Agents → Overview → Run controls](/agents/overview.html#agent-run-controls).
+:::
+
 ## Where to manage rules
 
 Settings → Dispatch Rules. The page lets you:

@@ -101,8 +101,11 @@ export default defineConfig({
         {
           text: "Working in Forge",
           items: [
+            { text: "Inbox", link: "/guide/inbox.html" },
             { text: "Workspaces", link: "/guide/workspaces.html" },
             { text: "Issues", link: "/guide/issues.html" },
+            { text: "Quick Notes", link: "/guide/quick-notes.html" },
+            { text: "Saved Views", link: "/guide/saved-views.html" },
             { text: "Projects & Initiatives", link: "/guide/projects-and-initiatives.html" },
             { text: "Sprints", link: "/guide/sprints.html" },
             { text: "Time & Attachments", link: "/guide/time-and-attachments.html" },

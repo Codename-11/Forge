@@ -27,6 +27,7 @@ import { dispatchRuleRouter } from "./dispatch-rule";
 import { eventRouter } from "./event";
 import { inboxRouter } from "./inbox";
 import { initiativeRouter } from "./initiative";
+import { noteRouter } from "./note";
 import { notificationRouter } from "./notification";
 import { pinRouter } from "./pin";
 import { recentItemRouter } from "./recent-item";
@@ -54,6 +55,7 @@ export const appRouter = router({
   initiative: initiativeRouter,
   integration: integrationRouter,
   notification: notificationRouter,
+  note: noteRouter,
   issue: issueRouter,
   label: labelRouter,
   pin: pinRouter,

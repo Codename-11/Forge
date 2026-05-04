@@ -206,6 +206,49 @@ naming, where the agent posts updates, escalation paths. Keep them short;
 they're prepended in front of the operator's actual content.
 :::
 
+## Agent run controls
+
+Once an agent is in flight on an issue, the operator can intervene
+without waiting for the agent to notice. Each `AgentRun` carries a
+`controlState` (`AgentRunControlState`):
+
+| State | Meaning |
+|---|---|
+| `NONE` | Steady state. The run is proceeding normally. |
+| `PAUSE_REQUESTED` | Operator asked the agent to pause on its next loop tick. |
+| `CANCEL_REQUESTED` | Operator asked the agent to abort the run. |
+
+Three procs write the state:
+
+- `agentRun.requestPause({ runId })`
+- `agentRun.requestCancel({ runId })`
+- `agentRun.requestRedirect({ runId, toAgentId })` — cancel + reassign,
+  which triggers the regular `AGENT_ASSIGNED` dispatch chain for the
+  new agent.
+
+Each call:
+
+1. Writes the new `controlState` plus `controlRequestedAt` and
+   `controlRequestedById`.
+2. Fires an `AGENT_RUN_CONTROL_REQUESTED` audit event.
+3. POSTs an `AGENT_RUN_CONTROL` webhook to the agent's `webhookUrl`
+   (best-effort, same plumbing as comment fan-out).
+
+The runtime is responsible for honoring the request on its next loop
+tick and resetting `controlState` to `NONE` (or transitioning the run
+to a terminal state for cancel). Until the runtime acks, the UI
+renders a "pause requested" / "cancel requested" badge so the operator
+knows the request is in flight but not yet effective.
+
+`RUN_PAUSED`, `RUN_RESUMED`, and `RUN_CANCELED` events are emitted by
+runtimes that have adopted the protocol (Hermes; Claude Code via the
+local `forge` daemon). Runtimes that haven't adopted it yet just don't
+act on the requests; the request stays pending until the operator
+clears it or the run reaches a terminal state on its own.
+
+The agent UI surfaces these via `<RunControlMenu />` on each in-flight
+pipeline row, with options for pause / cancel / redirect-to-…
+
 ## Where to look
 
 - **Agents dashboard** — `/w/<slug>/agents`. List of all non-archived agents

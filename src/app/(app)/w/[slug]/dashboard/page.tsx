@@ -23,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CycleChip } from "@/components/cycle-chip";
 import { ProjectChip } from "@/components/project-chip";
+import { QuickNotesWidget } from "@/components/quick-notes-widget";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
@@ -137,6 +138,8 @@ export default function DashboardPage() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-6 p-6">
           <GreetingBar greeting={greeting} name={firstName} slug={slug} />
+
+          <QuickNotesWidget />
 
           <OnboardingCard
             projectsCount={projects?.items.length ?? 0}
@@ -822,7 +825,7 @@ function IssueRow({
         <span className="truncate">{title}</span>
         <span
           className={
-            "ml-auto text-[0.6875rem] " +
+            "text-meta ml-auto " +
             (trailingTone === "warn" ? "text-warning" : "text-muted-foreground")
           }
         >

@@ -123,6 +123,29 @@ The roadmap is one of the few places mouse interaction is faster than
 keyboard. Drag-and-drop is the natural expression of "move this here."
 :::
 
+## Project Overview tab
+
+Project detail pages (`/w/<slug>/projects/<id>`) default to an
+**Overview** tab — the at-a-glance read of where the project actually
+is.
+
+The overview tab renders:
+
+- **Header stats** — issue count by status category (BACKLOG / TODO /
+  IN_PROGRESS / IN_REVIEW / DONE / CANCELED), a tiny progress bar, and
+  the timeline (start → target).
+- **Current sprint slice** — issues from this project that are
+  members of the workspace's active sprint. Useful for "what is this
+  project landing this sprint."
+- **Members** — the human assignees and assigned agents that have
+  touched issues in the project recently.
+- **Recent activity** — the last N events on issues in the project,
+  pulled from `ActivityEvent` filtered to `subjectId IN
+  project.issues`.
+
+Switch to the **List** tab for the full filterable issue list (with
+bulk-select), or **Board** for the kanban view.
+
 ## Project lifecycle in practice
 
 A typical flow:

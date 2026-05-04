@@ -3772,6 +3772,165 @@ export const mcpTools = {
       };
     },
   },
+
+  // ---------------------------------------------------------------------- Notes
+  //
+  // Per-(workspace, user) markdown scratchpad. The dashboard's
+  // <QuickNotesWidget /> is the human surface; agents use these tools to
+  // leave themselves notes (reasoning trails, follow-up reminders,
+  // cross-issue context). Each note is owned by exactly one actor —
+  // these tools never read or write another user's notes. When the
+  // calling API key is agent-linked, "owner" is the agent's linked
+  // userId. When it's a personal/session key, "owner" is the human.
+  //
+  // For shared, conversational notes use `comments.create`. For
+  // project-level docs use issue descriptions. These tools are
+  // intentionally narrow.
+
+  /**
+   * Create a personal note for the calling actor. Markdown body. Notes
+   * are private to the actor — agents leave notes for themselves, not
+   * for the operator. To leave a note for someone else, use
+   * `comments.create` on the relevant issue (their inbox will pick it up
+   * via @-mention).
+   */
+  "notes.create": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      title: z
+        .string()
+        .max(200)
+        .optional()
+        .describe("Optional title (≤200 chars). Body's first line is used as a fallback."),
+      body: z
+        .string()
+        .min(1)
+        .max(50_000)
+        .describe("Markdown body. Required."),
+      pinned: z
+        .boolean()
+        .default(false)
+        .describe("Pin to the top of the caller's notes list."),
+    }),
+    async run(
+      input: { title?: string; body: string; pinned: boolean },
+      ctx: McpContext,
+    ) {
+      const userId = await resolveActorId(ctx);
+      return db.note.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          userId,
+          title: input.title?.trim() || null,
+          body: input.body,
+          pinned: input.pinned,
+        },
+      });
+    },
+  },
+
+  /**
+   * List the caller's own notes in this workspace. Unarchived rows by
+   * default; pass `archived: true` to list the archive. Ordered by
+   * `(pinned desc, updatedAt desc)`.
+   */
+  "notes.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      archived: z
+        .boolean()
+        .default(false)
+        .describe("When true, list archived notes instead of active ones."),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .default(20)
+        .describe("Max rows to return (default 20, max 100)."),
+    }),
+    async run(input: { archived: boolean; limit: number }, ctx: McpContext) {
+      const userId = await resolveActorId(ctx);
+      return db.note.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          userId,
+          archivedAt: input.archived ? { not: null } : null,
+        },
+        orderBy: [{ pinned: "desc" }, { updatedAt: "desc" }],
+        take: input.limit,
+      });
+    },
+  },
+
+  /**
+   * Patch fields on one of the caller's own notes. Pass any subset of
+   * `title` / `body` / `pinned`. Cross-actor mutation is blocked — the
+   * note must belong to the same actor that owns this API key.
+   */
+  "notes.update": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().describe("Note id (cuid)."),
+      title: z
+        .string()
+        .max(200)
+        .nullable()
+        .optional()
+        .describe("Pass null to clear, omit to leave unchanged."),
+      body: z.string().min(1).max(50_000).optional(),
+      pinned: z.boolean().optional(),
+    }),
+    async run(
+      input: {
+        id: string;
+        title?: string | null;
+        body?: string;
+        pinned?: boolean;
+      },
+      ctx: McpContext,
+    ) {
+      const userId = await resolveActorId(ctx);
+      const existing = await db.note.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId, userId },
+      });
+      if (!existing) throw new Error("Note not found.");
+      return db.note.update({
+        where: { id: existing.id },
+        data: {
+          ...(input.title !== undefined
+            ? { title: input.title === null ? null : input.title.trim() || null }
+            : {}),
+          ...(input.body !== undefined ? { body: input.body } : {}),
+          ...(input.pinned !== undefined ? { pinned: input.pinned } : {}),
+        },
+      });
+    },
+  },
+
+  /**
+   * Soft-archive one of the caller's own notes — bumps it out of the
+   * default list. Reverse via the human UI's "unarchive" action; there
+   * is no `notes.unarchive` MCP tool by design (agents shouldn't be
+   * resurrecting archived notes silently).
+   */
+  "notes.archive": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().describe("Note id (cuid)."),
+    }),
+    async run(input: { id: string }, ctx: McpContext) {
+      const userId = await resolveActorId(ctx);
+      const existing = await db.note.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId, userId },
+      });
+      if (!existing) throw new Error("Note not found.");
+      return db.note.update({
+        where: { id: existing.id },
+        data: { archivedAt: new Date() },
+      });
+    },
+  },
 } as const;
 
 export type McpToolName = keyof typeof mcpTools;
