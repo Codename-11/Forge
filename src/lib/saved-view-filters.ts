@@ -98,6 +98,46 @@ export function safeParseFilters(input: unknown): SavedViewFilters {
   return r.success ? r.data : {};
 }
 
+/**
+ * Order-independent value-equality on two filter blobs. Arrays are
+ * compared as sets (order doesn't matter to the query), and missing
+ * vs. empty-array vs. undefined all collapse to "no filter set" so a
+ * canonicalized blob compares equal to a freshly-built one.
+ *
+ * Used by the saved-views bar to decide whether the current
+ * `/issues` filter state matches an existing view exactly. When it
+ * does, the bar surfaces "Save changes" + "New view"; when it
+ * doesn't, it offers "Save view".
+ */
+export function filtersEqual(
+  a: SavedViewFilters | null | undefined,
+  b: SavedViewFilters | null | undefined,
+): boolean {
+  const A = a ?? {};
+  const B = b ?? {};
+  const keys = new Set<string>([...Object.keys(A), ...Object.keys(B)]);
+  for (const k of keys) {
+    const va = (A as Record<string, unknown>)[k];
+    const vb = (B as Record<string, unknown>)[k];
+    if (Array.isArray(va) || Array.isArray(vb)) {
+      const aa = Array.isArray(va) ? [...va].map(String).sort() : [];
+      const bb = Array.isArray(vb) ? [...vb].map(String).sort() : [];
+      if (aa.length !== bb.length) return false;
+      for (let i = 0; i < aa.length; i++) {
+        if (aa[i] !== bb[i]) return false;
+      }
+      continue;
+    }
+    // Treat undefined and "false" as equivalent for booleans —
+    // omitting a toggle and explicitly setting it false both mean
+    // "off". Mirrors `isEmptyFilters`.
+    const va_n = va === undefined || va === false ? null : va;
+    const vb_n = vb === undefined || vb === false ? null : vb;
+    if (va_n !== vb_n) return false;
+  }
+  return true;
+}
+
 /** Lookup table for `updatedSince`. Returns the threshold as a Date. */
 export function updatedSinceToDate(window: UpdatedSinceWindow): Date {
   const days = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 }[window];

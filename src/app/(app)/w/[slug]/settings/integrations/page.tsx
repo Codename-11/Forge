@@ -1,10 +1,23 @@
 "use client";
 import Link from "next/link";
+import { useState } from "react";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { Topbar } from "@/components/topbar";
 import { Card } from "@/components/settings/card";
-import { Server, Terminal, MonitorPlay, Code2, Webhook } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Server,
+  Terminal,
+  MonitorPlay,
+  Code2,
+  Webhook,
+  Mail,
+  KeyRound,
+  Copy,
+  RefreshCw,
+} from "lucide-react";
 
 const ICONS = { Server, Terminal, MonitorPlay, Code2, Webhook } as const;
 
@@ -78,8 +91,197 @@ export default function IntegrationsPage() {
               </Card>
             );
           })}
+
+          <EmailIngestSection />
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Email-to-issue (beta) — exposes a webhook endpoint at
+ * `/api/ingest/email`. Toggle + HMAC secret rotation. Provider
+ * wiring (Postmark / SendGrid inbound) lives in the operator's
+ * deployment, not in Forge itself; this UI captures the contract
+ * and lets admins manage the secret. Off by default.
+ */
+function EmailIngestSection() {
+  const ws = useWorkspace();
+  const utils = trpc.useUtils();
+  const isAdmin = ws.role === "OWNER" || ws.role === "ADMIN";
+
+  const { data: status } = trpc.workspace.emailIngestStatus.useQuery(undefined, {
+    enabled: isAdmin,
+  });
+  const { data: current } = trpc.workspace.current.useQuery(undefined, {
+    enabled: isAdmin,
+  });
+
+  const [pendingSecret, setPendingSecret] = useState<string | null>(null);
+
+  const updateWorkspace = trpc.workspace.update.useMutation({
+    onSuccess: () => {
+      utils.workspace.current.invalidate();
+      utils.workspace.emailIngestStatus.invalidate();
+      toast.success("Email ingest updated.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const rotateSecret = trpc.workspace.rotateEmailIngestSecret.useMutation({
+    onSuccess: ({ secret }) => {
+      setPendingSecret(secret);
+      utils.workspace.emailIngestStatus.invalidate();
+      toast.success("Secret regenerated — copy it now.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (!isAdmin) return null;
+
+  const enabled = current?.emailIngestEnabled ?? false;
+  const secretSet = status?.secretSet ?? false;
+  const inboxAddress = `inbox+${(status?.workspaceKey ?? ws.key).toLowerCase()}@forge.axiom-labs.dev`;
+  const examplePayload = JSON.stringify(
+    {
+      workspaceKey: status?.workspaceKey ?? ws.key,
+      from: "alice@example.com",
+      subject: "Bug: dashboard crashes on load",
+      body: "Steps to reproduce…",
+      attachments: [],
+    },
+    null,
+    2,
+  );
+
+  function copy(text: string, label = "Copied") {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => toast.success(label))
+      .catch(() => toast.error("Clipboard write failed."));
+  }
+
+  return (
+    <Card as="div">
+      <div className="flex items-start gap-3 p-4">
+        <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-subtle/40 text-foreground/80">
+          <Mail className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1 space-y-3">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-foreground">
+              Email-to-issue
+            </h3>
+            <span
+              className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+              title="The endpoint is wired and accepts signed payloads, but no upstream provider integration ships yet."
+            >
+              beta
+            </span>
+            {enabled && (
+              <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-emerald-700">
+                enabled
+              </span>
+            )}
+          </div>
+          <p className="text-[0.8125rem] text-muted-foreground">
+            POST signed JSON to <code className="font-mono">/api/ingest/email</code>{" "}
+            and Forge creates an issue. Useful for wiring Postmark /
+            SendGrid inbound webhooks to a target inbox.
+          </p>
+
+          <label className="flex items-center justify-between gap-3 rounded-md border border-border bg-background/40 p-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">Enable email ingestion</div>
+              <div className="text-xs text-muted-foreground">
+                When off, the endpoint returns 403 even with a valid
+                signature.
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) =>
+                updateWorkspace.mutate({ emailIngestEnabled: e.target.checked })
+              }
+              className="h-4 w-4"
+              disabled={updateWorkspace.isPending}
+            />
+          </label>
+
+          <div className="space-y-2 rounded-md border border-border bg-background/40 p-3">
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs font-medium">HMAC secret</span>
+              <span className="text-[0.6875rem] text-muted-foreground">
+                {secretSet ? "configured" : "not yet generated"}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto h-7 text-[0.6875rem]"
+                disabled={rotateSecret.isPending}
+                onClick={() => rotateSecret.mutate()}
+              >
+                <RefreshCw className="h-3 w-3" />
+                {secretSet ? "Rotate secret" : "Generate secret"}
+              </Button>
+            </div>
+            {pendingSecret && (
+              <div className="rounded border border-warning/30 bg-warning/10 p-2 text-[0.6875rem]">
+                <div className="mb-1 font-semibold text-warning">
+                  Copy now — this secret is shown once.
+                </div>
+                <code className="block break-all font-mono">
+                  {pendingSecret}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => copy(pendingSecret, "Secret copied.")}
+                  className="mt-1 inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                >
+                  <Copy className="h-3 w-3" /> Copy
+                </button>
+              </div>
+            )}
+            <p className="text-[0.6875rem] text-muted-foreground">
+              The signature header is{" "}
+              <code className="font-mono">x-forge-email-signature</code>:
+              hex-encoded HMAC-SHA256 of the raw request body using
+              this secret.
+            </p>
+          </div>
+
+          <div className="space-y-2 rounded-md border border-border bg-background/40 p-3 text-[0.6875rem] text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">Target inbox</span>
+              <code className="font-mono text-foreground">{inboxAddress}</code>
+              <button
+                type="button"
+                onClick={() => copy(inboxAddress, "Inbox address copied.")}
+                className="ml-auto inline-flex items-center gap-1 hover:text-foreground"
+                title="Copy"
+              >
+                <Copy className="h-3 w-3" />
+              </button>
+            </div>
+            <p>
+              The address above is a placeholder — actual Postmark /
+              SendGrid wiring lands in a future run. Today the
+              endpoint is the contract.
+            </p>
+            <details className="text-foreground/80">
+              <summary className="cursor-pointer text-foreground hover:text-ember">
+                Example payload
+              </summary>
+              <pre className="mt-2 overflow-x-auto rounded bg-card/60 p-2 font-mono text-[0.625rem] text-foreground/90">
+                {examplePayload}
+              </pre>
+            </details>
+          </div>
+        </div>
+      </div>
+    </Card>
   );
 }

@@ -2,6 +2,184 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-04 — Today + What's New + Quick-save + Pomodoro + Email stub (Run B of 2)
+
+Run B of a 2-run plan; Run A landed at `b56001f`. Five UI-mostly
+features shipped together in one squashed Forge commit, single
+migration `0027_pomodoro_email`, container rebuild + push to master.
+Pure surface work — every backend addition is read-side or a single
+endpoint; no event-fan-out changes, no audit branches, no MCP tools.
+
+### Pack 1 — Today widget on the dashboard
+
+- **`dashboard.today` proc** — three-region payload: active sprint
+  countdown, due-soon issues (next 7d, max 5, overdue-but-open
+  included), and a 7-entry week-peek strip with per-day counts. UTC
+  date keys (`YYYY-MM-DD`) so the client can match cells without
+  timezone math; the visual "today" highlight comes from a
+  client-side local-date resolution. Uses ISO-week alignment (Mon-
+  start) so the strip is always seven contiguous days.
+- **`<TodayWidget />`** — sits between the GreetingBar and Quick
+  Notes on the dashboard. Empty-states inline: all-empty collapses
+  to a "Nothing scheduled — fluid week" tile rather than vanishing;
+  sprint-without-due-soon hides the middle region but still shows
+  countdown + week peek. Sprint row → `/cycles/{id}`; due-soon row
+  → issue detail; week-peek day → `/issues` (date-filter is queued
+  for a follow-up).
+
+### Pack 2 — What's New rail
+
+- **`CHANGELOG.md`** — new file at the repo root in
+  Keep-a-Changelog format. Backfilled with terse entries for the
+  past ~6 weeks pulled from DEVLOG headings and `git log` (e.g.
+  Watch/Journal/Slash, Quick Notes, UX revamp wave, agent
+  awareness/Runtime, etc.). One line per item under
+  Added/Changed/Fixed/Removed.
+- **`system.changelog` + `system.changelogFull` procs** — read the
+  CHANGELOG.md at request time, cached in process memory by mtime.
+  Custom Keep-a-Changelog parser splits `## [version] — heading`
+  blocks and groups bullets by `### Added/Changed/Fixed/Removed`.
+  Unknown subsections are ignored. No DB column.
+- **`<WhatsNewTile />`** — dashboard tile, sits below the Standup
+  tile. Shows the most recent entry's heading + 4 bullets, then a
+  short list of the next few headings, then a "View all" link.
+  Type chips (added/changed/fixed/removed) re-use the warm-earthy
+  success/ember/danger tokens — no new colors introduced.
+- **`/w/[slug]/whats-new` page** — full changelog rendered with the
+  same Topbar + scroll-wrapper pattern as `/docs`. Type-grouped
+  bullets per version. No markdown library — the parser already
+  yields structured data, so the renderer is plain JSX.
+
+### Pack 3 — Quick-save filter as view
+
+- **`filtersEqual()` helper** added to `src/lib/saved-view-filters.ts`.
+  Order-independent (arrays compared as sets), `undefined === false`
+  for booleans (omitted toggle = explicit-false), missing-array =
+  empty-array. Plus 10 unit tests in `tests/unit/saved-view-
+  filters.test.ts`.
+- **SavedViewsBar inline buttons** — when current filters match an
+  existing saved view exactly, the bar surfaces a chip with the
+  matched view's name + a "Save changes" overwrite button + a "New
+  view" fork button. When filters don't match any view, a single
+  "Save view" button (the existing one). When no filters are active,
+  the button disables with a tooltip pointing at the chips.
+  Re-uses the existing `savedView.update` / `savedView.create`
+  procs — no new tRPC.
+
+### Pack 4 — Pomodoro on the time tracker
+
+- **Schema** — three new columns on `User`: `pomodoroEnabled`
+  (default false), `pomodoroMinutes` (default 25), `pomodoroBreakMinutes`
+  (default 5). Migration 0027.
+- **`user.updatePomodoro` mutation** — protected proc with
+  Zod-validated bounds (1–120). The values surface on
+  `user.me` so the time-tracker widget can read them without a
+  separate fetch.
+- **Settings UI** — new "Pomodoro" `<Section />` on
+  `/settings/account` after Onboarding. Toggle + two number
+  inputs; save button calls `user.updatePomodoro`.
+- **TimeTrackerWidget integration** — when a timer is running AND
+  `pomodoroEnabled` is on, schedules a `setTimeout` for
+  `pomodoroMinutes * 60_000` since the timer's `startedAt`. At
+  fire time, posts a non-modal sonner toast with two actions:
+  "Stop timer" (calls `timeEntry.stop`) and "Snooze 5m" (extends
+  the next reminder). The toast is dismissible; the timer keeps
+  running unless the operator explicitly stops. Tracks fired
+  cycles per `entryId` via a ref so re-renders / tab switches
+  don't re-fire the same prompt.
+
+### Pack 5 — Email-to-issue stub
+
+- **Schema** — `Workspace.emailIngestEnabled` (default false) +
+  `Workspace.emailIngestSecret` (nullable HMAC secret). Migration
+  0027. The secret field is **never** echoed back through
+  `workspace.current` — that proc was converted from `include` to
+  an explicit `select` that omits `emailIngestSecret`. The shape
+  of every previously-included scalar is preserved.
+- **`workspace.emailIngestStatus` query** — read-only `{ enabled,
+  secretSet, workspaceKey }` for the settings UI to render
+  "Generate" vs "Rotate".
+- **`workspace.rotateEmailIngestSecret` mutation** — admin-only.
+  Generates `feis_<40 hex>` (160 bits via `crypto.randomBytes`),
+  persists, returns the new secret once.
+- **`POST /api/ingest/email`** — accepts JSON
+  `{workspaceKey, from, subject, body, replyTo?, headers?,
+  attachments?}`. Resolves workspace by key (404 on miss). 403
+  when ingest disabled. HMAC-SHA256 of the raw body using the
+  workspace's secret, compared via `timingSafeEqual` against
+  `x-forge-email-signature` header (401 on mismatch). On accept:
+  creates an issue in the workspace's default status with `title
+  = subject` and `body = "From: <from>\n\n<body>"`, records
+  `ISSUE_CREATED` audit/event with `payload.source =
+  "email-ingest"`. If the `from` email matches a workspace
+  member, the issue's `claimedById` is set; otherwise it lands
+  unassigned. Attachments (if any) upload directly to MinIO via
+  `PutObjectCommand` after the issue transaction commits — failures
+  are logged and skipped, not rolled back.
+- **Settings → Integrations** gained an "Email-to-issue (beta)"
+  card: enable/disable toggle, generate/rotate-secret with a
+  one-time-display warning panel, the placeholder inbox address
+  (`inbox+{key}@forge.axiom-labs.dev`), and a collapsible
+  example-payload JSON snippet. Provider wiring (Postmark inbound,
+  etc.) explicitly out of scope.
+
+### Docs
+
+- New: `docs/guide/today-widget.md`, `docs/guide/whats-new.md`,
+  `docs/automation/email-ingest.md`. Sidebar updated to surface
+  them under Working in Forge / Automation Surfaces.
+- Updated: `docs/guide/saved-views.md` gained a "Quick-save when
+  filters match an existing view" section. `docs/guide/time-and-
+  attachments.md` gained a "Pomodoro" subsection.
+
+### Numbers
+
+- 1 migration (0027): 5 columns total (3 on User, 2 on Workspace).
+- 0 new tRPC routers (system.* added but `_app.ts` change is one
+  line). 5 new procs across `dashboard.today`,
+  `system.changelog/changelogFull`, `user.updatePomodoro`,
+  `workspace.emailIngestStatus / rotateEmailIngestSecret` (and
+  `workspace.update` gained one optional input field).
+- 1 new HTTP endpoint (`/api/ingest/email`).
+- 4 new components (`TodayWidget`, `WhatsNewTile`, the whats-new
+  page, the integrations email card) + 1 inline upgrade
+  (`SavedViewsBar`). Pomodoro fits inside the existing time-tracker
+  widget.
+- 11 net unit tests added: 10 for `filtersEqual`/`isEmptyFilters`/
+  `safeParseFilters`, 1 for the CHANGELOG.md parser shape.
+- 0 new lint errors. Pre-existing 5 errors unchanged. 232 → 243
+  tests pass.
+
+### Sequence (for the audit trail)
+
+1. Schema: append columns, format, generate, `migrate deploy`.
+2. Servers: dashboard.today, system router (+ `_app.ts`),
+   user.updatePomodoro, workspace email-ingest procs +
+   workspace.current select-list rewrite.
+3. UI: TodayWidget on dashboard above Quick Notes; WhatsNewTile
+   below Standup; whats-new page route under `/w/[slug]/whats-new`.
+4. SavedViewsBar enhancement + `filtersEqual` lib helper.
+5. Time-tracker widget pomodoro nudge + account settings section.
+6. Email-ingest API endpoint + integrations settings card.
+7. Docs (3 new pages, 2 updates) + sidebar entries.
+8. Tests: filtersEqual unit, changelog-parser smoke.
+9. `pnpm lint && pnpm typecheck && pnpm test` — 243 tests pass.
+10. `cd docs && pnpm build` — green.
+11. DEVLOG (this section), squashed commit, push, container rebuild.
+
+### Deferred
+
+- Today widget's week-peek day cells link to plain `/issues`. A
+  proper deep-link by `dueDate` requires either a new
+  `SavedViewFilters.dueOn` predicate or query-param support on
+  `issue.list` — punted to a follow-up that owns the saved-view
+  filter shape change.
+- Email ingest replies don't stitch into existing issues. Threading
+  via `In-Reply-To` / `References` is the obvious next step but
+  needs a real provider integration to test against.
+- The CHANGELOG.md is hand-curated. A `pnpm changelog` script that
+  pre-fills entries from DEVLOG headings would close the loop.
+
 ## 2026-05-04 — Watch + Journal + Slash + Hermes sync (Run A of 2)
 
 Run A of a 2-run plan. Three MCP-affecting features shipped together

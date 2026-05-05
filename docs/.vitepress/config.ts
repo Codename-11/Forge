@@ -103,6 +103,8 @@ export default defineConfig({
           items: [
             { text: "Inbox", link: "/guide/inbox.html" },
             { text: "Workspaces", link: "/guide/workspaces.html" },
+            { text: "Today Widget", link: "/guide/today-widget.html" },
+            { text: "What's New", link: "/guide/whats-new.html" },
             { text: "Issues", link: "/guide/issues.html" },
             { text: "Slash Commands", link: "/guide/slash-commands.html" },
             { text: "Watching", link: "/guide/watching.html" },
@@ -154,6 +156,7 @@ export default defineConfig({
             { text: "Webhooks", link: "/automation/webhooks.html" },
             { text: "Plugins", link: "/automation/plugins.html" },
             { text: "API Keys", link: "/automation/api-keys.html" },
+            { text: "Email-to-issue", link: "/automation/email-ingest.html" },
           ],
         },
       ],

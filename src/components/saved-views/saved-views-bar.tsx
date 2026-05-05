@@ -9,6 +9,7 @@ import { Confirm, QuickForm } from "@/components/ui/modal";
 import { PinButton } from "@/components/pins/pin-button";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import {
+  filtersEqual,
   isEmptyFilters,
   safeParseFilters,
   type SavedViewFilters,
@@ -137,6 +138,19 @@ export function SavedViewsBar({
 
   const hasViews = (views?.length ?? 0) > 0;
   const filtersDirty = !isEmptyFilters(currentFilters);
+
+  // Quick-save: when the current filters match an existing saved view
+  // exactly, surface "Save changes" (overwrite) + "New view" (clone)
+  // inline. When they don't match, fall through to "Save view" only.
+  // The match check is order-independent and ignores the stored
+  // sortKey, since the saved-view bar doesn't track sort yet.
+  const matchedView = useMemo(() => {
+    if (!filtersDirty || !views) return null;
+    return (
+      views.find((v) => filtersEqual(safeParseFilters(v.filters), currentFilters)) ??
+      null
+    );
+  }, [views, currentFilters, filtersDirty]);
 
   return (
     <>
@@ -289,27 +303,69 @@ export function SavedViewsBar({
           </ul>
         )}
 
-        {/* Save-as button at the end of the row. */}
+        {/* Save-as buttons at the end of the row. Two modes:
+            - filtersDirty + matchedView: "Save changes" overwrites
+              the matched view, "New view" forks. The matched view's
+              name is shown as a small label so the operator knows
+              what they'd be saving over.
+            - filtersDirty + no match: single "Save view" button.
+            - !filtersDirty: disabled "Save view" button. */}
         {hasViews && <span className="mx-1 h-4 w-px bg-border/60" aria-hidden />}
-        <button
-          type="button"
-          onClick={onCreate}
-          disabled={!filtersDirty}
-          className={cn(
-            "focus-ring inline-flex h-6 items-center gap-1 rounded-full border border-dashed px-2.5 text-meta",
-            filtersDirty
-              ? "border-ember/40 text-foreground hover:bg-ember/10"
-              : "cursor-not-allowed border-border/60 text-muted-foreground/60",
-          )}
-          title={
-            filtersDirty
-              ? "Save the current filters as a view"
-              : "Apply some filters first"
-          }
-        >
-          <BookmarkPlus className="h-3 w-3" aria-hidden />
-          Save view
-        </button>
+        {filtersDirty && matchedView ? (
+          <>
+            <span
+              className="text-meta inline-flex items-center gap-1 rounded-full border border-ember/30 bg-ember/10 px-2.5 py-0.5 text-foreground"
+              title={`Current filters match the saved view "${matchedView.name}".`}
+            >
+              <Bookmark className="h-3 w-3 fill-ember/60 text-ember" aria-hidden />
+              <span className="max-w-[140px] truncate">{matchedView.name}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                update.mutate({
+                  id: matchedView.id,
+                  filters: currentFilters,
+                })
+              }
+              className="focus-ring inline-flex h-6 items-center gap-1 rounded-full border border-ember/40 px-2.5 text-meta text-foreground hover:bg-ember/10"
+              title={`Overwrite "${matchedView.name}" with the current filters.`}
+              disabled={update.isPending}
+            >
+              <Bookmark className="h-3 w-3" aria-hidden />
+              Save changes
+            </button>
+            <button
+              type="button"
+              onClick={onCreate}
+              className="focus-ring inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-ember/40 px-2.5 text-meta text-foreground hover:bg-ember/10"
+              title="Save the current filters as a brand-new view."
+            >
+              <BookmarkPlus className="h-3 w-3" aria-hidden />
+              New view
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={onCreate}
+            disabled={!filtersDirty}
+            className={cn(
+              "focus-ring inline-flex h-6 items-center gap-1 rounded-full border border-dashed px-2.5 text-meta",
+              filtersDirty
+                ? "border-ember/40 text-foreground hover:bg-ember/10"
+                : "cursor-not-allowed border-border/60 text-muted-foreground/60",
+            )}
+            title={
+              filtersDirty
+                ? "Save the current filters as a view"
+                : "Apply some filters first"
+            }
+          >
+            <BookmarkPlus className="h-3 w-3" aria-hidden />
+            Save view
+          </button>
+        )}
       </div>
 
       {renameTarget && (
