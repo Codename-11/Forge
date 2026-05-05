@@ -41,6 +41,24 @@ those four headings) are ignored by the parser.
 - Group every entry under one of `### Added`, `### Changed`,
   `### Fixed`, `### Removed`.
 
+## Scaffolding new entries
+
+Run `pnpm changelog` to draft a fresh `[Unreleased]` block from
+recent activity. The script reads `CHANGELOG.md` for the most
+recent dated heading, then inspects:
+
+- `git log --no-merges --since=<that-date>` — categorised by
+  conventional-commits prefix (`feat:` → Added, `fix:` → Fixed,
+  `refactor:` / `polish:` / etc → Changed, `feat!:` / `BREAKING`
+  → Removed).
+- `DEVLOG.md` headings dated after the same anchor — emitted as a
+  `Source DEVLOG entries` block so reviewers can cross-reference.
+
+Output goes to **stdout only** — the script never writes to
+`CHANGELOG.md` directly. Review the draft, edit the bullets to
+match the user-facing voice (terser than commit subjects), then
+paste into the file.
+
 ## Where to next
 
 - [Today widget](/guide/today-widget.html) — the dashboard tile that

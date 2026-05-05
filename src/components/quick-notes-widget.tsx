@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
-  BookOpen,
+  NotebookPen,
   ChevronDown,
   ChevronRight,
   FilePlus,
@@ -13,11 +13,9 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation";
 import { trpc } from "@/lib/trpc";
 import { useHotkey } from "@/lib/keyboard";
 import { cn, relativeTime } from "@/lib/utils";
-import { useWorkspace } from "@/hooks/use-workspace";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 
 /**
@@ -32,8 +30,6 @@ import { MarkdownWithAttachments } from "@/components/markdown/attachment-render
  * Suppressed when the cursor is in an input/textarea (per `useHotkey`).
  */
 export function QuickNotesWidget() {
-  const ws = useWorkspace();
-  const router = useRouter();
   const utils = trpc.useUtils();
 
   const [collapsed, setCollapsed] = useState(false);
@@ -75,14 +71,27 @@ export function QuickNotesWidget() {
     onSuccess: () => utils.note.list.invalidate(),
     onError: (e) => toast.error(e.message),
   });
-  const convert = trpc.note.convertToIssue.useMutation({
-    onSuccess: ({ issueId, number }) => {
-      toast.success(`Converted to issue #${number}`);
-      utils.issue.list.invalidate();
-      router.push(`/w/${ws.slug}/issues/${issueId}`);
+  // The headless convert proc still exists for agent / programmatic
+  // callers, but the dashboard widget routes through the QuickCreate
+  // dialog so the operator can edit title/description and decide
+  // whether to archive the source note before submitting. Dispatched
+  // via a `forge:quick-create` CustomEvent — QuickCreate listens.
+  const convertViaQuickCreate = useCallback(
+    (note: { id: string; title: string | null; body: string }) => {
+      const firstLine = note.body.split("\n").find((l) => l.trim()) ?? "";
+      const seedTitle = (note.title?.trim() || firstLine.trim()).slice(0, 300);
+      window.dispatchEvent(
+        new CustomEvent("forge:quick-create", {
+          detail: {
+            title: seedTitle,
+            body: note.body,
+            archiveNoteId: note.id,
+          },
+        }),
+      );
     },
-    onError: (e) => toast.error(e.message),
-  });
+    [],
+  );
 
   const focusAdd = useCallback(() => {
     setCollapsed(false);
@@ -176,7 +185,7 @@ export function QuickNotesWidget() {
           {tab === "notes" ? (
             <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />
           ) : (
-            <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
+            <NotebookPen className="h-3.5 w-3.5 text-muted-foreground" />
           )}
           <span>{tab === "notes" ? "Notes" : "Journal"}</span>
           {tab === "notes" && count > 0 && (
@@ -386,7 +395,7 @@ export function QuickNotesWidget() {
                   onArchive={() => archive.mutate({ id: n.id })}
                   onUnarchive={() => unarchive.mutate({ id: n.id })}
                   onDelete={() => del.mutate({ id: n.id })}
-                  onConvert={() => convert.mutate({ id: n.id })}
+                  onConvert={() => convertViaQuickCreate(n)}
                 />
               ))}
             </ul>
@@ -454,7 +463,7 @@ function JournalBody({
       {/* Today's entry */}
       <div className="flex flex-col gap-2 border-b border-border px-4 py-3">
         <div className="flex items-center gap-2 text-meta text-muted-foreground">
-          <BookOpen className="h-3 w-3" />
+          <NotebookPen className="h-3 w-3" />
           <span className="font-mono uppercase tracking-wider">Today</span>
           <span className="text-muted-foreground/80">·</span>
           <span>{todayHeading}</span>

@@ -272,6 +272,17 @@ const filterSchema = z.object({
    */
   excludeSnoozed: z.boolean().default(false),
 
+  /**
+   * Single-day due-date filter. Format `YYYY-MM-DD` (UTC). Narrows to
+   * issues whose `dueDate` falls within `[startOfDay, startOfDay+1d)`.
+   * Powers the Today widget's week-peek day-cell deep-link to
+   * `/issues?dueOn=…`.
+   */
+  dueOn: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "dueOn must be YYYY-MM-DD")
+    .optional(),
+
   limit: z.number().min(1).max(500).default(50),
   cursor: cursorSchema,
 });
@@ -402,6 +413,15 @@ export const issueRouter = router({
                   { snoozedUntil: { lte: new Date() } },
                 ],
               }
+            : {}),
+          ...(input.dueOn
+            ? (() => {
+                // Parse YYYY-MM-DD as UTC midnight, then bracket the day.
+                const [y, m, d] = input.dueOn.split("-").map(Number);
+                const start = new Date(Date.UTC(y, m - 1, d));
+                const end = new Date(Date.UTC(y, m - 1, d + 1));
+                return { dueDate: { gte: start, lt: end } };
+              })()
             : {}),
           ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
           ...(blockedConstraint ?? {}),

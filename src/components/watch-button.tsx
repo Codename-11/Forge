@@ -1,6 +1,7 @@
 "use client";
-import { Eye, EyeOff } from "lucide-react";
+import { Bot, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
+import { Avatar } from "@/components/ui/avatar";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { MOTION } from "@/lib/motion";
@@ -126,14 +127,131 @@ export function WatchButton({
         )}
       </button>
       {watchers.length > 0 && (
-        <span
-          title={chipTitle}
-          className="text-meta rounded-full bg-subtle/60 px-1.5 font-mono text-muted-foreground"
-        >
-          {watchers.length}
-        </span>
+        <WatcherChip count={watchers.length} watchers={watchers} fallbackTitle={chipTitle} />
       )}
       {otherCount < 0 && null}
     </div>
+  );
+}
+
+/**
+ * Watcher count chip with a CSS-driven hover popover. The popover lists
+ * up to six watchers with avatars + names + handles, and a "+N more"
+ * spillover when the list overflows. We keep the native `title=` so
+ * keyboard / touch users still get a fallback tooltip — the popover is
+ * a richer enhancement, not a replacement.
+ *
+ * No Radix Popover dep — pure Tailwind `group-hover` + `opacity-0` /
+ * `pointer-events-none` so the layer is invisible until the chip is
+ * hovered. Anchored above the chip so it doesn't dip below the issue
+ * header on narrow viewports.
+ */
+function WatcherChip({
+  count,
+  watchers,
+  fallbackTitle,
+}: {
+  count: number;
+  watchers: WatcherRow[];
+  fallbackTitle: string;
+}) {
+  const MAX = 6;
+  const shown = watchers.slice(0, MAX);
+  const overflow = Math.max(0, watchers.length - MAX);
+  return (
+    <span className="group/watchers relative inline-flex">
+      <span
+        title={fallbackTitle}
+        className="text-meta rounded-full bg-subtle/60 px-1.5 font-mono text-muted-foreground"
+      >
+        {count}
+      </span>
+      <div
+        role="tooltip"
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute right-0 top-[calc(100%+6px)] z-50 w-64 rounded-md border border-border bg-popover p-2 shadow-md opacity-0 transition-opacity",
+          "group-hover/watchers:opacity-100 group-focus-within/watchers:opacity-100",
+        )}
+      >
+        <div className="mb-1 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+          Watchers ({count})
+        </div>
+        <ul className="flex flex-col gap-0.5">
+          {shown.map((w) => (
+            <li
+              key={w.id}
+              className="flex items-center gap-2 rounded px-1 py-0.5 text-meta"
+            >
+              <WatcherAvatar w={w} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-foreground">
+                  {w.user?.name ?? w.agent?.name ?? "Unknown"}
+                </div>
+                <div className="truncate font-mono text-[0.6875rem] text-muted-foreground">
+                  {w.user
+                    ? w.user.handle
+                      ? `@${w.user.handle}`
+                      : ""
+                    : w.agent
+                      ? `@${w.agent.profileKey}`
+                      : ""}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+        {overflow > 0 && (
+          <div className="mt-1 border-t border-border/60 px-1 pt-1 text-meta text-muted-foreground">
+            +{overflow} more
+          </div>
+        )}
+      </div>
+    </span>
+  );
+}
+
+type WatcherRow = {
+  id: string;
+  userId?: string | null;
+  agentId?: string | null;
+  user?: {
+    id: string;
+    name: string | null;
+    image: string | null;
+    handle?: string | null;
+  } | null;
+  agent?: {
+    id: string;
+    name: string;
+    profileKey: string;
+    avatar: string | null;
+  } | null;
+};
+
+function WatcherAvatar({ w }: { w: WatcherRow }) {
+  if (w.agent) {
+    // Agent watchers — show the bot glyph (or the agent's avatar emoji
+    // if set). Indigo tint matches the agent visual language elsewhere.
+    return (
+      <span
+        aria-hidden
+        className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-indigo-500/15 text-indigo-500"
+      >
+        {w.agent.avatar ? (
+          <span className="text-[0.6875rem]">{w.agent.avatar}</span>
+        ) : (
+          <Bot className="h-3 w-3" />
+        )}
+      </span>
+    );
+  }
+  return (
+    <Avatar
+      name={w.user?.name ?? null}
+      image={w.user?.image ?? null}
+      size={20}
+      className="shrink-0"
+    />
   );
 }

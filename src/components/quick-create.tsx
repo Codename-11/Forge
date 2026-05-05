@@ -17,6 +17,10 @@ import {
   parseSlashCommands,
   SLASH_COMMAND_HELP,
 } from "@/lib/slash-commands";
+import {
+  SlashAutocomplete,
+  useSlashAutocomplete,
+} from "@/components/slash-autocomplete";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 type Priority = (typeof PRIORITIES)[number];
@@ -68,6 +72,16 @@ export function QuickCreate() {
   const [projectId, setProjectId] = useState<string>("");
   const [restored, setRestored] = useState(false);
 
+  // External seeding: when QuickCreate is opened via a `forge:quick-create`
+  // event with `title` + `body` (e.g. from "Convert to issue" on a Quick
+  // Note), we surface a description textarea and pre-fill it. The
+  // optional `archiveNoteId` lives alongside so the success path can
+  // archive the source note when the operator opts in.
+  const [seedDescription, setSeedDescription] = useState<string>("");
+  const [showDescription, setShowDescription] = useState(false);
+  const [archiveNoteId, setArchiveNoteId] = useState<string | null>(null);
+  const [archiveOnCreate, setArchiveOnCreate] = useState(true);
+
   // Escalation: when ⌘⏎ is hit on a mode that has a richer full form,
   // we route to the matching NewXDialog with a seeded name.
   const [fullForm, setFullForm] =
@@ -113,6 +127,17 @@ export function QuickCreate() {
   const createProject = trpc.project.create.useMutation({
     onError: (err) => toast.error(err.message),
   });
+  // Optional follow-up: when QuickCreate was seeded from a note's
+  // "Convert to issue" action and the operator left the archive
+  // checkbox checked, archive the source note after the issue is
+  // persisted. Best-effort — failure toasts but doesn't block the
+  // create success path.
+  const archiveNote = trpc.note.archive.useMutation({
+    onError: (err) => toast.error(`Issue created — note archive failed: ${err.message}`),
+    onSuccess: () => {
+      void utils.note.list.invalidate();
+    },
+  });
 
   const busy =
     createIssue.isPending ||
@@ -144,7 +169,10 @@ export function QuickCreate() {
 
   const close = useCallback(
     (persistDraft: boolean) => {
-      if (persistDraft && text.trim().length > 0) {
+      // Don't persist the draft when we were seeded from an external
+      // event (note convert) — the user's intent was a one-shot, and
+      // restoring "From note: …" later would be confusing.
+      if (persistDraft && text.trim().length > 0 && !archiveNoteId) {
         saveDraft<DraftShape>(DRAFT_KEY, { text, mode: mode.kind });
       }
       setOpen(false);
@@ -152,28 +180,50 @@ export function QuickCreate() {
       setPriority("NONE");
       setProjectId("");
       setRestored(false);
+      setSeedDescription("");
+      setShowDescription(false);
+      setArchiveNoteId(null);
+      setArchiveOnCreate(true);
     },
-    [text, mode.kind],
+    [text, mode.kind, archiveNoteId],
   );
 
   const openFor = useCallback(
-    (override?: { projectId?: string }) => {
+    (override?: {
+      projectId?: string;
+      title?: string;
+      body?: string;
+      archiveNoteId?: string;
+    }) => {
       const next = modeForPath(pathname);
-      setMode(next);
+      // Force issue mode when seeded with a title/body (e.g. note
+      // convert) — picking that on a `/cycles` page should still go to
+      // an issue.
+      const seeded = !!(override?.title || override?.body);
+      const effectiveMode: Mode = seeded ? { kind: "issue" } : next;
+      setMode(effectiveMode);
       if (override?.projectId) setProjectId(override.projectId);
-      // Hydrate a draft if present + mode matches.
-      const draft = readDraft<DraftShape>(DRAFT_KEY);
-      if (draft && draft.text) {
-        // Only carry text across if the mode flavor matches (keeps an
-        // issue draft from surfacing on the cycles page).
-        if (!draft.mode || draft.mode === next.kind) {
-          setText(draft.text);
-          setRestored(true);
+
+      if (seeded) {
+        setText(override.title ?? "");
+        setSeedDescription(override.body ?? "");
+        setShowDescription(true);
+        setArchiveNoteId(override.archiveNoteId ?? null);
+        setArchiveOnCreate(true);
+        setRestored(false);
+      } else {
+        // Hydrate a draft if present + mode matches.
+        const draft = readDraft<DraftShape>(DRAFT_KEY);
+        if (draft && draft.text) {
+          if (!draft.mode || draft.mode === effectiveMode.kind) {
+            setText(draft.text);
+            setRestored(true);
+          } else {
+            setRestored(false);
+          }
         } else {
           setRestored(false);
         }
-      } else {
-        setRestored(false);
       }
       setOpen(true);
     },
@@ -198,7 +248,12 @@ export function QuickCreate() {
     document.addEventListener("click", clickHandler);
     const evtHandler = (e: Event) => {
       const detail =
-        (e as CustomEvent<{ projectId?: string }>).detail ?? {};
+        (e as CustomEvent<{
+          projectId?: string;
+          title?: string;
+          body?: string;
+          archiveNoteId?: string;
+        }>).detail ?? {};
       openFor(detail);
     };
     window.addEventListener("forge:quick-create", evtHandler);
@@ -312,28 +367,42 @@ export function QuickCreate() {
             return;
           }
           const applyCommands = commands.length > 0 ? commands : undefined;
+          // Seed description (note → issue path). If empty after trim,
+          // stay omitted so we don't write blank descriptions.
+          const seededDesc = seedDescription.trim() || undefined;
+          // Capture the archive intent before close() resets state.
+          const archiveTargetNoteId =
+            archiveNoteId && archiveOnCreate ? archiveNoteId : null;
           if (secondary) {
             // Create + open: same as primary but route to the new issue.
             const issue = await createIssue.mutateAsync({
               title: finalTitle,
+              description: seededDesc,
               projectId: projectId || undefined,
               priority,
               labelIds: [],
               applyCommands,
             });
             await utils.issue.list.invalidate();
+            if (archiveTargetNoteId) {
+              archiveNote.mutate({ id: archiveTargetNoteId });
+            }
             done(`Created #${issue.number}`);
             const base = ws ? `/w/${ws.slug}` : "";
             router.push(`${base}/issues/${issue.id}`);
           } else {
             const issue = await createIssue.mutateAsync({
               title: finalTitle,
+              description: seededDesc,
               projectId: projectId || undefined,
               priority,
               labelIds: [],
               applyCommands,
             });
             await utils.issue.list.invalidate();
+            if (archiveTargetNoteId) {
+              archiveNote.mutate({ id: archiveTargetNoteId });
+            }
             done(`Created #${issue.number}`);
           }
           return;
@@ -420,7 +489,24 @@ export function QuickCreate() {
     }
   }
 
+  // Slash autocomplete for issue / sub-issue modes. When the user types
+  // a top-of-body slash command, surface the dropdown so they can pick
+  // by keyword. Only enabled where commands actually parse.
+  const slashEnabled =
+    mode.kind === "issue" ||
+    (mode.kind === "issue-context" && mode.intent === "sub-issue");
+  const slash = useSlashAutocomplete({
+    value: text,
+    onChange: (next) => setText(next),
+    textareaRef: inputRef,
+  });
+
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    // Let the autocomplete consume nav / Enter / Tab / Escape first
+    // when it's open. When it returns true, we bail before running the
+    // QuickCreate Enter-to-submit shortcut so users can pick items
+    // without firing a create.
+    if (slashEnabled && slash.onKeyDown(e)) return;
     if (e.key === "Enter") {
       e.preventDefault();
       const secondary = e.metaKey || e.ctrlKey;
@@ -496,16 +582,22 @@ export function QuickCreate() {
               setProjectId("");
             }}
           />
-          <input
-            ref={inputRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={placeholder}
-            aria-label={`Quick-create ${modeLabel}`}
-            autoComplete="off"
-            className="focus-ring min-w-0 flex-1 bg-transparent px-1 text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
-          />
+          <div className="relative min-w-0 flex-1">
+            <input
+              ref={inputRef}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={onKeyDown}
+              {...(slashEnabled ? slash.bind : {})}
+              placeholder={placeholder}
+              aria-label={`Quick-create ${modeLabel}`}
+              autoComplete="off"
+              className="focus-ring w-full bg-transparent px-1 text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
+            />
+            {slashEnabled && slash.visible && (
+              <SlashAutocomplete {...slash.dropdownProps} />
+            )}
+          </div>
           {restored && (
             <span className="hidden shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.6875rem] uppercase tracking-wider text-ember sm:inline">
               Restored
@@ -550,6 +642,38 @@ export function QuickCreate() {
                 {c.keyword}
               </span>
             ))}
+          </div>
+        )}
+
+        {/* Seeded description — shown when QuickCreate was opened with
+            an external `forge:quick-create` event carrying `body` (e.g.
+            note → issue convert). The textarea is editable so the
+            operator can trim before submitting. */}
+        {showDescription && mode.kind === "issue" && (
+          <div className="border-t border-border/60 bg-card/30 px-3 py-2">
+            <label className="block">
+              <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                Description
+              </span>
+              <textarea
+                value={seedDescription}
+                onChange={(e) => setSeedDescription(e.target.value)}
+                rows={4}
+                className="focus-ring mt-1 w-full resize-y rounded-md border border-input bg-background/40 p-2 text-[0.8125rem] placeholder:text-muted-foreground/60 focus:outline-none"
+                placeholder="Description (markdown ok)…"
+              />
+            </label>
+            {archiveNoteId && (
+              <label className="mt-1.5 inline-flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={archiveOnCreate}
+                  onChange={(e) => setArchiveOnCreate(e.target.checked)}
+                  className="h-3 w-3 rounded border-border"
+                />
+                <span>Archive source note after creating issue</span>
+              </label>
+            )}
           </div>
         )}
 

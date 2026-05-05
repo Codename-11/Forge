@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Activity } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
@@ -17,6 +17,10 @@ import {
   SLASH_COMMAND_HINT,
   type SlashCommand,
 } from "@/lib/slash-commands";
+import {
+  SlashAutocomplete,
+  useSlashAutocomplete,
+} from "@/components/slash-autocomplete";
 
 /**
  * Main column of the issue detail page — description (inline-editable)
@@ -180,11 +184,21 @@ function Comments({
 }) {
   const utils = trpc.useUtils();
   const [draft, setDraft] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   // Pending commands are stashed here when we fire `createComment` so
   // the success callback can dispatch `applyCommands` once the
   // comment is persisted. `useState` keeps it in scope across renders
   // without re-fetching the form's draft.
   const [pendingCommands, setPendingCommands] = useState<SlashCommand[]>([]);
+
+  // Autocomplete: fires on top-of-body slash lines, inserts stubs on
+  // Enter / Tab / click. Same surface as QuickCreate; helps discover
+  // the seven command keywords without remembering them.
+  const slash = useSlashAutocomplete({
+    value: draft,
+    onChange: (next) => setDraft(next),
+    textareaRef: composerRef,
+  });
 
   const applyCommandsM = trpc.issue.applyCommands.useMutation({
     onSuccess: ({ results }) => {
@@ -322,14 +336,25 @@ function Comments({
         onDrop={drop.onDrop}
       >
         <DropOverlay active={drop.isOver} label="Drop to attach to comment" />
-        <textarea
-          placeholder="Leave a comment… (paste or drop files to attach)"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onPaste={paste.onPaste}
-          rows={2}
-          className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[0.8125rem]"
-        />
+        <div className="relative">
+          <textarea
+            ref={composerRef}
+            placeholder="Leave a comment… (paste or drop files to attach)"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onPaste={paste.onPaste}
+            onKeyDown={(e) => {
+              // Let autocomplete consume nav / Enter / Tab / Escape
+              // when the dropdown is open. The form's submit button
+              // still drives explicit submission via click.
+              slash.onKeyDown(e);
+            }}
+            {...slash.bind}
+            rows={2}
+            className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[0.8125rem]"
+          />
+          {slash.visible && <SlashAutocomplete {...slash.dropdownProps} />}
+        </div>
         {hasCommands && (
           <div className="text-meta text-muted-foreground">
             {SLASH_COMMAND_HINT}

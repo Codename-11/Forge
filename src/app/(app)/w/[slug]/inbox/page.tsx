@@ -1092,7 +1092,10 @@ function WatchingSection({ slug }: { slug: string }) {
       <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
         <Eye className="h-3 w-3" />
         <span>Watching</span>
-        <span className="font-mono normal-case tracking-normal text-muted-foreground/70">
+        {/* Pill count — matches the BucketSection / Mentions count
+            chip shape so the section header reads as a peer of the
+            other inbox sections. */}
+        <span className="rounded-full bg-subtle/70 px-1.5 font-mono normal-case tracking-normal text-muted-foreground">
           {count}
         </span>
         <ChevronDown className="ml-auto h-3 w-3 transition-transform group-open:rotate-180" />
