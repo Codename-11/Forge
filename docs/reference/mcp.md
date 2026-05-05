@@ -71,6 +71,10 @@ key contract.
 | `assign`     | Assign agent. Identify by `agentId` or `profileKey`.                         |
 | `reassign`   | Atomic handoff — see below.                                                  |
 | `assigned`   | List issues assigned to an agent.                                            |
+| `watch`      | Add the caller as a watcher of `issueId`. Idempotent. Identity is inferred from the API key (`linkedAgentId` → agent-watch, otherwise user-watch). |
+| `unwatch`    | Remove the caller's watch on `issueId`.                                      |
+| `listWatchers` | List watchers of an issue with user/agent identity fields.                |
+| `listWatching` | List issues the caller is currently watching.                             |
 
 **`reassign`** is the canonical agent-to-agent handoff. Input:
 `{ issueId, toProfileKey, rationale }` — `rationale` must be ≥ 10 characters.
@@ -226,10 +230,12 @@ not for the operator. To leave a note for someone else, use
 
 | Tool            | Scope          | Summary                                                                |
 |-----------------|----------------|------------------------------------------------------------------------|
-| `notes.create`  | `WRITE_ISSUES` | Create a personal note. Inputs: `{ title?, body, pinned? }`.            |
-| `notes.list`    | `READ_ISSUES`  | List the caller's own notes. Inputs: `{ archived?, limit? }`.           |
+| `notes.create`  | `WRITE_ISSUES` | Create a personal note. Inputs: `{ title?, body, pinned?, kind?, journalDate? }`. |
+| `notes.list`    | `READ_ISSUES`  | List the caller's own notes (NOTE-kind by default). Inputs: `{ archived?, kind?, limit? }`. |
 | `notes.update`  | `WRITE_ISSUES` | Patch one of the caller's notes. Inputs: `{ id, title?, body?, pinned? }`. |
 | `notes.archive` | `WRITE_ISSUES` | Soft-archive one of the caller's notes. Inputs: `{ id }`.               |
+| `notes.todayJournal` | `WRITE_ISSUES` | Get-or-create today's JOURNAL entry for the caller (timezone-aware). Idempotent. |
+| `notes.listJournal` | `READ_ISSUES` | List recent journal entries. Inputs: `{ from?, to?, limit? = 30 }`.    |
 
 Returns the resulting `Note` row(s). Cross-actor mutation is blocked
 at the resolver — passing an `id` owned by another user yields a

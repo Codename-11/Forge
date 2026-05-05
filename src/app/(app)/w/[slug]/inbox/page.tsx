@@ -16,6 +16,7 @@ import {
   Bot,
   CheckCheck,
   CalendarClock,
+  Eye,
   UserCircle2,
   X,
 } from "lucide-react";
@@ -563,6 +564,10 @@ export default function InboxPage() {
               />
 
               {!allWorkspaces && (
+                <WatchingSection slug={workspace.slug} />
+              )}
+
+              {!allWorkspaces && (
                 <Section
                   title={
                     <span className="flex items-center gap-2">
@@ -1063,6 +1068,56 @@ function SnoozedSection({
               <X className="h-3 w-3" />
               Unsnooze
             </button>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Watching — issues the caller has subscribed to via WatchButton.
+// Distinct from assignment / pin / snooze; rendered as a collapsible
+// section after the existing buckets so it doesn't dominate the page
+// for users who don't use the feature.
+// ---------------------------------------------------------------------------
+
+function WatchingSection({ slug }: { slug: string }) {
+  const { data, isLoading } = trpc.issue.watching.useQuery({ limit: 50 });
+  const items = data?.items ?? [];
+  const count = items.length;
+  if (!isLoading && count === 0) return null;
+  return (
+    <details className="group rounded-lg border border-border bg-card/30">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
+        <Eye className="h-3 w-3" />
+        <span>Watching</span>
+        <span className="font-mono normal-case tracking-normal text-muted-foreground/70">
+          {count}
+        </span>
+        <ChevronDown className="ml-auto h-3 w-3 transition-transform group-open:rotate-180" />
+      </summary>
+      <ul className="border-t border-border">
+        {items.map(({ issue: i }) => (
+          <li
+            key={i.id}
+            className="flex items-center gap-2 px-3 py-2 text-[0.75rem] hover:bg-subtle/40"
+          >
+            <Link
+              href={`/w/${slug}/issues/${i.id}`}
+              className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
+            >
+              <span className="text-id shrink-0 text-muted-foreground">
+                {i.project ? `${i.project.key}-` : ""}
+                {i.number}
+              </span>
+              <span className="truncate">{i.title}</span>
+              {i.status?.name && (
+                <span className="text-meta ml-auto shrink-0 text-muted-foreground">
+                  {i.status.name}
+                </span>
+              )}
+            </Link>
           </li>
         ))}
       </ul>

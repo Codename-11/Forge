@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
+  BookOpen,
   ChevronDown,
   ChevronRight,
   FilePlus,
@@ -36,6 +37,7 @@ export function QuickNotesWidget() {
   const utils = trpc.useUtils();
 
   const [collapsed, setCollapsed] = useState(false);
+  const [tab, setTab] = useState<"notes" | "journal">("notes");
   const [showArchived, setShowArchived] = useState(false);
   const [draft, setDraft] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
@@ -46,7 +48,7 @@ export function QuickNotesWidget() {
 
   const listQ = trpc.note.list.useQuery(
     { archived: showArchived, limit: 30 },
-    { staleTime: 30_000 },
+    { staleTime: 30_000, enabled: tab === "notes" },
   );
 
   const create = trpc.note.create.useMutation({
@@ -84,10 +86,52 @@ export function QuickNotesWidget() {
 
   const focusAdd = useCallback(() => {
     setCollapsed(false);
+    setTab("notes");
     setTimeout(() => addRef.current?.focus(), 0);
   }, []);
 
   useHotkey("n", focusAdd, []);
+
+  // Journal tab — get-or-create today's entry, list past entries.
+  const journalTodayM = trpc.note.todayJournal.useMutation({
+    onError: (e) => toast.error(e.message),
+  });
+  const journalListQ = trpc.note.listJournal.useQuery(
+    { limit: 30 },
+    { staleTime: 30_000, enabled: tab === "journal" },
+  );
+
+  const [journalDraft, setJournalDraft] = useState<{ id: string; body: string } | null>(null);
+  const [todayJournalId, setTodayJournalId] = useState<string | null>(null);
+
+  // Auto-create today's journal on tab focus.
+  useEffect(() => {
+    if (tab !== "journal") return;
+    if (todayJournalId) return;
+    journalTodayM.mutateAsync(undefined as unknown as void).then((row) => {
+      setTodayJournalId(row.id);
+      setJournalDraft({ id: row.id, body: row.body });
+      void utils.note.listJournal.invalidate();
+    }).catch(() => {});
+    // Run once per tab activation; subsequent dependencies handled inside.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  const journalUpdate = trpc.note.update.useMutation({
+    onSuccess: () => utils.note.listJournal.invalidate(),
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Build today's heading. Uses Intl.DateTimeFormat in the user's
+  // browser locale — picks up timezone from the user's environment.
+  const todayHeading = useMemo(() => {
+    const now = new Date();
+    return now.toLocaleDateString(undefined, {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    });
+  }, []);
 
   const items = listQ.data?.items ?? [];
   const count = items.length;
@@ -122,55 +166,129 @@ export function QuickNotesWidget() {
           type="button"
           onClick={() => setCollapsed((c) => !c)}
           className="focus-ring flex items-center gap-2 rounded text-sm font-medium hover:text-foreground"
-          title={collapsed ? "Expand notes" : "Collapse notes"}
+          title={collapsed ? "Expand" : "Collapse"}
         >
           {collapsed ? (
             <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
           ) : (
             <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
           )}
-          <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />
-          <span>Notes</span>
-          {count > 0 && (
+          {tab === "notes" ? (
+            <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />
+          ) : (
+            <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+          <span>{tab === "notes" ? "Notes" : "Journal"}</span>
+          {tab === "notes" && count > 0 && (
             <span className="rounded-full bg-subtle px-1.5 font-mono text-[0.6875rem] text-muted-foreground">
               {count}
+            </span>
+          )}
+          {tab === "journal" && (
+            <span className="text-meta font-mono normal-case tracking-normal text-muted-foreground/80">
+              {todayHeading}
             </span>
           )}
         </button>
         {!collapsed && (
           <>
-            <button
-              type="button"
-              onClick={focusAdd}
-              className="focus-ring ml-auto inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-meta text-muted-foreground hover:border-ember/40 hover:text-foreground"
-              title="Add a quick note (n)"
-            >
-              <Plus className="h-3 w-3" />
-              <span>Add</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowArchived((v) => !v)}
-              className={cn(
-                "focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta",
-                showArchived
-                  ? "text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              title={
-                showArchived
-                  ? "Show active notes"
-                  : "Show archived notes"
-              }
-            >
-              <Archive className="h-3 w-3" />
-              <span>{showArchived ? "Active" : "Archived"}</span>
-            </button>
+            {/* Tab switch */}
+            <div className="ml-2 inline-flex shrink-0 overflow-hidden rounded-md border border-border bg-card/40 text-[0.6875rem]">
+              <button
+                type="button"
+                onClick={() => setTab("notes")}
+                className={cn(
+                  "focus-ring px-2 py-0.5 font-mono uppercase tracking-wider",
+                  tab === "notes"
+                    ? "bg-subtle text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                title="Personal notes — quick scratchpad"
+              >
+                Notes
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("journal")}
+                className={cn(
+                  "focus-ring border-l border-border px-2 py-0.5 font-mono uppercase tracking-wider",
+                  tab === "journal"
+                    ? "bg-subtle text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                title="Daily journal — one entry per day"
+              >
+                Journal
+              </button>
+            </div>
+            {tab === "notes" && (
+              <button
+                type="button"
+                onClick={focusAdd}
+                className="focus-ring ml-auto inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-meta text-muted-foreground hover:border-ember/40 hover:text-foreground"
+                title="Add a quick note (n)"
+              >
+                <Plus className="h-3 w-3" />
+                <span>Add</span>
+              </button>
+            )}
+            {tab === "notes" && (
+              <button
+                type="button"
+                onClick={() => setShowArchived((v) => !v)}
+                className={cn(
+                  "focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta",
+                  showArchived
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                title={
+                  showArchived
+                    ? "Show active notes"
+                    : "Show archived notes"
+                }
+              >
+                <Archive className="h-3 w-3" />
+                <span>{showArchived ? "Active" : "Archived"}</span>
+              </button>
+            )}
           </>
         )}
       </header>
 
-      {!collapsed && (
+      {!collapsed && tab === "journal" && (
+        <JournalBody
+          today={
+            todayJournalId
+              ? journalListQ.data?.items.find((n) => n.id === todayJournalId) ??
+                (journalDraft
+                  ? {
+                      id: journalDraft.id,
+                      title: null,
+                      body: journalDraft.body,
+                      pinned: false,
+                      kind: "JOURNAL" as const,
+                      journalDate: new Date(),
+                      archivedAt: null,
+                      updatedAt: new Date(),
+                    }
+                  : null)
+              : null
+          }
+          todayHeading={todayHeading}
+          past={(journalListQ.data?.items ?? []).filter(
+            (n) => !todayJournalId || n.id !== todayJournalId,
+          )}
+          loading={journalListQ.isLoading}
+          onSaveBody={(body) => {
+            if (!todayJournalId) return;
+            journalUpdate.mutate({ id: todayJournalId, body });
+            setJournalDraft({ id: todayJournalId, body });
+          }}
+        />
+      )}
+
+      {!collapsed && tab === "notes" && (
         <div className="flex flex-col">
           {/* Inline add row */}
           {!showArchived && (
@@ -276,6 +394,178 @@ export function QuickNotesWidget() {
         </div>
       )}
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Journal body — today's entry as an editable card, past entries below.
+// ---------------------------------------------------------------------------
+
+type JournalRow = {
+  id: string;
+  title: string | null;
+  body: string;
+  pinned: boolean;
+  kind: "JOURNAL" | "NOTE";
+  journalDate: Date | string | null;
+  archivedAt: Date | string | null;
+  updatedAt: Date | string;
+};
+
+function JournalBody({
+  today,
+  todayHeading,
+  past,
+  loading,
+  onSaveBody,
+}: {
+  today: JournalRow | null;
+  todayHeading: string;
+  past: JournalRow[];
+  loading: boolean;
+  onSaveBody: (body: string) => void;
+}) {
+  // Local controlled body so typing isn't a round-trip per keystroke.
+  // Persisted on blur or ⌘⏎ via `onSaveBody`.
+  const [body, setBody] = useState(today?.body ?? "");
+  const lastIdRef = useRef<string | null>(null);
+
+  // Sync local state when today's row hydrates / changes.
+  useEffect(() => {
+    if (!today) return;
+    if (lastIdRef.current === today.id) return;
+    lastIdRef.current = today.id;
+    setBody(today.body);
+  }, [today]);
+
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleSave = useCallback(
+    (next: string) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        onSaveBody(next);
+      }, 800);
+    },
+    [onSaveBody],
+  );
+
+  return (
+    <div className="flex flex-col">
+      {/* Today's entry */}
+      <div className="flex flex-col gap-2 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2 text-meta text-muted-foreground">
+          <BookOpen className="h-3 w-3" />
+          <span className="font-mono uppercase tracking-wider">Today</span>
+          <span className="text-muted-foreground/80">·</span>
+          <span>{todayHeading}</span>
+        </div>
+        {today ? (
+          <textarea
+            value={body}
+            onChange={(e) => {
+              setBody(e.target.value);
+              scheduleSave(e.target.value);
+            }}
+            onBlur={() => {
+              if (debounceRef.current) clearTimeout(debounceRef.current);
+              if (today && body !== today.body) onSaveBody(body);
+            }}
+            onKeyDown={(e) => {
+              if (
+                e.key === "Enter" &&
+                (e.metaKey || e.ctrlKey)
+              ) {
+                e.preventDefault();
+                if (debounceRef.current) clearTimeout(debounceRef.current);
+                onSaveBody(body);
+              }
+            }}
+            placeholder="What happened today? Wins, blockers, decisions, follow-ups…"
+            rows={4}
+            className="focus-ring w-full resize-y rounded-md border border-input bg-background/40 p-2 text-sm placeholder:text-muted-foreground/60 focus:outline-none"
+          />
+        ) : (
+          <div className="text-meta text-muted-foreground">
+            Loading today&apos;s entry…
+          </div>
+        )}
+        <div className="text-meta text-muted-foreground">
+          Auto-saves on blur · ⌘⏎ to save now
+        </div>
+      </div>
+
+      {/* Past entries */}
+      <div className="flex flex-col">
+        {loading ? (
+          <ul className="flex flex-col gap-1 p-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <li key={i} className="h-8 animate-pulse rounded bg-subtle/60" />
+            ))}
+          </ul>
+        ) : past.length === 0 ? (
+          <div className="px-4 py-4 text-center text-xs text-muted-foreground">
+            No past entries yet — they&apos;ll appear here as the days roll on.
+          </div>
+        ) : (
+          <ul className="flex flex-col">
+            {past.map((n) => (
+              <JournalPastRow key={n.id} note={n} />
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function JournalPastRow({ note }: { note: JournalRow }) {
+  const [open, setOpen] = useState(false);
+  const dateLabel = useMemo(() => {
+    if (!note.journalDate) return "—";
+    const d = new Date(note.journalDate);
+    return d.toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+  }, [note.journalDate]);
+  const firstLine = useMemo(
+    () => note.body.split("\n").find((l) => l.trim().length > 0)?.trim() ?? "",
+    [note.body],
+  );
+
+  return (
+    <li className="border-b border-border/60 last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="focus-ring flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-subtle/40"
+      >
+        <span className="text-id shrink-0 font-mono text-muted-foreground">
+          {dateLabel}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+          {firstLine || (
+            <span className="text-muted-foreground italic">empty</span>
+          )}
+        </span>
+        {open ? (
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3 w-3 text-muted-foreground" />
+        )}
+      </button>
+      {open && (
+        <div className="px-4 pb-3">
+          <div className="rounded-md border border-border bg-background/40 p-2">
+            <MarkdownWithAttachments
+              body={note.body || "_(empty)_"}
+              className="text-xs"
+            />
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
 

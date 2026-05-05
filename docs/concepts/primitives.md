@@ -220,6 +220,29 @@ operator. The `note.convertToIssue` mutation spawns a real Issue from
 a note's body without auto-archiving the source. See
 [Quick Notes](/guide/quick-notes.html).
 
+`Note` has two variants distinguished by `kind`:
+
+- **`NOTE`** (default) — the scratchpad described above. `journalDate`
+  is `NULL`.
+- **`JOURNAL`** — a daily-summary entry. `journalDate` is set to UTC
+  midnight on the user's wall-clock date; the unique constraint
+  `(workspaceId, userId, journalDate)` enforces one journal row per
+  user per day. Surfaced in the Journal tab of the Notes widget. See
+  [Daily Journal](/guide/journal.html).
+
+## IssueWatcher
+
+Per-(issue, user OR agent) subscription row. A watcher receives
+event fan-out for every event whose subject is the watched issue —
+agents through their webhook (the same per-agent dispatch shim used
+for comment @-mentions), humans through the inbox/notification
+surfaces. Either `userId` OR `agentId` is set, never both. The actor
+of an event is filtered out of fan-out.
+
+Pin and Watch are intentionally orthogonal: pin is a UI shortcut,
+watch is event subscription. Both can be active on the same issue
+simultaneously. See [Watching](/guide/watching.html).
+
 ## Junctions
 
 Two many-to-many junctions are worth naming for completeness:

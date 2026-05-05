@@ -13,8 +13,211 @@ import { triageIssue } from "@/server/services/ai-triage";
 import { finishRunsForIssue, recordAgentAction } from "@/server/services/agent-run";
 import { agentId as agentIdSchema } from "./agent";
 import { UPDATED_SINCE_VALUES, updatedSinceToDate } from "@/lib/saved-view-filters";
+import type { SlashCommand } from "@/lib/slash-commands";
+import type { db as DbHandleType } from "@/server/db";
 
 const cursorSchema = z.string().optional();
+
+/**
+ * Zod shape for the `applyCommands` extension on `issue.create`. Mirrors
+ * the `SlashCommand` discriminated union from `src/lib/slash-commands.ts`
+ * so callers can either let the server parse the body OR pass a
+ * pre-parsed array. Agents prefer the explicit array — more reliable
+ * than text parsing.
+ */
+const slashCommandSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("assign"), handle: z.string().min(1).max(64) }),
+  z.object({ kind: z.literal("due"), date: z.coerce.date() }),
+  z.object({ kind: z.literal("label"), name: z.string().min(1).max(64) }),
+  z.object({
+    kind: z.literal("priority"),
+    level: z.enum(["urgent", "high", "medium", "low", "none"]),
+  }),
+  z.object({ kind: z.literal("project"), key: z.string().min(2).max(8) }),
+  z.object({ kind: z.literal("watch") }),
+  z.object({ kind: z.literal("unwatch") }),
+]);
+
+/**
+ * Apply a list of `SlashCommand`s to a freshly-created issue. Each
+ * command is best-effort: missing labels/projects/agents log a skip
+ * but don't fail the whole creation. Returns the structured outcome
+ * for debugging / surfacing in the response. Runs OUTSIDE the create
+ * transaction so failures here can never roll the issue back —
+ * callers expect the issue to land regardless.
+ */
+type DbHandle = typeof DbHandleType;
+
+async function applySlashCommandsToIssue(opts: {
+  db: DbHandle;
+  workspaceId: string;
+  issueId: string;
+  actorId: string;
+  callerAgentId: string | null;
+  commands: SlashCommand[];
+  ip: string | null;
+  userAgent: string | null;
+}): Promise<Array<{ kind: string; status: "applied" | "skipped"; reason?: string }>> {
+  const out: Array<{ kind: string; status: "applied" | "skipped"; reason?: string }> = [];
+  const db = opts.db;
+  const priorityMap: Record<string, Priority> = {
+    urgent: Priority.URGENT,
+    high: Priority.HIGH,
+    medium: Priority.MEDIUM,
+    low: Priority.LOW,
+    none: Priority.NONE,
+  };
+
+  for (const cmd of opts.commands) {
+    try {
+      switch (cmd.kind) {
+        case "assign": {
+          const agent = await db.agent.findFirst({
+            where: {
+              workspaceId: opts.workspaceId,
+              profileKey: cmd.handle,
+              archivedAt: null,
+            },
+            select: { id: true, profileKey: true },
+          });
+          if (!agent) {
+            out.push({ kind: cmd.kind, status: "skipped", reason: "agent not found" });
+            break;
+          }
+          await db.$transaction(async (tx) => {
+            await tx.issue.update({
+              where: { id: opts.issueId },
+              data: { assignedAgentId: agent.id },
+            });
+            const reasonBlob = await recordManualDispatchReason(tx, {
+              issueId: opts.issueId,
+              agentProfileKey: agent.profileKey,
+              actorId: opts.actorId,
+            });
+            await recordChange(tx, {
+              workspaceId: opts.workspaceId,
+              actorId: opts.actorId,
+              entity: "Issue",
+              entityId: opts.issueId,
+              action: "assign-agent",
+              after: { assignedAgentId: agent.id },
+              eventKind: EventKind.AGENT_ASSIGNED,
+              subjectType: "issue",
+              subjectId: opts.issueId,
+              payload: {
+                agentId: agent.id,
+                previousAgentId: null,
+                dispatchReason: reasonBlob,
+                via: "slash-command",
+              },
+              ip: opts.ip,
+              userAgent: opts.userAgent,
+            });
+            await maybeApplyAgentTemplate(tx, opts.issueId, agent.id);
+          });
+          out.push({ kind: cmd.kind, status: "applied" });
+          break;
+        }
+        case "due": {
+          await db.issue.update({
+            where: { id: opts.issueId },
+            data: { dueDate: cmd.date },
+          });
+          out.push({ kind: cmd.kind, status: "applied" });
+          break;
+        }
+        case "label": {
+          const label = await db.label.findFirst({
+            where: { workspaceId: opts.workspaceId, name: cmd.name },
+            select: { id: true },
+          });
+          if (!label) {
+            out.push({ kind: cmd.kind, status: "skipped", reason: "label not found" });
+            break;
+          }
+          await db.issueLabel.upsert({
+            where: { issueId_labelId: { issueId: opts.issueId, labelId: label.id } },
+            create: { issueId: opts.issueId, labelId: label.id },
+            update: {},
+          });
+          out.push({ kind: cmd.kind, status: "applied" });
+          break;
+        }
+        case "priority": {
+          await db.issue.update({
+            where: { id: opts.issueId },
+            data: { priority: priorityMap[cmd.level] },
+          });
+          out.push({ kind: cmd.kind, status: "applied" });
+          break;
+        }
+        case "project": {
+          const proj = await db.project.findFirst({
+            where: { workspaceId: opts.workspaceId, key: cmd.key, archived: false },
+            select: { id: true },
+          });
+          if (!proj) {
+            out.push({ kind: cmd.kind, status: "skipped", reason: "project not found" });
+            break;
+          }
+          await db.issue.update({
+            where: { id: opts.issueId },
+            data: { projectId: proj.id },
+          });
+          out.push({ kind: cmd.kind, status: "applied" });
+          break;
+        }
+        case "watch": {
+          // user-watch only when caller is human; agent-watch when caller
+          // is an agent via API key.
+          if (opts.callerAgentId) {
+            await db.issueWatcher.upsert({
+              where: { issueId_agentId: { issueId: opts.issueId, agentId: opts.callerAgentId } },
+              create: {
+                workspaceId: opts.workspaceId,
+                issueId: opts.issueId,
+                agentId: opts.callerAgentId,
+              },
+              update: {},
+            });
+          } else {
+            await db.issueWatcher.upsert({
+              where: { issueId_userId: { issueId: opts.issueId, userId: opts.actorId } },
+              create: {
+                workspaceId: opts.workspaceId,
+                issueId: opts.issueId,
+                userId: opts.actorId,
+              },
+              update: {},
+            });
+          }
+          out.push({ kind: cmd.kind, status: "applied" });
+          break;
+        }
+        case "unwatch": {
+          if (opts.callerAgentId) {
+            await db.issueWatcher.deleteMany({
+              where: { issueId: opts.issueId, agentId: opts.callerAgentId },
+            });
+          } else {
+            await db.issueWatcher.deleteMany({
+              where: { issueId: opts.issueId, userId: opts.actorId },
+            });
+          }
+          out.push({ kind: cmd.kind, status: "applied" });
+          break;
+        }
+      }
+    } catch (e) {
+      out.push({
+        kind: cmd.kind,
+        status: "skipped",
+        reason: e instanceof Error ? e.message : "unknown",
+      });
+    }
+  }
+  return out;
+}
 
 const filterSchema = z.object({
   // -- Singleton filters (kept for back-compat with existing call-sites). --
@@ -321,6 +524,14 @@ export const issueRouter = router({
         dueDate: z.date().optional(),
         estimate: z.number().min(0).optional(),
         slaMinutes: z.number().int().min(1).optional(),
+        /**
+         * Optional pre-parsed slash commands to apply after the issue
+         * is created. Composer UIs and agents should pass this rather
+         * than relying on the server to text-parse the description.
+         * Each command is best-effort — failures log a skip and don't
+         * roll the create back.
+         */
+        applyCommands: z.array(slashCommandSchema).max(20).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -433,7 +644,26 @@ export const issueRouter = router({
         // picks an agent — no need to double-call from here.
         await maybeAutoDispatch(tx, issue.id);
         return issue;
-      }).then((issue) => {
+      }).then(async (issue) => {
+        // Apply slash commands AFTER the create transaction commits, so
+        // a missing label or unknown agent doesn't roll the issue back.
+        // Each step has its own small transaction (assign also writes
+        // an AGENT_ASSIGNED event) — see `applySlashCommandsToIssue`.
+        let commandResults:
+          | Array<{ kind: string; status: "applied" | "skipped"; reason?: string }>
+          | undefined;
+        if (input.applyCommands && input.applyCommands.length > 0) {
+          commandResults = await applySlashCommandsToIssue({
+            db: ctx.db,
+            workspaceId: ctx.workspaceId,
+            issueId: issue.id,
+            actorId: ctx.session.user.id,
+            callerAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            commands: input.applyCommands,
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
         // Fire-and-forget AI triage. Skipped server-side when AI is off
         // or already-triaged. Runs out-of-band so create stays sub-100ms
         // even when the LLM call takes seconds. We don't await — clients
@@ -444,7 +674,9 @@ export const issueRouter = router({
           // creates an issue via API key (saves cost on bulk creates).
           void triageIssue(issue.id);
         }
-        return issue;
+        return commandResults
+          ? { ...issue, commandResults }
+          : issue;
       });
     }),
 
@@ -1838,6 +2070,178 @@ export const issueRouter = router({
         }
         return { updated: validIds.length };
       });
+    }),
+
+  // ----------------------------------------------------- Slash commands apply
+  /**
+   * Apply a list of slash commands to an existing issue. Used by the
+   * comment composer (parses leading slash lines, posts the cleaned
+   * body, then calls this for the commands). Each command is
+   * best-effort — failures log a skip but don't fail the call.
+   * Returns the structured outcome so the UI can surface skips.
+   */
+  applyCommands: workspaceProcedure
+    .input(
+      z.object({
+        issueId: z.string().cuid(),
+        commands: z.array(slashCommandSchema).max(20),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const issue = await ctx.db.issue.findFirst({
+        where: { id: input.issueId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!issue) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+      }
+      const results = await applySlashCommandsToIssue({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        issueId: input.issueId,
+        actorId: ctx.session.user.id,
+        callerAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        commands: input.commands,
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      return { results };
+    }),
+
+  // ----------------------------------------------------------------- Watching
+  // Per-(issue, user OR agent) subscription. Watch and Pin are
+  // orthogonal — pin is a UI shortcut, watch is event subscription.
+  // Watchers receive event fan-out via the per-agent dispatch shim
+  // (agents) or via the inbox/notification surface (humans). The
+  // actor of an event is filtered out of fan-out so people don't get
+  // pinged for their own moves.
+
+  /**
+   * Add the caller as a watcher of `issueId`. Idempotent — calling
+   * twice is a no-op. When the call is via an API key linked to an
+   * agent, the row is agent-scoped; otherwise it's user-scoped.
+   */
+  watch: workspaceProcedure
+    .input(z.object({ issueId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const issue = await ctx.db.issue.findFirst({
+        where: { id: input.issueId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!issue) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+      }
+      const callerAgentId = ctx.apiKey?.linkedAgentId ?? null;
+      if (callerAgentId) {
+        return ctx.db.issueWatcher.upsert({
+          where: { issueId_agentId: { issueId: input.issueId, agentId: callerAgentId } },
+          create: {
+            workspaceId: ctx.workspaceId,
+            issueId: input.issueId,
+            agentId: callerAgentId,
+          },
+          update: {},
+        });
+      }
+      return ctx.db.issueWatcher.upsert({
+        where: {
+          issueId_userId: { issueId: input.issueId, userId: ctx.session.user.id },
+        },
+        create: {
+          workspaceId: ctx.workspaceId,
+          issueId: input.issueId,
+          userId: ctx.session.user.id,
+        },
+        update: {},
+      });
+    }),
+
+  /**
+   * Remove the caller's watch on `issueId`. No-op if they weren't
+   * watching. Returns `{ ok: true }` either way.
+   */
+  unwatch: workspaceProcedure
+    .input(z.object({ issueId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const callerAgentId = ctx.apiKey?.linkedAgentId ?? null;
+      if (callerAgentId) {
+        await ctx.db.issueWatcher.deleteMany({
+          where: { issueId: input.issueId, agentId: callerAgentId },
+        });
+      } else {
+        await ctx.db.issueWatcher.deleteMany({
+          where: { issueId: input.issueId, userId: ctx.session.user.id },
+        });
+      }
+      return { ok: true as const };
+    }),
+
+  /**
+   * List watchers for an issue. Returns `user` + `agent` identity
+   * fields so the UI can render a tooltip of names without an extra
+   * round-trip. Read-only for any workspace member.
+   */
+  watchers: workspaceProcedure
+    .input(z.object({ issueId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.issueWatcher.findMany({
+        where: { issueId: input.issueId, workspaceId: ctx.workspaceId },
+        orderBy: { createdAt: "asc" },
+        include: {
+          user: { select: { id: true, name: true, handle: true, image: true } },
+          agent: { select: { id: true, profileKey: true, name: true, avatar: true } },
+        },
+      });
+      return { items: rows };
+    }),
+
+  /**
+   * Issues the caller is currently watching. Defaults to the latest
+   * `limit` rows ordered by issue.updatedAt desc, so the inbox
+   * "Watching" tab can show fresh activity at the top.
+   */
+  watching: workspaceProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(100).default(50) }))
+    .query(async ({ ctx, input }) => {
+      const callerAgentId = ctx.apiKey?.linkedAgentId ?? null;
+      const where: Prisma.IssueWatcherWhereInput = callerAgentId
+        ? { workspaceId: ctx.workspaceId, agentId: callerAgentId }
+        : { workspaceId: ctx.workspaceId, userId: ctx.session.user.id };
+      const rows = await ctx.db.issueWatcher.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: input.limit,
+        include: {
+          issue: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              priority: true,
+              updatedAt: true,
+              snoozedUntil: true,
+              status: { select: { id: true, name: true, color: true, category: true } },
+              project: { select: { id: true, name: true, key: true } },
+              assignedAgent: { select: { id: true, profileKey: true, name: true, avatar: true } },
+            },
+          },
+        },
+      });
+      // Filter out issues that have been soft-deleted; sort by issue
+      // updatedAt desc so most-recently-active rises to the top.
+      const items = rows
+        .filter((r) => r.issue !== null)
+        .map((r) => ({
+          watchId: r.id,
+          createdAt: r.createdAt,
+          issue: r.issue!,
+        }));
+      items.sort(
+        (a, b) =>
+          new Date(b.issue.updatedAt).getTime() -
+          new Date(a.issue.updatedAt).getTime(),
+      );
+      return { items };
     }),
 });
 

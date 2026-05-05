@@ -72,6 +72,18 @@ issue is filtered out of every other Inbox bucket (and the dashboard
 "Stalled" column). On expiry the row resurfaces in whichever bucket
 matches its actual state (typically Stalled or Queue).
 
+### Watching
+
+Issues you've subscribed to via the eye glyph on the issue detail
+page. Distinct from assignment / pin / snooze — watching is event
+subscription without ownership. Collapsed by default. Each row links
+straight to the issue detail page.
+
+The bucket is sourced from `issue.watching` (per-user view of
+`IssueWatcher`). Pin and Watch are orthogonal — both can be active
+on the same issue. See [Watching](/guide/watching.html) for the full
+breakdown.
+
 ## Last-visit unread tracking
 
 The Inbox tracks `User.lastInboxVisitAt` so it can show you "new since

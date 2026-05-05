@@ -29,7 +29,7 @@ error shapes all flow from this router definition.
 |-------------------|-----------------------------------------------------------------------------------------------------------------|
 | `workspace`       | `list`, `current`, `create`, `listMembers`, `addMember`, `setMemberRole`, `removeMember` (admin)                |
 | `project`         | `list`, `byId`, `create`, `update`, `archive`                                                                    |
-| `issue`           | `list`, `byId`, `create`, `update`, `assign`, `softDelete`, `snooze`, `unsnooze`, `snoozeMany`, `nudge`, `bulkTransition`, `bulkAddLabel`, `bulkRemoveLabel`, `bulkAssign`, `bulkAssignAgent`, `bulkArchive` |
+| `issue`           | `list`, `byId`, `create`, `update`, `assign`, `softDelete`, `snooze`, `unsnooze`, `snoozeMany`, `nudge`, `bulkTransition`, `bulkAddLabel`, `bulkRemoveLabel`, `bulkAssign`, `bulkAssignAgent`, `bulkArchive`, `applyCommands`, `watch`, `unwatch`, `watchers`, `watching` |
 | `comment`         | `create`, `update`, `softDelete`                                                                                 |
 | `analytics`       | `summary`, `statusDistribution`, `throughput`, `cycleTime`, `slaBreaches`, `dispatch.summary`, `dispatch.timeseries` |
 | `plugin`          | `list`, `register`, `approve`, `suspend`, `issueApiKey`, `revokeApiKey`                                          |
@@ -55,7 +55,7 @@ error shapes all flow from this router definition.
 | `recentItem`      | `list`, `track`                                                                                                  |
 | `commandPalette`  | `search`                                                                                                         |
 | `savedView`       | `list`, `create`, `update`, `delete`                                                                             |
-| `note`            | `list`, `create`, `update`, `archive`, `unarchive`, `delete`, `convertToIssue`                                   |
+| `note`            | `list`, `create`, `update`, `archive`, `unarchive`, `delete`, `convertToIssue`, `todayJournal`, `listJournal`     |
 | `inbox`           | `list`, `badge`, `visit`                                                                                         |
 | `dashboard`       | `suggestions`, `stalledInProgress`                                                                               |
 | `notification`    | `list`, `markRead`, `markAllRead`, `dismiss`                                                                     |
@@ -262,13 +262,47 @@ Per-(workspace, user) markdown scratchpad. The dashboard
 
 | Procedure | Summary |
 |---|---|
-| `list({ archived?, limit? })` | Caller's notes ordered by `(pinned desc, updatedAt desc)`. Default unarchived. |
-| `create({ title?, body, pinned? })` | Create a note for the calling user. |
-| `update({ id, title?, body?, pinned? })` | Patch a note the caller owns. `title: null` clears the title. |
+| `list({ archived?, kind?, limit? })` | Caller's notes ordered by `(pinned desc, updatedAt desc)`. Default `kind = NOTE`, unarchived. |
+| `create({ title?, body, pinned?, kind?, journalDate? })` | Create a note for the calling user. `kind = JOURNAL` requires `journalDate` (or defaults to now). |
+| `update({ id, title?, body?, pinned? })` | Patch a note the caller owns. `title: null` clears the title. Empty body allowed (for journal entries that are still being filled in). |
 | `archive({ id })` | Soft-archive. |
 | `unarchive({ id })` | Reverse archive. |
 | `delete({ id })` | Hard-delete. Prefer `archive` — this is the cleanup path. |
 | `convertToIssue({ id, projectId? })` | Spawn an Issue with `title = note.title \|\| first line of body` and `description = body`. The note is left in place. Returns `{ issueId, issueKey, number }`. |
+| `todayJournal()` | Get-or-create today's `JOURNAL` entry for the caller, anchored to UTC midnight on the user's wall-clock date (driven by `User.timezone`). Idempotent across calls in the same day. |
+| `listJournal({ from?, to?, limit? = 30 })` | List recent journal entries for the caller, ordered by `journalDate desc`. |
+
+### `issue.watch / unwatch / watchers / watching`
+
+Per-(issue, user OR agent) subscriptions. See
+[Watching](/guide/watching.html) for the full breakdown.
+
+| Procedure | Summary |
+|---|---|
+| `watch({ issueId })` | Add caller as watcher. Idempotent. Identity inferred from API key (`linkedAgentId` → agent-watch, otherwise user-watch). |
+| `unwatch({ issueId })` | Remove caller's watch. No-op if not watching. |
+| `watchers({ issueId })` | List watchers with hydrated `user` / `agent` identity fields. |
+| `watching({ limit? = 50 })` | Issues the caller currently watches, ordered by issue `updatedAt desc`. Powers the inbox **Watching** section. |
+
+### `issue.applyCommands`
+
+Apply a list of slash commands to an existing issue (or create one
+through `issue.create({ applyCommands })`). Each command is
+best-effort; failures log a skip with reason but don't fail the call.
+See [Slash commands](/guide/slash-commands.html) for the seven
+recognised forms.
+
+```ts
+issue.applyCommands.mutate({
+  issueId,
+  commands: [
+    { kind: "priority", level: "urgent" },
+    { kind: "label", name: "deploy" },
+    { kind: "watch" },
+  ],
+})
+// → { results: [{ kind, status: "applied" | "skipped", reason? }] }
+```
 
 ### `attachment.attachLink`
 

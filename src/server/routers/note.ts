@@ -1,8 +1,44 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, Priority } from "@prisma/client";
+import { EventKind, NoteKind, Priority } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+
+/**
+ * Compute "today's date" (UTC midnight) anchored in the user's
+ * timezone. The journalDate column is stored as UTC midnight; what
+ * varies per user is which UTC midnight counts as "today" given their
+ * wall-clock day. Falls back to the server's UTC midnight when no
+ * timezone is set (matches the schema default).
+ */
+function todayUtcMidnightForTimezone(tz: string | null): Date {
+  const now = new Date();
+  if (!tz) {
+    const d = new Date(now);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+  // Use Intl.DateTimeFormat to get the wall-clock Y/M/D in the
+  // requested zone, then build a UTC midnight on that date. This
+  // intentionally normalises to UTC midnight (NOT local midnight)
+  // so the unique constraint behaves the same regardless of DST.
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const [y, m, d] = fmt.format(now).split("-").map((p) => parseInt(p, 10));
+    const out = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+    return out;
+  } catch {
+    // Bad timezone string — fall back to UTC.
+    const d = new Date(now);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+}
 
 /**
  * Quick Notes — per-user markdown scratchpad surfaced on the dashboard.
@@ -22,13 +58,16 @@ import { recordChange } from "@/server/audit";
 
 export const noteRouter = router({
   /**
-   * List the caller's notes in this workspace. Defaults to non-archived;
-   * pass `{ archived: true }` to list archived rows.
+   * List the caller's notes in this workspace. Defaults to non-archived,
+   * NOTE-kind only; pass `{ archived: true }` to list archived rows or
+   * `{ kind: "JOURNAL" }` to list journal entries (though most consumers
+   * should use `note.listJournal` for that).
    */
   list: workspaceProcedure
     .input(
       z.object({
         archived: z.boolean().default(false),
+        kind: z.nativeEnum(NoteKind).default(NoteKind.NOTE),
         limit: z.number().int().positive().max(100).default(20),
       }),
     )
@@ -37,6 +76,7 @@ export const noteRouter = router({
         where: {
           workspaceId: ctx.workspaceId,
           userId: ctx.session.user.id,
+          kind: input.kind,
           archivedAt: input.archived ? { not: null } : null,
         },
         orderBy: [{ pinned: "desc" }, { updatedAt: "desc" }],
@@ -52,6 +92,14 @@ export const noteRouter = router({
         title: z.string().max(200).optional(),
         body: z.string().min(1).max(50_000),
         pinned: z.boolean().default(false),
+        kind: z.nativeEnum(NoteKind).default(NoteKind.NOTE),
+        /**
+         * Required when `kind = JOURNAL`. Ignored otherwise. UTC
+         * midnight is recommended; callers that need timezone-aware
+         * "today" should use `note.todayJournal` instead which does
+         * the normalisation.
+         */
+        journalDate: z.coerce.date().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -62,9 +110,82 @@ export const noteRouter = router({
           title: input.title?.trim() || null,
           body: input.body,
           pinned: input.pinned,
+          kind: input.kind,
+          journalDate:
+            input.kind === NoteKind.JOURNAL
+              ? input.journalDate ?? new Date()
+              : null,
         },
       });
       return note;
+    }),
+
+  /**
+   * Get-or-create today's journal entry for the caller. Date is
+   * "today" in the caller's timezone (User.timezone) — falls back to
+   * UTC midnight when null. Idempotent: subsequent calls on the same
+   * day return the existing row. Empty body on first creation so the
+   * UI can immediately render an editable card.
+   */
+  todayJournal: workspaceProcedure.mutation(async ({ ctx }) => {
+    const me = await ctx.db.user.findUniqueOrThrow({
+      where: { id: ctx.session.user.id },
+      select: { timezone: true },
+    });
+    const today = todayUtcMidnightForTimezone(me.timezone);
+
+    const existing = await ctx.db.note.findFirst({
+      where: {
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+        kind: NoteKind.JOURNAL,
+        journalDate: today,
+      },
+    });
+    if (existing) return existing;
+    return ctx.db.note.create({
+      data: {
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+        kind: NoteKind.JOURNAL,
+        journalDate: today,
+        title: null,
+        body: "",
+      },
+    });
+  }),
+
+  /**
+   * List recent journal entries for the caller, ordered by
+   * `journalDate desc`. Default window is 30 entries (≈one month).
+   */
+  listJournal: workspaceProcedure
+    .input(
+      z.object({
+        from: z.coerce.date().optional(),
+        to: z.coerce.date().optional(),
+        limit: z.number().int().positive().max(180).default(30),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.note.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.session.user.id,
+          kind: NoteKind.JOURNAL,
+          ...(input.from || input.to
+            ? {
+                journalDate: {
+                  ...(input.from ? { gte: input.from } : {}),
+                  ...(input.to ? { lte: input.to } : {}),
+                },
+              }
+            : {}),
+        },
+        orderBy: { journalDate: "desc" },
+        take: input.limit,
+      });
+      return { items: rows };
     }),
 
   /** Patch fields on a note the caller owns. */
@@ -73,7 +194,10 @@ export const noteRouter = router({
       z.object({
         id: z.string(),
         title: z.string().max(200).nullable().optional(),
-        body: z.string().min(1).max(50_000).optional(),
+        // Allow empty body for journal entries that were created blank
+        // and edited later. NOTE-kind rows enforce min(1) at create time;
+        // an explicit clear via update is rare but harmless.
+        body: z.string().max(50_000).optional(),
         pinned: z.boolean().optional(),
       }),
     )

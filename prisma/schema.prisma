@@ -271,6 +271,14 @@ enum CommentKind {
   STATUS
 }
 
+/// Note variants. NOTE is the default scratchpad; JOURNAL is a daily
+/// summary entry pinned to a calendar date. JOURNAL rows are unique per
+/// (workspace, user, journalDate) so `notes.todayJournal` upserts cleanly.
+enum NoteKind {
+  NOTE
+  JOURNAL
+}
+
 /// Lifecycle of an AgentRun — opened on first activity from an agent
 /// against an issue, closed when the issue transitions to a terminal
 /// status, the agent reports completion, or the watchdog flags it
@@ -347,6 +355,7 @@ model User {
   pins                 Pin[]
   recentItems          RecentItem[]
   notes                Note[]
+  issueWatches         IssueWatcher[]
 
   @@index([handle])
 }
@@ -529,6 +538,7 @@ model Workspace {
   pins               Pin[]
   recentItems        RecentItem[]
   notes              Note[]
+  issueWatchers      IssueWatcher[]
   startedStatus      Status?             @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
@@ -690,6 +700,7 @@ model Issue {
   relationsTo   IssueRelation[] @relation("IssueRelationTo")
   timeEntries   TimeEntry[]
   agentRuns     AgentRun[]
+  watchers      IssueWatcher[]
 
   @@unique([workspaceId, number])
   @@index([workspaceId, statusId])
@@ -1357,6 +1368,7 @@ model Agent {
   dispatchRules    DispatchRule[]
   runs             AgentRun[]
   chatThreads      ChatThread[]
+  issueWatches     IssueWatcher[]
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
@@ -1596,6 +1608,15 @@ model Note {
   title       String?
   body        String    @db.Text
   pinned      Boolean   @default(false)
+  /// Variant — NOTE (scratchpad) vs JOURNAL (daily summary). JOURNAL
+  /// entries are pinned to `journalDate` and unique per user per day,
+  /// so `notes.todayJournal` can upsert idempotently.
+  kind        NoteKind  @default(NOTE)
+  /// Calendar date for JOURNAL entries (UTC midnight, normalized in the
+  /// caller's timezone). Null for NOTE rows. Unique with (workspaceId,
+  /// userId) — Postgres allows multiple NULLs through a unique
+  /// constraint, so NOTE rows are unaffected.
+  journalDate DateTime?
   archivedAt  DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -1603,5 +1624,37 @@ model Note {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([workspaceId, userId, journalDate])
   @@index([workspaceId, userId, archivedAt, pinned, updatedAt])
+  @@index([workspaceId, userId, kind, journalDate])
+}
+
+/// Per-(issue, user OR agent) subscription row. A watcher receives
+/// fan-out notifications for every event whose subject is the watched
+/// issue (delivered via the same per-agent dispatch shim used for
+/// comment @-mentions, or the in-app inbox/notification surface for
+/// human watchers). Either `userId` or `agentId` must be set — never
+/// both, never neither (enforced in the handler; the unique
+/// constraints prevent duplicates per identity).
+///
+/// Pin (UI shortcut) and Watch (event subscription) are intentionally
+/// orthogonal — both can be active on the same issue simultaneously.
+model IssueWatcher {
+  id          String   @id @default(cuid())
+  workspaceId String
+  issueId     String
+  userId      String?
+  agentId     String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue     Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent     Agent?    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([issueId, userId])
+  @@unique([issueId, agentId])
+  @@index([workspaceId, userId])
+  @@index([workspaceId, agentId])
+  @@index([issueId])
 }
