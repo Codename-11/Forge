@@ -249,6 +249,41 @@ clears it or the run reaches a terminal state on its own.
 The agent UI surfaces these via `<RunControlMenu />` on each in-flight
 pipeline row, with options for pause / cancel / redirect-to-…
 
+## Stalled visibility
+
+Forge tracks two distinct flavours of "stalled" — the difference matters
+because the right response is different:
+
+| Flavour | Definition | Where it surfaces |
+|---|---|---|
+| **Stalled run** | An `AgentRun` is still `ACTIVE` but `lastEventAt` is older than `STALE_RUN_MS` (5 min). Defined once in `src/lib/agent-stale.ts`; consumed by the Mission Control overlay, the agent detail page, the dashboard tile, and the `agentRun.kick` mutation. | Mission Control "Needs attention" lane, agent detail Stalled bucket, dashboard Agents tile (red `N stl` chip), Mission Control glance roster (per-agent red `N stl` pill). |
+| **Stalled issue** | An issue is in `IN_PROGRESS` / `IN_REVIEW` and `updatedAt` is older than `Workspace.stalledThresholdDays` (default 7d, settings-driven, `0` disables). | Inbox "Stalled" sub-buckets (yours / agents), dashboard "Stalled" column, agent detail Stalled bucket, dashboard Agents tile (warning `N quiet` chip). |
+
+A stalled *run* is usually a runtime glitch — the agent's last loop tick
+crashed, the webhook didn't deliver, the runner is offline. The
+operator's first move is the **Kick** button (`agentRun.kick`), which
+re-fires the dispatch webhook without changing assignment.
+
+A stalled *issue* is usually a design / dependency wait — the agent did
+its turn and is now waiting on a human review, an external dependency,
+or a clarifying answer in the comment thread. There is no "Kick" for
+issues; the right move is to read the thread, comment, and possibly
+reassign.
+
+The agent detail page's Stalled bucket renders both lists side-by-side.
+When the same issue appears in both (an issue is past the day-threshold
+*and* its run is past the 5-minute threshold), the issue row carries an
+"also stalled run" tag so the operator doesn't read the same incident
+twice.
+
+The dashboard's Agents tile aggregates per-agent counts so a single
+glance tells you which agent is worst off. Sorted by stalled-run count
+first — runtime glitches are the higher-urgency signal.
+
+The Mission Control glance view shows per-agent stalled-run pills next
+to the load fraction so the floating widget gives the same signal
+without leaving the current page.
+
 ## Where to look
 
 - **Agents dashboard** — `/w/<slug>/agents`. List of all non-archived agents

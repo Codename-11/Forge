@@ -16,6 +16,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useHotkey, useChord } from "@/lib/keyboard";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
+import { STALE_RUN_MS } from "@/lib/agent-stale";
 import {
   cornerToClass,
   useDragHandle,
@@ -116,7 +117,7 @@ export function MissionControl() {
     // hasn't flipped them yet, the pill should warn.
     const now = Date.now();
     return (activeRuns ?? []).filter(
-      (r) => now - new Date(r.lastEventAt).getTime() > 5 * 60_000,
+      (r) => now - new Date(r.lastEventAt).getTime() > STALE_RUN_MS,
     );
   }, [activeRuns]);
   const hasStalled = stalledRuns.length > 0;

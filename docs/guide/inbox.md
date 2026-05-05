@@ -59,6 +59,24 @@ Two sub-buckets:
 Stalled is the bucket that surfaces "things slipping through the
 cracks." If it's empty most days, your throughput is healthy.
 
+### Waiting on me
+
+Conversational follow-ups you owe an agent. A row appears here when
+the most recent comment on an issue is from an agent, that comment
+`@-mentions` you, and you haven't replied since. Once you comment on
+the issue (any comment counts as a reply, even a one-liner), the row
+clears.
+
+The match is conservative on purpose — a stable handle (`@firstname`,
+`@email-prefix`, or `@User.handle` if set) has to appear in the
+agent's comment body. We prefer missing some pings (false-negative)
+over showing non-relevant rows (false-positive). A future mention
+table will make this exact.
+
+The section hides itself when empty — invisible until an agent
+actually pings you. Each row links straight to the issue with the
+comment body excerpted; click through to reply.
+
 ### Snoozed
 
 Issues you've explicitly marked "on hold until later." Collapsed by

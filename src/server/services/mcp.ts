@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import {
   AgentProvider,
+  AgentRunStatus,
   AgentStatus,
   CommentKind,
   CycleStatus,
@@ -19,6 +20,8 @@ import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
+import { STALE_RUN_MS } from "@/server/services/agent-presence";
+import { deliverWebhook } from "@/server/services/plugin-runtime";
 import {
   assertKeyScope,
   buildKeyScopeWhere,
@@ -3573,6 +3576,107 @@ export const mcpTools = {
           agent: { select: { id: true, profileKey: true } },
         },
       });
+    },
+  },
+
+  /**
+   * Operator "kick" for a stalled run. Re-fires the dispatch webhook
+   * for the underlying issue without changing assignment or
+   * controlState. Mirrors the tRPC `agentRun.kick` proc — same
+   * eligibility (run must be ACTIVE and quiet past `STALE_RUN_MS`)
+   * and same `AGENT_RUN_KICKED` audit row. WRITE_ISSUES scope so a
+   * narrowed agent key can't kick across project boundaries.
+   *
+   * Returns `{ ok, kicked, idleMs }`. `kicked: false` means the run
+   * was found but not yet stalled — the caller should retry rather
+   * than treat this as an error.
+   */
+  "runs.kick": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      runId: z.string().min(1).max(40).describe("AgentRun.id"),
+    }),
+    async run(input: { runId: string }, ctx: McpContext) {
+      const run = await db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          issueId: true,
+          status: true,
+          lastEventAt: true,
+          currentStep: true,
+          agent: {
+            select: {
+              id: true,
+              profileKey: true,
+              webhookUrl: true,
+              webhookSecret: true,
+            },
+          },
+        },
+      });
+      if (!run) throw new Error("AgentRun not found in this workspace.");
+      if (run.status !== AgentRunStatus.ACTIVE) {
+        throw new Error(`Run is ${run.status}; only ACTIVE runs can be kicked.`);
+      }
+      // Defensive scope check: kick is an issue-side action, so reuse
+      // the issue narrowing the API key may carry.
+      await assertKeyScope(scopeCtx(ctx), {
+        entity: "issue",
+        id: run.issueId,
+      });
+      const idleMs = Date.now() - run.lastEventAt.getTime();
+      if (idleMs < STALE_RUN_MS) {
+        return { ok: true, kicked: false, idleMs } as const;
+      }
+
+      await db.$transaction(async (tx) => {
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId,
+          entity: "AgentRun",
+          entityId: run.id,
+          action: "kick",
+          eventKind: EventKind.AGENT_RUN_KICKED,
+          subjectType: "agent-run",
+          subjectId: run.id,
+          payload: {
+            runId: run.id,
+            issueId: run.issueId,
+            agentId: run.agent.id,
+            idleMs,
+            currentStep: run.currentStep,
+            via: "mcp",
+          },
+        });
+      });
+
+      const url = run.agent.webhookUrl;
+      const secret = run.agent.webhookSecret;
+      if (url && secret) {
+        void deliverWebhook({
+          url,
+          secret,
+          timeoutMs: 5000,
+          body: {
+            id: `run-kick-${run.id}-${Date.now()}`,
+            kind: "AGENT_RUN_KICKED",
+            subjectType: "agent-run",
+            subjectId: run.id,
+            payload: {
+              runId: run.id,
+              issueId: run.issueId,
+              agentId: run.agent.id,
+              workspaceId: ctx.workspaceId,
+              idleMs,
+              reason: "operator-kick",
+            },
+            createdAt: new Date().toISOString(),
+          },
+        }).catch(() => undefined);
+      }
+
+      return { ok: true, kicked: true, idleMs } as const;
     },
   },
 

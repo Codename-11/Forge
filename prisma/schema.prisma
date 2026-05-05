@@ -112,6 +112,7 @@ enum EventKind {
   ISSUE_UNSNOOZED
   ISSUE_NUDGED
   AGENT_RUN_CONTROL_REQUESTED
+  AGENT_RUN_KICKED
 }
 
 /// Operator-requested control on an in-flight AgentRun. NONE is the

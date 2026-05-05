@@ -139,6 +139,76 @@ workspace-shared `agent:dispatch`). Used by the agent ops page to surface
 delivery success/failure ratios per agent without joining through the
 `Webhook` model.
 
+### `agent.stalled`
+
+Per-agent stalled visibility. Returns both flavours of "stalled":
+
+```ts
+agent.stalled({ agentId }) → {
+  stalledRuns:    [{ id, issueId, currentStep, startedAt, lastEventAt, issue: { number, title, status, project, workspace } }],
+  stalledIssues:  [{ id, number, title, updatedAt, status, project, workspace }],
+  stalledThresholdDays: number, // 0 disables the issue bucket
+}
+```
+
+- **Stalled runs** are `AgentRun` rows still `ACTIVE` whose `lastEventAt`
+  is older than `STALE_RUN_MS` (5 min). UI signal — distinct from the
+  watchdog that *closes* runs (`Workspace.agentRunStaleMinutes`).
+- **Stalled issues** are issues currently assigned to the agent in an
+  IN_PROGRESS / IN_REVIEW status that haven't been updated in
+  `Workspace.stalledThresholdDays`. Snoozed rows are excluded. When
+  `stalledThresholdDays === 0` the bucket is disabled and an empty array
+  is returned.
+
+Powers the per-agent "Stalled" bucket on the agent detail page; pairs
+with the `agentRun.kick` mutation for the per-row Kick affordance.
+
+### `dashboard.agentActivity`
+
+Per-agent at-a-glance health for the dashboard "Agents" tile.
+
+```ts
+dashboard.agentActivity() → {
+  agents: [{
+    id, profileKey, name, avatar, status,
+    lastHeartbeatAt,
+    load,           // active runs for this agent
+    maxConcurrent,  // 0 = ∞
+    stalledRuns,    // active runs older than STALE_RUN_MS
+    stalledIssues,  // assigned issues quiet past stalledThresholdDays
+  }],
+  stalledThresholdDays: number,
+}
+```
+
+Sorted server-side by `stalledRuns desc → stalledIssues desc → load desc
+→ name asc` so the worst-off agent renders first. Returns an empty
+`agents` array when no non-archived agents exist; the tile hides itself
+in that case.
+
+### `inbox.waitingOnMe`
+
+Conservative "agent is waiting on me" filter. Returns issues whose most
+recent comment is from an agent and `@-mentions` the calling user, where
+the caller hasn't replied since.
+
+```ts
+inbox.waitingOnMe({ limit? = 25 }) → {
+  items: [{
+    issue:       { id, number, title, status, project, workspace },
+    lastComment: {
+      id, body, createdAt,
+      author: { kind: "agent", id, name, profileKey, avatar },
+    },
+  }],
+}
+```
+
+Heuristic — by design, prefers false-negatives over false-positives. The
+mention match is against `User.handle | name | email`'s lowercase
+tokens. A future mention table would make this exact; the trade-off is
+documented inline in `src/server/routers/inbox.ts`.
+
 ### `event.recent`
 
 Last N workspace events filtered to relevant kinds (`ISSUE_*`,
@@ -189,6 +259,7 @@ and `heatmap` procedures, the following were added:
 | `abandon({ runId, summary?, alsoUnassign? })` | mutation | Mark a run ABANDONED, optionally clear the issue assignment. |
 | `redispatch({ runId })` | mutation | Abandon the current run, re-queue the issue, and trigger auto-dispatch. |
 | `nudge({ runId, message? })` | mutation | Post a `@{profileKey} {message}` comment on the issue; the audit fan-out routes it to the agent's webhook. |
+| `kick({ runId })` | mutation | Re-fire the dispatch webhook for a stalled run without changing assignment or `controlState`. Eligibility: run is `ACTIVE` and quiet 5+ minutes (`STALE_RUN_MS` from `src/lib/agent-stale.ts`). Younger runs return `{ ok: true, kicked: false }`; non-active runs throw. Records `AGENT_RUN_KICKED`. |
 
 ### `access.*`
 

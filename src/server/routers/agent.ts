@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
   AgentProvider,
+  AgentRunStatus,
   AgentRuntimeMode,
   AgentStatus,
   EventKind,
@@ -12,6 +13,7 @@ import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import type { db as PrismaDb } from "@/server/db";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
+import { STALE_RUN_MS } from "@/server/services/agent-presence";
 
 /**
  * Agent registry. Agents are MCP-first actors — LLM profiles that hold
@@ -1143,6 +1145,130 @@ export const agentRouter = router({
         agent,
         rows: page,
         nextBefore,
+      };
+    }),
+
+  /**
+   * Per-agent stalled visibility — surfaces both flavours of "stalled"
+   * for a single agent so the agent detail page can render a dedicated
+   * bucket without joining two queries client-side.
+   *
+   *   - **stalledRuns** — `AgentRun` rows for this agent that are still
+   *     ACTIVE but whose `lastEventAt` is older than `STALE_RUN_MS` (5
+   *     min). UI signal — the watchdog that *closes* runs uses
+   *     `Workspace.agentRunStaleMinutes`, a different knob. Operators
+   *     should be able to see (and kick) a run as stalled long before
+   *     the watchdog auto-closes it.
+   *   - **stalledIssues** — issues currently assigned to this agent
+   *     where `updatedAt < (now - workspace.stalledThresholdDays * 24h)`
+   *     and the status is in a started category. When
+   *     `stalledThresholdDays === 0` the bucket is disabled and an
+   *     empty array is returned.
+   *
+   * Each row carries enough fields for the row renderer (issue key,
+   * title, status, project, run id, currentStep, lastEventAt) so the
+   * client doesn't need follow-up fetches. Sorted oldest-first within
+   * each bucket so the most-stale entries surface to the top.
+   */
+  stalled: workspaceProcedure
+    .input(z.object({ agentId }))
+    .query(async ({ ctx, input }) => {
+      // Workspace-scope guard: confirm the agent belongs to the
+      // calling tenant before returning rows joined off it.
+      const agent = await ctx.db.agent.findFirst({
+        where: { id: input.agentId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const ws = await ctx.db.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { stalledThresholdDays: true },
+      });
+
+      const now = Date.now();
+      const runCutoff = new Date(now - STALE_RUN_MS);
+
+      const stalledRuns = await ctx.db.agentRun.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          agentId: agent.id,
+          status: AgentRunStatus.ACTIVE,
+          lastEventAt: { lt: runCutoff },
+        },
+        orderBy: [{ lastEventAt: "asc" }],
+        take: 50,
+        select: {
+          id: true,
+          issueId: true,
+          currentStep: true,
+          startedAt: true,
+          lastEventAt: true,
+          issue: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              status: {
+                select: { id: true, name: true, category: true, color: true },
+              },
+              project: {
+                select: { id: true, key: true, name: true, color: true },
+              },
+              workspace: { select: { key: true, slug: true } },
+            },
+          },
+        },
+      });
+
+      let stalledIssues: Array<{
+        id: string;
+        number: number;
+        title: string;
+        updatedAt: Date;
+        status: { id: string; name: string; category: string; color: string };
+        project: { id: string; key: string; name: string; color: string | null } | null;
+        workspace: { key: string; slug: string };
+      }> = [];
+      if (ws.stalledThresholdDays > 0) {
+        const issueCutoff = new Date(
+          now - ws.stalledThresholdDays * 24 * 60 * 60 * 1000,
+        );
+        const snoozeNow = new Date();
+        stalledIssues = await ctx.db.issue.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+            assignedAgentId: agent.id,
+            updatedAt: { lt: issueCutoff },
+            status: { category: { in: ["IN_PROGRESS", "IN_REVIEW"] } },
+            OR: [
+              { snoozedUntil: null },
+              { snoozedUntil: { lte: snoozeNow } },
+            ],
+          },
+          orderBy: [{ updatedAt: "asc" }],
+          take: 50,
+          select: {
+            id: true,
+            number: true,
+            title: true,
+            updatedAt: true,
+            status: {
+              select: { id: true, name: true, category: true, color: true },
+            },
+            project: {
+              select: { id: true, key: true, name: true, color: true },
+            },
+            workspace: { select: { key: true, slug: true } },
+          },
+        });
+      }
+
+      return {
+        stalledRuns,
+        stalledIssues,
+        stalledThresholdDays: ws.stalledThresholdDays,
       };
     }),
 });

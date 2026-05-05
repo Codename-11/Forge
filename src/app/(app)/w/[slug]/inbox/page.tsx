@@ -506,6 +506,10 @@ export default function InboxPage() {
                 </Card>
               </Section>
 
+              {!allWorkspaces && (
+                <WaitingOnMeSection slug={workspace.slug} />
+              )}
+
               <BucketSection
                 bucket="humanStalled"
                 title="Stalled — yours"
@@ -1072,6 +1076,79 @@ function SnoozedSection({
         ))}
       </ul>
     </details>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Waiting on me — agent-authored comments that @mention the caller and
+// haven't been replied to. The proc is conservative on purpose (mention
+// heuristic; see the inbox router for trade-offs); the section hides
+// itself when empty so it's invisible until an agent actually pings you.
+// ---------------------------------------------------------------------------
+
+function WaitingOnMeSection({ slug }: { slug: string }) {
+  const { data, isLoading } = trpc.inbox.waitingOnMe.useQuery({ limit: 25 });
+  const items = data?.items ?? [];
+  if (isLoading) return null;
+  if (items.length === 0) return null;
+  return (
+    <Section
+      title={
+        <span className="flex items-center gap-2">
+          <Bot className="h-3.5 w-3.5 text-ember" />
+          Waiting on me
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">
+            {items.length}
+          </span>
+        </span>
+      }
+      hint="Agent comments that @-mention you with no reply from you yet."
+    >
+      <Card as="ul">
+        {items.map((row) => (
+          <li
+            key={row.lastComment.id}
+            className="flex items-start gap-3 px-3 py-2 text-[0.75rem] hover:bg-subtle/40"
+          >
+            <span
+              aria-hidden
+              className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-subtle text-[0.6875rem]"
+              title={`@${row.lastComment.author.profileKey}`}
+            >
+              {row.lastComment.author.avatar ?? (
+                <Bot className="h-3 w-3 text-muted-foreground" />
+              )}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <Link
+                  href={`/w/${slug}/issues/${row.issue.id}`}
+                  className="text-id hover:underline"
+                >
+                  {formatIssueId(row.issue.workspace.key, row.issue.number)}
+                </Link>
+                <span className="truncate">{row.issue.title}</span>
+                <span
+                  className="text-id font-mono text-muted-foreground"
+                  title={row.lastComment.author.name}
+                >
+                  @{row.lastComment.author.profileKey}
+                </span>
+              </div>
+              <div className="mt-0.5 line-clamp-2 text-muted-foreground">
+                {row.lastComment.body}
+              </div>
+            </div>
+            <span
+              className="text-meta shrink-0 text-muted-foreground"
+              title={new Date(row.lastComment.createdAt).toLocaleString()}
+            >
+              {relativeTime(row.lastComment.createdAt)}
+            </span>
+          </li>
+        ))}
+      </Card>
+    </Section>
   );
 }
 

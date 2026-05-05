@@ -1,6 +1,8 @@
 "use client";
+import { useState } from "react";
 import Link from "next/link";
 import { notFound, useParams, useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import type { AgentStatus } from "@prisma/client";
 import {
   Activity,
@@ -63,6 +65,7 @@ export default function AgentDetailPage() {
       utils.agent.webhookHealth.invalidate();
       utils.agent.unifiedTimeline.invalidate();
       utils.agent.pipeline.invalidate();
+      utils.agent.stalled.invalidate();
       utils.analytics.dispatch.summary.invalidate();
     },
     {
@@ -73,6 +76,13 @@ export default function AgentDetailPage() {
         "ISSUE_STATUS_CHANGED",
         "ISSUE_QUEUED",
         "COMMENT_CREATED",
+        "AGENT_RUN_STARTED",
+        "AGENT_RUN_STEP",
+        "AGENT_RUN_BLOCKED",
+        "AGENT_RUN_COMPLETED",
+        "AGENT_RUN_STALLED",
+        "AGENT_RUN_KICKED",
+        "AGENT_RUN_CONTROL_REQUESTED",
       ],
     },
   );
@@ -138,6 +148,7 @@ export default function AgentDetailPage() {
               <UptimeSection agentId={agent.id} />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <div className="lg:col-span-2 space-y-4">
+                  <StalledSection agentId={agent.id} slug={ws.slug} wsKey={ws.key} />
                   <CurrentlyWorkingSection agentId={agent.id} />
                 </div>
                 <div className="space-y-4">
@@ -454,6 +465,219 @@ function LegendDot({ color, label }: { color: string; label: string }) {
       />
       {label}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-agent Stalled bucket. Two flavours surfaced together:
+ *
+ *  - **Stalled runs (5m+)** — `AgentRun` rows still ACTIVE but quiet
+ *    past the shared `STALE_RUN_MS` threshold. Each row carries a
+ *    `Kick` button that re-fires the dispatch webhook for the issue
+ *    via `agentRun.kick` — assignment isn't changed; the agent is
+ *    just nudged.
+ *  - **Stalled issues (Nd+)** — issues currently assigned to this
+ *    agent past `Workspace.stalledThresholdDays`. No kick affordance:
+ *    long stalls usually mean a design / dependency wait, not a runtime
+ *    glitch.
+ *
+ * If an issue appears in both buckets we tag the issue row with "(also
+ * stalled run)" so the operator doesn't read the same incident twice
+ * without context. The stalled-run row stays primary because it has
+ * the kick affordance.
+ *
+ * Hidden entirely when both lists are empty — no clutter on healthy
+ * agents.
+ */
+function StalledSection({
+  agentId,
+  slug,
+  wsKey,
+}: {
+  agentId: string;
+  slug: string;
+  wsKey: string;
+}) {
+  const { data, isLoading } = trpc.agent.stalled.useQuery({ agentId });
+
+  if (isLoading || !data) return null;
+  const { stalledRuns, stalledIssues, stalledThresholdDays } = data;
+  if (stalledRuns.length === 0 && stalledIssues.length === 0) return null;
+
+  // Build the set of issue ids that already appear as a stalled run so
+  // the issue list can flag overlap rather than duplicate the line.
+  const runIssueIds = new Set(stalledRuns.map((r) => r.issueId));
+
+  return (
+    <Section
+      title={
+        <span className="flex items-center gap-2">
+          <AlertTriangle className="h-3.5 w-3.5 text-warning" />
+          Stalled
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">
+            {stalledRuns.length + stalledIssues.length} total
+          </span>
+        </span>
+      }
+    >
+      <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
+        {stalledRuns.length > 0 && (
+          <div>
+            <div className="mb-1 flex items-center gap-2 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+              <span>Stalled runs (5m+)</span>
+              <span className="font-mono">{stalledRuns.length}</span>
+            </div>
+            <ul className="space-y-1">
+              {stalledRuns.map((r) => (
+                <StalledRunRow
+                  key={r.id}
+                  run={r}
+                  slug={slug}
+                  wsKey={wsKey}
+                />
+              ))}
+            </ul>
+          </div>
+        )}
+        {stalledIssues.length > 0 && (
+          <div>
+            <div className="mb-1 flex items-center gap-2 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+              <span>
+                Stalled issues
+                {stalledThresholdDays > 0
+                  ? ` (${stalledThresholdDays}d+)`
+                  : ""}
+              </span>
+              <span className="font-mono">{stalledIssues.length}</span>
+            </div>
+            <ul className="space-y-1">
+              {stalledIssues.map((i) => {
+                const alsoRun = runIssueIds.has(i.id);
+                return (
+                  <li key={i.id}>
+                    <Link
+                      href={`/w/${slug}/issues/${i.id}`}
+                      className="focus-ring flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-[0.75rem] hover:bg-subtle"
+                      title={
+                        alsoRun
+                          ? "Also has a stalled run — see the run row above for the Kick action."
+                          : `Quiet since ${relativeTime(i.updatedAt)}`
+                      }
+                    >
+                      <span className="text-id text-muted-foreground">
+                        {formatIssueId(wsKey, i.number)}
+                      </span>
+                      <span className="flex-1 truncate">{i.title}</span>
+                      {alsoRun && (
+                        <span className="rounded-sm bg-warning/15 px-1 text-[0.625rem] font-medium uppercase tracking-wider text-warning">
+                          also stalled run
+                        </span>
+                      )}
+                      {i.project && (
+                        <span className="font-mono text-meta text-muted-foreground">
+                          {i.project.key}
+                        </span>
+                      )}
+                      <span
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ background: i.status.color }}
+                        title={i.status.name}
+                      />
+                      <span className="text-meta text-warning">
+                        {relativeTime(i.updatedAt)}
+                      </span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+type StalledRunRowProps = {
+  run: NonNullable<RouterOutputs["agent"]["stalled"]>["stalledRuns"][number];
+  slug: string;
+  wsKey: string;
+};
+
+function StalledRunRow({ run, slug, wsKey }: StalledRunRowProps) {
+  const utils = trpc.useUtils();
+  // Optimistic 30s "kicked just now" hint — clears either when the
+  // realtime layer refreshes or the timer expires, whichever first.
+  const [kickedAt, setKickedAt] = useState<number | null>(null);
+  const kickM = trpc.agentRun.kick.useMutation({
+    onSuccess: (res) => {
+      if (res.kicked) {
+        toast.success("Run kicked. Watching for the agent to ack…");
+        setKickedAt(Date.now());
+        setTimeout(() => setKickedAt(null), 30_000);
+      } else {
+        toast.message("Run already moving — kick skipped.");
+      }
+      void utils.agent.stalled.invalidate();
+      void utils.agentRun.activeAll.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const recentlyKicked =
+    kickedAt !== null && Date.now() - kickedAt < 30_000;
+
+  return (
+    <li className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-[0.75rem]">
+      <Link
+        href={`/w/${slug}/issues/${run.issue.id}`}
+        className="focus-ring flex min-w-0 flex-1 items-center gap-2 hover:bg-subtle"
+        title={
+          run.currentStep
+            ? `Last step: ${run.currentStep}`
+            : `No status comment yet. Last event ${relativeTime(run.lastEventAt)}.`
+        }
+      >
+        <span className="text-id text-muted-foreground">
+          {formatIssueId(wsKey, run.issue.number)}
+        </span>
+        <span className="flex-1 truncate">{run.issue.title}</span>
+        {run.issue.project && (
+          <span className="font-mono text-meta text-muted-foreground">
+            {run.issue.project.key}
+          </span>
+        )}
+        <span
+          className="h-1.5 w-1.5 rounded-full"
+          style={{ background: run.issue.status.color }}
+          title={run.issue.status.name}
+        />
+        <span className="text-meta text-warning">
+          quiet {relativeTime(run.lastEventAt)}
+        </span>
+      </Link>
+      {recentlyKicked ? (
+        <span
+          className="rounded-md border border-success/30 bg-success/10 px-2 py-0.5 text-[0.6875rem] font-medium text-success"
+          title="Kick delivered — waiting for the agent to ack."
+        >
+          kicked
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => kickM.mutate({ runId: run.id })}
+          disabled={kickM.isPending}
+          title="Re-dispatch to wake the agent. Doesn't change assignment."
+          className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-0.5 text-[0.6875rem] text-foreground/80 hover:border-ember/40 hover:text-foreground disabled:opacity-50"
+        >
+          <Zap className="h-3 w-3" />
+          Kick
+        </button>
+      )}
+    </li>
   );
 }
 

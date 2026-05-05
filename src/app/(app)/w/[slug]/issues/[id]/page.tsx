@@ -58,6 +58,18 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const { data: members } = trpc.workspace.members.useQuery();
   const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
   const { data: allLabels } = trpc.label.list.useQuery();
+  // Pre-loaded for the reassign confirmation toast — both the agent
+  // list (for the new-assignee display name) and a cap-50 activity
+  // window (for the "X events shared" hint). Neither is on the
+  // critical render path so a brief stale read is fine; they cost
+  // one tRPC call each but are reused by the picker / activity rail.
+  const { data: agentListData } = trpc.agent.list.useQuery({
+    includeArchived: false,
+  });
+  const { data: recentEvents } = trpc.issue.activity.useQuery(
+    { issueId: id, limit: 50 },
+    { staleTime: 30_000 },
+  );
   // Phase 1B: surface project's linked initiative and the issue's cycle as
   // chips. Both queries are skipped when the underlying id is null so we
   // don't hit the server on issues that don't have either link.
@@ -539,7 +551,52 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         onOpenChange={setAgentPickerOpen}
         currentAgentId={issue.assignedAgent?.id ?? null}
         onSelect={(agentId) => {
-          update.mutate({ id: issue.id, assignedAgentId: agentId });
+          // Reassignment-confirmation toast: when the assigned agent
+          // *changes* (not on the initial assign), reassure the
+          // operator that context is preserved. The standard
+          // AGENT_ASSIGNED webhook already carries the issueSnapshot;
+          // this toast just makes it visible. `eventCount` is the
+          // last-7-day count from already-loaded data so the toast
+          // doesn't trigger an extra fetch.
+          const wasAssigned = !!issue.assignedAgent;
+          const isReassign =
+            wasAssigned && agentId !== issue.assignedAgent?.id;
+          let nextAgentName: string | null = null;
+          if (agentId) {
+            const next = agentListData?.find((a) => a.id === agentId);
+            if (next)
+              nextAgentName = `@${next.profileKey}`;
+          }
+          update.mutate(
+            { id: issue.id, assignedAgentId: agentId },
+            {
+              onSuccess: () => {
+                if (isReassign && nextAgentName) {
+                  // 7-day activity count for the issue. Falls back to
+                  // total events if the timeline isn't loaded.
+                  const cutoff = Date.now() - 7 * 86_400_000;
+                  const eventCount = recentEvents
+                    ? recentEvents.filter(
+                        (e) => new Date(e.createdAt).getTime() >= cutoff,
+                      ).length
+                    : null;
+                  toast.success(
+                    `Reassigned ${issueKey} to ${nextAgentName}`,
+                    {
+                      description:
+                        eventCount !== null
+                          ? `Context preserved · ${eventCount} event${eventCount === 1 ? "" : "s"} shared via comment thread`
+                          : "Context preserved · the new agent receives the full issue snapshot",
+                    },
+                  );
+                } else if (!wasAssigned && nextAgentName) {
+                  toast.success(`Assigned ${issueKey} to ${nextAgentName}`);
+                } else if (!agentId && wasAssigned) {
+                  toast.success(`Unassigned agent from ${issueKey}`);
+                }
+              },
+            },
+          );
           setAgentPickerOpen(false);
         }}
       />

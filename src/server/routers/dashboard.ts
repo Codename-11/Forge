@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { AgentRunStatus } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
+import { STALE_RUN_MS } from "@/server/services/agent-presence";
 
 /**
  * Dashboard zero-state suggestions. Three buckets — current sprint,
@@ -330,6 +332,132 @@ export const dashboardRouter = router({
         stalledThresholdDays: ws.stalledThresholdDays,
       };
     }),
+
+  /**
+   * Agent Activity tile — per-agent at-a-glance health for the
+   * dashboard. Composed server-side so the client doesn't have to
+   * juggle three tRPC queries and join them itself.
+   *
+   * Per agent (non-archived):
+   *   - identity (id, profileKey, name, avatar, status)
+   *   - lastHeartbeatAt
+   *   - load = currently-active runs for this agent
+   *   - maxConcurrent (0 = ∞)
+   *   - stalledRuns = active runs older than `STALE_RUN_MS`
+   *   - stalledIssues = issues assigned to this agent past
+   *     `Workspace.stalledThresholdDays` (0 disables the count, returns 0)
+   *
+   * Sort: stalledRuns desc → stalledIssues desc → load desc → name asc.
+   * Empty array when no agents exist (the client hides the tile).
+   */
+  agentActivity: workspaceProcedure.query(async ({ ctx }) => {
+    const agents = await ctx.db.agent.findMany({
+      where: { workspaceId: ctx.workspaceId, archivedAt: null },
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        profileKey: true,
+        name: true,
+        avatar: true,
+        status: true,
+        lastHeartbeatAt: true,
+        maxConcurrent: true,
+      },
+    });
+
+    if (agents.length === 0) {
+      return { agents: [], stalledThresholdDays: 0 };
+    }
+
+    const ws = await ctx.db.workspace.findUniqueOrThrow({
+      where: { id: ctx.workspaceId },
+      select: { stalledThresholdDays: true },
+    });
+
+    const agentIds = agents.map((a) => a.id);
+    const now = Date.now();
+    const runCutoff = new Date(now - STALE_RUN_MS);
+
+    // Active-run load + stalled-run count, both grouped by agent in
+    // a single sweep over the active rows. Bounded by the workspace's
+    // active-run cardinality (typically <100; if it ever blows up we
+    // can switch to GROUP BY).
+    const activeRuns = await ctx.db.agentRun.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        agentId: { in: agentIds },
+        status: AgentRunStatus.ACTIVE,
+      },
+      select: { agentId: true, lastEventAt: true },
+    });
+    const loadByAgent = new Map<string, number>();
+    const stalledRunsByAgent = new Map<string, number>();
+    for (const r of activeRuns) {
+      loadByAgent.set(r.agentId, (loadByAgent.get(r.agentId) ?? 0) + 1);
+      if (r.lastEventAt < runCutoff) {
+        stalledRunsByAgent.set(
+          r.agentId,
+          (stalledRunsByAgent.get(r.agentId) ?? 0) + 1,
+        );
+      }
+    }
+
+    // Stalled-issue count per agent — single grouped query when the
+    // workspace setting is enabled.
+    const stalledIssuesByAgent = new Map<string, number>();
+    if (ws.stalledThresholdDays > 0) {
+      const issueCutoff = new Date(
+        now - ws.stalledThresholdDays * 24 * 60 * 60 * 1000,
+      );
+      const snoozeNow = new Date();
+      const stalledIssues = await ctx.db.issue.groupBy({
+        by: ["assignedAgentId"],
+        where: {
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+          assignedAgentId: { in: agentIds },
+          updatedAt: { lt: issueCutoff },
+          status: { category: { in: ["IN_PROGRESS", "IN_REVIEW"] } },
+          OR: [
+            { snoozedUntil: null },
+            { snoozedUntil: { lte: snoozeNow } },
+          ],
+        },
+        _count: { _all: true },
+      });
+      for (const r of stalledIssues) {
+        if (r.assignedAgentId) {
+          stalledIssuesByAgent.set(r.assignedAgentId, r._count._all);
+        }
+      }
+    }
+
+    const rows = agents.map((a) => ({
+      id: a.id,
+      profileKey: a.profileKey,
+      name: a.name,
+      avatar: a.avatar,
+      status: a.status,
+      lastHeartbeatAt: a.lastHeartbeatAt,
+      load: loadByAgent.get(a.id) ?? 0,
+      maxConcurrent: a.maxConcurrent,
+      stalledRuns: stalledRunsByAgent.get(a.id) ?? 0,
+      stalledIssues: stalledIssuesByAgent.get(a.id) ?? 0,
+    }));
+
+    rows.sort((a, b) => {
+      if (a.stalledRuns !== b.stalledRuns) return b.stalledRuns - a.stalledRuns;
+      if (a.stalledIssues !== b.stalledIssues)
+        return b.stalledIssues - a.stalledIssues;
+      if (a.load !== b.load) return b.load - a.load;
+      return a.name.localeCompare(b.name);
+    });
+
+    return {
+      agents: rows,
+      stalledThresholdDays: ws.stalledThresholdDays,
+    };
+  }),
 });
 
 // -- helpers ----------------------------------------------------------------

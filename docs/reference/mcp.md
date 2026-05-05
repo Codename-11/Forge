@@ -1,6 +1,6 @@
 # MCP Tools
 
-Forge exposes 69 tools across 19 namespaces. Two transports — JSON-RPC 2.0 at
+Forge exposes 70 tools across 19 namespaces. Two transports — JSON-RPC 2.0 at
 `POST /api/mcp/rpc` (preferred for agent clients) and REST aliases at
 `POST /api/mcp/<tool>`. Both are gated by the same API-key auth and the same
 scope/narrowing checks.
@@ -369,6 +369,7 @@ heartbeat returns a missing-row error.
 |---|---|
 | `recordUsage` | Update token + cost columns on an `AgentRun`. `{ runId, tokensIn?, tokensOut?, tokensCached?, costUsd? }`. Idempotent — latest call replaces (cumulative as reported by the agent). |
 | `list` | List `AgentRun` rows for "my recent history" introspection. `{ agentId?, issueId?, status?, limit? = 50, before? }` → newest-first by `startedAt`. Each row includes scalars (status, currentStep, startedAt, finishedAt, lastEventAt, tokensIn, tokensOut, tokensCached, costUsd) plus `issue { id, number, title, workspace: { key } }` and `agent { id, profileKey }`. |
+| `kick` | Operator-driven nudge for a stalled run. `{ runId }`. Re-fires the dispatch webhook for the underlying issue without changing assignment or `controlState`. Only kicks an `ACTIVE` run that's been quiet 5+ minutes; younger runs return `{ ok: true, kicked: false }`. Records `AGENT_RUN_KICKED`. Scope: `WRITE_ISSUES`. |
 
 `costUsd` is taken verbatim from the agent for v1; a server-side
 rate table per model is a future enhancement.

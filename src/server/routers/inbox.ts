@@ -371,6 +371,151 @@ export const inboxRouter = router({
   }),
 
   /**
+   * "Waiting on me" — issues whose most recent comment was authored by
+   * an agent and @-mentions the calling user, AND no human reply from
+   * the calling user has landed since. Surfaces the conversational
+   * follow-ups that an operator owes their agents.
+   *
+   * Heuristic — by design, conservative. The agent must @-mention one
+   * of the caller's handle tokens (`@firstname`, `@email-prefix`,
+   * `@handle` if set). False-negatives (missing some) are preferred
+   * over false-positives (showing non-relevant work). A future
+   * mention table would make this exact; for now we trade precision
+   * for "not noisy" and document the trade-off here.
+   *
+   * Implementation: fetch recent agent-authored comments in the
+   * workspace, filter to those that mention the caller, then for each
+   * candidate issue load the latest comment to confirm:
+   *   1. it's still the agent comment (no later comment exists), OR
+   *   2. all later comments are from non-callers (the caller hasn't
+   *      replied themselves).
+   * The second case keeps the row in "waiting" even if a different
+   * teammate chimed in — the agent was specifically asking *me*.
+   */
+  waitingOnMe: workspaceProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(50).default(25),
+        })
+        .default({ limit: 25 }),
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      const me = await ctx.db.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: { id: true, name: true, handle: true, email: true },
+      });
+      const tokens = buildMentionHaystack(me.name, me.handle, me.email);
+      if (tokens.length === 0) return { items: [] };
+
+      // Pull recent agent-authored comments in the window. Bounded so
+      // a chatty workspace doesn't drag the query — Phase 1B can move
+      // this behind a saved view if cardinality grows.
+      const since = new Date(Date.now() - MENTION_WINDOW_MS);
+      const candidates = await ctx.db.comment.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+          createdAt: { gte: since },
+          authoringAgentId: { not: null },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+        select: {
+          id: true,
+          body: true,
+          createdAt: true,
+          issueId: true,
+          authoringAgent: {
+            select: { id: true, name: true, profileKey: true, avatar: true },
+          },
+          issue: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              workspace: { select: { id: true, slug: true, key: true } },
+              status: { select: { id: true, name: true, category: true, color: true } },
+              project: { select: { id: true, key: true, name: true, color: true } },
+              deletedAt: true,
+            },
+          },
+        },
+      });
+
+      // Filter to mentions of caller, keep at most one entry per issue
+      // (the most recent — Map insertion order from already-DESC
+      // candidates).
+      const seenIssue = new Map<
+        string,
+        (typeof candidates)[number]
+      >();
+      for (const c of candidates) {
+        if (!c.issue || c.issue.deletedAt) continue;
+        if (!commentMentionsUser(c.body, tokens)) continue;
+        if (!seenIssue.has(c.issueId)) {
+          seenIssue.set(c.issueId, c);
+        }
+      }
+      if (seenIssue.size === 0) return { items: [] };
+
+      // For each candidate issue confirm the caller hasn't replied
+      // *after* the agent's mention. Done in parallel; bounded by the
+      // mention candidate count which is already capped at 200.
+      const items: Array<{
+        issue: NonNullable<(typeof candidates)[number]["issue"]>;
+        lastComment: {
+          id: string;
+          body: string;
+          createdAt: Date;
+          author: {
+            kind: "agent";
+            id: string;
+            name: string;
+            profileKey: string;
+            avatar: string | null;
+          };
+        };
+      }> = [];
+      for (const c of seenIssue.values()) {
+        const callerReply = await ctx.db.comment.findFirst({
+          where: {
+            issueId: c.issueId,
+            authorId: userId,
+            createdAt: { gt: c.createdAt },
+            deletedAt: null,
+          },
+          select: { id: true },
+        });
+        if (callerReply) continue;
+        items.push({
+          issue: c.issue!,
+          lastComment: {
+            id: c.id,
+            body: c.body,
+            createdAt: c.createdAt,
+            author: {
+              kind: "agent",
+              id: c.authoringAgent!.id,
+              name: c.authoringAgent!.name,
+              profileKey: c.authoringAgent!.profileKey,
+              avatar: c.authoringAgent!.avatar,
+            },
+          },
+        });
+        if (items.length >= input.limit) break;
+      }
+
+      // Newest-first within the page.
+      items.sort(
+        (a, b) =>
+          b.lastComment.createdAt.getTime() - a.lastComment.createdAt.getTime(),
+      );
+      return { items };
+    }),
+
+  /**
    * Quick sidebar badge — just the "things demanding attention" count without
    * fetching the full body. Used by the Inbox nav item.
    */

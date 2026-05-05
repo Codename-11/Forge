@@ -5,6 +5,7 @@ import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
+import { STALE_RUN_MS } from "@/server/services/agent-presence";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // a loose validator instead of `.cuid()` so both shapes pass.
@@ -690,6 +691,114 @@ export const agentRunRouter = router({
         });
         return { ok: true, commentId: comment.id };
       });
+    }),
+
+  /**
+   * Operator-driven "kick" of a stalled run. Re-fires the dispatch
+   * webhook for the underlying issue without changing assignment or
+   * controlState — just nudges the agent to wake up. The audit
+   * fan-out re-uses the per-agent dispatch shim that originally
+   * delivered AGENT_ASSIGNED, so the runtime sees an event shape it
+   * already knows how to handle.
+   *
+   * Eligibility: run must be ACTIVE and stalled (lastEventAt older
+   * than `STALE_RUN_MS`). If the run is younger than that we no-op
+   * silently — the operator might have raced a fresh tick — and
+   * return `{ ok: true, kicked: false }`. If the run is no longer
+   * active we throw so the UI can clear its optimistic state.
+   *
+   * Records `EventKind.AGENT_RUN_KICKED` so the timeline distinguishes
+   * a kick from auto-dispatch / control-request flows.
+   */
+  kick: workspaceProcedure
+    .input(z.object({ runId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      const run = await ctx.db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          issueId: true,
+          status: true,
+          lastEventAt: true,
+          currentStep: true,
+          agent: {
+            select: {
+              id: true,
+              profileKey: true,
+              webhookUrl: true,
+              webhookSecret: true,
+            },
+          },
+        },
+      });
+      if (!run) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Run not found." });
+      }
+      if (run.status !== AgentRunStatus.ACTIVE) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Run is ${run.status}; only ACTIVE runs can be kicked.`,
+        });
+      }
+      const idleMs = Date.now() - run.lastEventAt.getTime();
+      if (idleMs < STALE_RUN_MS) {
+        // Not stalled yet — silent no-op. The UI's optimistic "kicked"
+        // hint will time out on its own; the operator can retry.
+        return { ok: true, kicked: false, idleMs } as const;
+      }
+
+      await ctx.db.$transaction(async (tx) => {
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "AgentRun",
+          entityId: run.id,
+          action: "kick",
+          eventKind: EventKind.AGENT_RUN_KICKED,
+          subjectType: "agent-run",
+          subjectId: run.id,
+          payload: {
+            runId: run.id,
+            issueId: run.issueId,
+            agentId: run.agent.id,
+            idleMs,
+            currentStep: run.currentStep,
+          },
+        });
+      });
+
+      // Best-effort webhook ping. Distinct kind so the runtime can
+      // treat it differently from a fresh assignment if it wants —
+      // most adapters can re-use their AGENT_ASSIGNED handler since
+      // payload shape is similar.
+      const url = run.agent.webhookUrl;
+      const secret = run.agent.webhookSecret;
+      if (url && secret) {
+        void deliverWebhook({
+          url,
+          secret,
+          timeoutMs: 5000,
+          body: {
+            id: `run-kick-${run.id}-${Date.now()}`,
+            kind: "AGENT_RUN_KICKED",
+            subjectType: "agent-run",
+            subjectId: run.id,
+            payload: {
+              runId: run.id,
+              issueId: run.issueId,
+              agentId: run.agent.id,
+              workspaceId: ctx.workspaceId,
+              idleMs,
+              reason: "operator-kick",
+            },
+            createdAt: new Date().toISOString(),
+          },
+        }).catch(() => {
+          // Webhook delivery is best-effort; the audit row is durable.
+        });
+      }
+
+      return { ok: true, kicked: true, idleMs } as const;
     }),
 });
 
