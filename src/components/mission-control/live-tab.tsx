@@ -2,6 +2,7 @@
 import { useMemo } from "react";
 import { Activity } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { STALE_RUN_MS } from "@/lib/agent-stale";
 import { RunRow } from "./run-row";
 
 /**
@@ -9,8 +10,6 @@ import { RunRow } from "./run-row";
  * other ACTIVE runs in lastEventAt-desc order. Empty state explains
  * how runs open.
  */
-
-const STALE_RUN_MS = 5 * 60_000;
 
 export function LiveTab({
   pinnedIds,

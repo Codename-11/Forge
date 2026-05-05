@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Bot, ChevronUp, GripHorizontal, ChevronDown, ExternalLink } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { STALE_RUN_MS } from "@/lib/agent-stale";
 
 /**
  * Compact "agent presence + heartbeat" view, sits between the pill and
@@ -64,8 +65,19 @@ export function GlanceView({
   }, []);
 
   const loadByAgent = new Map<string, number>();
+  // Per-agent stalled-run count derived client-side from the same
+  // `activeRuns` query the rest of the panel uses — keeps the
+  // glance view single-fetch and lets the filter share the
+  // STALE_RUN_MS constant with the Live tab. A run is stalled when
+  // its `lastEventAt` exceeds the threshold; ts re-evaluates on the
+  // 30s tick below.
+  const stalledByAgent = new Map<string, number>();
+  const now = Date.now();
   for (const r of activeRuns ?? []) {
     loadByAgent.set(r.agentId, (loadByAgent.get(r.agentId) ?? 0) + 1);
+    if (now - new Date(r.lastEventAt).getTime() > STALE_RUN_MS) {
+      stalledByAgent.set(r.agentId, (stalledByAgent.get(r.agentId) ?? 0) + 1);
+    }
   }
 
   const sorted = [...(agents ?? [])].sort((a, b) => {
@@ -130,6 +142,7 @@ export function GlanceView({
         )}
         {sorted.map((a) => {
           const load = loadByAgent.get(a.id) ?? 0;
+          const stalled = stalledByAgent.get(a.id) ?? 0;
           const cap = a.maxConcurrent;
           const atCap = cap > 0 && load >= cap;
           const isOnline = a.status === "ONLINE";
@@ -186,6 +199,14 @@ export function GlanceView({
                         {cap > 0 ? `${load}/${cap}` : `${load}`} active
                       </span>
                     </>
+                  )}
+                  {stalled > 0 && (
+                    <span
+                      className="ml-0.5 rounded-sm bg-danger/10 px-1 font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-danger"
+                      title={`${stalled} run${stalled === 1 ? "" : "s"} stalled (5m+ idle). Click row to open agent detail.`}
+                    >
+                      {stalled} stl
+                    </span>
                   )}
                 </div>
               </div>

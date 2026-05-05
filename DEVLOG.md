@@ -2,6 +2,140 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-05 — Agent visibility + handoff polish
+
+Bailey reported: Victor has 2 stalled jobs; the Mission Control overlay
+sees them but the dashboard and the agent detail page don't surface them
+clearly. Single coordinated deploy — eight items, one squashed commit,
+docker rebuild, Hermes-side companion edits.
+
+### Single source of truth: `STALE_RUN_MS`
+
+The 5-minute "this run is stalled (UI sense)" threshold was hardcoded
+once in `src/components/mission-control/live-tab.tsx` and again, as a
+literal `5 * 60_000`, in `mission-control.tsx`'s pill-stalled
+calculation. Lifted to **`src/lib/agent-stale.ts`** (`export const
+STALE_RUN_MS = 5 * 60_000`) and re-exported as a server-only barrel from
+**`src/server/services/agent-presence.ts`**. Imported by `live-tab.tsx`,
+`mission-control.tsx`, `glance-view.tsx` (client), `agent.ts`,
+`agent-run.ts`, `dashboard.ts`, `mcp.ts` (server). Distinct from the
+auto-close watchdog (`Workspace.agentRunStaleMinutes`) — that's a
+per-workspace knob for state transitions; the constant is purely a UI
+"show as needing attention" signal.
+
+### 1. Agent detail — Stalled bucket
+
+- **`agent.stalled({ agentId })`** new tRPC proc returns
+  `{ stalledRuns, stalledIssues, stalledThresholdDays }`. Stalled runs
+  are `AgentRun.status === ACTIVE AND lastEventAt < (now - STALE_RUN_MS)`;
+  stalled issues are `assignedAgentId === input.agentId AND
+  status.category IN (IN_PROGRESS, IN_REVIEW) AND updatedAt <
+  (now - workspace.stalledThresholdDays * 24h)`, snoozed rows excluded.
+  When `stalledThresholdDays === 0`, the issue bucket returns empty.
+- **`<StalledSection />`** new component on the agent detail page,
+  rendered above `CurrentlyWorkingSection` inside the same lg:col-span-2
+  column. Two sub-buckets: "Stalled runs (5m+)" with per-row Kick
+  buttons; "Stalled issues (Nd+)" without Kick. Same warm warning tint
+  the HealthFocusBanner uses (`border-warning/30 bg-warning/5`). Hidden
+  entirely when both lists are empty — no clutter on healthy agents.
+- De-dupe: an issue that appears in both lists is tagged "(also stalled
+  run)" on the issue side; the run side stays primary because it carries
+  the Kick affordance.
+- Realtime invalidation list extended with `AGENT_RUN_STARTED`,
+  `AGENT_RUN_STEP`, `AGENT_RUN_BLOCKED`, `AGENT_RUN_COMPLETED`,
+  `AGENT_RUN_STALLED`, `AGENT_RUN_KICKED`, `AGENT_RUN_CONTROL_REQUESTED`.
+
+### 2. Dashboard — Agent Activity tile
+
+- **`dashboard.agentActivity()`** new proc composes the per-agent
+  health snapshot in one round-trip: identity, presence, last
+  heartbeat, load (`X/Y` where Y = maxConcurrent or ∞), stalled-run
+  count, stalled-issue count. Sorted server-side by stalled-run desc →
+  stalled-issue desc → load desc → name asc so the worst-off agent is
+  always on top. Empty array when no agents — the client hides the tile.
+- **`<AgentActivityTile />`** new component at
+  `src/components/dashboard/agent-activity-tile.tsx`, mounted between
+  TodayWidget and QuickNotes on the dashboard. Compact — one row per
+  agent, hover reveals chevron, click → `/agents/[profileKey]`.
+  Aggregate header shows total stalled-run / stalled-issue counts in
+  warning + danger colors so the eye lands on the bad numbers first.
+
+### 3. Mission Control glance-view — per-agent stalled chip
+
+- `glance-view.tsx` now derives a per-agent stalled-run count
+  client-side from the same `agentRun.activeAll` query the panel
+  already uses (no extra fetch). Rendered as a tiny `N stl` red pill
+  next to the load fraction, with native `title=` showing "N runs
+  stalled (5m+ idle). Click row to open agent detail."
+
+### 4. Inbox — Waiting on me
+
+- **`inbox.waitingOnMe({ limit? = 25 })`** new proc. Returns issues
+  where the latest comment was authored by an agent (via
+  `Comment.authoringAgentId`) and `@-mentions` the calling user (via
+  the same `buildMentionHaystack` heuristic the existing mentions tab
+  uses), AND the caller hasn't replied since. Conservative — prefers
+  false-negatives over false-positives; documented inline.
+- **`<WaitingOnMeSection />`** mounted between Mentions and Stalled in
+  the Inbox. Hidden when empty — invisible until an agent actually
+  pings the operator. Each row shows the issue key + title, the
+  agent's `@profileKey`, and the comment body excerpt.
+- New integration tests in
+  `src/server/routers/__tests__/inbox-waiting.test.ts` cover the three
+  scenarios: agent mention surfaces the row; caller's reply hides it;
+  mention to a different user doesn't false-positive.
+
+### 5. Kick run
+
+- **`agentRun.kick({ runId })`** new tRPC mutation + matching
+  **`runs.kick`** MCP tool (scope `WRITE_ISSUES`). Records
+  `EventKind.AGENT_RUN_KICKED` (new enum value, migration `0028`).
+  Re-fires the dispatch webhook for the issue without changing
+  assignment or `controlState`. Eligibility: run must be `ACTIVE` and
+  quiet for at least `STALE_RUN_MS`. Younger runs return
+  `{ ok: true, kicked: false }` (no-op, operator can retry); non-active
+  runs throw.
+- Surfaced as a small lightning-bolt button on the agent detail
+  Stalled bucket's stalled-run rows. After a successful kick, the row
+  shows a "kicked" success chip for 30s while the realtime layer
+  refreshes.
+
+### 6. Reassign confirmation toast
+
+- Issue detail page's `AgentPickerModal.onSelect` now distinguishes
+  initial assign / reassign / unassign and emits the right toast
+  copy. For a reassignment specifically, the description reads
+  `Context preserved · X events shared via comment thread` where X is
+  the count of `ActivityEvent` rows on the issue in the last 7 days
+  (computed from already-loaded `issue.activity` data — no extra
+  fetch).
+
+### 7. Schema + migration
+
+- `EventKind.AGENT_RUN_KICKED` added to `prisma/schema.prisma`.
+- Migration `0028_agent_run_kicked_eventkind/migration.sql` runs
+  `ALTER TYPE "EventKind" ADD VALUE IF NOT EXISTS 'AGENT_RUN_KICKED';`.
+
+### 8. Docs
+
+- `docs/agents/overview.md` gained a **Stalled visibility** section
+  spelling out the two flavours (run vs issue), the four surfaces
+  (Mission Control, agent detail, dashboard tile, glance roster), and
+  the right operator response to each.
+- `docs/guide/inbox.md` gained the **Waiting on me** section.
+- `docs/reference/mcp.md` documents `runs.kick` and bumps the tool
+  count (69 → 70).
+- `docs/reference/trpc.md` documents `agent.stalled`,
+  `dashboard.agentActivity`, `inbox.waitingOnMe`, and `agentRun.kick`.
+
+### Verification
+
+- `pnpm typecheck` clean.
+- `pnpm lint` — same 5 pre-existing errors (issue-board.tsx,
+  control-tab.tsx); no new errors in touched files.
+- `pnpm test` — 32 files, 246 tests pass (3 new in `inbox-waiting`).
+- `pnpm --filter forge-docs build` — vitepress builds clean.
+
 ## 2026-05-04 — Polish run (deferred follow-ups)
 
 Bundle of seven small QoL items deferred from the recent feature

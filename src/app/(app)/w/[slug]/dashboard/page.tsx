@@ -26,6 +26,7 @@ import { ProjectChip } from "@/components/project-chip";
 import { QuickNotesWidget } from "@/components/quick-notes-widget";
 import { TodayWidget } from "@/components/dashboard/today-widget";
 import { WhatsNewTile } from "@/components/dashboard/whats-new-tile";
+import { AgentActivityTile } from "@/components/dashboard/agent-activity-tile";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
@@ -142,6 +143,8 @@ export default function DashboardPage() {
           <GreetingBar greeting={greeting} name={firstName} slug={slug} />
 
           <TodayWidget slug={slug} workspaceKey={workspaceKey} />
+
+          <AgentActivityTile slug={slug} />
 
           <QuickNotesWidget />
 
