@@ -13,6 +13,10 @@ import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
 import { NewCycleDialog } from "@/components/cycles/new-cycle-dialog";
 import { NewInitiativeDialog } from "@/components/initiatives/new-initiative-dialog";
 import { NewProjectDialog } from "@/components/projects/new-project-dialog";
+import {
+  parseSlashCommands,
+  SLASH_COMMAND_HELP,
+} from "@/lib/slash-commands";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 type Priority = (typeof PRIORITIES)[number];
@@ -295,13 +299,27 @@ export function QuickCreate() {
     try {
       switch (mode.kind) {
         case "issue": {
+          // Pull leading slash commands out of the value. For the
+          // single-line QuickCreate input, this lets users type
+          // "/priority high\nFix the bug" or just put commands at the
+          // start of the title field. The stripped tail becomes the
+          // title; if the tail is empty (only commands typed) we
+          // bail with a clear toast.
+          const { strippedBody, commands } = parseSlashCommands(value);
+          const finalTitle = strippedBody.trim();
+          if (!finalTitle) {
+            toast.error("Title required after slash commands.");
+            return;
+          }
+          const applyCommands = commands.length > 0 ? commands : undefined;
           if (secondary) {
             // Create + open: same as primary but route to the new issue.
             const issue = await createIssue.mutateAsync({
-              title: value,
+              title: finalTitle,
               projectId: projectId || undefined,
               priority,
               labelIds: [],
+              applyCommands,
             });
             await utils.issue.list.invalidate();
             done(`Created #${issue.number}`);
@@ -309,10 +327,11 @@ export function QuickCreate() {
             router.push(`${base}/issues/${issue.id}`);
           } else {
             const issue = await createIssue.mutateAsync({
-              title: value,
+              title: finalTitle,
               projectId: projectId || undefined,
               priority,
               labelIds: [],
+              applyCommands,
             });
             await utils.issue.list.invalidate();
             done(`Created #${issue.number}`);
@@ -376,12 +395,19 @@ export function QuickCreate() {
             await utils.issue.activity.invalidate({ issueId: mode.issueId });
             done("Comment added.");
           } else {
+            const { strippedBody, commands } = parseSlashCommands(value);
+            const finalTitle = strippedBody.trim();
+            if (!finalTitle) {
+              toast.error("Title required after slash commands.");
+              return;
+            }
             const issue = await createIssue.mutateAsync({
-              title: value,
+              title: finalTitle,
               projectId: contextIssue?.projectId ?? undefined,
               parentId: mode.issueId,
               priority,
               labelIds: [],
+              applyCommands: commands.length > 0 ? commands : undefined,
             });
             await utils.issue.list.invalidate();
             done(`Created sub-issue #${issue.number}`);
@@ -506,6 +532,26 @@ export function QuickCreate() {
             </Kbd>
           </button>
         </div>
+
+        {/* Slash hint — render only for issue / sub-issue (commands
+            don't apply to plain comments or to cycles/projects). */}
+        {(mode.kind === "issue" ||
+          (mode.kind === "issue-context" && mode.intent === "sub-issue")) && (
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 bg-card/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground">
+            <span className="font-mono uppercase tracking-wider opacity-70">
+              slash
+            </span>
+            {SLASH_COMMAND_HELP.slice(0, 6).map((c) => (
+              <span
+                key={c.keyword}
+                className="rounded bg-subtle/50 px-1.5 py-0.5 font-mono"
+                title={`Example: ${c.example}`}
+              >
+                {c.keyword}
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Secondary row: priority chips (issue) / intent tabs (issue-context) */}
         {(mode.kind === "issue" ||

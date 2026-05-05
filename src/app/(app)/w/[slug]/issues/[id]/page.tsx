@@ -17,6 +17,7 @@ import { useTimePrefs } from "@/lib/time-prefs";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { PinToggleButton } from "@/components/pins/pin-toggle-button";
 import { PinButton } from "@/components/pins/pin-button";
+import { WatchButton } from "@/components/watch-button";
 import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
@@ -316,6 +317,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               targetId={issue.id}
               workspaceId={workspace.id}
             />
+            <WatchButton issueId={issue.id} />
 
             {editingTitle ? (
               <form

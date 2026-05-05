@@ -410,6 +410,49 @@ export async function recordChange(
     }
   }
 
+  // (e) Watchers — for any issue-subject event, fan out to every
+  //     subscribed agent watcher whose webhook is configured. Skip
+  //     the actor's own row to avoid self-paging. Human watchers
+  //     don't need a synthetic webhook — they're served by the
+  //     inbox / notification surfaces. Agent watchers are routed
+  //     through the same per-agent shim used for comment @-mentions.
+  //
+  //     ISSUE_WATCHED / ISSUE_UNWATCHED would create a self-feedback
+  //     loop, so they're explicitly excluded if added later. (Today
+  //     no such EventKind values exist — watch/unwatch tRPC procs
+  //     intentionally don't emit events.)
+  if (params.subjectType === "issue") {
+    const watchers = await tx.issueWatcher.findMany({
+      where: {
+        workspaceId: params.workspaceId,
+        issueId: params.subjectId,
+        agentId: { not: null },
+      },
+      select: {
+        agentId: true,
+        agent: { select: { id: true, webhookUrl: true } },
+      },
+    });
+    for (const w of watchers) {
+      if (!w.agent || !w.agent.webhookUrl) continue;
+      // Don't fan out the actor's own action back to themselves —
+      // when an agent comments and is also a watcher, the COMMENT_CREATED
+      // already routes via the assigned-agent + mention shims. Watcher
+      // fan-out is for OTHER stakeholders.
+      // Note: actorId is a User id, agentId is an Agent id; equality
+      // is impossible. We instead detect agent-as-actor via the
+      // payload's `agentId` field when present.
+      const payloadAgentId = (params.payload as { agentId?: string } | undefined)?.agentId;
+      if (payloadAgentId && payloadAgentId === w.agent.id) continue;
+      const wid = await upsertAgentDispatchWebhook(
+        tx,
+        params.workspaceId,
+        agentDispatchUrlFor(w.agent.id),
+      );
+      agentWebhookIds.push(wid);
+    }
+  }
+
   const deliveryRows = subscribers.map((w) => ({
     webhookId: w.id,
     eventId: event.id,

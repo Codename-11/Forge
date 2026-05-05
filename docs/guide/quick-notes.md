@@ -15,8 +15,14 @@ A collapsible card at the top of `/w/<slug>/dashboard`, between the
 greeting bar and the onboarding card. Default state: open. Click the
 header to collapse.
 
-The widget shows up to 30 rows by default — pinned notes float to the
-top, then by most-recently-updated.
+The widget has two tabs:
+
+- **Notes** — the personal scratchpad described on this page.
+- **Journal** — a separate daily-summary surface. One entry per day,
+  pinned to the calendar date. See [Daily Journal](/guide/journal.html).
+
+The Notes tab shows up to 30 rows by default — pinned notes float to
+the top, then by most-recently-updated.
 
 ## What a note is
 

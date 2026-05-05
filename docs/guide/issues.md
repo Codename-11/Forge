@@ -94,6 +94,21 @@ Two paths.
 title, description, status, priority, project, kind. <kbd>⌘ Enter</kbd> to
 submit. This is the path for ~95% of creation.
 
+The QuickCreate input also recognises [slash commands](/guide/slash-commands.html)
+at the start of the line:
+
+```
+/assign @victor
+/priority urgent
+/label deploy
+The deploy script silently swallows non-zero exit codes.
+```
+
+The slash commands are stripped from the title; the cleaned tail is
+the issue title; the matching field updates fire as
+`applyCommands` on `issue.create`. The same parsing works in the
+issue detail comment composer.
+
 **Full-page create.** Navigate to `/w/<slug>/issues/new` for the longer
 form: sub-issue parent, cycle, attachments, relations, agent assignment.
 

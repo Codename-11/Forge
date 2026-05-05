@@ -2,6 +2,144 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-04 — Watch + Journal + Slash + Hermes sync (Run A of 2)
+
+Run A of a 2-run plan. Three MCP-affecting features shipped together
+plus a Hermes-side sync of the runtime skill / SYSTEM.md catalog.
+One squashed commit on master, container rebuilt, migration 0026
+applied on boot. Run B (UI-only polish) is queued for a follow-up.
+
+### Pack A — Watch / Follow issues
+
+- **Schema** — new `IssueWatcher` model (one row per (issue, user OR
+  agent)). Either `userId` or `agentId` is set, never both, never
+  neither — enforced in handlers + by the unique constraints
+  `@@unique([issueId, userId])` + `@@unique([issueId, agentId])`.
+  Pin and Watch are intentionally orthogonal: pin is a UI shortcut,
+  watch is event subscription. Both can be active on the same issue.
+  Back-relations on User, Workspace, Issue, Agent.
+- **tRPC `issue.watch / unwatch / watchers / watching`** — appended
+  to the existing issueRouter. Identity inferred from caller:
+  `apiKey.linkedAgentId` → agent-watch, otherwise user-watch. The
+  `watching` proc is sorted by issue `updatedAt desc` so the inbox
+  Watching section surfaces fresh activity at the top.
+- **MCP `issues.{watch,unwatch,listWatchers,listWatching}`** — same
+  shapes; scopes are `WRITE_ISSUES` for mutations, `READ_ISSUES` for
+  reads. Reuses `assertKeyScope` for project/label narrowing.
+- **Event fan-out (audit.ts branch e)** — for any issue-subject
+  event, fan out to every subscribed agent watcher whose webhook is
+  configured. Routed through the same per-agent dispatch shim used
+  for comment @-mentions. Skips fan-out when the watcher is the
+  actor (detected via `payload.agentId` for AGENT_ASSIGNED /
+  COMMENT_CREATED so we don't self-page). Human watchers get inbox/
+  notification surfacing, not webhooks.
+- **`<WatchButton />`** — new component at `src/components/watch-
+  button.tsx`. Eye / EyeOff lucide glyphs, optimistic toggle, plus
+  a small watcher-count chip whose `title=` lists the names. Wired
+  into the issue detail header next to PinButton.
+- **Inbox surface** — new collapsible `<WatchingSection />` in
+  `inbox/page.tsx` between Snoozed and Current sprint burn. Sourced
+  from `issue.watching`; renders the issue id, title, and current
+  status name. Rolls itself up when the caller has no watches.
+
+### Pack B — Daily journal (Note variant)
+
+- **Schema** — new `NoteKind` enum (`NOTE | JOURNAL`) + two columns
+  on `Note`: `kind` (default `NOTE`) and `journalDate?`. The unique
+  `(workspaceId, userId, journalDate)` powers `notes.todayJournal`'s
+  upsert; Postgres allows multiple NULLs through unique, so existing
+  NOTE rows are untouched.
+- **tRPC `note.todayJournal / listJournal`** — `todayJournal` is a
+  get-or-create mutation that anchors to UTC midnight on the user's
+  wall-clock date (read from `User.timezone`, falls back to UTC).
+  `listJournal` paginates by `journalDate desc`. The existing
+  `note.create` accepts optional `kind` + `journalDate`; the
+  existing `note.list` defaults to `kind: NOTE` so the dashboard
+  widget's Notes tab keeps its prior shape.
+- **MCP `notes.todayJournal / notes.listJournal`** — agent-facing
+  surface. Scopes `WRITE_ISSUES` / `READ_ISSUES`. Use cases for
+  agents: daily summary, blocker log, decision record. NOT for
+  inter-agent communication (use `comments.create` for that).
+- **`<QuickNotesWidget />`** — added a tab toggle (Notes / Journal)
+  in the header. Journal tab auto-creates today's entry on focus
+  via `note.todayJournal`, renders today as the editable card at
+  the top, and lists past entries below as collapsible date rows.
+  Auto-saves on blur with an 800ms debounce; ⌘⏎ saves immediately.
+  The header date string uses the user's locale.
+
+### Pack C — Slash commands in composers
+
+- **Parser util** — new `src/lib/slash-commands.ts`. Exports
+  `parseSlashCommands(body)` returning `{ strippedBody, commands }`.
+  Recognises `/assign @handle`, `/due <when>`, `/label <name>`,
+  `/priority <level>`, `/project <KEY>`, `/watch`, `/unwatch`. Date
+  parsing handles "today" / "tomorrow" / "in 3 days" / "in 1 week"
+  / "next Mon" / "2026-05-15" / "May 15" inline (no chrono-node
+  dep). Commands are stripped only when they appear contiguously
+  at the top of the body; lines inside a fenced code block are
+  preserved verbatim. Plus a `parseDateExpression` export for
+  reuse and 14 unit tests in `tests/unit/slash-commands.test.ts`.
+- **`issue.create` extension** — accepts an optional
+  `applyCommands: SlashCommand[]` field. After the create
+  transaction commits, each command runs against
+  `applySlashCommandsToIssue` (assign / due / label / priority /
+  project / watch / unwatch). Best-effort: a missing label or
+  project logs a skip in the returned `commandResults` array but
+  doesn't roll the create back.
+- **`issue.applyCommands` proc** — new mutation taking
+  `{ issueId, commands[] }` and running the same helper for an
+  existing issue. Used by the comment composer.
+- **QuickCreate composer** — parses leading slash commands on
+  submit; the cleaned tail becomes the issue title. A small slash-
+  hint chip strip renders below the input for issue / sub-issue
+  modes.
+- **Comment composer** — parses on submit, posts the cleaned body
+  as a comment, then dispatches `issue.applyCommands` for any
+  commands found. Supports a "commands only, no body" path that
+  skips the comment entirely. A `/` -prefixed draft surfaces the
+  hint string below the textarea.
+
+### Pack D — Hermes-side sync (separate from Forge git)
+
+After the Forge commit + container rebuild, edit-in-place updates to:
+- `~/SYSTEM.md` — bumped tool count, added the new MCP entries
+  (`issues.watch/unwatch/listWatchers/listWatching`,
+  `notes.todayJournal/listJournal`).
+- `~/.hermes/skills/pm/forge/SKILL.md` — added Notes / Journal,
+  Watching, and Slash commands sections + bumped tool count in the
+  Tools table.
+
+No Hermes restart required — `tools/list` auto-discovers the new
+MCP entries; no config.yaml changes.
+
+### Migration `0026_watch_journal_slash`
+
+- `CREATE TYPE "NoteKind" AS ENUM ('NOTE', 'JOURNAL')`.
+- Adds `kind`, `journalDate` columns to `Note` + the matching
+  indexes (unique on `(workspaceId, userId, journalDate)` and
+  composite on `(workspaceId, userId, kind, journalDate)`).
+- Creates the `IssueWatcher` table with the four indexes spec'd
+  above and FK cascades for workspace/issue/user/agent.
+- Idempotent on application — applies cleanly on the dev DB and
+  on the prod container's first boot after deploy.
+
+### Verification
+
+- `pnpm lint` — 5 pre-existing errors only (issue-board.tsx + control-
+  tab.tsx); no new errors introduced.
+- `pnpm typecheck` — clean.
+- `pnpm test` — 232 passed (29 files), up from 218 pre-run with the
+  new `tests/unit/slash-commands.test.ts` (14 tests).
+- VitePress `pnpm build` — clean (no dead links).
+
+### Run B (queued)
+
+UI-only polish to follow:
+- Watching count chip next to inbox tab pill on dashboard
+- Journal tab icon refinement + collapse-by-default option
+- Slash command autocomplete dropdown (prototype is hint-only)
+- Per-issue watcher list popover on the count chip
+
 ## 2026-05-04 — Quick Notes + docs refresh
 
 Three packs in one coordinated deploy: a new Quick Notes primitive

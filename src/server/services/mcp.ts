@@ -933,6 +933,145 @@ export const mcpTools = {
     },
   },
 
+  // -------------------------------------------------------------------- Watching
+  // Per-(issue, user OR agent) subscriptions. Watch and Pin are
+  // orthogonal: pin is a UI shortcut, watch is event subscription.
+  // When the calling key has `linkedAgentId`, the row is agent-scoped;
+  // otherwise it's user-scoped (resolved via `resolveActorId`).
+  //
+  // Use case: an agent watches an issue it has stake in but isn't
+  // assigned to (`issues.assigned` is for ownership). Comment
+  // @-mentions, status transitions, and SLA breaches will fan out to
+  // the watcher's webhook in addition to the assignee's.
+
+  /**
+   * Watch an issue. Idempotent — calling twice is a no-op. Returns the
+   * IssueWatcher row.
+   */
+  "issues.watch": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().describe("Issue id (cuid) to watch."),
+    }),
+    async run(input: { issueId: string }, ctx: McpContext) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      const issue = await db.issue.findFirst({
+        where: { id: input.issueId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!issue) throw new Error("Issue not found in this workspace.");
+      const callerAgentId = ctx.apiKey?.linkedAgentId ?? null;
+      if (callerAgentId) {
+        return db.issueWatcher.upsert({
+          where: { issueId_agentId: { issueId: input.issueId, agentId: callerAgentId } },
+          create: {
+            workspaceId: ctx.workspaceId,
+            issueId: input.issueId,
+            agentId: callerAgentId,
+          },
+          update: {},
+        });
+      }
+      const userId = await resolveActorId(ctx);
+      return db.issueWatcher.upsert({
+        where: { issueId_userId: { issueId: input.issueId, userId } },
+        create: {
+          workspaceId: ctx.workspaceId,
+          issueId: input.issueId,
+          userId,
+        },
+        update: {},
+      });
+    },
+  },
+
+  /**
+   * Unwatch an issue. No-op if the caller wasn't watching. Returns
+   * `{ ok: true }`.
+   */
+  "issues.unwatch": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().describe("Issue id (cuid) to unwatch."),
+    }),
+    async run(input: { issueId: string }, ctx: McpContext) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      const callerAgentId = ctx.apiKey?.linkedAgentId ?? null;
+      if (callerAgentId) {
+        await db.issueWatcher.deleteMany({
+          where: { issueId: input.issueId, agentId: callerAgentId },
+        });
+      } else {
+        const userId = await resolveActorId(ctx);
+        await db.issueWatcher.deleteMany({
+          where: { issueId: input.issueId, userId },
+        });
+      }
+      return { ok: true as const };
+    },
+  },
+
+  /**
+   * List watchers of an issue. Returns user + agent identity fields so
+   * a caller can render a tooltip without an extra round-trip.
+   */
+  "issues.listWatchers": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().describe("Issue id (cuid)."),
+    }),
+    async run(input: { issueId: string }, ctx: McpContext) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      return db.issueWatcher.findMany({
+        where: { issueId: input.issueId, workspaceId: ctx.workspaceId },
+        orderBy: { createdAt: "asc" },
+        include: {
+          user: { select: { id: true, name: true, handle: true } },
+          agent: { select: { id: true, profileKey: true, name: true } },
+        },
+      });
+    },
+  },
+
+  /**
+   * Issues the caller is watching. Mirrors `issue.watching` tRPC. When
+   * the API key has `linkedAgentId`, returns agent-watched issues;
+   * otherwise the human caller's user-watches.
+   */
+  "issues.listWatching": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      limit: z.number().int().min(1).max(100).default(50),
+    }),
+    async run(input: { limit: number }, ctx: McpContext) {
+      const callerAgentId = ctx.apiKey?.linkedAgentId ?? null;
+      const where: Prisma.IssueWatcherWhereInput = callerAgentId
+        ? { workspaceId: ctx.workspaceId, agentId: callerAgentId }
+        : { workspaceId: ctx.workspaceId, userId: await resolveActorId(ctx) };
+      const rows = await db.issueWatcher.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: input.limit,
+        include: {
+          issue: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              priority: true,
+              updatedAt: true,
+              status: { select: { id: true, name: true, category: true } },
+              project: { select: { id: true, name: true, key: true } },
+            },
+          },
+        },
+      });
+      return rows
+        .filter((r) => r.issue !== null)
+        .map((r) => ({ watchId: r.id, createdAt: r.createdAt, issue: r.issue! }));
+    },
+  },
+
   // ------------------------------------------------------------------- Comments
   "comments.create": {
     scopes: ["WRITE_COMMENTS"] as const,
@@ -3928,6 +4067,103 @@ export const mcpTools = {
       return db.note.update({
         where: { id: existing.id },
         data: { archivedAt: new Date() },
+      });
+    },
+  },
+
+  /**
+   * Get-or-create today's JOURNAL entry for the calling actor. Date is
+   * "today" in the actor's timezone (User.timezone) — falls back to UTC
+   * midnight when null. Idempotent across calls in the same day. Use
+   * cases for an agent: daily summary, blocker log, decision record.
+   * NOT for inter-agent communication — use `comments.create` for that.
+   */
+  "notes.todayJournal": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({}).default({}),
+    async run(_input: Record<string, never>, ctx: McpContext) {
+      const userId = await resolveActorId(ctx);
+      const me = await db.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: { timezone: true },
+      });
+      const tz = me.timezone;
+      // Mirrors note.todayJournal in the tRPC router. Stored as UTC
+      // midnight on the user's wall-clock date.
+      const now = new Date();
+      let today: Date;
+      try {
+        if (tz) {
+          const fmt = new Intl.DateTimeFormat("en-CA", {
+            timeZone: tz,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          });
+          const [y, m, d] = fmt.format(now).split("-").map((p) => parseInt(p, 10));
+          today = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+        } else {
+          today = new Date(now);
+          today.setUTCHours(0, 0, 0, 0);
+        }
+      } catch {
+        today = new Date(now);
+        today.setUTCHours(0, 0, 0, 0);
+      }
+      const existing = await db.note.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          userId,
+          kind: "JOURNAL",
+          journalDate: today,
+        },
+      });
+      if (existing) return existing;
+      return db.note.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          userId,
+          kind: "JOURNAL",
+          journalDate: today,
+          title: null,
+          body: "",
+        },
+      });
+    },
+  },
+
+  /**
+   * List recent JOURNAL entries for the caller, ordered by
+   * `journalDate desc`. Default 30 (≈one month).
+   */
+  "notes.listJournal": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      from: z.coerce.date().optional(),
+      to: z.coerce.date().optional(),
+      limit: z.number().int().min(1).max(180).default(30),
+    }),
+    async run(
+      input: { from?: Date; to?: Date; limit: number },
+      ctx: McpContext,
+    ) {
+      const userId = await resolveActorId(ctx);
+      return db.note.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          userId,
+          kind: "JOURNAL",
+          ...(input.from || input.to
+            ? {
+                journalDate: {
+                  ...(input.from ? { gte: input.from } : {}),
+                  ...(input.to ? { lte: input.to } : {}),
+                },
+              }
+            : {}),
+        },
+        orderBy: { journalDate: "desc" },
+        take: input.limit,
       });
     },
   },

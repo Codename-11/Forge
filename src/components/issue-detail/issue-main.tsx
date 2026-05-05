@@ -12,6 +12,11 @@ import { useDropUpload } from "@/components/attachments/use-drop-upload";
 import { DropOverlay } from "@/components/attachments/drop-overlay";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
+import {
+  parseSlashCommands,
+  SLASH_COMMAND_HINT,
+  type SlashCommand,
+} from "@/lib/slash-commands";
 
 /**
  * Main column of the issue detail page — description (inline-editable)
@@ -175,15 +180,49 @@ function Comments({
 }) {
   const utils = trpc.useUtils();
   const [draft, setDraft] = useState("");
+  // Pending commands are stashed here when we fire `createComment` so
+  // the success callback can dispatch `applyCommands` once the
+  // comment is persisted. `useState` keeps it in scope across renders
+  // without re-fetching the form's draft.
+  const [pendingCommands, setPendingCommands] = useState<SlashCommand[]>([]);
+
+  const applyCommandsM = trpc.issue.applyCommands.useMutation({
+    onSuccess: ({ results }) => {
+      const skipped = results.filter((r) => r.status === "skipped");
+      if (skipped.length > 0) {
+        toast.warning(
+          `${skipped.length} command${skipped.length === 1 ? "" : "s"} skipped: ${skipped
+            .map((s) => `/${s.kind}${s.reason ? ` (${s.reason})` : ""}`)
+            .join(", ")}`,
+        );
+      } else if (results.length > 0) {
+        toast.success(
+          `Applied ${results.length} command${results.length === 1 ? "" : "s"}.`,
+        );
+      }
+      utils.issue.byId.invalidate({ id: issueId });
+      utils.issue.activity.invalidate({ issueId });
+      utils.issue.watchers.invalidate({ issueId });
+    },
+    onError: (e) => toast.error(`Slash commands: ${e.message}`),
+  });
 
   const createComment = trpc.comment.create.useMutation({
     onSuccess: () => {
       utils.issue.byId.invalidate({ id: issueId });
       utils.issue.activity.invalidate({ issueId });
+      if (pendingCommands.length > 0) {
+        applyCommandsM.mutate({ issueId, commands: pendingCommands });
+        setPendingCommands([]);
+      }
       setDraft("");
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Live preview: do we have any leading slash commands? Drives the
+  // hint chip below the textarea.
+  const hasCommands = draft.trim().startsWith("/");
 
   const paste = usePasteUpload({
     targetType: "issue",
@@ -259,7 +298,22 @@ function Comments({
         onSubmit={(e) => {
           e.preventDefault();
           if (!draft.trim()) return;
-          createComment.mutate({ issueId, body: draft.trim() });
+          // Parse leading slash commands. Anything in a fenced code
+          // block at the top is preserved verbatim. Cleaned body is
+          // what gets posted; commands fire as a separate mutation.
+          const { strippedBody, commands } = parseSlashCommands(draft);
+          const body = strippedBody.trim();
+          if (!body && commands.length === 0) return;
+          if (!body && commands.length > 0) {
+            // Pure command line — apply, no comment posted.
+            applyCommandsM.mutate({ issueId, commands });
+            setDraft("");
+            return;
+          }
+          // Stash commands so the create-comment success callback
+          // applies them once the comment is persisted.
+          setPendingCommands(commands);
+          createComment.mutate({ issueId, body });
         }}
         className="relative mt-4 space-y-2"
         onDragEnter={drop.onDragEnter}
@@ -276,11 +330,20 @@ function Comments({
           rows={2}
           className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[0.8125rem]"
         />
+        {hasCommands && (
+          <div className="text-meta text-muted-foreground">
+            {SLASH_COMMAND_HINT}
+          </div>
+        )}
         <div className="flex justify-end">
           <Button
             type="submit"
             size="sm"
-            disabled={!draft.trim() || createComment.isPending}
+            disabled={
+              (!draft.trim()) ||
+              createComment.isPending ||
+              applyCommandsM.isPending
+            }
           >
             Comment
           </Button>
