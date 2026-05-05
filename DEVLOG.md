@@ -2,6 +2,138 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-04 — Polish run (deferred follow-ups)
+
+Bundle of seven small QoL items deferred from the recent feature
+deploys (`b56001f` Run A, `8deb486` Run B). Pure surface + script
+work — one schema-free squashed commit on master, push, container
+rebuild. No new dependencies introduced.
+
+### 1. Today widget — week-peek deep-link
+
+- **`issue.list` gained `dueOn?: string`** (YYYY-MM-DD, UTC). When
+  set, narrows the where clause to `dueDate >= startOfDay(dueOn)
+  AND dueDate < startOfDay(dueOn+1)`. Inline UTC bracketing so the
+  client can pass the same key the `dashboard.today.weekPeek` proc
+  emits without timezone arithmetic.
+- **`<TodayWidget />`** week-peek day cells now link to
+  `/issues?dueOn=YYYY-MM-DD` instead of plain `/issues`.
+- **Issues page** reads `?dueOn` from search params, validates the
+  shape (regex), threads it through a new `dueOn?: string` prop on
+  `<IssueList />`, and surfaces a dismissible **`<DueOnChip />`**
+  next to the existing Sprint / Initiative chips. Clear-filters
+  also drops the URL param.
+- Not part of `SavedViewFilters` — a saved view shouldn't pin a
+  specific calendar day. Lives on the URL only.
+
+### 2. CHANGELOG scaffolder
+
+- **`tools/scripts/changelog-scaffold.ts`** + `pnpm changelog`
+  script in `package.json`. Reads `CHANGELOG.md` for the most
+  recent dated heading, then:
+  - Commits via `git log --no-merges --since=<that-date>`
+    (uses `execFileSync` so `%h`/`%s` aren't shell-expanded).
+  - DEVLOG headings with the date strictly newer than the anchor.
+- Categorises commits conventional-commits-ish: `feat:` → Added,
+  `fix:` → Fixed, `refactor:` / `polish:` / chore / docs → Changed,
+  `feat!:` / `BREAKING` → Removed (with a callout). Anything else
+  is Changed.
+- Output is **stdout only** — never writes to `CHANGELOG.md`. Keeps
+  release notes human-curated; the script is just a draft generator.
+- `docs/guide/whats-new.md` gained a "Scaffolding new entries"
+  section pointing at `pnpm changelog`.
+
+### 3. Watcher count chip hover popover
+
+- **`<WatcherChip />`** inside `watch-button.tsx` now ships a
+  CSS-driven hover popover (no Radix dep, no portal). Shows the
+  watcher count, then on hover/focus reveals up to six rows with
+  avatars + names + handles + an inline `+N more` overflow line.
+  Uses `group-hover/watchers` + `group-focus-within/watchers` for
+  the reveal so keyboard users get parity.
+- Native `title=` is preserved as the baseline tooltip — the
+  popover is the richer enhancement on top, not a replacement.
+- Agent watchers render with the indigo `Bot` glyph (or the agent's
+  avatar emoji if set); humans get the existing `<Avatar />` shape.
+
+### 4. Slash command autocomplete dropdown
+
+- **`src/components/slash-autocomplete.tsx`** — new component +
+  `useSlashAutocomplete` hook. Pure React + Tailwind, no
+  third-party autocomplete lib. Detects when the cursor's current
+  line is inside the top-of-body slash-command block (every
+  preceding non-blank line also `/`-prefixed) and the line itself
+  starts with `/`, then surfaces a dropdown anchored under the
+  textarea via `absolute left-0 right-0 top-full`.
+- **Keys**: ↓/↑ navigate, Enter / Tab insert the active stub
+  (replaces the current line, e.g. `/a` → `/assign `, caret lands
+  after the trailing space), Escape dismisses, click also inserts.
+  The hook's `onKeyDown` returns `true` when consumed so callers
+  can bail before their own submit-on-Enter logic.
+- Wired into **QuickCreate** (issue / sub-issue modes; the input
+  was wrapped in a `relative` container so the dropdown anchors
+  correctly inside the floating bar) and the **comment composer**
+  on issue-detail.
+- `docs/guide/slash-commands.md` gained an Autocomplete section
+  describing the keys and the top-of-body block rule.
+
+### 5. QuickCreate event seeding for note → issue
+
+- **`<QuickNotesWidget />`** "Convert to issue" no longer calls
+  `note.convertToIssue` directly. It dispatches a
+  `forge:quick-create` `CustomEvent` with `{ title, body,
+  archiveNoteId }` instead, letting the operator review/edit
+  before submitting.
+- **QuickCreate** event handler accepts the new fields, opens in
+  `issue` mode (overrides the path-derived mode when a seed is
+  present), surfaces a description textarea + an "Archive source
+  note after creating issue" checkbox (default on). Draft-restore
+  is suppressed for seeded sessions so a discarded convert doesn't
+  resurrect on the next `⇧C`.
+- After successful create, `note.archive` fires when the checkbox
+  was left checked. Failure toasts but doesn't block the create
+  success path.
+- The headless `note.convertToIssue` proc stays — agent / scripted
+  callers still use it.
+
+### 6. Watching section count chip styling
+
+- The inbox `WatchingSection` count chip now renders as a pill
+  (`rounded-full bg-subtle/70 px-1.5`) to match the
+  Mentions/BucketSection count chips. Cosmetic only — same data,
+  consistent visual weight across sections.
+
+### 7. Journal tab icon refinement
+
+- Swapped `BookOpen` → `NotebookPen` in `<QuickNotesWidget />`'s
+  Journal tab (header chip + body's "Today" eyebrow). Reads more
+  obviously as "writing in a journal" than `BookOpen`'s
+  documentation-y feel.
+
+### Verification
+
+- `pnpm typecheck` — clean.
+- `pnpm lint` — only the 5 pre-existing errors (issue-board.tsx +
+  control-tab.tsx + mission-control); no new errors. The unused
+  `useRef` import that snuck into `slash-autocomplete.tsx` during
+  iteration was removed.
+- `pnpm test` — 243 passed (31 files), unchanged from Run B.
+- `cd docs && pnpm build` — green.
+- `pnpm changelog` smoke-tested end-to-end against current
+  `CHANGELOG.md`; emits the expected three-commit `[Unreleased]`
+  block with DEVLOG entries enumerated.
+
+### Notes / non-goals
+
+- Slash autocomplete uses a "below-textarea, full-width" layout
+  rather than caret-position tracking, per spec — caret-following
+  popovers in textareas are fiddly across browsers, and the
+  simpler variant covers the use case. Noted for future iteration
+  if/when a user's request flips the priority.
+- `SavedViewFilters` was deliberately NOT extended with `dueOn`
+  because saved views shouldn't pin a specific calendar day. The
+  filter is URL-only.
+
 ## 2026-05-04 — Today + What's New + Quick-save + Pomodoro + Email stub (Run B of 2)
 
 Run B of a 2-run plan; Run A landed at `b56001f`. Five UI-mostly

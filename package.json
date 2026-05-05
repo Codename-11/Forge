@@ -31,7 +31,8 @@
     "docs:preview": "pnpm --dir docs --ignore-workspace preview",
     "dev:all": "./scripts/dev-all.sh",
     "build:cli": "tsc -p tools/forge-cli",
-    "forge": "node tools/forge-cli/dist/index.js"
+    "forge": "node tools/forge-cli/dist/index.js",
+    "changelog": "tsx tools/scripts/changelog-scaffold.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

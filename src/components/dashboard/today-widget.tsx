@@ -270,14 +270,13 @@ function WeekPeek({
         {weekPeek.map((d, i) => {
           const isToday = d.date === todayKey;
           const hasDot = d.count > 0;
-          // The link is /issues; we don't currently filter by dueDate
-          // in the saved-view filter shape (no `dueOn` predicate yet),
-          // so we route to plain /issues for now and let the operator
-          // skim. Future: deep-link with a saved-view filter.
+          // Deep-link to `/issues?dueOn=YYYY-MM-DD` — the issue list
+          // page reads the param and threads it into `issue.list`, then
+          // surfaces a dismissible "Due on …" chip in the filter bar.
           return (
             <li key={d.date}>
               <Link
-                href={`/w/${slug}/issues`}
+                href={`/w/${slug}/issues?dueOn=${d.date}`}
                 className={cn(
                   "focus-ring group flex flex-col items-center gap-1 rounded-md border px-1 py-1.5 text-meta transition-colors",
                   isToday

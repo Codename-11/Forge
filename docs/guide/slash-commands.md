@@ -66,6 +66,28 @@ without posting a comment:
 - Leading blank lines before the first command are skipped.
 - Blank lines between commands are also fine.
 
+## Autocomplete
+
+Both the QuickCreate input (issue / sub-issue modes) and the comment
+composer surface a small dropdown when the cursor sits on a
+top-of-body line that starts with `/`. The dropdown lists the seven
+command keywords + a one-line example for each.
+
+Keys:
+
+| Key | Effect |
+|---|---|
+| <kbd>↓</kbd> / <kbd>↑</kbd> | Move the active selection |
+| <kbd>Enter</kbd> / <kbd>Tab</kbd> | Insert the active command's stub (e.g. `/assign `) |
+| <kbd>Esc</kbd> | Dismiss without inserting |
+| Click | Inserts as if Enter were pressed |
+
+So typing `/a` then <kbd>Tab</kbd> expands to `/assign ` with the
+caret right after the trailing space — ready for the argument. The
+dropdown only opens when the line is in the contiguous top-of-body
+slash block; once you've typed prose below, it stops auto-opening
+on later slashes.
+
 ## Errors and skips
 
 Commands are best-effort. If a referenced label, project, or agent

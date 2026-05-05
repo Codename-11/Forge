@@ -75,7 +75,16 @@ export default function IssuesPage() {
   // `?view=<id>` deep links land here, then resolve to filters when the
   // saved-view list arrives. Mismatches (deleted view, wrong workspace)
   // silently fall back to a clean state.
+  // `?dueOn=YYYY-MM-DD` is a transient filter (Today widget week-peek
+  // deep-link); not part of saved views, lives only in the URL + chip.
   const viewIdFromUrl = searchParams?.get("view") ?? null;
+  const dueOnFromUrl = searchParams?.get("dueOn") ?? null;
+  // Validate the URL value before threading it into the query. A
+  // malformed `?dueOn=foo` shouldn't hit the server.
+  const dueOn =
+    dueOnFromUrl && /^\d{4}-\d{2}-\d{2}$/.test(dueOnFromUrl)
+      ? dueOnFromUrl
+      : null;
   useEffect(() => {
     if (!viewIdFromUrl) {
       setActiveViewId(null);
@@ -158,7 +167,14 @@ export default function IssuesPage() {
     }
   }
 
-  const hasFilters = !isEmptyFilters(filters) || !!query;
+  function clearDueOn() {
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    params.delete("dueOn");
+    const q = params.toString();
+    router.replace(q ? `${pathname}?${q}` : pathname);
+  }
+
+  const hasFilters = !isEmptyFilters(filters) || !!query || !!dueOn;
   const isWorkspaceEmpty =
     !!wsCount && wsCount._count.issues === 0 && !hasFilters;
 
@@ -223,10 +239,14 @@ export default function IssuesPage() {
               value={initiativeId}
               onChange={setInitiativeId}
             />
+            {dueOn && <DueOnChip dueOn={dueOn} onClear={clearDueOn} />}
             {hasFilters && (
               <button
                 type="button"
-                onClick={clearAllFilters}
+                onClick={() => {
+                  clearAllFilters();
+                  if (dueOn) clearDueOn();
+                }}
                 className="text-meta text-muted-foreground hover:text-foreground"
               >
                 Clear filters
@@ -268,11 +288,15 @@ export default function IssuesPage() {
             <IssueList
               workspaceKey={key}
               extraFilters={issueQueryFilters}
+              dueOn={dueOn ?? undefined}
               emptyOverride={
                 hasFilters ? (
                   <FilteredEmptyState
                     activeViewName={activeView?.name ?? null}
-                    onClear={clearAllFilters}
+                    onClear={() => {
+                      clearAllFilters();
+                      if (dueOn) clearDueOn();
+                    }}
                   />
                 ) : undefined
               }
@@ -341,6 +365,42 @@ function FilteredEmptyState({
         }
       />
     </div>
+  );
+}
+
+/**
+ * Dismissible "Due on …" chip. Surfaced when the page is opened from
+ * the Today widget's week-peek deep-link (`?dueOn=YYYY-MM-DD`). The X
+ * removes the URL param without disturbing other filters.
+ */
+function DueOnChip({
+  dueOn,
+  onClear,
+}: {
+  dueOn: string;
+  onClear: () => void;
+}) {
+  // Parse the YYYY-MM-DD as UTC midnight to avoid timezone surprises
+  // when displaying "May 4" in the chip.
+  const [y, m, d] = dueOn.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  const label = date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-2 py-0.5 text-meta text-ember">
+      Due on {label}
+      <button
+        type="button"
+        onClick={onClear}
+        aria-label="Clear due-on filter"
+        className="focus-ring -mr-0.5 ml-0.5 rounded p-0.5 hover:bg-ember/20"
+      >
+        <span aria-hidden>×</span>
+      </button>
+    </span>
   );
 }
 

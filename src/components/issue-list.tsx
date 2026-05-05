@@ -40,6 +40,7 @@ export function IssueList({
   query,
   cycleId,
   initiativeId,
+  dueOn,
   extraFilters,
   emptyHint,
   emptyOverride,
@@ -55,6 +56,12 @@ export function IssueList({
   cycleId?: string | null;
   /** Tri-state: `undefined` = any; `null` = no initiative; string = id. */
   initiativeId?: string | null;
+  /**
+   * Single-day due-date filter (UTC `YYYY-MM-DD`). Forwarded straight
+   * through to `issue.list`. Not part of `SavedViewFilters` — saved
+   * views don't pin a specific calendar day.
+   */
+  dueOn?: string;
   /**
    * Phase 1D saved-view filter projection. Spread into `issue.list` after
    * the singleton legacy props so they remain authoritative. Use this
@@ -79,6 +86,7 @@ export function IssueList({
     query,
     cycleId,
     initiativeId,
+    dueOn,
     ...(extraFilters ?? {}),
   });
   const { data: statuses } = trpc.status.list.useQuery();
