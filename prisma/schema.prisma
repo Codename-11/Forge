@@ -329,6 +329,15 @@ model User {
   /// is greater than this timestamp count as unread for that user.
   /// Bumped via `inbox.visit` (debounced 5s server-side).
   lastInboxVisitAt       DateTime?
+  /// When true, the time-tracker shows a "pomodoro complete" toast
+  /// every `pomodoroMinutes` while a timer is running. Off by default.
+  pomodoroEnabled        Boolean   @default(false)
+  /// Length of one pomodoro work block (minutes). 25 is canonical.
+  pomodoroMinutes        Int       @default(25)
+  /// Length of the suggested break (minutes). Surfaced in the toast
+  /// copy; the timer itself isn't paused — pomodoro is a prompt, not
+  /// a hard stop.
+  pomodoroBreakMinutes   Int       @default(5)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
@@ -401,96 +410,96 @@ model VerificationToken {
 // ----------------------------------------------------------------------------
 
 model Workspace {
-  id                         String           @id @default(cuid())
-  slug                       String           @unique
-  name                       String
+  id                            String           @id @default(cuid())
+  slug                          String           @unique
+  name                          String
   /// Short key used for issue identifiers: e.g. `FRG-123`.
-  key                        String           @unique
-  avatarUrl                  String?
+  key                           String           @unique
+  avatarUrl                     String?
   /// Default cycle length (days). Overridable per cycle at create time.
-  cycleLengthDays            Int              @default(7)
+  cycleLengthDays               Int              @default(7)
   /// Default rest/cooldown days between cycles (0 = back-to-back).
-  cycleCooldownDays          Int              @default(0)
+  cycleCooldownDays             Int              @default(0)
   /// When true, the time-tracking surface is enabled for this workspace.
-  timeTrackingEnabled        Boolean          @default(false)
+  timeTrackingEnabled           Boolean          @default(false)
   /// Soft cap on total attachment storage (MB) for this workspace.
-  attachmentQuotaMb          Int              @default(1024)
+  attachmentQuotaMb             Int              @default(1024)
   /// Master toggle for auto-dispatching queued issues to agents.
-  autoDispatch               Boolean          @default(false)
+  autoDispatch                  Boolean          @default(false)
   /// Strategy used when autoDispatch is on. MANUAL_ONLY disables picking.
-  autoDispatchMode           AutoDispatchMode @default(MANUAL_ONLY)
+  autoDispatchMode              AutoDispatchMode @default(MANUAL_ONLY)
   /// When true, assigning (manually or auto) immediately pushes the agent
   /// webhook to start work; when false, the issue sits in the agent queue.
-  autoStartOnAssign          Boolean          @default(false)
+  autoStartOnAssign             Boolean          @default(false)
   /// If a claimed issue sees no activity (comments/transitions) within this
   /// window, it is auto-released back to the pool. 0 = disabled.
-  agentIdleTimeoutMinutes    Int              @default(0)
+  agentIdleTimeoutMinutes       Int              @default(0)
   /// Gated dispatch — assignment lands in queue but agent does not start
   /// work until a human approves.
-  requireApprovalBeforeStart Boolean          @default(false)
+  requireApprovalBeforeStart    Boolean          @default(false)
   /// When > 0, agents must move issues out of BACKLOG/TODO within
   /// this many minutes of assignment. Stale issues emit ISSUE_STALLED
   /// and (depending on `autoRedispatchOnStall`) get their assignedAgentId
   /// cleared so the next auto-dispatch picks them up.
-  assignmentSlaMinutes       Int              @default(0)
+  assignmentSlaMinutes          Int              @default(0)
   /// When true, ISSUE_STALLED also clears assignedAgentId so the
   /// auto-dispatcher re-picks. When false, the event fires but the
   /// assignment is preserved (operator-driven workflow).
-  autoRedispatchOnStall      Boolean          @default(false)
+  autoRedispatchOnStall         Boolean          @default(false)
   /// When > 0, every successful AGENT_ASSIGNED delivery starts an
   /// "ack window" — the agent must comment on or transition the
   /// issue within this many seconds, otherwise an AGENT_NOACK event
   /// fires (and the issue is re-dispatched if `autoRedispatchOnNoack`
   /// is true). 0 disables the check. 60–180s is reasonable when the
   /// agent's loop is fast.
-  requiredAckSeconds         Int              @default(0)
+  requiredAckSeconds            Int              @default(0)
   /// When true, AGENT_NOACK also clears assignedAgentId so the
   /// auto-dispatcher re-picks. Mirrors `autoRedispatchOnStall`.
-  autoRedispatchOnNoack      Boolean          @default(false)
+  autoRedispatchOnNoack         Boolean          @default(false)
   /// When true, the maintenance worker scans for SLA breaches every
   /// minute and emits ISSUE_SLA_BREACH events. Off by default —
   /// requires `Issue.slaMinutes` to be set per-issue, otherwise the
   /// sweep is a no-op for the row.
-  slaEnforcementEnabled      Boolean          @default(false)
+  slaEnforcementEnabled         Boolean          @default(false)
   /// Master toggle for AI features in this workspace. Off by default.
   /// Gates AI triage on issue create AND Coach agent comments on
   /// stall/noack/breach events. Requires `ANTHROPIC_API_KEY` in env.
-  aiEnabled                  Boolean          @default(false)
+  aiEnabled                     Boolean          @default(false)
   /// When true, every newly created issue (by a human author) kicks off
   /// a background AI triage. Null when `aiEnabled` is off.
-  aiTriageOnCreate           Boolean          @default(true)
+  aiTriageOnCreate              Boolean          @default(true)
   /// When true, Coach agents post diagnostic comments on
   /// ISSUE_STALLED / AGENT_NOACK / ISSUE_SLA_BREACH events. The
   /// workspace must have an Agent with role=COACH for this to fire.
-  aiCoachEnabled             Boolean          @default(true)
+  aiCoachEnabled                Boolean          @default(true)
   /// Which provider Forge talks to for AI features. Default `hermes`
   /// uses Mission-Control's pattern: an OpenAI-compatible Hermes
   /// gateway that itself fans out to Anthropic / OpenAI / etc. via the
   /// model-router plugin. Other values (`openai`, `anthropic`,
   /// `custom`) bypass Hermes and call the named provider directly.
   /// All provider URLs / keys live in env — see ai-providers.ts.
-  aiProvider                 String           @default("hermes")
+  aiProvider                    String           @default("hermes")
   /// Optional model override. The provider supplies a sensible default
   /// (Hermes default = workspace's session model; OpenAI default =
   /// gpt-4o-mini; Anthropic default = claude-haiku-4-5-20251001).
-  aiModel                    String?
+  aiModel                       String?
   /// AgentRun monitoring: when > 0, the watchdog flags an ACTIVE run
   /// as STALLED if it sees no AgentRunEvent within this many minutes.
   /// 5 is a reasonable starting point for short loops; bump for slower
   /// agents. 0 disables the sweep.
-  agentRunStaleMinutes       Int              @default(0)
+  agentRunStaleMinutes          Int              @default(0)
   /// Optional Status row id to auto-transition into on AGENT_ASSIGNED.
   /// When set, the audit/event fan-out promotes assigned issues to this
   /// status (must be in IN_PROGRESS category, validated at write time).
   /// Skipped if the issue is already in IN_PROGRESS / IN_REVIEW or in a
   /// terminal category (DONE / CANCELED). Null disables — agents must
   /// transition client-side via statuses.list + issues.transition.
-  startedStatusId            String?
+  startedStatusId               String?
   /// Issues with `updatedAt` older than this threshold (in days) are
   /// considered "stalled" by the dashboard suggestions bucket. Settings-
   /// driven so admins can tune the workspace's idle definition without
   /// editing handler code. 0 disables the bucket.
-  stalledThresholdDays       Int              @default(7)
+  stalledThresholdDays          Int              @default(7)
   /// Minutes since `Agent.lastHeartbeatAt` after which a PERSISTENT
   /// agent's presence row surfaces a warning chip on the agents page.
   /// EPHEMERAL agents only heartbeat while running, so the warning is
@@ -500,9 +509,18 @@ model Workspace {
   /// agent's presence row escalates to the critical (danger) tier.
   /// Should be > `agentHeartbeatWarnMinutes`. 0 disables critical.
   agentHeartbeatCriticalMinutes Int              @default(30)
-  createdAt                  DateTime         @default(now())
-  updatedAt                  DateTime         @updatedAt
-  deletedAt                  DateTime?
+  /// Master toggle for the `/api/ingest/email` inbound endpoint. When
+  /// off, the endpoint returns 403 even if the HMAC signature is valid.
+  /// Off by default; admins flip it on in `/settings/integrations`.
+  emailIngestEnabled            Boolean          @default(false)
+  /// HMAC-SHA256 shared secret for the email-ingest endpoint. Caller
+  /// signs the JSON body and sends it as `x-forge-email-signature`.
+  /// Null until the admin generates one; rotating it invalidates any
+  /// outstanding inbound integrations.
+  emailIngestSecret             String?
+  createdAt                     DateTime         @default(now())
+  updatedAt                     DateTime         @updatedAt
+  deletedAt                     DateTime?
 
   memberships        Membership[]
   projects           Project[]

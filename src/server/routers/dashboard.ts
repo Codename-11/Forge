@@ -179,6 +179,112 @@ export const dashboardRouter = router({
     }),
 
   /**
+   * "Today widget" — the focused this-week tile that sits above
+   * Quick Notes on the dashboard. Three regions:
+   *
+   *   1. Active sprint countdown (id + name + endsAt). Re-uses
+   *      `cycle.current` semantics inline so the dashboard makes a
+   *      single round-trip.
+   *   2. Due-soon issues (next 7 days, not in DONE/CANCELED), capped
+   *      at 5 and ordered by dueDate ascending. Includes overdue
+   *      rows that aren't yet closed (so a missed deadline still
+   *      surfaces).
+   *   3. Week peek — Mon–Sun of the *current ISO week* with
+   *      per-day counts of issues whose dueDate falls on that day.
+   *      Uses UTC date keys (`YYYY-MM-DD`) so the client can match
+   *      day cells without timezone math; the user's timezone
+   *      shifts what "today" means visually but the backing data
+   *      is workspace-wide so it's fine to anchor on UTC.
+   *
+   * Tile renders empty-states inline; the proc never returns null.
+   */
+  today: workspaceProcedure.query(async ({ ctx }) => {
+    const now = new Date();
+
+    // 1. Active sprint countdown.
+    const activeCycle = await ctx.db.cycle.findFirst({
+      where: { workspaceId: ctx.workspaceId, status: "ACTIVE" },
+      orderBy: { startsAt: "desc" },
+      select: { id: true, name: true, endsAt: true },
+    });
+
+    // 2 + 3 share the date math. Anchor "this week" to UTC Monday →
+    // Sunday so the strip always shows seven contiguous days.
+    const todayUtcMidnight = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    );
+    // getUTCDay: 0=Sun, 1=Mon, ..., 6=Sat. Convert to 0=Mon..6=Sun.
+    const isoDow = (todayUtcMidnight.getUTCDay() + 6) % 7;
+    const weekStart = new Date(todayUtcMidnight);
+    weekStart.setUTCDate(weekStart.getUTCDate() - isoDow);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
+
+    // Due soon — next 7 days from now (NOT week-aligned). Includes
+    // already-overdue rows so the operator sees them too. Cap 5.
+    const dueSoonCutoff = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const dueSoonRows = await ctx.db.issue.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        deletedAt: null,
+        dueDate: { not: null, lte: dueSoonCutoff },
+        status: { category: { notIn: ["DONE", "CANCELED"] } },
+      },
+      orderBy: [{ dueDate: "asc" }, { priority: "desc" }],
+      take: 5,
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        priority: true,
+        dueDate: true,
+        status: { select: { id: true, name: true, category: true, color: true } },
+        project: { select: { id: true, key: true, name: true, color: true, icon: true } },
+      },
+    });
+    // Build the issue-key string client-side; we already have number.
+    // (Workspace.key is workspace-static and the client knows it from
+    // useWorkspace.)
+    const dueSoon = dueSoonRows.map((r) => ({
+      id: r.id,
+      number: r.number,
+      title: r.title,
+      priority: r.priority,
+      dueDate: r.dueDate,
+      status: r.status,
+      project: r.project,
+    }));
+
+    // 3. Week peek — count of issues whose dueDate falls inside the
+    // [weekStart, weekEnd) range, grouped by UTC date.
+    const weekIssues = await ctx.db.issue.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        deletedAt: null,
+        dueDate: { gte: weekStart, lt: weekEnd },
+        status: { category: { notIn: ["DONE", "CANCELED"] } },
+      },
+      select: { dueDate: true },
+    });
+    const counts = new Map<string, number>();
+    for (const r of weekIssues) {
+      if (!r.dueDate) continue;
+      const d = new Date(r.dueDate);
+      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const weekPeek: { date: string; count: number }[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStart);
+      d.setUTCDate(d.getUTCDate() + i);
+      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+      weekPeek.push({ date: key, count: counts.get(key) ?? 0 });
+    }
+
+    return { activeCycle, dueSoon, weekPeek };
+  }),
+
+  /**
    * In-progress issues that are quiet past `stalledThresholdDays`. Lifted
    * out of `dashboard/page.tsx` (which previously hardcoded 3 days) so
    * the threshold is settings-driven and consumers can't double-filter.

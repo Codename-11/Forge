@@ -24,6 +24,8 @@ import { Button } from "@/components/ui/button";
 import { CycleChip } from "@/components/cycle-chip";
 import { ProjectChip } from "@/components/project-chip";
 import { QuickNotesWidget } from "@/components/quick-notes-widget";
+import { TodayWidget } from "@/components/dashboard/today-widget";
+import { WhatsNewTile } from "@/components/dashboard/whats-new-tile";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
@@ -139,6 +141,8 @@ export default function DashboardPage() {
         <div className="mx-auto max-w-6xl space-y-6 p-6">
           <GreetingBar greeting={greeting} name={firstName} slug={slug} />
 
+          <TodayWidget slug={slug} workspaceKey={workspaceKey} />
+
           <QuickNotesWidget />
 
           <OnboardingCard
@@ -188,6 +192,7 @@ export default function DashboardPage() {
 
           <StandupTile slug={slug} />
 
+          <WhatsNewTile slug={slug} />
 
           <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             {isAdmin && !events.isError ? (

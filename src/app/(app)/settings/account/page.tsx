@@ -58,6 +58,9 @@ export default function AccountPage() {
   const [timeFormat, setTimeFormat] = useState<"12h" | "24h">("12h");
   const [browserTz, setBrowserTz] = useState<string>("");
   const [browserLocale, setBrowserLocale] = useState<string>("");
+  const [pomodoroEnabled, setPomodoroEnabled] = useState(false);
+  const [pomodoroMinutes, setPomodoroMinutes] = useState(25);
+  const [pomodoroBreakMinutes, setPomodoroBreakMinutes] = useState(5);
 
   useEffect(() => {
     if (typeof Intl !== "undefined") {
@@ -78,6 +81,25 @@ export default function AccountPage() {
     setLocale(me.user.locale ?? "");
     setTimeFormat((me.user.timeFormat as "12h" | "24h" | null) ?? "12h");
   }, [me]);
+
+  // Pomodoro state hydrates from `user.me` (account-scoped) since
+  // those columns live on User, not Membership. Keep the inputs as
+  // local component state and ship via `user.updatePomodoro` so the
+  // form stays consistent with the rest of the page's "Save" pattern.
+  useEffect(() => {
+    if (!account) return;
+    setPomodoroEnabled(account.pomodoroEnabled ?? false);
+    setPomodoroMinutes(account.pomodoroMinutes ?? 25);
+    setPomodoroBreakMinutes(account.pomodoroBreakMinutes ?? 5);
+  }, [account]);
+
+  const updatePomodoro = trpc.user.updatePomodoro.useMutation({
+    onSuccess: () => {
+      utils.user.me.invalidate();
+      toast.success("Pomodoro preferences saved.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const update = trpc.workspace.updatePreferences.useMutation({
     onSuccess: () => {
@@ -332,6 +354,78 @@ export default function AccountPage() {
                   </ul>
                 </div>
               )}
+            </div>
+          </Section>
+
+          <Section
+            title="Pomodoro"
+            hint="Optional break prompts while a timer is running. Off by default. The toast is a nudge — your timer keeps running unless you stop it."
+          >
+            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+              <label className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">
+                    Enable pomodoro break prompts
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    When checked, the time-tracker fires a toast every
+                    {` ${pomodoroMinutes} `} minute{pomodoroMinutes === 1 ? "" : "s"}
+                    {" "}while a timer is running.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={pomodoroEnabled}
+                  onChange={(e) => setPomodoroEnabled(e.target.checked)}
+                  className="h-4 w-4"
+                />
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Work minutes">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={120}
+                    value={pomodoroMinutes}
+                    onChange={(e) =>
+                      setPomodoroMinutes(
+                        Math.max(1, Math.min(120, Number(e.target.value) || 1)),
+                      )
+                    }
+                    disabled={!pomodoroEnabled}
+                  />
+                </Field>
+                <Field label="Break minutes">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={120}
+                    value={pomodoroBreakMinutes}
+                    onChange={(e) =>
+                      setPomodoroBreakMinutes(
+                        Math.max(1, Math.min(120, Number(e.target.value) || 1)),
+                      )
+                    }
+                    disabled={!pomodoroEnabled}
+                  />
+                </Field>
+              </div>
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  variant="ember"
+                  disabled={updatePomodoro.isPending}
+                  onClick={() =>
+                    updatePomodoro.mutate({
+                      pomodoroEnabled,
+                      pomodoroMinutes,
+                      pomodoroBreakMinutes,
+                    })
+                  }
+                >
+                  {updatePomodoro.isPending ? "Saving…" : "Save pomodoro"}
+                </Button>
+              </div>
             </div>
           </Section>
         </div>

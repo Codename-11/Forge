@@ -1,8 +1,19 @@
 import { z } from "zod";
+import { randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { CycleStatus, EventKind, Role } from "@prisma/client";
 import { router, protectedProcedure, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+
+/**
+ * Crypto-strong random token for shared secrets (email-ingest HMAC,
+ * etc.). 40 hex chars = 160 bits of entropy. Url-safe.
+ */
+function randomToken(len = 40): string {
+  return randomBytes(Math.ceil(len / 2))
+    .toString("hex")
+    .slice(0, len);
+}
 import {
   deleteWorkspaceBucket,
   ensureWorkspaceBucket,
@@ -68,9 +79,47 @@ export const workspaceRouter = router({
     }),
 
   current: workspaceProcedure.query(async ({ ctx }) => {
+    // NOTE: we used to return all scalar columns via `include`; that
+    // changed to a tight select when `emailIngestSecret` was added so
+    // the HMAC shared secret never leaks to a non-admin caller. The
+    // shape of every previously-included scalar is preserved below.
     return ctx.db.workspace.findUniqueOrThrow({
       where: { id: ctx.workspaceId },
-      include: {
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        key: true,
+        avatarUrl: true,
+        cycleLengthDays: true,
+        cycleCooldownDays: true,
+        timeTrackingEnabled: true,
+        attachmentQuotaMb: true,
+        autoDispatch: true,
+        autoDispatchMode: true,
+        autoStartOnAssign: true,
+        agentIdleTimeoutMinutes: true,
+        requireApprovalBeforeStart: true,
+        assignmentSlaMinutes: true,
+        autoRedispatchOnStall: true,
+        requiredAckSeconds: true,
+        autoRedispatchOnNoack: true,
+        slaEnforcementEnabled: true,
+        aiEnabled: true,
+        aiTriageOnCreate: true,
+        aiCoachEnabled: true,
+        aiProvider: true,
+        aiModel: true,
+        agentRunStaleMinutes: true,
+        startedStatusId: true,
+        stalledThresholdDays: true,
+        agentHeartbeatWarnMinutes: true,
+        agentHeartbeatCriticalMinutes: true,
+        emailIngestEnabled: true,
+        // emailIngestSecret intentionally omitted — see note above.
+        createdAt: true,
+        updatedAt: true,
+        deletedAt: true,
         statuses: { orderBy: { position: "asc" } },
         _count: { select: { projects: true, issues: true, memberships: true } },
       },
@@ -178,6 +227,7 @@ export const workspaceRouter = router({
         aiProvider: z.enum(["hermes", "openai", "anthropic", "custom"]).optional(),
         aiModel: z.string().min(1).max(80).nullable().optional(),
         startedStatusId: z.string().nullable().optional(),
+        emailIngestEnabled: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -207,6 +257,41 @@ export const workspaceRouter = router({
         data: input,
       });
     }),
+
+  /**
+   * Whether the email-ingest secret is currently set (without
+   * leaking the secret itself). Used by `/settings/integrations` to
+   * decide whether to show "Generate secret" or "Rotate secret".
+   */
+  emailIngestStatus: workspaceProcedure.query(async ({ ctx }) => {
+    const ws = await ctx.db.workspace.findUniqueOrThrow({
+      where: { id: ctx.workspaceId },
+      select: { emailIngestEnabled: true, emailIngestSecret: true, key: true },
+    });
+    return {
+      enabled: ws.emailIngestEnabled,
+      secretSet: !!ws.emailIngestSecret,
+      workspaceKey: ws.key,
+    };
+  }),
+
+  /**
+   * Email-to-issue ingest: regenerate the HMAC secret used by
+   * `/api/ingest/email`. Rotating invalidates any outstanding
+   * inbound integration that was pointing at the old secret. Admin
+   * only; the new secret is returned once and then never echoed
+   * back through `workspace.current` (it's stored but never selected
+   * by the read paths). This proc returns the secret so the UI can
+   * show it once and let the operator copy it.
+   */
+  rotateEmailIngestSecret: adminProcedure.mutation(async ({ ctx }) => {
+    const secret = `feis_${randomToken(40)}`;
+    await ctx.db.workspace.update({
+      where: { id: ctx.workspaceId },
+      data: { emailIngestSecret: secret },
+    });
+    return { secret };
+  }),
 
   archive: adminProcedure.mutation(async ({ ctx }) => {
     if (ctx.membership.role !== Role.OWNER) {

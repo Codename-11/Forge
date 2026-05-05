@@ -39,6 +39,16 @@ export function TimeTrackerWidget() {
     { enabled, refetchOnWindowFocus: true },
   );
 
+  // Pomodoro prefs are server-side per-user (no localStorage). When
+  // both pomodoroEnabled is on AND a timer is running, we schedule a
+  // toast at `pomodoroMinutes` past the timer's start. The toast is
+  // a nudge — it never pauses or stops the timer. Re-fires every
+  // `pomodoroMinutes` so a long session prompts more than once.
+  const { data: account } = trpc.user.me.useQuery(undefined, { enabled });
+  const pomodoroEnabled = account?.pomodoroEnabled ?? false;
+  const pomodoroMinutes = account?.pomodoroMinutes ?? 25;
+  const pomodoroBreakMinutes = account?.pomodoroBreakMinutes ?? 5;
+
   const { data: recentIssues } = trpc.issue.list.useQuery(
     { includeDone: false, limit: 20 },
     { enabled: enabled && open && !running },
@@ -99,6 +109,73 @@ export function TimeTrackerWidget() {
     const iv = window.setInterval(() => setTick((n) => n + 1), 1000);
     return () => window.clearInterval(iv);
   }, [running]);
+
+  // Pomodoro nudge — fire a toast every `pomodoroMinutes` since the
+  // timer's `startedAt`. Tracks how many cycles we've already
+  // notified for via a ref, so toggling tabs doesn't re-trigger
+  // already-fired prompts. The nudge is dismissible, has a "Stop
+  // timer" action and a "Snooze 5min" action, and never pauses the
+  // running timer (in-flow operators expect to keep going).
+  const lastFiredRef = useRef<{ entryId: string; cycle: number } | null>(null);
+  const snoozedUntilRef = useRef<number>(0);
+  useEffect(() => {
+    if (!enabled || !pomodoroEnabled || !running) return;
+    const startedAt = new Date(running.startedAt).getTime();
+    const periodMs = pomodoroMinutes * 60 * 1000;
+    let timeoutId: number | null = null;
+    const schedule = () => {
+      const now = Date.now();
+      const elapsed = Math.max(0, now - startedAt);
+      // Cycle number we *should* have fired by now.
+      const dueCycles = Math.floor(elapsed / periodMs);
+      const lastFired =
+        lastFiredRef.current?.entryId === running.id
+          ? lastFiredRef.current.cycle
+          : 0;
+      const nextCycle = Math.max(lastFired + 1, dueCycles + 1);
+      const fireAt = startedAt + nextCycle * periodMs;
+      const delay = Math.max(0, fireAt - now);
+      // Honor an active snooze.
+      const snoozeBuffer = Math.max(0, snoozedUntilRef.current - now);
+      timeoutId = window.setTimeout(
+        () => {
+          // Re-check we're still running the same entry.
+          if (!running) return;
+          lastFiredRef.current = { entryId: running.id, cycle: nextCycle };
+          toast(`Pomodoro complete · ${pomodoroMinutes}m`, {
+            description: `Take a ${pomodoroBreakMinutes}m break? Timer keeps running unless you stop it.`,
+            duration: 12000,
+            action: {
+              label: "Stop timer",
+              onClick: () => {
+                stop.mutate({ entryId: running.id });
+              },
+            },
+            cancel: {
+              label: "Snooze 5m",
+              onClick: () => {
+                snoozedUntilRef.current = Date.now() + 5 * 60 * 1000;
+              },
+            },
+          });
+          schedule();
+        },
+        delay + snoozeBuffer,
+      );
+    };
+    schedule();
+    return () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    enabled,
+    pomodoroEnabled,
+    pomodoroMinutes,
+    pomodoroBreakMinutes,
+    running?.id,
+    running?.startedAt,
+  ]);
 
   const elapsedLabel = useMemo(() => {
     if (!running) return "";

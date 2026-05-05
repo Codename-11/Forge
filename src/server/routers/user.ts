@@ -27,6 +27,9 @@ const ME_SELECT = {
   textSize: true,
   onboardingDismissedAt: true,
   onboardingSkippedSteps: true,
+  pomodoroEnabled: true,
+  pomodoroMinutes: true,
+  pomodoroBreakMinutes: true,
 } as const;
 
 // Today only "member" is opt-out-able. Keep the enum tight so we don't
@@ -108,6 +111,29 @@ export const userRouter = router({
       return ctx.db.user.update({
         where: { id: ctx.session.user.id },
         data: { onboardingSkippedSteps: { set: next } },
+        select: ME_SELECT,
+      });
+    }),
+
+  /**
+   * Per-user pomodoro prefs. The time-tracker widget consults these
+   * each time a timer starts to decide whether to schedule a "break"
+   * toast and at what cadence. Off by default. The toast is just a
+   * prompt — it never pauses or stops the timer. Durations are
+   * clamped 1..120 to keep the schedule reasonable.
+   */
+  updatePomodoro: protectedProcedure
+    .input(
+      z.object({
+        pomodoroEnabled: z.boolean().optional(),
+        pomodoroMinutes: z.number().int().min(1).max(120).optional(),
+        pomodoroBreakMinutes: z.number().int().min(1).max(120).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.user.update({
+        where: { id: ctx.session.user.id },
+        data: input,
         select: ME_SELECT,
       });
     }),

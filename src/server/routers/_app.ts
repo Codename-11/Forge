@@ -21,6 +21,7 @@ import { recurringRouter } from "./recurring";
 import { viewRouter } from "./view";
 import { savedViewRouter } from "./saved-view";
 import { standupRouter } from "./standup";
+import { systemRouter } from "./system";
 import { cycleRouter } from "./cycle";
 import { dashboardRouter } from "./dashboard";
 import { dispatchRuleRouter } from "./dispatch-rule";
@@ -70,6 +71,7 @@ export const appRouter = router({
   savedView: savedViewRouter,
   standup: standupRouter,
   status: statusRouter,
+  system: systemRouter,
   template: issueTemplateRouter,
   timeEntry: timeEntryRouter,
   user: userRouter,

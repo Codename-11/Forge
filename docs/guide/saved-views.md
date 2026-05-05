@@ -26,6 +26,21 @@ On `/issues`, configure the filter you want, then click **Save view**
 in the filter bar. You'll be prompted for a name. The view appears
 in the **Views** chip rail at the top of the page.
 
+### Quick-save when filters match an existing view
+
+When the current filter set matches a saved view exactly (order-
+independent — arrays compare as sets, missing values and explicit
+`false` collapse to "no filter"), the bar shifts mode:
+
+- A small chip shows the matched view's name.
+- **Save changes** overwrites the matched view's filters with the
+  current selection.
+- **New view** opens the standard create dialog so you can fork the
+  filter as a new named view.
+
+When no filters are applied at all, the **Save view** button
+disables itself with a tooltip pointing you at the filter chips.
+
 ## Switching between views
 
 Click any chip in the Views rail to apply that view. The filter,

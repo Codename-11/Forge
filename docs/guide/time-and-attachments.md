@@ -47,6 +47,23 @@ against the current issue. This is the fastest path: open issue, hit the
 chord, work, hit the chord again to stop. The entry's `issueId` is set
 automatically.
 
+### Pomodoro
+
+A per-user opt-in nudge. When **Enable pomodoro break prompts** is on
+in `Settings → Account`, the time-tracker fires a non-modal toast
+every `pomodoroMinutes` (default 25) while a timer is running. The
+toast has two affordances:
+
+- **Stop timer** — closes the running entry just like the Stop button.
+- **Snooze 5m** — pushes the next reminder out by five minutes.
+
+The work / break durations are settings on the User row
+(`pomodoroEnabled`, `pomodoroMinutes`, `pomodoroBreakMinutes`) — both
+defaults are configurable per-account. Pomodoro is intentionally a
+*prompt*, not a hard stop: a deep-flow operator can dismiss the toast
+and the timer keeps counting. There's no localStorage involved — the
+prefs cascade across every device the user signs in from.
+
 ### MCP tools
 
 Six tools cover the surface:
