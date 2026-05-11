@@ -2,6 +2,70 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-11 — Fix issues.transition lifecycle + lint cleanup
+
+Investigating why Victor had 3 stale runs surfaced a latent bug in
+`issues.transition` (MCP). Of the 3 runs, 2 (AXI-40 / AXI-42) were
+legitimate in-flight grooming on still-open issues. The 3rd (AXI-5)
+was supposed to close when I transitioned the issue to Done — but
+the existing MCP tool only ran a bare `db.issue.update({ statusId })`,
+skipping:
+
+- lifecycle timestamps (`completedAt` / `canceledAt` / `startedAt`)
+- the `ISSUE_STATUS_CHANGED` audit + activity event
+- `finishRunsForIssue()` on terminal categories
+
+Consequences observed in the AXI workspace:
+- AXI-5 was visibly "Done" but had `completedAt: null` (would have
+  undercounted in analytics).
+- No webhook subscriber saw the close event.
+- The Victor run on AXI-5 stayed ACTIVE → showed as stale.
+
+### Fix
+
+`issues.transition` rewritten in `src/server/services/mcp.ts` to
+mirror the tRPC `issue.update` + my new `issues.bulkTransition`
+semantics:
+
+- Read the full `before` row (including the current `status`) so the
+  audit `before` snapshot is correct.
+- Compute lifecycle timestamps from the target category.
+- One transaction: `issue.update` → `recordChange` (ISSUE_STATUS_CHANGED)
+  → branch on terminal category to either close runs
+  (`finishRunsForIssue`) or touch/open the calling agent's run.
+- Same-status calls are a no-op now (skips the write + event) so
+  callers polling `transition` to the current status don't spam
+  audit logs.
+
+### Tests
+
+4 new regression tests in
+`src/server/services/__tests__/mcp.test.ts`:
+- → DONE: completedAt set, ISSUE_STATUS_CHANGED emitted, ACTIVE run
+  flipped to COMPLETED.
+- → CANCELED: canceledAt set, run flipped to ABANDONED.
+- → IN_PROGRESS: startedAt stamped once; round-trip Backlog →
+  In Progress preserves the original `startedAt`.
+- Same-status: no audit, no event.
+
+All 260 tests pass.
+
+### Backfill
+
+AXI-5 was left in an inconsistent state by the buggy transition
+earlier this session. Followed up by setting `completedAt` to the
+moment it landed in Done (`2026-05-11T00:51:56.904Z`, the original
+`updatedAt`) and explicitly finishing the orphaned Victor run.
+
+### Operational followup (not done here)
+
+`Workspace.agentRunStaleMinutes` defaults to 0 in the AXI workspace
+— the watchdog that auto-closes long-stale runs is disabled. With
+the fix above, terminal transitions close their runs immediately,
+so the watchdog matters less. Worth turning on (e.g. 60min) so any
+future runs that get orphaned through other code paths still get
+reaped instead of accumulating forever.
+
 ## 2026-05-10 — Forge MCP Phase A: filters + generic update + labels
 
 Grooming pass on open Forge issues surfaced two MCP gaps tracked as

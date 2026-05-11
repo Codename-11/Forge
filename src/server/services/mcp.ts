@@ -19,7 +19,7 @@ import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
-import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
+import { openOrTouchRun, appendRunEvent, finishRunsForIssue } from "@/server/services/agent-run";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import {
@@ -734,33 +734,76 @@ export const mcpTools = {
     }),
     async run(input: { id: string; statusId: string }, ctx: McpContext) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.id });
-      // Ensure both the issue and the target status belong to this workspace.
-      const [issue, status] = await Promise.all([
+      const actorId = await resolveActorId(ctx);
+      const agentId = ctx.apiKey?.linkedAgentId ?? null;
+
+      // Validate both rows live in this workspace before opening a tx, so
+      // we can fail fast with a meaningful message.
+      const [before, status] = await Promise.all([
         db.issue.findFirst({
-          where: { id: input.id, workspaceId: ctx.workspaceId },
-          select: { id: true },
+          where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
+          include: { status: true },
         }),
         db.status.findFirst({
           where: { id: input.statusId, workspaceId: ctx.workspaceId },
-          select: { id: true },
         }),
       ]);
-      if (!issue) throw new Error("Issue not found in this workspace.");
+      if (!before) throw new Error("Issue not found in this workspace.");
       if (!status) throw new Error("Status not found in this workspace.");
-      const updated = await db.issue.update({
-        where: { id: issue.id },
-        data: { statusId: status.id },
-      });
-      // Touch the agent run so the live pulse strip + watchdog see this
-      // transition. No-op when the API key isn't agent-linked.
-      const agentId = ctx.apiKey?.linkedAgentId ?? null;
-      if (agentId) {
-        await db.$transaction(async (tx) => {
+
+      // No-op path: caller asked for the status the issue already has.
+      // Return the row without writing audit / touching the run so we don't
+      // emit a phantom ISSUE_STATUS_CHANGED. Matches the tRPC `issue.update`
+      // semantics where `patch.statusId === before.statusId` skips the
+      // status-change branch.
+      if (before.statusId === status.id) return before;
+
+      // Lifecycle timestamps based on the target category — mirrors
+      // issue.ts:765-778 and the bulkTransition path below.
+      const extra: { startedAt?: Date; completedAt?: Date | null; canceledAt?: Date | null } = {};
+      if (status.category === "IN_PROGRESS" && !before.startedAt) extra.startedAt = new Date();
+      if (status.category === "DONE") extra.completedAt = new Date();
+      if (status.category === "CANCELED") extra.canceledAt = new Date();
+      if (status.category !== "DONE") extra.completedAt = null;
+      if (status.category !== "CANCELED") extra.canceledAt = null;
+
+      return db.$transaction(async (tx) => {
+        const after = await tx.issue.update({
+          where: { id: before.id },
+          data: { statusId: status.id, ...extra },
+          include: { status: true },
+        });
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId,
+          entity: "Issue",
+          entityId: before.id,
+          action: "update",
+          before,
+          after,
+          eventKind: EventKind.ISSUE_STATUS_CHANGED,
+          subjectType: "issue",
+          subjectId: before.id,
+          payload: { statusId: status.id, from: before.statusId },
+        });
+
+        // Terminal status: close any ACTIVE runs (matches issue.ts:898-904).
+        // Otherwise touch/open the calling agent's run so the live pulse
+        // strip + watchdog see the transition.
+        if (status.category === "DONE" || status.category === "CANCELED") {
+          await finishRunsForIssue(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: before.id,
+            status: status.category === "DONE" ? "COMPLETED" : "ABANDONED",
+            actorId,
+          });
+        } else if (agentId) {
           const { run, isNew } = await openOrTouchRun(tx, {
             workspaceId: ctx.workspaceId,
             issueId: input.id,
             agentId,
-            currentStep: `→ ${input.statusId}`,
+            currentStep: `→ ${status.name}`,
           });
           if (!isNew) {
             await appendRunEvent(tx, {
@@ -769,12 +812,13 @@ export const mcpTools = {
               issueId: input.id,
               agentId,
               kind: "TRANSITION",
-              payload: { statusId: input.statusId },
+              payload: { statusId: status.id, category: status.category },
             });
           }
-        });
-      }
-      return updated;
+        }
+
+        return after;
+      });
     },
   },
 
