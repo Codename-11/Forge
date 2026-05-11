@@ -2282,3 +2282,121 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     expect(audit).toHaveLength(2);
   });
 });
+
+describe("mcp — issues.transition lifecycle handling", () => {
+  it("→ DONE sets completedAt, emits ISSUE_STATUS_CHANGED, closes ACTIVE runs", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MTD" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, profileKey: "v", name: "V" },
+    });
+    const { ctx } = buildMcpCtx(fixture, { linkedAgentId: agent.id });
+    const done = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "DONE" },
+    });
+    const issue = await createIssue(fixture, { title: "close me" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+
+    await call("issues.transition", { id: issue.id, statusId: done.id }, ctx);
+
+    const after = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(after.statusId).toBe(done.id);
+    expect(after.completedAt).not.toBeNull();
+
+    const events = await prisma.activityEvent.findMany({
+      where: { workspaceId: fixture.workspace.id, subjectType: "issue", subjectId: issue.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(events.map((e) => e.kind)).toContain(EventKind.ISSUE_STATUS_CHANGED);
+
+    const runAfter = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(runAfter.status).toBe("COMPLETED");
+    expect(runAfter.finishedAt).not.toBeNull();
+  });
+
+  it("→ CANCELED sets canceledAt + closes runs as ABANDONED", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MTC" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, profileKey: "v", name: "V" },
+    });
+    const { ctx } = buildMcpCtx(fixture, { linkedAgentId: agent.id });
+    const cancelled = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "CANCELED" },
+    });
+    const issue = await createIssue(fixture, { title: "kill it" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+
+    await call("issues.transition", { id: issue.id, statusId: cancelled.id }, ctx);
+
+    const after = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(after.canceledAt).not.toBeNull();
+    expect(after.completedAt).toBeNull();
+
+    const runAfter = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(runAfter.status).toBe("ABANDONED");
+  });
+
+  it("→ IN_PROGRESS stamps startedAt once; re-entry leaves it untouched", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MTI" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const inProgress = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "IN_PROGRESS" },
+    });
+    const backlog = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "BACKLOG" },
+    });
+    const issue = await createIssue(fixture, { title: "start me" });
+
+    await call("issues.transition", { id: issue.id, statusId: inProgress.id }, ctx);
+    const first = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(first.startedAt).not.toBeNull();
+    const startedAtFirst = first.startedAt!;
+
+    // Bounce back to backlog, then back to in-progress — startedAt should
+    // stick to the first arrival, not reset on re-entry.
+    await call("issues.transition", { id: issue.id, statusId: backlog.id }, ctx);
+    await call("issues.transition", { id: issue.id, statusId: inProgress.id }, ctx);
+    const after = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(after.startedAt?.toISOString()).toBe(startedAtFirst.toISOString());
+  });
+
+  it("→ same status is a no-op (no event, no audit, no run touch)", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MTN" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "stay put" });
+    const before = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+
+    await call("issues.transition", { id: issue.id, statusId: before.statusId }, ctx);
+
+    const events = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        kind: EventKind.ISSUE_STATUS_CHANGED,
+      },
+    });
+    expect(events).toHaveLength(0);
+  });
+});
