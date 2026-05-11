@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { EventKind, Prisma, Priority, RelationKind, StatusCategory, WorkItemKind } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { assertKeyScope, buildKeyScopeWhere } from "@/server/services/api-key-auth";
@@ -2275,7 +2276,7 @@ type IssueRow = { id: string };
  * exclude via `id: { notIn: [...] }` without iterating.
  */
 async function findBlockedIssueIds(ctx: {
-  db: typeof import("@/server/db").db;
+  db: PrismaClient;
   workspaceId: string;
 }): Promise<Set<string>> {
   // Row shape written by `relation.add`:
@@ -2319,7 +2320,7 @@ async function findBlockedIssueIds(ctx: {
  * re-fetching the relation graph.
  */
 async function annotateUnblocked<T extends IssueRow>(
-  ctx: { db: typeof import("@/server/db").db; workspaceId: string },
+  ctx: { db: PrismaClient; workspaceId: string },
   rows: T[],
 ): Promise<Array<T & { unblocked: boolean }>> {
   if (!rows.length) return [];

@@ -44,13 +44,14 @@ export function IssueBoard({
   const ws = useMaybeWorkspace();
   const base = ws ? `/w/${ws.slug}` : "";
 
+  type IssueItem = NonNullable<typeof issues>["items"][number];
   const byStatus = useMemo(() => {
-    const map = new Map<string, typeof issues extends { items: infer U } ? U : never>();
-    for (const s of statuses ?? []) (map as any).set(s.id, []);
+    const map = new Map<string, IssueItem[]>();
+    for (const s of statuses ?? []) map.set(s.id, []);
     for (const i of issues?.items ?? []) {
-      const arr = (map as any).get(i.statusId) ?? [];
+      const arr = map.get(i.statusId) ?? [];
       arr.push(i);
-      (map as any).set(i.statusId, arr);
+      map.set(i.statusId, arr);
     }
     return map;
   }, [statuses, issues]);
@@ -60,7 +61,7 @@ export function IssueBoard({
   return (
     <div className="flex h-[calc(100svh-6rem)] gap-3 overflow-x-auto px-4 py-3">
       {statuses.map((s) => {
-        const column = ((byStatus as any).get(s.id) ?? []) as NonNullable<typeof issues>["items"];
+        const column = byStatus.get(s.id) ?? [];
         return (
           <section
             key={s.id}

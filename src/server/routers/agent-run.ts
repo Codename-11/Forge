@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { AgentRunControlState, AgentRunStatus, EventKind } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
@@ -817,7 +818,7 @@ export const agentRunRouter = router({
  */
 async function requestRunControl(
   ctx: {
-    db: typeof import("@/server/db").db;
+    db: PrismaClient;
     workspaceId: string;
     session: { user: { id: string } };
   },

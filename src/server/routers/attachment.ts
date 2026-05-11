@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { EventKind } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import {
@@ -350,7 +351,7 @@ export const attachmentRouter = router({
  * caller's workspace. Keeps attachments from ever referencing foreign rows.
  */
 async function assertTargetInWorkspace(
-  ctx: { db: typeof import("@/server/db").db; workspaceId: string },
+  ctx: { db: PrismaClient; workspaceId: string },
   targetType: string,
   targetId: string,
 ): Promise<void> {

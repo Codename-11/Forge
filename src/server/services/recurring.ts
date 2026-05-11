@@ -60,7 +60,7 @@ export async function runRecurringOnce(recurringId: string) {
 }
 
 let tickerStarted = false;
-let tickerHandle: NodeJS.Timeout | null = null;
+let _tickerHandle: NodeJS.Timeout | null = null;
 
 /**
  * Scan all due RecurringIssue rows and materialize issues for each. Safe to
@@ -96,13 +96,13 @@ export function startRecurringTicker(intervalMs = 5 * 60_000) {
   tickerStarted = true;
   // Fire once shortly after boot so a manual `runNow` after creation isn't
   // the only way to see it work.
-  tickerHandle = setTimeout(async function tick() {
+  _tickerHandle = setTimeout(async function tick() {
     try {
       await scanDueRecurring();
     } catch (err) {
       logger.warn({ err }, "recurring tick errored");
     } finally {
-      tickerHandle = setTimeout(tick, intervalMs);
+      _tickerHandle = setTimeout(tick, intervalMs);
     }
   }, 10_000);
   logger.info({ intervalMs }, "recurring ticker started");

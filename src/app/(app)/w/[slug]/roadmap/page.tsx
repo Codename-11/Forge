@@ -299,7 +299,7 @@ function RoadmapRow({
   initiative,
   projects,
   rangeStart,
-  totalDays,
+  totalDays: _totalDays,
   pct,
   dayOffset,
   href,

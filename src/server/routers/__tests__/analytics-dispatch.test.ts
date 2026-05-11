@@ -3,7 +3,7 @@ import {
   AgentStatus,
   AutoDispatchMode,
   EventKind,
-  Prisma,
+  type Prisma,
 } from "@prisma/client";
 import { analyticsRouter } from "@/server/routers/analytics";
 import {
