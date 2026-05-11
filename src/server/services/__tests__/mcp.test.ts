@@ -1960,3 +1960,325 @@ describe("mcp — notes (per-actor scoping)", () => {
     expect(archived.find((n) => n.id === created.id)).toBeTruthy();
   });
 });
+
+describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
+  it("issues.list honors projectId, labelIds, cycleId, priority filters", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MLF" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+
+    const projectA = await prisma.project.create({
+      data: { workspaceId: fixture.workspace.id, key: "A", name: "Project A", createdById: fixture.user.id },
+    });
+    const projectB = await prisma.project.create({
+      data: { workspaceId: fixture.workspace.id, key: "B", name: "Project B", createdById: fixture.user.id },
+    });
+    const cycle = await prisma.cycle.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Sprint 1",
+        startsAt: new Date(),
+        endsAt: new Date(Date.now() + 7 * 86_400_000),
+        lengthDays: 7,
+      },
+    });
+    const labelHot = await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "hot", color: "#ff0000" },
+    });
+    const labelCold = await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "cold", color: "#0000ff" },
+    });
+
+    const a = await createIssue(fixture, { title: "A urgent in sprint", projectId: projectA.id, cycleId: cycle.id });
+    const b = await createIssue(fixture, { title: "A low backlog", projectId: projectA.id });
+    const c = await createIssue(fixture, { title: "B medium in sprint", projectId: projectB.id, cycleId: cycle.id });
+    await prisma.issue.update({ where: { id: a.id }, data: { priority: "URGENT" } });
+    await prisma.issue.update({ where: { id: b.id }, data: { priority: "LOW" } });
+    await prisma.issue.update({ where: { id: c.id }, data: { priority: "MEDIUM" } });
+    await prisma.issueLabel.create({ data: { issueId: a.id, labelId: labelHot.id } });
+    await prisma.issueLabel.create({ data: { issueId: c.id, labelId: labelCold.id } });
+
+    const byProject = (await call("issues.list", { projectId: projectA.id }, ctx)) as Array<{ id: string }>;
+    expect(byProject.map((i) => i.id).sort()).toEqual([a.id, b.id].sort());
+
+    const byLabel = (await call("issues.list", { labelIds: [labelHot.id] }, ctx)) as Array<{ id: string }>;
+    expect(byLabel.map((i) => i.id)).toEqual([a.id]);
+
+    const byCycle = (await call("issues.list", { cycleId: cycle.id }, ctx)) as Array<{ id: string }>;
+    expect(byCycle.map((i) => i.id).sort()).toEqual([a.id, c.id].sort());
+
+    const backlog = (await call("issues.list", { cycleId: null }, ctx)) as Array<{ id: string }>;
+    expect(backlog.map((i) => i.id)).toEqual([b.id]);
+
+    const urgent = (await call("issues.list", { priorities: ["URGENT", "HIGH"] }, ctx)) as Array<{ id: string }>;
+    expect(urgent.map((i) => i.id)).toEqual([a.id]);
+
+    // Compound filter: project A AND urgent priority.
+    const compound = (await call(
+      "issues.list",
+      { projectId: projectA.id, priority: "URGENT" },
+      ctx,
+    )) as Array<{ id: string }>;
+    expect(compound.map((i) => i.id)).toEqual([a.id]);
+  });
+
+  it("issues.update writes audit + ISSUE_UPDATED and emits ISSUE_PRIORITY_CHANGED on priority bump", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MUP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const project = await prisma.project.create({
+      data: { workspaceId: fixture.workspace.id, key: "P", name: "P", createdById: fixture.user.id },
+    });
+    const issue = await createIssue(fixture, { title: "patch me" });
+
+    const updated = (await call(
+      "issues.update",
+      {
+        id: issue.id,
+        title: "patched",
+        description: "new body",
+        priority: "HIGH",
+        projectId: project.id,
+      },
+      ctx,
+    )) as { id: string; title: string; description: string | null; priority: string; projectId: string | null };
+
+    expect(updated.title).toBe("patched");
+    expect(updated.description).toBe("new body");
+    expect(updated.priority).toBe("HIGH");
+    expect(updated.projectId).toBe(project.id);
+
+    const events = await prisma.activityEvent.findMany({
+      where: { workspaceId: fixture.workspace.id, subjectType: "issue", subjectId: issue.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(events.map((e) => e.kind)).toContain(EventKind.ISSUE_UPDATED);
+    expect(events.map((e) => e.kind)).toContain(EventKind.ISSUE_PRIORITY_CHANGED);
+
+    const audit = await prisma.auditLog.findMany({
+      where: { workspaceId: fixture.workspace.id, entity: "Issue", entityId: issue.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(audit.map((a) => a.action)).toContain("update");
+    expect(audit.map((a) => a.action)).toContain("change-priority");
+  });
+
+  it("issues.update clears projectId/cycleId/parentId when passed null", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MUN" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const project = await prisma.project.create({
+      data: { workspaceId: fixture.workspace.id, key: "P", name: "P", createdById: fixture.user.id },
+    });
+    const issue = await createIssue(fixture, { title: "scoped", projectId: project.id });
+    await call("issues.update", { id: issue.id, projectId: null }, ctx);
+    const after = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(after.projectId).toBeNull();
+  });
+
+  it("issues.update rejects cross-workspace project FK", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MUX" });
+    const other = await createWorkspaceFixture({ keyPrefix: "MUY" });
+    fixtures.push(fixture, other);
+    const prisma = getPrisma();
+    const otherProject = await prisma.project.create({
+      data: { workspaceId: other.workspace.id, key: "X", name: "X", createdById: other.user.id },
+    });
+    const issue = await createIssue(fixture, { title: "guarded" });
+    const { ctx } = buildMcpCtx(fixture);
+
+    await expect(
+      call("issues.update", { id: issue.id, projectId: otherProject.id }, ctx),
+    ).rejects.toThrow(/Project not found/);
+  });
+
+  it("issues.update requires WRITE_ISSUES and honors issue narrowing", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MUW" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const project = await prisma.project.create({
+      data: { workspaceId: fixture.workspace.id, key: "L", name: "L", createdById: fixture.user.id },
+    });
+    const inLane = await createIssue(fixture, { title: "in", projectId: project.id });
+    const outOfLane = await createIssue(fixture, { title: "out" });
+
+    const readOnly = buildMcpCtx(fixture, { scopes: ["READ_ISSUES"] }).ctx;
+    await expect(
+      call("issues.update", { id: inLane.id, title: "no" }, readOnly),
+    ).rejects.toThrow(/WRITE_ISSUES/);
+
+    const narrowed = buildMcpCtx(fixture, { projectIds: [project.id] }).ctx;
+    await expect(
+      call("issues.update", { id: outOfLane.id, title: "blocked" }, narrowed),
+    ).rejects.toThrow(/scope/i);
+  });
+
+  it("issues.bulkTransition flips many issues, writes one audit each, sets completedAt on DONE", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MBT" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const done = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "DONE" },
+    });
+    const i1 = await createIssue(fixture, { title: "one" });
+    const i2 = await createIssue(fixture, { title: "two" });
+    const i3 = await createIssue(fixture, { title: "three" });
+
+    const res = (await call(
+      "issues.bulkTransition",
+      { ids: [i1.id, i2.id, i3.id], statusId: done.id },
+      ctx,
+    )) as { count: number };
+    expect(res.count).toBe(3);
+
+    const rows = await prisma.issue.findMany({
+      where: { id: { in: [i1.id, i2.id, i3.id] } },
+    });
+    for (const r of rows) {
+      expect(r.statusId).toBe(done.id);
+      expect(r.completedAt).not.toBeNull();
+    }
+
+    const events = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "issue",
+        kind: EventKind.ISSUE_STATUS_CHANGED,
+      },
+    });
+    expect(events).toHaveLength(3);
+  });
+
+  it("labels.create/update/delete: ADMIN required + round-trip", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MLB" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+
+    const created = (await call(
+      "labels.create",
+      { name: "bug", color: "#ff0000" },
+      ctx,
+    )) as { id: string; name: string; color: string };
+    expect(created.name).toBe("bug");
+
+    // Duplicate name → conflict.
+    await expect(
+      call("labels.create", { name: "bug", color: "#000000" }, ctx),
+    ).rejects.toThrow(/already used/);
+
+    const updated = (await call(
+      "labels.update",
+      { id: created.id, name: "Bug", color: "#aa0000" },
+      ctx,
+    )) as { id: string; name: string; color: string };
+    expect(updated.name).toBe("Bug");
+    expect(updated.color).toBe("#aa0000");
+
+    // Non-admin scope rejects label catalog mutation.
+    const noAdmin = buildMcpCtx(fixture, {
+      scopes: ["READ_ISSUES", "WRITE_ISSUES"],
+    }).ctx;
+    await expect(
+      call("labels.create", { name: "spam", color: "#000000" }, noAdmin),
+    ).rejects.toThrow(/ADMIN/);
+
+    const del = (await call("labels.delete", { id: created.id }, ctx)) as {
+      id: string;
+      deleted: boolean;
+    };
+    expect(del.deleted).toBe(true);
+    const gone = await prisma.label.findUnique({ where: { id: created.id } });
+    expect(gone).toBeNull();
+  });
+
+  it("labels.list returns workspace labels with issue counts", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MLL" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const a = await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "a", color: "#111111" },
+    });
+    await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "b", color: "#222222" },
+    });
+    const issue = await createIssue(fixture, { title: "tagged" });
+    await prisma.issueLabel.create({ data: { issueId: issue.id, labelId: a.id } });
+
+    const rows = (await call("labels.list", {}, ctx)) as Array<{
+      name: string;
+      _count: { issues: number };
+    }>;
+    expect(rows.map((r) => r.name)).toEqual(["a", "b"]);
+    expect(rows.find((r) => r.name === "a")?._count.issues).toBe(1);
+    expect(rows.find((r) => r.name === "b")?._count.issues).toBe(0);
+  });
+
+  it("issues.setLabels adds and removes; cross-workspace label is rejected", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MSL" });
+    const other = await createWorkspaceFixture({ keyPrefix: "MSO" });
+    fixtures.push(fixture, other);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const labelKeep = await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "keep", color: "#111111" },
+    });
+    const labelDrop = await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "drop", color: "#222222" },
+    });
+    const otherLabel = await prisma.label.create({
+      data: { workspaceId: other.workspace.id, name: "alien", color: "#999999" },
+    });
+    const issue = await createIssue(fixture, { title: "tag me" });
+    await prisma.issueLabel.create({ data: { issueId: issue.id, labelId: labelDrop.id } });
+
+    const res = (await call(
+      "issues.setLabels",
+      { issueId: issue.id, add: [labelKeep.id], remove: [labelDrop.id] },
+      ctx,
+    )) as { added: number; removed: number };
+    expect(res.added).toBe(1);
+    expect(res.removed).toBe(1);
+
+    const after = await prisma.issueLabel.findMany({ where: { issueId: issue.id } });
+    expect(after.map((r) => r.labelId)).toEqual([labelKeep.id]);
+
+    await expect(
+      call("issues.setLabels", { issueId: issue.id, add: [otherLabel.id] }, ctx),
+    ).rejects.toThrow(/do not belong/);
+  });
+
+  it("issues.bulkSetLabels tags many issues and writes per-issue audit rows", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MBL" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const tag = await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "groom", color: "#333333" },
+    });
+    const i1 = await createIssue(fixture, { title: "one" });
+    const i2 = await createIssue(fixture, { title: "two" });
+
+    const res = (await call(
+      "issues.bulkSetLabels",
+      { issueIds: [i1.id, i2.id], add: [tag.id] },
+      ctx,
+    )) as { updated: number; added: number; removed: number };
+    expect(res.updated).toBe(2);
+    expect(res.added).toBe(2);
+
+    const audit = await prisma.auditLog.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        entity: "Issue",
+        action: "bulk-set-labels",
+      },
+    });
+    expect(audit).toHaveLength(2);
+  });
+});

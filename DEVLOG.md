@@ -2,6 +2,108 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-10 — Forge MCP Phase A: filters + generic update + labels
+
+Grooming pass on open Forge issues surfaced two MCP gaps tracked as
+AXI-42 (issue update + label management) and AXI-40 (workspace
+scoping). This session ships **Phase A**: the issue/label-side gaps,
+all in `src/server/services/mcp.ts` + tests. Phase B (comment
+edit/delete + UI), Phase C (`workspaces.list` + workspace selector
+threading), Phase D (`access.*`) are follow-ups.
+
+Most "new features" were MCP-surface wiring around existing tRPC
+procs — `label.*`, `issue.update`, `issue.bulkTransition`,
+`issue.bulkSetLabels` already existed. The MCP layer just hadn't
+exposed them.
+
+### New MCP tools
+
+- **`issues.list` — filter passthrough.** Previously accepted only
+  `query/limit/includeDone`; silently ignored everything else. Now
+  mirrors the tRPC `filterSchema` (issue.ts:222) subset that matters
+  for grooming: `projectId/projectIds`, `statusId/statusCategories`,
+  `priority/priorities`, `cycleId/cycleIds` (with `null` = backlog),
+  `initiativeId/initiativeIds` (with `null` = no-initiative),
+  `labelIds`, `assigneeId`, `assignedAgentId`, `unassigned`,
+  `withoutCycle`, `withoutInitiative`. Fulltext search now hits
+  description as well as title. Where-construction kept inline +
+  commented rather than DRY'd with the tRPC router; future refactor
+  can extract `buildIssueListWhere(filter, scope)`.
+
+- **`issues.update`** — generic field patch. Intentionally narrow:
+  no `statusId` (use `issues.transition`), no `assignedAgentId` (use
+  `issues.assign/reassign/release`). Covers title, description,
+  priority, projectId, cycleId, parentId, dueDate, estimate. Null
+  on FK fields clears them. Cross-tenant guards on every referenced
+  id. Mirrors the audit + event semantics of the tRPC `issue.update`
+  proc — emits `ISSUE_UPDATED` and a separate
+  `ISSUE_PRIORITY_CHANGED` on priority bumps so the dispatch
+  escalation path keeps working. Closes the AXI-42 core ask.
+
+- **`issues.bulkTransition`** — wraps tRPC `issue.bulkTransition`
+  semantics. Per-row scope check (a narrowed key can't bulk-move
+  issues outside its lane), correct lifecycle timestamps
+  (`startedAt`/`completedAt`/`canceledAt`) based on target
+  category, one `ISSUE_STATUS_CHANGED` event per row.
+
+- **`labels.list / labels.create / labels.update / labels.delete`** —
+  ADMIN-gated for create/update/delete to mirror the tRPC
+  `adminProcedure`. `labels.list` is READ_ISSUES — labels are issue
+  metadata. Unique-name enforcement via the existing
+  `@@unique([workspaceId, name])`. Workspace UI for label management
+  already exists at `/w/[slug]/settings/labels/`; this just adds the
+  agent path.
+
+- **`issues.setLabels`** — single-issue `{ add[], remove[] }`. Most
+  common grooming shape.
+
+- **`issues.bulkSetLabels`** — many-issue `{ issueIds, add[],
+  remove[] }`. Mirrors tRPC `issue.bulkSetLabels` (issue.ts:987-)
+  including the 50-row audit-chunking pattern and per-row
+  `ISSUE_UPDATED` emission. Workspace validation on label ids; rows
+  outside the workspace get filtered before any writes.
+
+### Tests
+
+10 new integration tests in `src/server/services/__tests__/mcp.test.ts`
+covering filter combinations, audit + event emission, FK
+cross-tenant guards, scope/narrowing enforcement, ADMIN gate on
+label catalog mutations, and the bulk-label workspace-scoped
+validation path. All 70 MCP + 77 router tests pass.
+
+### UI audit (informs Phase B/C)
+
+Spawned an Explore agent to map web-UI completeness for the three
+domains in scope:
+
+- **Labels admin UI**: ✅ complete at
+  `src/app/(app)/w/[slug]/settings/labels/page.tsx`. No UI work
+  needed for Phase A label tools.
+- **Comment edit/delete UI**: ❌ missing. Backend has
+  `comment.update`/`comment.softDelete` but no buttons in
+  `src/components/issue-detail/issue-main.tsx`. Phase B will add
+  the UI + the missing audit-emission on those procs.
+- **Workspace switcher**: ✅ complete
+  (`src/components/workspace-switcher.tsx`, `g w` chord,
+  `/settings/workspaces` management page). Phase C is server-only.
+
+### Pre-existing issues NOT touched
+
+`pnpm lint` reports warnings/errors in
+`src/server/routers/{attachment,dashboard,inbox,issue,project,recurring,view}.ts`
+and a few components — all pre-existing, unrelated to Phase A. My
+new code is lint-clean.
+
+### Followups
+
+- AXI-5 verified complete + closed via MCP this session (Phase 3
+  primitives — cycles/initiatives/relations/time all shipped).
+- AXI-40 (workspace scoping) is still backlogged for Phase C. Until
+  then, home-lab issues keep the `Home Lab:` prefix convention in
+  AXI workspace. Note also: AXI-40 lives at `project = null` in the
+  AXI workspace — Phase A's `issues.update` is what lets us move it
+  cleanly into FRG, but only once redeployed.
+
 ## 2026-05-05 — Agent visibility + handoff polish
 
 Bailey reported: Victor has 2 stalled jobs; the Mission Control overlay
