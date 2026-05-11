@@ -55,7 +55,7 @@ export default function TimeLogPage() {
   );
   const { data: entries, isLoading } = trpc.timeEntry.list.useQuery(listInput);
 
-  const rows = entries ?? [];
+  const rows = useMemo(() => entries ?? [], [entries]);
   const totals = useMemo(() => {
     let minutes = 0;
     let billableAmount = 0;

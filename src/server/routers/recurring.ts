@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { TRPCError } from "@trpc/server";
 import { Priority } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { PluginScope, ApiKeyKind } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
 import { router, adminProcedure, workspaceProcedure } from "@/server/trpc";
 import { agentId as agentIdSchema } from "./agent";
@@ -24,7 +25,7 @@ type NarrowIds = {
  * caller scoping a key to a project that isn't in their workspace.
  */
 async function assertIdsInWorkspace(
-  db: import("@prisma/client").PrismaClient,
+  db: PrismaClient,
   workspaceId: string,
   ids: NarrowIds,
 ): Promise<void> {
@@ -96,7 +97,7 @@ const narrowingInput = {
  * don't want a caller linking a key to an agent in a different tenant.
  */
 async function assertAgentInWorkspace(
-  db: import("@prisma/client").PrismaClient,
+  db: PrismaClient,
   workspaceId: string,
   agentId: string | null | undefined,
 ): Promise<void> {

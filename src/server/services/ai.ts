@@ -1,6 +1,6 @@
 import "server-only";
 import { Priority } from "@prisma/client";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { logger } from "@/server/logger";
 import {
   getClient,

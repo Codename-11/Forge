@@ -7,7 +7,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
-  Key,
   PlugZap,
   ServerCog,
   Terminal,

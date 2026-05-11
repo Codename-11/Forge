@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CycleStatus, type Prisma } from "@prisma/client";
+import { CycleStatus, type Prisma, type PrismaClient } from "@prisma/client";
 import { router, protectedProcedure, workspaceProcedure } from "@/server/trpc";
 
 /**
@@ -589,7 +589,7 @@ export const inboxRouter = router({
 
 // ----- Helpers --------------------------------------------------------------
 
-type DB = typeof import("@/server/db").db;
+type DB = PrismaClient;
 
 async function findBlockedIssueIds(
   db: DB,

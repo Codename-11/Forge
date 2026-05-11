@@ -29,7 +29,6 @@ export default async function OgImage() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={dataUri} width={96} height={96} alt="" />
           <div style={{ display: "flex", flexDirection: "column" }}>
             <div style={{ fontSize: 64, fontWeight: 600, letterSpacing: -1, display: "flex" }}>

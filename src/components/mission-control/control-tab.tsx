@@ -156,36 +156,39 @@ function DeliveryRow({
 
 export function ControlTab({ slug: _slug }: { slug: string }) {
   const ws = useMaybeWorkspace();
+  const isAdmin = ws?.role === "OWNER" || ws?.role === "ADMIN";
 
-  if (ws?.role !== "OWNER" && ws?.role !== "ADMIN") {
+  const [filter, setFilter] = useState<FilterStatus>("all");
+  const utils = trpc.useUtils();
+
+  // Gate the queries on admin role rather than the hook order so the
+  // rules-of-hooks invariant holds while the admin-only API stays admin-only.
+  const { data, isLoading } = trpc.admin.webhookDeliveries.list.useQuery(
+    { status: filter === "all" ? undefined : filter, limit: 50 },
+    { staleTime: 5_000, enabled: isAdmin },
+  );
+
+  const { data: pendingData } = trpc.admin.webhookDeliveries.list.useQuery(
+    { status: "PENDING", limit: 200 },
+    { staleTime: 5_000, enabled: isAdmin },
+  );
+
+  const { data: successData } = trpc.admin.webhookDeliveries.list.useQuery(
+    { status: "SUCCESS", limit: 20 },
+    { staleTime: 10_000, enabled: isAdmin },
+  );
+
+  const retryM = trpc.admin.webhookDeliveries.retry.useMutation({
+    onSuccess: () => void utils.admin.webhookDeliveries.list.invalidate(),
+  });
+
+  if (!isAdmin) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-[0.75rem] text-muted-foreground">
         Admin only.
       </div>
     );
   }
-
-  const [filter, setFilter] = useState<FilterStatus>("all");
-  const utils = trpc.useUtils();
-
-  const { data, isLoading } = trpc.admin.webhookDeliveries.list.useQuery(
-    { status: filter === "all" ? undefined : filter, limit: 50 },
-    { staleTime: 5_000 },
-  );
-
-  const { data: pendingData } = trpc.admin.webhookDeliveries.list.useQuery(
-    { status: "PENDING", limit: 200 },
-    { staleTime: 5_000 },
-  );
-
-  const { data: successData } = trpc.admin.webhookDeliveries.list.useQuery(
-    { status: "SUCCESS", limit: 20 },
-    { staleTime: 10_000 },
-  );
-
-  const retryM = trpc.admin.webhookDeliveries.retry.useMutation({
-    onSuccess: () => void utils.admin.webhookDeliveries.list.invalidate(),
-  });
 
   const items = (data?.items ?? []) as DeliveryItem[];
 

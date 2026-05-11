@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentRunStatus } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 
@@ -462,7 +463,7 @@ export const dashboardRouter = router({
 
 // -- helpers ----------------------------------------------------------------
 
-type DB = typeof import("@/server/db").db;
+type DB = PrismaClient;
 
 async function fetchSlice(
   db: DB,
