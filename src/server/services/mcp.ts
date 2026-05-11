@@ -154,26 +154,163 @@ export const mcpTools = {
   "issues.list": {
     scopes: ["READ_ISSUES"] as const,
     input: z.object({
-      query: z.string().max(200).optional().describe("Fulltext search on title"),
-      limit: z.number().int().min(1).max(50).default(20),
+      query: z
+        .string()
+        .max(200)
+        .optional()
+        .describe("Fulltext search on title + description (case-insensitive)"),
+      // Singleton filters
+      projectId: z.string().cuid().optional(),
+      statusId: z.string().cuid().optional(),
+      priority: z.enum(["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+      cycleId: z
+        .string()
+        .cuid()
+        .nullable()
+        .optional()
+        .describe("CUID to pin, null for backlog (no cycle)"),
+      initiativeId: z
+        .string()
+        .cuid()
+        .nullable()
+        .optional()
+        .describe(
+          "CUID to pin, null for issues whose project has no initiative or no project",
+        ),
+      assigneeId: z.string().cuid().optional(),
+      assignedAgentId: z
+        .string()
+        .cuid()
+        .nullable()
+        .optional()
+        .describe("Agent CUID to pin, null for issues with no agent assigned"),
+      // Array filters (any-of). AND'd with singleton equivalents above.
+      projectIds: z.array(z.string().cuid()).max(100).optional(),
+      labelIds: z.array(z.string().cuid()).max(100).optional(),
+      statusCategories: z.array(z.nativeEnum(StatusCategory)).max(8).optional(),
+      priorities: z
+        .array(z.enum(["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"]))
+        .max(8)
+        .optional(),
+      cycleIds: z.array(z.string().cuid()).max(100).optional(),
+      initiativeIds: z.array(z.string().cuid()).max(100).optional(),
+      // Boolean predicates — convenience selectors. Compose under AND with
+      // explicit ids above. Mirrors the tRPC `filterSchema` semantics so
+      // agents calling the MCP can express the same shapes the web app uses.
+      unassigned: z
+        .boolean()
+        .optional()
+        .describe("No human assignees AND no agent assigned."),
+      withoutCycle: z.boolean().optional(),
+      withoutInitiative: z.boolean().optional(),
       includeDone: z.boolean().default(false).describe("Include DONE/CANCELED issues"),
+      limit: z.number().int().min(1).max(100).default(20),
     }),
     async run(
-      input: { query?: string; limit: number; includeDone: boolean },
+      input: {
+        query?: string;
+        projectId?: string;
+        statusId?: string;
+        priority?: "NONE" | "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+        cycleId?: string | null;
+        initiativeId?: string | null;
+        assigneeId?: string;
+        assignedAgentId?: string | null;
+        projectIds?: string[];
+        labelIds?: string[];
+        statusCategories?: StatusCategory[];
+        priorities?: ("NONE" | "LOW" | "MEDIUM" | "HIGH" | "URGENT")[];
+        cycleIds?: string[];
+        initiativeIds?: string[];
+        unassigned?: boolean;
+        withoutCycle?: boolean;
+        withoutInitiative?: boolean;
+        includeDone: boolean;
+        limit: number;
+      },
       ctx: McpContext,
     ) {
       const keyWhere = buildKeyScopeWhere(scopeCtx(ctx), "issue");
+
+      // Mirrors the tRPC `issue.list` where-construction (issue.ts:294-428).
+      // Kept inline rather than DRY'd because the tRPC procedure consumes
+      // the full session context (cursor, blocked-set helper bound to
+      // `ctx.db`) and the MCP path only needs the simpler subset. Future
+      // refactor: extract a shared `buildIssueListWhere(filter, scope)`.
+      const andClauses: Array<Record<string, unknown>> = [];
+
+      if (input.initiativeId === null || input.withoutInitiative === true) {
+        andClauses.push({
+          OR: [{ projectId: null }, { project: { initiativeId: null } }],
+        });
+      }
+      if (input.query) {
+        andClauses.push({
+          OR: [
+            { title: { contains: input.query, mode: "insensitive" as const } },
+            { description: { contains: input.query, mode: "insensitive" as const } },
+          ],
+        });
+      }
+      if (input.unassigned === true) {
+        andClauses.push({
+          AND: [{ assignees: { none: {} } }, { assignedAgentId: null }],
+        });
+      }
+      if (input.statusCategories?.length) {
+        andClauses.push({
+          status: { category: { in: input.statusCategories } },
+        });
+      }
+      if (input.cycleIds?.length || input.withoutCycle === true) {
+        const ors: Array<Record<string, unknown>> = [];
+        if (input.cycleIds?.length) ors.push({ cycleId: { in: input.cycleIds } });
+        if (input.withoutCycle === true) ors.push({ cycleId: null });
+        andClauses.push({ OR: ors });
+      }
+      if (input.initiativeIds?.length) {
+        andClauses.push({
+          project: { initiativeId: { in: input.initiativeIds } },
+        });
+      }
+
       return db.issue.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           deletedAt: null,
           ...keyWhere,
-          ...(input.query
-            ? { title: { contains: input.query, mode: "insensitive" as const } }
+          ...(input.projectId ? { projectId: input.projectId } : {}),
+          ...(input.projectIds?.length
+            ? { projectId: { in: input.projectIds } }
             : {}),
+          ...(input.statusId ? { statusId: input.statusId } : {}),
+          ...(input.assigneeId
+            ? { assignees: { some: { userId: input.assigneeId } } }
+            : {}),
+          ...(input.labelIds?.length
+            ? { labels: { some: { labelId: { in: input.labelIds } } } }
+            : {}),
+          ...(input.priority ? { priority: input.priority } : {}),
+          ...(input.priorities?.length
+            ? { priority: { in: input.priorities } }
+            : {}),
+          ...(input.cycleId === null
+            ? { cycleId: null }
+            : input.cycleId
+              ? { cycleId: input.cycleId }
+              : {}),
+          ...(typeof input.initiativeId === "string"
+            ? { project: { initiativeId: input.initiativeId } }
+            : {}),
+          ...(input.assignedAgentId === null
+            ? { assignedAgentId: null }
+            : input.assignedAgentId
+              ? { assignedAgentId: input.assignedAgentId }
+              : {}),
           ...(input.includeDone
             ? {}
             : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
+          ...(andClauses.length ? { AND: andClauses } : {}),
         },
         take: input.limit,
         orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
@@ -374,6 +511,218 @@ export const mcpTools = {
         },
         include: { status: true },
       });
+    },
+  },
+
+  /**
+   * Generic field-patch update for an issue. Intentionally narrow:
+   * `statusId` belongs on `issues.transition` (which also touches the
+   * agent-run timeline) and `assignedAgentId` belongs on
+   * `issues.assign` / `reassign` / `release` (which stamp
+   * `dispatchReason` and emit `AGENT_ASSIGNED`). Everything else —
+   * title, description, priority, project, cycle, parent, dueDate,
+   * estimate — lives here. Mirrors the audit + event semantics of the
+   * tRPC `issue.update` proc (issue.ts:703-) so subscribers can't tell
+   * the two paths apart.
+   */
+  "issues.update": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().describe("Issue id (cuid)"),
+      title: z.string().min(1).max(300).optional(),
+      description: z.string().max(50_000).nullable().optional(),
+      priority: z.enum(["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+      projectId: z
+        .string()
+        .cuid()
+        .nullable()
+        .optional()
+        .describe("Pass null to remove from project."),
+      cycleId: z
+        .string()
+        .cuid()
+        .nullable()
+        .optional()
+        .describe("Pass null to remove from cycle."),
+      parentId: z
+        .string()
+        .cuid()
+        .nullable()
+        .optional()
+        .describe("Pass null to clear the parent (un-nest)."),
+      dueDate: z.coerce.date().nullable().optional(),
+      estimate: z.number().min(0).nullable().optional(),
+    }),
+    async run(
+      input: {
+        id: string;
+        title?: string;
+        description?: string | null;
+        priority?: "NONE" | "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+        projectId?: string | null;
+        cycleId?: string | null;
+        parentId?: string | null;
+        dueDate?: Date | null;
+        estimate?: number | null;
+      },
+      ctx: McpContext,
+    ) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.id });
+      const actorId = await resolveActorId(ctx);
+      const { id, ...patch } = input;
+
+      return db.$transaction(async (tx) => {
+        const before = await tx.issue.findFirstOrThrow({
+          where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
+        });
+
+        // Cross-tenant guards on referenced ids. Skip the `null` branch
+        // (caller is clearing the field — no FK to validate).
+        if (typeof patch.projectId === "string") {
+          await assertKeyScope(scopeCtx(ctx), { entity: "project", id: patch.projectId });
+          const proj = await tx.project.findFirst({
+            where: { id: patch.projectId, workspaceId: ctx.workspaceId },
+            select: { id: true },
+          });
+          if (!proj) throw new Error("Project not found in this workspace.");
+        }
+        if (typeof patch.cycleId === "string") {
+          const cyc = await tx.cycle.findFirst({
+            where: { id: patch.cycleId, workspaceId: ctx.workspaceId },
+            select: { id: true },
+          });
+          if (!cyc) throw new Error("Cycle not found in this workspace.");
+        }
+        if (typeof patch.parentId === "string") {
+          if (patch.parentId === id) {
+            throw new Error("Issue cannot be its own parent.");
+          }
+          const parent = await tx.issue.findFirst({
+            where: { id: patch.parentId, workspaceId: ctx.workspaceId, deletedAt: null },
+            select: { id: true },
+          });
+          if (!parent) throw new Error("Parent issue not found in this workspace.");
+        }
+
+        const updateRes = await tx.issue.updateMany({
+          where: { id, workspaceId: ctx.workspaceId },
+          data: patch,
+        });
+        if (updateRes.count === 0) {
+          throw new Error("Issue not found in this workspace.");
+        }
+        const after = await tx.issue.findUniqueOrThrow({
+          where: { id },
+          include: { status: true, project: true },
+        });
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId,
+          entity: "Issue",
+          entityId: id,
+          action: "update",
+          before,
+          after,
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "issue",
+          subjectId: id,
+          payload: patch,
+        });
+
+        // Priority changes get a dedicated event so the dispatch
+        // escalation path (HIGH/URGENT) can route precisely without
+        // walking the generic ISSUE_UPDATED payload. Matches issue.ts:818-836.
+        if (patch.priority && patch.priority !== before.priority) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId,
+            entity: "Issue",
+            entityId: id,
+            action: "change-priority",
+            before: { priority: before.priority },
+            after: { priority: patch.priority },
+            eventKind: EventKind.ISSUE_PRIORITY_CHANGED,
+            subjectType: "issue",
+            subjectId: id,
+            payload: { from: before.priority, to: patch.priority },
+          });
+        }
+
+        return after;
+      });
+    },
+  },
+
+  /**
+   * Bulk status transition — wraps the tRPC `issue.bulkTransition`
+   * semantics so a grooming agent can move many issues into Done /
+   * Canceled in one call. Honors lifecycle timestamps (`startedAt`,
+   * `completedAt`, `canceledAt`) and emits ISSUE_STATUS_CHANGED per
+   * row so downstream subscribers behave identically to single
+   * transitions.
+   */
+  "issues.bulkTransition": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      ids: z.array(z.string().cuid()).min(1).max(200),
+      statusId: z.string().cuid(),
+    }),
+    async run(input: { ids: string[]; statusId: string }, ctx: McpContext) {
+      // Per-id scope check so a narrowed key can't transition issues
+      // outside its lane in bulk.
+      for (const id of input.ids) {
+        await assertKeyScope(scopeCtx(ctx), { entity: "issue", id });
+      }
+      const actorId = await resolveActorId(ctx);
+
+      const status = await db.status.findFirst({
+        where: { id: input.statusId, workspaceId: ctx.workspaceId },
+      });
+      if (!status) throw new Error("Status not found in this workspace.");
+
+      const rows = await db.issue.findMany({
+        where: {
+          id: { in: input.ids },
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+        },
+        include: { status: true },
+      });
+
+      let changed = 0;
+      for (const before of rows) {
+        if (before.statusId === status.id) continue;
+        const extra: { startedAt?: Date; completedAt?: Date | null; canceledAt?: Date | null } = {};
+        if (status.category === "IN_PROGRESS" && !before.startedAt) extra.startedAt = new Date();
+        if (status.category === "DONE") extra.completedAt = new Date();
+        if (status.category === "CANCELED") extra.canceledAt = new Date();
+        if (status.category !== "DONE") extra.completedAt = null;
+        if (status.category !== "CANCELED") extra.canceledAt = null;
+
+        await db.$transaction(async (tx) => {
+          const after = await tx.issue.update({
+            where: { id: before.id },
+            data: { statusId: status.id, ...extra },
+            include: { status: true },
+          });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId,
+            entity: "Issue",
+            entityId: before.id,
+            action: "update",
+            before,
+            after,
+            eventKind: EventKind.ISSUE_STATUS_CHANGED,
+            subjectType: "issue",
+            subjectId: before.id,
+            payload: { statusId: status.id, from: before.statusId },
+          });
+        });
+        changed += 1;
+      }
+      return { count: changed, statusId: status.id };
     },
   },
 
@@ -1072,6 +1421,241 @@ export const mcpTools = {
       return rows
         .filter((r) => r.issue !== null)
         .map((r) => ({ watchId: r.id, createdAt: r.createdAt, issue: r.issue! }));
+    },
+  },
+
+  /**
+   * Add and/or remove labels on one issue. Convenience around
+   * `issues.bulkSetLabels` for the single-issue grooming case (the
+   * most common shape). The composite `@@id([issueId, labelId])`
+   * lets us re-add an existing pair safely (skipDuplicates).
+   */
+  "issues.setLabels": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().cuid(),
+      add: z.array(z.string().cuid()).max(50).default([]),
+      remove: z.array(z.string().cuid()).max(50).default([]),
+    }),
+    async run(
+      input: { issueId: string; add: string[]; remove: string[] },
+      ctx: McpContext,
+    ) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      const actorId = await resolveActorId(ctx);
+      const labelIds = Array.from(new Set([...input.add, ...input.remove]));
+      if (labelIds.length > 0) {
+        const found = await db.label.findMany({
+          where: { id: { in: labelIds }, workspaceId: ctx.workspaceId },
+          select: { id: true },
+        });
+        if (found.length !== labelIds.length) {
+          throw new Error("One or more labels do not belong to this workspace.");
+        }
+      }
+      return db.$transaction(async (tx) => {
+        const issue = await tx.issue.findFirst({
+          where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!issue) throw new Error("Issue not found in this workspace.");
+
+        let added = 0;
+        let removed = 0;
+        if (input.remove.length > 0) {
+          const res = await tx.issueLabel.deleteMany({
+            where: { issueId: issue.id, labelId: { in: input.remove } },
+          });
+          removed = res.count;
+        }
+        if (input.add.length > 0) {
+          const res = await tx.issueLabel.createMany({
+            data: input.add.map((labelId) => ({ issueId: issue.id, labelId })),
+            skipDuplicates: true,
+          });
+          added = res.count;
+        }
+        if (added > 0 || removed > 0) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId,
+            entity: "Issue",
+            entityId: issue.id,
+            action: "set-labels",
+            after: { add: input.add, remove: input.remove },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "issue",
+            subjectId: issue.id,
+            payload: { add: input.add, remove: input.remove },
+          });
+        }
+        const after = await tx.issue.findUniqueOrThrow({
+          where: { id: issue.id },
+          include: { labels: { include: { label: true } } },
+        });
+        return { issue: after, added, removed };
+      });
+    },
+  },
+
+  /**
+   * Bulk label add/remove across many issues. Wraps the tRPC
+   * `issue.bulkSetLabels` semantics (issue.ts:987-) — one audit row
+   * per affected issue, chunked, with workspace-scoped validation.
+   * Grooming agents tagging large selections should prefer this over
+   * N round-trips to `issues.setLabels`.
+   */
+  "issues.bulkSetLabels": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      issueIds: z.array(z.string().cuid()).min(1).max(500),
+      add: z.array(z.string().cuid()).max(50).default([]),
+      remove: z.array(z.string().cuid()).max(50).default([]),
+    }),
+    async run(
+      input: { issueIds: string[]; add: string[]; remove: string[] },
+      ctx: McpContext,
+    ) {
+      if (input.add.length === 0 && input.remove.length === 0) {
+        return { updated: 0, added: 0, removed: 0 };
+      }
+      // Per-id scope check so a narrowed key can't tag issues outside its lane.
+      for (const id of input.issueIds) {
+        await assertKeyScope(scopeCtx(ctx), { entity: "issue", id });
+      }
+      const actorId = await resolveActorId(ctx);
+      const labelIds = Array.from(new Set([...input.add, ...input.remove]));
+      const found = await db.label.findMany({
+        where: { id: { in: labelIds }, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (found.length !== labelIds.length) {
+        throw new Error("One or more labels do not belong to this workspace.");
+      }
+
+      return db.$transaction(async (tx) => {
+        const issues = await tx.issue.findMany({
+          where: {
+            id: { in: input.issueIds },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          select: { id: true },
+        });
+        const validIds = issues.map((i) => i.id);
+        if (validIds.length === 0) {
+          return { updated: 0, added: 0, removed: 0 };
+        }
+
+        let added = 0;
+        let removed = 0;
+        if (input.remove.length > 0) {
+          const res = await tx.issueLabel.deleteMany({
+            where: { issueId: { in: validIds }, labelId: { in: input.remove } },
+          });
+          removed = res.count;
+        }
+        if (input.add.length > 0) {
+          const data = validIds.flatMap((issueId) =>
+            input.add.map((labelId) => ({ issueId, labelId })),
+          );
+          const res = await tx.issueLabel.createMany({ data, skipDuplicates: true });
+          added = res.count;
+        }
+
+        // Same 50-row audit chunking as the tRPC proc.
+        const CHUNK = 50;
+        for (let i = 0; i < validIds.length; i += CHUNK) {
+          const chunk = validIds.slice(i, i + CHUNK);
+          for (const issueId of chunk) {
+            await recordChange(tx, {
+              workspaceId: ctx.workspaceId,
+              actorId,
+              entity: "Issue",
+              entityId: issueId,
+              action: "bulk-set-labels",
+              after: { add: input.add, remove: input.remove },
+              eventKind: EventKind.ISSUE_UPDATED,
+              subjectType: "issue",
+              subjectId: issueId,
+              payload: { add: input.add, remove: input.remove },
+            });
+          }
+        }
+        return { updated: validIds.length, added, removed };
+      });
+    },
+  },
+
+  // --------------------------------------------------------------------- Labels
+  "labels.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({}),
+    async run(_input: Record<string, never>, ctx: McpContext) {
+      return db.label.findMany({
+        where: { workspaceId: ctx.workspaceId },
+        orderBy: { name: "asc" },
+        include: { _count: { select: { issues: true } } },
+      });
+    },
+  },
+
+  "labels.create": {
+    // ADMIN-gated to mirror the tRPC `label.create` adminProcedure.
+    // Narrowed agent keys without ADMIN can still tag/untag issues
+    // via `issues.setLabels`; only workspace mutation of the label
+    // catalog itself requires admin.
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      name: z.string().min(1).max(40),
+      color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+    }),
+    async run(input: { name: string; color: string }, ctx: McpContext) {
+      const existing = await db.label.findUnique({
+        where: { workspaceId_name: { workspaceId: ctx.workspaceId, name: input.name } },
+      });
+      if (existing) throw new Error("Label name already used.");
+      return db.label.create({
+        data: { ...input, workspaceId: ctx.workspaceId },
+      });
+    },
+  },
+
+  "labels.update": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      name: z.string().min(1).max(40).optional(),
+      color: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+    }),
+    async run(
+      input: { id: string; name?: string; color?: string },
+      ctx: McpContext,
+    ) {
+      const { id, ...patch } = input;
+      const row = await db.label.findFirst({
+        where: { id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!row) throw new Error("Label not found in this workspace.");
+      return db.label.update({ where: { id: row.id }, data: patch });
+    },
+  },
+
+  "labels.delete": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      const row = await db.label.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!row) throw new Error("Label not found in this workspace.");
+      await db.label.delete({ where: { id: row.id } });
+      return { id: row.id, deleted: true };
     },
   },
 
