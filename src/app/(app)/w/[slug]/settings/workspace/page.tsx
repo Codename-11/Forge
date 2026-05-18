@@ -28,6 +28,7 @@ export default function WorkspaceSettingsPage() {
   const [attachmentQuotaMb, setAttachmentQuotaMb] = useState(ws.attachmentQuotaMb);
   const [agentIdleTimeoutMinutes, setAgentIdleTimeoutMinutes] = useState(0);
   const [assignmentSlaMinutes, setAssignmentSlaMinutes] = useState(0);
+  const [agentRunStaleMinutes, setAgentRunStaleMinutes] = useState(0);
   const [autoRedispatchOnStall, setAutoRedispatchOnStall] = useState(false);
   const [requiredAckSeconds, setRequiredAckSeconds] = useState(0);
   const [autoRedispatchOnNoack, setAutoRedispatchOnNoack] = useState(false);
@@ -60,6 +61,7 @@ export default function WorkspaceSettingsPage() {
     setAttachmentQuotaMb(current.attachmentQuotaMb);
     setAgentIdleTimeoutMinutes(current.agentIdleTimeoutMinutes);
     setAssignmentSlaMinutes(current.assignmentSlaMinutes);
+    setAgentRunStaleMinutes(current.agentRunStaleMinutes);
     setAutoRedispatchOnStall(current.autoRedispatchOnStall);
     setRequiredAckSeconds(current.requiredAckSeconds);
     setAutoRedispatchOnNoack(current.autoRedispatchOnNoack);
@@ -263,6 +265,21 @@ export default function WorkspaceSettingsPage() {
                   value={assignmentSlaMinutes}
                   onChange={(e) =>
                     setAssignmentSlaMinutes(Number(e.target.value) || 0)
+                  }
+                  disabled={!canEdit}
+                />
+              </Field>
+              <Field
+                label="Agent run stale timeout (minutes)"
+                hint="Close ACTIVE agent runs as STALLED when their last run event is older than this window. 0 disables auto-close; the UI can still surface runs as stale earlier for operator attention."
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  max={10080}
+                  value={agentRunStaleMinutes}
+                  onChange={(e) =>
+                    setAgentRunStaleMinutes(Number(e.target.value) || 0)
                   }
                   disabled={!canEdit}
                 />
@@ -532,6 +549,7 @@ export default function WorkspaceSettingsPage() {
                     attachmentQuotaMb,
                     agentIdleTimeoutMinutes,
                     assignmentSlaMinutes,
+                    agentRunStaleMinutes,
                     autoRedispatchOnStall,
                     requiredAckSeconds,
                     autoRedispatchOnNoack,

@@ -24,6 +24,18 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm prisma generate
 RUN pnpm build
 
+# ---- worker ---------------------------------------------------------------
+# BullMQ maintenance/webhook workers are a separate process from the Next.js
+# server. Keep a dedicated target with the built source tree + generated Prisma
+# client so production Compose can run `pnpm worker` without baking worker logic
+# into the web container entrypoint.
+FROM base AS worker
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=build /app ./
+CMD ["pnpm", "worker"]
+
 # ---- runner ---------------------------------------------------------------
 FROM node:20-alpine AS runner
 RUN apk add --no-cache libc6-compat tini

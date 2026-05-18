@@ -46,6 +46,19 @@ async function adminSetup() {
 }
 
 describe("workspaceRouter — admin member management", () => {
+  it("updates the agent-run stale watchdog threshold", async () => {
+    const { caller, fixture } = await adminSetup();
+    const prisma = getPrisma();
+
+    await caller.update({ agentRunStaleMinutes: 45 });
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: fixture.workspace.id },
+      select: { agentRunStaleMinutes: true },
+    });
+    expect(workspace.agentRunStaleMinutes).toBe(45);
+  });
+
   it("listMembers returns all memberships including the caller", async () => {
     const { caller, fixture } = await adminSetup();
     const members = await caller.listMembers();
