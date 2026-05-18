@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-18 — First-class Chat workspace surface
+
+### Summary
+
+Promoted Forge chat from a Mission Control panel-only workflow into a top-level workspace surface at `/w/[slug]/chat`. Chat now has a discoverable sidebar entry and a dedicated operator-console layout for recent agent conversations, file-backed prompts, dispatch/thinking hints, and the existing attachment-capable composer.
+
+### What changed
+
+- Added shared sidebar nav metadata and a Work → Chat item between Inbox and Issues with `g m` keyboard chord.
+- Added `/w/[slug]/chat` route backed by a new `ChatWorkspaceSurface` client component.
+- Built a two/three-pane chat console: recent thread list, active conversation view using the existing `ChatThreadView`, and an XL context rail with selected agent/thread metadata.
+- Extended `chat.threads` with latest visible message preview plus attachment count/image hints for conversation rows.
+- Added owner-scoped `chat.getThread` for deep-linked thread reads with visible messages and finalized chat-message attachment metadata.
+- Added backend coverage for thread summaries, thread deep-link authorization, attachment metadata, and sidebar nav placement.
+- Added an opt-in Playwright smoke for authenticated `/chat` route/composer wiring.
+
+### Verification
+
+- RED verified targeted chat/router failures before implementation: missing `latestMessage` summary and missing `chat.getThread` procedure.
+- `pnpm vitest run src/server/routers/__tests__/chat.test.ts tests/unit/sidebar-nav.test.ts` → 2 files / 7 tests passed.
+- `pnpm lint` → pass.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass. Plain `pnpm typecheck` OOMed under the local Node heap cap before reporting diagnostics.
+- `pnpm test` → 36 files / 274 tests passed.
+- `pnpm exec playwright test tests/e2e/chat-surface.spec.ts` → 1 skipped by default; opt-in with `FORGE_E2E_CHAT_SURFACE=1` and a seeded authenticated Forge session.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` → pass; `/w/[slug]/chat` included in the production route table.
+
 ## 2026-05-18 — Chat Attachments + Rich Rendering v1
 
 ### Summary
