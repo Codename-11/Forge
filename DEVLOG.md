@@ -2,6 +2,30 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-18 — Deploy Forge worker + enable agent-run stale reaping
+
+### Summary
+
+Fixed the deployment gap behind the "stale activities" problem: the production Forge stack only ran the Next.js web process, while `src/server/worker.ts` documents the BullMQ maintenance/webhook worker as a separate long-running process. Without that worker, repeatable maintenance jobs could exist in Redis but never execute reliably.
+
+### What changed
+
+- Added a Docker `worker` target that runs the BullMQ worker separately from the web container.
+- Added `scripts/ignore-server-only.cjs` and preloaded it from `pnpm worker` so the Node/tsx worker can reuse server modules that import Next's `server-only` guard.
+- Added `forge-worker` to the live compose stack at `~/docker/forge/docker-compose.yaml` using the same environment as the web service and only the internal network.
+- Surfaced `Workspace.agentRunStaleMinutes` in the workspace settings UI and allowed `workspace.update` to persist it.
+- Added regression coverage for `workspace.update({ agentRunStaleMinutes })` and `sweepStalledRuns()`.
+- Set AXI `agentRunStaleMinutes` to 60 in production, letting the worker close the three old ACTIVE runs as `STALLED` through the normal `finishRun()` path.
+
+### Verification
+
+- RED verified: `workspace.update({ agentRunStaleMinutes: 45 })` initially left the DB at `0`; after the router fix it persists.
+- `pnpm vitest run src/server/services/__tests__/agent-run-stale.test.ts src/server/routers/__tests__/workspace-members.test.ts -t "agent-run-stale|updates the agent-run stale watchdog threshold"` → 3 tests passed.
+- `timeout 8s pnpm worker` logs `workers running` before the intentional timeout.
+- `docker compose build forge-worker` completed successfully.
+- Live `forge-worker` container is running and logs `workers running`.
+- After setting AXI's threshold to 60, the worker emitted 3 `AGENT_RUN_STALLED` events and changed the prior stale ACTIVE runs to `STALLED`.
+
 ## 2026-05-11 — Fix issues.transition lifecycle + lint cleanup
 
 Investigating why Victor had 3 stale runs surfaced a latent bug in

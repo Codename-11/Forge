@@ -23,7 +23,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "worker": "tsx src/server/worker.ts",
+    "worker": "NODE_OPTIONS='--require ./scripts/ignore-server-only.cjs' tsx src/server/worker.ts",
     "format": "prettier --write .",
     "docs:install": "pnpm --dir docs --ignore-workspace install",
     "docs:dev": "pnpm --dir docs --ignore-workspace dev",

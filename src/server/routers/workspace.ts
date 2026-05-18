@@ -217,6 +217,7 @@ export const workspaceRouter = router({
         attachmentQuotaMb: z.number().int().min(0).max(1_024_000).optional(),
         agentIdleTimeoutMinutes: z.number().int().min(0).max(1440).optional(),
         assignmentSlaMinutes: z.number().int().min(0).max(10080).optional(),
+        agentRunStaleMinutes: z.number().int().min(0).max(10080).optional(),
         autoRedispatchOnStall: z.boolean().optional(),
         requiredAckSeconds: z.number().int().min(0).max(3600).optional(),
         autoRedispatchOnNoack: z.boolean().optional(),
