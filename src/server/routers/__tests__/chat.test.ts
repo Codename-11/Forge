@@ -101,6 +101,91 @@ describe("chatRouter deferred dispatch", () => {
     expect(afterSecond).toBe(1);
   });
 
+  it("lists workspace chat threads with latest visible message and attachment summary", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "review the screenshots" });
+    await prisma.attachment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        targetType: "chat-message",
+        targetId: sent.messageId,
+        kind: "FILE",
+        filename: "screen.png",
+        mimeType: "image/png",
+        size: 12,
+        url: "s3://bucket/screen.png",
+      },
+    });
+
+    const threads = await caller.threads();
+
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).toMatchObject({
+      id: sent.threadId,
+      latestMessage: {
+        id: sent.messageId,
+        role: "USER",
+        body: "review the screenshots",
+        attachmentCount: 1,
+        hasImageAttachment: true,
+      },
+    });
+  });
+
+  it("fetches a selected chat thread by id with visible messages and attachment metadata", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "thread deep-link" });
+    const attachment = await prisma.attachment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        targetType: "chat-message",
+        targetId: sent.messageId,
+        kind: "LINK",
+        filename: "Runbook",
+        mimeType: "text/url",
+        size: 0,
+        url: "https://example.com/runbook",
+        externalUrl: "https://example.com/runbook",
+        linkTitle: "Runbook",
+      },
+    });
+
+    const thread = await caller.getThread({ threadId: sent.threadId });
+
+    expect(thread).not.toBeNull();
+    if (!thread) throw new Error("expected chat thread to be visible to owner");
+    expect(thread.id).toBe(sent.threadId);
+    expect(thread.agent.id).toBe(agent.id);
+    expect(thread.messages).toHaveLength(1);
+    expect(thread.messages[0]).toMatchObject({
+      id: sent.messageId,
+      body: "thread deep-link",
+      attachments: [
+        {
+          id: attachment.id,
+          filename: "Runbook",
+          mimeType: "text/url",
+          externalUrl: "https://example.com/runbook",
+          targetType: "chat-message",
+          targetId: sent.messageId,
+        },
+      ],
+    });
+  });
+
+  it("does not expose chat threads owned by a different workspace member", async () => {
+    const { agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "private operator thread" });
+    const secondCtx = await buildContext(fixture, { asUserId: fixture.secondUser.id });
+    const secondCaller = chatRouter.createCaller(secondCtx);
+
+    const threads = await secondCaller.threads();
+    const fetched = await secondCaller.getThread({ threadId: sent.threadId });
+
+    expect(threads.map((thread) => thread.id)).not.toContain(sent.threadId);
+    expect(fetched).toBeNull();
+  });
+
   it("includes finalized chat attachments in the dispatch payload and allows bodyless attachment dispatch", async () => {
     const { prisma, agent, caller, fixture } = await setup();
     const pending = await caller.createPendingMessage({ agentId: agent.id, body: "" });

@@ -53,13 +53,77 @@ function chatEventPayload(input: {
   };
 }
 
+const visibleChatMessageWhere = {
+  OR: [{ role: { not: ChatRole.USER } }, { dispatchedAt: { not: null } }],
+} satisfies Prisma.ChatMessageWhereInput;
+
+type ChatAttachmentSummary = Prisma.AttachmentGetPayload<{ select: typeof chatAttachmentSelect }>;
+
+type ChatMessageWithAttachments = Prisma.ChatMessageGetPayload<{
+  select: {
+    id: true;
+    role: true;
+    body: true;
+    createdAt: true;
+    sourceRunId: true;
+  };
+}> & {
+  attachments: ChatAttachmentSummary[];
+};
+
+function isImageMime(mimeType: string): boolean {
+  return mimeType.toLowerCase().startsWith("image/");
+}
+
+async function loadChatAttachmentsByMessageId(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  messageIds: string[],
+): Promise<Map<string, ChatAttachmentSummary[]>> {
+  if (messageIds.length === 0) return new Map();
+  const attachments = await tx.attachment.findMany({
+    where: {
+      workspaceId,
+      targetType: "chat-message",
+      targetId: { in: messageIds },
+      NOT: { url: { startsWith: "pending:" } },
+    },
+    orderBy: { createdAt: "asc" },
+    select: chatAttachmentSelect,
+  });
+  const byMessage = new Map<string, ChatAttachmentSummary[]>();
+  for (const attachment of attachments) {
+    if (!attachment.targetId) continue;
+    const bucket = byMessage.get(attachment.targetId) ?? [];
+    bucket.push(attachment);
+    byMessage.set(attachment.targetId, bucket);
+  }
+  return byMessage;
+}
+
+async function attachChatMessageMetadata(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  messages: Array<Omit<ChatMessageWithAttachments, "attachments">>,
+): Promise<ChatMessageWithAttachments[]> {
+  const byMessage = await loadChatAttachmentsByMessageId(
+    tx,
+    workspaceId,
+    messages.map((message) => message.id),
+  );
+  return messages.map((message) => ({
+    ...message,
+    attachments: byMessage.get(message.id) ?? [],
+  }));
+}
+
 export const chatRouter = router({
   /**
    * List chat threads the current user has with any agent. Empty when
    * the user hasn't started any chats yet.
    */
   threads: workspaceProcedure.query(async ({ ctx }) => {
-    return ctx.db.chatThread.findMany({
+    const threads = await ctx.db.chatThread.findMany({
       where: {
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
@@ -68,9 +132,40 @@ export const chatRouter = router({
       orderBy: { lastMessageAt: "desc" },
       include: {
         agent: { select: { id: true, name: true, profileKey: true, avatar: true, status: true, role: true } },
+        messages: {
+          where: visibleChatMessageWhere,
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { id: true, role: true, body: true, createdAt: true, sourceRunId: true },
+        },
         _count: { select: { messages: true } },
       },
       take: 50,
+    });
+    const latestMessages = threads.flatMap((thread) => thread.messages);
+    const latestWithAttachments = await attachChatMessageMetadata(
+      ctx.db,
+      ctx.workspaceId,
+      latestMessages,
+    );
+    const latestById = new Map(latestWithAttachments.map((message) => [message.id, message]));
+    return threads.map(({ messages, ...thread }) => {
+      const latest = messages[0] ? latestById.get(messages[0].id) : null;
+      return {
+        ...thread,
+        latestMessage: latest
+          ? {
+              id: latest.id,
+              role: latest.role,
+              body: latest.body,
+              createdAt: latest.createdAt,
+              sourceRunId: latest.sourceRunId,
+              attachmentCount: latest.attachments.length,
+              hasImageAttachment: latest.attachments.some((attachment) => isImageMime(attachment.mimeType)),
+              attachments: latest.attachments,
+            }
+          : null,
+      };
     });
   }),
 
@@ -110,6 +205,43 @@ export const chatRouter = router({
         take: 50,
       });
       return { thread, agent, messages };
+    }),
+
+  /**
+   * Fetch a concrete thread for deep-linked chat surfaces. This is read-only
+   * and owner-scoped: another member of the same workspace should not see a
+   * private operator/agent thread just because they can guess the id.
+   */
+  getThread: workspaceProcedure
+    .input(z.object({ threadId: idString }))
+    .query(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: {
+          id: input.threadId,
+          workspaceId: ctx.workspaceId,
+          userId: ctx.session.user.id,
+          archivedAt: null,
+        },
+        include: {
+          agent: { select: { id: true, name: true, profileKey: true, avatar: true, status: true, role: true } },
+        },
+      });
+      if (!thread) return null;
+      const messages = await ctx.db.chatMessage.findMany({
+        where: {
+          threadId: thread.id,
+          ...visibleChatMessageWhere,
+        },
+        orderBy: { createdAt: "asc" },
+        take: 100,
+        select: { id: true, role: true, body: true, createdAt: true, sourceRunId: true },
+      });
+      const messagesWithAttachments = await attachChatMessageMetadata(
+        ctx.db,
+        ctx.workspaceId,
+        messages,
+      );
+      return { ...thread, messages: messagesWithAttachments };
     }),
 
   /**

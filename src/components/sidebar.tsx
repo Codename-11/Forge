@@ -3,23 +3,16 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Inbox,
-  CircleDot,
-  Clock,
-  FolderKanban,
-  LayoutDashboard,
-  LineChart,
-  Settings,
   Search,
   Plus,
-  CalendarRange,
-  Compass,
-  Map as MapIcon,
-  Workflow,
-  BookOpen,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
+import {
+  WORKSPACE_NAV_FOOTER_ITEMS,
+  WORKSPACE_NAV_SECTIONS,
+  type WorkspaceNavItem,
+} from "@/components/sidebar-nav";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { useModKeyLabel } from "@/lib/platform";
@@ -48,78 +41,8 @@ import { trpc } from "@/lib/trpc";
  *   - Sign out / theme toggle → inside the user menu.
  */
 
-type NavItem = {
-  path: string;
-  label: string;
-  icon: typeof Inbox;
-  /** Second key of the `g <x>` leader chord. */
-  chord?: string;
-  /** Renders an unread-inbox badge when set to `"inbox"`. */
-  badge?: "inbox";
-  /** Only show when `Workspace.timeTrackingEnabled`. */
-  onlyWhenTimeTracking?: true;
-};
-
-type NavSection = {
-  id: string;
-  label: string;
-  items: readonly NavItem[];
-};
-
-/**
- * Single source of truth for sidebar nav. Agent 3 (dashboard/inbox merge) may
- * flip entries in the `Work` and `Personal` groups; keep this structure data-
- * driven so those edits don't require touching the rendering code.
- */
-const SECTIONS: readonly NavSection[] = [
-  {
-    id: "work",
-    label: "Work",
-    // Dashboard is the default workspace landing (rollups + onboarding).
-    // Inbox sits next to it because both are "homepage-y" surfaces — the
-    // bell-drawer Mine tab is a fast-access version of Inbox, but the
-    // full page lives here. Issues / Projects round out the workflow.
-    // Time is workspace-feature-flagged; renders only when enabled.
-    // Standup was dropped from the rail — it lives on the Dashboard as
-    // a tile and stays reachable via the command palette and `g u` chord.
-    items: [
-      { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
-      { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
-      { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
-      { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
-      { path: "/time", label: "Time", icon: Clock, chord: "t", onlyWhenTimeTracking: true },
-    ],
-  },
-  {
-    id: "planning",
-    label: "Planning",
-    items: [
-      { path: "/cycles", label: "Sprints", icon: CalendarRange, chord: "c" },
-      { path: "/initiatives", label: "Initiatives", icon: Compass, chord: "n" },
-      { path: "/roadmap", label: "Roadmap", icon: MapIcon, chord: "r" },
-    ],
-  },
-  {
-    id: "insights",
-    label: "Insights",
-    items: [
-      { path: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
-      { path: "/agents", label: "Agents", icon: Workflow, chord: "o" },
-    ],
-  },
-] as const;
-
-/**
- * Pinned-to-bottom items rendered in a separate footer block (above the
- * collapse toggle). Visually separated by a thin border so utility
- * surfaces — Docs (help) and Settings (configuration) — stay one click
- * away without competing with the workflow nav above.
- */
-const FOOTER_ITEMS: readonly NavItem[] = [
-  // `g h` = help mnemonic for the in-app VitePress viewer.
-  { path: "/docs", label: "Docs", icon: BookOpen, chord: "h" },
-  { path: "/settings", label: "Settings", icon: Settings, chord: "," },
-] as const;
+const SECTIONS = WORKSPACE_NAV_SECTIONS;
+const FOOTER_ITEMS = WORKSPACE_NAV_FOOTER_ITEMS;
 
 const COLLAPSED_STORAGE_KEY = "forge.sidebarCollapsed";
 
@@ -423,7 +346,7 @@ function NavRow({
   inboxCount,
   inFooter,
 }: {
-  item: { href: string; path: string; label: string; icon: typeof Inbox; chord?: string; badge?: "inbox" };
+  item: WorkspaceNavItem & { href: string };
   pathname: string | null;
   collapsed: boolean;
   inboxCount: number;

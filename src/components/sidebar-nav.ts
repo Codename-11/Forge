@@ -1,0 +1,76 @@
+import {
+  CalendarRange,
+  CircleDot,
+  Clock,
+  Compass,
+  FolderKanban,
+  Inbox,
+  LayoutDashboard,
+  LineChart,
+  Map as MapIcon,
+  MessageSquare,
+  Settings,
+  BookOpen,
+  Workflow,
+} from "lucide-react";
+
+export type WorkspaceNavItem = {
+  path: string;
+  label: string;
+  icon: typeof Inbox;
+  /** Second key of the `g <x>` leader chord. */
+  chord?: string;
+  /** Renders an unread-inbox badge when set to `"inbox"`. */
+  badge?: "inbox";
+  /** Only show when `Workspace.timeTrackingEnabled`. */
+  onlyWhenTimeTracking?: true;
+};
+
+export type WorkspaceNavSection = {
+  id: string;
+  label: string;
+  items: readonly WorkspaceNavItem[];
+};
+
+/**
+ * Single source of truth for workspace sidebar nav and keyboard chords.
+ * Exported separately from the client sidebar so tests and route metadata can
+ * validate product placement without rendering the full shell.
+ */
+export const WORKSPACE_NAV_SECTIONS: readonly WorkspaceNavSection[] = [
+  {
+    id: "work",
+    label: "Work",
+    items: [
+      { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
+      { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
+      { path: "/chat", label: "Chat", icon: MessageSquare, chord: "m" },
+      { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
+      { path: "/projects", label: "Projects", icon: FolderKanban, chord: "p" },
+      { path: "/time", label: "Time", icon: Clock, chord: "t", onlyWhenTimeTracking: true },
+    ],
+  },
+  {
+    id: "planning",
+    label: "Planning",
+    items: [
+      { path: "/cycles", label: "Sprints", icon: CalendarRange, chord: "c" },
+      { path: "/initiatives", label: "Initiatives", icon: Compass, chord: "n" },
+      { path: "/roadmap", label: "Roadmap", icon: MapIcon, chord: "r" },
+    ],
+  },
+  {
+    id: "insights",
+    label: "Insights",
+    items: [
+      { path: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
+      { path: "/agents", label: "Agents", icon: Workflow, chord: "o" },
+    ],
+  },
+] as const;
+
+/** Utility surfaces pinned below workflow navigation. */
+export const WORKSPACE_NAV_FOOTER_ITEMS: readonly WorkspaceNavItem[] = [
+  { path: "/docs", label: "Docs", icon: BookOpen, chord: "h" },
+  { path: "/settings", label: "Settings", icon: Settings, chord: "," },
+] as const;
