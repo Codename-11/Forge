@@ -11,6 +11,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { isImageAvatar, textAvatarForAgent } from "@/components/chat/agent-glyph-utils";
 
 type AgentLite = {
   id: string;
@@ -56,20 +57,23 @@ function statusMeta(input: {
 }
 
 function AgentGlyph({ agent, active }: { agent: AgentLite; active?: boolean }) {
+  const avatar = agent.avatar?.trim() || null;
+  const imageAvatar = isImageAvatar(avatar) ? avatar : null;
   return (
     <span
       className={cn(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border font-mono text-[0.6875rem] uppercase",
+        "flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border font-mono text-[0.6875rem] uppercase",
         active
           ? "border-ember/40 bg-ember/15 text-ember"
           : "border-border bg-subtle/50 text-muted-foreground",
       )}
+      title={`${agent.name} @${agent.profileKey}`}
     >
-      {agent.avatar ? (
+      {imageAvatar ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={agent.avatar} alt="" className="h-full w-full rounded-lg object-cover" />
+        <img src={imageAvatar} alt="" className="h-full w-full rounded-lg object-cover" />
       ) : (
-        agent.profileKey.slice(0, 2)
+        <span aria-hidden>{textAvatarForAgent(agent)}</span>
       )}
     </span>
   );

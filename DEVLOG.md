@@ -2,6 +2,23 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-18 — Chat agent glyph fallback fix
+
+### Summary
+
+Fixed the new Chat workspace's agent profile glyphs. Agent `avatar` is configured as "short text or image URL", but the Chat surface treated every non-empty avatar as an `<img src>`, so text/emoji avatars rendered as broken empty image boxes.
+
+### What changed
+
+- Added shared Chat glyph helpers to distinguish URL-like image avatars from short text/emoji avatars.
+- Updated Chat conversation/context glyphs to render short text/emoji directly and only use `<img>` for URL/data/blob/relative image sources.
+- Added regression coverage for text, emoji, image-like, and initials fallback behavior.
+
+### Verification
+
+- `pnpm vitest run tests/unit/agent-glyph-utils.test.ts tests/unit/sidebar-nav.test.ts src/server/routers/__tests__/chat.test.ts` → 3 files / 10 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm lint && NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass.
+
 ## 2026-05-18 — First-class Chat workspace surface
 
 ### Summary
