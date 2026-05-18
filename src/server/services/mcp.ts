@@ -97,6 +97,54 @@ async function resolveActorId(ctx: McpContext): Promise<string> {
   return m.userId;
 }
 
+const chatAttachmentSelect = {
+  id: true,
+  filename: true,
+  mimeType: true,
+  size: true,
+  kind: true,
+  externalUrl: true,
+  targetType: true,
+  targetId: true,
+  createdAt: true,
+} as const;
+
+async function assertMcpChatMessageTarget(ctx: McpContext, messageId: string): Promise<void> {
+  const message = await db.chatMessage.findFirst({
+    where: { id: messageId, workspaceId: ctx.workspaceId },
+    select: { id: true, thread: { select: { userId: true, agentId: true } } },
+  });
+  if (!message) throw new Error("chat-message target not found in this workspace.");
+  const linkedAgentId = ctx.apiKey?.linkedAgentId ?? null;
+  const userId = ctx.userId ?? null;
+  if (userId === message.thread.userId) return;
+  if (linkedAgentId && linkedAgentId === message.thread.agentId) return;
+  throw new Error("Only the chat thread owner or linked agent may access this chat-message attachment target.");
+}
+
+async function loadChatAttachmentMap(workspaceId: string, messageIds: string[]) {
+  const rows = messageIds.length
+    ? await db.attachment.findMany({
+        where: {
+          workspaceId,
+          targetType: "chat-message",
+          targetId: { in: messageIds },
+          NOT: { url: { startsWith: "pending:" } },
+        },
+        orderBy: { createdAt: "asc" },
+        select: chatAttachmentSelect,
+      })
+    : [];
+  const byMessage = new Map<string, typeof rows>();
+  for (const row of rows) {
+    if (!row.targetId) continue;
+    const bucket = byMessage.get(row.targetId) ?? [];
+    bucket.push(row);
+    byMessage.set(row.targetId, bucket);
+  }
+  return byMessage;
+}
+
 const addDays = (date: Date, days: number): Date => {
   const d = new Date(date);
   d.setUTCDate(d.getUTCDate() + days);
@@ -3072,6 +3120,8 @@ export const mcpTools = {
           entity: "initiative",
           id: input.targetId,
         });
+      } else if (input.targetType === "chat-message") {
+        await assertMcpChatMessageTarget(ctx, input.targetId);
       }
       const uploaderId = await resolveActorId(ctx);
       return presignUploadUrl({
@@ -3166,6 +3216,8 @@ export const mcpTools = {
           entity: "initiative",
           id: input.targetId,
         });
+      } else if (input.targetType === "chat-message") {
+        await assertMcpChatMessageTarget(ctx, input.targetId);
       }
       // If the caller didn't supply a label, try to scrape <title> from
       // the target page so the chip is meaningful out of the box. Fail
@@ -3213,6 +3265,8 @@ export const mcpTools = {
           entity: "initiative",
           id: input.targetId,
         });
+      } else if (input.targetType === "chat-message") {
+        await assertMcpChatMessageTarget(ctx, input.targetId);
       }
       return db.attachment.findMany({
         where: {
@@ -3242,6 +3296,8 @@ export const mcpTools = {
           entity: "issue",
           id: row.targetId,
         });
+      } else if (row.targetType === "chat-message" && row.targetId) {
+        await assertMcpChatMessageTarget(ctx, row.targetId);
       }
       return presignDownloadUrl(input.attachmentId);
     },
@@ -3263,6 +3319,8 @@ export const mcpTools = {
           entity: "issue",
           id: row.targetId,
         });
+      } else if (row.targetType === "chat-message" && row.targetId) {
+        await assertMcpChatMessageTarget(ctx, row.targetId);
       }
       await deleteAttachment(input.attachmentId);
       return { ok: true };
@@ -3322,6 +3380,8 @@ export const mcpTools = {
           entity: "initiative",
           id: row.targetId,
         });
+      } else if (row.targetType === "chat-message" && row.targetId) {
+        await assertMcpChatMessageTarget(ctx, row.targetId);
       }
       // Narrow allowlist for inline reads — matches the storage allowlist
       // intersected with the MIME types most agents can actually consume
@@ -3633,6 +3693,7 @@ export const mcpTools = {
       const messages = await db.chatMessage.findMany({
         where: {
           threadId: thread.id,
+          OR: [{ role: { not: "USER" } }, { dispatchedAt: { not: null } }],
           ...(input.before ? { createdAt: { lt: input.before } } : {}),
         },
         orderBy: { createdAt: "desc" },
@@ -3646,6 +3707,10 @@ export const mcpTools = {
           createdAt: true,
         },
       });
+      const attachmentMap = await loadChatAttachmentMap(
+        ctx.workspaceId,
+        messages.map((m) => m.id),
+      );
       // Surface `finalizedDraftId` if the persisted message carried one in
       // its publish payload — the column itself isn't on ChatMessage, so we
       // omit unless callers reach further. For now, expose null.
@@ -3659,6 +3724,7 @@ export const mcpTools = {
           sourceRunId: m.sourceRunId,
           createdAt: m.createdAt,
           finalizedDraftId: null as string | null,
+          attachments: attachmentMap.get(m.id) ?? [],
         })),
       };
     },
@@ -4574,7 +4640,10 @@ export const mcpTools = {
       }
 
       const messages = await db.chatMessage.findMany({
-        where: { threadId: thread.id },
+        where: {
+          threadId: thread.id,
+          OR: [{ role: { not: "USER" } }, { dispatchedAt: { not: null } }],
+        },
         orderBy: { createdAt: "desc" },
         take: 50,
         select: {
@@ -4586,6 +4655,11 @@ export const mcpTools = {
           createdAt: true,
         },
       });
+
+      const attachmentMap = await loadChatAttachmentMap(
+        ctx.workspaceId,
+        messages.map((m) => m.id),
+      );
 
       // Pull a peer summary if the thread's agent differs from the caller
       // (shouldn't happen since we gate on linkedAgentId, but a session
@@ -4637,7 +4711,10 @@ export const mcpTools = {
       return {
         workspace,
         thread,
-        messages,
+        messages: messages.map((m) => ({
+          ...m,
+          attachments: attachmentMap.get(m.id) ?? [],
+        })),
         agent,
         linkedIssues,
       };

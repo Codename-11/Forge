@@ -1544,6 +1544,11 @@ model ChatMessage {
   body            String   @db.Text
   contextSnapshot Json?
   sourceRunId     String?
+  /// Set when a USER message has emitted CHAT_MESSAGE_POSTED and is safe
+  /// for agent dispatch. Null means the message is still pending upload /
+  /// attachment finalization, or is an agent/system message that is not
+  /// dispatched to an agent.
+  dispatchedAt    DateTime?
   createdAt       DateTime @default(now())
 
   workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)

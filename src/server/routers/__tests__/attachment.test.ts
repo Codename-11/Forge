@@ -9,6 +9,7 @@ import {
   createIssue,
   createWorkspaceFixture,
   disconnectPrisma,
+  getPrisma,
   type TestFixture,
 } from "./helpers";
 import { describeIfMinio } from "./minio-probe";
@@ -60,6 +61,64 @@ async function putBytes(url: string, body: Buffer, mimeType: string) {
 }
 
 describe("attachmentRouter", () => {
+  it("allows chat-message uploads for the owning human thread", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, profileKey: `chat-${Date.now()}`, name: "Chat Agent" },
+    });
+    const thread = await prisma.chatThread.create({
+      data: { workspaceId: fixture.workspace.id, userId: fixture.user.id, agentId: agent.id },
+    });
+    const message = await prisma.chatMessage.create({
+      data: { workspaceId: fixture.workspace.id, threadId: thread.id, role: "USER", body: "with file" },
+    });
+
+    const init = await caller.initUpload({
+      targetType: "chat-message",
+      targetId: message.id,
+      filename: "chat.txt",
+      mimeType: "text/plain",
+      size: 4,
+    });
+    expect(init.attachmentId).toBeTruthy();
+
+    const link = await caller.attachLink({
+      targetType: "chat-message",
+      targetId: message.id,
+      url: "https://example.com/context",
+      title: "Context link",
+    });
+    const rows = await caller.list({ targetType: "chat-message", targetId: message.id });
+    expect(rows.map((r) => r.id)).toContain(link.id);
+  });
+
+  it("rejects chat-message uploads from other thread participants", async () => {
+    const { fixture } = await setup();
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, profileKey: `chatx-${Date.now()}`, name: "Chat Agent" },
+    });
+    const thread = await prisma.chatThread.create({
+      data: { workspaceId: fixture.workspace.id, userId: fixture.user.id, agentId: agent.id },
+    });
+    const message = await prisma.chatMessage.create({
+      data: { workspaceId: fixture.workspace.id, threadId: thread.id, role: "USER", body: "owned by user1" },
+    });
+    const otherCtx = await buildContext(fixture, { asUserId: fixture.secondUser.id });
+    const otherCaller = attachmentRouter.createCaller(otherCtx);
+
+    await expect(
+      otherCaller.initUpload({
+        targetType: "chat-message",
+        targetId: message.id,
+        filename: "leak.txt",
+        mimeType: "text/plain",
+        size: 4,
+      }),
+    ).rejects.toThrow(/thread owner|agent/i);
+  });
+
   it("initUpload → finalize → list → download → delete", async () => {
     const { caller, fixture } = await setup();
     const issue = await createIssue(fixture);

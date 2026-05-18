@@ -135,7 +135,7 @@ function ChatMessageAttachments({ messageId }: { messageId: string }) {
   const images = rows.filter((a) => isImageMime(a.mimeType));
   const others = rows.filter((a) => !isImageMime(a.mimeType));
   return (
-    <div className="mt-1.5 space-y-1.5">
+    <div className="mt-1.5 space-y-1.5" data-testid="chat-message-attachments">
       {images.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {images.map((a) => (

@@ -8,6 +8,8 @@ import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
 import { ChatComposer } from "./chat-composer";
+import { uploadAttachmentFile } from "@/components/attachments/attachment-upload-client";
+import { toast } from "sonner";
 import { ChatMarkdown } from "./chat-markdown";
 import type { SlashCommandContext } from "@/lib/chat-slash-commands";
 
@@ -222,24 +224,71 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
       void utils.chat.threads.invalidate();
     },
   });
+  const createPendingM = trpc.chat.createPendingMessage.useMutation();
+  const dispatchM = trpc.chat.dispatchMessage.useMutation({
+    onSuccess: () => {
+      threadM.mutate({ agentId });
+      void utils.chat.threads.invalidate();
+    },
+  });
+  const initUploadM = trpc.attachment.initUpload.useMutation();
+  const finalizeM = trpc.attachment.finalize.useMutation();
+  const [pendingDraft, setPendingDraft] = useState<{ body: string; files: string[] } | null>(null);
 
   const ctx = useChatContext();
   const workspace = useMaybeWorkspace();
 
-  const handleSend = (body: string) => {
-    sendM.mutate({
-      agentId,
-      body,
-      context: {
-        route: ctx.route,
-        slug: ctx.slug,
-        issueId: ctx.issueId,
-        selectedIds: ctx.selectedIds,
-        pinnedRunIds: ctx.pinnedRunIds,
-        liveRunIds: ctx.liveRunIds,
-        visibleEntities: ctx.visibleEntities,
-      },
-    });
+  const currentContext = useMemo(
+    () => ({
+      route: ctx.route,
+      slug: ctx.slug,
+      issueId: ctx.issueId,
+      selectedIds: ctx.selectedIds,
+      pinnedRunIds: ctx.pinnedRunIds,
+      liveRunIds: ctx.liveRunIds,
+      visibleEntities: ctx.visibleEntities,
+    }),
+    [ctx.route, ctx.slug, ctx.issueId, ctx.selectedIds, ctx.pinnedRunIds, ctx.liveRunIds, ctx.visibleEntities],
+  );
+
+  const handleSend = async (body: string, files: File[] = []) => {
+    setPendingDraft({ body, files: files.map((f) => f.name || "attachment") });
+    try {
+      if (files.length === 0) {
+        await sendM.mutateAsync({
+          agentId,
+          body,
+          context: currentContext,
+        });
+        return;
+      }
+
+      const pending = await createPendingM.mutateAsync({
+        agentId,
+        body,
+        context: currentContext,
+      });
+      for (const file of files) {
+        await uploadAttachmentFile({
+          file,
+          targetType: "chat-message",
+          targetId: pending.messageId,
+          initUpload: initUploadM.mutateAsync,
+          finalize: finalizeM.mutateAsync,
+        });
+      }
+      await utils.attachment.list.invalidate({
+        targetType: "chat-message",
+        targetId: pending.messageId,
+      });
+      await dispatchM.mutateAsync({ messageId: pending.messageId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to send chat attachments";
+      toast.error(message);
+      throw err;
+    } finally {
+      setPendingDraft(null);
+    }
   };
 
   // Build slash-command context — stable reference via useMemo.
@@ -332,8 +381,9 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
     ? Date.now() - new Date(lastPersistedMessage.createdAt).getTime()
     : Infinity;
   // Also show while send is in flight (the draft bubble is present but not committed).
+  const composerBusy = sendM.isPending || createPendingM.isPending || initUploadM.isPending || finalizeM.isPending || dispatchM.isPending;
   const showThinking =
-    !sendM.isPending &&
+    !composerBusy &&
     !draft && // suppress static bubble when draft stream is active
     lastMessageIsUser &&
     lastMessageAge < 300_000; // 5 min
@@ -409,12 +459,16 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
         {displayRows.map((m) => (
           <ChatMessageBubble key={m.id} msg={m} agentName={agent?.name} />
         ))}
-        {sendM.isPending && (
+        {composerBusy && pendingDraft && (
           <ChatMessageBubble
             msg={{
               id: "_pending",
               role: "USER",
-              body: sendM.variables?.body ?? "",
+              body:
+                pendingDraft.body ||
+                (pendingDraft.files.length > 0
+                  ? pendingDraft.files.map((name) => `📎 ${name}`).join("\n")
+                  : ""),
               createdAt: new Date(),
               isDraft: true,
             }}
@@ -429,8 +483,8 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
       </div>
       <ChatComposer
         onSend={handleSend}
-        disabled={sendM.isPending}
-        isPending={sendM.isPending}
+        disabled={composerBusy}
+        isPending={composerBusy}
         placeholder={composerPlaceholder}
         banner={composerBanner}
         slashContext={slashContext}

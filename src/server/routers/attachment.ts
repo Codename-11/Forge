@@ -116,6 +116,14 @@ export const attachmentRouter = router({
   finalize: workspaceProcedure
     .input(finalizeInput)
     .mutation(async ({ ctx, input }) => {
+      const pending = await ctx.db.attachment.findFirst({
+        where: { id: input.attachmentId, workspaceId: ctx.workspaceId },
+        select: { targetType: true, targetId: true },
+      });
+      if (!pending || !pending.targetType || !pending.targetId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Attachment not found." });
+      }
+      await assertTargetInWorkspace(ctx, pending.targetType, pending.targetId);
       let finalized: Awaited<ReturnType<typeof finalizeAttachment>>;
       try {
         finalized = await finalizeAttachment({
@@ -238,6 +246,7 @@ export const attachmentRouter = router({
    * select it).
    */
   list: workspaceProcedure.input(listInput).query(async ({ ctx, input }) => {
+    await assertTargetInWorkspace(ctx, input.targetType, input.targetId);
     return ctx.db.attachment.findMany({
       where: {
         workspaceId: ctx.workspaceId,
@@ -351,7 +360,12 @@ export const attachmentRouter = router({
  * caller's workspace. Keeps attachments from ever referencing foreign rows.
  */
 async function assertTargetInWorkspace(
-  ctx: { db: PrismaClient; workspaceId: string },
+  ctx: {
+    db: PrismaClient;
+    workspaceId: string;
+    session?: { user?: { id?: string | null } } | null;
+    apiKey?: { linkedAgentId?: string | null } | null;
+  },
   targetType: string,
   targetId: string,
 ): Promise<void> {
@@ -383,6 +397,27 @@ async function assertTargetInWorkspace(
           where: { id: targetId, workspaceId },
           select: { id: true },
         });
+      case "chat-message": {
+        const message = await db.chatMessage.findFirst({
+          where: { id: targetId, workspaceId },
+          select: {
+            id: true,
+            thread: { select: { userId: true, agentId: true } },
+          },
+        });
+        if (!message) return null;
+        const sessionUserId = ctx.session?.user?.id ?? null;
+        const linkedAgentId = ctx.apiKey?.linkedAgentId ?? null;
+        const ownsThread = Boolean(sessionUserId && sessionUserId === message.thread.userId);
+        const isThreadAgent = Boolean(linkedAgentId && linkedAgentId === message.thread.agentId);
+        if (!ownsThread && !isThreadAgent) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only the chat thread owner or linked agent may attach to this message.",
+          });
+        }
+        return { id: message.id };
+      }
       default:
         return null;
     }
