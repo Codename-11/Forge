@@ -1502,12 +1502,27 @@ describe("mcp — awareness tools (Stream BA)", () => {
         agentId: agent.id,
       },
     });
-    await prisma.chatMessage.create({
+    const message = await prisma.chatMessage.create({
       data: {
         workspaceId: f.workspace.id,
         threadId: thread.id,
         role: "USER",
         body: "ping",
+        dispatchedAt: new Date(),
+      },
+    });
+    const attachment = await prisma.attachment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        targetType: "chat-message",
+        targetId: message.id,
+        kind: "LINK",
+        filename: "Runbook",
+        mimeType: "text/url",
+        size: 0,
+        url: "https://example.com/runbook",
+        externalUrl: "https://example.com/runbook",
+        linkTitle: "Runbook",
       },
     });
 
@@ -1518,10 +1533,13 @@ describe("mcp — awareness tools (Stream BA)", () => {
       ctxAddr,
     )) as {
       thread: { id: string };
-      messages: Array<{ body: string }>;
+      messages: Array<{ body: string; attachments: Array<{ id: string; filename: string; externalUrl: string | null }> }>;
     };
     expect(res.thread.id).toBe(thread.id);
     expect(res.messages[0].body).toBe("ping");
+    expect(res.messages[0].attachments).toMatchObject([
+      { id: attachment.id, filename: "Runbook", externalUrl: "https://example.com/runbook" },
+    ]);
 
     const { ctx: ctxStranger } = buildMcpCtx(f, {
       linkedAgentId: stranger.id,
@@ -1582,6 +1600,26 @@ describe("mcp — awareness tools (Stream BA)", () => {
         agentId: agent.id,
       },
     });
+    const message = await prisma.chatMessage.create({
+      data: {
+        workspaceId: f.workspace.id,
+        threadId: thread.id,
+        role: "USER",
+        body: "bundle ping",
+        dispatchedAt: new Date(),
+      },
+    });
+    const attachment = await prisma.attachment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        targetType: "chat-message",
+        targetId: message.id,
+        filename: "bundle.png",
+        mimeType: "image/png",
+        size: 10,
+        url: "chat-message/test/bundle.png",
+      },
+    });
     const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
     const bundle = (await call(
       "agent.context.bundle",
@@ -1590,11 +1628,15 @@ describe("mcp — awareness tools (Stream BA)", () => {
     )) as {
       workspace: { id: string };
       thread: { id: string };
-      messages: unknown[];
+      messages: Array<{ id: string; attachments: Array<{ id: string; filename: string; mimeType: string }> }>;
     };
     expect(bundle.workspace.id).toBe(f.workspace.id);
     expect(bundle.thread.id).toBe(thread.id);
     expect(Array.isArray(bundle.messages)).toBe(true);
+    expect(bundle.messages[0]).toMatchObject({
+      id: message.id,
+      attachments: [{ id: attachment.id, filename: "bundle.png", mimeType: "image/png" }],
+    });
   });
 
   it("agent.context.bundle requires exactly one of issueId/threadId", async () => {

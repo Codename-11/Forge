@@ -3,6 +3,7 @@ import { useCallback } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { attachmentMarkdownRef } from "./issue-attachments-panel";
+import { uploadAttachmentFile, type AttachmentUploadTargetType } from "./attachment-upload-client";
 
 /**
  * Shared upload primitive used by both `usePasteUpload` and
@@ -15,12 +16,7 @@ import { attachmentMarkdownRef } from "./issue-attachments-panel";
  * semantics, error-toast copy, and the markdown insertion shape — keeps
  * the UX of attaching from clipboard vs. dropping a file identical.
  */
-export type AttachmentTargetType =
-  | "issue"
-  | "comment"
-  | "project"
-  | "initiative"
-  | "cycle";
+export type AttachmentTargetType = AttachmentUploadTargetType;
 
 export type UploadAndInsertArgs = {
   file: File;
@@ -44,20 +40,13 @@ export function useUploadTarget(args: {
     async ({ file, insertAt }: UploadAndInsertArgs) => {
       const at = insertAt ?? value.length;
       try {
-        const init = await initUpload.mutateAsync({
+        const init = await uploadAttachmentFile({
+          file,
           targetType,
           targetId,
-          filename: file.name || "pasted-file",
-          mimeType: file.type || "application/octet-stream",
-          size: file.size,
+          initUpload: initUpload.mutateAsync,
+          finalize: finalize.mutateAsync,
         });
-        const put = await fetch(init.uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": file.type || "application/octet-stream" },
-          body: file,
-        });
-        if (!put.ok) throw new Error(`Upload failed (${put.status})`);
-        await finalize.mutateAsync({ attachmentId: init.attachmentId });
         const ref = attachmentMarkdownRef({
           attachmentId: init.attachmentId,
           filename: file.name || "attachment",

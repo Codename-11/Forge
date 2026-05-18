@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ChatRole, EventKind } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -17,6 +18,40 @@ const ChatContextSchema = z.object({
   pinnedRunIds: z.array(z.string()).optional(),
   liveRunIds: z.array(z.string()).optional(),
 }).partial();
+
+const chatAttachmentSelect = {
+  id: true,
+  filename: true,
+  mimeType: true,
+  size: true,
+  kind: true,
+  externalUrl: true,
+  targetType: true,
+  targetId: true,
+  createdAt: true,
+} as const;
+
+function chatEventPayload(input: {
+  threadId: string;
+  messageId: string;
+  agentId: string;
+  role: "USER" | "AGENT";
+  body?: string;
+  context?: Prisma.InputJsonValue | null;
+  sourceRunId?: string | null;
+  attachments?: Prisma.InputJsonValue;
+}): Prisma.InputJsonObject {
+  return {
+    threadId: input.threadId,
+    messageId: input.messageId,
+    agentId: input.agentId,
+    role: input.role,
+    ...(input.body !== undefined ? { body: input.body } : {}),
+    ...(input.context !== undefined ? { context: input.context } : {}),
+    ...(input.sourceRunId !== undefined ? { sourceRunId: input.sourceRunId } : {}),
+    attachments: (input.attachments ?? []) as Prisma.InputJsonValue,
+  };
+}
 
 export const chatRouter = router({
   /**
@@ -67,7 +102,10 @@ export const chatRouter = router({
         update: {},
       });
       const messages = await ctx.db.chatMessage.findMany({
-        where: { threadId: thread.id },
+        where: {
+          threadId: thread.id,
+          OR: [{ role: { not: ChatRole.USER } }, { dispatchedAt: { not: null } }],
+        },
         orderBy: { createdAt: "asc" },
         take: 50,
       });
@@ -75,8 +113,9 @@ export const chatRouter = router({
     }),
 
   /**
-   * Send a user message. Persists, fans out via CHAT_MESSAGE_POSTED so
-   * the audit/webhook layer dispatches to the agent.
+   * Send a user text-only message. This remains the immediate path: it
+   * persists, marks dispatchedAt, then fans out CHAT_MESSAGE_POSTED so
+   * webhooks/agents can respond.
    */
   send: workspaceProcedure
     .input(z.object({
@@ -86,6 +125,7 @@ export const chatRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       return ctx.db.$transaction(async (tx) => {
+        const now = new Date();
         const thread = await tx.chatThread.upsert({
           where: {
             workspaceId_userId_agentId: {
@@ -98,9 +138,9 @@ export const chatRouter = router({
             workspaceId: ctx.workspaceId,
             userId: ctx.session.user.id,
             agentId: input.agentId,
-            lastMessageAt: new Date(),
+            lastMessageAt: now,
           },
-          update: { lastMessageAt: new Date() },
+          update: { lastMessageAt: now },
         });
         const message = await tx.chatMessage.create({
           data: {
@@ -109,6 +149,7 @@ export const chatRouter = router({
             role: ChatRole.USER,
             body: input.body,
             contextSnapshot: (input.context ?? {}) as never,
+            dispatchedAt: now,
           },
         });
         await recordChange(tx, {
@@ -120,28 +161,143 @@ export const chatRouter = router({
           eventKind: EventKind.CHAT_MESSAGE_POSTED,
           subjectType: "chat-thread",
           subjectId: thread.id,
-          payload: {
+          payload: chatEventPayload({
             threadId: thread.id,
             messageId: message.id,
             agentId: input.agentId,
             role: "USER",
             body: input.body,
             context: input.context ?? {},
-          },
+            attachments: [] as Prisma.InputJsonArray,
+          }),
         });
         return { threadId: thread.id, messageId: message.id };
       });
     }),
 
   /**
+   * Create a USER message without dispatching it yet. Attachment-aware UI
+   * uses this, uploads/finalizes files against targetType=chat-message,
+   * then calls dispatchMessage. This removes the race where agents were
+   * invoked before the inbound attachments existed.
+   */
+  createPendingMessage: workspaceProcedure
+    .input(z.object({
+      agentId: idString,
+      body: z.string().max(8000).default(""),
+      context: ChatContextSchema.optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const agent = await ctx.db.agent.findFirst({
+        where: { id: input.agentId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
+      const thread = await ctx.db.chatThread.upsert({
+        where: {
+          workspaceId_userId_agentId: {
+            workspaceId: ctx.workspaceId,
+            userId: ctx.session.user.id,
+            agentId: input.agentId,
+          },
+        },
+        create: {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.session.user.id,
+          agentId: input.agentId,
+        },
+        update: {},
+      });
+      const message = await ctx.db.chatMessage.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          threadId: thread.id,
+          role: ChatRole.USER,
+          body: input.body,
+          contextSnapshot: (input.context ?? {}) as never,
+          dispatchedAt: null,
+        },
+      });
+      return { threadId: thread.id, messageId: message.id };
+    }),
+
+  /**
+   * Dispatch a previously-created pending USER message once all required
+   * chat-message attachments are finalized. Idempotent: duplicate calls do
+   * not emit duplicate CHAT_MESSAGE_POSTED events.
+   */
+  dispatchMessage: workspaceProcedure
+    .input(z.object({ messageId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        const message = await tx.chatMessage.findFirst({
+          where: { id: input.messageId, workspaceId: ctx.workspaceId },
+          include: { thread: { select: { id: true, userId: true, agentId: true } } },
+        });
+        if (!message) throw new TRPCError({ code: "NOT_FOUND", message: "Message not found" });
+        if (message.role !== ChatRole.USER) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Only user messages can be dispatched" });
+        }
+        if (message.thread.userId !== ctx.session.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Only the thread owner may dispatch this message" });
+        }
+        const attachments = await tx.attachment.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            targetType: "chat-message",
+            targetId: message.id,
+            NOT: { url: { startsWith: "pending:" } },
+          },
+          orderBy: { createdAt: "asc" },
+          select: chatAttachmentSelect,
+        });
+        if (message.body.trim().length === 0 && attachments.length === 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Message must include text or at least one finalized attachment",
+          });
+        }
+        if (message.dispatchedAt) {
+          return { threadId: message.thread.id, messageId: message.id, dispatched: false };
+        }
+        const now = new Date();
+        const updated = await tx.chatMessage.updateMany({
+          where: { id: message.id, dispatchedAt: null },
+          data: { dispatchedAt: now },
+        });
+        if (updated.count === 0) {
+          return { threadId: message.thread.id, messageId: message.id, dispatched: false };
+        }
+        await tx.chatThread.update({
+          where: { id: message.thread.id },
+          data: { lastMessageAt: now },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "ChatMessage",
+          entityId: message.id,
+          action: "create",
+          eventKind: EventKind.CHAT_MESSAGE_POSTED,
+          subjectType: "chat-thread",
+          subjectId: message.thread.id,
+          payload: chatEventPayload({
+            threadId: message.thread.id,
+            messageId: message.id,
+            agentId: message.thread.agentId,
+            role: "USER",
+            body: message.body,
+            context: message.contextSnapshot ?? {},
+            attachments: attachments as unknown as Prisma.InputJsonArray,
+          }),
+        });
+        return { threadId: message.thread.id, messageId: message.id, dispatched: true };
+      });
+    }),
+
+  /**
    * Agent-side append. Restricted to API keys whose linkedAgentId
    * matches the thread's agent.
-   *
-   * NOTE: ctx.apiKey exists on BaseContext (nullable). We read
-   * ctx.apiKey?.linkedAgentId. On session-authenticated requests
-   * (humans) this is null, so the FORBIDDEN check fires. Agents
-   * calling this procedure must authenticate via an ApiKey that has
-   * linkedAgentId set to the target agent's id.
    */
   appendAgentMessage: workspaceProcedure
     .input(z.object({
@@ -182,13 +338,13 @@ export const chatRouter = router({
           eventKind: EventKind.CHAT_MESSAGE_POSTED,
           subjectType: "chat-thread",
           subjectId: thread.id,
-          payload: {
+          payload: chatEventPayload({
             threadId: thread.id,
             messageId: message.id,
             agentId: thread.agentId,
             role: "AGENT",
             sourceRunId: input.sourceRunId ?? null,
-          },
+          }),
         });
         return { messageId: message.id };
       });
@@ -212,6 +368,7 @@ export const chatRouter = router({
       return ctx.db.chatMessage.findMany({
         where: {
           threadId: input.threadId,
+          OR: [{ role: { not: ChatRole.USER } }, { dispatchedAt: { not: null } }],
           ...(input.before ? { createdAt: { lt: input.before } } : {}),
         },
         orderBy: { createdAt: "desc" },

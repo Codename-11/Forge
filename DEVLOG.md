@@ -2,6 +2,31 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-18 — Chat Attachments + Rich Rendering v1
+
+### Summary
+
+Implemented chat-message attachments end-to-end using the existing polymorphic `Attachment` + MinIO system. Chat messages with files now use a deferred send flow: create a pending `ChatMessage`, upload/finalize attachments against `targetType = "chat-message"`, then emit `CHAT_MESSAGE_POSTED` only after attachments are visible to agents.
+
+### What changed
+
+- Added `ChatMessage.dispatchedAt` plus migration `0029_chat_message_dispatched_at`.
+- Added `chat.createPendingMessage` and `chat.dispatchMessage`; kept `chat.send` as the immediate text-only path.
+- Added secure `chat-message` target validation to attachment upload/list/download/finalize paths so only the thread owner or linked thread agent can attach/read.
+- Included finalized chat attachments in `CHAT_MESSAGE_POSTED` payloads and MCP `chat.getThread` / `agent.context.bundle` thread context.
+- Added composer paperclip, paste, and drag/drop file staging with deferred upload/finalize/dispatch.
+- Rendered chat-message image thumbnails and file/link chips inline on bubbles via the existing attachment chip/lightbox system.
+- Added unit/integration coverage for deferred dispatch, attachment validation, MCP context metadata, upload helper sequencing, and an opt-in Playwright browser smoke for seeded chat UI.
+
+### Verification
+
+- `pnpm prisma migrate deploy` applied `0029_chat_message_dispatched_at` locally.
+- `pnpm lint` → pass.
+- `pnpm typecheck` → pass.
+- `pnpm test` → 35 files / 270 tests passed.
+- `pnpm exec playwright test tests/e2e/chat-attachments-rich-rendering.spec.ts` → 1 skipped by default; opt-in with `FORGE_E2E_CHAT_ATTACHMENTS=1` for seeded authenticated UI.
+- `pnpm build` → pass.
+
 ## 2026-05-18 — Deploy Forge worker + enable agent-run stale reaping
 
 ### Summary
