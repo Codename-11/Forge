@@ -10,6 +10,28 @@
 
 ---
 
+**Execution status — updated 2026-05-19 11:10 EDT:** Core Agentic Work OS substrate is shipped, verified, pushed, migrated, and deployed to live Forge at commit `f911cff23c3e80e72de79a6f1687da900826bd45`. Production `forge` and `forge-worker` were rebuilt/recreated from `/home/bailey/docker/forge/docker-compose.yaml`; migrations `0032`–`0038` applied successfully; live smoke checks passed for signin, authenticated route redirects, worker boot, and MCP exposure/callability. The remaining work is product-surface completion on top of the new primitives, not unfinished schema/MCP foundation.
+
+## Execution status matrix
+
+| Area | Status | Shipped evidence | Remaining / deferred |
+|------|--------|------------------|----------------------|
+| Wave 0 — baseline and safety rails | ✅ Complete | Plan committed, baseline verified during rollout. | None. |
+| Wave 1 — entity refs / hydration foundation | ✅ Complete | `src/lib/entity-ref.ts`, `src/server/services/entity-hydration.ts`, tests. | Safe rich renderer unification may still need a follow-up audit if UI inconsistencies appear. |
+| Wave 2 — Artifact primitive v1 | ✅ Complete | `Artifact` / `ArtifactVersion`, artifact router/service/pages, MCP `artifacts.*`, migration `0032`. | More artifact templates and richer artifact creation UX are follow-ups. |
+| Wave 3 — Capture Sheet / promotion | 🟡 Partial | Chat-message promote-to-artifact affordance shipped. | Full CaptureSheet UI for issue / artifact / note / action-request capture remains. |
+| Wave 4 — ContextSet / context inspector | 🟡 Partial | `ContextSet` schema/service/router/MCP and hydration shipped, migration `0033`. | Full operator-facing context inspector/editor polish remains. |
+| Wave 5 — agent completion contract | ✅ Complete | Issue/run completion fields, MCP/run completion path, context bundle additions, migration `0034`. | UI polish around expected output/checklists can continue. |
+| Wave 6 — ExecutionPlan / ExecutionStep | 🟡 Partial | Schema/service/router/MCP foundation shipped, migration `0035`. | Human plan-builder UI, step assignment surface, progress timeline remain. |
+| Wave 7 — AgentCrew / ReviewGate | 🟡 Partial | Schema/service/router/MCP foundation shipped, migration `0036`. | Crew admin UI and ReviewGate approval surface remain. |
+| Wave 8 — ActionRequest | ✅ Core complete | Schema/service/router/MCP and Inbox/Command Center integration shipped, migration `0037`. | Richer UI handling and notification ergonomics remain. |
+| Wave 9 — Command Center v0 | ✅ Complete v0 | `/w/[slug]/command-center`, `g j`, active/stalled/due/artifact/action aggregations. | Cross-workspace breadth/polish and operator actions can expand. |
+| Wave 10 — WorkspaceCanvas | 🟡 Foundation complete | Schema/router/read-only MCP `canvases.*`, migration `0038`. | Visual pan/zoom canvas viewer and mutation MCP tools remain. |
+| Wave 11 — MCP/Hermes integration | ✅ Complete for shipped primitives | 115 live MCP tools; new primitive list/get calls verified; `agent.context.bundle` extended. | Canvas mutation tools and deeper execution prompt wiring remain. |
+| Wave 12 — docs/deploy/live verification | ✅ Complete | Docs/DEVLOG updated, `pnpm test`/typecheck/lint/build passed pre-deploy, live services rebuilt and smoke-tested. | Keep this status matrix current as follow-ups land. |
+
+---
+
 ## 0. Non-negotiables
 
 1. **Canonical content lives in canonical tables.** Canvas/cards/promotions/context sets store references and layout/selection metadata; they do not duplicate issue/chat/artifact bodies.
@@ -721,76 +743,67 @@ Commit: `docs: document agentic work os primitives`
 
 ---
 
-## 4. Suggested single-goal prompt for Claude Code
+## 4. Next-session handoff for Claude Code
 
-Paste this into Claude Code from `~/forge` on Docker-Server:
+**One-paragraph handoff to paste first:** Forge Agentic Work OS core substrate is already shipped and live at `f911cff23c3e80e72de79a6f1687da900826bd45`; read `CLAUDE.md`, `DEVLOG.md`, and `docs/audits/2026-05-19-forge-agentic-work-os-execution-plan.md` first, then treat that plan as the canonical status/remaining-work map rather than restarting the 12-wave implementation. The completed foundation includes Artifacts, ContextSets, completion contracts, ExecutionPlans, AgentCrews, ReviewGates, ActionRequests, Command Center v0, WorkspaceCanvas schema/read MCP, migrations `0032`–`0038`, and live Docker deployment; the next session should focus only on remaining product surfaces: full CaptureSheet, ExecutionPlan UI, AgentCrew/ReviewGate admin/approval UI, WorkspaceCanvas viewer, and safe canvas mutation MCP tools, preserving the plan's constraints around workspace scoping, audit/activity events, service/router paths, polymorphic attachments, and Forge design tokens.
+
+Paste this fuller prompt into Claude Code from `~/forge` on Docker-Server when continuing the remaining product-surface work:
 
 ```text
-You are Claude Code on Docker-Server working in /home/bailey/forge. Implement the Forge Agentic Work OS roadmap as a single long-running, agent-team-style execution. Read CLAUDE.md, DEVLOG.md, docs/audits/2026-05-19-forge-agentic-work-os-execution-plan.md, prisma/schema.prisma, src/server/services/mcp.ts, src/server/routers/chat.ts, src/server/services/chat-context.ts, src/server/services/storage.ts, and src/components/sidebar-nav.ts before changing code.
+You are Claude Code on Docker-Server working in /home/bailey/forge. Continue, do not restart, the Forge Agentic Work OS roadmap. Read CLAUDE.md, DEVLOG.md, and docs/audits/2026-05-19-forge-agentic-work-os-execution-plan.md before changing code; use that plan's Execution status matrix as the source of truth for what is complete vs remaining.
 
-Goal: evolve Forge from PM + chat + agents into a cohesive agentic work OS. Add or harden these primitives and surfaces in safe vertical slices: shared entity refs and unified renderer; Artifact; Capture Sheet/promotions; ContextSet/context inspector; agent completion contract; ExecutionPlan/ExecutionStep; AgentCrew/ReviewGate; ActionRequest/Mention; cross-workspace Command Center; WorkspaceCanvas spatial board; MCP/Hermes context exposure; docs/deploy verification.
+Current live baseline: commit f911cff23c3e80e72de79a6f1687da900826bd45 is pushed and deployed. Core primitives and migrations 0032-0038 are live: Artifacts, ContextSets, completion contracts, ExecutionPlans, AgentCrews, ReviewGates, ActionRequests, Command Center v0, WorkspaceCanvas schema/read MCP, and MCP/Hermes context exposure. Production forge and forge-worker were rebuilt/recreated from /home/bailey/docker/forge/docker-compose.yaml and smoke-tested.
 
-Constraints:
-- Preserve existing Issues/Chat/Agents/Hermes delivery behavior.
-- Use tRPC/services/MCP paths; do not direct-mutate production DB outside Prisma migrations/deploy verification.
-- Every tenant row needs workspaceId and membership/resource checks.
-- Reuse polymorphic Attachment + MinIO for files/links.
-- Canvas stores layout + entity refs only, never duplicated canonical content.
-- Emit AuditLog/ActivityEvent/NotificationState where existing patterns require it.
-- Server-side product state only; no localStorage as source of truth.
-- Keep UI mobile-friendly and aligned to Forge dark/warm-earthy design.
-- Commit after each working wave with tests.
+Your goal is to implement the remaining product surfaces on top of that shipped substrate, in this priority order unless DEVLOG shows newer operator direction: (1) full CaptureSheet UI for issue/artifact/note/action-request capture and promotion, (2) ExecutionPlan builder/progress/step-assignment UI, (3) AgentCrew admin and ReviewGate approval/resolve UI, (4) WorkspaceCanvas visual viewer, (5) safe audited canvas mutation MCP tools.
 
-Execution style:
-- Use internal subagents/agent teams for schema/backend/frontend/MCP/QA when helpful.
-- Work wave-by-wave from the plan; do not attempt a giant unverified patch.
-- For every wave: write tests first where practical, implement, run targeted tests, then commit.
-- If scope gets too large, ship the first coherent subset with docs and TODOs rather than leaving the app broken.
+Constraints: preserve existing Issues/Chat/Agents/Hermes delivery behavior; use tRPC/services/MCP paths rather than ad hoc DB mutation; keep every tenant row workspace-scoped; reuse polymorphic Attachment + MinIO; Canvas stores layout + refs only, not duplicated canonical content; emit AuditLog/ActivityEvent/NotificationState where existing patterns require it; no localStorage as product source of truth; keep UI mobile-friendly and aligned to Forge dark/warm-earthy tokens.
 
-Minimum acceptance for this run:
-1. New plan/docs committed.
-2. Shared entity refs + renderer foundation shipped.
-3. Artifact primitive with attachments and promote-from-chat/comment/note shipped.
-4. ContextSet/context inspector + agent completion contract shipped.
-5. At least one of ExecutionPlan/ActionRequest/CommandCenter/WorkspaceCanvas shipped as a functional v0, with the rest scaffolded behind safe docs/TODOs if necessary.
-6. MCP/context bundle updated for every shipped primitive.
-7. `pnpm test`, `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck`, `NODE_OPTIONS=--max-old-space-size=4096 pnpm lint`, and `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` pass before deployment.
-8. DEVLOG updated with what shipped, what was deferred, migrations, and verification.
-
-Start by printing a short wave plan and current git/test baseline, then proceed without asking for more clarification unless a destructive deployment/secret action is required.
+Execution style: start by printing the current git status, latest DEVLOG entry, and which remaining surface you will tackle first. Work in small commits with tests. Before deploy, run pnpm test, NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck, NODE_OPTIONS=--max-old-space-size=4096 pnpm lint, and NODE_OPTIONS=--max-old-space-size=4096 pnpm build. Update DEVLOG and this plan's status matrix with completed/remaining changes.
 ```
 
 ---
 
-## 5. Risk / cut-line guidance
+## 5. Remaining-work priority / cut-line guidance
 
-If the run is getting too large, cut in this order:
+The foundation is deployed; do **not** spend the next run re-implementing schema/MCP primitives unless tests prove a regression. Cut remaining UI work in this order:
 
-1. Must ship: entity refs, renderer foundation, Artifact, promotion, ContextSet, completion contract.
-2. Strong next: ActionRequest and Command Center because they improve daily operation immediately.
-3. Then: ExecutionPlan/ExecutionStep because multi-agent work needs it.
-4. Then: AgentCrew/ReviewGate because it formalizes team execution and safety.
-5. Last in this run: WorkspaceCanvas because it is high-upside but should sit on stable Artifact/Context/Plan primitives.
+1. **Must ship next:** full CaptureSheet, because it is the missing intent-ingest bridge across Issues / Artifacts / Notes / ActionRequests.
+2. **Strong next:** ExecutionPlan UI, because the schema/MCP exists but humans need to see and steer plans.
+3. **Then:** AgentCrew admin + ReviewGate approval UI, because team execution and safety gates need operator controls.
+4. **Then:** WorkspaceCanvas visual viewer, starting read-only / entity-backed.
+5. **Last:** Canvas mutation MCP tools, only after viewer semantics and audit/event paths are clear.
 
-Do not let Canvas consume the whole run. Tiny whiteboard hydra is charming until it eats the PM system.
+Do not let Canvas consume the whole follow-up. Tiny whiteboard hydra is charming until it eats the PM system.
 
 ---
 
 ## 6. Final verification checklist
 
-- [ ] Migrations apply cleanly.
-- [ ] Prisma client regenerated.
-- [ ] New routers have authorization tests.
-- [ ] MCP schemas validate and resource narrowing still works.
-- [ ] Existing chat/Hermes delivery tests pass.
-- [ ] Artifact attachment upload/finalize/list works.
-- [ ] Promotion from chat/comment/note preserves source refs.
-- [ ] Agent context bundle includes shipped primitives.
-- [ ] UI routes load at desktop and mobile widths.
-- [ ] Worker still boots.
-- [ ] `pnpm test` pass.
-- [ ] `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` pass.
-- [ ] `NODE_OPTIONS=--max-old-space-size=4096 pnpm lint` pass.
-- [ ] `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` pass.
-- [ ] DEVLOG updated.
-- [ ] Git status clean except intentional untracked artifacts.
+### Completed for deployed foundation (`f911cff`, 2026-05-19)
+
+- [x] Migrations apply cleanly in production (`0032`–`0038`).
+- [x] Prisma client regenerated during build.
+- [x] New routers have authorization/resource tests for shipped primitives.
+- [x] MCP schemas validate and resource narrowing still works for shipped primitives.
+- [x] Existing chat/Hermes delivery tests passed before deployment.
+- [x] Artifact primitive and promote-to-artifact path shipped.
+- [x] Agent context bundle includes shipped primitives.
+- [x] Core UI routes build and protected live routes redirect to signin when unauthenticated.
+- [x] Worker boots live (`forge-worker` logs `workers running`).
+- [x] `pnpm test` passed pre-deploy: 339/339.
+- [x] `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` passed pre-deploy.
+- [x] `NODE_OPTIONS=--max-old-space-size=4096 pnpm lint` passed pre-deploy.
+- [x] `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` passed pre-deploy.
+- [x] DEVLOG updated.
+- [x] `origin/master` matches deployed commit `f911cff23c3e80e72de79a6f1687da900826bd45`.
+
+### Still required for follow-up product surfaces
+
+- [ ] Full CaptureSheet UI implemented and tested.
+- [ ] ExecutionPlan UI implemented and tested.
+- [ ] AgentCrew admin UI implemented and tested.
+- [ ] ReviewGate approval/resolve UI implemented and tested.
+- [ ] WorkspaceCanvas visual viewer implemented and tested at desktop/mobile widths.
+- [ ] Canvas mutation MCP tools implemented only after audited service paths exist.
+- [ ] Follow-up DEVLOG entry updates completed/deferred status.
+- [ ] Follow-up deploy smoke verifies web, worker, MCP, and relevant authenticated routes.
