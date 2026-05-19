@@ -3,7 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Bot, Clock3, ImageIcon, MessageSquare, Paperclip, Radio, Settings2 } from "lucide-react";
+import {
+  Archive,
+  Bot,
+  Clock3,
+  ImageIcon,
+  MessageSquare,
+  Paperclip,
+  Radio,
+  Search,
+  Settings2,
+  X,
+} from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { ChatThreadView } from "@/components/mission-control/chat-thread";
@@ -12,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
+import { ChatStatusRail } from "@/components/chat/chat-status-rail";
 
 type AgentLite = {
   id: string;
@@ -56,6 +68,8 @@ function statusMeta(input: {
   return { label: "offline", tone: "muted" as const };
 }
 
+type ThreadStateFilter = "all" | "waiting" | "stalled" | "has_attachments";
+
 function AgentGlyph({ agent, active }: { agent: AgentLite; active?: boolean }) {
   return <AgentAvatar agent={agent} active={active} size="md" shape="rounded" />;
 }
@@ -66,14 +80,25 @@ export function ChatWorkspaceSurface() {
   const searchParams = useSearchParams();
   const utils = trpc.useUtils();
   const threadParam = searchParams.get("thread");
+  const [query, setQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState<ThreadStateFilter>("all");
+  const [archived, setArchived] = useState(false);
+  const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
 
-  const { data: threads, isLoading: threadsLoading } = trpc.chat.threads.useQuery(undefined, {
-    staleTime: 20_000,
-  });
+  const { data: threads, isLoading: threadsLoading } = trpc.chat.threads.useQuery(
+    { query: query.trim() || undefined, state: stateFilter, archived },
+    { staleTime: 20_000 },
+  );
   const { data: agents, isLoading: agentsLoading } = trpc.agent.list.useQuery(
     { includeArchived: false },
     { staleTime: 60_000 },
   );
+  const archiveM = trpc.chat.archiveThread.useMutation({
+    onSuccess: () => void utils.chat.threads.invalidate(),
+  });
+  const restoreM = trpc.chat.restoreThread.useMutation({
+    onSuccess: () => void utils.chat.threads.invalidate(),
+  });
 
   useRealtime((evt) => {
     if (evt.subjectType === "chat-thread" || evt.subjectType === "chat-thread-stream") {
@@ -124,10 +149,12 @@ export function ChatWorkspaceSurface() {
   const openThread = (threadId: string, agentId: string) => {
     setSelectedAgentId(agentId);
     router.replace(`/w/${ws.slug}/chat?thread=${encodeURIComponent(threadId)}`);
+    setMobilePickerOpen(false);
   };
   const startAgent = (agentId: string) => {
     setSelectedAgentId(agentId);
     router.replace(`/w/${ws.slug}/chat`);
+    setMobilePickerOpen(false);
   };
 
   const hasRows = (threads?.length ?? 0) > 0 || starterAgents.length > 0;
@@ -154,9 +181,63 @@ export function ChatWorkspaceSurface() {
                 <MessageSquare className="h-4 w-4 text-ember" />
                 Conversations
               </div>
-              <p className="mt-1 text-subtitle text-muted-foreground">
+              <p className="text-subtitle mt-1 text-muted-foreground">
                 Recent operator ⇄ agent threads in this workspace.
               </p>
+              <div className="mt-3 flex items-center gap-1 rounded-md border border-border bg-background/70 px-2 py-1">
+                <Search className="h-3.5 w-3.5 text-muted-foreground" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search chats…"
+                  className="text-meta min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/60"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    onClick={() => setQuery("")}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {(
+                  [
+                    ["all", "All"],
+                    ["waiting", "Waiting"],
+                    ["stalled", "Stalled"],
+                    ["has_attachments", "Files"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setStateFilter(value)}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[0.625rem]",
+                      stateFilter === value
+                        ? "border-ember/40 bg-ember/10 text-ember"
+                        : "border-border bg-card/40 text-muted-foreground",
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setArchived((v) => !v)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[0.625rem]",
+                    archived
+                      ? "border-ember/40 bg-ember/10 text-ember"
+                      : "border-border bg-card/40 text-muted-foreground",
+                  )}
+                >
+                  Archived
+                </button>
+              </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {(threadsLoading || agentsLoading) && !hasRows ? (
@@ -168,10 +249,12 @@ export function ChatWorkspaceSurface() {
               ) : !hasRows ? (
                 <div className="rounded-lg border border-dashed border-border bg-card/40 p-4 text-center">
                   <Bot className="mx-auto h-7 w-7 text-muted-foreground/60" />
-                  <div className="mt-2 text-sm font-medium text-foreground">No conversations yet</div>
-                  <p className="mt-1 text-meta text-muted-foreground">
-                    Chat is where agent conversations and file-backed prompts appear.
-                    Add an agent, then send a message with context or attachments.
+                  <div className="mt-2 text-sm font-medium text-foreground">
+                    No conversations yet
+                  </div>
+                  <p className="text-meta mt-1 text-muted-foreground">
+                    Chat is where agent conversations and file-backed prompts appear. Add an agent,
+                    then send a message with context or attachments.
                   </p>
                 </div>
               ) : (
@@ -203,10 +286,15 @@ export function ChatWorkspaceSurface() {
                                 <span className="truncate text-sm font-medium text-foreground">
                                   {thread.agent.name}
                                 </span>
-                                <span className="text-id text-muted-foreground">@{thread.agent.profileKey}</span>
+                                <span className="text-id text-muted-foreground">
+                                  @{thread.agent.profileKey}
+                                </span>
                               </div>
-                              <p className="mt-0.5 truncate text-meta text-muted-foreground">
-                                {truncate(latest?.body, latest?.attachmentCount ? "Attachment prompt" : "No messages yet")}
+                              <p className="text-meta mt-0.5 truncate text-muted-foreground">
+                                {truncate(
+                                  latest?.body,
+                                  latest?.attachmentCount ? "Attachment prompt" : "No messages yet",
+                                )}
                               </p>
                               <div className="mt-1 flex items-center gap-2 text-[0.6875rem] text-muted-foreground/80">
                                 <span className="flex items-center gap-1">
@@ -215,7 +303,11 @@ export function ChatWorkspaceSurface() {
                                 </span>
                                 {latest?.attachmentCount ? (
                                   <span className="flex items-center gap-1">
-                                    {latest.hasImageAttachment ? <ImageIcon className="h-3 w-3" /> : <Paperclip className="h-3 w-3" />}
+                                    {latest.hasImageAttachment ? (
+                                      <ImageIcon className="h-3 w-3" />
+                                    ) : (
+                                      <Paperclip className="h-3 w-3" />
+                                    )}
                                     {latest.attachmentCount}
                                   </span>
                                 ) : null}
@@ -260,8 +352,10 @@ export function ChatWorkspaceSurface() {
                           >
                             <AgentGlyph agent={agent} active={active} />
                             <div className="min-w-0 flex-1">
-                              <div className="truncate text-sm font-medium text-foreground">{agent.name}</div>
-                              <div className="flex items-center gap-2 text-meta text-muted-foreground">
+                              <div className="truncate text-sm font-medium text-foreground">
+                                {agent.name}
+                              </div>
+                              <div className="text-meta flex items-center gap-2 text-muted-foreground">
                                 <span className="text-id">@{agent.profileKey}</span>
                                 <span className="flex items-center gap-1">
                                   <Radio className="h-3 w-3" />
@@ -280,15 +374,97 @@ export function ChatWorkspaceSurface() {
           </aside>
 
           <main className="flex min-h-0 flex-col bg-background">
+            <div className="flex items-center gap-2 border-b border-border/70 bg-card/40 px-3 py-2 md:hidden">
+              <Button variant="subtle" size="sm" onClick={() => setMobilePickerOpen(true)}>
+                <MessageSquare className="mr-1.5 h-3.5 w-3.5" /> Conversations
+              </Button>
+              <div className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                {selectedAgent
+                  ? `${selectedAgent.name} · @${selectedAgent.profileKey}`
+                  : "No conversation selected"}
+              </div>
+              {selectedThread && !archived && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => archiveM.mutate({ threadId: selectedThread.id })}
+                >
+                  <Archive className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+            {mobilePickerOpen && (
+              <div
+                className="fixed inset-0 z-50 bg-background/80 backdrop-blur md:hidden"
+                onClick={() => setMobilePickerOpen(false)}
+              >
+                <div
+                  className="h-full w-[86vw] max-w-sm border-r border-border bg-card p-3 shadow-xl"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="text-sm font-semibold text-foreground">Conversations</div>
+                    <Button variant="ghost" size="sm" onClick={() => setMobilePickerOpen(false)}>
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <div className="max-h-[calc(100vh-4rem)] space-y-1 overflow-y-auto">
+                    {(threads ?? []).map((thread) => (
+                      <button
+                        key={thread.id}
+                        type="button"
+                        onClick={() => openThread(thread.id, thread.agent.id)}
+                        className="flex w-full items-center gap-2 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-left"
+                      >
+                        <AgentGlyph
+                          agent={thread.agent}
+                          active={selectedAgentId === thread.agent.id}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-foreground">
+                            {thread.agent.name}
+                          </div>
+                          <div className="text-meta truncate text-muted-foreground">
+                            {truncate(thread.latestMessage?.body, "No messages yet")}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                    {starterAgents.map((agent) => (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        onClick={() => startAgent(agent.id)}
+                        className="flex w-full items-center gap-2 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-left"
+                      >
+                        <AgentGlyph agent={agent} active={selectedAgentId === agent.id} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-foreground">
+                            {agent.name}
+                          </div>
+                          <div className="text-meta text-muted-foreground">new thread</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
             {threadParam && threads && !selectedThread ? (
               <div className="flex h-full items-center justify-center p-8 text-center">
                 <div className="max-w-sm rounded-xl border border-border bg-card/40 p-6 shadow-sm">
                   <MessageSquare className="mx-auto h-8 w-8 text-muted-foreground/60" />
-                  <h2 className="mt-3 text-base font-semibold text-foreground">Thread unavailable</h2>
+                  <h2 className="mt-3 text-base font-semibold text-foreground">
+                    Thread unavailable
+                  </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
                     This chat thread is archived, belongs to another operator, or no longer exists.
                   </p>
-                  <Button className="mt-4" variant="subtle" onClick={() => router.replace(`/w/${ws.slug}/chat`)}>
+                  <Button
+                    className="mt-4"
+                    variant="subtle"
+                    onClick={() => router.replace(`/w/${ws.slug}/chat`)}
+                  >
                     Back to Chat
                   </Button>
                 </div>
@@ -299,10 +475,12 @@ export function ChatWorkspaceSurface() {
               <div className="flex h-full items-center justify-center p-8 text-center text-muted-foreground">
                 <div className="max-w-sm">
                   <Bot className="mx-auto mb-3 h-8 w-8 text-muted-foreground/60" />
-                  <div className="text-base font-semibold text-foreground">Pick an agent to start</div>
+                  <div className="text-base font-semibold text-foreground">
+                    Pick an agent to start
+                  </div>
                   <p className="mt-1 text-sm">
-                    Chat is the live operator console. Messages can carry page context,
-                    pasted files, drag/drop uploads, and links for Hermes-backed agents.
+                    Chat is the live operator console. Messages can carry page context, pasted
+                    files, drag/drop uploads, and links for Hermes-backed agents.
                   </p>
                 </div>
               </div>
@@ -310,39 +488,24 @@ export function ChatWorkspaceSurface() {
           </main>
 
           <section className="hidden border-l border-border/70 bg-card/20 p-4 xl:block">
-            <div className="rounded-xl border border-border bg-card/50 p-4">
-              <div className="text-sm font-semibold text-foreground">Context</div>
-              {selectedAgent ? (
-                <div className="mt-3 space-y-3 text-sm">
-                  <div className="flex items-center gap-3">
-                    <AgentGlyph agent={selectedAgent} active />
-                    <div className="min-w-0">
-                      <div className="truncate font-medium text-foreground">{selectedAgent.name}</div>
-                      <div className="text-id text-muted-foreground">@{selectedAgent.profileKey}</div>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-meta">
-                    <div className="rounded-lg border border-border/60 bg-background/60 p-2">
-                      <div className="text-muted-foreground">Status</div>
-                      <div className="mt-0.5 font-medium text-foreground">{selectedAgent.status.toLowerCase()}</div>
-                    </div>
-                    <div className="rounded-lg border border-border/60 bg-background/60 p-2">
-                      <div className="text-muted-foreground">Messages</div>
-                      <div className="mt-0.5 font-medium text-foreground">
-                        {selectedThread?._count.messages ?? "—"}
-                      </div>
-                    </div>
-                  </div>
-                  <p className="text-meta text-muted-foreground">
-                    Composer sends your current page context plus finalized attachments only after upload completes.
-                  </p>
-                </div>
-              ) : (
-                <p className="mt-2 text-meta text-muted-foreground">
-                  Select a conversation to inspect agent state and attachment-backed prompts.
-                </p>
-              )}
-            </div>
+            <ChatStatusRail workspaceSlug={ws.slug} thread={selectedThread ?? null} />
+            {selectedThread && (
+              <div className="mt-3 rounded-xl border border-border bg-card/40 p-3">
+                <Button
+                  variant="subtle"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() =>
+                    archived
+                      ? restoreM.mutate({ threadId: selectedThread.id })
+                      : archiveM.mutate({ threadId: selectedThread.id })
+                  }
+                >
+                  <Archive className="mr-1.5 h-3.5 w-3.5" />
+                  {archived ? "Restore conversation" : "Archive conversation"}
+                </Button>
+              </div>
+            )}
           </section>
         </div>
       </div>

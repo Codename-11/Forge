@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
-import { useChatContext } from "@/hooks/use-chat-context";
+import { formatChatContextSummary, useChatContext } from "@/hooks/use-chat-context";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
@@ -39,7 +39,7 @@ function relativeTime(input: Date | string | null | undefined): string {
 }
 
 /** Three-dot typing indicator rendered like an agent bubble. */
-function AgentThinkingBubble({ stale }: { stale: boolean }) {
+function AgentThinkingBubble({ stale, detail }: { stale: boolean; detail?: string }) {
   return (
     <div className="space-y-1">
       <div className="flex items-start gap-2">
@@ -64,9 +64,8 @@ function AgentThinkingBubble({ stale }: { stale: boolean }) {
         </div>
       </div>
       {stale && (
-        <p className="pl-7 text-meta italic text-muted-foreground/60">
-          Still thinking… or take a different path? Check the agent&apos;s status in Mission
-          Control.
+        <p className="text-meta pl-7 italic text-muted-foreground/60">
+          {detail ?? "Still thinking… inspect the Chat status rail for run and delivery details."}
         </p>
       )}
     </div>
@@ -74,13 +73,7 @@ function AgentThinkingBubble({ stale }: { stale: boolean }) {
 }
 
 /** Streaming draft bubble — renders partial agent response with a blinking cursor. */
-function AgentDraftBubble({
-  body,
-  agentName,
-}: {
-  body: string;
-  agentName?: string;
-}) {
+function AgentDraftBubble({ body, agentName }: { body: string; agentName?: string }) {
   return (
     <div className="flex items-start gap-2">
       <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ember/15 text-ember">
@@ -96,9 +89,7 @@ function AgentDraftBubble({
           <div className="relative">
             <ChatMarkdown body={body} />
             {/* Pulsing cursor appended inline */}
-            <span className="inline-block animate-pulse text-muted-foreground">
-              ▍
-            </span>
+            <span className="inline-block animate-pulse text-muted-foreground">▍</span>
           </div>
         ) : (
           // Empty draft — show three dots while waiting for first delta.
@@ -149,6 +140,10 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
 
   const data = threadM.data;
   const threadId = data?.thread.id;
+  const { data: diagnostics } = trpc.chat.threadDiagnostics.useQuery(
+    { threadId: threadId ?? "" },
+    { enabled: Boolean(threadId), staleTime: 10_000 },
+  );
   // Fetch full agent data (includes runtimeMode + lastHeartbeatAt) separately.
   const { data: agentFull } = trpc.agent.byId.useQuery(
     { id: agentId },
@@ -164,10 +159,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
 
   const appendLocal = (body: string) => {
     const id = `_local_${++localIdRef.current}`;
-    setLocalMessages((prev) => [
-      ...prev,
-      { id, role: "SYSTEM", body, createdAt: new Date() },
-    ]);
+    setLocalMessages((prev) => [...prev, { id, role: "SYSTEM", body, createdAt: new Date() }]);
   };
 
   const clearLocal = () => {
@@ -182,10 +174,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
     if (!threadId) return;
 
     // Streaming draft events.
-    if (
-      evt.subjectType === "chat-thread-stream" &&
-      evt.subjectId === threadId
-    ) {
+    if (evt.subjectType === "chat-thread-stream" && evt.subjectId === threadId) {
       const p = evt.payload as {
         phase: string;
         draftId: string;
@@ -200,9 +189,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
           startedAt: Date.now(),
         });
       } else if (p.phase === "delta" && p.delta) {
-        setDraft((d) =>
-          d && d.draftId === p.draftId ? { ...d, body: d.body + p.delta } : d,
-        );
+        setDraft((d) => (d && d.draftId === p.draftId ? { ...d, body: d.body + p.delta } : d));
       } else if (p.phase === "finalized") {
         // Hold draft visible briefly while the persisted message lands.
         setTimeout(() => {
@@ -249,8 +236,18 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
       liveRunIds: ctx.liveRunIds,
       visibleEntities: ctx.visibleEntities,
     }),
-    [ctx.route, ctx.slug, ctx.issueId, ctx.selectedIds, ctx.pinnedRunIds, ctx.liveRunIds, ctx.visibleEntities],
+    [
+      ctx.route,
+      ctx.slug,
+      ctx.issueId,
+      ctx.selectedIds,
+      ctx.pinnedRunIds,
+      ctx.liveRunIds,
+      ctx.visibleEntities,
+    ],
   );
+
+  const contextSummary = useMemo(() => formatChatContextSummary(currentContext), [currentContext]);
 
   const handleSend = async (body: string, files: File[] = []) => {
     setPendingDraft({ body, files: files.map((f) => f.name || "attachment") });
@@ -382,13 +379,25 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
     ? Date.now() - new Date(lastPersistedMessage.createdAt).getTime()
     : Infinity;
   // Also show while send is in flight (the draft bubble is present but not committed).
-  const composerBusy = sendM.isPending || createPendingM.isPending || initUploadM.isPending || finalizeM.isPending || dispatchM.isPending;
+  const composerBusy =
+    sendM.isPending ||
+    createPendingM.isPending ||
+    initUploadM.isPending ||
+    finalizeM.isPending ||
+    dispatchM.isPending;
   const showThinking =
     !composerBusy &&
     !draft && // suppress static bubble when draft stream is active
     lastMessageIsUser &&
     lastMessageAge < 300_000; // 5 min
   const thinkingIsStale = showThinking && lastMessageAge >= 60_000;
+  const thinkingDetail = diagnostics?.lastRun
+    ? diagnostics.lastRun.status === "ACTIVE"
+      ? `Still active: ${diagnostics.lastRun.currentStep ?? "running"}`
+      : `Run ${diagnostics.lastRun.status.toLowerCase()} · inspect status rail.`
+    : diagnostics?.lastDelivery?.status === "FAILED"
+      ? "Webhook delivery failed; retry is available in the status rail."
+      : "No run/delivery record found yet; inspect agent status.";
 
   // Suppress unused var warning — lastMessage is used for list rendering logic.
   void lastMessage;
@@ -399,17 +408,13 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
         <div className="flex items-center gap-2 border-b border-border/70 bg-card/40 px-3 py-1.5">
           <AgentAvatar agent={agent} size="xs" shape="circle" active />
           <span className="text-[0.75rem] font-medium text-foreground">{agent.name}</span>
-          <span className="text-[0.625rem] text-muted-foreground">
-            @{agent.profileKey}
-          </span>
+          <span className="text-[0.625rem] text-muted-foreground">@{agent.profileKey}</span>
 
           {/* Runtime mode badge */}
           <span
             className={cn(
               "rounded border px-1 py-0 text-[0.5625rem] uppercase tracking-wider text-muted-foreground",
-              isEphemeral
-                ? "border-amber-500/30 bg-subtle/40"
-                : "border-border bg-subtle/40",
+              isEphemeral ? "border-amber-500/30 bg-subtle/40" : "border-border bg-subtle/40",
             )}
           >
             {isEphemeral ? "session-only" : "persistent"}
@@ -426,17 +431,12 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
             ) : isPersistentOnline ? (
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title="online" />
             ) : isPersistentBusy ? (
-              <span
-                className="h-1.5 w-1.5 animate-pulse rounded-full bg-ember"
-                title="busy"
-              />
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ember" title="busy" />
             ) : (
               <span className="flex items-center gap-1 text-[0.625rem] text-muted-foreground">
                 <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
                 offline
-                {lastHeartbeatAt
-                  ? ` · last seen ${relativeTime(lastHeartbeatAt)}`
-                  : ""}
+                {lastHeartbeatAt ? ` · last seen ${relativeTime(lastHeartbeatAt)}` : ""}
               </span>
             )}
           </span>
@@ -477,7 +477,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
         {draft ? (
           <AgentDraftBubble body={draft.body} agentName={agent?.name} />
         ) : (
-          showThinking && <AgentThinkingBubble stale={thinkingIsStale} />
+          showThinking && <AgentThinkingBubble stale={thinkingIsStale} detail={thinkingDetail} />
         )}
       </div>
       <ChatComposer
@@ -487,6 +487,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
         placeholder={composerPlaceholder}
         banner={composerBanner}
         slashContext={slashContext}
+        contextSummary={contextSummary}
       />
     </div>
   );
