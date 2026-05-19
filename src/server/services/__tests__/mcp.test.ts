@@ -2623,3 +2623,127 @@ describe("mcp runs.complete + completion contract", () => {
     expect(result.followUps).toBeTruthy();
   });
 });
+
+describe("mcp canvases.* mutation tools", () => {
+  it("creates a canvas, adds/patches/removes a node, and round-trips via canvases.get", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CV1" });
+    fixtures.push(fixture);
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "Canvas anchor" });
+
+    const canvas = (await call(
+      "canvases.create",
+      { name: "Migration board" },
+      ctx,
+    )) as { id: string };
+
+    const node = (await call(
+      "canvases.addNode",
+      {
+        canvasId: canvas.id,
+        targetType: "issue",
+        targetId: issue.id,
+        x: 10,
+        y: 20,
+        width: 240,
+        height: 140,
+      },
+      ctx,
+    )) as { id: string };
+
+    await call(
+      "canvases.patchNode",
+      { id: node.id, x: 99, y: 199, collapsed: true },
+      ctx,
+    );
+
+    const got = (await call("canvases.get", { id: canvas.id }, ctx)) as {
+      nodes: Array<{ id: string; x: number; y: number; collapsed: boolean }>;
+    };
+    const placed = got.nodes.find((n) => n.id === node.id);
+    expect(placed?.x).toBe(99);
+    expect(placed?.y).toBe(199);
+    expect(placed?.collapsed).toBe(true);
+
+    await call("canvases.removeNode", { id: node.id }, ctx);
+    const afterRemove = (await call("canvases.get", { id: canvas.id }, ctx)) as {
+      nodes: Array<{ id: string }>;
+    };
+    expect(afterRemove.nodes.find((n) => n.id === node.id)).toBeUndefined();
+  });
+
+  it("rejects edges between nodes that don't share a canvas", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CV2" });
+    fixtures.push(fixture);
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture, { title: "Edge anchor" });
+
+    const canvasA = (await call(
+      "canvases.create",
+      { name: "Board A" },
+      ctx,
+    )) as { id: string };
+    const canvasB = (await call(
+      "canvases.create",
+      { name: "Board B" },
+      ctx,
+    )) as { id: string };
+
+    const nodeA = (await call(
+      "canvases.addNode",
+      { canvasId: canvasA.id, targetType: "issue", targetId: issue.id, x: 0, y: 0 },
+      ctx,
+    )) as { id: string };
+    const nodeB = (await call(
+      "canvases.addNode",
+      { canvasId: canvasB.id, targetType: "issue", targetId: issue.id, x: 0, y: 0 },
+      ctx,
+    )) as { id: string };
+
+    await expect(
+      call(
+        "canvases.addEdge",
+        { canvasId: canvasA.id, fromNodeId: nodeA.id, toNodeId: nodeB.id },
+        ctx,
+      ),
+    ).rejects.toThrow(/missing from this workspace/);
+  });
+
+  it("addEdge then removeEdge is idempotent on canvases.get edges", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CV3" });
+    fixtures.push(fixture);
+    const { ctx } = buildMcpCtx(fixture);
+    const issueA = await createIssue(fixture, { title: "From" });
+    const issueB = await createIssue(fixture, { title: "To" });
+
+    const canvas = (await call("canvases.create", { name: "Wired" }, ctx)) as { id: string };
+    const a = (await call(
+      "canvases.addNode",
+      { canvasId: canvas.id, targetType: "issue", targetId: issueA.id, x: 0, y: 0 },
+      ctx,
+    )) as { id: string };
+    const b = (await call(
+      "canvases.addNode",
+      { canvasId: canvas.id, targetType: "issue", targetId: issueB.id, x: 100, y: 100 },
+      ctx,
+    )) as { id: string };
+
+    const edge = (await call(
+      "canvases.addEdge",
+      { canvasId: canvas.id, fromNodeId: a.id, toNodeId: b.id, label: "blocks" },
+      ctx,
+    )) as { id: string };
+
+    let got = (await call("canvases.get", { id: canvas.id }, ctx)) as {
+      edges: Array<{ id: string; label: string | null }>;
+    };
+    expect(got.edges).toHaveLength(1);
+    expect(got.edges[0].label).toBe("blocks");
+
+    await call("canvases.removeEdge", { id: edge.id }, ctx);
+    got = (await call("canvases.get", { id: canvas.id }, ctx)) as {
+      edges: Array<{ id: string }>;
+    };
+    expect(got.edges).toHaveLength(0);
+  });
+});
