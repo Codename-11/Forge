@@ -66,7 +66,7 @@ describe("agentCrewRouter + reviewGateRouter", () => {
   });
 
   it("rejects members from another workspace", async () => {
-    const { fixture, prisma, crewCaller } = await setup();
+    const { prisma, crewCaller } = await setup();
     const other = await createWorkspaceFixture({ keyPrefix: "OW" });
     fixtures.push(other);
     const stranger = await prisma.agent.create({

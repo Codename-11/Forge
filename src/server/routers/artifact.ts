@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { ArtifactStatus, ArtifactType, Prisma } from "@prisma/client";
+import { ArtifactStatus, ArtifactType } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import {
   archiveArtifact,

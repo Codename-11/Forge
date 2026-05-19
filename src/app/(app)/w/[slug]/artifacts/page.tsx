@@ -2,7 +2,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { FileText, Plus, Sparkles } from "lucide-react";
-import { ArtifactStatus, ArtifactType } from "@prisma/client";
+import type { ArtifactStatus, ArtifactType } from "@prisma/client";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -80,7 +80,7 @@ export default function ArtifactsPage() {
                 Capture durable outputs — specs, decisions, runbooks,
                 reports — that outlive a single issue. Promote a chat
                 message, comment, or note into an artifact via the
-                source's menu, or create a new one from scratch.
+                source&apos;s menu, or create a new one from scratch.
               </span>
             }
             action={

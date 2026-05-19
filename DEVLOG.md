@@ -2,6 +2,149 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Agentic Work OS rollout (Waves 1-11)
+
+### Summary
+
+Shipped 11 vertical slices that take Forge from a PM + chat
+substrate to a cohesive agentic work OS. Each wave landed as a
+discrete commit with tests, migrations, and updated MCP surface.
+Existing Issues/Chat/Agents/Hermes delivery behavior is
+preserved throughout — the new primitives extend rather than
+replace.
+
+### Waves shipped
+
+1. **Shared entity refs + hydration** (`src/lib/entity-ref.ts`,
+   `src/server/services/entity-hydration.ts`). 16 entity types
+   with a typed `{ type, id, workspaceId?, label? }` schema and a
+   bulk hydrator that resolves any ref list to
+   `{ label, subLabel, url, missing, meta }` for cards / context
+   bundles / canvases.
+
+2. **Artifact + ArtifactVersion** (migration 0032). Durable
+   versionable outputs (DOCUMENT / DECISION / RUNBOOK / REPORT /
+   SPEC / BRIEF / VERIFICATION). Body edits snapshot a new
+   version automatically. UI at `/w/{slug}/artifacts`. MCP
+   `artifacts.list/get/create/update/archive/promote`.
+   Polymorphic Attachment now accepts `artifact` targetType.
+
+3. **Promote-to-artifact UI affordance** on chat-message
+   bubbles. Minimal CaptureSheet — full sheet deferred.
+
+4. **ContextSet + ContextSetItem** (migration 0033). Reusable
+   bundles of canonical refs with INCLUDE / EXCLUDE /
+   SUMMARY_ONLY modes. MCP `contextSets.list/hydrate/create/
+   addItem/removeItem`.
+
+5. **Agent completion contract** (migration 0034). Issue gains
+   `expectedOutput` / `verificationChecklist` / `artifactRequired`.
+   AgentRun gains `producedArtifactIds` / `verificationResult` /
+   `followUps`. MCP `runs.complete` is the structured submission
+   tool; the issue context bundle surfaces a `completionContract`
+   block.
+
+6. **ExecutionPlan + ExecutionStep** (migration 0035). Multi-step
+   plans under issues or projects with optional
+   `dependsOnStepIds` and per-step `expectedOutput` /
+   `verification`. Plan lifecycle DRAFT → APPROVED → RUNNING →
+   …; step lifecycle TODO → READY → RUNNING → … MCP
+   `executionPlans.list/get/create/transition/transitionStep`.
+
+7. **AgentCrew + AgentCrewMember + ReviewGate** (migration 0036).
+   Crews bind agents to roles (PLANNER / WORKER / REVIEWER /
+   OBSERVER / OPERATOR_PROXY). ReviewGates block downstream
+   automation on any reviewable target. MCP `agentCrews.list`,
+   `reviewGates.list/open/resolve`. ExecutionPlan.crewId FK
+   landed here (deferred from Wave 6).
+
+8. **ActionRequest** (migration 0037). Precise resolvable asks
+   replacing vague notifications. Inbox
+   `actionRequestsForMe` unions OPEN rows assigned to the caller
+   with the existing @-mention waitingOnMe stream. MCP
+   `actionRequests.list/create/transition`.
+
+9. **Command Center v0**. Read-only aggregator at
+   `/w/{slug}/command-center` unioning action requests, review
+   gates, active/stalled runs, due issues, recent artifacts,
+   and the running timer. Sidebar entry under Work with chord
+   `g j`.
+
+10. **WorkspaceCanvas + Node + Edge** (migration 0038). Schema
+    + tRPC + read-only MCP for the infinite spatial canvas
+    primitive. Nodes carry layout + entity refs; canonical
+    content always comes from the source row via the
+    entity-hydration service. Viewer UI deferred per the plan's
+    risk guidance.
+
+11. **MCP + Hermes context integration pass**. Audited the MCP
+    surface. Extended `agent.context.bundle` for chat threads
+    with `pendingActionRequests` (OPEN, assigned to the calling
+    agent) and `recentArtifacts` (authored by this agent). Issue
+    branch already carries linked artifacts + completion
+    contract from earlier waves.
+
+### Migrations applied
+
+- `0032_artifact_primitive` — Artifact + ArtifactVersion + 2 enums.
+- `0033_context_set` — ContextSet + ContextSetItem.
+- `0034_completion_contract` — Issue + AgentRun columns.
+- `0035_execution_plan` — ExecutionPlan + ExecutionStep + 2 enums.
+- `0036_agent_crew_review_gate` — AgentCrew + Member + ReviewGate
+  + the deferred ExecutionPlan.crewId FK.
+- `0037_action_request` — ActionRequest + enum.
+- `0038_workspace_canvas` — WorkspaceCanvas + Node + Edge.
+
+All migrations are non-destructive: new columns are nullable
+where appropriate, and existing tables (Issue, AgentRun) gained
+columns with safe defaults.
+
+### Verification
+
+- `pnpm test` → 48 files / 339 tests passed (was 42 / 313
+  pre-Wave-1; +6 files / +26 tests added across the waves).
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass.
+- Full audit/activity event emission verified per-wave with the
+  recordChange dual-write pattern.
+
+### Deferred to follow-ups
+
+- Full **CaptureSheet UI** — Wave 3 shipped only the
+  promote-to-artifact chip; the unified create-anything sheet
+  (issue / artifact / note / action request) is still
+  hand-wavy.
+- **ExecutionPlan UI**. Schema + tRPC + MCP are live; the human
+  plan builder, step-assignment surfaces, and progress timeline
+  are not.
+- **AgentCrew admin UI**. Same shape — schema is here, picker
+  surface is not.
+- **ReviewGate inbox surface**. Gates exist; the human approval
+  UI hasn't shipped yet.
+- **WorkspaceCanvas viewer**. The hardest UI surface. Per the
+  plan's "do not let canvas consume the whole run" guidance,
+  shipped the foundation (schema + router + hydration + tests)
+  but not the pan/zoom React surface. Cate-inspired interaction
+  patterns and tldraw/react-flow evaluation are open.
+- **MCP mutation tools for canvases**. v0 is read-only.
+
+### Files of note
+
+| Area | Path |
+|------|------|
+| Entity refs | `src/lib/entity-ref.ts` |
+| Hydration | `src/server/services/entity-hydration.ts` |
+| Artifact service | `src/server/services/artifact-service.ts` |
+| Artifact router | `src/server/routers/artifact.ts` |
+| Artifact pages | `src/app/(app)/w/[slug]/artifacts/` |
+| ContextSet | `src/server/{routers,services}/context-set*` |
+| ExecutionPlan | `src/server/{routers,services}/execution-plan*` |
+| AgentCrew | `src/server/{routers,services}/agent-crew*` |
+| ActionRequest | `src/server/{routers,services}/action-request*` |
+| Command Center | `src/server/routers/command-center.ts` + page |
+| Canvas | `src/server/routers/canvas.ts` |
+| MCP surface | `src/server/services/mcp.ts` (much-expanded) |
+| Docs | `docs/concepts/primitives.md` (new section) |
+
 ## 2026-05-18 — Forge Conversations v2 follow-up
 
 ### Summary
