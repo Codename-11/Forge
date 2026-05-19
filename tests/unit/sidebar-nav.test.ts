@@ -27,4 +27,35 @@ describe("workspace sidebar navigation", () => {
       chord: "f",
     });
   });
+
+  it("surfaces Plans under Planning with the g l shortcut", () => {
+    const planning = WORKSPACE_NAV_SECTIONS.find((section) => section.id === "planning");
+    expect(planning?.items.find((item) => item.label === "Plans")).toMatchObject({
+      path: "/plans",
+      chord: "l",
+    });
+  });
+
+  it("surfaces Canvas under Planning with the g k shortcut", () => {
+    const planning = WORKSPACE_NAV_SECTIONS.find((section) => section.id === "planning");
+    expect(planning?.items.find((item) => item.label === "Canvas")).toMatchObject({
+      path: "/canvas",
+      chord: "k",
+    });
+  });
+
+  it("surfaces Review under Work with the g v shortcut", () => {
+    const work = WORKSPACE_NAV_SECTIONS.find((section) => section.id === "work");
+    expect(work?.items.find((item) => item.label === "Review")).toMatchObject({
+      path: "/review",
+      chord: "v",
+    });
+  });
+
+  it("does not double-assign any chord", () => {
+    const chords = WORKSPACE_NAV_SECTIONS.flatMap((s) => s.items)
+      .map((i) => i.chord)
+      .filter((c): c is string => Boolean(c));
+    expect(new Set(chords).size).toBe(chords.length);
+  });
 });
