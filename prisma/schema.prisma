@@ -409,6 +409,7 @@ model User {
   resolvedReviewGates     ReviewGate[]        @relation("ReviewGateResolver")
   requestedActionRequests ActionRequest[]     @relation("ActionRequestRequester")
   assignedActionRequests  ActionRequest[]     @relation("ActionRequestAssignee")
+  createdCanvases         WorkspaceCanvas[]   @relation("WorkspaceCanvasCreator")
 
   @@index([handle])
 }
@@ -611,7 +612,10 @@ model Workspace {
   agentCrewMembers   AgentCrewMember[]
   reviewGates        ReviewGate[]
   actionRequests     ActionRequest[]
-  startedStatus      Status?             @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
+  canvases           WorkspaceCanvas[]
+  canvasNodes        WorkspaceCanvasNode[]
+  canvasEdges        WorkspaceCanvasEdge[]
+  startedStatus      Status?               @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
 }
@@ -2187,4 +2191,89 @@ model ActionRequest {
   @@index([assignedUserId, status])
   @@index([assignedAgentId, status])
   @@index([issueId])
+}
+
+// ----------------------------------------------------------------------------
+// Agentic work OS — WorkspaceCanvas (added 2026-05-19, migration 0038)
+// ----------------------------------------------------------------------------
+
+/// Infinite spatial canvas for synthesis work — operators arrange
+/// existing entities on a 2D plane to make sense of in-progress work.
+/// Canvas stores layout + entity refs only; canonical content lives
+/// on the source row so a canvas can never become a second source of
+/// truth.
+///
+/// `scopeType` / `scopeId` optionally anchor the canvas under an
+/// issue / project / initiative / user / workspace. Workspace-scope
+/// is the default (canvas with no anchor).
+model WorkspaceCanvas {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  scopeType   String?
+  scopeId     String?
+  viewport    Json?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  archivedAt  DateTime?
+
+  workspace Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User?                 @relation("WorkspaceCanvasCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  nodes     WorkspaceCanvasNode[]
+  edges     WorkspaceCanvasEdge[]
+
+  @@index([workspaceId, scopeType, scopeId])
+  @@index([workspaceId, updatedAt])
+}
+
+/// A card on the canvas. `targetType` + `targetId` references a
+/// canonical entity (issue/artifact/chat-thread/attachment/agent-run/
+/// execution-plan/execution-step). The cuid is workspaceId-scoped at
+/// fetch time via the entity-hydration service; deleted-target rows
+/// surface as dead-ref placeholders rather than disappearing.
+model WorkspaceCanvasNode {
+  id          String   @id @default(cuid())
+  workspaceId String
+  canvasId    String
+  targetType  String
+  targetId    String
+  x           Float
+  y           Float
+  width       Float
+  height      Float
+  zIndex      Int      @default(0)
+  collapsed   Boolean  @default(false)
+  /// card | full | compact | live. Free-form string so views don't
+  /// require enum migration.
+  viewMode    String?
+  meta        Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  canvas    WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+
+  @@index([canvasId, zIndex])
+  @@index([workspaceId, targetType, targetId])
+}
+
+/// A directional edge between two canvas nodes — used to draw
+/// connections / relations between cards. Optional label / kind for
+/// labeled arrows.
+model WorkspaceCanvasEdge {
+  id          String   @id @default(cuid())
+  workspaceId String
+  canvasId    String
+  fromNodeId  String
+  toNodeId    String
+  label       String?
+  kind        String?
+  meta        Json?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  canvas    WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+
+  @@index([canvasId])
 }

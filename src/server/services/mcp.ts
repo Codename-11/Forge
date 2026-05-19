@@ -5293,6 +5293,53 @@ export const mcpTools = {
     },
   },
 
+  // ---------------------------------------------------------- WorkspaceCanvas
+  //
+  // Read-only access for agents. Canvases hold layout + entity refs,
+  // never canonical content; mutation stays in the human UI for v0.
+
+  "canvases.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      scopeType: z.string().max(40).optional(),
+      scopeId: z.string().max(40).optional(),
+      includeArchived: z.boolean().default(false),
+      limit: z.number().int().min(1).max(100).default(50),
+    }),
+    async run(
+      input: { scopeType?: string; scopeId?: string; includeArchived: boolean; limit: number },
+      ctx: McpContext,
+    ) {
+      return db.workspaceCanvas.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          scopeType: input.scopeType,
+          scopeId: input.scopeId,
+          archivedAt: input.includeArchived ? undefined : null,
+        },
+        orderBy: { updatedAt: "desc" },
+        take: input.limit,
+        include: { _count: { select: { nodes: true, edges: true } } },
+      });
+    },
+  },
+
+  "canvases.get": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      const row = await db.workspaceCanvas.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        include: {
+          nodes: { orderBy: { zIndex: "asc" } },
+          edges: true,
+        },
+      });
+      if (!row) throw new Error("Canvas not found.");
+      return row;
+    },
+  },
+
   // ------------------------------------------------------------ ActionRequests
   //
   // Precise, resolvable asks. Agents create ActionRequests to surface
