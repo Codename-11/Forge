@@ -4523,6 +4523,93 @@ export const mcpTools = {
     },
   },
 
+  // --------------------------------------------------------------------- Chat thread kick
+  /**
+   * Re-fire the wake for a stalled chat thread. Mirrors the operator-
+   * facing tRPC `chat.retryLastUserMessage` mutation but is scoped to
+   * the linked agent (the agent that owns the thread) rather than the
+   * thread's user — letting an agent's own backstop poller recover
+   * missed wakes without the operator having to click "retry" in the
+   * UI.
+   *
+   * Resolves the latest dispatched USER message on the thread that
+   * hasn't been acknowledged yet, then emits a CHAT_MESSAGE_POSTED
+   * event with `retry: true`. Forge's worker re-queues a
+   * WebhookDelivery against the agent's `webhookUrl`. Idempotent
+   * call-wise — re-running just re-fires another wake; the
+   * acknowledgedAt timestamp on the message row keeps the inbox
+   * filter honest.
+   */
+  "chat.kickThread": {
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({
+      threadId: z.string().min(1).max(40).describe("ChatThread.id to kick."),
+    }),
+    async run(input: { threadId: string }, ctx: McpContext) {
+      const agentId = ctx.apiKey?.linkedAgentId ?? null;
+      if (!agentId) {
+        throw new Error(
+          "chat.kickThread requires an API key with linkedAgentId set.",
+        );
+      }
+      const thread = await db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, agentId },
+        select: { id: true, agentId: true },
+      });
+      if (!thread) {
+        throw new Error(
+          "Chat thread not found in this workspace, or it does not belong to the calling agent.",
+        );
+      }
+      const latest = await db.chatMessage.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          threadId: thread.id,
+          role: "USER",
+          dispatchedAt: { not: null },
+          acknowledgedAt: null,
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, body: true, contextSnapshot: true },
+      });
+      if (!latest) {
+        return {
+          ok: true,
+          kicked: false,
+          reason: "no-unacked-user-message",
+        } as const;
+      }
+      await db.$transaction(async (tx) => {
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: null,
+          entity: "ChatMessage",
+          entityId: latest.id,
+          action: "retry-dispatch",
+          eventKind: EventKind.CHAT_MESSAGE_POSTED,
+          subjectType: "chat-thread",
+          subjectId: thread.id,
+          payload: {
+            threadId: thread.id,
+            messageId: latest.id,
+            agentId: thread.agentId,
+            role: "USER",
+            body: latest.body,
+            context: (latest.contextSnapshot ?? {}) as Prisma.InputJsonValue,
+            retry: true,
+            retriedAt: new Date().toISOString(),
+            retryReason: "inbox-poll-backstop",
+          },
+        });
+      });
+      return {
+        ok: true,
+        kicked: true,
+        chatMessageId: latest.id,
+      } as const;
+    },
+  },
+
   // --------------------------------------------------------------------- Agent dispatch inbox
   /**
    * Durable inbox for the calling agent. Returns the canonical work
