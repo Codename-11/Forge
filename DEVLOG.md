@@ -2,6 +2,30 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-18 — Chat operator console completion
+
+### Summary
+
+Completed the Forge Chat / Conversations operator-console pass: conversations now expose diagnostics for waiting/stalled states, safe audited recovery controls, archive/search/filter polish, a mobile picker, context preview before send, and per-attachment include/exclude staging while preserving the existing Hermes deferred-dispatch semantics.
+
+### What changed
+
+- Promoted agent avatar rendering into a shared `AgentAvatar` component so text/emoji avatars and URL image avatars render consistently.
+- Added `chat.threadDiagnostics` plus diagnostics on `chat.threads`, `chat.getThread`, and MCP `agent.context.bundle({ threadId })`.
+- Added owner-scoped archive/restore, search/filter state (`waiting`, `stalled`, `has_attachments`, archived), and audited retry/kick recovery mutations.
+- Added `ChatStatusRail` with agent/reply/run/delivery state and guarded `Retry dispatch` / `Kick run` actions.
+- Upgraded stale thinking copy to reference concrete diagnostics instead of generic Mission Control guidance.
+- Added mobile conversation picker/drawer for `/w/[slug]/chat` and archive affordances.
+- Added composer “Context to send” preview and per-attachment include/exclude controls; excluded files are not uploaded/finalized into agent context.
+
+### Verification
+
+- `pnpm vitest run src/server/routers/__tests__/chat.test.ts tests/unit/sidebar-nav.test.ts tests/unit/agent-avatar.test.ts tests/unit/attachment-upload-client.test.ts tests/unit/chat-context-summary.test.ts src/server/services/__tests__/mcp.test.ts` → 6 files / 93 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm lint` → pass.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass.
+- `pnpm test` → 39 files / 287 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` → pass; `/w/[slug]/chat` included in production route table.
+
 ## 2026-05-18 — Chat agent glyph fallback fix
 
 ### Summary
@@ -108,6 +132,7 @@ skipping:
 - `finishRunsForIssue()` on terminal categories
 
 Consequences observed in the AXI workspace:
+
 - AXI-5 was visibly "Done" but had `completedAt: null` (would have
   undercounted in analytics).
 - No webhook subscriber saw the close event.
@@ -133,6 +158,7 @@ semantics:
 
 4 new regression tests in
 `src/server/services/__tests__/mcp.test.ts`:
+
 - → DONE: completedAt set, ISSUE_STATUS_CHANGED emitted, ACTIVE run
   flipped to COMPLETED.
 - → CANCELED: canceledAt set, run flipped to ABANDONED.
@@ -214,7 +240,7 @@ exposed them.
   common grooming shape.
 
 - **`issues.bulkSetLabels`** — many-issue `{ issueIds, add[],
-  remove[] }`. Mirrors tRPC `issue.bulkSetLabels` (issue.ts:987-)
+remove[] }`. Mirrors tRPC `issue.bulkSetLabels` (issue.ts:987-)
   including the 50-row audit-chunking pattern and per-row
   `ISSUE_UPDATED` emission. Workspace validation on label ids; rows
   outside the workspace get filtered before any writes.
@@ -287,8 +313,8 @@ per-workspace knob for state transitions; the constant is purely a UI
   `{ stalledRuns, stalledIssues, stalledThresholdDays }`. Stalled runs
   are `AgentRun.status === ACTIVE AND lastEventAt < (now - STALE_RUN_MS)`;
   stalled issues are `assignedAgentId === input.agentId AND
-  status.category IN (IN_PROGRESS, IN_REVIEW) AND updatedAt <
-  (now - workspace.stalledThresholdDays * 24h)`, snoozed rows excluded.
+status.category IN (IN_PROGRESS, IN_REVIEW) AND updatedAt <
+(now - workspace.stalledThresholdDays * 24h)`, snoozed rows excluded.
   When `stalledThresholdDays === 0`, the issue bucket returns empty.
 - **`<StalledSection />`** new component on the agent detail page,
   rendered above `CurrentlyWorkingSection` inside the same lg:col-span-2
@@ -405,7 +431,7 @@ rebuild. No new dependencies introduced.
 
 - **`issue.list` gained `dueOn?: string`** (YYYY-MM-DD, UTC). When
   set, narrows the where clause to `dueDate >= startOfDay(dueOn)
-  AND dueDate < startOfDay(dueOn+1)`. Inline UTC bracketing so the
+AND dueDate < startOfDay(dueOn+1)`. Inline UTC bracketing so the
   client can pass the same key the `dashboard.today.weekPeek` proc
   emits without timezone arithmetic.
 - **`<TodayWidget />`** week-peek day cells now link to
@@ -474,7 +500,7 @@ rebuild. No new dependencies introduced.
 - **`<QuickNotesWidget />`** "Convert to issue" no longer calls
   `note.convertToIssue` directly. It dispatches a
   `forge:quick-create` `CustomEvent` with `{ title, body,
-  archiveNoteId }` instead, letting the operator review/edit
+archiveNoteId }` instead, letting the operator review/edit
   before submitting.
 - **QuickCreate** event handler accepts the new fields, opens in
   `issue` mode (overrides the path-derived mode when a seed is
@@ -580,7 +606,7 @@ endpoint; no event-fan-out changes, no audit branches, no MCP tools.
   Order-independent (arrays compared as sets), `undefined === false`
   for booleans (omitted toggle = explicit-false), missing-array =
   empty-array. Plus 10 unit tests in `tests/unit/saved-view-
-  filters.test.ts`.
+filters.test.ts`.
 - **SavedViewsBar inline buttons** — when current filters match an
   existing saved view exactly, the bar surfaces a chip with the
   matched view's name + a "Save changes" overwrite button + a "New
@@ -615,27 +641,26 @@ endpoint; no event-fan-out changes, no audit branches, no MCP tools.
 ### Pack 5 — Email-to-issue stub
 
 - **Schema** — `Workspace.emailIngestEnabled` (default false) +
-  `Workspace.emailIngestSecret` (nullable HMAC secret). Migration
-  0027. The secret field is **never** echoed back through
+  `Workspace.emailIngestSecret` (nullable HMAC secret). Migration 0027. The secret field is **never** echoed back through
   `workspace.current` — that proc was converted from `include` to
   an explicit `select` that omits `emailIngestSecret`. The shape
   of every previously-included scalar is preserved.
 - **`workspace.emailIngestStatus` query** — read-only `{ enabled,
-  secretSet, workspaceKey }` for the settings UI to render
+secretSet, workspaceKey }` for the settings UI to render
   "Generate" vs "Rotate".
 - **`workspace.rotateEmailIngestSecret` mutation** — admin-only.
   Generates `feis_<40 hex>` (160 bits via `crypto.randomBytes`),
   persists, returns the new secret once.
 - **`POST /api/ingest/email`** — accepts JSON
   `{workspaceKey, from, subject, body, replyTo?, headers?,
-  attachments?}`. Resolves workspace by key (404 on miss). 403
+attachments?}`. Resolves workspace by key (404 on miss). 403
   when ingest disabled. HMAC-SHA256 of the raw body using the
   workspace's secret, compared via `timingSafeEqual` against
   `x-forge-email-signature` header (401 on mismatch). On accept:
   creates an issue in the workspace's default status with `title
-  = subject` and `body = "From: <from>\n\n<body>"`, records
+= subject` and `body = "From: <from>\n\n<body>"`, records
   `ISSUE_CREATED` audit/event with `payload.source =
-  "email-ingest"`. If the `from` email matches a workspace
+"email-ingest"`. If the `from` email matches a workspace
   member, the issue's `claimedById` is set; otherwise it lands
   unassigned. Attachments (if any) upload directly to MinIO via
   `PutObjectCommand` after the issue transaction commits — failures
@@ -654,12 +679,12 @@ endpoint; no event-fan-out changes, no audit branches, no MCP tools.
   them under Working in Forge / Automation Surfaces.
 - Updated: `docs/guide/saved-views.md` gained a "Quick-save when
   filters match an existing view" section. `docs/guide/time-and-
-  attachments.md` gained a "Pomodoro" subsection.
+attachments.md` gained a "Pomodoro" subsection.
 
 ### Numbers
 
 - 1 migration (0027): 5 columns total (3 on User, 2 on Workspace).
-- 0 new tRPC routers (system.* added but `_app.ts` change is one
+- 0 new tRPC routers (system.\* added but `_app.ts` change is one
   line). 5 new procs across `dashboard.today`,
   `system.changelog/changelogFull`, `user.updatePomodoro`,
   `workspace.emailIngestStatus / rotateEmailIngestSecret` (and
@@ -736,7 +761,7 @@ applied on boot. Run B (UI-only polish) is queued for a follow-up.
   COMMENT_CREATED so we don't self-page). Human watchers get inbox/
   notification surfacing, not webhooks.
 - **`<WatchButton />`** — new component at `src/components/watch-
-  button.tsx`. Eye / EyeOff lucide glyphs, optimistic toggle, plus
+button.tsx`. Eye / EyeOff lucide glyphs, optimistic toggle, plus
   a small watcher-count chip whose `title=` lists the names. Wired
   into the issue detail header next to PinButton.
 - **Inbox surface** — new collapsible `<WatchingSection />` in
@@ -804,6 +829,7 @@ applied on boot. Run B (UI-only polish) is queued for a follow-up.
 ### Pack D — Hermes-side sync (separate from Forge git)
 
 After the Forge commit + container rebuild, edit-in-place updates to:
+
 - `~/SYSTEM.md` — bumped tool count, added the new MCP entries
   (`issues.watch/unwatch/listWatchers/listWatching`,
   `notes.todayJournal/listJournal`).
@@ -837,6 +863,7 @@ MCP entries; no config.yaml changes.
 ### Run B (queued)
 
 UI-only polish to follow:
+
 - Watching count chip next to inbox tab pill on dashboard
 - Journal tab icon refinement + collapse-by-default option
 - Slash command autocomplete dropdown (prototype is hint-only)
@@ -854,7 +881,7 @@ commit on master, container rebuilt, migration 0025 applied on boot.
 - **Schema** — new `Note` model on the dashboard for per-(workspace,
   user) markdown scratchpad rows. Migration `0025_note` adds the
   table + a single composite index `(workspaceId, userId,
-  archivedAt, pinned, updatedAt)` covering the default sort. Soft-
+archivedAt, pinned, updatedAt)` covering the default sort. Soft-
   delete via `archivedAt`; `pinned` floats rows in the widget. Back-
   relations on `User.notes` and `Workspace.notes`.
 - **tRPC `note.*`** — `list`, `create`, `update`, `archive`,
@@ -870,7 +897,7 @@ commit on master, container rebuilt, migration 0025 applied on boot.
   / `notes.archive`, scoped `WRITE_ISSUES` for writes and
   `READ_ISSUES` for reads (matching the comment surface). Each tool
   resolves the actor via `resolveActorId` and gates `userId == actor`
-  at every read and write — agents leave notes for *themselves*, not
+  at every read and write — agents leave notes for _themselves_, not
   the operator. There is no `notes.unarchive` MCP tool by design
   (agents shouldn't silently resurrect archived notes); the human-
   only `note.unarchive` tRPC proc covers that case.
@@ -993,9 +1020,9 @@ schema changes, no migration.
 
 - **Project overview scroll fix.** The project detail page's tab
   container at `/w/[slug]/projects/[id]` had `min-h-0 flex-1
-  overflow-hidden` *without* `flex flex-col`, so the children's
+overflow-hidden` _without_ `flex flex-col`, so the children's
   `flex-1` collapsed to auto and the inner `<div className="h-full
-  overflow-y-auto">` inherited 0 height — scroll was unreachable. Added
+overflow-y-auto">` inherited 0 height — scroll was unreachable. Added
   `flex flex-col` to both the outer tab wrapper and the inner content
   wrapper. Same anti-pattern surfaced on `/w/[slug]/issues` where the
   list-view's `<div className="h-full overflow-y-auto">` was inside an
@@ -1003,7 +1030,7 @@ schema changes, no migration.
   index also use `min-h-0 flex-1 overflow-hidden` but are
   intentionally horizontal flex rows (CyclePlanningBoard +
   CycleBacklogPanel) — left alone. Other pages with `min-h-0 flex-1
-  overflow-y-auto` (settings, dashboard, initiatives, …) are scroll
+overflow-y-auto` (settings, dashboard, initiatives, …) are scroll
   containers around content-height children — not affected.
 - **Server-scraped link titles + favicons.** Added
   `fetchLinkMetadata(url)` to `src/server/services/storage.ts`: native
@@ -1040,7 +1067,7 @@ schema changes, no migration.
   `storage.test.ts` and `attachment.test.ts` await it at module top
   and use the returned describe. Probe runs once per file, cached.
   Brought up `forge-dev-minio` via `docker compose -f docker/docker-compose.yml
-  up -d minio` for this session — both suites now pass cleanly.
+up -d minio` for this session — both suites now pass cleanly.
 - **No new dependencies, no schema change, no migration.**
 
 ### Files touched
@@ -1095,7 +1122,7 @@ worktree-base race), Phase 1A/B/C parallel worktrees, Phase 2 squash.
 ### Shape
 
 - **Pinning** — polymorphic `Pin { userId, workspaceId?, targetType,
-  targetId, orderIndex }` with target enum
+targetId, orderIndex }` with target enum
   `ISSUE | PROJECT | INITIATIVE | SAVED_VIEW | CYCLE | AGENT`. Migration
   backfills `User.pinnedIssueIds` into `Pin` rows
   (workspaceId=NULL, targetType=ISSUE, ordered) then drops the array
@@ -1131,7 +1158,7 @@ worktree-base race), Phase 1A/B/C parallel worktrees, Phase 2 squash.
   visible rows, Enter to dispatch, Esc to close. Cross-workspace
   toggle skipped (workspace badge on results when scope differs).
 - **Recent items** — `RecentItem { userId, workspaceId, targetType,
-  targetId, visitedAt }` upserted on entity-page mount via
+targetId, visitedAt }` upserted on entity-page mount via
   `recentItem.track`, server-side debounced 5s. Surfaced in the
   command palette's empty-state rail; primitive is the shared
   `<RecentItemsRail />`.
@@ -1173,7 +1200,7 @@ ordering as `orderIndex = ord - 1`. Then drops `User.pinnedIssueIds`.
 
 - `pnpm typecheck` clean
 - `pnpm lint` baseline (5 errors, all pre-existing in `issue-board.tsx`
-  + `mission-control/control-tab.tsx`)
+  - `mission-control/control-tab.tsx`)
 - `pnpm test` 208/214 — same 6 MinIO `ECONNREFUSED ::1:59000` failures
   as the last two days, environmental, no touched files.
 
@@ -1298,7 +1325,7 @@ the Stalled column server-side (kills the hardcoded 3d filter).
   applied, no rework needed.
 - `RunControlMenu`'s "redirect" option: on schemas without a
   `FAILED` AgentRunStatus, the failed lane filters on `ABANDONED +
-  STALLED`. A future migration could add `FAILED` proper if the
+STALLED`. A future migration could add `FAILED` proper if the
   semantic split matters.
 
 ### Verification
@@ -1392,7 +1419,7 @@ one commit per Bailey's request.
 - New procedures: `issue.siblings({ issueId, scope })`,
   `project.overview({ id })`, `dashboard.suggestions({ limit })`,
   `initiative.linkedFor({ projectId })`, `savedView.{list, create,
-  update, delete, reorder}`.
+update, delete, reorder}`.
 - Migration `0020_ux_revamp_phase0`: new `IssueSavedView` model +
   `Workspace.stalledThresholdDays Int @default(7)` (Bailey's
   settings-driven rule — no magic numbers in handlers).
@@ -1506,7 +1533,7 @@ their own client-side transition.
 
 - **Schema** (migration 0019_workspace_started_status_id):
   `Workspace.startedStatusId` nullable FK to `Status` with `ON DELETE
-  SET NULL`. Reverse relation `Status.workspaceStartedFor`.
+SET NULL`. Reverse relation `Status.workspaceStartedFor`.
   Single-column index. No backfill — existing workspaces stay null
   (off) until an admin opts in.
 - **`recordChange` enrichment** (`src/server/audit.ts`):
@@ -1517,7 +1544,7 @@ their own client-side transition.
   and does the `tx.issue.update`. The subsequent `loadIssueSnapshot`
   reads the post-transition state, so the embedded `issueSnapshot`
   reflects the new statusId. Payload also gains `autoTransitionedTo:
-  <statusId>` so receivers can distinguish a server-driven transition
+<statusId>` so receivers can distinguish a server-driven transition
   from a pre-existing started status. All 7 AGENT_ASSIGNED producers
   pick this up automatically (centralized via `recordChange`, same
   pattern as `issueSnapshot`).
@@ -1594,21 +1621,21 @@ issues to IN_PROGRESS without inventing status ids.
 - **Backend:** new `statuses.list({ category? })` MCP tool. `READ_ISSUES`-
   scoped. Returns `{ id, name, category, color, position, isDefault }[]`
   ordered by `position`. Optional `StatusCategory` filter (`BACKLOG |
-  TODO | IN_PROGRESS | IN_REVIEW | DONE | CANCELED`). 3 new tests
+TODO | IN_PROGRESS | IN_REVIEW | DONE | CANCELED`). 3 new tests
   (56 total in mcp.test.ts, all passing).
 - **Daemon:** `tools/forge-cli/src/dispatch/issue-loop.ts` gains a
   `maybeTransitionToInProgress` helper that runs between
   context-bundle and inline-attachments. Calls `statuses.list({
-  category: "IN_PROGRESS" })`, prefers `isDefault` then first by
+category: "IN_PROGRESS" })`, prefers `isDefault` then first by
   `position`, then `issues.transition`. Skipped when the issue is
   already in IN_PROGRESS or IN_REVIEW; no-op when the workspace has
   no IN_PROGRESS-category status. Best-effort — failures log and
   proceed rather than abort the assignment.
 - **Hermes runbook** (`~/.hermes/skills/pm/forge/SKILL.md`) refreshed:
   tool count 50 → 69, full namespace table, new "Awareness shortcut"
-  + "Status discovery" sub-sections, agent-queue loop now opens with
-  `agent.context.bundle` and includes the `statuses.list` →
-  `issues.transition` IN_PROGRESS pattern.
+  - "Status discovery" sub-sections, agent-queue loop now opens with
+    `agent.context.bundle` and includes the `statuses.list` →
+    `issues.transition` IN_PROGRESS pattern.
 - **`~/SYSTEM.md`** updated: tool count 50 → 69 (19 namespaces) with
   the full new surface enumerated; note that HTTP MCP `tools/list`
   hot-discovery means no Hermes restart is required.
@@ -1651,6 +1678,7 @@ delegation (Tier 3, deferred — needs more design).
 ### Stream BA — backend MCP additions + AGENT_ASSIGNED enrichment
 
 10 new/extended tools in `src/server/services/mcp.ts`:
+
 - `comments.list({ issueId, before?, limit? })` — `READ_ISSUES`. Closes
   the biggest gap: agents can now read the comment history they're
   entering, not just write to it.
@@ -1709,6 +1737,7 @@ the issue has attachments; click jumps the rail to the Attachments
 tab.
 
 Runtime UX:
+
 - `/settings/runtimes` index gains a "Show archived" toggle and
   per-row Unarchive button. Archived rows render at `opacity-60` with
   an "archived" badge.
@@ -1780,7 +1809,7 @@ shared `runClaudeProcess` helper. Dispatch types live in
 - **Provider coverage beyond Claude Code** — codex/hermes/gemini/
   cursor-agent stubs still respond `[provider:X] not implemented`.
 - **OAuth device-code flow for `forge login`** — still v1; takes URL
-  + token via prompt or flag.
+  - token via prompt or flag.
 - **Inline-content cap tuning** — daemon-side budget is 4MB total per
   dispatch with 1MB per attachment. May need adjustment based on
   real-world prompt sizes.
@@ -1813,18 +1842,18 @@ timeline (C), and `forge` CLI + local daemon (D).
     router, registered on `_app.ts`.
   - `agent.list` / `agent.byId` / `agent.byProfileKey` selects
     extended to include `runtime { id, name, kind, heartbeatAt,
-    providersAvailable }`.
+providersAvailable }`.
   - New `agent.unifiedTimeline({ profileKey, before?, limit? })`
     merges Comment, ActivityEvent, and AgentRunEvent rows for an
     agent into a cursor-paginated timeline. Per-source fetch + merge
-    + slice; `nextBefore` is the cursor.
+    - slice; `nextBefore` is the cursor.
 
 - **MCP tools:**
   - `runtimes.register({ name, kind, endpoint?, providersAvailable })`
     — ADMIN-scoped. Sets `ownerId` from caller's `userId`.
   - `runtimes.heartbeat({ runtimeId })` — ADMIN-scoped.
   - `runs.recordUsage({ runId, tokensIn?, tokensOut?, tokensCached?,
-    costUsd? })` — WRITE_ISSUES-scoped. Validates `linkedAgentId`
+costUsd? })` — WRITE_ISSUES-scoped. Validates `linkedAgentId`
     matches the run's `agentId`. Idempotent (replace, not add).
 
 - **UI:**
@@ -1859,9 +1888,9 @@ timeline (C), and `forge` CLI + local daemon (D).
     `/api/plugins/events` SSE with bearer auth, heartbeats every 60s.
   - Claude Code adapter (`dispatch/claude-code.ts`) spawns
     `claude --print --input-format stream-json --output-format
-    stream-json --include-partial-messages --verbose
-    --permission-mode bypassPermissions
-    --append-system-prompt <chat-mode>`, parses
+stream-json --include-partial-messages --verbose
+--permission-mode bypassPermissions
+--append-system-prompt <chat-mode>`, parses
     `content_block_delta` events, streams them through
     `chat.startDraft / appendDraftChunk / finalizeDraft`. Override
     binary path with `FORGE_CLAUDE_BIN`. Missing binary →
@@ -1898,12 +1927,12 @@ timeline (C), and `forge` CLI + local daemon (D).
 
 - **Stream D daemon is reading too narrow a slice of the chat SSE
   payload.** `chat.send` actually publishes `{threadId, messageId,
-  agentId, role, body, context}` (see `src/server/routers/chat.ts:123`)
+agentId, role, body, context}` (see `src/server/routers/chat.ts:123`)
   — the daemon's typed read in `tools/forge-cli/src/daemon.ts:256-258`
   drops `body` and `context`, then the placeholder prompt is sent to
   Claude. Fix is one-line: include `body` + `context` in the typed
   payload and pass them through `handleChatDispatch`. A separate
-  `chat.getThread` MCP tool is still useful for *prior* messages /
+  `chat.getThread` MCP tool is still useful for _prior_ messages /
   thread history (the SSE event only carries the single new message),
   but is no longer urgent for the basic dispatch path.
 - **`runtimes.list` / `agents.list` MCP tools** — would let the CLI's
@@ -2450,9 +2479,9 @@ ambiguity. New `event` router added for the activity drawer.
   export + `useActivityDrawer()` hook). Right-side slide-out
   triggered from a topbar bell icon; subscribes to `useRealtime` to
   invalidate `event.recent` + `event.unreadCount`. "Mine only" toggle
-  + "Mark all read" persisted to `localStorage[forge.activityDrawer.lastReadAt]`.
-  Esc / backdrop close. Pagination cursor via "Load older". Hidden
-  in account-level shells (no workspace context).
+  - "Mark all read" persisted to `localStorage[forge.activityDrawer.lastReadAt]`.
+    Esc / backdrop close. Pagination cursor via "Load older". Hidden
+    in account-level shells (no workspace context).
 - **Topbar bell** with unread-count badge prepended to existing
   actions. Always visible inside a workspace, hidden outside.
 - **RealtimeToaster** (`src/components/realtime-toaster.tsx`,
@@ -2770,7 +2799,7 @@ doing right now" without clicking through Inbox + Analytics.
   `COMMENT_CREATED`. Optional `agentId` narrows to subject-agent events,
   `payload.agentId` matches, and issue events on issues currently
   assigned to that agent. Cursor pagination on `(createdAt DESC, id
-  DESC)`. Hydrates referenced issues + agents in batched lookups.
+DESC)`. Hydrates referenced issues + agents in batched lookups.
 
 The blocker-graph helper (`findBlockedIssueIdsForWorkspace`) is a local
 copy of the one in `issue.ts` — keeps the agent router import-
@@ -4285,6 +4314,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
 ### What shipped
 
 **Mission Control chat (`282ce7f`, polished through `69a5659`)**
+
 - `ChatThread` + `ChatMessage` Prisma models. Thread is unique per
   `(workspaceId, userId, agentId)`. Migration `0016`.
 - New `chat` tRPC router: `threads`, `thread` (mutation, upserts),
@@ -4299,6 +4329,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
   same plumbing as comment @-mentions.
 
 **Chat reply streaming (`69a5659`)**
+
 - Three new MCP tools for stateless streaming drafts:
   `chat.startDraft({ threadId }) → { draftId }`,
   `chat.appendDraftChunk({ threadId, draftId, delta, seq? })`,
@@ -4313,6 +4344,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
   for runtimes not yet wired to the streaming path.
 
 **Chat polish (`104c75e`)**
+
 - `chat-markdown.tsx` — hand-rolled lightweight markdown renderer
   (no new deps; Forge had no markdown libs installed). Headings,
   ordered/unordered lists, fenced code blocks with copy buttons,
@@ -4325,6 +4357,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
 - Better empty thread state with example prompts.
 
 **Slash commands (`69a5659`)**
+
 - Pure-client registry at `src/lib/chat-slash-commands.ts` modeled
   on `~/mission-control/lib/slash-commands.ts`.
 - `/help`, `/clear`, `/info`, `/agents`, `/issue <KEY>`, `/status`.
@@ -4336,6 +4369,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
   (`/issue`, `/status`) transform input and call `sendM.mutate`.
 
 **Runtime mode honesty (`0515871`)**
+
 - `Agent.runtimeMode` (PERSISTENT | EPHEMERAL — already existed but
   unused in UI) now surfaces in:
   - Agents tab (sort + badge by mode + last-heartbeat).
@@ -4351,6 +4385,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
   and `.retry`.
 
 **Access keys split (`0515871`)**
+
 - `ApiKeyKind` enum (AGENT | PERSONAL | SESSION). Migration `0017`
   with backfill: existing rows get `AGENT` if `linkedAgentId` is
   set, `PERSONAL` otherwise.
@@ -4362,6 +4397,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
   create flows, expiry badges, copy-once raw-key reveal.
 
 **Integrations adapter manifest (`0515871`)**
+
 - Static manifest at `src/server/integrations/adapters.ts` (NOT a
   Prisma table — uses existing `AgentProvider` enum). Five
   adapters: Hermes, Claude Code (session), Claude Desktop
@@ -4374,6 +4410,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
   keys" links into the access page.
 
 **Hermes-side glue (out-of-repo, in `~/.hermes/`)**
+
 - `forge-presence` skill (`~/.hermes/skills/forge-presence/`):
   `bin/heartbeat.sh <profile>` calls Forge's MCP `agents.heartbeat`;
   `bin/setup.sh <profile>` installs a per-minute system crontab
@@ -4386,7 +4423,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
 - `~/.hermes/config.yaml` adds a `platforms.forge` block.
 - `~/.hermes/webhook_subscriptions.json` switches `deliver: "log"`
   → `"forge"` with a new `forge_thread_id_path:
-  "payload.threadId"` field. Prompt template updated: agent no
+"payload.threadId"` field. Prompt template updated: agent no
   longer calls `forge_chat_appendMessage` directly for chat events
   (platform adapter handles delivery — avoids duplicate messages).
 - **Activation requires Hermes gateway restart.**
@@ -4398,6 +4435,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
   upstream-mergeable as-is.
 
 **Nav reorg (`d61cc03`)**
+
 - Sidebar: dropped "Admin" group entirely. New "Insights" group:
   Analytics + Agents (Agents is a real surface now, not config).
   Plugins + Admin portal removed from rail (live in Settings).
@@ -4408,7 +4446,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
   parent (Issue templates / Project templates).
   `/settings/project-templates` is a permanent redirect.
 - Duplicate-route cleanup: `/w/{slug}/settings/{account,appearance,
-  access,workspaces}` are now redirects to `/settings/*` so deep
+access,workspaces}` are now redirects to `/settings/*` so deep
   links keep working but ambiguity is gone.
 
 ### What I learned (write-down for future sessions)
@@ -4418,7 +4456,7 @@ each commit. Commits, oldest first: `282ce7f`, `eeb58ee`, `0515871`,
   inputs on routers should use `z.string().min(1).max(40)` matching
   the pattern in `agentId` from the agent router. Fix in `eeb58ee`.
 - **The `/api/trpc/...` tRPC route does NOT honor `Authorization:
-  Bearer ...` for API key auth.** Only `/api/mcp/...` paths run
+Bearer ...` for API key auth.** Only `/api/mcp/...` paths run
   `authenticateApiKey()`. Runtime integrations should call MCP, not
   tRPC, when authenticating with an API key.
 - **Forge already had a complete heartbeat sweep**
