@@ -2,6 +2,17 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-18 — Forge Conversations v2 follow-up
+
+### Summary
+
+Hardened chat compaction after live smoke exposed that repeated manual compaction could re-summarize already summarized messages and nest the previous summary. `compactChatThread` now advances from `summarizedUntilMessageId`, no-ops when there are no new visible messages, and avoids emitting duplicate compaction activity for repeated clicks. Added regression coverage for repeated `chat.compactThread` calls.
+
+### Verification
+
+- `pnpm vitest run src/server/routers/__tests__/chat.test.ts src/server/services/__tests__/mcp.test.ts` → 2 files / 89 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass.
+
 ## 2026-05-18 — Forge Conversations v2
 
 ### Summary

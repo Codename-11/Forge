@@ -107,6 +107,26 @@ describe("chatRouter deferred dispatch", () => {
     expect(result.thread.summaryMarkdown).toContain("Conversation Summary");
     expect(result.summarizedMessageCount).toBeGreaterThan(0);
     expect(event?.payload).toMatchObject({ threadId: conversation.thread.id });
+
+    const eventCountAfterFirstCompact = await prisma.activityEvent.count({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.CHAT_THREAD_COMPACTED,
+        subjectId: conversation.thread.id,
+      },
+    });
+    const repeated = await caller.compactThread({ threadId: conversation.thread.id });
+    const eventCountAfterRepeatedCompact = await prisma.activityEvent.count({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.CHAT_THREAD_COMPACTED,
+        subjectId: conversation.thread.id,
+      },
+    });
+
+    expect(repeated.summarizedMessageCount).toBe(0);
+    expect(repeated.thread.summaryMarkdown).toBe(result.thread.summaryMarkdown);
+    expect(eventCountAfterRepeatedCompact).toBe(eventCountAfterFirstCompact);
   });
 
   it("creates pending messages without dispatching until dispatchMessage is called", async () => {
