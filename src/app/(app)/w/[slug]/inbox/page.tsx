@@ -465,6 +465,12 @@ export default function InboxPage() {
                       const isNew =
                         !!previousVisitAt &&
                         new Date(m.createdAt) > previousVisitAt;
+                      // Mentions are issue-scoped today. After migration
+                      // 0040 (step comments) Comment.issueId is nullable
+                      // on the type, but the mentions feed still only
+                      // surfaces issue-attached rows. Skip defensively.
+                      if (!m.issue) return null;
+                      const issue = m.issue;
                       return (
                         <li
                           key={m.id}
@@ -475,18 +481,18 @@ export default function InboxPage() {
                         >
                           {isNew && <NewDot />}
                           <WorkspaceBadge
-                            slug={m.issue.workspace.slug}
-                            wsKey={m.issue.workspace.key}
+                            slug={issue.workspace.slug}
+                            wsKey={issue.workspace.key}
                           />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
                               <Link
-                                href={`/w/${m.issue.workspace.slug}/issues/${m.issue.id}`}
+                                href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
                                 className="text-id hover:underline"
                               >
-                                {formatIssueId(m.issue.workspace.key, m.issue.number)}
+                                {formatIssueId(issue.workspace.key, issue.number)}
                               </Link>
-                              <span className="truncate">{m.issue.title}</span>
+                              <span className="truncate">{issue.title}</span>
                             </div>
                             <div className="mt-0.5 line-clamp-2 text-muted-foreground">
                               <span className="font-medium text-foreground">

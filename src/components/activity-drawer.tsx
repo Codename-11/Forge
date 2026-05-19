@@ -1221,20 +1221,27 @@ function MinePanel({
           count={data?.counts.mentions ?? 0}
           icon={<AtSign className="h-3.5 w-3.5 text-muted-foreground" />}
         >
-          {data?.mentions.slice(0, 8).map((c) => (
-            <MineRow
-              key={c.id}
-              href={`/w/${c.issue.workspace.slug}/issues/${c.issue.id}`}
-              onNavigate={onNavigate}
-              left={
-                <span className="font-mono text-[0.6875rem] text-muted-foreground">
-                  {c.issue.workspace.key}-{c.issue.number}
-                </span>
-              }
-              title={c.issue.title}
-              meta={`${c.author.name ?? "someone"} · ${relativeTime(c.createdAt)}`}
-            />
-          ))}
+          {data?.mentions.slice(0, 8).map((c) => {
+            // Mentions are issue-scoped today; step comments don't
+            // surface here yet. Skip defensively after migration 0040
+            // made Comment.issueId nullable on the type.
+            if (!c.issue) return null;
+            const issue = c.issue;
+            return (
+              <MineRow
+                key={c.id}
+                href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
+                onNavigate={onNavigate}
+                left={
+                  <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                    {issue.workspace.key}-{issue.number}
+                  </span>
+                }
+                title={issue.title}
+                meta={`${c.author.name ?? "someone"} · ${relativeTime(c.createdAt)}`}
+              />
+            );
+          })}
         </MineSection>
       )}
 

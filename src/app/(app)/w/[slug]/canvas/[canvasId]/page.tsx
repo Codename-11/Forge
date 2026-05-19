@@ -8,6 +8,8 @@ import {
   Maximize2,
   Plus,
   Trash2,
+  Bot,
+  User as UserIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
@@ -341,10 +343,34 @@ function CanvasCard({
   const tone = node.ref.missing
     ? "border-warning/40 bg-warning/5"
     : "border-border bg-card/80";
+  const isLive = node.viewMode === "live";
+  const isRunning =
+    !node.ref.missing && (node.ref.meta?.status as string | undefined) === "RUNNING";
+  const ring = isLive && isRunning ? "ring-2 ring-ember/60 animate-pulse" : "";
+
+  let body: React.ReactNode;
+  if (node.ref.missing) {
+    body = <div className="text-sm font-medium">Missing {node.targetType}</div>;
+  } else if (node.targetType === "execution-plan") {
+    body = <ExecutionPlanCardBody node={node} live={isLive} />;
+  } else if (node.targetType === "execution-step") {
+    body = <ExecutionStepCardBody node={node} live={isLive} />;
+  } else {
+    body = (
+      <>
+        <div className="text-meta uppercase tracking-wide text-muted-foreground">
+          {node.targetType.replace("-", " ")}
+          {node.ref.subLabel ? <span> · {node.ref.subLabel}</span> : null}
+        </div>
+        <div className="line-clamp-3 text-sm font-medium">{node.ref.label}</div>
+      </>
+    );
+  }
+
   return (
     <div
       data-canvas-card
-      className={`absolute flex flex-col gap-1 rounded-lg border p-3 shadow-md ${tone}`}
+      className={`absolute flex flex-col gap-1.5 rounded-lg border p-3 shadow-md ${tone} ${ring}`}
       style={{
         left: node.x,
         top: node.y,
@@ -354,15 +380,7 @@ function CanvasCard({
       onMouseDown={onMouseDown}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="text-meta uppercase tracking-wide text-muted-foreground">
-            {node.targetType.replace("-", " ")}
-            {node.ref.subLabel ? <span> · {node.ref.subLabel}</span> : null}
-          </div>
-          <div className="line-clamp-3 text-sm font-medium">
-            {node.ref.missing ? `Missing ${node.targetType}` : node.ref.label}
-          </div>
-        </div>
+        <div className="min-w-0 flex-1">{body}</div>
         <button
           type="button"
           onClick={(e) => {
@@ -383,6 +401,126 @@ function CanvasCard({
         >
           Open <ExternalLink className="h-3 w-3" />
         </a>
+      ) : null}
+    </div>
+  );
+}
+
+function statusToneClasses(status: string | undefined): string {
+  switch (status) {
+    case "RUNNING":
+      return "border-ember/40 bg-ember/15 text-ember";
+    case "DONE":
+    case "COMPLETED":
+      return "border-success/40 bg-success/10 text-success";
+    case "BLOCKED":
+    case "CANCELED":
+      return "border-warning/40 bg-warning/10 text-warning";
+    case "REVIEW":
+      return "border-ember/30 bg-ember/10 text-ember";
+    case "READY":
+    case "APPROVED":
+      return "border-border bg-subtle text-foreground";
+    default:
+      return "border-border bg-card/40 text-muted-foreground";
+  }
+}
+
+function StatusBadge({ status }: { status: string | undefined }) {
+  if (!status) return null;
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${statusToneClasses(status)}`}
+    >
+      {status.toLowerCase()}
+    </span>
+  );
+}
+
+function ExecutionPlanCardBody({ node, live }: { node: HydratedNode; live: boolean }) {
+  const meta = (node.ref.meta ?? {}) as {
+    status?: string;
+    stepCount?: number;
+    doneSteps?: number;
+    runningSteps?: number;
+    progress?: number;
+  };
+  const total = meta.stepCount ?? 0;
+  const done = meta.doneSteps ?? 0;
+  const running = meta.runningSteps ?? 0;
+  const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <span className="text-meta uppercase tracking-wide text-muted-foreground">Plan</span>
+        <StatusBadge status={meta.status} />
+      </div>
+      <div className="line-clamp-2 text-sm font-medium">{node.ref.label}</div>
+      <div className="flex items-center gap-2">
+        <div className="h-1 flex-1 overflow-hidden rounded-full bg-subtle">
+          <div
+            className="h-full rounded-full bg-ember/70 transition-all"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className="text-meta tabular-nums text-muted-foreground">
+          {done}/{total}
+        </span>
+      </div>
+      {live && running > 0 ? (
+        <div className="inline-flex items-center gap-1.5 text-meta text-ember">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember/60" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-ember" />
+          </span>
+          Running · {running} step{running === 1 ? "" : "s"}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ExecutionStepCardBody({ node, live }: { node: HydratedNode; live: boolean }) {
+  const meta = (node.ref.meta ?? {}) as {
+    status?: string;
+    position?: number;
+    expectedOutput?: string | null;
+    assignedAgent?: { name: string; profileKey: string } | null;
+    assignedUser?: { name: string | null; email: string } | null;
+  };
+  const positionLabel =
+    typeof meta.position === "number" ? `#${meta.position + 1}` : null;
+  const assigneeLabel = meta.assignedAgent
+    ? `@${meta.assignedAgent.profileKey}`
+    : meta.assignedUser
+      ? meta.assignedUser.name || meta.assignedUser.email
+      : null;
+  const assigneeIcon = meta.assignedAgent ? (
+    <Bot className="h-3 w-3" />
+  ) : meta.assignedUser ? (
+    <UserIcon className="h-3 w-3" />
+  ) : null;
+  void live;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        {positionLabel ? (
+          <span className="rounded-full border border-border bg-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+            {positionLabel}
+          </span>
+        ) : null}
+        <span className="text-meta uppercase tracking-wide text-muted-foreground">Step</span>
+        <StatusBadge status={meta.status} />
+      </div>
+      <div className="line-clamp-2 text-sm font-medium">{node.ref.label}</div>
+      {assigneeLabel ? (
+        <div className="inline-flex items-center gap-1 text-meta text-muted-foreground">
+          {assigneeIcon}
+          <span className="truncate">{assigneeLabel}</span>
+        </div>
+      ) : null}
+      {meta.expectedOutput ? (
+        <p className="line-clamp-2 text-meta text-muted-foreground">{meta.expectedOutput}</p>
       ) : null}
     </div>
   );

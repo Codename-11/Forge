@@ -397,4 +397,215 @@ export const canvasRouter = router({
       await ctx.db.workspaceCanvasEdge.delete({ where: { id: input.id } });
       return { ok: true };
     }),
+
+  /**
+   * Build a canvas from an existing ExecutionPlan: places the plan node
+   * at the origin and topologically lays out step nodes by longest-path
+   * depth, with edges from plan → step (contains) and prerequisite →
+   * dependent (depends_on).
+   */
+  createFromPlan: workspaceProcedure
+    .input(
+      z.object({
+        planId: z.string().cuid(),
+        name: z.string().min(1).max(200).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const plan = await ctx.db.executionPlan.findFirst({
+        where: { id: input.planId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: {
+          id: true,
+          title: true,
+          steps: {
+            select: { id: true, position: true, dependsOnStepIds: true },
+            orderBy: { position: "asc" },
+          },
+        },
+      });
+      if (!plan) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
+      }
+
+      const layout = computePlanLayout(plan.steps);
+
+      const result = await ctx.db.$transaction(async (tx) => {
+        const canvas = await tx.workspaceCanvas.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            name: (input.name ?? plan.title).trim() || plan.title,
+            scopeType: "execution-plan",
+            scopeId: plan.id,
+            createdById: ctx.session?.user?.id ?? null,
+          },
+        });
+
+        const planNode = await tx.workspaceCanvasNode.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            canvasId: canvas.id,
+            targetType: "execution-plan",
+            targetId: plan.id,
+            x: 0,
+            y: 0,
+            width: 320,
+            height: 160,
+            zIndex: 0,
+            viewMode: "card",
+          },
+        });
+
+        const stepNodeIds = new Map<string, string>();
+        for (const step of plan.steps) {
+          const pos = layout.positions.get(step.id);
+          if (!pos) continue;
+          const created = await tx.workspaceCanvasNode.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: canvas.id,
+              targetType: "execution-step",
+              targetId: step.id,
+              x: pos.x,
+              y: pos.y,
+              width: 280,
+              height: 140,
+              zIndex: 0,
+              viewMode: "card",
+            },
+          });
+          stepNodeIds.set(step.id, created.id);
+        }
+
+        let edgeCount = 0;
+        for (const step of plan.steps) {
+          const stepNodeId = stepNodeIds.get(step.id);
+          if (!stepNodeId) continue;
+          await tx.workspaceCanvasEdge.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: canvas.id,
+              fromNodeId: planNode.id,
+              toNodeId: stepNodeId,
+              kind: "contains",
+            },
+          });
+          edgeCount += 1;
+          for (const depId of step.dependsOnStepIds) {
+            const fromId = stepNodeIds.get(depId);
+            if (!fromId) continue;
+            await tx.workspaceCanvasEdge.create({
+              data: {
+                workspaceId: ctx.workspaceId,
+                canvasId: canvas.id,
+                fromNodeId: fromId,
+                toNodeId: stepNodeId,
+                kind: "depends_on",
+              },
+            });
+            edgeCount += 1;
+          }
+        }
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: canvas.id,
+          action: "created",
+          after: { name: canvas.name, scope: "execution-plan", planId: plan.id },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: canvas.id,
+        });
+
+        return {
+          canvasId: canvas.id,
+          nodeCount: stepNodeIds.size + 1,
+          edgeCount,
+        };
+      });
+
+      return result;
+    }),
 });
+
+interface PlanStepForLayout {
+  id: string;
+  position: number;
+  dependsOnStepIds: string[];
+}
+
+interface PlanLayout {
+  positions: Map<string, { x: number; y: number }>;
+}
+
+/**
+ * Longest-path depth per step → rows. Steps with no in-workspace
+ * prerequisites land in depth 1 (depth 0 holds the plan node).
+ * Cycles or stale refs collapse silently to the next safe depth so the
+ * mutation never deadlocks.
+ */
+function computePlanLayout(steps: PlanStepForLayout[]): PlanLayout {
+  const X_SPACING = 320;
+  const Y_SPACING = 200;
+  const PLAN_ROW_HEIGHT = Y_SPACING;
+
+  const validIds = new Set(steps.map((s) => s.id));
+  const depth = new Map<string, number>();
+  const visiting = new Set<string>();
+  const stepById = new Map(steps.map((s) => [s.id, s] as const));
+
+  function depthFor(id: string): number {
+    const cached = depth.get(id);
+    if (cached !== undefined) return cached;
+    if (visiting.has(id)) {
+      depth.set(id, 1);
+      return 1;
+    }
+    visiting.add(id);
+    const step = stepById.get(id);
+    if (!step) {
+      visiting.delete(id);
+      depth.set(id, 1);
+      return 1;
+    }
+    let best = 1;
+    for (const dep of step.dependsOnStepIds) {
+      if (!validIds.has(dep)) continue;
+      best = Math.max(best, depthFor(dep) + 1);
+    }
+    visiting.delete(id);
+    depth.set(id, best);
+    return best;
+  }
+
+  for (const s of steps) depthFor(s.id);
+
+  const byDepth = new Map<number, string[]>();
+  for (const s of steps) {
+    const d = depth.get(s.id) ?? 1;
+    const list = byDepth.get(d) ?? [];
+    list.push(s.id);
+    byDepth.set(d, list);
+  }
+  for (const list of byDepth.values()) {
+    list.sort((a, b) => {
+      const pa = stepById.get(a)?.position ?? 0;
+      const pb = stepById.get(b)?.position ?? 0;
+      return pa - pb;
+    });
+  }
+
+  const positions = new Map<string, { x: number; y: number }>();
+  for (const [d, list] of byDepth.entries()) {
+    const rowWidth = list.length * X_SPACING;
+    const startX = -((rowWidth - X_SPACING) / 2);
+    list.forEach((id, idx) => {
+      positions.set(id, {
+        x: startX + idx * X_SPACING,
+        y: PLAN_ROW_HEIGHT * d,
+      });
+    });
+  }
+  return { positions };
+}
