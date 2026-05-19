@@ -17,6 +17,8 @@ export interface SlashCommandContext {
   clearLocal: () => void;
   /** Send a structured prompt as if the user typed it. */
   sendPrompt: (body: string) => void;
+  /** Request server-side compaction for the current conversation. */
+  compactThread?: () => Promise<void> | void;
 }
 
 export interface SlashCommand {
@@ -108,6 +110,43 @@ export const SLASH_COMMANDS: SlashCommand[] = [
       ctx.sendPrompt(
         `What are you currently working on? Reply with a quick summary of active runs and any blockers.`,
       );
+    },
+  },
+  {
+    name: "summarize",
+    description: "Ask the agent to summarize this conversation.",
+    category: "prompt",
+    promptDispatch: true,
+    run: (_args, ctx) => {
+      ctx.sendPrompt("Summarize this conversation: durable facts, decisions, blockers, and next actions.");
+    },
+  },
+  {
+    name: "compact",
+    description: "Compact this conversation into Forge-owned summary context.",
+    category: "control",
+    run: async (_args, ctx) => {
+      if (!ctx.compactThread) {
+        ctx.appendLocal("_Compaction is not available in this surface._");
+        return;
+      }
+      await ctx.compactThread();
+      ctx.appendLocal("_Conversation compacted. Future agent context will include the summary plus recent messages._");
+    },
+  },
+  {
+    name: "hermes",
+    description: "Safe Hermes bridge: `/hermes status`, `/hermes usage`, `/hermes skills`.",
+    category: "prompt",
+    promptDispatch: true,
+    run: (args, ctx) => {
+      const allowed = new Set(["status", "usage", "skills"]);
+      const subcommand = args.trim().split(/\s+/)[0]?.toLowerCase();
+      if (!subcommand || !allowed.has(subcommand)) {
+        ctx.appendLocal("_Allowed Hermes commands:_ `/hermes status`, `/hermes usage`, `/hermes skills`.");
+        return;
+      }
+      ctx.sendPrompt(`Run the safe Hermes ${subcommand} check for this Forge conversation and summarize the result.`);
     },
   },
 ];

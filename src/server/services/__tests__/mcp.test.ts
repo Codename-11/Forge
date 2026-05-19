@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { EventKind, RelationKind } from "@prisma/client";
+import { ChatContextMode, EventKind, RelationKind } from "@prisma/client";
 import { mcpTools, type McpContext } from "@/server/services/mcp";
 import type { ApiKeyContext } from "@/server/services/api-key-auth";
 import {
@@ -1463,6 +1463,11 @@ describe("mcp — awareness tools (Stream BA)", () => {
         workspaceId: f.workspace.id,
         userId: f.user.id,
         agentId: agent.id,
+        title: "Runbook conversation",
+        topic: "MCP metadata coverage",
+        contextMode: ChatContextMode.FULL_SUMMARY,
+        summaryMarkdown: "Existing durable summary",
+        isDefault: false,
       },
     });
     const message = await prisma.chatMessage.create({
@@ -1491,13 +1496,19 @@ describe("mcp — awareness tools (Stream BA)", () => {
 
     const { ctx: ctxAddr } = buildMcpCtx(f, { linkedAgentId: agent.id });
     const res = (await call("chat.getThread", { threadId: thread.id }, ctxAddr)) as {
-      thread: { id: string };
+      thread: { id: string; title: string | null; topic: string | null; contextMode: string; summaryMarkdown: string | null };
       messages: Array<{
         body: string;
         attachments: Array<{ id: string; filename: string; externalUrl: string | null }>;
       }>;
     };
     expect(res.thread.id).toBe(thread.id);
+    expect(res.thread).toMatchObject({
+      title: "Runbook conversation",
+      topic: "MCP metadata coverage",
+      contextMode: "FULL_SUMMARY",
+      summaryMarkdown: "Existing durable summary",
+    });
     expect(res.messages[0].body).toBe("ping");
     expect(res.messages[0].attachments).toMatchObject([
       { id: attachment.id, filename: "Runbook", externalUrl: "https://example.com/runbook" },
@@ -1556,6 +1567,10 @@ describe("mcp — awareness tools (Stream BA)", () => {
         workspaceId: f.workspace.id,
         userId: f.user.id,
         agentId: agent.id,
+        title: "Context bundle thread",
+        topic: "Bundle topic",
+        summaryMarkdown: "Durable context summary",
+        summarizedAt: new Date(),
       },
     });
     const message = await prisma.chatMessage.create({
@@ -1581,15 +1596,31 @@ describe("mcp — awareness tools (Stream BA)", () => {
     const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
     const bundle = (await call("agent.context.bundle", { threadId: thread.id }, ctx)) as {
       workspace: { id: string };
-      thread: { id: string };
+      thread: { id: string; title: string | null };
+      conversation: { id: string; title: string | null; contextMode: string };
+      summary: { markdown: string | null; summarizedUntilMessageId: string | null; summarizedAt: Date | null };
+      recentMessages: Array<{
+        id: string;
+        attachments: Array<{ id: string; filename: string; mimeType: string }>;
+      }>;
       messages: Array<{
         id: string;
         attachments: Array<{ id: string; filename: string; mimeType: string }>;
       }>;
+      attachments: Array<{ id: string; targetId: string }>;
+      contextPolicy: { mode: string; limit: number };
       diagnostics: { latestUserMessageId: string | null; waitingForReply: boolean };
     };
     expect(bundle.workspace.id).toBe(f.workspace.id);
     expect(bundle.thread.id).toBe(thread.id);
+    expect(bundle.conversation).toMatchObject({
+      id: thread.id,
+      title: "Context bundle thread",
+      contextMode: "SMART",
+    });
+    expect(bundle.summary.markdown).toBe("Durable context summary");
+    expect(bundle.contextPolicy).toMatchObject({ mode: "SMART", limit: 50 });
+    expect(bundle.attachments).toMatchObject([{ id: attachment.id, targetId: message.id }]);
     expect(Array.isArray(bundle.messages)).toBe(true);
     expect(bundle.messages[0]).toMatchObject({
       id: message.id,

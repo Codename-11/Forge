@@ -25,6 +25,7 @@ import { checkRequiredAck } from "@/server/services/required-ack";
 import { sweepSlaBreaches } from "@/server/services/sla-breach";
 import { sweepStalledRuns } from "@/server/services/agent-run-stale";
 import { recordAgentAction } from "@/server/services/agent-run";
+import { sweepChatCompaction } from "@/server/services/chat-compaction";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -41,6 +42,8 @@ const SLA_BREACH_SWEEP_INTERVAL_MS = 60_000;
 const SLA_BREACH_SWEEP_JOB_ID = "sla-breach-sweep";
 const AGENT_RUN_STALE_SWEEP_INTERVAL_MS = 60_000;
 const AGENT_RUN_STALE_SWEEP_JOB_ID = "agent-run-stale-sweep";
+const CHAT_COMPACTION_SWEEP_INTERVAL_MS = 5 * 60_000;
+const CHAT_COMPACTION_SWEEP_JOB_ID = "chat-compaction-sweep";
 
 export { webhookQueue, maintenanceQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
@@ -246,6 +249,10 @@ export const maintenanceWorker = new Worker(
         const res = await sweepStalledRuns();
         return res;
       }
+      case "chat-compaction-sweep": {
+        const res = await sweepChatCompaction(db);
+        return res;
+      }
       case "required-ack-check": {
         const eventId = job.data?.agentAssignedEventId as string | undefined;
         if (!eventId) return null;
@@ -386,6 +393,20 @@ export async function registerAgentRunStaleSweepJob(): Promise<void> {
   );
 }
 
+/** Periodic chat compaction sweep. Keeps long agent conversations bounded. */
+export async function registerChatCompactionSweepJob(): Promise<void> {
+  await maintenanceQueue.add(
+    "chat-compaction-sweep",
+    {},
+    {
+      jobId: CHAT_COMPACTION_SWEEP_JOB_ID,
+      repeat: { every: CHAT_COMPACTION_SWEEP_INTERVAL_MS },
+      removeOnComplete: { age: 3600, count: 100 },
+      removeOnFail: { age: 86_400, count: 50 },
+    },
+  );
+}
+
 // Auto-register recurring jobs when this module loads (i.e. when
 // `pnpm worker` boots). Fire-and-forget — a Redis outage at boot should
 // not crash the worker; BullMQ will retry internally on the next op.
@@ -403,6 +424,9 @@ void registerSlaBreachSweepJob().catch((err) => {
 });
 void registerAgentRunStaleSweepJob().catch((err) => {
   logger.warn({ err }, "failed to register agent-run-stale-sweep job");
+});
+void registerChatCompactionSweepJob().catch((err) => {
+  logger.warn({ err }, "failed to register chat-compaction-sweep job");
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -1,17 +1,19 @@
 import { z } from "zod";
-import { AgentRunStatus, ChatRole, EventKind } from "@prisma/client";
+import { AgentRunStatus, ChatContextMode, ChatRole, EventKind } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
+import { compactChatThread } from "@/server/services/chat-compaction";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // the same loose validator the rest of the codebase uses for entity ids.
 const idString = z.string().min(1).max(40);
 
 const ThreadStateSchema = z.enum(["all", "waiting", "stalled", "has_attachments"]);
+const ChatContextModeSchema = z.nativeEnum(ChatContextMode);
 
 const ChatContextSchema = z
   .object({
@@ -237,6 +239,63 @@ function isImageMime(mimeType: string): boolean {
   return mimeType.toLowerCase().startsWith("image/");
 }
 
+function defaultConversationTitle(agentName: string): string {
+  return `Chat with ${agentName}`;
+}
+
+async function requireChatAgent(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  agentId: string,
+) {
+  const agent = await tx.agent.findFirst({
+    where: { id: agentId, workspaceId, archivedAt: null },
+    select: { id: true, name: true, profileKey: true, avatar: true, status: true, role: true },
+  });
+  if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
+  return agent;
+}
+
+async function getOrCreateDefaultThread(input: {
+  tx: Prisma.TransactionClient;
+  workspaceId: string;
+  userId: string;
+  agentId: string;
+  now?: Date;
+  touch?: boolean;
+}) {
+  const existing = await input.tx.chatThread.findFirst({
+    where: {
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      agentId: input.agentId,
+      isDefault: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  if (existing) {
+    if (input.touch) {
+      return input.tx.chatThread.update({
+        where: { id: existing.id },
+        data: { lastMessageAt: input.now ?? new Date(), archivedAt: null },
+      });
+    }
+    return existing;
+  }
+  const agent = await requireChatAgent(input.tx, input.workspaceId, input.agentId);
+  return input.tx.chatThread.create({
+    data: {
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      agentId: input.agentId,
+      title: defaultConversationTitle(agent.name),
+      isDefault: true,
+      contextMode: ChatContextMode.SMART,
+      lastMessageAt: input.now ?? new Date(),
+    },
+  });
+}
+
 async function loadChatAttachmentsByMessageId(
   tx: Prisma.TransactionClient,
   workspaceId: string,
@@ -389,31 +448,18 @@ export const chatRouter = router({
     }),
 
   /**
-   * Open / get a thread by agent. Upserts via the (workspaceId, userId,
-   * agentId) unique. Returns thread + last 50 messages oldest-first.
+   * Open / get the default DM thread for an agent. This preserves the old
+   * one-click chat behavior while named conversations use createConversation.
    */
-  thread: workspaceProcedure
+  defaultThread: workspaceProcedure
     .input(z.object({ agentId: idString }))
     .mutation(async ({ ctx, input }) => {
-      const agent = await ctx.db.agent.findFirst({
-        where: { id: input.agentId, workspaceId: ctx.workspaceId, archivedAt: null },
-        select: { id: true, name: true, profileKey: true, avatar: true, status: true, role: true },
-      });
-      if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
-      const thread = await ctx.db.chatThread.upsert({
-        where: {
-          workspaceId_userId_agentId: {
-            workspaceId: ctx.workspaceId,
-            userId: ctx.session.user.id,
-            agentId: agent.id,
-          },
-        },
-        create: {
-          workspaceId: ctx.workspaceId,
-          userId: ctx.session.user.id,
-          agentId: agent.id,
-        },
-        update: {},
+      const agent = await requireChatAgent(ctx.db, ctx.workspaceId, input.agentId);
+      const thread = await getOrCreateDefaultThread({
+        tx: ctx.db,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+        agentId: agent.id,
       });
       const messages = await ctx.db.chatMessage.findMany({
         where: {
@@ -424,6 +470,94 @@ export const chatRouter = router({
         take: 50,
       });
       return { thread, agent, messages };
+    }),
+
+  /** Backward-compatible alias for existing Mission Control callers. */
+  thread: workspaceProcedure
+    .input(z.object({ agentId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      const agent = await requireChatAgent(ctx.db, ctx.workspaceId, input.agentId);
+      const thread = await getOrCreateDefaultThread({
+        tx: ctx.db,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+        agentId: agent.id,
+      });
+      const messages = await ctx.db.chatMessage.findMany({
+        where: {
+          threadId: thread.id,
+          OR: [{ role: { not: ChatRole.USER } }, { dispatchedAt: { not: null } }],
+        },
+        orderBy: { createdAt: "asc" },
+        take: 50,
+      });
+      return { thread, agent, messages };
+    }),
+
+  createConversation: workspaceProcedure
+    .input(
+      z.object({
+        agentId: idString,
+        title: z.string().trim().min(1).max(120).optional(),
+        topic: z.string().trim().max(500).optional(),
+        contextMode: ChatContextModeSchema.default(ChatContextMode.SMART),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const agent = await requireChatAgent(ctx.db, ctx.workspaceId, input.agentId);
+      const thread = await ctx.db.chatThread.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.session.user.id,
+          agentId: agent.id,
+          title: input.title ?? null,
+          topic: input.topic || null,
+          isDefault: false,
+          contextMode: input.contextMode,
+        },
+      });
+      return { thread, agent, messages: [] };
+    }),
+
+  updateConversation: workspaceProcedure
+    .input(
+      z.object({
+        threadId: idString,
+        title: z.string().trim().min(1).max(120).nullable().optional(),
+        topic: z.string().trim().max(500).nullable().optional(),
+        contextMode: ChatContextModeSchema.optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
+        select: { id: true },
+      });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Chat thread not found" });
+      return ctx.db.chatThread.update({
+        where: { id: thread.id },
+        data: {
+          ...(input.title !== undefined ? { title: input.title } : {}),
+          ...(input.topic !== undefined ? { topic: input.topic || null } : {}),
+          ...(input.contextMode !== undefined ? { contextMode: input.contextMode } : {}),
+        },
+      });
+    }),
+
+  compactThread: workspaceProcedure
+    .input(z.object({ threadId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
+        select: { id: true },
+      });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Chat thread not found" });
+      return compactChatThread(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        threadId: thread.id,
+        actorId: ctx.session.user.id,
+        actor: "manual",
+      });
     }),
 
   /**
@@ -482,6 +616,7 @@ export const chatRouter = router({
     .input(
       z.object({
         agentId: idString,
+        threadId: idString.optional(),
         body: z.string().min(1).max(8000),
         context: ChatContextSchema.optional(),
       }),
@@ -489,22 +624,28 @@ export const chatRouter = router({
     .mutation(async ({ ctx, input }) => {
       return ctx.db.$transaction(async (tx) => {
         const now = new Date();
-        const thread = await tx.chatThread.upsert({
-          where: {
-            workspaceId_userId_agentId: {
+        const thread = input.threadId
+          ? await tx.chatThread.findFirst({
+              where: {
+                id: input.threadId,
+                workspaceId: ctx.workspaceId,
+                userId: ctx.session.user.id,
+                agentId: input.agentId,
+                archivedAt: null,
+              },
+            })
+          : await getOrCreateDefaultThread({
+              tx,
               workspaceId: ctx.workspaceId,
               userId: ctx.session.user.id,
               agentId: input.agentId,
-            },
-          },
-          create: {
-            workspaceId: ctx.workspaceId,
-            userId: ctx.session.user.id,
-            agentId: input.agentId,
-            lastMessageAt: now,
-          },
-          update: { lastMessageAt: now },
-        });
+              now,
+              touch: true,
+            });
+        if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Chat thread not found" });
+        if (input.threadId) {
+          await tx.chatThread.update({ where: { id: thread.id }, data: { lastMessageAt: now } });
+        }
         const message = await tx.chatMessage.create({
           data: {
             workspaceId: ctx.workspaceId,
@@ -548,31 +689,30 @@ export const chatRouter = router({
     .input(
       z.object({
         agentId: idString,
+        threadId: idString.optional(),
         body: z.string().max(8000).default(""),
         context: ChatContextSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const agent = await ctx.db.agent.findFirst({
-        where: { id: input.agentId, workspaceId: ctx.workspaceId, archivedAt: null },
-        select: { id: true },
-      });
-      if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
-      const thread = await ctx.db.chatThread.upsert({
-        where: {
-          workspaceId_userId_agentId: {
+      const agent = await requireChatAgent(ctx.db, ctx.workspaceId, input.agentId);
+      const thread = input.threadId
+        ? await ctx.db.chatThread.findFirst({
+            where: {
+              id: input.threadId,
+              workspaceId: ctx.workspaceId,
+              userId: ctx.session.user.id,
+              agentId: agent.id,
+              archivedAt: null,
+            },
+          })
+        : await getOrCreateDefaultThread({
+            tx: ctx.db,
             workspaceId: ctx.workspaceId,
             userId: ctx.session.user.id,
-            agentId: input.agentId,
-          },
-        },
-        create: {
-          workspaceId: ctx.workspaceId,
-          userId: ctx.session.user.id,
-          agentId: input.agentId,
-        },
-        update: {},
-      });
+            agentId: agent.id,
+          });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Chat thread not found" });
       const message = await ctx.db.chatMessage.create({
         data: {
           workspaceId: ctx.workspaceId,

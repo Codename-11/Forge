@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-18 — Forge Conversations v2
+
+### Summary
+
+Shipped Forge Conversations v2 as a first-class multi-conversation agent chat system. Agents can now have multiple named operator threads while the default DM path remains backward-compatible for existing Mission Control and Hermes delivery flows. Context sent to Hermes is now deterministic: durable summary + recent visible messages + finalized attachments + page/operator context and diagnostics.
+
+### What changed
+
+- Replaced the one-thread-per-agent uniqueness constraint with conversation metadata on `ChatThread`: title, topic, default-thread flag, context mode, archive state, durable summary, and summarized cursor/timestamp.
+- Added `chat.createConversation`, `chat.updateConversation`, and `chat.compactThread`; preserved `chat.thread({ agentId })` as the default DM compatibility alias.
+- Updated `chat.send` and deferred attachment dispatch to target selected named threads without accidentally falling back to the default DM.
+- Added `chat-context` and `chat-compaction` services for deterministic MCP bundles and summary compaction.
+- Extended MCP `chat.getThread` and `agent.context.bundle({ threadId })` with conversation metadata, summary, context policy, recent messages, finalized attachments, linked issues, and diagnostics.
+- Added worker-driven chat compaction sweep alongside the existing maintenance jobs.
+- Updated the Chat workspace with a new-conversation dialog, named thread rows, selected-thread routing, context/summary diagnostics, and a guarded `Compact now` operator control.
+- Expanded Forge-local slash commands with explicit allowlisted `/compact`, `/summarize`, and safe `/hermes {status|usage|skills}` behavior; arbitrary Hermes command bridging remains blocked.
+
+### Verification
+
+- Applied migrations `0030_chat_conversations_v2` and `0031_chat_thread_default_flag_default` locally with `pnpm prisma migrate deploy` and regenerated Prisma client.
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts src/server/routers/__tests__/chat.test.ts tests/unit/sidebar-nav.test.ts` → 3 files / 90 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass.
+- `pnpm lint` → pass.
+- `pnpm test` → 39 files / 290 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` → pass; verified `/w/[slug]/chat` remains in the production route manifest.
+
 ## 2026-05-18 — Chat operator console completion
 
 ### Summary

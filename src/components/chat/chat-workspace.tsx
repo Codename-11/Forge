@@ -10,6 +10,7 @@ import {
   ImageIcon,
   MessageSquare,
   Paperclip,
+  Plus,
   Radio,
   Search,
   Settings2,
@@ -53,6 +54,17 @@ function truncate(body: string | null | undefined, fallback: string): string {
   return cleaned.length > 96 ? `${cleaned.slice(0, 93)}…` : cleaned;
 }
 
+function conversationTitle(thread: {
+  title?: string | null;
+  isDefault?: boolean | null;
+  agent: { name: string };
+  latestMessage?: { body: string | null } | null;
+}): string {
+  if (thread.title?.trim()) return thread.title.trim();
+  if (thread.isDefault) return `Chat with ${thread.agent.name}`;
+  return truncate(thread.latestMessage?.body, "Untitled conversation");
+}
+
 function statusMeta(input: {
   agent: AgentLite;
   latestMessage?: { role: string; createdAt: Date | string } | null;
@@ -84,6 +96,11 @@ export function ChatWorkspaceSurface() {
   const [stateFilter, setStateFilter] = useState<ThreadStateFilter>("all");
   const [archived, setArchived] = useState(false);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
+  const [newConversationOpen, setNewConversationOpen] = useState(false);
+  const [newAgentId, setNewAgentId] = useState("");
+  const [newTitle, setNewTitle] = useState("");
+  const [newTopic, setNewTopic] = useState("");
+  const [newContextMode, setNewContextMode] = useState<"SMART" | "RECENT_ONLY" | "FULL_SUMMARY" | "PINNED_CONTEXT">("SMART");
 
   const { data: threads, isLoading: threadsLoading } = trpc.chat.threads.useQuery(
     { query: query.trim() || undefined, state: stateFilter, archived },
@@ -98,6 +115,16 @@ export function ChatWorkspaceSurface() {
   });
   const restoreM = trpc.chat.restoreThread.useMutation({
     onSuccess: () => void utils.chat.threads.invalidate(),
+  });
+  const createConversationM = trpc.chat.createConversation.useMutation({
+    onSuccess: async (result) => {
+      await utils.chat.threads.invalidate();
+      setNewConversationOpen(false);
+      setNewTitle("");
+      setNewTopic("");
+      setSelectedAgentId(result.agent.id);
+      router.replace(`/w/${ws.slug}/chat?thread=${encodeURIComponent(result.thread.id)}`);
+    },
   });
 
   useRealtime((evt) => {
@@ -129,7 +156,7 @@ export function ChatWorkspaceSurface() {
   }, [agents, selectedAgentId, selectedThread, threadParam, threads]);
 
   const threadAgentIds = useMemo(
-    () => new Set((threads ?? []).map((thread) => thread.agent.id)),
+    () => new Set((threads ?? []).filter((thread) => thread.isDefault).map((thread) => thread.agent.id)),
     [threads],
   );
   const starterAgents = useMemo(
@@ -146,6 +173,10 @@ export function ChatWorkspaceSurface() {
     );
   }, [agents, selectedAgentId, selectedThread?.agent, threads]);
 
+  useEffect(() => {
+    if (!newAgentId && agents?.[0]?.id) setNewAgentId(agents[0].id);
+  }, [agents, newAgentId]);
+
   const openThread = (threadId: string, agentId: string) => {
     setSelectedAgentId(agentId);
     router.replace(`/w/${ws.slug}/chat?thread=${encodeURIComponent(threadId)}`);
@@ -157,6 +188,16 @@ export function ChatWorkspaceSurface() {
     setMobilePickerOpen(false);
   };
 
+  const createConversation = () => {
+    if (!newAgentId) return;
+    createConversationM.mutate({
+      agentId: newAgentId,
+      title: newTitle.trim() || undefined,
+      topic: newTopic.trim() || undefined,
+      contextMode: newContextMode,
+    });
+  };
+
   const hasRows = (threads?.length ?? 0) > 0 || starterAgents.length > 0;
 
   return (
@@ -165,14 +206,72 @@ export function ChatWorkspaceSurface() {
         title="Chat"
         subtitle="Agent conversations, file-backed prompts, and dispatch state."
         actions={
-          <Link href={`/w/${ws.slug}/settings/agents`}>
-            <Button variant="ghost" size="sm">
-              <Settings2 className="mr-1.5 h-3.5 w-3.5" />
-              Manage agents
+          <div className="flex items-center gap-2">
+            <Button variant="subtle" size="sm" onClick={() => setNewConversationOpen(true)}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              New conversation
             </Button>
-          </Link>
+            <Link href={`/w/${ws.slug}/settings/agents`}>
+              <Button variant="ghost" size="sm">
+                <Settings2 className="mr-1.5 h-3.5 w-3.5" />
+                Manage agents
+              </Button>
+            </Link>
+          </div>
         }
       />
+      {newConversationOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-card p-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-foreground">New conversation</div>
+                <p className="text-meta text-muted-foreground">Create a named agent thread with explicit context policy.</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => setNewConversationOpen(false)}>
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            <div className="mt-4 space-y-3">
+              <label className="block text-meta text-muted-foreground">
+                Agent
+                <select
+                  value={newAgentId}
+                  onChange={(event) => setNewAgentId(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"
+                >
+                  {(agents ?? []).map((agent) => (
+                    <option key={agent.id} value={agent.id}>{agent.name} · @{agent.profileKey}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-meta text-muted-foreground">
+                Title
+                <input value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="Launch plan, debugging thread, research pass…" className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground" />
+              </label>
+              <label className="block text-meta text-muted-foreground">
+                Topic
+                <textarea value={newTopic} onChange={(event) => setNewTopic(event.target.value)} rows={3} placeholder="Optional operator context for this conversation." className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground" />
+              </label>
+              <label className="block text-meta text-muted-foreground">
+                Context mode
+                <select value={newContextMode} onChange={(event) => setNewContextMode(event.target.value as typeof newContextMode)} className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground">
+                  <option value="SMART">Smart · summary plus recent messages</option>
+                  <option value="RECENT_ONLY">Recent only</option>
+                  <option value="FULL_SUMMARY">Full summary plus recent</option>
+                  <option value="PINNED_CONTEXT">Pinned context</option>
+                </select>
+              </label>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setNewConversationOpen(false)}>Cancel</Button>
+              <Button variant="subtle" size="sm" disabled={!newAgentId || createConversationM.isPending} onClick={createConversation}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" /> Create
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-hidden">
         <div className="grid h-full min-h-0 grid-cols-[20rem_minmax(0,1fr)] border-b border-border/60 max-lg:grid-cols-[17rem_minmax(0,1fr)] max-md:grid-cols-1 xl:grid-cols-[20rem_minmax(0,1fr)_18rem]">
           <aside className="flex min-h-0 flex-col border-r border-border/70 bg-card/30 max-md:hidden">
@@ -265,7 +364,7 @@ export function ChatWorkspaceSurface() {
                         Recent
                       </div>
                       {(threads ?? []).map((thread) => {
-                        const active = selectedAgentId === thread.agent.id;
+                        const active = selectedThread?.id === thread.id;
                         const latest = thread.latestMessage;
                         const meta = statusMeta({ agent: thread.agent, latestMessage: latest });
                         return (
@@ -284,13 +383,16 @@ export function ChatWorkspaceSurface() {
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-2">
                                 <span className="truncate text-sm font-medium text-foreground">
-                                  {thread.agent.name}
+                                  {conversationTitle(thread)}
                                 </span>
-                                <span className="text-id text-muted-foreground">
-                                  @{thread.agent.profileKey}
-                                </span>
+                                {thread.isDefault ? (
+                                  <span className="rounded-full border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">default</span>
+                                ) : null}
                               </div>
                               <p className="text-meta mt-0.5 truncate text-muted-foreground">
+                                {thread.agent.name} · @{thread.agent.profileKey}
+                              </p>
+                              <p className="text-meta mt-0.5 truncate text-muted-foreground/80">
                                 {truncate(
                                   latest?.body,
                                   latest?.attachmentCount ? "Attachment prompt" : "No messages yet",
@@ -418,14 +520,14 @@ export function ChatWorkspaceSurface() {
                       >
                         <AgentGlyph
                           agent={thread.agent}
-                          active={selectedAgentId === thread.agent.id}
+                          active={selectedThread?.id === thread.id}
                         />
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-medium text-foreground">
-                            {thread.agent.name}
+                            {conversationTitle(thread)}
                           </div>
                           <div className="text-meta truncate text-muted-foreground">
-                            {truncate(thread.latestMessage?.body, "No messages yet")}
+                            {thread.agent.name} · {truncate(thread.latestMessage?.body, "No messages yet")}
                           </div>
                         </div>
                       </button>
@@ -470,7 +572,7 @@ export function ChatWorkspaceSurface() {
                 </div>
               </div>
             ) : selectedAgentId ? (
-              <ChatThreadView agentId={selectedAgentId} />
+              <ChatThreadView agentId={selectedAgentId} threadId={selectedThread?.id ?? null} />
             ) : (
               <div className="flex h-full items-center justify-center p-8 text-center text-muted-foreground">
                 <div className="max-w-sm">

@@ -108,6 +108,7 @@ enum EventKind {
   AGENT_RUN_COMPLETED
   AGENT_RUN_STALLED
   CHAT_MESSAGE_POSTED
+  CHAT_THREAD_COMPACTED
   ISSUE_SNOOZED
   ISSUE_UNSNOOZED
   ISSUE_NUDGED
@@ -130,6 +131,13 @@ enum ChatRole {
   USER
   AGENT
   SYSTEM
+}
+
+enum ChatContextMode {
+  SMART
+  RECENT_ONLY
+  FULL_SUMMARY
+  PINNED_CONTEXT
 }
 
 /// Polymorphic target for personal pins + recent-item tracking.
@@ -1518,22 +1526,28 @@ model AgentRunEvent {
 }
 
 model ChatThread {
-  id            String    @id @default(cuid())
-  workspaceId   String
-  userId        String
-  agentId       String
-  title         String?
-  lastMessageAt DateTime  @default(now())
-  createdAt     DateTime  @default(now())
-  archivedAt    DateTime?
+  id                       String          @id @default(cuid())
+  workspaceId              String
+  userId                   String
+  agentId                  String
+  title                    String?
+  topic                    String?
+  isDefault                Boolean         @default(false)
+  contextMode              ChatContextMode @default(SMART)
+  summaryMarkdown          String?         @db.Text
+  summarizedUntilMessageId String?
+  summarizedAt             DateTime?
+  lastMessageAt            DateTime        @default(now())
+  createdAt                DateTime        @default(now())
+  archivedAt               DateTime?
 
   workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   agent     Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
 
-  @@unique([workspaceId, userId, agentId])
-  @@index([workspaceId, userId, lastMessageAt])
+  @@index([workspaceId, userId, agentId, lastMessageAt])
+  @@index([workspaceId, userId, archivedAt, lastMessageAt])
 }
 
 model ChatMessage {
