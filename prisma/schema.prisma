@@ -380,33 +380,35 @@ model User {
   sessions    Session[]
   memberships Membership[]
 
-  authoredIssues        Issue[]             @relation("IssueAuthor")
-  assignedIssues        IssueAssignee[]
-  comments              Comment[]
-  auditEntries          AuditLog[]
-  events                ActivityEvent[]
-  notificationStates    NotificationState[]
-  createdProjects       Project[]           @relation("ProjectCreator")
-  apiKeys               ApiKey[]
-  claimedIssues         Issue[]             @relation("IssueClaimedBy")
-  recurringCreated      RecurringIssue[]    @relation("RecurringCreator")
-  savedViews            SavedView[]
-  issueSavedViews       IssueSavedView[]
-  timeEntries           TimeEntry[]
-  chatThreads           ChatThread[]
-  runtimes              Runtime[]
-  controlRequestedRuns  AgentRun[]          @relation("AgentRunControlRequester")
-  pins                  Pin[]
-  recentItems           RecentItem[]
-  notes                 Note[]
-  issueWatches          IssueWatcher[]
-  createdArtifacts      Artifact[]          @relation("ArtifactCreator")
-  artifactVersions      ArtifactVersion[]   @relation("ArtifactVersionCreator")
-  ownedContextSets      ContextSet[]        @relation("ContextSetOwnerUser")
-  createdExecutionPlans ExecutionPlan[]     @relation("ExecutionPlanCreator")
-  executionSteps        ExecutionStep[]     @relation("ExecutionStepUser")
-  requestedReviewGates  ReviewGate[]        @relation("ReviewGateRequester")
-  resolvedReviewGates   ReviewGate[]        @relation("ReviewGateResolver")
+  authoredIssues          Issue[]             @relation("IssueAuthor")
+  assignedIssues          IssueAssignee[]
+  comments                Comment[]
+  auditEntries            AuditLog[]
+  events                  ActivityEvent[]
+  notificationStates      NotificationState[]
+  createdProjects         Project[]           @relation("ProjectCreator")
+  apiKeys                 ApiKey[]
+  claimedIssues           Issue[]             @relation("IssueClaimedBy")
+  recurringCreated        RecurringIssue[]    @relation("RecurringCreator")
+  savedViews              SavedView[]
+  issueSavedViews         IssueSavedView[]
+  timeEntries             TimeEntry[]
+  chatThreads             ChatThread[]
+  runtimes                Runtime[]
+  controlRequestedRuns    AgentRun[]          @relation("AgentRunControlRequester")
+  pins                    Pin[]
+  recentItems             RecentItem[]
+  notes                   Note[]
+  issueWatches            IssueWatcher[]
+  createdArtifacts        Artifact[]          @relation("ArtifactCreator")
+  artifactVersions        ArtifactVersion[]   @relation("ArtifactVersionCreator")
+  ownedContextSets        ContextSet[]        @relation("ContextSetOwnerUser")
+  createdExecutionPlans   ExecutionPlan[]     @relation("ExecutionPlanCreator")
+  executionSteps          ExecutionStep[]     @relation("ExecutionStepUser")
+  requestedReviewGates    ReviewGate[]        @relation("ReviewGateRequester")
+  resolvedReviewGates     ReviewGate[]        @relation("ReviewGateResolver")
+  requestedActionRequests ActionRequest[]     @relation("ActionRequestRequester")
+  assignedActionRequests  ActionRequest[]     @relation("ActionRequestAssignee")
 
   @@index([handle])
 }
@@ -608,6 +610,7 @@ model Workspace {
   agentCrews         AgentCrew[]
   agentCrewMembers   AgentCrewMember[]
   reviewGates        ReviewGate[]
+  actionRequests     ActionRequest[]
   startedStatus      Status?             @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
@@ -789,6 +792,7 @@ model Issue {
   watchers       IssueWatcher[]
   artifacts      Artifact[]
   executionPlans ExecutionPlan[]
+  actionRequests ActionRequest[]
 
   @@unique([workspaceId, number])
   @@index([workspaceId, statusId])
@@ -1465,6 +1469,8 @@ model Agent {
   crewMemberships          AgentCrewMember[] @relation("AgentCrewMember")
   requestedReviewGates     ReviewGate[]      @relation("ReviewGateRequesterAgent")
   resolvedReviewGates      ReviewGate[]      @relation("ReviewGateResolverAgent")
+  requestedActionRequests  ActionRequest[]   @relation("ActionRequestRequesterAgent")
+  assignedActionRequests   ActionRequest[]   @relation("ActionRequestAssigneeAgent")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
@@ -2126,4 +2132,59 @@ model ReviewGate {
 
   @@index([workspaceId, status, createdAt])
   @@index([workspaceId, targetType, targetId])
+}
+
+// ----------------------------------------------------------------------------
+// Agentic work OS — ActionRequest (added 2026-05-19, migration 0037)
+// ----------------------------------------------------------------------------
+
+/// Lifecycle for an ActionRequest. OPEN is the steady state; RESOLVED
+/// is the successful path; DISMISSED is the "no longer relevant"
+/// path; SNOOZED parks the request until the operator chooses to act.
+enum ActionRequestStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+  SNOOZED
+}
+
+/// A precise, resolvable ask. Replaces vague notifications: instead of
+/// "the agent commented", ActionRequest models "the agent needs your
+/// decision before continuing." Inbox's waiting-on-me query unions
+/// these with the existing NotificationState lifecycle.
+model ActionRequest {
+  id                 String               @id @default(cuid())
+  workspaceId        String
+  title              String
+  body               String?              @db.Text
+  status             ActionRequestStatus  @default(OPEN)
+  severity           NotificationSeverity @default(INFO)
+  requestedByUserId  String?
+  requestedByAgentId String?
+  assignedUserId     String?
+  assignedAgentId    String?
+  /// Polymorphic source — chat-message, comment, agent-run, etc.
+  sourceType         String?
+  sourceId           String?
+  /// Optional pointer at the issue this request relates to. Lets the
+  /// inbox surface group requests under their parent issue without
+  /// re-deriving from sourceType.
+  issueId            String?
+  dueAt              DateTime?
+  resolvedAt         DateTime?
+  resolution         String?              @db.Text
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requestedByUser  User?     @relation("ActionRequestRequester", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  requestedByAgent Agent?    @relation("ActionRequestRequesterAgent", fields: [requestedByAgentId], references: [id], onDelete: SetNull)
+  assignedUser     User?     @relation("ActionRequestAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignedAgent    Agent?    @relation("ActionRequestAssigneeAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  issue            Issue?    @relation(fields: [issueId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status, createdAt])
+  @@index([assignedUserId, status])
+  @@index([assignedAgentId, status])
+  @@index([issueId])
 }

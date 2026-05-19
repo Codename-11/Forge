@@ -5293,6 +5293,124 @@ export const mcpTools = {
     },
   },
 
+  // ------------------------------------------------------------ ActionRequests
+  //
+  // Precise, resolvable asks. Agents create ActionRequests to surface
+  // blockers ("I need a decision before continuing"); humans create
+  // them to assign work to other humans or agents. Resolved /
+  // dismissed / snoozed lifecycle keeps the inbox clean.
+
+  "actionRequests.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      status: z.enum(["OPEN", "RESOLVED", "DISMISSED", "SNOOZED"]).optional(),
+      assignedAgentId: z.string().cuid().optional(),
+      assignedUserId: z.string().cuid().optional(),
+      issueId: z.string().cuid().optional(),
+      limit: z.number().int().min(1).max(100).default(50),
+    }),
+    async run(
+      input: {
+        status?: "OPEN" | "RESOLVED" | "DISMISSED" | "SNOOZED";
+        assignedAgentId?: string;
+        assignedUserId?: string;
+        issueId?: string;
+        limit: number;
+      },
+      ctx: McpContext,
+    ) {
+      return db.actionRequest.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          status: input.status,
+          assignedAgentId: input.assignedAgentId,
+          assignedUserId: input.assignedUserId,
+          issueId: input.issueId,
+        },
+        orderBy: { createdAt: "desc" },
+        take: input.limit,
+      });
+    },
+  },
+
+  "actionRequests.create": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      title: z.string().min(1).max(300),
+      body: z.string().max(10_000).nullable().optional(),
+      severity: z
+        .enum(["INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"])
+        .default("INFO"),
+      assignedUserId: z.string().cuid().nullable().optional(),
+      assignedAgentId: z.string().cuid().nullable().optional(),
+      sourceType: z.string().max(40).nullable().optional(),
+      sourceId: z.string().max(40).nullable().optional(),
+      issueId: z.string().cuid().nullable().optional(),
+      dueAt: z.coerce.date().nullable().optional(),
+    }),
+    async run(
+      input: {
+        title: string;
+        body?: string | null;
+        severity: "INFO" | "SUCCESS" | "WARNING" | "ERROR" | "CRITICAL";
+        assignedUserId?: string | null;
+        assignedAgentId?: string | null;
+        sourceType?: string | null;
+        sourceId?: string | null;
+        issueId?: string | null;
+        dueAt?: Date | null;
+      },
+      ctx: McpContext,
+    ) {
+      const { createActionRequest } = await import(
+        "@/server/services/action-request-service"
+      );
+      return createActionRequest(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        title: input.title,
+        body: input.body ?? null,
+        severity: input.severity as never,
+        assignedUserId: input.assignedUserId ?? null,
+        assignedAgentId: input.assignedAgentId ?? null,
+        sourceType: input.sourceType ?? null,
+        sourceId: input.sourceId ?? null,
+        issueId: input.issueId ?? null,
+        dueAt: input.dueAt ?? null,
+      });
+    },
+  },
+
+  "actionRequests.transition": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      status: z.enum(["OPEN", "RESOLVED", "DISMISSED", "SNOOZED"]),
+      resolution: z.string().max(10_000).nullable().optional(),
+    }),
+    async run(
+      input: {
+        id: string;
+        status: "OPEN" | "RESOLVED" | "DISMISSED" | "SNOOZED";
+        resolution?: string | null;
+      },
+      ctx: McpContext,
+    ) {
+      const { transitionActionRequest } = await import(
+        "@/server/services/action-request-service"
+      );
+      await transitionActionRequest(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        requestId: input.id,
+        status: input.status as never,
+        resolution: input.resolution ?? null,
+      });
+      return { ok: true };
+    },
+  },
+
   // --------------------------------------------------------- AgentCrews / Gates
   //
   // Crews bind agents to a plan with roles (planner/worker/reviewer);

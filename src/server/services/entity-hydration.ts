@@ -411,9 +411,35 @@ async function hydrateOne(
         meta: { status: row.status, position: row.position, planId: row.planId },
       }));
     }
-    case "action-request":
-      // Wave 8 primitive. Returns empty until that wave ships.
-      return [];
+    case "action-request": {
+      const rows = await db.actionRequest.findMany({
+        where: { workspaceId, id: { in: ids } },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          severity: true,
+          assignedUserId: true,
+          assignedAgentId: true,
+          dueAt: true,
+        },
+      });
+      return rows.map((row) => ({
+        type: "action-request" as const,
+        id: row.id,
+        missing: false,
+        label: row.title,
+        subLabel: `${row.status.toLowerCase()} · ${row.severity.toLowerCase()}`,
+        url: workspaceUrl(workspaceSlug, `/inbox?actionRequest=${row.id}`),
+        meta: {
+          status: row.status,
+          severity: row.severity,
+          dueAt: row.dueAt,
+          assignedUserId: row.assignedUserId,
+          assignedAgentId: row.assignedAgentId,
+        },
+      }));
+    }
     default: {
       const exhaustive: never = type;
       void exhaustive;

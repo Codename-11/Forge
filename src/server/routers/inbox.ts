@@ -516,6 +516,51 @@ export const inboxRouter = router({
     }),
 
   /**
+   * Wave 8: precise, resolvable asks targeting the caller. Returned
+   * alongside the @-mention waitingOnMe stream so the UI can union
+   * both lists under the same "needs your input" bucket. Open status
+   * only; resolved/dismissed/snoozed are excluded.
+   */
+  actionRequestsForMe: workspaceProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(100).default(50),
+        })
+        .default({ limit: 50 }),
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.session?.user?.id;
+      if (!userId) return { items: [] };
+      const rows = await ctx.db.actionRequest.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          assignedUserId: userId,
+          status: "OPEN",
+        },
+        orderBy: [{ severity: "desc" }, { createdAt: "desc" }],
+        take: input.limit,
+        include: {
+          requestedByAgent: {
+            select: { id: true, name: true, profileKey: true, avatar: true },
+          },
+          requestedByUser: {
+            select: { id: true, name: true, image: true },
+          },
+          issue: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              workspace: { select: { slug: true, key: true } },
+            },
+          },
+        },
+      });
+      return { items: rows };
+    }),
+
+  /**
    * Quick sidebar badge — just the "things demanding attention" count without
    * fetching the full body. Used by the Inbox nav item.
    */
