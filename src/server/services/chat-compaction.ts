@@ -85,13 +85,6 @@ export async function compactChatThread(
 ) {
   const thread = await db.chatThread.findFirst({
     where: { id: input.threadId, workspaceId: input.workspaceId },
-    select: {
-      id: true,
-      workspaceId: true,
-      userId: true,
-      summaryMarkdown: true,
-      summarizedUntilMessageId: true,
-    },
   });
   if (!thread) throw new Error("Chat thread not found in this workspace.");
 
@@ -104,8 +97,21 @@ export async function compactChatThread(
     orderBy: { createdAt: "asc" },
     select: { id: true, role: true, body: true, createdAt: true },
   });
-  const compactable = messages.slice(0, Math.max(0, messages.length - SUMMARY_KEEP_RECENT));
-  const source = compactable.length > 0 ? compactable : messages;
+  const summarizedCursorIndex = thread.summarizedUntilMessageId
+    ? messages.findIndex((message) => message.id === thread.summarizedUntilMessageId)
+    : -1;
+  const unsummarizedMessages = summarizedCursorIndex >= 0 ? messages.slice(summarizedCursorIndex + 1) : messages;
+
+  if (unsummarizedMessages.length === 0) {
+    return {
+      thread,
+      summarizedUntilMessageId: thread.summarizedUntilMessageId,
+      summarizedMessageCount: 0,
+    };
+  }
+
+  const compactable = unsummarizedMessages.slice(0, Math.max(0, unsummarizedMessages.length - SUMMARY_KEEP_RECENT));
+  const source = compactable.length > 0 ? compactable : unsummarizedMessages;
   const summarizedUntil = source.at(-1) ?? null;
   const summaryMarkdown = buildExtractiveChatSummary({
     existingSummary: thread.summaryMarkdown,
@@ -116,7 +122,7 @@ export async function compactChatThread(
     where: { id: thread.id },
     data: {
       summaryMarkdown,
-      summarizedUntilMessageId: summarizedUntil?.id ?? null,
+      summarizedUntilMessageId: summarizedUntil?.id ?? thread.summarizedUntilMessageId,
       summarizedAt: new Date(),
     },
   });
@@ -132,7 +138,7 @@ export async function compactChatThread(
     subjectId: thread.id,
     payload: {
       threadId: thread.id,
-      summarizedUntilMessageId: summarizedUntil?.id ?? null,
+      summarizedUntilMessageId: summarizedUntil?.id ?? thread.summarizedUntilMessageId,
       summarizedMessageCount: source.length,
       actor: input.actor ?? "manual",
     } as Prisma.InputJsonObject,
@@ -140,7 +146,7 @@ export async function compactChatThread(
 
   return {
     thread: updated,
-    summarizedUntilMessageId: summarizedUntil?.id ?? null,
+    summarizedUntilMessageId: summarizedUntil?.id ?? thread.summarizedUntilMessageId,
     summarizedMessageCount: source.length,
   };
 }
