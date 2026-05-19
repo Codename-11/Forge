@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
+import { ArtifactType, NotificationSeverity } from "@prisma/client";
 import { cn } from "@/lib/utils";
 import { MOTION } from "@/lib/motion";
 import { Kbd } from "@/components/ui/kbd";
@@ -25,11 +26,21 @@ import {
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 type Priority = (typeof PRIORITIES)[number];
 
+const SEVERITIES = [
+  NotificationSeverity.INFO,
+  NotificationSeverity.WARNING,
+  NotificationSeverity.ERROR,
+  NotificationSeverity.CRITICAL,
+] as const;
+
 type Mode =
   | { kind: "issue" }
   | { kind: "cycle" }
   | { kind: "initiative" }
   | { kind: "project" }
+  | { kind: "note" }
+  | { kind: "artifact" }
+  | { kind: "action-request" }
   | { kind: "issue-context"; issueId: string; intent: "comment" | "sub-issue" };
 
 const DRAFT_KEY = "quickCreate";
@@ -40,21 +51,21 @@ type DraftShape = {
 };
 
 /**
- * Context-aware quick-create. `⇧C` opens a Linear-style floating input at
- * the top of the viewport — single line, fast, keyboard-first. The
- * container is NOT a modal: it doesn't dim the page, and clicking outside
- * simply closes.
+ * Context-aware capture. `⇧C` opens a Linear-style floating input at the
+ * top of the viewport — single line, fast, keyboard-first. The container
+ * is NOT a modal: it doesn't dim the page, and clicking outside simply
+ * closes. The mode dropdown spans the full agentic-work-OS surface so any
+ * intent (issue / sprint / project / initiative / note / artifact /
+ * action request) can be captured without navigating first.
  *
- * Pathname determines the *initial* mode (set when the overlay opens). On
- * pages that aren't issue-context, the mode chip becomes a dropdown so the
- * user can switch to issue / sprint / project / initiative without
- * navigating first.
+ * Pathname determines the *initial* mode (set when the overlay opens):
  *
- *   /w/*\/cycles           → "cycle"       (⏎ create · ⌘⏎ full form)
- *   /w/*\/initiatives      → "initiative"  (⏎ create · ⌘⏎ full form)
- *   /w/*\/projects         → "project"     (⏎ create · ⌘⏎ full form)
- *   /w/*\/issues/:id       → "issue-context" (comment | sub-issue tabs)
- *   anywhere else          → "issue"       (⏎ create · ⌘⏎ create + open)
+ *   /w/*\/cycles           → "cycle"          (⏎ create · ⌘⏎ full form)
+ *   /w/*\/initiatives      → "initiative"     (⏎ create · ⌘⏎ full form)
+ *   /w/*\/projects         → "project"        (⏎ create · ⌘⏎ full form)
+ *   /w/*\/artifacts        → "artifact"       (⏎ create · ⌘⏎ create + open)
+ *   /w/*\/issues/:id       → "issue-context"  (comment | sub-issue tabs)
+ *   anywhere else          → "issue"          (⏎ create · ⌘⏎ create + open)
  *
  * Draft behavior: if the user has typed anything and dismisses with `⎋`,
  * the text is persisted under `forge.draft.quickCreate` for 24h. The next
@@ -71,6 +82,13 @@ export function QuickCreate() {
   const [priority, setPriority] = useState<Priority>("NONE");
   const [projectId, setProjectId] = useState<string>("");
   const [restored, setRestored] = useState(false);
+  // Per-mode extras for the new agentic-OS destinations.
+  const [artifactType, setArtifactType] = useState<ArtifactType>(
+    ArtifactType.DOCUMENT,
+  );
+  const [severity, setSeverity] = useState<NotificationSeverity>(
+    NotificationSeverity.INFO,
+  );
 
   // External seeding: when QuickCreate is opened via a `forge:quick-create`
   // event with `title` + `body` (e.g. from "Convert to issue" on a Quick
@@ -127,6 +145,15 @@ export function QuickCreate() {
   const createProject = trpc.project.create.useMutation({
     onError: (err) => toast.error(err.message),
   });
+  const createNote = trpc.note.create.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+  const createArtifact = trpc.artifact.create.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+  const createActionRequest = trpc.actionRequest.create.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
   // Optional follow-up: when QuickCreate was seeded from a note's
   // "Convert to issue" action and the operator left the archive
   // checkbox checked, archive the source note after the issue is
@@ -144,7 +171,10 @@ export function QuickCreate() {
     createComment.isPending ||
     createCycle.isPending ||
     createInitiative.isPending ||
-    createProject.isPending;
+    createProject.isPending ||
+    createNote.isPending ||
+    createArtifact.isPending ||
+    createActionRequest.isPending;
 
   // ----- open/close lifecycle --------------------------------------
 
@@ -164,6 +194,8 @@ export function QuickCreate() {
       return { kind: "initiative" };
     if (tail === "/projects" || tail.startsWith("/projects?"))
       return { kind: "project" };
+    if (tail === "/artifacts" || tail.startsWith("/artifacts?") || tail.startsWith("/artifacts/"))
+      return { kind: "artifact" };
     return { kind: "issue" };
   }, []);
 
@@ -184,6 +216,8 @@ export function QuickCreate() {
       setShowDescription(false);
       setArchiveNoteId(null);
       setArchiveOnCreate(true);
+      setArtifactType(ArtifactType.DOCUMENT);
+      setSeverity(NotificationSeverity.INFO);
     },
     [text, mode.kind, archiveNoteId],
   );
@@ -304,6 +338,12 @@ export function QuickCreate() {
         return "Initiative";
       case "project":
         return "Project";
+      case "note":
+        return "Note";
+      case "artifact":
+        return "Artifact";
+      case "action-request":
+        return "Action request";
       case "issue-context":
         return mode.intent === "comment" ? "Comment" : "Sub-issue";
     }
@@ -319,6 +359,12 @@ export function QuickCreate() {
         return "Initiative name… (⌘⏎ more options)";
       case "project":
         return "Project name… (⌘⏎ more options)";
+      case "note":
+        return "Note (one-liner; ⌘⏎ to add description)";
+      case "artifact":
+        return "Artifact title… (⌘⏎ create + open)";
+      case "action-request":
+        return "What do you need from someone? (⌘⏎ add description)";
       case "issue-context":
         return mode.intent === "comment"
           ? "Write a comment… (⏎ post)"
@@ -333,8 +379,10 @@ export function QuickCreate() {
     mode.kind === "project";
   const secondaryHint = hasEscalation
     ? "⌘⏎ more options"
-    : mode.kind === "issue"
+    : mode.kind === "issue" || mode.kind === "artifact"
     ? "⌘⏎ create + open"
+    : mode.kind === "note" || mode.kind === "action-request"
+    ? "⌘⏎ add description"
     : null;
 
   // ----- submit ----------------------------------------------------
@@ -452,6 +500,58 @@ export function QuickCreate() {
           await createProject.mutateAsync({ name: value, key });
           await utils.project.list.invalidate();
           done("Project created.");
+          return;
+        }
+        case "note": {
+          // Single-line text becomes body; if a description was
+          // expanded via ⌘⏎ we use that as body and keep `value` as
+          // the title (matches the note router's nullable title).
+          if (secondary && !showDescription) {
+            setShowDescription(true);
+            return;
+          }
+          const titleVal = showDescription ? value : null;
+          const bodyVal = showDescription
+            ? seedDescription.trim()
+            : value;
+          if (!bodyVal) {
+            toast.error("Note body required.");
+            return;
+          }
+          await createNote.mutateAsync({
+            title: titleVal ?? undefined,
+            body: bodyVal,
+          });
+          await utils.note.list.invalidate();
+          done("Note created.");
+          return;
+        }
+        case "artifact": {
+          const created = await createArtifact.mutateAsync({
+            title: value,
+            body: showDescription ? seedDescription : "",
+            type: artifactType,
+          });
+          await utils.artifact.list.invalidate();
+          done("Artifact created.");
+          if (secondary || showDescription) {
+            const base = ws ? `/w/${ws.slug}` : "";
+            router.push(`${base}/artifacts/${created.slug}`);
+          }
+          return;
+        }
+        case "action-request": {
+          if (secondary && !showDescription) {
+            setShowDescription(true);
+            return;
+          }
+          await createActionRequest.mutateAsync({
+            title: value,
+            body: seedDescription.trim() ? seedDescription : null,
+            severity,
+          });
+          await utils.actionRequest.list.invalidate();
+          done("Action request opened.");
           return;
         }
         case "issue-context": {
@@ -645,11 +745,16 @@ export function QuickCreate() {
           </div>
         )}
 
-        {/* Seeded description — shown when QuickCreate was opened with
-            an external `forge:quick-create` event carrying `body` (e.g.
-            note → issue convert). The textarea is editable so the
-            operator can trim before submitting. */}
-        {showDescription && mode.kind === "issue" && (
+        {/* Body / description textarea — used for:
+            - issue mode when seeded from a "Convert to issue" event;
+            - note/artifact/action-request modes when the user expands
+              the secondary description via ⌘⏎. The textarea is editable
+              so operators can trim or extend before submitting. */}
+        {showDescription &&
+          (mode.kind === "issue" ||
+            mode.kind === "note" ||
+            mode.kind === "artifact" ||
+            mode.kind === "action-request") && (
           <div className="border-t border-border/60 bg-card/30 px-3 py-2">
             <label className="block">
               <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -677,9 +782,13 @@ export function QuickCreate() {
           </div>
         )}
 
-        {/* Secondary row: priority chips (issue) / intent tabs (issue-context) */}
+        {/* Secondary row: per-mode chips. Issue → priority + project,
+            issue-context → comment/sub-issue intent, artifact → type
+            picker, action-request → severity. */}
         {(mode.kind === "issue" ||
-          mode.kind === "issue-context") && (
+          mode.kind === "issue-context" ||
+          mode.kind === "artifact" ||
+          mode.kind === "action-request") && (
           <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 bg-card/50 px-3 py-2 text-[0.6875rem]">
             {mode.kind === "issue-context" && (
               <>
@@ -739,6 +848,38 @@ export function QuickCreate() {
               </>
             )}
 
+            {mode.kind === "artifact" && (
+              <>
+                <span className="mr-1 font-mono uppercase tracking-wider opacity-70">
+                  type
+                </span>
+                {Object.values(ArtifactType).map((t) => (
+                  <PriorityChip
+                    key={t}
+                    selected={artifactType === t}
+                    label={t}
+                    onClick={() => setArtifactType(t)}
+                  />
+                ))}
+              </>
+            )}
+
+            {mode.kind === "action-request" && (
+              <>
+                <span className="mr-1 font-mono uppercase tracking-wider opacity-70">
+                  severity
+                </span>
+                {SEVERITIES.map((s) => (
+                  <PriorityChip
+                    key={s}
+                    selected={severity === s}
+                    label={s}
+                    onClick={() => setSeverity(s)}
+                  />
+                ))}
+              </>
+            )}
+
             <span className="ml-auto inline-flex items-center gap-1 text-muted-foreground">
               <Kbd>⎋</Kbd> close
             </span>
@@ -749,13 +890,23 @@ export function QuickCreate() {
   );
 }
 
-type SwitchableMode = "issue" | "cycle" | "project" | "initiative";
+type SwitchableMode =
+  | "issue"
+  | "cycle"
+  | "project"
+  | "initiative"
+  | "note"
+  | "artifact"
+  | "action-request";
 
-const SWITCHABLE_MODES: { kind: SwitchableMode; label: string }[] = [
+export const SWITCHABLE_MODES: { kind: SwitchableMode; label: string }[] = [
   { kind: "issue", label: "Issue" },
   { kind: "cycle", label: "Sprint" },
   { kind: "project", label: "Project" },
   { kind: "initiative", label: "Initiative" },
+  { kind: "note", label: "Note" },
+  { kind: "artifact", label: "Artifact" },
+  { kind: "action-request", label: "Action req." },
 ];
 
 function ModeChip({
@@ -776,6 +927,12 @@ function ModeChip({
       ? "Initiative"
       : mode.kind === "project"
       ? "Project"
+      : mode.kind === "note"
+      ? "Note"
+      : mode.kind === "artifact"
+      ? "Artifact"
+      : mode.kind === "action-request"
+      ? "Action req."
       : mode.intent === "comment"
       ? "Comment"
       : "Sub-issue";
