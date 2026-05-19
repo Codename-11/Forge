@@ -481,6 +481,7 @@ export const issueRouter = router({
               authoringAgent: {
                 select: { id: true, name: true, profileKey: true, avatar: true },
               },
+              run: { select: { id: true, status: true, finishedAt: true } },
             },
           },
           attachments: true,

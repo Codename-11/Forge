@@ -85,6 +85,23 @@ function scopeCtx(ctx: McpContext): { apiKey: ApiKeyContext | null; db: typeof d
   return { apiKey: ctx.apiKey, db };
 }
 
+type McpCommentWithDates = {
+  kind: CommentKind;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+function effectiveCommentTime(comment: McpCommentWithDates): number {
+  // Rolling STATUS comments represent the latest run update, so expose them
+  // at updatedAt in agent-facing bundles. BODY comments keep their original
+  // position even if edited later.
+  return (comment.kind === CommentKind.STATUS ? comment.updatedAt : comment.createdAt).getTime();
+}
+
+function sortCommentsChronologically<T extends McpCommentWithDates>(comments: T[]): T[] {
+  return [...comments].sort((a, b) => effectiveCommentTime(a) - effectiveCommentTime(b));
+}
+
 /**
  * Resolve the acting user id. MCP keys often belong to a plugin (no userId);
  * fall back to any workspace member so rows that require an author /
@@ -478,21 +495,23 @@ export const mcpTools = {
 
       if (include.comments) {
         const limit = typeof include.comments === "object" ? include.comments.limit : 20;
-        out.comments = await db.comment.findMany({
+        const comments = await db.comment.findMany({
           where: {
             workspaceId: ctx.workspaceId,
             issueId: input.id,
             deletedAt: null,
           },
-          orderBy: { createdAt: "desc" },
+          orderBy: { updatedAt: "desc" },
           take: limit,
           include: {
             author: { select: { id: true, name: true, image: true } },
             authoringAgent: {
               select: { id: true, profileKey: true, name: true },
             },
+            run: { select: { id: true, status: true, finishedAt: true } },
           },
         });
+        out.comments = sortCommentsChronologically(comments);
       }
 
       if (include.relations) {
@@ -4604,20 +4623,21 @@ export const mcpTools = {
         });
         if (!issue) throw new Error("Issue not found in this workspace.");
 
-        const [comments, attachments, relations, currentRun, artifacts] = await Promise.all([
+        const [rawComments, attachments, relations, currentRun, artifacts] = await Promise.all([
           db.comment.findMany({
             where: {
               workspaceId: ctx.workspaceId,
               issueId,
               deletedAt: null,
             },
-            orderBy: { createdAt: "desc" },
+            orderBy: { updatedAt: "desc" },
             take: 50,
             include: {
               author: { select: { id: true, name: true, image: true } },
               authoringAgent: {
                 select: { id: true, profileKey: true, name: true },
               },
+              run: { select: { id: true, status: true, finishedAt: true } },
             },
           }),
           db.attachment.findMany({
@@ -4687,6 +4707,7 @@ export const mcpTools = {
           verificationChecklist: issue.verificationChecklist,
           artifactRequired: issue.artifactRequired,
         };
+        const comments = sortCommentsChronologically(rawComments);
 
         return {
           workspace,
