@@ -1206,12 +1206,38 @@ describe("mcp — awareness tools (Stream BA)", () => {
       where: { id: issue.id },
       data: { description: "the body" },
     });
+    const t1 = new Date("2026-01-01T00:00:00.000Z");
+    const t2 = new Date("2026-01-01T00:01:00.000Z");
+    const t3 = new Date("2026-01-01T00:02:00.000Z");
     await prisma.comment.create({
       data: {
         workspaceId: f.workspace.id,
         issueId: issue.id,
         authorId: f.user.id,
-        body: "hi",
+        body: "first",
+        createdAt: t1,
+        updatedAt: t1,
+      },
+    });
+    await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.user.id,
+        body: "final status",
+        kind: "STATUS",
+        createdAt: t2,
+        updatedAt: t3,
+      },
+    });
+    await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.user.id,
+        body: "middle",
+        createdAt: new Date("2026-01-01T00:01:30.000Z"),
+        updatedAt: new Date("2026-01-01T00:01:30.000Z"),
       },
     });
     const label = await prisma.label.create({
@@ -1266,7 +1292,11 @@ describe("mcp — awareness tools (Stream BA)", () => {
     )) as Record<string, unknown>;
     expect(full.description).toBe("the body");
     expect(Array.isArray(full.comments)).toBe(true);
-    expect((full.comments as unknown[]).length).toBe(1);
+    expect((full.comments as Array<{ body: string }>).map((c) => c.body)).toEqual([
+      "first",
+      "middle",
+      "final status",
+    ]);
     expect(Array.isArray(full.relations)).toBe(true);
     expect((full.relations as unknown[]).length).toBe(1);
     expect(full.currentRun).toBeTruthy();

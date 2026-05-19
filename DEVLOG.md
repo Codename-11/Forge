@@ -2,6 +2,39 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Align agent status comments with issue chronology
+
+### Summary
+
+Audited issue comment rendering and MCP hydration after the operator noticed
+persistent/status comments did not line up chronologically with normal comments.
+The root mismatch was that STATUS comments are rolling AgentRun updates: their
+meaningful timestamp is `updatedAt`, while their row `createdAt` stays at the
+first live-status upsert. The UI also pinned all STATUS rows, including old
+completed/abandoned runs, which made historical run summaries look like current
+activity.
+
+### What changed
+
+1. **Issue UI timeline.** Active/stalled STATUS comments remain pinned as live
+   run state; terminal STATUS comments now render in the normal comment stream
+   using `updatedAt` as their effective chronological timestamp.
+2. **MCP context order.** `issues.get(...include.comments)` and
+   `agent.context.bundle({ issueId })` now hydrate comments in effective
+   chronological order, so Hermes sees human comments and rolling agent status
+   in the same order the operator expects.
+3. **Run metadata.** Issue detail comment hydration now includes the linked
+   AgentRun status so the UI can distinguish live run state from historical run
+   summaries without guessing.
+
+### Verification
+
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts --testNamePattern "issues.get with include|agent.context.bundle issueId"` → pass.
+- `pnpm lint` → pass.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass.
+- `pnpm test` → 49 files / 352 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` → pass.
+
 ## 2026-05-19 — Clarify agent assignment vs. comment mentions
 
 ### Summary

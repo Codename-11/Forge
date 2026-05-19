@@ -55,7 +55,33 @@ type Comment = {
     profileKey: string;
     avatar: string | null;
   } | null;
+  run?: {
+    id: string;
+    status: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED";
+    finishedAt: Date | string | null;
+  } | null;
 };
+
+function timestampMs(value: Date | string | null | undefined): number {
+  if (!value) return 0;
+  return value instanceof Date ? value.getTime() : new Date(value).getTime();
+}
+
+function commentTimelineMs(comment: Comment): number {
+  // STATUS comments are rolling run updates: their meaningful timeline
+  // position is the last update, not the row creation time. BODY comments
+  // stay at creation time so edited comments don't jump around.
+  if (comment.kind === "STATUS") return timestampMs(comment.updatedAt ?? comment.createdAt);
+  return timestampMs(comment.createdAt);
+}
+
+function isPinnedStatusComment(comment: Comment): boolean {
+  if (comment.kind !== "STATUS") return false;
+  // Pin only live/problem run status. Completed/abandoned status rows are
+  // historical summaries and belong in the chronological conversation.
+  if (!comment.run) return true;
+  return comment.run.status === "ACTIVE" || comment.run.status === "STALLED";
+}
 
 export function IssueMain({
   issueId,
@@ -251,27 +277,30 @@ function Comments({
     onChange: setDraft,
   });
 
-  // STATUS comments live separately from the chronological thread. We
-  // surface the latest STATUS per-agent at the top so the issue page's
-  // "what is this agent doing right now" answer is impossible to miss
-  // — even when the run has stalled and the live strip is gone, the
-  // last status the agent posted is still visible.
-  const statusComments = comments.filter((c) => c.kind === "STATUS");
-  const bodyComments = comments.filter((c) => c.kind !== "STATUS");
+  // STATUS comments are rolling agent-run updates. Active/stalled status is
+  // pinned as the "right now" answer; terminal status rows are historical and
+  // render in the normal timeline using updatedAt as their effective time.
+  const pinnedStatusComments = comments
+    .filter(isPinnedStatusComment)
+    .sort((a, b) => commentTimelineMs(b) - commentTimelineMs(a));
+  const timelineComments = comments
+    .filter((c) => !isPinnedStatusComment(c))
+    .sort((a, b) => commentTimelineMs(a) - commentTimelineMs(b));
   return (
     <section>
-      <SectionLabel>Comments {bodyComments.length > 0 && <Count>{bodyComments.length}</Count>}</SectionLabel>
+      <SectionLabel>Comments {timelineComments.length > 0 && <Count>{timelineComments.length}</Count>}</SectionLabel>
       <div className="space-y-3">
-        {statusComments.map((c) => (
+        {pinnedStatusComments.map((c) => (
           <StatusCommentPin key={c.id} comment={c} />
         ))}
-        {bodyComments.length === 0 && statusComments.length === 0 && (
+        {timelineComments.length === 0 && pinnedStatusComments.length === 0 && (
           <p className="text-xs text-muted-foreground">No comments yet.</p>
         )}
-        {bodyComments.map((c) => {
+        {timelineComments.map((c) => {
           // Agent-authored comments show the agent name in the byline and a
           // small indigo "agent" chip. Human comments render as before.
           const isAgent = Boolean(c.authoringAgent);
+          const isStatus = c.kind === "STATUS";
           const displayName = c.authoringAgent?.name ?? c.author.name;
           return (
             <div key={c.id} className="flex gap-2.5">
@@ -280,10 +309,17 @@ function Comments({
                 image={isAgent ? null : c.author.image}
                 size={22}
               />
-              <div className="min-w-0 flex-1 rounded-md border border-border bg-card/40 p-2.5">
+              <div className={`min-w-0 flex-1 rounded-md border border-border p-2.5 ${isStatus ? "bg-ember/5" : "bg-card/40"}`}>
                 <div className="flex items-center gap-2 text-meta">
                   <span className="font-medium">{displayName}</span>
-                  {isAgent && (
+                  {isStatus ? (
+                    <Badge
+                      color="#d97706"
+                      className="font-mono text-[0.6875rem] uppercase tracking-wider"
+                    >
+                      run status
+                    </Badge>
+                  ) : isAgent && (
                     // Indigo `agent` chip mirrors the `linkedAgent` badge on
                     // the ApiKey row in settings/access so the visual
                     // language for "this action was an agent" stays
@@ -296,7 +332,7 @@ function Comments({
                     </Badge>
                   )}
                   <span className="text-muted-foreground">
-                    {relativeTime(c.createdAt)}
+                    {relativeTime(isStatus ? (c.updatedAt ?? c.createdAt) : c.createdAt)}
                   </span>
                 </div>
                 <MarkdownWithAttachments
