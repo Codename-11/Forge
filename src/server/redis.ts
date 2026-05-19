@@ -12,7 +12,10 @@ function make() {
   return new Redis(url, {
     maxRetriesPerRequest: 3,
     enableReadyCheck: true,
-    lazyConnect: false,
+    // Next.js imports server modules while collecting page data during builds.
+    // Connect on first real Redis command so static analysis/build workers do
+    // not try to dial localhost Redis inside the Docker build container.
+    lazyConnect: true,
   });
 }
 

@@ -2,6 +2,31 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Quiet Docker build Redis imports
+
+### Summary
+
+Cleaned up Forge's Docker build output by preventing Redis-backed modules from
+opening sockets during Next.js page-data collection. The build container does
+not run alongside Forge Redis, so eager BullMQ/ioredis construction produced
+misleading `ECONNREFUSED` noise even though runtime services were healthy.
+
+### What changed
+
+1. **ioredis lazy connect.** `src/server/redis.ts` now defers Redis socket
+   creation until the first real command instead of connecting at module import.
+2. **BullMQ lazy queue handles.** `src/server/queues.ts` now exports lazy proxy
+   handles so API-route static analysis can import queue producer modules
+   without constructing BullMQ queues during `next build`.
+
+### Verification
+
+- `pnpm test` → 49 files / 352 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm lint` → pass, no warnings.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` → pass.
+- `docker compose -f /home/bailey/docker/forge/docker-compose.yaml build forge` → pass with `BUILD_NOISE_FOUND=0` for `ioredis`, `ECONNREFUSED`, and `AggregateError`.
+
 ## 2026-05-19 — Agentic Work OS release-gate hardening
 
 ### Summary
