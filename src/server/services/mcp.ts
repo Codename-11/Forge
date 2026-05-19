@@ -4826,6 +4826,151 @@ export const mcpTools = {
     },
   },
 
+  // ------------------------------------------------------------------ ContextSets
+  //
+  // Reusable bundles of canonical refs an agent receives as context.
+  // Items are polymorphic via targetType/targetId; includeMode
+  // controls INCLUDE/EXCLUDE/SUMMARY_ONLY visibility. Agents call
+  // `contextSets.hydrate` to get the bundle resolved to labels/urls.
+
+  "contextSets.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      includeArchived: z.boolean().default(false),
+      limit: z.number().int().min(1).max(100).default(50),
+    }),
+    async run(input: { includeArchived: boolean; limit: number }, ctx: McpContext) {
+      return db.contextSet.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          archivedAt: input.includeArchived ? undefined : null,
+        },
+        orderBy: { updatedAt: "desc" },
+        take: input.limit,
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          ownerUserId: true,
+          ownerAgentId: true,
+          createdAt: true,
+          updatedAt: true,
+          _count: { select: { items: true } },
+        },
+      });
+    },
+  },
+
+  "contextSets.hydrate": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      const { hydrateContextSet } = await import("@/server/services/context-set-service");
+      const ws = await db.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { slug: true },
+      });
+      const result = await hydrateContextSet(db, {
+        workspaceId: ctx.workspaceId,
+        contextSetId: input.id,
+        workspaceSlug: ws.slug,
+      });
+      if (!result) throw new Error("Context set not found.");
+      return result;
+    },
+  },
+
+  "contextSets.create": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      name: z.string().min(1).max(200),
+      description: z.string().max(2_000).nullable().optional(),
+      items: z
+        .array(
+          z.object({
+            targetType: z.string().min(1).max(40),
+            targetId: z.string().min(1),
+            includeMode: z.enum(["INCLUDE", "EXCLUDE", "SUMMARY_ONLY"]).default("INCLUDE"),
+            note: z.string().max(1_000).nullable().optional(),
+          }),
+        )
+        .max(200)
+        .optional(),
+    }),
+    async run(
+      input: {
+        name: string;
+        description?: string | null;
+        items?: Array<{
+          targetType: string;
+          targetId: string;
+          includeMode: "INCLUDE" | "EXCLUDE" | "SUMMARY_ONLY";
+          note?: string | null;
+        }>;
+      },
+      ctx: McpContext,
+    ) {
+      const { createContextSet } = await import("@/server/services/context-set-service");
+      return createContextSet(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        name: input.name,
+        description: input.description ?? null,
+        items: input.items?.map((it) => ({ ...it, note: it.note ?? null })),
+      });
+    },
+  },
+
+  "contextSets.addItem": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      contextSetId: z.string().cuid(),
+      targetType: z.string().min(1).max(40),
+      targetId: z.string().min(1),
+      includeMode: z.enum(["INCLUDE", "EXCLUDE", "SUMMARY_ONLY"]).default("INCLUDE"),
+      note: z.string().max(1_000).nullable().optional(),
+    }),
+    async run(
+      input: {
+        contextSetId: string;
+        targetType: string;
+        targetId: string;
+        includeMode: "INCLUDE" | "EXCLUDE" | "SUMMARY_ONLY";
+        note?: string | null;
+      },
+      ctx: McpContext,
+    ) {
+      const { addContextSetItem } = await import("@/server/services/context-set-service");
+      return addContextSetItem(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        contextSetId: input.contextSetId,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        includeMode: input.includeMode,
+        note: input.note ?? null,
+      });
+    },
+  },
+
+  "contextSets.removeItem": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      contextSetId: z.string().cuid(),
+      itemId: z.string().cuid(),
+    }),
+    async run(input: { contextSetId: string; itemId: string }, ctx: McpContext) {
+      const { removeContextSetItem } = await import("@/server/services/context-set-service");
+      await removeContextSetItem(db, {
+        workspaceId: ctx.workspaceId,
+        contextSetId: input.contextSetId,
+        itemId: input.itemId,
+      });
+      return { ok: true };
+    },
+  },
+
   // ---------------------------------------------------------------------- Notes
   //
   // Per-(workspace, user) markdown scratchpad. The dashboard's
