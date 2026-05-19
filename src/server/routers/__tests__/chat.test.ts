@@ -1,8 +1,9 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { EventKind } from "@prisma/client";
+import { AgentRunStatus, ChatRole, EventKind, WebhookDeliveryStatus } from "@prisma/client";
 import { chatRouter } from "@/server/routers/chat";
 import {
   buildContext,
+  createIssue,
   createWorkspaceFixture,
   disconnectPrisma,
   getPrisma,
@@ -157,6 +158,7 @@ describe("chatRouter deferred dispatch", () => {
     expect(thread.id).toBe(sent.threadId);
     expect(thread.agent.id).toBe(agent.id);
     expect(thread.messages).toHaveLength(1);
+    expect(thread.diagnostics).toMatchObject({ latestUserMessageId: sent.messageId });
     expect(thread.messages[0]).toMatchObject({
       id: sent.messageId,
       body: "thread deep-link",
@@ -245,5 +247,178 @@ describe("chatRouter deferred dispatch", () => {
       },
     });
     expect(events).toBe(1);
+  });
+
+  it("exposes diagnostics when the latest user message is waiting for a reply", async () => {
+    const { agent, caller } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "are you there?" });
+
+    const diagnostics = await caller.threadDiagnostics({ threadId: sent.threadId });
+    const threads = await caller.threads({ state: "waiting" });
+
+    expect(diagnostics).toMatchObject({
+      latestUserMessageId: sent.messageId,
+      latestAgentMessageAt: null,
+      waitingForReply: true,
+      lastRun: null,
+    });
+    expect(diagnostics.waitingMs).toBeGreaterThanOrEqual(0);
+    expect(threads.map((thread) => thread.id)).toContain(sent.threadId);
+  });
+
+  it("clears waiting diagnostics when an agent reply is newer than the user message", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "ping" });
+    await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: sent.threadId,
+        role: ChatRole.AGENT,
+        body: "pong",
+      },
+    });
+
+    const diagnostics = await caller.threadDiagnostics({ threadId: sent.threadId });
+    expect(diagnostics.waitingForReply).toBe(false);
+    expect(diagnostics.waitingMs).toBeNull();
+    expect(diagnostics.latestAgentMessageAt).toBeInstanceOf(Date);
+  });
+
+  it("resolves linked sourceRunId diagnostics and redacts failed delivery text", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const issue = await createIssue(fixture, { title: "Chat-linked run" });
+    const sent = await caller.send({ agentId: agent.id, body: "debug delivery" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        startedAt: new Date(Date.now() - 120_000),
+        lastEventAt: new Date(Date.now() - 120_000),
+        currentStep: "waiting on Hermes",
+      },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: sent.threadId,
+        role: ChatRole.AGENT,
+        body: "working on it",
+        sourceRunId: run.id,
+      },
+    });
+    const webhook = await prisma.webhook.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        url: "https://example.invalid/webhook",
+        secret: "secret",
+        events: [EventKind.CHAT_MESSAGE_POSTED],
+      },
+    });
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.CHAT_MESSAGE_POSTED,
+        subjectId: sent.threadId,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    await prisma.webhookDelivery.create({
+      data: {
+        webhookId: webhook.id,
+        eventId: event.id,
+        status: WebhookDeliveryStatus.FAILED,
+        attempt: 2,
+        responseStatus: 500,
+        responseBody:
+          "Bearer super-secret-token url=https://forge.axiom-labs.dev/api/mcp/rpc token=abc123",
+      },
+    });
+
+    const diagnostics = await caller.threadDiagnostics({ threadId: sent.threadId });
+    expect(diagnostics.lastSourceRunId).toBe(run.id);
+    expect(diagnostics.lastRun).toMatchObject({
+      id: run.id,
+      status: AgentRunStatus.ACTIVE,
+      currentStep: "waiting on Hermes",
+    });
+    expect(diagnostics.lastDelivery).toMatchObject({
+      status: WebhookDeliveryStatus.FAILED,
+      attempts: 2,
+    });
+    expect(diagnostics.lastDelivery?.lastError).toContain("[REDACTED]");
+    expect(diagnostics.lastDelivery?.lastError).not.toContain("super-secret-token");
+    expect(diagnostics.lastDelivery?.lastError).not.toContain("forge.axiom-labs.dev");
+  });
+
+  it("archives and restores owner-scoped chat threads", async () => {
+    const { agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "archive me" });
+    const secondCtx = await buildContext(fixture, { asUserId: fixture.secondUser.id });
+    const secondCaller = chatRouter.createCaller(secondCtx);
+
+    await expect(secondCaller.archiveThread({ threadId: sent.threadId })).rejects.toThrow();
+    await caller.archiveThread({ threadId: sent.threadId });
+    expect((await caller.threads()).map((thread) => thread.id)).not.toContain(sent.threadId);
+    expect((await caller.threads({ archived: true })).map((thread) => thread.id)).toContain(
+      sent.threadId,
+    );
+    await caller.restoreThread({ threadId: sent.threadId });
+    expect((await caller.threads()).map((thread) => thread.id)).toContain(sent.threadId);
+  });
+
+  it("retries the latest dispatched user message with an audited dispatch event", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "retry this" });
+    const before = await prisma.activityEvent.count({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.CHAT_MESSAGE_POSTED,
+        subjectId: sent.threadId,
+      },
+    });
+
+    const result = await caller.retryLastUserMessage({ threadId: sent.threadId });
+    const after = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.CHAT_MESSAGE_POSTED,
+        subjectId: sent.threadId,
+      },
+      orderBy: { createdAt: "asc" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(after).toHaveLength(before + 1);
+    expect(after.at(-1)?.payload).toMatchObject({ messageId: sent.messageId, retry: true });
+  });
+
+  it("kicks an active stale run only when it belongs to the thread agent", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const issue = await createIssue(fixture, { title: "Kickable run" });
+    const sent = await caller.send({ agentId: agent.id, body: "stalled?" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        lastEventAt: new Date(Date.now() - 10 * 60_000),
+        currentStep: "stalled in chat",
+      },
+    });
+
+    const result = await caller.kickThreadRun({ threadId: sent.threadId, runId: run.id });
+    const event = await prisma.activityEvent.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_RUN_KICKED,
+        subjectId: run.id,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, action: "kick", kicked: true });
+    expect(event?.payload).toMatchObject({ runId: run.id, threadId: sent.threadId });
   });
 });

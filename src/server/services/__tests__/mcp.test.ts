@@ -146,11 +146,9 @@ describe("mcp — smoke: cycles, initiatives, relations, time, attachments, pins
     )) as { planned: number };
     expect(plan.planned).toBe(2);
 
-    const roll = (await call(
-      "cycles.rollover",
-      { fromCycleId: created.id },
-      ctx,
-    )) as { rolled: number };
+    const roll = (await call("cycles.rollover", { fromCycleId: created.id }, ctx)) as {
+      rolled: number;
+    };
     // Neither issue is DONE/CANCELED so both roll.
     expect(roll.rolled).toBe(2);
   });
@@ -160,11 +158,10 @@ describe("mcp — smoke: cycles, initiatives, relations, time, attachments, pins
     fixtures.push(fixture);
     const { ctx } = buildMcpCtx(fixture);
 
-    const initiative = (await call(
-      "initiatives.create",
-      { name: "H1 Launch" },
-      ctx,
-    )) as { id: string; slug: string };
+    const initiative = (await call("initiatives.create", { name: "H1 Launch" }, ctx)) as {
+      id: string;
+      slug: string;
+    };
     expect(initiative.slug).toBe("h1-launch");
 
     const prisma = getPrisma();
@@ -222,19 +219,11 @@ describe("mcp — smoke: cycles, initiatives, relations, time, attachments, pins
     expect(added.relation.id).toBeTruthy();
     expect(added.reciprocal).not.toBeNull();
 
-    const rels = (await call(
-      "relations.listForIssue",
-      { issueId: a.id },
-      ctx,
-    )) as unknown[];
+    const rels = (await call("relations.listForIssue", { issueId: a.id }, ctx)) as unknown[];
     expect(rels.length).toBe(1);
 
     await call("relations.remove", { relationId: added.relation.id }, ctx);
-    const relsAfter = (await call(
-      "relations.listForIssue",
-      { issueId: a.id },
-      ctx,
-    )) as unknown[];
+    const relsAfter = (await call("relations.listForIssue", { issueId: a.id }, ctx)) as unknown[];
     expect(relsAfter.length).toBe(0);
   });
 
@@ -281,11 +270,9 @@ describe("mcp — smoke: cycles, initiatives, relations, time, attachments, pins
     const a = await createIssue(fixture, { title: "A" });
     const b = await createIssue(fixture, { title: "B" });
 
-    const res = (await call(
-      "pins.set",
-      { issueIds: [a.id, b.id] },
-      ctx,
-    )) as { pinnedIssueIds: string[] };
+    const res = (await call("pins.set", { issueIds: [a.id, b.id] }, ctx)) as {
+      pinnedIssueIds: string[];
+    };
     expect(res.pinnedIssueIds).toEqual([a.id, b.id]);
 
     const listed = (await call("pins.list", {}, ctx)) as Array<{ id: string }>;
@@ -301,9 +288,7 @@ describe("mcp — smoke: cycles, initiatives, relations, time, attachments, pins
     const b = await createIssue(fixture);
     const c = await createIssue(fixture);
     const d = await createIssue(fixture);
-    await expect(
-      call("pins.set", { issueIds: [a.id, b.id, c.id, d.id] }, ctx),
-    ).rejects.toThrow();
+    await expect(call("pins.set", { issueIds: [a.id, b.id, c.id, d.id] }, ctx)).rejects.toThrow();
   });
 });
 
@@ -536,7 +521,10 @@ describe("mcp — project mutations and issue queue toggle", () => {
       where: { workspaceId: fixture.workspace.id, subjectType: "project", subjectId: created.id },
       orderBy: { createdAt: "asc" },
     });
-    expect(events.map((e) => e.kind)).toEqual([EventKind.PROJECT_CREATED, EventKind.PROJECT_UPDATED]);
+    expect(events.map((e) => e.kind)).toEqual([
+      EventKind.PROJECT_CREATED,
+      EventKind.PROJECT_UPDATED,
+    ]);
 
     const audit = await prisma.auditLog.findMany({
       where: { workspaceId: fixture.workspace.id, entity: "Project", entityId: created.id },
@@ -560,10 +548,20 @@ describe("mcp — project mutations and issue queue toggle", () => {
     fixtures.push(fixture);
     const prisma = getPrisma();
     const allowed = await prisma.project.create({
-      data: { workspaceId: fixture.workspace.id, key: "OK", name: "allowed", createdById: fixture.user.id },
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "OK",
+        name: "allowed",
+        createdById: fixture.user.id,
+      },
     });
     const blocked = await prisma.project.create({
-      data: { workspaceId: fixture.workspace.id, key: "NO", name: "blocked", createdById: fixture.user.id },
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "NO",
+        name: "blocked",
+        createdById: fixture.user.id,
+      },
     });
     const { ctx } = buildMcpCtx(fixture, { projectIds: [allowed.id] });
 
@@ -627,7 +625,12 @@ describe("mcp — project mutations and issue queue toggle", () => {
     fixtures.push(fixture);
     const prisma = getPrisma();
     const project = await prisma.project.create({
-      data: { workspaceId: fixture.workspace.id, key: "LANE", name: "Lane", createdById: fixture.user.id },
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "LANE",
+        name: "Lane",
+        createdById: fixture.user.id,
+      },
     });
     const scoped = await createIssue(fixture, { title: "scoped", projectId: project.id });
     const outside = await createIssue(fixture, { title: "outside" });
@@ -668,19 +671,15 @@ describe("mcp — new agent / cycles / time tools", () => {
     expect(byKey.assignedAgentId).toBe(agent.id);
 
     // Unassign.
-    const cleared = (await call(
-      "issues.assign",
-      { issueId: issue.id, agentId: null },
-      ctx,
-    )) as { assignedAgentId: string | null };
+    const cleared = (await call("issues.assign", { issueId: issue.id, agentId: null }, ctx)) as {
+      assignedAgentId: string | null;
+    };
     expect(cleared.assignedAgentId).toBeNull();
 
     // Assign by agentId.
-    const byId = (await call(
-      "issues.assign",
-      { issueId: issue.id, agentId: agent.id },
-      ctx,
-    )) as { assignedAgentId: string | null };
+    const byId = (await call("issues.assign", { issueId: issue.id, agentId: agent.id }, ctx)) as {
+      assignedAgentId: string | null;
+    };
     expect(byId.assignedAgentId).toBe(agent.id);
 
     // AGENT_ASSIGNED event was emitted.
@@ -714,11 +713,9 @@ describe("mcp — new agent / cycles / time tools", () => {
       data: { assignedAgentId: agent.id },
     });
 
-    const rows = (await call(
-      "issues.assigned",
-      { profileKey: "mizu" },
-      ctx,
-    )) as Array<{ id: string }>;
+    const rows = (await call("issues.assigned", { profileKey: "mizu" }, ctx)) as Array<{
+      id: string;
+    }>;
     expect(rows.map((r) => r.id)).toEqual([mine.id]);
     expect(rows.map((r) => r.id)).not.toContain(theirs.id);
   });
@@ -736,11 +733,7 @@ describe("mcp — new agent / cycles / time tools", () => {
     const prisma = getPrisma();
     const { ctx } = buildMcpCtx(fixture);
     const issue = await createIssue(fixture, { title: "cycle-able" });
-    const cycle = (await call(
-      "cycles.create",
-      { name: "Sprint X" },
-      ctx,
-    )) as { id: string };
+    const cycle = (await call("cycles.create", { name: "Sprint X" }, ctx)) as { id: string };
 
     const added = (await call(
       "cycles.addIssue",
@@ -754,11 +747,9 @@ describe("mcp — new agent / cycles / time tools", () => {
     });
     expect(afterAdd.cycleId).toBe(cycle.id);
 
-    const removed = (await call(
-      "cycles.removeIssue",
-      { issueId: issue.id },
-      ctx,
-    )) as { cycleId: string | null };
+    const removed = (await call("cycles.removeIssue", { issueId: issue.id }, ctx)) as {
+      cycleId: string | null;
+    };
     expect(removed.cycleId).toBeNull();
   });
 
@@ -916,11 +907,7 @@ describe("mcp — issues.reassign handoff flow", () => {
     });
 
     await expect(
-      call(
-        "issues.reassign",
-        { issueId: issue.id, toProfileKey: "mizu", rationale: "short" },
-        ctx,
-      ),
+      call("issues.reassign", { issueId: issue.id, toProfileKey: "mizu", rationale: "short" }, ctx),
     ).rejects.toThrow(/10 characters/i);
   });
 
@@ -1068,9 +1055,7 @@ describe("mcp — agents.me + agents.heartbeat", () => {
     const f = await createWorkspaceFixture();
     fixtures.push(f);
     const { ctx } = buildMcpCtx(f, { linkedAgentId: null });
-    await expect(call("agents.me", {}, ctx)).rejects.toThrow(
-      /No agent inferred/,
-    );
+    await expect(call("agents.me", {}, ctx)).rejects.toThrow(/No agent inferred/);
   });
 
   it("agents.heartbeat bumps lastHeartbeatAt and sets status", async () => {
@@ -1087,11 +1072,10 @@ describe("mcp — agents.me + agents.heartbeat", () => {
     });
     const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
     const before = Date.now();
-    const res = (await call(
-      "agents.heartbeat",
-      { status: "ONLINE" },
-      ctx,
-    )) as { status: string; lastHeartbeatAt: Date };
+    const res = (await call("agents.heartbeat", { status: "ONLINE" }, ctx)) as {
+      status: string;
+      lastHeartbeatAt: Date;
+    };
     expect(res.status).toBe("ONLINE");
     expect(res.lastHeartbeatAt.getTime()).toBeGreaterThanOrEqual(before);
   });
@@ -1109,9 +1093,7 @@ describe("mcp — agents.me + agents.heartbeat", () => {
       },
     });
     const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
-    await expect(
-      call("agents.heartbeat", { status: "ONLINE" }, ctx),
-    ).rejects.toThrow(/archived/);
+    await expect(call("agents.heartbeat", { status: "ONLINE" }, ctx)).rejects.toThrow(/archived/);
   });
 
   it("agents.heartbeat rejects cross-workspace linked agent", async () => {
@@ -1128,9 +1110,7 @@ describe("mcp — agents.me + agents.heartbeat", () => {
       },
     });
     const { ctx } = buildMcpCtx(f, { linkedAgentId: foreignAgent.id });
-    await expect(
-      call("agents.heartbeat", { status: "ONLINE" }, ctx),
-    ).rejects.toThrow(/not found/);
+    await expect(call("agents.heartbeat", { status: "ONLINE" }, ctx)).rejects.toThrow(/not found/);
   });
 });
 
@@ -1166,11 +1146,9 @@ describe("mcp — awareness tools (Stream BA)", () => {
         deletedAt: new Date(),
       },
     });
-    const rows = (await call(
-      "comments.list",
-      { issueId: issue.id, limit: 50 },
-      ctx,
-    )) as Array<{ id: string }>;
+    const rows = (await call("comments.list", { issueId: issue.id, limit: 50 }, ctx)) as Array<{
+      id: string;
+    }>;
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(c1.id);
     expect(ids).toContain(c2.id);
@@ -1192,9 +1170,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
     });
     const outside = await createIssue(f, { title: "outside" });
     const { ctx } = buildMcpCtx(f, { projectIds: [project.id] });
-    await expect(
-      call("comments.list", { issueId: outside.id }, ctx),
-    ).rejects.toThrow(/scope/i);
+    await expect(call("comments.list", { issueId: outside.id }, ctx)).rejects.toThrow(/scope/i);
   });
 
   it("comments.list cross-tenant: cannot read another workspace's issue", async () => {
@@ -1213,11 +1189,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
       },
     });
     const { ctx } = buildMcpCtx(f);
-    const rows = (await call(
-      "comments.list",
-      { issueId: otherIssue.id },
-      ctx,
-    )) as unknown[];
+    const rows = (await call("comments.list", { issueId: otherIssue.id }, ctx)) as unknown[];
     // Workspace filter on the where clause means we get an empty list rather
     // than a leak, even with broad scopes. Caller's workspaceId is the gate.
     expect(rows).toEqual([]);
@@ -1273,10 +1245,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
     });
 
     // Default shape — no include — returns lean payload (no `comments`).
-    const lean = (await call("issues.get", { id: issue.id }, ctx)) as Record<
-      string,
-      unknown
-    >;
+    const lean = (await call("issues.get", { id: issue.id }, ctx)) as Record<string, unknown>;
     expect(lean).toBeTruthy();
     expect(lean.comments).toBeUndefined();
 
@@ -1367,11 +1336,9 @@ describe("mcp — awareness tools (Stream BA)", () => {
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(live.id);
     expect(ids).not.toContain(dead.id);
-    const all = (await call(
-      "agents.list",
-      { includeArchived: true },
-      ctx,
-    )) as Array<{ id: string }>;
+    const all = (await call("agents.list", { includeArchived: true }, ctx)) as Array<{
+      id: string;
+    }>;
     expect(all.map((r) => r.id)).toContain(dead.id);
   });
 
@@ -1379,9 +1346,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
     const f = await createWorkspaceFixture({ keyPrefix: "BAA2" });
     fixtures.push(f);
     const noRead = buildMcpCtx(f, { scopes: ["READ_ISSUES"] }).ctx;
-    await expect(call("agents.list", {}, noRead)).rejects.toThrow(
-      /READ_USERS/,
-    );
+    await expect(call("agents.list", {}, noRead)).rejects.toThrow(/READ_USERS/);
   });
 
   it("events.recent reads ActivityEvent rows for the workspace", async () => {
@@ -1467,11 +1432,9 @@ describe("mcp — awareness tools (Stream BA)", () => {
     const all = (await call("statuses.list", {}, ctx)) as Array<{
       category: string;
     }>;
-    const inProgress = (await call(
-      "statuses.list",
-      { category: "IN_PROGRESS" },
-      ctx,
-    )) as Array<{ category: string }>;
+    const inProgress = (await call("statuses.list", { category: "IN_PROGRESS" }, ctx)) as Array<{
+      category: string;
+    }>;
     expect(inProgress.every((r) => r.category === "IN_PROGRESS")).toBe(true);
     expect(inProgress.length).toBeLessThanOrEqual(all.length);
   });
@@ -1527,13 +1490,12 @@ describe("mcp — awareness tools (Stream BA)", () => {
     });
 
     const { ctx: ctxAddr } = buildMcpCtx(f, { linkedAgentId: agent.id });
-    const res = (await call(
-      "chat.getThread",
-      { threadId: thread.id },
-      ctxAddr,
-    )) as {
+    const res = (await call("chat.getThread", { threadId: thread.id }, ctxAddr)) as {
       thread: { id: string };
-      messages: Array<{ body: string; attachments: Array<{ id: string; filename: string; externalUrl: string | null }> }>;
+      messages: Array<{
+        body: string;
+        attachments: Array<{ id: string; filename: string; externalUrl: string | null }>;
+      }>;
     };
     expect(res.thread.id).toBe(thread.id);
     expect(res.messages[0].body).toBe("ping");
@@ -1544,14 +1506,14 @@ describe("mcp — awareness tools (Stream BA)", () => {
     const { ctx: ctxStranger } = buildMcpCtx(f, {
       linkedAgentId: stranger.id,
     });
-    await expect(
-      call("chat.getThread", { threadId: thread.id }, ctxStranger),
-    ).rejects.toThrow(/Only the thread's agent/);
+    await expect(call("chat.getThread", { threadId: thread.id }, ctxStranger)).rejects.toThrow(
+      /Only the thread's agent/,
+    );
 
     const noLink = buildMcpCtx(f).ctx;
-    await expect(
-      call("chat.getThread", { threadId: thread.id }, noLink),
-    ).rejects.toThrow(/linkedAgentId/);
+    await expect(call("chat.getThread", { threadId: thread.id }, noLink)).rejects.toThrow(
+      /linkedAgentId/,
+    );
   });
 
   it("agent.context.bundle issueId branch returns workspace + issue + extras", async () => {
@@ -1568,11 +1530,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
         body: "comment",
       },
     });
-    const bundle = (await call(
-      "agent.context.bundle",
-      { issueId: issue.id },
-      ctx,
-    )) as {
+    const bundle = (await call("agent.context.bundle", { issueId: issue.id }, ctx)) as {
       workspace: { id: string };
       issue: { id: string };
       comments: unknown[];
@@ -1621,14 +1579,14 @@ describe("mcp — awareness tools (Stream BA)", () => {
       },
     });
     const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
-    const bundle = (await call(
-      "agent.context.bundle",
-      { threadId: thread.id },
-      ctx,
-    )) as {
+    const bundle = (await call("agent.context.bundle", { threadId: thread.id }, ctx)) as {
       workspace: { id: string };
       thread: { id: string };
-      messages: Array<{ id: string; attachments: Array<{ id: string; filename: string; mimeType: string }> }>;
+      messages: Array<{
+        id: string;
+        attachments: Array<{ id: string; filename: string; mimeType: string }>;
+      }>;
+      diagnostics: { latestUserMessageId: string | null; waitingForReply: boolean };
     };
     expect(bundle.workspace.id).toBe(f.workspace.id);
     expect(bundle.thread.id).toBe(thread.id);
@@ -1637,15 +1595,17 @@ describe("mcp — awareness tools (Stream BA)", () => {
       id: message.id,
       attachments: [{ id: attachment.id, filename: "bundle.png", mimeType: "image/png" }],
     });
+    expect(bundle.diagnostics).toMatchObject({
+      latestUserMessageId: message.id,
+      waitingForReply: true,
+    });
   });
 
   it("agent.context.bundle requires exactly one of issueId/threadId", async () => {
     const f = await createWorkspaceFixture({ keyPrefix: "BAB3" });
     fixtures.push(f);
     const { ctx } = buildMcpCtx(f);
-    await expect(
-      call("agent.context.bundle", {}, ctx),
-    ).rejects.toThrow(/exactly one/i);
+    await expect(call("agent.context.bundle", {}, ctx)).rejects.toThrow(/exactly one/i);
   });
 
   it("runs.list filters by agent + status + issue", async () => {
@@ -1704,11 +1664,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
     const agent = await prisma.agent.create({
       data: { workspaceId: f.workspace.id, profileKey: "v", name: "V" },
     });
-    await call(
-      "issues.assign",
-      { issueId: issue.id, agentId: agent.id },
-      ctx,
-    );
+    await call("issues.assign", { issueId: issue.id, agentId: agent.id }, ctx);
     const events = await prisma.activityEvent.findMany({
       where: {
         workspaceId: f.workspace.id,
@@ -1750,11 +1706,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
     });
     expect(before.status?.category).not.toBe("IN_PROGRESS");
 
-    await call(
-      "issues.assign",
-      { issueId: issue.id, agentId: agent.id },
-      ctx,
-    );
+    await call("issues.assign", { issueId: issue.id, agentId: agent.id }, ctx);
 
     const after = await prisma.issue.findUniqueOrThrow({
       where: { id: issue.id },
@@ -1851,11 +1803,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
 
     const { ctx } = buildMcpCtx(f);
     // Plain comment on Bob's issue, no @mention of Victor.
-    await call(
-      "comments.create",
-      { issueId: issue.id, body: "moving to done — looks good" },
-      ctx,
-    );
+    await call("comments.create", { issueId: issue.id, body: "moving to done — looks good" }, ctx);
 
     const deliveries = await prisma.webhookDelivery.findMany({
       where: {
@@ -1900,11 +1848,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
     const agent = await prisma.agent.create({
       data: { workspaceId: f.workspace.id, profileKey: "v", name: "V" },
     });
-    await call(
-      "issues.assign",
-      { issueId: started.id, agentId: agent.id },
-      ctx,
-    );
+    await call("issues.assign", { issueId: started.id, agentId: agent.id }, ctx);
     let events = await prisma.activityEvent.findMany({
       where: {
         workspaceId: f.workspace.id,
@@ -1913,9 +1857,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
       },
       orderBy: { createdAt: "desc" },
     });
-    expect(
-      (events[0].payload as Record<string, unknown>).autoTransitionedTo,
-    ).toBeUndefined();
+    expect((events[0].payload as Record<string, unknown>).autoTransitionedTo).toBeUndefined();
 
     // Already DONE — should not reopen.
     const closed = await createIssue(f, { title: "already done" });
@@ -1923,11 +1865,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
       where: { id: closed.id },
       data: { statusId: done.id },
     });
-    await call(
-      "issues.assign",
-      { issueId: closed.id, agentId: agent.id },
-      ctx,
-    );
+    await call("issues.assign", { issueId: closed.id, agentId: agent.id }, ctx);
     const after = await prisma.issue.findUniqueOrThrow({
       where: { id: closed.id },
       select: { statusId: true },
@@ -1941,9 +1879,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
       },
       orderBy: { createdAt: "desc" },
     });
-    expect(
-      (events[0].payload as Record<string, unknown>).autoTransitionedTo,
-    ).toBeUndefined();
+    expect((events[0].payload as Record<string, unknown>).autoTransitionedTo).toBeUndefined();
   });
 });
 
@@ -1965,11 +1901,9 @@ describe("mcp — notes (per-actor scoping)", () => {
     const listed = (await call("notes.list", {}, ctx)) as Array<{ id: string }>;
     expect(listed.find((n) => n.id === created.id)).toBeTruthy();
 
-    const updated = (await call(
-      "notes.update",
-      { id: created.id, pinned: true },
-      ctx,
-    )) as { pinned: boolean };
+    const updated = (await call("notes.update", { id: created.id, pinned: true }, ctx)) as {
+      pinned: boolean;
+    };
     expect(updated.pinned).toBe(true);
 
     // Plant a row owned by the second user — should be invisible.
@@ -1984,9 +1918,9 @@ describe("mcp — notes (per-actor scoping)", () => {
     expect(reList.find((n) => n.id === otherNote.id)).toBeUndefined();
 
     // Cross-actor update should be blocked at the resolver.
-    await expect(
-      call("notes.update", { id: otherNote.id, pinned: true }, ctx),
-    ).rejects.toThrow(/Note not found/);
+    await expect(call("notes.update", { id: otherNote.id, pinned: true }, ctx)).rejects.toThrow(
+      /Note not found/,
+    );
 
     // Archive flips the row out of the default list.
     await call("notes.archive", { id: created.id }, ctx);
@@ -1994,11 +1928,7 @@ describe("mcp — notes (per-actor scoping)", () => {
       id: string;
     }>;
     expect(afterArchive.find((n) => n.id === created.id)).toBeUndefined();
-    const archived = (await call(
-      "notes.list",
-      { archived: true },
-      ctx,
-    )) as Array<{ id: string }>;
+    const archived = (await call("notes.list", { archived: true }, ctx)) as Array<{ id: string }>;
     expect(archived.find((n) => n.id === created.id)).toBeTruthy();
   });
 });
@@ -2011,10 +1941,20 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     const { ctx } = buildMcpCtx(fixture);
 
     const projectA = await prisma.project.create({
-      data: { workspaceId: fixture.workspace.id, key: "A", name: "Project A", createdById: fixture.user.id },
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "A",
+        name: "Project A",
+        createdById: fixture.user.id,
+      },
     });
     const projectB = await prisma.project.create({
-      data: { workspaceId: fixture.workspace.id, key: "B", name: "Project B", createdById: fixture.user.id },
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "B",
+        name: "Project B",
+        createdById: fixture.user.id,
+      },
     });
     const cycle = await prisma.cycle.create({
       data: {
@@ -2032,28 +1972,44 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
       data: { workspaceId: fixture.workspace.id, name: "cold", color: "#0000ff" },
     });
 
-    const a = await createIssue(fixture, { title: "A urgent in sprint", projectId: projectA.id, cycleId: cycle.id });
+    const a = await createIssue(fixture, {
+      title: "A urgent in sprint",
+      projectId: projectA.id,
+      cycleId: cycle.id,
+    });
     const b = await createIssue(fixture, { title: "A low backlog", projectId: projectA.id });
-    const c = await createIssue(fixture, { title: "B medium in sprint", projectId: projectB.id, cycleId: cycle.id });
+    const c = await createIssue(fixture, {
+      title: "B medium in sprint",
+      projectId: projectB.id,
+      cycleId: cycle.id,
+    });
     await prisma.issue.update({ where: { id: a.id }, data: { priority: "URGENT" } });
     await prisma.issue.update({ where: { id: b.id }, data: { priority: "LOW" } });
     await prisma.issue.update({ where: { id: c.id }, data: { priority: "MEDIUM" } });
     await prisma.issueLabel.create({ data: { issueId: a.id, labelId: labelHot.id } });
     await prisma.issueLabel.create({ data: { issueId: c.id, labelId: labelCold.id } });
 
-    const byProject = (await call("issues.list", { projectId: projectA.id }, ctx)) as Array<{ id: string }>;
+    const byProject = (await call("issues.list", { projectId: projectA.id }, ctx)) as Array<{
+      id: string;
+    }>;
     expect(byProject.map((i) => i.id).sort()).toEqual([a.id, b.id].sort());
 
-    const byLabel = (await call("issues.list", { labelIds: [labelHot.id] }, ctx)) as Array<{ id: string }>;
+    const byLabel = (await call("issues.list", { labelIds: [labelHot.id] }, ctx)) as Array<{
+      id: string;
+    }>;
     expect(byLabel.map((i) => i.id)).toEqual([a.id]);
 
-    const byCycle = (await call("issues.list", { cycleId: cycle.id }, ctx)) as Array<{ id: string }>;
+    const byCycle = (await call("issues.list", { cycleId: cycle.id }, ctx)) as Array<{
+      id: string;
+    }>;
     expect(byCycle.map((i) => i.id).sort()).toEqual([a.id, c.id].sort());
 
     const backlog = (await call("issues.list", { cycleId: null }, ctx)) as Array<{ id: string }>;
     expect(backlog.map((i) => i.id)).toEqual([b.id]);
 
-    const urgent = (await call("issues.list", { priorities: ["URGENT", "HIGH"] }, ctx)) as Array<{ id: string }>;
+    const urgent = (await call("issues.list", { priorities: ["URGENT", "HIGH"] }, ctx)) as Array<{
+      id: string;
+    }>;
     expect(urgent.map((i) => i.id)).toEqual([a.id]);
 
     // Compound filter: project A AND urgent priority.
@@ -2071,7 +2027,12 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     const prisma = getPrisma();
     const { ctx } = buildMcpCtx(fixture);
     const project = await prisma.project.create({
-      data: { workspaceId: fixture.workspace.id, key: "P", name: "P", createdById: fixture.user.id },
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "P",
+        name: "P",
+        createdById: fixture.user.id,
+      },
     });
     const issue = await createIssue(fixture, { title: "patch me" });
 
@@ -2085,7 +2046,13 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
         projectId: project.id,
       },
       ctx,
-    )) as { id: string; title: string; description: string | null; priority: string; projectId: string | null };
+    )) as {
+      id: string;
+      title: string;
+      description: string | null;
+      priority: string;
+      projectId: string | null;
+    };
 
     expect(updated.title).toBe("patched");
     expect(updated.description).toBe("new body");
@@ -2113,7 +2080,12 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     const prisma = getPrisma();
     const { ctx } = buildMcpCtx(fixture);
     const project = await prisma.project.create({
-      data: { workspaceId: fixture.workspace.id, key: "P", name: "P", createdById: fixture.user.id },
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "P",
+        name: "P",
+        createdById: fixture.user.id,
+      },
     });
     const issue = await createIssue(fixture, { title: "scoped", projectId: project.id });
     await call("issues.update", { id: issue.id, projectId: null }, ctx);
@@ -2142,15 +2114,20 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     fixtures.push(fixture);
     const prisma = getPrisma();
     const project = await prisma.project.create({
-      data: { workspaceId: fixture.workspace.id, key: "L", name: "L", createdById: fixture.user.id },
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "L",
+        name: "L",
+        createdById: fixture.user.id,
+      },
     });
     const inLane = await createIssue(fixture, { title: "in", projectId: project.id });
     const outOfLane = await createIssue(fixture, { title: "out" });
 
     const readOnly = buildMcpCtx(fixture, { scopes: ["READ_ISSUES"] }).ctx;
-    await expect(
-      call("issues.update", { id: inLane.id, title: "no" }, readOnly),
-    ).rejects.toThrow(/WRITE_ISSUES/);
+    await expect(call("issues.update", { id: inLane.id, title: "no" }, readOnly)).rejects.toThrow(
+      /WRITE_ISSUES/,
+    );
 
     const narrowed = buildMcpCtx(fixture, { projectIds: [project.id] }).ctx;
     await expect(
@@ -2201,17 +2178,17 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     const prisma = getPrisma();
     const { ctx } = buildMcpCtx(fixture);
 
-    const created = (await call(
-      "labels.create",
-      { name: "bug", color: "#ff0000" },
-      ctx,
-    )) as { id: string; name: string; color: string };
+    const created = (await call("labels.create", { name: "bug", color: "#ff0000" }, ctx)) as {
+      id: string;
+      name: string;
+      color: string;
+    };
     expect(created.name).toBe("bug");
 
     // Duplicate name → conflict.
-    await expect(
-      call("labels.create", { name: "bug", color: "#000000" }, ctx),
-    ).rejects.toThrow(/already used/);
+    await expect(call("labels.create", { name: "bug", color: "#000000" }, ctx)).rejects.toThrow(
+      /already used/,
+    );
 
     const updated = (await call(
       "labels.update",

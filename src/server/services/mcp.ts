@@ -119,7 +119,9 @@ async function assertMcpChatMessageTarget(ctx: McpContext, messageId: string): P
   const userId = ctx.userId ?? null;
   if (userId === message.thread.userId) return;
   if (linkedAgentId && linkedAgentId === message.thread.agentId) return;
-  throw new Error("Only the chat thread owner or linked agent may access this chat-message attachment target.");
+  throw new Error(
+    "Only the chat thread owner or linked agent may access this chat-message attachment target.",
+  );
 }
 
 async function loadChatAttachmentMap(workspaceId: string, messageIds: string[]) {
@@ -151,7 +153,11 @@ const addDays = (date: Date, days: number): Date => {
   return d;
 };
 
-const projectKey = z.string().min(2).max(8).regex(/^[A-Z0-9]+$/);
+const projectKey = z
+  .string()
+  .min(2)
+  .max(8)
+  .regex(/^[A-Z0-9]+$/);
 
 /**
  * Compute the set of issue ids in a workspace blocked by at least one
@@ -222,9 +228,7 @@ export const mcpTools = {
         .cuid()
         .nullable()
         .optional()
-        .describe(
-          "CUID to pin, null for issues whose project has no initiative or no project",
-        ),
+        .describe("CUID to pin, null for issues whose project has no initiative or no project"),
       assigneeId: z.string().cuid().optional(),
       assignedAgentId: z
         .string()
@@ -245,10 +249,7 @@ export const mcpTools = {
       // Boolean predicates — convenience selectors. Compose under AND with
       // explicit ids above. Mirrors the tRPC `filterSchema` semantics so
       // agents calling the MCP can express the same shapes the web app uses.
-      unassigned: z
-        .boolean()
-        .optional()
-        .describe("No human assignees AND no agent assigned."),
+      unassigned: z.boolean().optional().describe("No human assignees AND no agent assigned."),
       withoutCycle: z.boolean().optional(),
       withoutInitiative: z.boolean().optional(),
       includeDone: z.boolean().default(false).describe("Include DONE/CANCELED issues"),
@@ -328,20 +329,14 @@ export const mcpTools = {
           deletedAt: null,
           ...keyWhere,
           ...(input.projectId ? { projectId: input.projectId } : {}),
-          ...(input.projectIds?.length
-            ? { projectId: { in: input.projectIds } }
-            : {}),
+          ...(input.projectIds?.length ? { projectId: { in: input.projectIds } } : {}),
           ...(input.statusId ? { statusId: input.statusId } : {}),
-          ...(input.assigneeId
-            ? { assignees: { some: { userId: input.assigneeId } } }
-            : {}),
+          ...(input.assigneeId ? { assignees: { some: { userId: input.assigneeId } } } : {}),
           ...(input.labelIds?.length
             ? { labels: { some: { labelId: { in: input.labelIds } } } }
             : {}),
           ...(input.priority ? { priority: input.priority } : {}),
-          ...(input.priorities?.length
-            ? { priority: { in: input.priorities } }
-            : {}),
+          ...(input.priorities?.length ? { priority: { in: input.priorities } } : {}),
           ...(input.cycleId === null
             ? { cycleId: null }
             : input.cycleId
@@ -355,9 +350,7 @@ export const mcpTools = {
             : input.assignedAgentId
               ? { assignedAgentId: input.assignedAgentId }
               : {}),
-          ...(input.includeDone
-            ? {}
-            : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
+          ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
           ...(andClauses.length ? { AND: andClauses } : {}),
         },
         take: input.limit,
@@ -373,9 +366,10 @@ export const mcpTools = {
       id: z.string().describe("Issue id (cuid)"),
       include: z
         .object({
-          description: z.boolean().optional().describe(
-            "Include the full Issue.description body (already on the row).",
-          ),
+          description: z
+            .boolean()
+            .optional()
+            .describe("Include the full Issue.description body (already on the row)."),
           comments: z
             .union([
               z.boolean(),
@@ -387,18 +381,19 @@ export const mcpTools = {
             .describe(
               "Include recent BODY/STATUS comments. Pass true for default (limit 20) or { limit }.",
             ),
-          attachments: z.boolean().optional().describe(
-            "Include all finalized attachments on the issue.",
-          ),
-          relations: z.boolean().optional().describe(
-            "Include outbound IssueRelation rows (matches relations.listForIssue).",
-          ),
-          currentRun: z.boolean().optional().describe(
-            "Include the most recent non-terminal AgentRun for this issue.",
-          ),
-          labels: z.boolean().optional().describe(
-            "Include labels via the IssueLabel join.",
-          ),
+          attachments: z
+            .boolean()
+            .optional()
+            .describe("Include all finalized attachments on the issue."),
+          relations: z
+            .boolean()
+            .optional()
+            .describe("Include outbound IssueRelation rows (matches relations.listForIssue)."),
+          currentRun: z
+            .boolean()
+            .optional()
+            .describe("Include the most recent non-terminal AgentRun for this issue."),
+          labels: z.boolean().optional().describe("Include labels via the IssueLabel join."),
         })
         .optional()
         .describe(
@@ -462,8 +457,7 @@ export const mcpTools = {
       }
 
       if (include.comments) {
-        const limit =
-          typeof include.comments === "object" ? include.comments.limit : 20;
+        const limit = typeof include.comments === "object" ? include.comments.limit : 20;
         out.comments = await db.comment.findMany({
           where: {
             workspaceId: ctx.workspaceId,
@@ -586,12 +580,7 @@ export const mcpTools = {
         .nullable()
         .optional()
         .describe("Pass null to remove from project."),
-      cycleId: z
-        .string()
-        .cuid()
-        .nullable()
-        .optional()
-        .describe("Pass null to remove from cycle."),
+      cycleId: z.string().cuid().nullable().optional().describe("Pass null to remove from cycle."),
       parentId: z
         .string()
         .cuid()
@@ -879,10 +868,7 @@ export const mcpTools = {
         .describe("Specific issue to claim; omit to auto-pick the next unblocked"),
       claimTtlMinutes: z.number().int().min(1).max(1440).default(60),
     }),
-    async run(
-      input: { issueId?: string; claimTtlMinutes: number },
-      ctx: McpContext,
-    ) {
+    async run(input: { issueId?: string; claimTtlMinutes: number }, ctx: McpContext) {
       const agentUserId = await resolveActorId(ctx);
       const expiresAt = new Date(Date.now() + input.claimTtlMinutes * 60_000);
 
@@ -1030,10 +1016,7 @@ export const mcpTools = {
       includeClaimed: z.boolean().default(false),
       limit: z.number().int().min(1).max(50).default(20),
     }),
-    async run(
-      input: { includeClaimed: boolean; limit: number },
-      ctx: McpContext,
-    ) {
+    async run(input: { includeClaimed: boolean; limit: number }, ctx: McpContext) {
       const keyWhere = buildKeyScopeWhere(scopeCtx(ctx), "issue");
       return db.issue.findMany({
         where: {
@@ -1065,10 +1048,7 @@ export const mcpTools = {
           .nullable()
           .optional()
           .describe("Agent id (cuid). Pass null to unassign. Optional if profileKey given."),
-        profileKey: z
-          .string()
-          .optional()
-          .describe("Resolve agent by profileKey instead of id."),
+        profileKey: z.string().optional().describe("Resolve agent by profileKey instead of id."),
       })
       .refine((v) => v.agentId !== undefined || v.profileKey !== undefined, {
         message: "Provide agentId (or null) or profileKey.",
@@ -1186,10 +1166,7 @@ export const mcpTools = {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({
       issueId: z.string().describe("Issue id (cuid)"),
-      toProfileKey: z
-        .string()
-        .min(1)
-        .describe("profileKey of the agent receiving the handoff."),
+      toProfileKey: z.string().min(1).describe("profileKey of the agent receiving the handoff."),
       rationale: z
         .string()
         .min(10, "Rationale must be at least 10 characters.")
@@ -1366,9 +1343,7 @@ export const mcpTools = {
           deletedAt: null,
           assignedAgentId: agentId,
           ...keyWhere,
-          ...(input.includeDone
-            ? {}
-            : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
+          ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
         },
         take: input.limit,
         orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
@@ -1529,10 +1504,7 @@ export const mcpTools = {
       add: z.array(z.string().cuid()).max(50).default([]),
       remove: z.array(z.string().cuid()).max(50).default([]),
     }),
-    async run(
-      input: { issueId: string; add: string[]; remove: string[] },
-      ctx: McpContext,
-    ) {
+    async run(input: { issueId: string; add: string[]; remove: string[] }, ctx: McpContext) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       const actorId = await resolveActorId(ctx);
       const labelIds = Array.from(new Set([...input.add, ...input.remove]));
@@ -1604,10 +1576,7 @@ export const mcpTools = {
       add: z.array(z.string().cuid()).max(50).default([]),
       remove: z.array(z.string().cuid()).max(50).default([]),
     }),
-    async run(
-      input: { issueIds: string[]; add: string[]; remove: string[] },
-      ctx: McpContext,
-    ) {
+    async run(input: { issueIds: string[]; add: string[]; remove: string[] }, ctx: McpContext) {
       if (input.add.length === 0 && input.remove.length === 0) {
         return { updated: 0, added: 0, removed: 0 };
       }
@@ -1723,10 +1692,7 @@ export const mcpTools = {
         .regex(/^#[0-9a-fA-F]{6}$/)
         .optional(),
     }),
-    async run(
-      input: { id: string; name?: string; color?: string },
-      ctx: McpContext,
-    ) {
+    async run(input: { id: string; name?: string; color?: string }, ctx: McpContext) {
       const { id, ...patch } = input;
       const row = await db.label.findFirst({
         where: { id, workspaceId: ctx.workspaceId },
@@ -1828,9 +1794,7 @@ export const mcpTools = {
     ) {
       const agentId = ctx.apiKey?.linkedAgentId ?? null;
       if (!agentId) {
-        throw new Error(
-          "comments.upsertStatus requires an agent-linked API key.",
-        );
+        throw new Error("comments.upsertStatus requires an agent-linked API key.");
       }
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       const authorId = await resolveActorId(ctx);
@@ -1934,15 +1898,13 @@ export const mcpTools = {
     scopes: ["READ_ISSUES"] as const,
     input: z.object({
       issueId: z.string().describe("Issue id (cuid)."),
-      before: z.coerce.date().optional().describe(
-        "Cursor — return comments created strictly before this timestamp.",
-      ),
+      before: z.coerce
+        .date()
+        .optional()
+        .describe("Cursor — return comments created strictly before this timestamp."),
       limit: z.number().int().min(1).max(200).default(50),
     }),
-    async run(
-      input: { issueId: string; before?: Date; limit: number },
-      ctx: McpContext,
-    ) {
+    async run(input: { issueId: string; before?: Date; limit: number }, ctx: McpContext) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       // Defensive workspace check — assertKeyScope only enforces narrowing,
       // not workspace membership. The base findMany filter does the rest.
@@ -2145,10 +2107,7 @@ export const mcpTools = {
         sinceHours: z.number().int().min(1).max(168).default(24),
       })
       .default({}),
-    async run(
-      raw: unknown,
-      ctx: McpContext,
-    ): Promise<unknown> {
+    async run(raw: unknown, ctx: McpContext): Promise<unknown> {
       const input = (raw ?? {}) as { sinceHours?: number };
       const userId = await resolveActorId(ctx);
       const { composeStandup } = await import("@/server/services/standup");
@@ -2288,10 +2247,7 @@ export const mcpTools = {
       cycleId: z.string(),
       issueIds: z.array(z.string()).min(1).max(500),
     }),
-    async run(
-      input: { cycleId: string; issueIds: string[] },
-      ctx: McpContext,
-    ) {
+    async run(input: { cycleId: string; issueIds: string[] }, ctx: McpContext) {
       const cycle = await db.cycle.findFirstOrThrow({
         where: { id: input.cycleId, workspaceId: ctx.workspaceId },
         select: { id: true },
@@ -2443,10 +2399,7 @@ export const mcpTools = {
     scopes: ["READ_PROJECTS"] as const,
     input: z
       .object({
-        status: z
-          .nativeEnum(InitiativeStatus)
-          .optional()
-          .describe("Filter by InitiativeStatus"),
+        status: z.nativeEnum(InitiativeStatus).optional().describe("Filter by InitiativeStatus"),
       })
       .default({}),
     async run(input: { status?: InitiativeStatus }, ctx: McpContext) {
@@ -2507,14 +2460,15 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
-      const slugSource = (input.slug ?? input.name)
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9\s-]/g, "")
-        .replace(/\s+/g, "-")
-        .replace(/-+/g, "-")
-        .replace(/^-|-$/g, "")
-        .slice(0, 48) || "initiative";
+      const slugSource =
+        (input.slug ?? input.name)
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9\s-]/g, "")
+          .replace(/\s+/g, "-")
+          .replace(/-+/g, "-")
+          .replace(/^-|-$/g, "")
+          .slice(0, 48) || "initiative";
       const createdById = await resolveActorId(ctx);
       const last = await db.initiative.findFirst({
         where: { workspaceId: ctx.workspaceId },
@@ -2577,10 +2531,7 @@ export const mcpTools = {
       initiativeId: z.string(),
       projectId: z.string(),
     }),
-    async run(
-      input: { initiativeId: string; projectId: string },
-      ctx: McpContext,
-    ) {
+    async run(input: { initiativeId: string; projectId: string }, ctx: McpContext) {
       await assertKeyScope(scopeCtx(ctx), {
         entity: "initiative",
         id: input.initiativeId,
@@ -2800,9 +2751,7 @@ export const mcpTools = {
           },
         });
         if (running) {
-          throw new Error(
-            "A time entry is already running. Stop it before starting a new one.",
-          );
+          throw new Error("A time entry is already running. Stop it before starting a new one.");
         }
         if (input.issueId) {
           await assertKeyScope(scopeCtx(ctx), {
@@ -3022,10 +2971,7 @@ export const mcpTools = {
         Math.max(0, Math.round((b.getTime() - a.getTime()) / 60_000));
       const amountFor = (minutes: number, rate?: number | null) =>
         !rate ? 0 : Math.round((minutes / 60) * rate * 100) / 100;
-      const buckets = new Map<
-        string,
-        { key: string; minutes: number; billableAmount: number }
-      >();
+      const buckets = new Map<string, { key: string; minutes: number; billableAmount: number }>();
       let totalMinutes = 0;
       let totalBillableAmount = 0;
       for (const e of entries) {
@@ -3037,8 +2983,7 @@ export const mcpTools = {
         let key: string;
         if (input.groupBy === "day") key = e.startedAt.toISOString().slice(0, 10);
         else if (input.groupBy === "issue") key = e.issue?.id ?? "unassigned";
-        else if (input.groupBy === "project")
-          key = e.issue?.project?.id ?? "unassigned";
+        else if (input.groupBy === "project") key = e.issue?.project?.id ?? "unassigned";
         else key = e.billable ? "billable" : "non-billable";
         const bucket = buckets.get(key) ?? { key, minutes: 0, billableAmount: 0 };
         bucket.minutes += mins;
@@ -3181,16 +3126,12 @@ export const mcpTools = {
         .string()
         .url()
         .max(2048)
-        .describe(
-          "Absolute URL to attach. Must be parseable by URL(); typically https://… .",
-        ),
+        .describe("Absolute URL to attach. Must be parseable by URL(); typically https://… ."),
       title: z
         .string()
         .max(255)
         .optional()
-        .describe(
-          "Optional human label. Defaults to the URL hostname when omitted.",
-        ),
+        .describe("Optional human label. Defaults to the URL hostname when omitted."),
     }),
     async run(
       input: {
@@ -3246,10 +3187,7 @@ export const mcpTools = {
       targetType: z.string().refine((v) => ALLOWED_TARGET_TYPES.has(v)),
       targetId: z.string(),
     }),
-    async run(
-      input: { targetType: string; targetId: string },
-      ctx: McpContext,
-    ) {
+    async run(input: { targetType: string; targetId: string }, ctx: McpContext) {
       if (input.targetType === "issue") {
         await assertKeyScope(scopeCtx(ctx), {
           entity: "issue",
@@ -3347,14 +3285,9 @@ export const mcpTools = {
         .min(1024)
         .max(25 * 1024 * 1024)
         .default(1_000_000)
-        .describe(
-          "Hard cap on bytes returned in the response. Defaults to 1 MB.",
-        ),
+        .describe("Hard cap on bytes returned in the response. Defaults to 1 MB."),
     }),
-    async run(
-      input: { attachmentId: string; maxBytes: number },
-      ctx: McpContext,
-    ) {
+    async run(input: { attachmentId: string; maxBytes: number }, ctx: McpContext) {
       const row = await db.attachment.findFirst({
         where: { id: input.attachmentId, workspaceId: ctx.workspaceId },
         select: {
@@ -3464,10 +3397,7 @@ export const mcpTools = {
   "pins.set": {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({
-      issueIds: z
-        .array(z.string())
-        .max(3)
-        .describe("Ordered list of pinned issue ids; max 3."),
+      issueIds: z.array(z.string()).max(3).describe("Ordered list of pinned issue ids; max 3."),
     }),
     async run(input: { issueIds: string[] }, ctx: McpContext) {
       const userId = await resolveActorId(ctx);
@@ -3533,10 +3463,7 @@ export const mcpTools = {
           "Filter to agents on a specific Runtime. Useful for daemons enumerating their own roster.",
         ),
     }),
-    async run(
-      input: { includeArchived: boolean; runtimeId?: string },
-      ctx: McpContext,
-    ) {
+    async run(input: { includeArchived: boolean; runtimeId?: string }, ctx: McpContext) {
       return db.agent.findMany({
         where: {
           workspaceId: ctx.workspaceId,
@@ -3561,15 +3488,13 @@ export const mcpTools = {
 
   "agents.me": {
     scopes: ["READ_USERS"] as const,
-    input: z.object({}).describe(
-      "Returns the Agent row linked to the calling API key (via linkedAgentId).",
-    ),
+    input: z
+      .object({})
+      .describe("Returns the Agent row linked to the calling API key (via linkedAgentId)."),
     async run(_input: Record<string, never>, ctx: McpContext) {
       const agentId = ctx.apiKey?.linkedAgentId;
       if (!agentId) {
-        throw new Error(
-          "No agent inferred; use an API key with linkedAgentId set.",
-        );
+        throw new Error("No agent inferred; use an API key with linkedAgentId set.");
       }
       const agent = await db.agent.findUnique({
         where: { id: agentId },
@@ -3608,9 +3533,7 @@ export const mcpTools = {
     async run(input: { status: AgentStatus }, ctx: McpContext) {
       const agentId = ctx.apiKey?.linkedAgentId;
       if (!agentId) {
-        throw new Error(
-          "No agent inferred; use an API key with linkedAgentId set.",
-        );
+        throw new Error("No agent inferred; use an API key with linkedAgentId set.");
       }
       const existing = await db.agent.findUnique({
         where: { id: agentId },
@@ -3659,20 +3582,16 @@ export const mcpTools = {
     scopes: ["WRITE_COMMENTS"] as const,
     input: z.object({
       threadId: z.string().min(1).max(40),
-      before: z.coerce.date().optional().describe(
-        "Cursor — return messages strictly before this createdAt.",
-      ),
+      before: z.coerce
+        .date()
+        .optional()
+        .describe("Cursor — return messages strictly before this createdAt."),
       limit: z.number().int().min(1).max(200).default(50),
     }),
-    async run(
-      input: { threadId: string; before?: Date; limit: number },
-      ctx: McpContext,
-    ) {
+    async run(input: { threadId: string; before?: Date; limit: number }, ctx: McpContext) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
-        throw new Error(
-          "chat.getThread requires an API key with linkedAgentId set.",
-        );
+        throw new Error("chat.getThread requires an API key with linkedAgentId set.");
       }
       const thread = await db.chatThread.findFirst({
         where: { id: input.threadId, workspaceId: ctx.workspaceId },
@@ -3742,9 +3661,7 @@ export const mcpTools = {
         .string()
         .min(1)
         .max(16_000)
-        .describe(
-          "Reply body. Markdown is rendered client-side; use fenced code blocks for code.",
-        ),
+        .describe("Reply body. Markdown is rendered client-side; use fenced code blocks for code."),
       sourceRunId: z
         .string()
         .min(1)
@@ -3754,15 +3671,10 @@ export const mcpTools = {
           "Optional AgentRun id to link the chat reply to a longer agent run for deep-linking.",
         ),
     }),
-    async run(
-      input: { threadId: string; body: string; sourceRunId?: string },
-      ctx: McpContext,
-    ) {
+    async run(input: { threadId: string; body: string; sourceRunId?: string }, ctx: McpContext) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
-        throw new Error(
-          "chat.appendMessage requires an API key with linkedAgentId set.",
-        );
+        throw new Error("chat.appendMessage requires an API key with linkedAgentId set.");
       }
       const thread = await db.chatThread.findFirst({
         where: { id: input.threadId, workspaceId: ctx.workspaceId },
@@ -3825,9 +3737,7 @@ export const mcpTools = {
     async run(input: { threadId: string }, ctx: McpContext) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
-        throw new Error(
-          "chat.startDraft requires an API key with linkedAgentId set.",
-        );
+        throw new Error("chat.startDraft requires an API key with linkedAgentId set.");
       }
       const thread = await db.chatThread.findFirst({
         where: { id: input.threadId, workspaceId: ctx.workspaceId },
@@ -3879,9 +3789,7 @@ export const mcpTools = {
     ) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
-        throw new Error(
-          "chat.appendDraftChunk requires an API key with linkedAgentId set.",
-        );
+        throw new Error("chat.appendDraftChunk requires an API key with linkedAgentId set.");
       }
       // Lighter check — we trust draftId already proved permission via startDraft.
       // But still verify the thread is in this workspace + this agent.
@@ -3925,9 +3833,7 @@ export const mcpTools = {
     ) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
-        throw new Error(
-          "chat.finalizeDraft requires an API key with linkedAgentId set.",
-        );
+        throw new Error("chat.finalizeDraft requires an API key with linkedAgentId set.");
       }
       const thread = await db.chatThread.findFirst({
         where: { id: input.threadId, workspaceId: ctx.workspaceId },
@@ -4014,10 +3920,7 @@ export const mcpTools = {
         .describe("Optional filter — LOCAL_DAEMON | REMOTE_HTTP | CLOUD."),
       includeArchived: z.boolean().default(false),
     }),
-    async run(
-      input: { kind?: RuntimeKind; includeArchived: boolean },
-      ctx: McpContext,
-    ) {
+    async run(input: { kind?: RuntimeKind; includeArchived: boolean }, ctx: McpContext) {
       return db.runtime.findMany({
         where: {
           workspaceId: ctx.workspaceId,
@@ -4043,9 +3946,7 @@ export const mcpTools = {
         .describe(
           "Display name. Defaults at the daemon to os.hostname(); REMOTE_HTTP integrations pick whatever the operator wants.",
         ),
-      kind: z
-        .nativeEnum(RuntimeKind)
-        .describe("LOCAL_DAEMON | REMOTE_HTTP | CLOUD."),
+      kind: z.nativeEnum(RuntimeKind).describe("LOCAL_DAEMON | REMOTE_HTTP | CLOUD."),
       endpoint: z
         .string()
         .url()
@@ -4109,11 +4010,7 @@ export const mcpTools = {
   "runtimes.heartbeat": {
     scopes: ["ADMIN"] as const,
     input: z.object({
-      runtimeId: z
-        .string()
-        .min(1)
-        .max(40)
-        .describe("Runtime.id returned from runtimes.register."),
+      runtimeId: z.string().min(1).max(40).describe("Runtime.id returned from runtimes.register."),
     }),
     async run(input: { runtimeId: string }, ctx: McpContext) {
       const row = await db.runtime.findFirst({
@@ -4168,9 +4065,7 @@ export const mcpTools = {
     ) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
-        throw new Error(
-          "runs.recordUsage requires an API key with linkedAgentId set.",
-        );
+        throw new Error("runs.recordUsage requires an API key with linkedAgentId set.");
       }
       const run = await db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
@@ -4178,9 +4073,7 @@ export const mcpTools = {
       });
       if (!run) throw new Error("AgentRun not found in this workspace.");
       if (run.agentId !== linkedAgentId) {
-        throw new Error(
-          "AgentRun belongs to a different agent than the calling key.",
-        );
+        throw new Error("AgentRun belongs to a different agent than the calling key.");
       }
       const data: Prisma.AgentRunUpdateInput = {};
       if (input.tokensIn !== undefined) data.tokensIn = input.tokensIn;
@@ -4212,13 +4105,12 @@ export const mcpTools = {
     input: z.object({
       agentId: z.string().min(1).max(40).optional(),
       issueId: z.string().min(1).max(40).optional(),
-      status: z
-        .enum(["ACTIVE", "COMPLETED", "ABANDONED", "STALLED"])
-        .optional(),
+      status: z.enum(["ACTIVE", "COMPLETED", "ABANDONED", "STALLED"]).optional(),
       limit: z.number().int().min(1).max(200).default(50),
-      before: z.coerce.date().optional().describe(
-        "Cursor — return runs started strictly before this timestamp.",
-      ),
+      before: z.coerce
+        .date()
+        .optional()
+        .describe("Cursor — return runs started strictly before this timestamp."),
     }),
     async run(
       input: {
@@ -4412,9 +4304,7 @@ export const mcpTools = {
           workspaceId: ctx.workspaceId,
           ...(input.subjectType ? { subjectType: input.subjectType } : {}),
           ...(input.subjectId ? { subjectId: input.subjectId } : {}),
-          ...(input.kinds && input.kinds.length
-            ? { kind: { in: input.kinds } }
-            : {}),
+          ...(input.kinds && input.kinds.length ? { kind: { in: input.kinds } } : {}),
           ...(input.before ? { createdAt: { lt: input.before } } : {}),
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -4472,10 +4362,7 @@ export const mcpTools = {
         category: z.nativeEnum(StatusCategory).optional(),
       })
       .default({}),
-    async run(
-      input: { category?: StatusCategory },
-      ctx: McpContext,
-    ) {
+    async run(input: { category?: StatusCategory }, ctx: McpContext) {
       return db.status.findMany({
         where: {
           workspaceId: ctx.workspaceId,
@@ -4513,15 +4400,10 @@ export const mcpTools = {
         issueId: z.string().min(1).max(40).optional(),
         threadId: z.string().min(1).max(40).optional(),
       })
-      .refine(
-        (v) =>
-          (v.issueId && !v.threadId) || (!v.issueId && v.threadId),
-        { message: "Provide exactly one of issueId or threadId." },
-      ),
-    async run(
-      input: { issueId?: string; threadId?: string },
-      ctx: McpContext,
-    ) {
+      .refine((v) => (v.issueId && !v.threadId) || (!v.issueId && v.threadId), {
+        message: "Provide exactly one of issueId or threadId.",
+      }),
+    async run(input: { issueId?: string; threadId?: string }, ctx: McpContext) {
       const workspace = await db.workspace.findUniqueOrThrow({
         where: { id: ctx.workspaceId },
         select: {
@@ -4577,10 +4459,7 @@ export const mcpTools = {
           db.attachment.findMany({
             where: {
               workspaceId: ctx.workspaceId,
-              OR: [
-                { targetType: "issue", targetId: issueId },
-                { issueId },
-              ],
+              OR: [{ targetType: "issue", targetId: issueId }, { issueId }],
               NOT: { url: { startsWith: "pending:" } },
             },
             orderBy: { createdAt: "asc" },
@@ -4683,10 +4562,7 @@ export const mcpTools = {
       // two distinct issueIds across recent messages; cap to 5 for safety.
       const issueIds = new Set<string>();
       for (const m of messages) {
-        const snap = m.contextSnapshot as
-          | { issueId?: string }
-          | null
-          | undefined;
+        const snap = m.contextSnapshot as { issueId?: string } | null | undefined;
         if (snap && typeof snap.issueId === "string") {
           issueIds.add(snap.issueId);
           if (issueIds.size >= 5) break;
@@ -4708,6 +4584,48 @@ export const mcpTools = {
           })
         : [];
 
+      const latestUser = messages.find((m) => m.role === "USER") ?? null;
+      const latestAgent = messages.find((m) => m.role === "AGENT") ?? null;
+      const lastSourceRunId = messages.find((m) => m.sourceRunId)?.sourceRunId ?? null;
+      const run = lastSourceRunId
+        ? await db.agentRun.findFirst({
+            where: { id: lastSourceRunId, workspaceId: ctx.workspaceId },
+            select: {
+              id: true,
+              status: true,
+              startedAt: true,
+              finishedAt: true,
+              currentStep: true,
+              lastEventAt: true,
+            },
+          })
+        : null;
+      const waitingForReply = Boolean(
+        latestUser &&
+        (!latestAgent || latestUser.createdAt.getTime() > latestAgent.createdAt.getTime()),
+      );
+      const now = Date.now();
+      const diagnostics = {
+        latestUserMessageId: latestUser?.id ?? null,
+        latestUserMessageAt: latestUser?.createdAt ?? null,
+        latestAgentMessageAt: latestAgent?.createdAt ?? null,
+        waitingForReply,
+        waitingMs:
+          waitingForReply && latestUser ? Math.max(0, now - latestUser.createdAt.getTime()) : null,
+        lastSourceRunId,
+        lastRun: run
+          ? {
+              id: run.id,
+              status: run.status,
+              startedAt: run.startedAt,
+              completedAt: run.finishedAt,
+              currentStep: run.currentStep,
+              lastEventAt: run.lastEventAt,
+              idleMs: Math.max(0, now - run.lastEventAt.getTime()),
+            }
+          : null,
+      };
+
       return {
         workspace,
         thread,
@@ -4717,6 +4635,7 @@ export const mcpTools = {
         })),
         agent,
         linkedIssues,
+        diagnostics,
       };
     },
   },
@@ -4750,20 +4669,10 @@ export const mcpTools = {
         .max(200)
         .optional()
         .describe("Optional title (≤200 chars). Body's first line is used as a fallback."),
-      body: z
-        .string()
-        .min(1)
-        .max(50_000)
-        .describe("Markdown body. Required."),
-      pinned: z
-        .boolean()
-        .default(false)
-        .describe("Pin to the top of the caller's notes list."),
+      body: z.string().min(1).max(50_000).describe("Markdown body. Required."),
+      pinned: z.boolean().default(false).describe("Pin to the top of the caller's notes list."),
     }),
-    async run(
-      input: { title?: string; body: string; pinned: boolean },
-      ctx: McpContext,
-    ) {
+    async run(input: { title?: string; body: string; pinned: boolean }, ctx: McpContext) {
       const userId = await resolveActorId(ctx);
       return db.note.create({
         data: {
@@ -4909,7 +4818,10 @@ export const mcpTools = {
             month: "2-digit",
             day: "2-digit",
           });
-          const [y, m, d] = fmt.format(now).split("-").map((p) => parseInt(p, 10));
+          const [y, m, d] = fmt
+            .format(now)
+            .split("-")
+            .map((p) => parseInt(p, 10));
           today = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
         } else {
           today = new Date(now);
@@ -4952,10 +4864,7 @@ export const mcpTools = {
       to: z.coerce.date().optional(),
       limit: z.number().int().min(1).max(180).default(30),
     }),
-    async run(
-      input: { from?: Date; to?: Date; limit: number },
-      ctx: McpContext,
-    ) {
+    async run(input: { from?: Date; to?: Date; limit: number }, ctx: McpContext) {
       const userId = await resolveActorId(ctx);
       return db.note.findMany({
         where: {
