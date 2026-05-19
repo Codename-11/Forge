@@ -5118,6 +5118,181 @@ export const mcpTools = {
     },
   },
 
+  // ----------------------------------------------------------- ExecutionPlans
+  //
+  // Multi-step plans an agent (or crew) executes under an issue or
+  // project. Steps form an ordered list with optional dependencies;
+  // the runner watches step state and surfaces ReviewGates (Wave 7)
+  // when approval is required. Agents call these tools to read their
+  // assigned steps, mark progress, and link AgentRun completion.
+
+  "executionPlans.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      status: z
+        .enum(["DRAFT", "APPROVED", "RUNNING", "BLOCKED", "COMPLETED", "CANCELED"])
+        .optional(),
+      issueId: z.string().cuid().optional(),
+      projectId: z.string().cuid().optional(),
+      includeArchived: z.boolean().default(false),
+      limit: z.number().int().min(1).max(100).default(50),
+    }),
+    async run(
+      input: {
+        status?: "DRAFT" | "APPROVED" | "RUNNING" | "BLOCKED" | "COMPLETED" | "CANCELED";
+        issueId?: string;
+        projectId?: string;
+        includeArchived: boolean;
+        limit: number;
+      },
+      ctx: McpContext,
+    ) {
+      return db.executionPlan.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          status: input.status,
+          issueId: input.issueId,
+          projectId: input.projectId,
+          archivedAt: input.includeArchived ? undefined : null,
+        },
+        orderBy: { updatedAt: "desc" },
+        take: input.limit,
+        include: { _count: { select: { steps: true } } },
+      });
+    },
+  },
+
+  "executionPlans.get": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      const plan = await db.executionPlan.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        include: {
+          steps: { orderBy: { position: "asc" } },
+          contextSet: { select: { id: true, name: true } },
+        },
+      });
+      if (!plan) throw new Error("Execution plan not found.");
+      return plan;
+    },
+  },
+
+  "executionPlans.create": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      title: z.string().min(1).max(300),
+      description: z.string().max(50_000).nullable().optional(),
+      issueId: z.string().cuid().nullable().optional(),
+      projectId: z.string().cuid().nullable().optional(),
+      contextSetId: z.string().cuid().nullable().optional(),
+      status: z
+        .enum(["DRAFT", "APPROVED", "RUNNING", "BLOCKED", "COMPLETED", "CANCELED"])
+        .optional(),
+      steps: z
+        .array(
+          z.object({
+            title: z.string().min(1).max(300),
+            body: z.string().max(50_000).nullable().optional(),
+            assignedAgentId: z.string().cuid().nullable().optional(),
+            assignedUserId: z.string().cuid().nullable().optional(),
+            expectedOutput: z.string().max(50_000).nullable().optional(),
+            dependsOnStepIds: z.array(z.string()).max(50).optional(),
+          }),
+        )
+        .max(50)
+        .optional(),
+    }),
+    async run(
+      input: {
+        title: string;
+        description?: string | null;
+        issueId?: string | null;
+        projectId?: string | null;
+        contextSetId?: string | null;
+        status?: "DRAFT" | "APPROVED" | "RUNNING" | "BLOCKED" | "COMPLETED" | "CANCELED";
+        steps?: Array<{
+          title: string;
+          body?: string | null;
+          assignedAgentId?: string | null;
+          assignedUserId?: string | null;
+          expectedOutput?: string | null;
+          dependsOnStepIds?: string[];
+        }>;
+      },
+      ctx: McpContext,
+    ) {
+      const { createExecutionPlan } = await import("@/server/services/execution-plan-service");
+      return createExecutionPlan(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        title: input.title,
+        description: input.description ?? null,
+        issueId: input.issueId ?? null,
+        projectId: input.projectId ?? null,
+        contextSetId: input.contextSetId ?? null,
+        status: input.status,
+        steps: input.steps?.map((s) => ({
+          title: s.title,
+          body: s.body ?? null,
+          assignedAgentId: s.assignedAgentId ?? null,
+          assignedUserId: s.assignedUserId ?? null,
+          expectedOutput: s.expectedOutput ?? null,
+          dependsOnStepIds: s.dependsOnStepIds ?? [],
+        })),
+      });
+    },
+  },
+
+  "executionPlans.transition": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      status: z.enum(["DRAFT", "APPROVED", "RUNNING", "BLOCKED", "COMPLETED", "CANCELED"]),
+    }),
+    async run(
+      input: { id: string; status: "DRAFT" | "APPROVED" | "RUNNING" | "BLOCKED" | "COMPLETED" | "CANCELED" },
+      ctx: McpContext,
+    ) {
+      const { updateExecutionPlan } = await import("@/server/services/execution-plan-service");
+      await updateExecutionPlan(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        planId: input.id,
+        status: input.status as never,
+      });
+      return { ok: true };
+    },
+  },
+
+  "executionPlans.transitionStep": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      stepId: z.string().cuid(),
+      status: z.enum(["TODO", "READY", "RUNNING", "BLOCKED", "REVIEW", "DONE", "CANCELED"]),
+      sourceRunId: z.string().cuid().nullable().optional(),
+    }),
+    async run(
+      input: {
+        stepId: string;
+        status: "TODO" | "READY" | "RUNNING" | "BLOCKED" | "REVIEW" | "DONE" | "CANCELED";
+        sourceRunId?: string | null;
+      },
+      ctx: McpContext,
+    ) {
+      const { updateExecutionStep } = await import("@/server/services/execution-plan-service");
+      await updateExecutionStep(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        stepId: input.stepId,
+        status: input.status as never,
+        sourceRunId: input.sourceRunId === undefined ? undefined : input.sourceRunId,
+      });
+      return { ok: true };
+    },
+  },
+
   // ---------------------------------------------------------------------- Notes
   //
   // Per-(workspace, user) markdown scratchpad. The dashboard's

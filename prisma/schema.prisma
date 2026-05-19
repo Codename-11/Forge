@@ -380,29 +380,31 @@ model User {
   sessions    Session[]
   memberships Membership[]
 
-  authoredIssues       Issue[]             @relation("IssueAuthor")
-  assignedIssues       IssueAssignee[]
-  comments             Comment[]
-  auditEntries         AuditLog[]
-  events               ActivityEvent[]
-  notificationStates   NotificationState[]
-  createdProjects      Project[]           @relation("ProjectCreator")
-  apiKeys              ApiKey[]
-  claimedIssues        Issue[]             @relation("IssueClaimedBy")
-  recurringCreated     RecurringIssue[]    @relation("RecurringCreator")
-  savedViews           SavedView[]
-  issueSavedViews      IssueSavedView[]
-  timeEntries          TimeEntry[]
-  chatThreads          ChatThread[]
-  runtimes             Runtime[]
-  controlRequestedRuns AgentRun[]          @relation("AgentRunControlRequester")
-  pins                 Pin[]
-  recentItems          RecentItem[]
-  notes                Note[]
-  issueWatches         IssueWatcher[]
-  createdArtifacts     Artifact[]          @relation("ArtifactCreator")
-  artifactVersions     ArtifactVersion[]   @relation("ArtifactVersionCreator")
-  ownedContextSets     ContextSet[]        @relation("ContextSetOwnerUser")
+  authoredIssues        Issue[]             @relation("IssueAuthor")
+  assignedIssues        IssueAssignee[]
+  comments              Comment[]
+  auditEntries          AuditLog[]
+  events                ActivityEvent[]
+  notificationStates    NotificationState[]
+  createdProjects       Project[]           @relation("ProjectCreator")
+  apiKeys               ApiKey[]
+  claimedIssues         Issue[]             @relation("IssueClaimedBy")
+  recurringCreated      RecurringIssue[]    @relation("RecurringCreator")
+  savedViews            SavedView[]
+  issueSavedViews       IssueSavedView[]
+  timeEntries           TimeEntry[]
+  chatThreads           ChatThread[]
+  runtimes              Runtime[]
+  controlRequestedRuns  AgentRun[]          @relation("AgentRunControlRequester")
+  pins                  Pin[]
+  recentItems           RecentItem[]
+  notes                 Note[]
+  issueWatches          IssueWatcher[]
+  createdArtifacts      Artifact[]          @relation("ArtifactCreator")
+  artifactVersions      ArtifactVersion[]   @relation("ArtifactVersionCreator")
+  ownedContextSets      ContextSet[]        @relation("ContextSetOwnerUser")
+  createdExecutionPlans ExecutionPlan[]     @relation("ExecutionPlanCreator")
+  executionSteps        ExecutionStep[]     @relation("ExecutionStepUser")
 
   @@index([handle])
 }
@@ -599,6 +601,8 @@ model Workspace {
   artifactVersions   ArtifactVersion[]
   contextSets        ContextSet[]
   contextSetItems    ContextSetItem[]
+  executionPlans     ExecutionPlan[]
+  executionSteps     ExecutionStep[]
   startedStatus      Status?             @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
@@ -640,14 +644,15 @@ model Project {
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
 
-  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy     User             @relation("ProjectCreator", fields: [createdById], references: [id])
-  initiative    Initiative?      @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
-  issues        Issue[]
-  templates     IssueTemplate[]
-  recurring     RecurringIssue[]
-  dispatchRules DispatchRule[]
-  artifacts     Artifact[]
+  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy      User             @relation("ProjectCreator", fields: [createdById], references: [id])
+  initiative     Initiative?      @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
+  issues         Issue[]
+  templates      IssueTemplate[]
+  recurring      RecurringIssue[]
+  dispatchRules  DispatchRule[]
+  artifacts      Artifact[]
+  executionPlans ExecutionPlan[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId, archived])
@@ -759,25 +764,26 @@ model Issue {
   updatedAt             DateTime        @updatedAt
   deletedAt             DateTime?
 
-  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project       Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  parent        Issue?          @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
-  children      Issue[]         @relation("IssueChildren")
-  cycle         Cycle?          @relation(fields: [cycleId], references: [id], onDelete: SetNull)
-  status        Status          @relation(fields: [statusId], references: [id])
-  author        User            @relation("IssueAuthor", fields: [authorId], references: [id])
-  claimedBy     User?           @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
-  assignedAgent Agent?          @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
-  assignees     IssueAssignee[]
-  labels        IssueLabel[]
-  comments      Comment[]
-  attachments   Attachment[]
-  relationsFrom IssueRelation[] @relation("IssueRelationFrom")
-  relationsTo   IssueRelation[] @relation("IssueRelationTo")
-  timeEntries   TimeEntry[]
-  agentRuns     AgentRun[]
-  watchers      IssueWatcher[]
-  artifacts     Artifact[]
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project        Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  parent         Issue?          @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children       Issue[]         @relation("IssueChildren")
+  cycle          Cycle?          @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  status         Status          @relation(fields: [statusId], references: [id])
+  author         User            @relation("IssueAuthor", fields: [authorId], references: [id])
+  claimedBy      User?           @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  assignedAgent  Agent?          @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  assignees      IssueAssignee[]
+  labels         IssueLabel[]
+  comments       Comment[]
+  attachments    Attachment[]
+  relationsFrom  IssueRelation[] @relation("IssueRelationFrom")
+  relationsTo    IssueRelation[] @relation("IssueRelationTo")
+  timeEntries    TimeEntry[]
+  agentRuns      AgentRun[]
+  watchers       IssueWatcher[]
+  artifacts      Artifact[]
+  executionPlans ExecutionPlan[]
 
   @@unique([workspaceId, number])
   @@index([workspaceId, statusId])
@@ -1449,6 +1455,8 @@ model Agent {
   authoredArtifacts        Artifact[]        @relation("ArtifactCreatorAgent")
   authoredArtifactVersions ArtifactVersion[] @relation("ArtifactVersionCreatorAgent")
   ownedContextSets         ContextSet[]      @relation("ContextSetOwnerAgent")
+  createdExecutionPlans    ExecutionPlan[]   @relation("ExecutionPlanCreatorAgent")
+  executionSteps           ExecutionStep[]   @relation("ExecutionStepAgent")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
@@ -1880,10 +1888,11 @@ model ContextSet {
   updatedAt    DateTime  @updatedAt
   archivedAt   DateTime?
 
-  workspace  Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  ownerUser  User?            @relation("ContextSetOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  ownerAgent Agent?           @relation("ContextSetOwnerAgent", fields: [ownerAgentId], references: [id], onDelete: SetNull)
-  items      ContextSetItem[]
+  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUser      User?            @relation("ContextSetOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerAgent     Agent?           @relation("ContextSetOwnerAgent", fields: [ownerAgentId], references: [id], onDelete: SetNull)
+  items          ContextSetItem[]
+  executionPlans ExecutionPlan[]  @relation("ExecutionPlanContext")
 
   @@index([workspaceId, updatedAt])
   @@index([workspaceId, ownerUserId])
@@ -1912,4 +1921,105 @@ model ContextSetItem {
   @@unique([contextSetId, targetType, targetId])
   @@index([workspaceId, targetType, targetId])
   @@index([contextSetId, position])
+}
+
+// ----------------------------------------------------------------------------
+// Agentic work OS — ExecutionPlan / ExecutionStep (added 2026-05-19, migration 0035)
+// ----------------------------------------------------------------------------
+
+/// Lifecycle for a multi-step execution plan.
+enum ExecutionPlanStatus {
+  DRAFT
+  APPROVED
+  RUNNING
+  BLOCKED
+  COMPLETED
+  CANCELED
+}
+
+/// Lifecycle for a step inside an execution plan.
+enum ExecutionStepStatus {
+  TODO
+  READY
+  RUNNING
+  BLOCKED
+  REVIEW
+  DONE
+  CANCELED
+}
+
+/// Multi-step plan that lives under an issue, project, or freestanding.
+/// Steps can be assigned to agents or humans; the runner watches the
+/// plan state and surfaces ReviewGates when a step needs approval.
+/// `contextSetId` ties the plan to a curated ContextSet so every step
+/// shares the same canonical-ref bundle.
+model ExecutionPlan {
+  id               String              @id @default(cuid())
+  workspaceId      String
+  title            String
+  description      String?             @db.Text
+  issueId          String?
+  projectId        String?
+  status           ExecutionPlanStatus @default(DRAFT)
+  createdById      String?
+  createdByAgentId String?
+  contextSetId     String?
+  /// Optional pointer at an AgentCrew (added in Wave 7) that owns
+  /// execution. SetNull on crew delete.
+  crewId           String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  archivedAt       DateTime?
+
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue          Issue?          @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  project        Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy      User?           @relation("ExecutionPlanCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByAgent Agent?          @relation("ExecutionPlanCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
+  contextSet     ContextSet?     @relation("ExecutionPlanContext", fields: [contextSetId], references: [id], onDelete: SetNull)
+  steps          ExecutionStep[]
+
+  @@index([workspaceId, status, updatedAt])
+  @@index([issueId])
+  @@index([projectId])
+  @@index([contextSetId])
+  @@index([crewId])
+}
+
+/// One step inside an ExecutionPlan. Steps form an ordered list; the
+/// `dependsOnStepIds` array lets a step block on earlier steps so the
+/// runner doesn't mark them READY until prerequisites are DONE.
+///
+/// `expectedOutput` / `verification` mirror the issue-level completion
+/// contract so steps assignable to agents get the same "done means..."
+/// hand-off.
+model ExecutionStep {
+  id               String              @id @default(cuid())
+  workspaceId      String
+  planId           String
+  title            String
+  body             String?             @db.Text
+  position         Int
+  status           ExecutionStepStatus @default(TODO)
+  assignedAgentId  String?
+  assignedUserId   String?
+  expectedOutput   String?             @db.Text
+  verification     Json?
+  /// Pointer at the AgentRun that finished this step. Null until done.
+  sourceRunId      String?
+  /// Step ids this step depends on (must be DONE before READY). Empty
+  /// array = no prerequisites.
+  dependsOnStepIds String[]            @default([])
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plan          ExecutionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  assignedAgent Agent?        @relation("ExecutionStepAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  assignedUser  User?         @relation("ExecutionStepUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+
+  @@unique([planId, position])
+  @@index([workspaceId, status])
+  @@index([assignedAgentId, status])
+  @@index([assignedUserId, status])
 }

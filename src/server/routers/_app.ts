@@ -28,6 +28,7 @@ import { cycleRouter } from "./cycle";
 import { dashboardRouter } from "./dashboard";
 import { dispatchRuleRouter } from "./dispatch-rule";
 import { eventRouter } from "./event";
+import { executionPlanRouter } from "./execution-plan";
 import { inboxRouter } from "./inbox";
 import { initiativeRouter } from "./initiative";
 import { noteRouter } from "./note";
@@ -56,6 +57,7 @@ export const appRouter = router({
   dashboard: dashboardRouter,
   dispatchRule: dispatchRuleRouter,
   event: eventRouter,
+  executionPlan: executionPlanRouter,
   inbox: inboxRouter,
   initiative: initiativeRouter,
   integration: integrationRouter,
