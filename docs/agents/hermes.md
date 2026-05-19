@@ -24,18 +24,36 @@ operators don't carry a mental translation table.
 have a `victor` agent with no collision; that's fine and intentional.
 :::
 
-## The push direction: dispatch via webhook
+## The push direction: dispatch via webhook (wake signal only)
 
 When the dispatcher selects an agent for an issue, Forge POSTs an envelope
 to the agent's `webhookUrl`. Hermes' inbound webhook adapter validates the
 signature, looks up the routed profile by the in-payload metadata, and hands
 the work off to the right agent loop.
 
+::: warning Webhooks wake; the inbox is the source of truth.
+The wake envelope is a low-latency nudge. The canonical record of "Victor
+owes work on AXI-42" is the `AgentRun` row that Forge created at
+assignment time, in the same transaction as the `ActivityEvent`. If the
+wake POST is dropped, retried, or arrives out of order, the agent can
+still recover by calling `mcp_forge_agent_inbox_list`. The required Hermes
+loop on every wake is:
+
+1. `mcp_forge_agent_inbox_list({ status: "unacked" })` — find the run.
+2. `mcp_forge_agent_inbox_ack({ runId })` — clear the operator's "wake
+   sent" indicator.
+3. `mcp_forge_agent_context_bundle({ issueId })` — read the truth.
+4. Act via `forge_issues_*` / `forge_comments_*` / `forge_chat_*`.
+
+Skipping the ack is what leaves Forge's UI showing an infinite thinking
+animation. Always ack, even for `[SILENT]` no-ops.
+:::
+
 Manual assignment is enough to start a Hermes agent. Operators do **not** have
 to also `@mention` the agent on the same issue. The webhook prompt should load
-the full issue context — including recent comments and attachments — before
-acting, so a comment written immediately before assignment becomes part of the
-agent's instructions.
+the full issue context — including recent comments and attachments — via the
+context bundle before acting, so a comment written immediately before
+assignment becomes part of the agent's instructions.
 
 For follow-up comments after an agent is already assigned, use an explicit
 `@profileKey` mention when you want the agent woken immediately. Plain comments

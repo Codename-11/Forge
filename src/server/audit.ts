@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { EventKind } from "@prisma/client";
 import { publish } from "@/server/realtime";
 import { nanoid } from "nanoid";
+import { ensureCanonicalFromEvent } from "@/server/services/agent-dispatch-inbox";
 
 /**
  * Synthetic slug + url used to route agent-bound dispatches through the
@@ -296,7 +297,16 @@ export async function recordChange(
   // (or several agents); each resolves to one or more synthetic Webhook
   // rows that the worker understands. Collected into `agentWebhookIds` so
   // the final createMany is a single round-trip.
+  //
+  // `resolvedAgentIds` accumulates the actual agent ids touched in
+  // branches (a)–(e). They're passed to `ensureCanonicalFromEvent`
+  // after the activity write so the durable inbox row (AgentRun for
+  // issue subjects, ChatMessage for chat subjects) is created in the
+  // same transaction as the ActivityEvent. Webhook delivery success or
+  // failure becomes a wake diagnostic only — canonical work exists
+  // either way.
   const agentWebhookIds: string[] = [];
+  const resolvedAgentIds: string[] = [];
 
   // (a) Issue-level assignment / queuing — route to the issue's currently
   //     assigned agent via the generic `agent:dispatch` shim. Worker
@@ -308,15 +318,24 @@ export async function recordChange(
   if (isAssigneeRouted) {
     const issue = await tx.issue.findUnique({
       where: { id: params.subjectId },
-      select: { assignedAgentId: true, assignedAgent: { select: { webhookUrl: true } } },
+      select: {
+        assignedAgentId: true,
+        assignedAgent: { select: { id: true, webhookUrl: true } },
+      },
     });
-    if (issue?.assignedAgentId && issue.assignedAgent?.webhookUrl) {
-      const wid = await upsertAgentDispatchWebhook(
-        tx,
-        params.workspaceId,
-        AGENT_DISPATCH_WEBHOOK_URL,
-      );
-      agentWebhookIds.push(wid);
+    if (issue?.assignedAgentId) {
+      // Always record the canonical resolution — even if the agent has
+      // no webhookUrl, the inbox row should exist so the agent can poll
+      // and pick up the work (the v1 "missed wake recovery" path).
+      resolvedAgentIds.push(issue.assignedAgentId);
+      if (issue.assignedAgent?.webhookUrl) {
+        const wid = await upsertAgentDispatchWebhook(
+          tx,
+          params.workspaceId,
+          AGENT_DISPATCH_WEBHOOK_URL,
+        );
+        agentWebhookIds.push(wid);
+      }
     }
   }
 
@@ -336,13 +355,16 @@ export async function recordChange(
           assignedAgent: { select: { id: true, webhookUrl: true } },
         },
       });
-      if (issue?.assignedAgentId && issue.assignedAgent?.webhookUrl) {
-        const wid = await upsertAgentDispatchWebhook(
-          tx,
-          params.workspaceId,
-          agentDispatchUrlFor(issue.assignedAgentId),
-        );
-        agentWebhookIds.push(wid);
+      if (issue?.assignedAgentId) {
+        resolvedAgentIds.push(issue.assignedAgentId);
+        if (issue.assignedAgent?.webhookUrl) {
+          const wid = await upsertAgentDispatchWebhook(
+            tx,
+            params.workspaceId,
+            agentDispatchUrlFor(issue.assignedAgentId),
+          );
+          agentWebhookIds.push(wid);
+        }
       }
     }
   }
@@ -359,25 +381,28 @@ export async function recordChange(
       | undefined;
     const mentions = payload?.mentions ?? [];
     if (mentions.length) {
-      // Load the mentioned agents to filter out any that don't have a
-      // webhookUrl (nothing to deliver to) and to enforce workspace
-      // scoping defensively.
+      // Load mentioned agents within workspace scope. We canonicalize
+      // every mentioned active agent into the inbox so the operator's
+      // intent is recoverable; webhook delivery is created only for
+      // agents that have a configured webhookUrl.
       const agents = await tx.agent.findMany({
         where: {
           workspaceId: params.workspaceId,
           id: { in: mentions.map((m) => m.agentId) },
           archivedAt: null,
-          webhookUrl: { not: null },
         },
-        select: { id: true },
+        select: { id: true, webhookUrl: true },
       });
       for (const a of agents) {
-        const wid = await upsertAgentDispatchWebhook(
-          tx,
-          params.workspaceId,
-          agentDispatchUrlFor(a.id),
-        );
-        agentWebhookIds.push(wid);
+        resolvedAgentIds.push(a.id);
+        if (a.webhookUrl) {
+          const wid = await upsertAgentDispatchWebhook(
+            tx,
+            params.workspaceId,
+            agentDispatchUrlFor(a.id),
+          );
+          agentWebhookIds.push(wid);
+        }
       }
     }
   }
@@ -395,17 +420,19 @@ export async function recordChange(
           workspaceId: params.workspaceId,
           id: payload.agentId,
           archivedAt: null,
-          webhookUrl: { not: null },
         },
-        select: { id: true },
+        select: { id: true, webhookUrl: true },
       });
       if (agent) {
-        const wid = await upsertAgentDispatchWebhook(
-          tx,
-          params.workspaceId,
-          agentDispatchUrlFor(agent.id),
-        );
-        agentWebhookIds.push(wid);
+        resolvedAgentIds.push(agent.id);
+        if (agent.webhookUrl) {
+          const wid = await upsertAgentDispatchWebhook(
+            tx,
+            params.workspaceId,
+            agentDispatchUrlFor(agent.id),
+          );
+          agentWebhookIds.push(wid);
+        }
       }
     }
   }
@@ -434,7 +461,7 @@ export async function recordChange(
       },
     });
     for (const w of watchers) {
-      if (!w.agent || !w.agent.webhookUrl) continue;
+      if (!w.agent) continue;
       // Don't fan out the actor's own action back to themselves —
       // when an agent comments and is also a watcher, the COMMENT_CREATED
       // already routes via the assigned-agent + mention shims. Watcher
@@ -444,13 +471,36 @@ export async function recordChange(
       // payload's `agentId` field when present.
       const payloadAgentId = (params.payload as { agentId?: string } | undefined)?.agentId;
       if (payloadAgentId && payloadAgentId === w.agent.id) continue;
-      const wid = await upsertAgentDispatchWebhook(
-        tx,
-        params.workspaceId,
-        agentDispatchUrlFor(w.agent.id),
-      );
-      agentWebhookIds.push(wid);
+      resolvedAgentIds.push(w.agent.id);
+      if (w.agent.webhookUrl) {
+        const wid = await upsertAgentDispatchWebhook(
+          tx,
+          params.workspaceId,
+          agentDispatchUrlFor(w.agent.id),
+        );
+        agentWebhookIds.push(wid);
+      }
     }
+  }
+
+  // Durable inbox: open / touch the canonical AgentRun (issue subject)
+  // or ChatMessage (chat-thread subject) for every agent the branches
+  // above resolved. Done in the same transaction as the ActivityEvent
+  // so a worker crash / missed wake never leaves a wake hanging
+  // without a recoverable work row. Dedupe agents in case multiple
+  // branches resolved the same id (e.g. AGENT_ASSIGNED + watcher).
+  const uniqueResolvedAgentIds = Array.from(new Set(resolvedAgentIds));
+  if (uniqueResolvedAgentIds.length > 0) {
+    await ensureCanonicalFromEvent(tx, {
+      workspaceId: params.workspaceId,
+      eventKind: params.eventKind,
+      eventId: event.id,
+      subjectType: params.subjectType,
+      subjectId: params.subjectId,
+      actorId: params.actorId,
+      payload: payloadOut,
+      resolvedAgentIds: uniqueResolvedAgentIds,
+    });
   }
 
   const deliveryRows = subscribers.map((w) => ({

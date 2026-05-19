@@ -24,7 +24,7 @@ import { sweepStaleWork } from "@/server/services/stale-work";
 import { checkRequiredAck } from "@/server/services/required-ack";
 import { sweepSlaBreaches } from "@/server/services/sla-breach";
 import { sweepStalledRuns } from "@/server/services/agent-run-stale";
-import { recordAgentAction } from "@/server/services/agent-run";
+import { recordWakeAttempt } from "@/server/services/agent-dispatch-inbox";
 import { sweepChatCompaction } from "@/server/services/chat-compaction";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
@@ -154,6 +154,46 @@ export const webhookWorker = new Worker(
       },
     });
 
+    // Wake telemetry: agent-targeted deliveries (success OR failure)
+    // bump the canonical work row's lastWake* fields so the inbox
+    // diagnostic rail can surface "wake failed 3 times" or "wake
+    // delivered at 14:23". Canonical work was created at event time in
+    // audit.recordChange, so this branch never has to open the first
+    // AgentRun — that's already happened.
+    if (presenceAgentId) {
+      if (delivery.event.subjectType === "issue") {
+        await db.$transaction(async (tx) => {
+          await recordWakeAttempt(tx, {
+            workspaceId: delivery.event.workspaceId,
+            agentId: presenceAgentId!,
+            target: { kind: "issue", issueId: delivery.event.subjectId },
+            deliveryId,
+            eventId: delivery.event.id,
+            eventKind: delivery.event.kind,
+            ok: res.ok,
+          });
+        });
+      } else if (delivery.event.subjectType === "chat-thread") {
+        // The user ChatMessage that triggered the dispatch carries the
+        // wake bookkeeping; resolve it from the event payload before
+        // updating. Falls through silently if the payload is malformed.
+        const payload = (delivery.event.payload ?? {}) as { messageId?: string };
+        if (payload.messageId) {
+          await db.$transaction(async (tx) => {
+            await recordWakeAttempt(tx, {
+              workspaceId: delivery.event.workspaceId,
+              agentId: presenceAgentId!,
+              target: { kind: "chat-message", chatMessageId: payload.messageId! },
+              deliveryId,
+              eventId: delivery.event.id,
+              eventKind: delivery.event.kind,
+              ok: res.ok,
+            });
+          });
+        }
+      }
+    }
+
     // Push-dispatch presence: every successful delivery to an agent's
     // webhook URL is proof the agent is reachable, so bump its
     // `lastHeartbeatAt` and (if it was OFFLINE) flip it back to ONLINE.
@@ -161,29 +201,6 @@ export const webhookWorker = new Worker(
     if (res.ok && presenceAgentId) {
       await recordAgentReachable(presenceAgentId);
 
-      // AgentRun lifecycle: a successful agent webhook delivery against
-      // an issue subject is the canonical "agent picked up the work"
-      // signal. Open (or touch) the run so the live pulse strip starts
-      // showing activity, even if the agent hasn't yet posted a status
-      // comment. AGENT_ASSIGNED gets a STARTED kind; everything else
-      // (priority bump, mention) gets DISPATCH so the timeline still
-      // distinguishes them.
-      if (delivery.event.subjectType === "issue") {
-        await db.$transaction(async (tx) => {
-          await recordAgentAction(tx, {
-            workspaceId: delivery.event.workspaceId,
-            issueId: delivery.event.subjectId,
-            agentId: presenceAgentId!,
-            kind:
-              delivery.event.kind === "AGENT_ASSIGNED"
-                ? "DISPATCH_RECEIVED"
-                : `DISPATCH_${delivery.event.kind}`,
-            assignmentEventId:
-              delivery.event.kind === "AGENT_ASSIGNED" ? delivery.event.id : null,
-            payload: { eventId: delivery.event.id, eventKind: delivery.event.kind },
-          });
-        });
-      }
       // Required-ack window: if the workspace opted in, schedule a
       // delayed maintenance job that checks whether the agent actually
       // moved/commented on the issue. Stable jobId per delivery so a

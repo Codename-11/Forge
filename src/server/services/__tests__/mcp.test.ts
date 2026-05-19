@@ -2831,3 +2831,161 @@ describe("mcp canvases.* mutation tools", () => {
     ).rejects.toThrow(/provided together/);
   });
 });
+
+describe("mcp — agent.inbox.list / agent.inbox.ack / agent.inbox.outputStarted", () => {
+  it("agent.inbox.list rejects keys without linkedAgentId", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "INI" });
+    fixtures.push(f);
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: null });
+    await expect(
+      call("agent.inbox.list", { status: "unacked", limit: 10 }, ctx),
+    ).rejects.toThrow(/linkedAgentId/);
+  });
+
+  it("agent.inbox.list returns the linked agent's unacked runs", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "INJ" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, name: "inj", profileKey: "inj", status: "ONLINE" },
+    });
+    const issue = await createIssue(f);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+    const result = (await call(
+      "agent.inbox.list",
+      { status: "unacked", limit: 10 },
+      ctx,
+    )) as { items: Array<{ kind: string; runId: string }> };
+    expect(result.items.some((i) => i.kind === "run" && i.runId === run.id)).toBe(true);
+  });
+
+  it("agent.inbox.ack flips acknowledgedAt and is idempotent", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "INK" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, name: "ink", profileKey: "ink", status: "ONLINE" },
+    });
+    const issue = await createIssue(f);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+    const first = (await call("agent.inbox.ack", { runId: run.id }, ctx)) as {
+      alreadyAcked: boolean;
+    };
+    expect(first.alreadyAcked).toBe(false);
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.acknowledgedAt).not.toBeNull();
+    const second = (await call("agent.inbox.ack", { runId: run.id }, ctx)) as {
+      alreadyAcked: boolean;
+    };
+    expect(second.alreadyAcked).toBe(true);
+  });
+
+  it("agent.inbox.ack rejects cross-agent ownership", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "INO" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const owner = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        name: "owner",
+        profileKey: "ino-owner",
+        status: "ONLINE",
+      },
+    });
+    const other = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        name: "other",
+        profileKey: "ino-other",
+        status: "ONLINE",
+      },
+    });
+    const issue = await createIssue(f);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: owner.id,
+        status: "ACTIVE",
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: other.id });
+    await expect(call("agent.inbox.ack", { runId: run.id }, ctx)).rejects.toThrow(
+      /different agent/,
+    );
+  });
+
+  it("agent.inbox.list narrows by projectIds scope", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "INS" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, name: "ins", profileKey: "ins", status: "ONLINE" },
+    });
+    const allowedProject = await prisma.project.create({
+      data: {
+        workspaceId: f.workspace.id,
+        key: "INSA",
+        name: "Allowed",
+        createdById: f.user.id,
+      },
+    });
+    const blockedProject = await prisma.project.create({
+      data: {
+        workspaceId: f.workspace.id,
+        key: "INSB",
+        name: "Blocked",
+        createdById: f.user.id,
+      },
+    });
+    const allowedIssue = await createIssue(f, { projectId: allowedProject.id });
+    const blockedIssue = await createIssue(f, { projectId: blockedProject.id });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: allowedIssue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: blockedIssue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+    const { ctx } = buildMcpCtx(f, {
+      linkedAgentId: agent.id,
+      projectIds: [allowedProject.id],
+    });
+    const result = (await call(
+      "agent.inbox.list",
+      { status: "unacked", limit: 50 },
+      ctx,
+    )) as { items: Array<{ kind: string; issueId?: string }> };
+    const visibleIssues = result.items
+      .filter((i) => i.kind === "run")
+      .map((i) => i.issueId);
+    expect(visibleIssues).toContain(allowedIssue.id);
+    expect(visibleIssues).not.toContain(blockedIssue.id);
+  });
+});
+

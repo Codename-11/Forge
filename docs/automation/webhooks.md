@@ -5,6 +5,18 @@ retried; receivers verify HMAC and acknowledge with `2xx`. Subscriptions are
 scoped to a workspace, and every delivery is recorded so admins can replay or
 dead-letter from the UI.
 
+::: warning Webhooks are wake signals, not work state
+For agent-routed events (`AGENT_ASSIGNED`, `COMMENT_CREATED` with mentions,
+`ISSUE_PRIORITY_CHANGED`, `CHAT_MESSAGE_POSTED`, watcher fan-out), the
+canonical work record is an `AgentRun` (issue subjects) or `ChatMessage`
+(chat subjects) created **in the same transaction** as the `ActivityEvent`.
+A successful webhook delivery is a low-latency wake; a missed wake is
+recoverable by the agent calling `mcp_forge_agent_inbox_list`. Receivers
+should always ack via `mcp_forge_agent_inbox_ack` and read
+`mcp_forge_agent_context_bundle` rather than trusting the wake payload as
+the full task spec. See [/agents/hermes.html](/agents/hermes.html).
+:::
+
 ## The model
 
 A `Webhook` row on a workspace declares where Forge should POST and which

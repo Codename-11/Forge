@@ -3762,6 +3762,31 @@ export const mcpTools = {
         throw new Error("Only the thread's agent may post replies.");
       }
       return db.$transaction(async (tx) => {
+        // Inbox lifecycle: an AGENT reply on the thread is the
+        // canonical "this user turn is satisfied" signal. Mark the
+        // most recent unfinished USER message as ack'd + output-
+        // started so the chat UI clears its "wake sent" / typing
+        // diagnostics in lock-step with the visible reply.
+        const pendingUserMessage = await tx.chatMessage.findFirst({
+          where: {
+            threadId: thread.id,
+            workspaceId: ctx.workspaceId,
+            role: "USER",
+            outputStartedAt: null,
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, acknowledgedAt: true },
+        });
+        if (pendingUserMessage) {
+          const now = new Date();
+          await tx.chatMessage.update({
+            where: { id: pendingUserMessage.id },
+            data: {
+              acknowledgedAt: pendingUserMessage.acknowledgedAt ?? now,
+              outputStartedAt: now,
+            },
+          });
+        }
         const message = await tx.chatMessage.create({
           data: {
             workspaceId: ctx.workspaceId,
@@ -3823,6 +3848,32 @@ export const mcpTools = {
       if (!thread) throw new Error("Chat thread not found in this workspace.");
       if (thread.agentId !== linkedAgentId) {
         throw new Error("Only the thread's agent may stream replies.");
+      }
+      // Inbox lifecycle: a chat draft starting is the canonical
+      // "agent picked up the wake" signal for chat threads. Bump
+      // acknowledgedAt + outputStartedAt on the latest unfinished
+      // USER message in this thread so the chat panel's typing
+      // animation gets driven by canonical state instead of the
+      // ambient draft chunk stream alone.
+      const pendingUserMessage = await db.chatMessage.findFirst({
+        where: {
+          threadId: thread.id,
+          workspaceId: ctx.workspaceId,
+          role: "USER",
+          outputStartedAt: null,
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, acknowledgedAt: true },
+      });
+      if (pendingUserMessage) {
+        const now = new Date();
+        await db.chatMessage.update({
+          where: { id: pendingUserMessage.id },
+          data: {
+            acknowledgedAt: pendingUserMessage.acknowledgedAt ?? now,
+            outputStartedAt: now,
+          },
+        });
       }
       const draftId = nanoid();
       // Lightweight SSE-only publish; nothing persisted.
@@ -3921,6 +3972,29 @@ export const mcpTools = {
         throw new Error("Only the thread's agent may finalize a draft here.");
       }
       return db.$transaction(async (tx) => {
+        // Inbox lifecycle: finalizing a draft is a definitive
+        // "user turn satisfied" — mirror the single-shot
+        // chat.appendMessage path so canonical state stays in sync.
+        const pendingUserMessage = await tx.chatMessage.findFirst({
+          where: {
+            threadId: thread.id,
+            workspaceId: ctx.workspaceId,
+            role: "USER",
+            outputStartedAt: null,
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, acknowledgedAt: true },
+        });
+        if (pendingUserMessage) {
+          const now = new Date();
+          await tx.chatMessage.update({
+            where: { id: pendingUserMessage.id },
+            data: {
+              acknowledgedAt: pendingUserMessage.acknowledgedAt ?? now,
+              outputStartedAt: now,
+            },
+          });
+        }
         const message = await tx.chatMessage.create({
           data: {
             workspaceId: ctx.workspaceId,
@@ -4446,6 +4520,137 @@ export const mcpTools = {
       }
 
       return { ok: true, kicked: true, idleMs } as const;
+    },
+  },
+
+  // --------------------------------------------------------------------- Agent dispatch inbox
+  /**
+   * Durable inbox for the calling agent. Returns the canonical work
+   * units (`AgentRun`s rooted on issues + USER `ChatMessage`s rooted
+   * on chat threads) that the agent owes attention on, with derived
+   * lifecycle state (queued → wake-sent → acknowledged → running →
+   * stalled). Identity comes from `ctx.apiKey.linkedAgentId`; calls
+   * without a linked agent key are rejected.
+   *
+   * Returned items always carry enough snapshot data for the agent to
+   * decide which `agent.context.bundle` call to make next without an
+   * extra round-trip — the recommended flow remains
+   * `agent.inbox.list → agent.inbox.ack → agent.context.bundle → act`.
+   */
+  "agent.inbox.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      status: z.enum(["unacked", "active", "stale", "all"]).default("unacked"),
+      limit: z.number().int().min(1).max(100).default(50),
+      staleAfterSeconds: z.number().int().min(30).max(86_400).optional(),
+    }),
+    async run(
+      input: {
+        status: "unacked" | "active" | "stale" | "all";
+        limit: number;
+        staleAfterSeconds?: number;
+      },
+      ctx: McpContext,
+    ) {
+      const agentId = ctx.apiKey?.linkedAgentId ?? null;
+      if (!agentId) {
+        throw new Error(
+          "agent.inbox.list requires an API key with linkedAgentId set.",
+        );
+      }
+      const { listInbox } = await import("@/server/services/agent-dispatch-inbox");
+      const items = await listInbox(db, {
+        workspaceId: ctx.workspaceId,
+        agentId,
+        filter: input.status,
+        limit: input.limit,
+        staleAfterSeconds: input.staleAfterSeconds,
+        scope: {
+          projectIds: ctx.apiKey?.projectIds ?? [],
+          labelIds: ctx.apiKey?.labelIds ?? [],
+          initiativeIds: ctx.apiKey?.initiativeIds ?? [],
+        },
+      });
+      return { items };
+    },
+  },
+
+  /**
+   * Acknowledge an inbox item. Sets `acknowledgedAt` on the canonical
+   * row (AgentRun.acknowledgedAt or ChatMessage.acknowledgedAt), which
+   * the UI uses to clear "wake sent" indicators and start the typing
+   * animation for chat. Idempotent — re-acking an already-acked row
+   * returns the prior timestamp.
+   */
+  "agent.inbox.ack": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z
+      .object({
+        runId: z.string().min(1).max(40).optional(),
+        chatMessageId: z.string().min(1).max(40).optional(),
+      })
+      .refine(
+        (v) => Boolean(v.runId) !== Boolean(v.chatMessageId),
+        "Provide exactly one of runId or chatMessageId.",
+      ),
+    async run(input: { runId?: string; chatMessageId?: string }, ctx: McpContext) {
+      const agentId = ctx.apiKey?.linkedAgentId ?? null;
+      if (!agentId) {
+        throw new Error(
+          "agent.inbox.ack requires an API key with linkedAgentId set.",
+        );
+      }
+      const { ackInboxItem } = await import("@/server/services/agent-dispatch-inbox");
+      const target = input.runId
+        ? { runId: input.runId }
+        : { chatMessageId: input.chatMessageId! };
+      return db.$transaction((tx) =>
+        ackInboxItem(tx, {
+          workspaceId: ctx.workspaceId,
+          agentId,
+          target,
+        }),
+      );
+    },
+  },
+
+  /**
+   * Mark output as started on an inbox item. For chat, this is usually
+   * called from `chat.startDraft` already; this tool exists so issue
+   * runs can explicitly transition `wake-sent → running` without
+   * waiting for the first status comment. Idempotent.
+   */
+  "agent.inbox.outputStarted": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z
+      .object({
+        runId: z.string().min(1).max(40).optional(),
+        chatMessageId: z.string().min(1).max(40).optional(),
+      })
+      .refine(
+        (v) => Boolean(v.runId) !== Boolean(v.chatMessageId),
+        "Provide exactly one of runId or chatMessageId.",
+      ),
+    async run(input: { runId?: string; chatMessageId?: string }, ctx: McpContext) {
+      const agentId = ctx.apiKey?.linkedAgentId ?? null;
+      if (!agentId) {
+        throw new Error(
+          "agent.inbox.outputStarted requires an API key with linkedAgentId set.",
+        );
+      }
+      const { markOutputStarted } = await import(
+        "@/server/services/agent-dispatch-inbox"
+      );
+      const target = input.runId
+        ? { runId: input.runId }
+        : { chatMessageId: input.chatMessageId! };
+      return db.$transaction((tx) =>
+        markOutputStarted(tx, {
+          workspaceId: ctx.workspaceId,
+          agentId,
+          target,
+        }),
+      );
     },
   },
 

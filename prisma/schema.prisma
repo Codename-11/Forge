@@ -1556,6 +1556,35 @@ model AgentRun {
   /// Optional pointer at the AGENT_ASSIGNED ActivityEvent that triggered
   /// this run. Useful for ack-window reasoning later.
   assignmentEventId    String?
+  /// ActivityEvent.id that *caused* the most recent wake. For
+  /// AGENT_ASSIGNED runs this mirrors `assignmentEventId`; for runs
+  /// kept warm by mentions / priority bumps / watcher fan-out it holds
+  /// the latest trigger so the inbox can distinguish "Victor was just
+  /// re-mentioned" from "Victor is the static assignee".
+  triggerEventId       String?
+  /// String mirror of ActivityEvent.kind for the latest trigger. Not
+  /// enum-typed on purpose — EventKind grows and we don't want to
+  /// migrate AgentRun every time. Conventional values: AGENT_ASSIGNED,
+  /// ISSUE_QUEUED, ISSUE_PRIORITY_CHANGED, COMMENT_CREATED,
+  /// CHAT_MESSAGE_POSTED.
+  triggerKind          String?
+  /// Set when the assigned agent has acknowledged the dispatch and
+  /// intends to act on it. Drives the UI transition from "wake sent" →
+  /// "acknowledged" and silences the chat typing animation diagnostic.
+  acknowledgedAt       DateTime?
+  /// Set the first time the agent's reply / status / step output lands.
+  /// Drives the UI transition from "acknowledged" → "running".
+  outputStartedAt      DateTime?
+  /// Worker-side: latest wake attempt timestamp regardless of HTTP
+  /// success. Diagnostic only — canonical work state lives elsewhere.
+  lastWakeAt           DateTime?
+  /// Number of wake attempts the worker has made for this run. Distinct
+  /// from WebhookDelivery.attempt (which counts retries on one row).
+  wakeAttempts         Int                  @default(0)
+  /// Optional pointer at the most recent WebhookDelivery so the
+  /// diagnostics panel can link straight to the (potentially failed)
+  /// delivery row.
+  lastWakeDeliveryId   String?
   /// Token-usage telemetry reported by the agent via `runs.recordUsage`.
   /// Cumulative as reported — the latest call replaces the prior values
   /// (idempotent), so agents should send running totals, not per-step
@@ -1592,6 +1621,11 @@ model AgentRun {
   @@index([workspaceId, status, lastEventAt])
   @@index([issueId, startedAt])
   @@index([agentId, status])
+  /// Inbox query: "what does Victor owe right now?" Filters unacked
+  /// (acknowledgedAt IS NULL) active runs ordered by recency.
+  @@index([workspaceId, agentId, acknowledgedAt, lastEventAt])
+  /// Reverse lookup from an ActivityEvent to its canonical run.
+  @@index([workspaceId, triggerEventId])
 }
 
 /// Append-only timeline for an AgentRun. Drives the live pulse strip and
@@ -1652,6 +1686,22 @@ model ChatMessage {
   /// attachment finalization, or is an agent/system message that is not
   /// dispatched to an agent.
   dispatchedAt    DateTime?
+  /// Set when the addressed agent has acknowledged this user turn via
+  /// `agent.inbox.ack`. Drives the UI transition from "wake sent" →
+  /// "acknowledged". Only meaningful when role = USER.
+  acknowledgedAt  DateTime?
+  /// Set when the agent's reply draft is first written (via
+  /// `chat.startDraft`) or finalized in one shot. Drives the typing
+  /// animation in the chat panel.
+  outputStartedAt DateTime?
+  /// Worker-side: latest wake attempt timestamp regardless of HTTP
+  /// success. Bumped on every WebhookDelivery for the addressed agent.
+  lastWakeAt      DateTime?
+  /// Number of wake attempts the worker has made for this message.
+  wakeAttempts    Int       @default(0)
+  /// Optional pointer at the most recent WebhookDelivery so the
+  /// diagnostics rail can link straight to the failed delivery row.
+  lastWakeDeliveryId String?
   createdAt       DateTime  @default(now())
 
   workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1659,6 +1709,9 @@ model ChatMessage {
 
   @@index([threadId, createdAt])
   @@index([workspaceId, createdAt])
+  /// Inbox: USER messages addressed to an agent that haven't been
+  /// acknowledged yet. The agent reads its own pending turns via this.
+  @@index([threadId, role, acknowledgedAt])
 }
 
 // ----------------------------------------------------------------------------
