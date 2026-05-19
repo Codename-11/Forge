@@ -370,12 +370,49 @@ async function hydrateOne(
         meta: { itemCount: row._count.items, description: row.description },
       }));
     }
-    case "execution-plan":
-    case "execution-step":
+    case "execution-plan": {
+      const rows = await db.executionPlan.findMany({
+        where: { workspaceId, id: { in: ids }, archivedAt: null },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          _count: { select: { steps: true } },
+        },
+      });
+      return rows.map((row) => ({
+        type: "execution-plan" as const,
+        id: row.id,
+        missing: false,
+        label: row.title,
+        subLabel: `${row.status.toLowerCase()} · ${row._count.steps} step${row._count.steps === 1 ? "" : "s"}`,
+        url: workspaceUrl(workspaceSlug, `/execution-plans/${row.id}`),
+        meta: { status: row.status, stepCount: row._count.steps },
+      }));
+    }
+    case "execution-step": {
+      const rows = await db.executionStep.findMany({
+        where: { workspaceId, id: { in: ids } },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          planId: true,
+          position: true,
+        },
+      });
+      return rows.map((row) => ({
+        type: "execution-step" as const,
+        id: row.id,
+        missing: false,
+        label: row.title,
+        subLabel: row.status.toLowerCase(),
+        url: workspaceUrl(workspaceSlug, `/execution-plans/${row.planId}#step-${row.id}`),
+        meta: { status: row.status, position: row.position, planId: row.planId },
+      }));
+    }
     case "action-request":
-      // Primitives that ship in later waves. Until their tables exist,
-      // return missing rows with the right type so the UI shows a
-      // greyed-out placeholder rather than silently dropping the ref.
+      // Wave 8 primitive. Returns empty until that wave ships.
       return [];
     default: {
       const exhaustive: never = type;
