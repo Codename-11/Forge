@@ -255,6 +255,130 @@ Two many-to-many junctions are worth naming for completeness:
 Both are simple junction tables; you'll mostly interact with them
 through the Prisma `include`s on `Issue` rather than directly.
 
+## Agentic work OS primitives
+
+Shipped in the 2026-05-19 rollout. These models extend Forge from a
+PM + chat system into a cohesive agentic work OS: capture intent,
+curate context, execute plans, produce durable outputs, request
+human review, and arrange work spatially. Every model below is
+workspace-scoped and writes audit + activity events through the
+shared `recordChange` path.
+
+### Artifact + ArtifactVersion
+
+Durable, versionable output objects — specs, decisions, runbooks,
+reports, briefs, verification logs, and accepted agent deliverables.
+Body edits snapshot a new `ArtifactVersion` automatically;
+metadata edits stay in-place. Polymorphic `sourceType` / `sourceId`
+back-link to the chat-message / comment / note / agent-run / issue
+the artifact was promoted from.
+
+Surfaces: `/w/{slug}/artifacts` index + `/w/{slug}/artifacts/{slug}`
+detail. tRPC `artifact.*`. MCP `artifacts.list/get/create/update/
+archive/promote`.
+
+### ContextSet + ContextSetItem
+
+Reusable bundles of canonical refs an agent receives at dispatch
+time. Items are polymorphic via `targetType` / `targetId` and
+carry an `includeMode` of `INCLUDE` / `EXCLUDE` / `SUMMARY_ONLY`.
+Owned by a user OR an agent. Hydration goes through the shared
+entity-hydration service so any future primitive plugs in
+automatically.
+
+Surfaces: tRPC `contextSet.*`. MCP `contextSets.list/hydrate/
+create/addItem/removeItem`.
+
+### Agent completion contract
+
+Three columns on Issue make "done means..." explicit before an
+agent starts work: `expectedOutput` (markdown spec),
+`verificationChecklist` (structured JSON array of checks), and
+`artifactRequired` (must the agent attach an artifact?). On the
+other side, AgentRun gains `producedArtifactIds`,
+`verificationResult`, and `followUps` so the final response is
+structured.
+
+MCP `agent.context.bundle` for issues now exposes a
+`completionContract` block; MCP `runs.complete` is the structured
+submission tool.
+
+### ExecutionPlan + ExecutionStep
+
+Multi-step plans an agent (or crew) executes under an issue or
+project. Steps form an ordered list with optional
+`dependsOnStepIds` so the runner can mark later steps READY only
+when prerequisites are DONE. Steps can be assigned to agents or
+humans and carry their own per-step `expectedOutput` /
+`verification`.
+
+Plan lifecycle: `DRAFT` → `APPROVED` → `RUNNING` →
+`BLOCKED` / `COMPLETED` / `CANCELED`.
+Step lifecycle: `TODO` → `READY` → `RUNNING` →
+`BLOCKED` / `REVIEW` / `DONE` / `CANCELED`.
+
+Surfaces: tRPC `executionPlan.*`. MCP `executionPlans.list/get/
+create/transition/transitionStep`.
+
+### AgentCrew + AgentCrewMember + ReviewGate
+
+A crew is a group of agents bound to roles (`PLANNER`, `WORKER`,
+`REVIEWER`, `OBSERVER`, `OPERATOR_PROXY`). The same agent can
+hold multiple roles on the same crew. ExecutionPlans optionally
+point at a crew via `crewId`.
+
+ReviewGate is an approval checkpoint attached to any reviewable
+target (artifact / execution-plan / execution-step /
+action-request / agent-run). Gates block downstream automation
+until resolved; re-resolution rejects.
+
+Surfaces: tRPC `agentCrew.*` + `reviewGate.*`. MCP
+`agentCrews.list` + `reviewGates.list/open/resolve`.
+
+### ActionRequest
+
+Precise, resolvable asks. Replaces vague notifications:
+"the agent needs your decision before continuing" rather than
+"the agent commented." Lifecycle: `OPEN` → `RESOLVED` /
+`DISMISSED` / `SNOOZED`. The Inbox `actionRequestsForMe` query
+unions OPEN rows assigned to the caller with the existing
+@-mention `waitingOnMe` stream.
+
+Surfaces: tRPC `actionRequest.*` + `inbox.actionRequestsForMe`.
+MCP `actionRequests.list/create/transition`.
+
+### Command Center
+
+Read-only aggregator at `/w/{slug}/command-center` that unions
+the operator's action requests, pending review gates, active
+and stalled agent runs, recent artifacts, issues due in the
+next 7 days, and the currently-running timer. Every card links
+to the canonical detail page — writes never happen here.
+
+Surfaces: tRPC `commandCenter.summary`.
+
+### WorkspaceCanvas + WorkspaceCanvasNode + WorkspaceCanvasEdge
+
+Infinite spatial board for synthesis work. Stores layout +
+entity refs only; canonical content always comes from the
+source row via the entity-hydration service. Nodes point at
+any entity type (issue / artifact / chat-thread / attachment /
+agent-run / execution-plan / execution-step); deleted-source
+nodes render as dead-ref placeholders rather than disappearing.
+
+Surfaces: tRPC `canvas.*`. MCP `canvases.list/get` (read-only
+for v0; mutation stays in the human UI).
+
+### Shared entity refs + hydration
+
+Every primitive above shares a typed reference contract
+(`src/lib/entity-ref.ts`) — a `{ type, id }` pair where `type` is
+one of the 16 canonical entity types. The server-side
+`entity-hydration.ts` service resolves any list of refs into
+display-ready rows ({ label, subLabel, url, missing, meta }) so
+canvas cards, context-set items, agent context bundles, and
+command-center surfaces render uniformly.
+
 ## Cross-references
 
 - [Scopes & Tenancy](/concepts/scopes-and-tenancy.html) — how the

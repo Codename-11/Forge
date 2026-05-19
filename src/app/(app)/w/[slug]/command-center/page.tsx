@@ -5,7 +5,6 @@ import {
   ArrowRight,
   Bot,
   CalendarClock,
-  CheckSquare,
   Clock,
   FileText,
   Inbox,

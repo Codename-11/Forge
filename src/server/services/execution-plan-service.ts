@@ -1,6 +1,7 @@
 import "server-only";
 import type { PrismaClient } from "@prisma/client";
-import { EventKind, ExecutionPlanStatus, ExecutionStepStatus, Prisma } from "@prisma/client";
+import { EventKind, ExecutionPlanStatus, Prisma } from "@prisma/client";
+import type { ExecutionStepStatus } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { recordChange } from "@/server/audit";
 

@@ -25,7 +25,6 @@ export function PromoteToArtifactButton({
   issueId,
   className,
   size = "sm",
-  variant = "ghost",
 }: {
   sourceType: SourceType;
   sourceId: string;
@@ -33,7 +32,6 @@ export function PromoteToArtifactButton({
   issueId?: string;
   className?: string;
   size?: "sm" | "icon";
-  variant?: "ghost" | "outline";
 }) {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
