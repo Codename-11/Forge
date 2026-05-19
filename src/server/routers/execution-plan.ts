@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
+import { EventKind, ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
+import { recordChange } from "@/server/audit";
+import { extractMentions } from "@/server/services/mentions";
 import {
   addExecutionStep,
   createExecutionPlan,
@@ -237,6 +239,157 @@ export const executionPlanRouter = router({
       await ctx.db.executionPlan.update({
         where: { id: step.planId },
         data: { updatedAt: new Date() },
+      });
+      return { ok: true };
+    }),
+
+  // -------------------------------------------------------------------
+  // Per-step comments — inline thread under each ExecutionStep. Reuses
+  // the polymorphic `Comment` model (executionStepId FK, added in
+  // migration 0040). Mirrors the issue-comment router patterns so the
+  // audit + event fan-out matches what operators already expect for
+  // issue threads.
+  // -------------------------------------------------------------------
+
+  stepCommentList: workspaceProcedure
+    .input(z.object({ stepId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      // Workspace gate: confirm the step belongs to this workspace
+      // before returning anything attached to it.
+      const step = await ctx.db.executionStep.findFirst({
+        where: { id: input.stepId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!step) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
+      }
+      const rows = await ctx.db.comment.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          executionStepId: input.stepId,
+          deletedAt: null,
+        },
+        orderBy: { createdAt: "asc" },
+        include: {
+          author: { select: { id: true, name: true, image: true } },
+          authoringAgent: {
+            select: { id: true, name: true, profileKey: true, avatar: true },
+          },
+        },
+      });
+      return { items: rows };
+    }),
+
+  stepCommentCreate: workspaceProcedure
+    .input(
+      z.object({
+        stepId: z.string().cuid(),
+        body: z.string().min(1).max(50_000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Step must exist + be in this workspace. Done outside the
+      // transaction to keep the audit-emit txn short.
+      const step = await ctx.db.executionStep.findFirst({
+        where: { id: input.stepId, workspaceId: ctx.workspaceId },
+        select: { id: true, planId: true },
+      });
+      if (!step) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
+      }
+
+      return ctx.db.$transaction(async (tx) => {
+        const authoringAgentId = ctx.apiKey?.linkedAgentId ?? null;
+
+        const comment = await tx.comment.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            executionStepId: input.stepId,
+            authorId: ctx.session.user.id,
+            body: input.body,
+            authoringAgentId,
+          },
+          include: {
+            author: { select: { id: true, name: true, image: true } },
+            authoringAgent: {
+              select: { id: true, name: true, profileKey: true, avatar: true },
+            },
+          },
+        });
+
+        // Resolve @profileKey tokens to Agents in this workspace — same
+        // shape as comment.create so downstream tooling that looks at
+        // COMMENT_CREATED payloads sees a uniform `mentions` array
+        // regardless of the comment's subject surface.
+        const tokens = extractMentions(input.body);
+        const mentions: Array<{ agentId: string; profileKey: string }> = [];
+        if (tokens.length) {
+          const matches = await tx.agent.findMany({
+            where: {
+              workspaceId: ctx.workspaceId,
+              profileKey: { in: tokens },
+              archivedAt: null,
+            },
+            select: { id: true, profileKey: true },
+          });
+          for (const a of matches) {
+            mentions.push({ agentId: a.id, profileKey: a.profileKey });
+          }
+        }
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Comment",
+          entityId: comment.id,
+          action: "create",
+          after: comment,
+          eventKind: EventKind.COMMENT_CREATED,
+          subjectType: "execution-step",
+          subjectId: input.stepId,
+          payload: {
+            commentId: comment.id,
+            executionStepId: input.stepId,
+            planId: step.planId,
+            preview: input.body.slice(0, 120),
+            mentions,
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        return comment;
+      });
+    }),
+
+  stepCommentDelete: workspaceProcedure
+    .input(z.object({ commentId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const comment = await ctx.db.comment.findFirst({
+        where: {
+          id: input.commentId,
+          workspaceId: ctx.workspaceId,
+          executionStepId: { not: null },
+        },
+        select: { id: true, authorId: true, executionStepId: true },
+      });
+      if (!comment) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Step comment not found." });
+      }
+      // Author-or-admin gate. `ctx.membership.role` is injected by
+      // workspaceProcedure middleware (OWNER / ADMIN / MEMBER).
+      const isAuthor = comment.authorId === ctx.session.user.id;
+      const isAdmin =
+        ctx.membership.role === "OWNER" || ctx.membership.role === "ADMIN";
+      if (!isAuthor && !isAdmin) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the author or a workspace admin can delete this comment.",
+        });
+      }
+      await ctx.db.comment.update({
+        where: { id: comment.id },
+        data: { deletedAt: new Date() },
       });
       return { ok: true };
     }),

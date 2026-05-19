@@ -1,16 +1,199 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
-// Inline formatter — handles **bold**, `code`, *italic*, and plain URLs.
+// Heavy-renderer loaders
+// ---------------------------------------------------------------------------
+// mermaid is ~700 KB and katex is ~280 KB. We dynamic-import them inside
+// useEffect so chat threads without diagrams or math never pull these
+// chunks. Webpack/Turbopack code-splits at the `import("…")` boundary, so
+// we don't need a separate React.lazy module file.
+//
+// Both loaders are memoised promises — once any block on the page kicks
+// the import we share the resolved module across all blocks.
+type MermaidApi = { render: (id: string, src: string) => Promise<{ svg: string }> };
+let mermaidPromise: Promise<MermaidApi> | null = null;
+function loadMermaid(): Promise<MermaidApi> {
+  if (!mermaidPromise) {
+    mermaidPromise = import("mermaid").then((mod) => {
+      const mermaid = mod.default;
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "neutral",
+        // strict security: blocks click handlers in user-authored diagrams.
+        securityLevel: "strict",
+        fontFamily: "inherit",
+      });
+      return mermaid as unknown as MermaidApi;
+    });
+  }
+  return mermaidPromise;
+}
+
+type KatexApi = {
+  renderToString: (tex: string, opts?: Record<string, unknown>) => string;
+};
+let katexPromise: Promise<KatexApi> | null = null;
+function loadKatex(): Promise<KatexApi> {
+  if (!katexPromise) {
+    katexPromise = Promise.all([
+      import("katex"),
+      // CSS side-effect import — Next.js bundles this into the chunk so
+      // it only loads when math is actually rendered on the page. tsc
+      // doesn't know about Next's CSS modules ambient types, hence the
+      // suppression.
+      // @ts-expect-error - non-module CSS side-effect import resolved by Next
+      import("katex/dist/katex.min.css"),
+    ]).then(([mod]) => mod.default as unknown as KatexApi);
+  }
+  return katexPromise;
+}
+
+// ---------------------------------------------------------------------------
+// MermaidBlock — renders a fenced ```mermaid block as an inline SVG.
+// On parse failure we drop back to the plain CodeBlock fallback so the
+// user never loses their source.
+// ---------------------------------------------------------------------------
+function MermaidBlock({ code, blockIndex }: { code: string; blockIndex: number }) {
+  const reactId = useId();
+  const diagramId = `mermaid-${reactId.replace(/:/g, "-")}-${blockIndex}`;
+  const [svg, setSvg] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadMermaid()
+      .then((mermaid) => mermaid.render(diagramId, code))
+      .then((res) => {
+        if (!cancelled) setSvg(res.svg);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [code, diagramId]);
+
+  if (failed) {
+    return (
+      <div className="my-1.5 overflow-hidden rounded-md border border-border bg-card/40">
+        <div className="border-b border-border bg-card/60 px-3 py-1 font-sans text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+          diagram failed to parse
+        </div>
+        <pre className="overflow-x-auto px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground">
+          <code>{code}</code>
+        </pre>
+      </div>
+    );
+  }
+
+  if (svg === null) {
+    return (
+      <div className="my-1.5 rounded-md border border-border bg-card/40 px-3 py-2 font-mono text-[0.6875rem] text-muted-foreground">
+        Loading diagram…
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="my-1.5 flex justify-center overflow-x-auto rounded-md border border-border bg-card/40 px-3 py-2 [&_svg]:h-auto [&_svg]:max-w-full"
+      // mermaid's `securityLevel: "strict"` strips event handlers and
+      // sanitises the SVG, which is why we can inject it inline.
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// KatexInline / KatexBlock — render LaTeX via katex.renderToString once
+// the dynamic import resolves. Fallback is the raw source in code-style
+// so it stays readable while loading or on error.
+// ---------------------------------------------------------------------------
+function useKatex(tex: string, displayMode: boolean) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    loadKatex()
+      .then((katex) => {
+        const rendered = katex.renderToString(tex, {
+          displayMode,
+          throwOnError: false,
+          // Trust nothing — katex still escapes HTML, but this stops
+          // \href and other risky macros in user-authored math.
+          trust: false,
+          strict: "ignore",
+        });
+        if (!cancelled) setHtml(rendered);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tex, displayMode]);
+  return { html, failed };
+}
+
+function KatexInline({ tex }: { tex: string }) {
+  const { html, failed } = useKatex(tex, false);
+  if (failed || html === null) {
+    return (
+      <code className="rounded border border-border bg-card/40 px-1 py-0 font-mono text-[0.85em] text-muted-foreground">
+        {tex}
+      </code>
+    );
+  }
+  return <span dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function KatexBlock({ tex }: { tex: string }) {
+  const { html, failed } = useKatex(tex, true);
+  if (failed) {
+    return (
+      <div className="my-1.5 overflow-hidden rounded-md border border-border bg-card/40">
+        <div className="border-b border-border bg-card/60 px-3 py-1 font-sans text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+          math failed to parse
+        </div>
+        <pre className="overflow-x-auto px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground">
+          <code>{tex}</code>
+        </pre>
+      </div>
+    );
+  }
+  if (html === null) {
+    return (
+      <div className="my-1.5 rounded-md border border-border bg-card/40 px-3 py-2 text-center font-mono text-[0.6875rem] text-muted-foreground">
+        {tex}
+      </div>
+    );
+  }
+  return (
+    <div
+      className="my-1.5 overflow-x-auto px-3 py-1 text-center"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inline formatter — handles **bold**, `code`, *italic*, plain URLs, and
+// inline LaTeX `$..$`.
 // Returns an array of React nodes from a raw text string.
 // ---------------------------------------------------------------------------
 function inlineFormat(text: string): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
-  // Priority order: URL, bold, inline code, italic
+  // Priority order: URL, bold, inline code, inline math, italic.
+  // Inline math requires a non-space char immediately after the opening
+  // `$` and before the closing `$`, and the closing `$` must not be
+  // followed by a digit — so plain prose like "$5 and $10" doesn't get
+  // captured as math.
   const regex =
-    /(https?:\/\/[^\s<]+[^\s<.,;:!?)}\]'"])|(\*\*(.+?)\*\*)|(`([^`]+)`)|\*([^*]+)\*/g;
+    /(https?:\/\/[^\s<]+[^\s<.,;:!?)}\]'"])|(\*\*(.+?)\*\*)|(`([^`]+)`)|(\$(?!\s)([^$\n]+?)(?<!\s)\$(?!\d))|\*([^*]+)\*/g;
   let last = 0;
   let match: RegExpExecArray | null;
 
@@ -49,10 +232,13 @@ function inlineFormat(text: string): React.ReactNode[] {
         </code>,
       );
     } else if (match[6]) {
+      // Inline LaTeX
+      parts.push(<KatexInline key={match.index} tex={match[7]} />);
+    } else if (match[8]) {
       // Italic
       parts.push(
         <em key={match.index} className="italic opacity-85">
-          {match[6]}
+          {match[8]}
         </em>,
       );
     }
@@ -108,27 +294,70 @@ function parseMarkdown(body: string): React.ReactNode[] {
   const result: React.ReactNode[] = [];
   let inCodeBlock = false;
   let codeLines: string[] = [];
+  let codeLang = "";
   let codeBlockIndex = 0;
+  let inMathBlock = false;
+  let mathLines: string[] = [];
+  let mathBlockIndex = 0;
+
+  function flushCode(keyHint: string) {
+    const code = codeLines.join("\n");
+    if (codeLang === "mermaid") {
+      result.push(
+        <MermaidBlock key={`mermaid-${keyHint}`} code={code} blockIndex={codeBlockIndex++} />,
+      );
+    } else {
+      result.push(<CodeBlock key={`code-${keyHint}`} code={code} index={codeBlockIndex++} />);
+    }
+    codeLines = [];
+    codeLang = "";
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
     // ---- Code fence toggle ----
-    if (line.startsWith("```")) {
+    if (!inMathBlock && line.startsWith("```")) {
       if (!inCodeBlock) {
         inCodeBlock = true;
         codeLines = [];
+        codeLang = line.slice(3).trim().toLowerCase();
       } else {
         inCodeBlock = false;
-        result.push(
-          <CodeBlock key={`code-${i}`} code={codeLines.join("\n")} index={codeBlockIndex++} />,
-        );
-        codeLines = [];
+        flushCode(String(i));
       }
       continue;
     }
     if (inCodeBlock) {
       codeLines.push(line);
+      continue;
+    }
+
+    // ---- Block math fence ($$..$$). Supports the single-line form
+    // `$$ a = b $$` and the multi-line fenced form. Must run before the
+    // blank-line spacer rule. ----
+    const singleLineMath = line.match(/^\s*\$\$(.+)\$\$\s*$/);
+    if (!inMathBlock && singleLineMath) {
+      result.push(
+        <KatexBlock key={`math-${i}-${mathBlockIndex++}`} tex={singleLineMath[1].trim()} />,
+      );
+      continue;
+    }
+    if (!inMathBlock && line.trim() === "$$") {
+      inMathBlock = true;
+      mathLines = [];
+      continue;
+    }
+    if (inMathBlock) {
+      if (line.trim() === "$$") {
+        inMathBlock = false;
+        result.push(
+          <KatexBlock key={`math-${i}-${mathBlockIndex++}`} tex={mathLines.join("\n")} />,
+        );
+        mathLines = [];
+      } else {
+        mathLines.push(line);
+      }
       continue;
     }
 
@@ -221,12 +450,30 @@ function parseMarkdown(body: string): React.ReactNode[] {
 
   // Unclosed code block — flush remaining lines as-is
   if (inCodeBlock && codeLines.length > 0) {
-    result.push(
-      <CodeBlock key="code-tail" code={codeLines.join("\n")} index={codeBlockIndex} />,
-    );
+    flushCode("tail");
+  }
+  // Unclosed math block — render whatever we have so content isn't lost.
+  if (inMathBlock && mathLines.length > 0) {
+    result.push(<KatexBlock key="math-tail" tex={mathLines.join("\n")} />);
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Eager prefetch: when a body contains a mermaid block, kick the dynamic
+// import in parallel with mount so the diagram renders without the
+// initial Suspense flash.
+// ---------------------------------------------------------------------------
+function usePrefetchMermaid(body: string) {
+  const prefetched = useRef(false);
+  const needs = /(^|\n)```mermaid\b/.test(body);
+  useEffect(() => {
+    if (needs && !prefetched.current) {
+      prefetched.current = true;
+      void loadMermaid();
+    }
+  }, [needs]);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +486,7 @@ export function ChatMarkdown({
   body: string;
   className?: string;
 }) {
+  usePrefetchMermaid(body);
   const nodes = parseMarkdown(body);
   return (
     <div className={cn("min-w-0 break-words text-[0.75rem] leading-relaxed", className)}>

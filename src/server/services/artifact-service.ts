@@ -421,7 +421,11 @@ async function fetchSource(
       });
       if (!row) return null;
       return {
-        title: row.issue.title ? `Re: ${row.issue.title}` : "Comment artifact",
+        // Comment.issue is nullable post-migration 0040 (step comments
+        // have no parent issue). Promotion currently only flows from
+        // issue-attached comments; keep the fallback in case a step
+        // comment is ever promoted in the future.
+        title: row.issue?.title ? `Re: ${row.issue.title}` : "Comment artifact",
         body: row.body,
         summary: null,
         issueId: row.issueId,

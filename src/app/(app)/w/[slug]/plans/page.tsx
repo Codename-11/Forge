@@ -20,6 +20,107 @@ const STATUS_TONE: Record<ExecutionPlanStatus, string> = {
   CANCELED: "bg-muted/40 text-muted-foreground line-through",
 };
 
+interface TemplateStep {
+  title: string;
+  body?: string;
+  expectedOutput?: string;
+  /** Positional indices of prerequisite steps within the same template. */
+  dependsOn?: number[];
+}
+
+interface PlanTemplate {
+  id: string;
+  label: string;
+  blurb: string;
+  description?: string;
+  steps: TemplateStep[];
+}
+
+const PLAN_TEMPLATES: PlanTemplate[] = [
+  {
+    id: "blank",
+    label: "Blank",
+    blurb: "Title only — start from scratch.",
+    steps: [],
+  },
+  {
+    id: "dag",
+    label: "DAG",
+    blurb: "Investigate → Design → Implement → Verify, each gating the next.",
+    description: "High-level execution plan with parallel and dependent steps.",
+    steps: [
+      { title: "Investigate", expectedOutput: "Findings written up; gaps named." },
+      { title: "Design", expectedOutput: "Approach selected, tradeoffs noted.", dependsOn: [0] },
+      { title: "Implement", expectedOutput: "Code merged and tests pass.", dependsOn: [1] },
+      { title: "Verify", expectedOutput: "Production smoke green; rollback path documented.", dependsOn: [2] },
+    ],
+  },
+  {
+    id: "rfc",
+    label: "RFC",
+    blurb: "Problem · Proposal · Alternatives · Tradeoffs + decision.",
+    description: "RFC for a non-trivial change. Pre-decisional; comments welcome before approval.",
+    steps: [
+      {
+        title: "Problem statement",
+        body: "> Replace this paragraph with the problem statement, including who is affected and what success looks like.",
+      },
+      {
+        title: "Proposal",
+        body: "> Describe the proposed change in enough detail that a reader can evaluate it without reading the implementation.",
+      },
+      {
+        title: "Alternatives considered",
+        body: "> Two or three credible alternatives, each with the reason it was not chosen.",
+      },
+      {
+        title: "Tradeoffs + decision",
+        body: "> Final decision and the tradeoffs we are accepting.",
+        dependsOn: [0, 1, 2],
+      },
+    ],
+  },
+  {
+    id: "postmortem",
+    label: "Post-mortem",
+    blurb: "What happened · Timeline · Root cause · Action items.",
+    description: "Blameless post-mortem.",
+    steps: [
+      {
+        title: "What happened",
+        body: "> Plain-language summary of the user-visible impact.",
+      },
+      {
+        title: "Timeline",
+        body: "> Chronological events, in UTC. Each row: HH:MM — what changed.",
+      },
+      {
+        title: "Root cause",
+        body: "> The actual underlying cause, not the proximate trigger.",
+      },
+      {
+        title: "Action items",
+        body: "> Concrete follow-ups with owners and target dates.",
+        dependsOn: [2],
+      },
+    ],
+  },
+  {
+    id: "feature-spec",
+    label: "Feature spec",
+    blurb: "Goal · Non-goals · Stories · Implementation · Risks · Rollout.",
+    description: "Feature specification — keep it tight; link out for depth.",
+    steps: [
+      { title: "Goal", body: "> One sentence stating the outcome." },
+      { title: "Non-goals", body: "> Bullet what this feature is explicitly NOT trying to do." },
+      { title: "User stories", body: "> As a {role}, I want {action} so that {outcome}." },
+      { title: "Implementation plan", body: "> Phases, with the riskiest step first." },
+      { title: "Risks + mitigations", body: "> Failure modes and how we'll catch them early." },
+      { title: "Rollout", body: "> Gating, dogfood plan, success metric, rollback path." },
+    ],
+  },
+];
+
 /**
  * Execution plans index. Lists every non-archived plan in the workspace
  * along with its status, target issue/project (when set), and step
@@ -36,19 +137,71 @@ export default function PlansPage() {
   });
   const [creating, setCreating] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
+  const [templateId, setTemplateId] = useState<string>("blank");
+  const [seeding, setSeeding] = useState(false);
 
   const items = useMemo(() => data?.items ?? [], [data]);
+  const selectedTemplate = useMemo(
+    () => PLAN_TEMPLATES.find((t) => t.id === templateId) ?? PLAN_TEMPLATES[0],
+    [templateId],
+  );
 
+  const addStep = trpc.executionPlan.addStep.useMutation();
   const create = trpc.executionPlan.create.useMutation({
-    onSuccess: ({ id }) => {
-      toast.success("Plan created");
+    onError: (e) => toast.error(e.message),
+  });
+
+  const submit = async () => {
+    if (seeding) return;
+    const title = draftTitle.trim() || "Untitled plan";
+    setSeeding(true);
+    let toastId: string | number | undefined;
+    try {
+      const plan = await create.mutateAsync({
+        title,
+        description: selectedTemplate.description ?? null,
+      });
+      const steps = selectedTemplate.steps;
+      if (steps.length > 0) {
+        toastId = toast.loading(`Seeding 0 / ${steps.length} steps…`);
+        const positionToId = new Map<number, string>();
+        for (let i = 0; i < steps.length; i++) {
+          const s = steps[i];
+          const dependsOnStepIds = (s.dependsOn ?? [])
+            .map((pos) => positionToId.get(pos))
+            .filter((id): id is string => Boolean(id));
+          const created = await addStep.mutateAsync({
+            planId: plan.id,
+            title: s.title,
+            body: s.body ?? null,
+            expectedOutput: s.expectedOutput ?? null,
+            dependsOnStepIds,
+          });
+          positionToId.set(i, created.id);
+          toast.loading(`Seeding ${i + 1} / ${steps.length} steps…`, { id: toastId });
+        }
+        toast.success(`Plan created · ${steps.length} step${steps.length === 1 ? "" : "s"} seeded`, {
+          id: toastId,
+        });
+      } else {
+        toast.success("Plan created");
+      }
       utils.executionPlan.list.invalidate();
       setCreating(false);
       setDraftTitle("");
-      router.push(`/w/${ws.slug}/plans/${id}`);
-    },
-    onError: (e) => toast.error(e.message),
-  });
+      setTemplateId("blank");
+      router.push(`/w/${ws.slug}/plans/${plan.id}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to seed plan";
+      if (toastId !== undefined) {
+        toast.error(message, { id: toastId });
+      } else {
+        toast.error(message);
+      }
+    } finally {
+      setSeeding(false);
+    }
+  };
 
   return (
     <>
@@ -121,7 +274,9 @@ export default function PlansPage() {
       {creating && (
         <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4"
-          onClick={() => setCreating(false)}
+          onClick={() => {
+            if (!seeding) setCreating(false);
+          }}
         >
           <div
             className="w-full max-w-md rounded-lg border border-border bg-card p-4 shadow-xl"
@@ -134,25 +289,54 @@ export default function PlansPage() {
               value={draftTitle}
               onChange={(e) => setDraftTitle(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && draftTitle.trim()) {
-                  create.mutate({ title: draftTitle.trim() });
+                if (e.key === "Enter" && draftTitle.trim() && !seeding) {
+                  void submit();
                 }
-                if (e.key === "Escape") setCreating(false);
+                if (e.key === "Escape" && !seeding) setCreating(false);
               }}
               placeholder="Plan title"
               className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
             />
+            <label className="mt-3 block text-meta uppercase tracking-wide text-muted-foreground">
+              Template
+            </label>
+            <select
+              value={templateId}
+              onChange={(e) => setTemplateId(e.target.value)}
+              disabled={seeding}
+              className="mt-1 w-full rounded-md border border-border bg-card/40 px-2 py-1.5 text-sm"
+            >
+              {PLAN_TEMPLATES.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-meta text-muted-foreground">
+              {selectedTemplate.blurb}
+              {selectedTemplate.steps.length > 0 && (
+                <>
+                  {" "}· {selectedTemplate.steps.length} step
+                  {selectedTemplate.steps.length === 1 ? "" : "s"}
+                </>
+              )}
+            </p>
             <div className="mt-3 flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setCreating(false)}
+                disabled={seeding}
+              >
                 Cancel
               </Button>
               <Button
                 variant="ember"
                 size="sm"
-                onClick={() => create.mutate({ title: draftTitle.trim() || "Untitled plan" })}
-                disabled={create.isPending || !draftTitle.trim()}
+                onClick={() => void submit()}
+                disabled={seeding || !draftTitle.trim()}
               >
-                {create.isPending ? "Creating…" : "Create"}
+                {seeding ? "Seeding…" : "Create"}
               </Button>
             </div>
           </div>

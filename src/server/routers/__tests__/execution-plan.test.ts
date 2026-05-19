@@ -111,3 +111,143 @@ describe("executionPlanRouter", () => {
     expect(got.contextSet?.id).toBe(set.id);
   });
 });
+
+describe("executionPlanRouter — step comments", () => {
+  async function setupWithStep() {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "EXS" });
+    fixtures.push(fixture);
+    const ctx = await buildContext(fixture);
+    const caller = executionPlanRouter.createCaller(ctx);
+    const plan = await caller.create({
+      title: "Plan with steps",
+      steps: [{ title: "Step one" }, { title: "Step two" }],
+    });
+    const full = await caller.get({ id: plan.id });
+    return { fixture, ctx, caller, plan: full, step: full.steps[0] };
+  }
+
+  it("create + list happy path returns comments in chronological order", async () => {
+    const { caller, step } = await setupWithStep();
+    const first = await caller.stepCommentCreate({
+      stepId: step.id,
+      body: "First take on this step.",
+    });
+    // Force a tiny gap so createdAt ordering is deterministic on a
+    // fast Postgres.
+    await new Promise((r) => setTimeout(r, 5));
+    const second = await caller.stepCommentCreate({
+      stepId: step.id,
+      body: "Follow-up after thinking it through.",
+    });
+
+    const got = await caller.stepCommentList({ stepId: step.id });
+    expect(got.items).toHaveLength(2);
+    expect(got.items[0].id).toBe(first.id);
+    expect(got.items[1].id).toBe(second.id);
+    expect(got.items[0].body).toBe("First take on this step.");
+  });
+
+  it("rejects steps from a different workspace", async () => {
+    const { caller: callerA } = await setupWithStep();
+    const { step: stepB } = await setupWithStep();
+    // callerA is scoped to workspace A; stepB lives in workspace B.
+    await expect(
+      callerA.stepCommentCreate({ stepId: stepB.id, body: "hi" }),
+    ).rejects.toThrow(/Execution step not found/);
+    await expect(
+      callerA.stepCommentList({ stepId: stepB.id }),
+    ).rejects.toThrow(/Execution step not found/);
+  });
+
+  it("emits COMMENT_CREATED observable via ActivityEvent query", async () => {
+    const { fixture, caller, step } = await setupWithStep();
+    const created = await caller.stepCommentCreate({
+      stepId: step.id,
+      body: "An event-worthy comment.",
+    });
+    const event = await getPrisma().activityEvent.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: "COMMENT_CREATED",
+        subjectType: "execution-step",
+        subjectId: step.id,
+      },
+    });
+    expect(event).not.toBeNull();
+    const payload = event!.payload as { commentId?: string; planId?: string };
+    expect(payload.commentId).toBe(created.id);
+    expect(payload.planId).toBeTruthy();
+  });
+
+  it("author can delete their own step comment (soft-delete)", async () => {
+    const { caller, step } = await setupWithStep();
+    const created = await caller.stepCommentCreate({
+      stepId: step.id,
+      body: "Going to retract this.",
+    });
+    await caller.stepCommentDelete({ commentId: created.id });
+    const got = await caller.stepCommentList({ stepId: step.id });
+    expect(got.items.find((c) => c.id === created.id)).toBeUndefined();
+
+    // Soft-deleted row still exists in the table with deletedAt set —
+    // important so audit history can still resolve it by id.
+    const row = await getPrisma().comment.findUnique({
+      where: { id: created.id },
+    });
+    expect(row?.deletedAt).not.toBeNull();
+  });
+
+  it("non-author non-admin cannot delete another user's step comment", async () => {
+    const { fixture, step } = await setupWithStep();
+    const authorCtx = await buildContext(fixture);
+    const authorCaller = executionPlanRouter.createCaller(authorCtx);
+    const created = await authorCaller.stepCommentCreate({
+      stepId: step.id,
+      body: "Author's comment.",
+    });
+
+    // Demote the second user to a plain MEMBER (createWorkspaceFixture
+    // already sets MEMBER, but make it explicit here so the gate is
+    // unambiguous), then drive the delete as them.
+    await getPrisma().membership.update({
+      where: {
+        userId_workspaceId: {
+          userId: fixture.secondUser.id,
+          workspaceId: fixture.workspace.id,
+        },
+      },
+      data: { role: "MEMBER" },
+    });
+    const otherCtx = await buildContext(fixture, {
+      asUserId: fixture.secondUser.id,
+    });
+    const otherCaller = executionPlanRouter.createCaller(otherCtx);
+
+    await expect(
+      otherCaller.stepCommentDelete({ commentId: created.id }),
+    ).rejects.toThrow(/author or a workspace admin/);
+  });
+
+  it("workspace admin can delete another user's step comment", async () => {
+    const { fixture, step } = await setupWithStep();
+    const authorCtx = await buildContext(fixture, {
+      asUserId: fixture.secondUser.id,
+    });
+    const authorCaller = executionPlanRouter.createCaller(authorCtx);
+    const created = await authorCaller.stepCommentCreate({
+      stepId: step.id,
+      body: "Comment from a member.",
+    });
+
+    // The first user is the OWNER (per createWorkspaceFixture); owners
+    // satisfy the admin gate.
+    const adminCtx = await buildContext(fixture);
+    const adminCaller = executionPlanRouter.createCaller(adminCtx);
+    await adminCaller.stepCommentDelete({ commentId: created.id });
+
+    const row = await getPrisma().comment.findUnique({
+      where: { id: created.id },
+    });
+    expect(row?.deletedAt).not.toBeNull();
+  });
+});

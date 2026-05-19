@@ -452,7 +452,10 @@ export const inboxRouter = router({
         (typeof candidates)[number]
       >();
       for (const c of candidates) {
-        if (!c.issue || c.issue.deletedAt) continue;
+        // Comment.issueId is nullable post-migration 0040 (step
+        // comments). The mentions inbox only surfaces issue-attached
+        // rows, so skip null-issue rows defensively.
+        if (!c.issueId || !c.issue || c.issue.deletedAt) continue;
         if (!commentMentionsUser(c.body, tokens)) continue;
         if (!seenIssue.has(c.issueId)) {
           seenIssue.set(c.issueId, c);

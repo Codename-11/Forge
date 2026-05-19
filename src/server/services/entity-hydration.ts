@@ -316,17 +316,28 @@ async function hydrateOne(
           issue: { select: { number: true, workspace: { select: { key: true } } } },
         },
       });
-      return rows.map((row) => ({
-        type: "comment" as const,
-        id: row.id,
-        missing: false,
-        label: row.body.length > 80 ? `${row.body.slice(0, 80)}…` : row.body,
-        subLabel: `${row.issue.workspace.key}-${row.issue.number}`,
-        url: workspaceUrl(
-          workspaceSlug,
-          `/i/${row.issue.workspace.key}-${row.issue.number}#comment-${row.id}`,
-        ),
-      }));
+      return rows.map((row) => {
+        // Comment.issue is nullable post-migration 0040 (step comments
+        // don't have a parent issue). Context-set hydration is
+        // currently only wired for issue comments — render step
+        // comments as standalone bodies if/when they appear.
+        const issue = row.issue;
+        return {
+          type: "comment" as const,
+          id: row.id,
+          missing: false,
+          label: row.body.length > 80 ? `${row.body.slice(0, 80)}…` : row.body,
+          subLabel: issue
+            ? `${issue.workspace.key}-${issue.number}`
+            : "step comment",
+          url: issue
+            ? workspaceUrl(
+                workspaceSlug,
+                `/i/${issue.workspace.key}-${issue.number}#comment-${row.id}`,
+              )
+            : workspaceUrl(workspaceSlug, "/plans"),
+        };
+      });
     }
     case "artifact": {
       const rows = await db.artifact.findMany({
@@ -376,19 +387,32 @@ async function hydrateOne(
         select: {
           id: true,
           title: true,
+          description: true,
           status: true,
-          _count: { select: { steps: true } },
+          steps: { select: { status: true } },
         },
       });
-      return rows.map((row) => ({
-        type: "execution-plan" as const,
-        id: row.id,
-        missing: false,
-        label: row.title,
-        subLabel: `${row.status.toLowerCase()} · ${row._count.steps} step${row._count.steps === 1 ? "" : "s"}`,
-        url: workspaceUrl(workspaceSlug, `/execution-plans/${row.id}`),
-        meta: { status: row.status, stepCount: row._count.steps },
-      }));
+      return rows.map((row) => {
+        const stepCount = row.steps.length;
+        const doneSteps = row.steps.filter((s) => s.status === "DONE").length;
+        const runningSteps = row.steps.filter((s) => s.status === "RUNNING").length;
+        return {
+          type: "execution-plan" as const,
+          id: row.id,
+          missing: false,
+          label: row.title,
+          subLabel: `${row.status.toLowerCase()} · ${stepCount} step${stepCount === 1 ? "" : "s"}`,
+          url: workspaceUrl(workspaceSlug, `/execution-plans/${row.id}`),
+          meta: {
+            status: row.status,
+            description: row.description,
+            stepCount,
+            doneSteps,
+            runningSteps,
+            progress: stepCount === 0 ? 0 : doneSteps / stepCount,
+          },
+        };
+      });
     }
     case "execution-step": {
       const rows = await db.executionStep.findMany({
@@ -399,6 +423,10 @@ async function hydrateOne(
           status: true,
           planId: true,
           position: true,
+          expectedOutput: true,
+          dependsOnStepIds: true,
+          assignedAgent: { select: { id: true, name: true, profileKey: true } },
+          assignedUser: { select: { id: true, name: true, email: true } },
         },
       });
       return rows.map((row) => ({
@@ -408,7 +436,27 @@ async function hydrateOne(
         label: row.title,
         subLabel: row.status.toLowerCase(),
         url: workspaceUrl(workspaceSlug, `/execution-plans/${row.planId}#step-${row.id}`),
-        meta: { status: row.status, position: row.position, planId: row.planId },
+        meta: {
+          status: row.status,
+          position: row.position,
+          planId: row.planId,
+          expectedOutput: row.expectedOutput,
+          dependsOnStepIds: row.dependsOnStepIds,
+          assignedAgent: row.assignedAgent
+            ? {
+                id: row.assignedAgent.id,
+                name: row.assignedAgent.name,
+                profileKey: row.assignedAgent.profileKey,
+              }
+            : null,
+          assignedUser: row.assignedUser
+            ? {
+                id: row.assignedUser.id,
+                name: row.assignedUser.name,
+                email: row.assignedUser.email,
+              }
+            : null,
+        },
       }));
     }
     case "action-request": {

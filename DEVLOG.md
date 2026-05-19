@@ -2,6 +2,102 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Plans + Canvas UX overhaul (parallel agent team)
+
+### Summary
+
+Ran a 5-agent parallel team to upgrade the Plans + Canvas surfaces in
+one session. Plans went from "title + plain-text body + linear ol of
+steps" to a full markdown-rendered, inline-auto-saving, list/timeline
+toggleable workspace with live progress, running-step highlight, plan
+templates, per-step comments, Mermaid + LaTeX in any markdown body, and
+a one-click "Open as Canvas" path that lays out steps topologically by
+their `dependsOnStepIds` graph. Canvas gained dedicated renderers for
+execution-plan and execution-step targets (card + live viewModes).
+
+### What changed
+
+1. **Markdown everywhere on Plans.** `ExecutionPlan.description`,
+   `ExecutionStep.body`, and `ExecutionStep.expectedOutput` now render
+   through `ChatMarkdown`. Inline auto-save (600 ms debounce) replaces
+   the old global Edit/Save toggle with per-field dirty tracking + a
+   subtle ember "saving…" / muted-green "saved" pill.
+2. **List ↔ Timeline view toggle.** Timeline renders a vertical
+   connector line with per-step color segments matching status
+   (TODO/READY/RUNNING/BLOCKED/REVIEW/DONE/CANCELED), dependency hints
+   below each title (`↳ depends on #3, #5`), click-to-expand body, and
+   subtle Tailwind transitions.
+3. **Live progress bar** in the plan header — stacked counts of
+   TODO/READY/RUNNING/BLOCKED/REVIEW/DONE with `{done}/{total} done ·
+   {running} running · {blocked} blocked` caption.
+4. **Currently-working highlight + auto-scroll.** RUNNING step gets an
+   ember ring + smooth scrollIntoView, suppressed if the operator
+   scrolled manually in the last 5 s.
+5. **Plan templates** on the create dialog — Blank / DAG / RFC /
+   Post-mortem / Feature spec. Templates seed title + description +
+   ordered steps with `dependsOnStepIds` resolved client-side via a
+   position→cuid map. Sequential `addStep.mutateAsync` calls with a
+   `toast.loading("Seeding N/M steps…")` progress indicator.
+6. **Mermaid + LaTeX in chat-markdown.** ` ```mermaid ` blocks render
+   as SVG diagrams; `$..$` and `$$..$$` render as KaTeX. Both libs are
+   dynamic-imported and only ship when a body actually uses them —
+   zero bundle cost for the chat hot path. Mermaid uses
+   `securityLevel: "strict"`; KaTeX uses `trust: false` + `strict:
+   "ignore"` so user-authored math can't smuggle HTML. Inline `$5 and
+   $10` (prices) is correctly ignored by the regex.
+7. **Canvas plan/step renderers.** Schema already allowed
+   `targetType="execution-plan" | "execution-step"` but the renderer
+   and entity-hydration only had stubs. Plans now render with status
+   badge + progress bar + animated "Running · N steps" sub-label
+   (live mode). Steps render with position pill + status badge +
+   assignee chip + 2-line expectedOutput. RUNNING gets an ember ring
+   in live mode to mirror the plans detail page.
+8. **`canvas.createFromPlan({ planId, name? })` tRPC.** Auto-creates
+   a workspace-scoped canvas with `scopeType="execution-plan"`, lays
+   out steps by longest-path depth on the `dependsOnStepIds` DAG
+   (320×200 grid), and adds `contains` + `depends_on` edges. Wired
+   to the plan header's "Open as Canvas" action.
+9. **Per-step comments.** Extended the existing `Comment` model with
+   a nullable `executionStepId` FK (cascade) and relaxed `issueId` to
+   nullable (migration 0040). App-layer keeps the "exactly one of
+   {issueId, executionStepId}" invariant. New tRPC procs:
+   `executionPlan.stepCommentList / stepCommentCreate / stepCommentDelete`.
+   New `StepComments` component is wired inline under each step
+   card — collapsed pill expands to a thread + composer (Cmd/Ctrl+
+   Enter to post). Comments emit `COMMENT_CREATED` events with
+   `subjectType: "execution-step"` for parity with issue comments.
+
+### Tests
+
+- 6 new tRPC tests for step comments (create/list/delete/admin
+  override/cross-workspace rejection/event emission).
+- 2 new canvas tests for `createFromPlan` (4-step plan with a chain
+  produces the right node/edge counts; cross-workspace rejected).
+- All existing tests still pass.
+
+### Verification
+
+- `pnpm lint` → clean.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → clean.
+- `pnpm test` → 50 files / 380 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` → clean.
+
+### Notes for future work
+
+- I considered storing HTML alongside Markdown as an optional plan
+  content type, then declined: XSS sanitization, diff churn, and
+  migration cost are too high relative to Markdown-with-GFM + Mermaid
+  + LaTeX, which now covers ~all the "rich plan body" use cases.
+- Mermaid is the heaviest dep (~700 KB). Strict dynamic-import is the
+  reason the chat hot path stays cheap. If a future page wants
+  diagrams to render server-side (e.g. PDF export), we'll need to
+  swap to a server renderer like @mermaid-js/mermaid-cli.
+- `docs/plans/hermes-kanban-comparison.md` captures the Hermes vs.
+  Forge work-state comparison and three follow-on enhancements to
+  consider in a separate session (move recovery into a server-side
+  ticker, auto-wire ack on first agent output, draft heartbeat for
+  long replies).
+
 ## 2026-05-19 — Durable agent dispatch inbox (single-operator)
 
 ### Summary
