@@ -292,6 +292,32 @@ enum NoteKind {
 /// against an issue, closed when the issue transitions to a terminal
 /// status, the agent reports completion, or the watchdog flags it
 /// stalled. ABANDONED is the manual-cancel terminal state.
+/// Lifecycle stage for an Artifact (durable specs, decisions, runbooks,
+/// reports, briefs, verification logs). DRAFT is the working state;
+/// IN_REVIEW signals a human/agent is reviewing; ACCEPTED is the
+/// canonical published version; ARCHIVED is the soft-delete tombstone.
+enum ArtifactStatus {
+  DRAFT
+  IN_REVIEW
+  ACCEPTED
+  ARCHIVED
+}
+
+/// Discriminator for Artifacts. DOCUMENT is the catch-all freeform
+/// markdown; the rest are first-class document kinds so list/filter
+/// surfaces can render purpose-specific icons + columns. Adding a
+/// new kind: add the enum here, the migration, and the renderer
+/// chip in `src/components/artifacts/artifact-type-chip.tsx`.
+enum ArtifactType {
+  DOCUMENT
+  DECISION
+  RUNBOOK
+  REPORT
+  SPEC
+  BRIEF
+  VERIFICATION
+}
+
 enum AgentRunStatus {
   ACTIVE
   COMPLETED
@@ -374,6 +400,8 @@ model User {
   recentItems          RecentItem[]
   notes                Note[]
   issueWatches         IssueWatcher[]
+  createdArtifacts     Artifact[]          @relation("ArtifactCreator")
+  artifactVersions     ArtifactVersion[]   @relation("ArtifactVersionCreator")
 
   @@index([handle])
 }
@@ -566,6 +594,8 @@ model Workspace {
   recentItems        RecentItem[]
   notes              Note[]
   issueWatchers      IssueWatcher[]
+  artifacts          Artifact[]
+  artifactVersions   ArtifactVersion[]
   startedStatus      Status?             @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
@@ -614,6 +644,7 @@ model Project {
   templates     IssueTemplate[]
   recurring     RecurringIssue[]
   dispatchRules DispatchRule[]
+  artifacts     Artifact[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId, archived])
@@ -728,6 +759,7 @@ model Issue {
   timeEntries   TimeEntry[]
   agentRuns     AgentRun[]
   watchers      IssueWatcher[]
+  artifacts     Artifact[]
 
   @@unique([workspaceId, number])
   @@index([workspaceId, statusId])
@@ -1387,15 +1419,17 @@ model Agent {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
-  workspace        Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  runtime          Runtime?       @relation("AgentRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
-  assignedIssues   Issue[]        @relation("IssueAssignedAgent")
-  apiKeys          ApiKey[]       @relation("AgentApiKeys")
-  authoredComments Comment[]      @relation("AgentAuthoredComments")
-  dispatchRules    DispatchRule[]
-  runs             AgentRun[]
-  chatThreads      ChatThread[]
-  issueWatches     IssueWatcher[]
+  workspace                Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runtime                  Runtime?          @relation("AgentRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
+  assignedIssues           Issue[]           @relation("IssueAssignedAgent")
+  apiKeys                  ApiKey[]          @relation("AgentApiKeys")
+  authoredComments         Comment[]         @relation("AgentAuthoredComments")
+  dispatchRules            DispatchRule[]
+  runs                     AgentRun[]
+  chatThreads              ChatThread[]
+  issueWatches             IssueWatcher[]
+  authoredArtifacts        Artifact[]        @relation("ArtifactCreatorAgent")
+  authoredArtifactVersions ArtifactVersion[] @relation("ArtifactVersionCreatorAgent")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
@@ -1551,11 +1585,11 @@ model ChatThread {
 }
 
 model ChatMessage {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   workspaceId     String
   threadId        String
   role            ChatRole
-  body            String   @db.Text
+  body            String    @db.Text
   contextSnapshot Json?
   sourceRunId     String?
   /// Set when a USER message has emitted CHAT_MESSAGE_POSTED and is safe
@@ -1563,7 +1597,7 @@ model ChatMessage {
   /// attachment finalization, or is an agent/system message that is not
   /// dispatched to an agent.
   dispatchedAt    DateTime?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
   workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   thread    ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
@@ -1695,4 +1729,99 @@ model IssueWatcher {
   @@index([workspaceId, userId])
   @@index([workspaceId, agentId])
   @@index([issueId])
+}
+
+// ----------------------------------------------------------------------------
+// Agentic work OS — Artifact primitive (added 2026-05-19, migration 0032)
+// ----------------------------------------------------------------------------
+
+/// A durable, versionable output object. Captures the long-lived
+/// outputs of agent/human work: specs, decisions, runbooks, reports,
+/// briefs, verification logs, and accepted agent deliverables.
+///
+/// `slug` is unique per workspace and lets the URL stay stable across
+/// title edits. `currentVersionId` points at the published version
+/// rendered by the artifact route; null means the artifact has only
+/// the head row (no version history yet).
+///
+/// `sourceType` + `sourceId` form a polymorphic backlink: when the
+/// artifact was promoted from a chat message, comment, note, or
+/// agent-run summary, those fields point at the source row so the UI
+/// can render "from chat message in #thread" provenance.
+model Artifact {
+  id               String         @id @default(cuid())
+  workspaceId      String
+  title            String
+  /// URL-friendly identifier, unique per workspace. Stable across
+  /// title edits; populated server-side at create time.
+  slug             String
+  type             ArtifactType   @default(DOCUMENT)
+  status           ArtifactStatus @default(DRAFT)
+  /// Canonical published body. Edits append a new ArtifactVersion
+  /// and (when published) update this column. Markdown.
+  body             String         @db.Text
+  /// Optional short summary used by list cards + agent context bundles.
+  summary          String?        @db.Text
+  createdById      String?
+  createdByAgentId String?
+  /// Polymorphic source ref for promotions: chat-message, comment,
+  /// note, agent-run, issue, etc. Null for artifacts created from
+  /// scratch.
+  sourceType       String?
+  sourceId         String?
+  /// Pointer at the currently-published ArtifactVersion. Null until
+  /// the first publish; thereafter set to the latest accepted version.
+  currentVersionId String?
+  /// Optional convenience pointers — surface artifacts in their
+  /// owning issue/project's detail panels without joining ContextSet.
+  /// Both are nullable + indexed.
+  issueId          String?
+  projectId        String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  archivedAt       DateTime?
+
+  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy      User?             @relation("ArtifactCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByAgent Agent?            @relation("ArtifactCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
+  issue          Issue?            @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  project        Project?          @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  versions       ArtifactVersion[]
+  currentVersion ArtifactVersion?  @relation("ArtifactCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status, updatedAt])
+  @@index([workspaceId, type, updatedAt])
+  @@index([issueId])
+  @@index([projectId])
+}
+
+/// Append-only revision row for an Artifact. Every edit creates a new
+/// version; the artifact's `currentVersionId` is updated when the
+/// version is published. Soft-delete on the parent Artifact cascades
+/// here; individual versions are never hard-deleted.
+model ArtifactVersion {
+  id               String   @id @default(cuid())
+  workspaceId      String
+  artifactId       String
+  /// Monotonic per-artifact version number, starting at 1.
+  version          Int
+  title            String
+  body             String   @db.Text
+  /// Optional short summary captured at publish time.
+  summary          String?  @db.Text
+  /// Optional changelog blurb explaining what changed in this version.
+  changelog        String?  @db.Text
+  createdById      String?
+  createdByAgentId String?
+  createdAt        DateTime @default(now())
+
+  workspace      Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  artifact       Artifact   @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  createdBy      User?      @relation("ArtifactVersionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByAgent Agent?     @relation("ArtifactVersionCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
+  currentOf      Artifact[] @relation("ArtifactCurrentVersion")
+
+  @@unique([artifactId, version])
+  @@index([workspaceId, createdAt])
 }

@@ -86,6 +86,9 @@ export const ALLOWED_TARGET_TYPES: ReadonlySet<string> = new Set<string>([
   "initiative",
   "cycle",
   "chat-message",
+  // Wave 2: durable artifacts (specs, decisions, runbooks…) can carry
+  // file/link attachments via the polymorphic refs.
+  "artifact",
 ]);
 
 // -- Client ------------------------------------------------------------------

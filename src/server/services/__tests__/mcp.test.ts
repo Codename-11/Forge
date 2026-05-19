@@ -2450,3 +2450,87 @@ describe("mcp — issues.transition lifecycle handling", () => {
     expect(events).toHaveLength(0);
   });
 });
+
+describe("mcp artifacts.*", () => {
+  it("artifacts.create then artifacts.get round-trips with version 1", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ART" });
+    fixtures.push(fixture);
+    const { ctx } = buildMcpCtx(fixture);
+    const created = (await call(
+      "artifacts.create",
+      { title: "MCP Decision Doc", body: "## Decision\nGo.", type: "DECISION" },
+      ctx,
+    )) as { id: string; slug: string };
+    expect(created.slug).toBe("mcp-decision-doc");
+
+    const got = (await call("artifacts.get", { id: created.id }, ctx)) as {
+      id: string;
+      title: string;
+      type: string;
+      versions: Array<{ version: number }>;
+    };
+    expect(got.title).toBe("MCP Decision Doc");
+    expect(got.type).toBe("DECISION");
+    expect(got.versions[0]?.version).toBe(1);
+  });
+
+  it("artifacts.update body change snapshots a new version", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARU" });
+    fixtures.push(fixture);
+    const { ctx } = buildMcpCtx(fixture);
+    const created = (await call(
+      "artifacts.create",
+      { title: "Iterating", body: "v1" },
+      ctx,
+    )) as { id: string };
+    await call(
+      "artifacts.update",
+      { id: created.id, body: "v2", changelog: "tightened tone" },
+      ctx,
+    );
+    const got = (await call("artifacts.get", { id: created.id }, ctx)) as {
+      versions: Array<{ version: number; changelog: string | null }>;
+    };
+    expect(got.versions[0].version).toBe(2);
+    expect(got.versions[0].changelog).toBe("tightened tone");
+  });
+
+  it("artifacts.promote pulls a chat message into a new artifact with source backlink", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `prom-${Date.now()}`,
+        name: "Promoter",
+      },
+    });
+    const thread = await prisma.chatThread.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        userId: fixture.user.id,
+        agentId: agent.id,
+        title: "Discovery",
+      },
+    });
+    const message = await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: thread.id,
+        role: "AGENT" as never,
+        body: "Here is the plan…",
+      },
+    });
+    const result = (await call(
+      "artifacts.promote",
+      { sourceType: "chat-message", sourceId: message.id, type: "SPEC" },
+      ctx,
+    )) as { id: string; slug: string };
+    const artifact = await prisma.artifact.findUniqueOrThrow({ where: { id: result.id } });
+    expect(artifact.sourceType).toBe("chat-message");
+    expect(artifact.sourceId).toBe(message.id);
+    expect(artifact.type).toBe("SPEC");
+  });
+});

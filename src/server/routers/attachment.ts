@@ -418,6 +418,11 @@ async function assertTargetInWorkspace(
         }
         return { id: message.id };
       }
+      case "artifact":
+        return db.artifact.findFirst({
+          where: { id: targetId, workspaceId, archivedAt: null },
+          select: { id: true },
+        });
       default:
         return null;
     }
