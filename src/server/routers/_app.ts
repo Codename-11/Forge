@@ -9,6 +9,7 @@ import { workspaceRouter } from "./workspace";
 import { projectRouter } from "./project";
 import { issueRouter } from "./issue";
 import { commentRouter } from "./comment";
+import { contextSetRouter } from "./context-set";
 import { analyticsRouter } from "./analytics";
 import { pluginRouter } from "./plugin";
 import { statusRouter } from "./status";
@@ -50,6 +51,7 @@ export const appRouter = router({
   analytics: analyticsRouter,
   attachment: attachmentRouter,
   comment: commentRouter,
+  contextSet: contextSetRouter,
   cycle: cycleRouter,
   dashboard: dashboardRouter,
   dispatchRule: dispatchRuleRouter,

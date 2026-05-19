@@ -402,6 +402,7 @@ model User {
   issueWatches         IssueWatcher[]
   createdArtifacts     Artifact[]          @relation("ArtifactCreator")
   artifactVersions     ArtifactVersion[]   @relation("ArtifactVersionCreator")
+  ownedContextSets     ContextSet[]        @relation("ContextSetOwnerUser")
 
   @@index([handle])
 }
@@ -596,6 +597,8 @@ model Workspace {
   issueWatchers      IssueWatcher[]
   artifacts          Artifact[]
   artifactVersions   ArtifactVersion[]
+  contextSets        ContextSet[]
+  contextSetItems    ContextSetItem[]
   startedStatus      Status?             @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
@@ -1430,6 +1433,7 @@ model Agent {
   issueWatches             IssueWatcher[]
   authoredArtifacts        Artifact[]        @relation("ArtifactCreatorAgent")
   authoredArtifactVersions ArtifactVersion[] @relation("ArtifactVersionCreatorAgent")
+  ownedContextSets         ContextSet[]      @relation("ContextSetOwnerAgent")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
@@ -1824,4 +1828,63 @@ model ArtifactVersion {
 
   @@unique([artifactId, version])
   @@index([workspaceId, createdAt])
+}
+
+// ----------------------------------------------------------------------------
+// Agentic work OS — ContextSet primitive (added 2026-05-19, migration 0033)
+// ----------------------------------------------------------------------------
+
+/// Reusable bundle of canonical refs an agent receives as context.
+/// ContextSets formalize "what did the agent see?" — items can be
+/// include / exclude / summary-only. The bundle is hydrated through
+/// the entity-hydration service at dispatch time and snapshotted on
+/// the AgentRun (or ChatMessage) so the audit trail is durable even
+/// after the set is edited.
+///
+/// `policy` is reserved for future controls (token budget caps, file
+/// glob filters, time-window limits). For v1 it stays null.
+model ContextSet {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  name         String
+  description  String?   @db.Text
+  ownerUserId  String?
+  ownerAgentId String?
+  policy       Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  archivedAt   DateTime?
+
+  workspace  Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUser  User?            @relation("ContextSetOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerAgent Agent?           @relation("ContextSetOwnerAgent", fields: [ownerAgentId], references: [id], onDelete: SetNull)
+  items      ContextSetItem[]
+
+  @@index([workspaceId, updatedAt])
+  @@index([workspaceId, ownerUserId])
+}
+
+/// Polymorphic ref inside a ContextSet. `targetType` matches the
+/// shared entity-ref enum; `targetId` is the cuid. `includeMode` is
+/// INCLUDE by default; EXCLUDE pulls a row out of the agent's view
+/// even if a default rule would have pulled it in; SUMMARY_ONLY
+/// includes the row but only as a one-line summary (saves tokens).
+model ContextSetItem {
+  id           String  @id @default(cuid())
+  workspaceId  String
+  contextSetId String
+  targetType   String
+  targetId     String
+  /// INCLUDE | EXCLUDE | SUMMARY_ONLY. Free-form string so future
+  /// modes don't require an enum migration.
+  includeMode  String  @default("INCLUDE")
+  position     Int     @default(0)
+  note         String? @db.Text
+
+  contextSet ContextSet @relation(fields: [contextSetId], references: [id], onDelete: Cascade)
+  workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([contextSetId, targetType, targetId])
+  @@index([workspaceId, targetType, targetId])
+  @@index([contextSetId, position])
 }

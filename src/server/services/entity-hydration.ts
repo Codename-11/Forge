@@ -350,7 +350,26 @@ async function hydrateOne(
         meta: { status: row.status, slug: row.slug, summary: row.summary },
       }));
     }
-    case "context-set":
+    case "context-set": {
+      const rows = await db.contextSet.findMany({
+        where: { workspaceId, id: { in: ids }, archivedAt: null },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          _count: { select: { items: true } },
+        },
+      });
+      return rows.map((row) => ({
+        type: "context-set" as const,
+        id: row.id,
+        missing: false,
+        label: row.name,
+        subLabel: `${row._count.items} item${row._count.items === 1 ? "" : "s"}`,
+        url: workspaceUrl(workspaceSlug, `/context-sets/${row.id}`),
+        meta: { itemCount: row._count.items, description: row.description },
+      }));
+    }
     case "execution-plan":
     case "execution-step":
     case "action-request":
