@@ -925,7 +925,7 @@ export const chatRouter = router({
             entity: "ChatThread",
             entityId: thread.id,
             action: "restore",
-            before: { archivedAt: thread.archivedAt.toISOString() },
+            before: { archivedAt: thread.archivedAt?.toISOString() ?? null },
             after: { archivedAt: null },
           },
         });
