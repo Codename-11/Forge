@@ -69,6 +69,18 @@ if the key is linked to an agent (`linkedAgentId`), it returns issues with
 matching `assignedAgentId`. If the key is linked to a human session, it
 returns by `claimedById`. The caller doesn't need to pass a profile.
 
+### When to assign vs. @mention an agent
+
+Use the agent picker/assignment field when you want to give an agent ownership
+of the issue. Assignment emits `AGENT_ASSIGNED` and wakes push-capable agents
+such as Hermes profiles; you do not need to also type `@victor` in the same
+moment just to start the run.
+
+Use `@profileKey` in a comment when the issue is already assigned and you want
+the agent to read/respond to that specific comment now. A normal comment is
+part of the issue history, but it is not a targeted wake-up for the assignee
+unless the agent is mentioned or has watched the issue.
+
 ## The queue
 
 `queued: true` means "this issue is ready for an agent to pick up." It's

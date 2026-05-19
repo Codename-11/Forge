@@ -2,6 +2,35 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Clarify agent assignment vs. comment mentions
+
+### Summary
+
+Audited the Forge agent-dispatch path after an operator report that assigning
+Victor did not appear to make the agent act on the latest issue comment. The
+runtime path is intentionally split: `AGENT_ASSIGNED` wakes the assignee and
+`COMMENT_CREATED` only wakes explicitly mentioned/watching agents. The Hermes
+webhook prompt was too weak on assignment context, so it could frame from the
+issue snapshot without necessarily reading the latest comments first.
+
+### What changed
+
+1. **Hermes dispatch prompt.** Updated the live `forge-dispatch` webhook
+   subscription to require `mcp_forge_agent_context_bundle({ issueId })` before
+   acting on `AGENT_ASSIGNED`, `ISSUE_QUEUED`, priority changes, or directed
+   comments. Assignment now explicitly treats the latest human/operator comment
+   as current instructions even when posted before the assignment.
+2. **User/operator docs.** Clarified in `docs/agents/overview.md`,
+   `docs/agents/hermes.md`, `docs/automation/webhooks.md`, and
+   `docs/guide/issues.md` that assignment starts work and does not require an
+   additional `@mention`, while follow-up comments should mention the agent or
+   rely on watching to wake it.
+
+### Verification
+
+- `pnpm build:docs` → pass; VitePress docs rendered and staged for production
+  build.
+
 ## 2026-05-19 — Quiet Docker build Redis imports
 
 ### Summary
