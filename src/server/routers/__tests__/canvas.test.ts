@@ -90,6 +90,34 @@ describe("canvasRouter", () => {
     expect(hydrated.nodes[0].ref?.missing).toBe(true);
   });
 
+  it("rejects nodes and scopes that point outside the workspace", async () => {
+    const { caller } = await setup();
+    const other = await createWorkspaceFixture({ keyPrefix: "OC" });
+    fixtures.push(other);
+    const otherIssue = await createIssue(other);
+
+    await expect(
+      caller.create({ name: "Foreign scope", scopeType: "issue", scopeId: otherIssue.id }),
+    ).rejects.toThrow(/target not found/);
+
+    await expect(caller.create({ name: "Half scope", scopeType: "issue" })).rejects.toThrow(
+      /provided together/,
+    );
+
+    const canvas = await caller.create({ name: "Board" });
+    await expect(
+      caller.addNode({
+        canvasId: canvas.id,
+        targetType: "issue",
+        targetId: otherIssue.id,
+        x: 0,
+        y: 0,
+        width: 240,
+        height: 160,
+      }),
+    ).rejects.toThrow(/target not found/);
+  });
+
   it("connects two nodes with an edge and tears the edge down with the node", async () => {
     const { fixture, caller } = await setup();
     const issueA = await createIssue(fixture);

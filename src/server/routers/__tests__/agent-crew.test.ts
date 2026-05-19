@@ -84,6 +84,34 @@ describe("agentCrewRouter + reviewGateRouter", () => {
     ).rejects.toThrow(/not agents in this workspace/);
   });
 
+  it("rejects non-admin users from mutating crews and resolving gates", async () => {
+    const { fixture, prisma, crewCaller, gateCaller } = await setup();
+    const memberCtx = await buildContext(fixture, { asUserId: fixture.secondUser.id });
+    const memberCrewCaller = agentCrewRouter.createCaller(memberCtx);
+    const memberGateCaller = reviewGateRouter.createCaller(memberCtx);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `member-${Date.now()}`,
+        name: "Member Agent",
+      },
+    });
+    const crew = await crewCaller.create({ name: "Admin owned" });
+    const gate = await gateCaller.open({
+      targetType: "execution-plan",
+      targetId: "plan_fake_id_for_targeting_only",
+      prompt: "Please review",
+    });
+
+    await expect(memberCrewCaller.create({ name: "Nope" })).rejects.toThrow(/Admin role/);
+    await expect(
+      memberCrewCaller.addMember({ crewId: crew.id, agentId: agent.id, role: "WORKER" }),
+    ).rejects.toThrow(/Admin role/);
+    await expect(memberGateCaller.resolve({ id: gate.id, decision: "APPROVED" })).rejects.toThrow(
+      /Admin role/,
+    );
+  });
+
   it("opens, resolves, and rejects a review gate", async () => {
     const { gateCaller } = await setup();
     const open = await gateCaller.open({

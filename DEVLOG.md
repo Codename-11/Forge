@@ -2,6 +2,38 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Agentic Work OS release-gate hardening
+
+### Summary
+
+Closed the deploy-blocking review findings from the long-run Claude Code
+implementation before shipping. The fixes keep new agent/team/canvas power
+behind the intended admin/API boundaries and preserve the audit/event trail
+for mutable operations.
+
+### What changed
+
+1. **Crew and ReviewGate admin gating.** AgentCrew create/archive/member
+   mutation routes and ReviewGate resolution now use `adminProcedure`, so
+   workspace MEMBERS can read but cannot change team composition or approve
+   gates. Added regression coverage for non-admin rejection.
+2. **Crew audit trail.** Crew archive, member add, and member remove now write
+   `recordChange` activity entries with actor and before/after context.
+3. **Canvas ref hardening.** tRPC and MCP canvas creation/node insertion now
+   validate entity refs through the shared hydrator before persisting layout.
+   MCP additionally applies API-key project/label/initiative narrowing for
+   issue/project/initiative refs and rejects half-scoped canvases.
+4. **Canvas mutation audit.** MCP canvas node/edge add, patch, and remove now
+   update the canvas timestamp and emit audited activity via transactions.
+
+### Verification
+
+- `pnpm vitest run src/server/routers/__tests__/canvas.test.ts src/server/routers/__tests__/agent-crew.test.ts src/server/services/__tests__/mcp.test.ts` → 3 files / 91 tests passed.
+- `pnpm test` → 49 files / 352 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm lint` → pass, no warnings.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` → pass.
+
 ## 2026-05-19 — Agentic Work OS product-surface follow-up
 
 ### Summary

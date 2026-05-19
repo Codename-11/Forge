@@ -40,7 +40,8 @@ import {
   presignDownloadUrl,
   presignUploadUrl,
 } from "@/server/services/storage";
-import { forgeEntityTypeSchema } from "@/lib/entity-ref";
+import { forgeEntityTypeSchema, type ForgeEntityType } from "@/lib/entity-ref";
+import { hydrateEntityRefs } from "@/server/services/entity-hydration";
 
 /**
  * Forge's MCP (Model Context Protocol) surface — the stable set of tools any
@@ -97,6 +98,23 @@ async function resolveActorId(ctx: McpContext): Promise<string> {
     select: { userId: true },
   });
   return m.userId;
+}
+
+async function assertMcpCanvasRef(ctx: McpContext, type: ForgeEntityType, id: string): Promise<void> {
+  if (type === "issue") {
+    await assertKeyScope(scopeCtx(ctx), { entity: "issue", id });
+  } else if (type === "project") {
+    await assertKeyScope(scopeCtx(ctx), { entity: "project", id });
+  } else if (type === "initiative") {
+    await assertKeyScope(scopeCtx(ctx), { entity: "initiative", id });
+  }
+  const [hydrated] = await hydrateEntityRefs(
+    { db, workspaceId: ctx.workspaceId },
+    [{ type, id }],
+  );
+  if (!hydrated || hydrated.missing) {
+    throw new Error(`${type} target not found in this workspace.`);
+  }
 }
 
 const chatAttachmentSelect = {
@@ -5396,15 +5414,25 @@ export const mcpTools = {
       input: { name: string; scopeType?: string | null; scopeId?: string | null },
       ctx: McpContext,
     ) {
-      const { EventKind: EK } = await import("@prisma/client");
-      const { recordChange } = await import("@/server/audit");
+      let scopeType: ForgeEntityType | null = null;
+      let scopeId: string | null = null;
+      if (input.scopeType || input.scopeId) {
+        if (!input.scopeType || !input.scopeId) {
+          throw new Error("Canvas scopeType and scopeId must be provided together.");
+        }
+        const parsed = forgeEntityTypeSchema.safeParse(input.scopeType);
+        if (!parsed.success) throw new Error("Canvas scopeType must be a known Forge entity type.");
+        await assertMcpCanvasRef(ctx, parsed.data, input.scopeId);
+        scopeType = parsed.data;
+        scopeId = input.scopeId;
+      }
       const canvas = await db.$transaction(async (tx) => {
         const created = await tx.workspaceCanvas.create({
           data: {
             workspaceId: ctx.workspaceId,
             name: input.name.trim(),
-            scopeType: input.scopeType ?? null,
-            scopeId: input.scopeId ?? null,
+            scopeType,
+            scopeId,
             createdById: ctx.userId ?? null,
           },
         });
@@ -5415,7 +5443,7 @@ export const mcpTools = {
           entityId: created.id,
           action: "created",
           after: { name: created.name },
-          eventKind: EK.ISSUE_UPDATED,
+          eventKind: EventKind.ISSUE_UPDATED,
           subjectType: "workspace-canvas",
           subjectId: created.id,
         });
@@ -5454,29 +5482,44 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
+      await assertMcpCanvasRef(ctx, input.targetType as ForgeEntityType, input.targetId);
       const canvas = await db.workspaceCanvas.findFirst({
         where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
         select: { id: true },
       });
       if (!canvas) throw new Error("Canvas not found.");
-      const node = await db.workspaceCanvasNode.create({
-        data: {
+      const node = await db.$transaction(async (tx) => {
+        const created = await tx.workspaceCanvasNode.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            canvasId: input.canvasId,
+            targetType: input.targetType,
+            targetId: input.targetId,
+            x: input.x,
+            y: input.y,
+            width: input.width,
+            height: input.height,
+            zIndex: input.zIndex ?? 0,
+            collapsed: input.collapsed ?? false,
+            viewMode: input.viewMode ?? null,
+          },
+        });
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
           workspaceId: ctx.workspaceId,
-          canvasId: input.canvasId,
-          targetType: input.targetType,
-          targetId: input.targetId,
-          x: input.x,
-          y: input.y,
-          width: input.width,
-          height: input.height,
-          zIndex: input.zIndex ?? 0,
-          collapsed: input.collapsed ?? false,
-          viewMode: input.viewMode ?? null,
-        },
-      });
-      await db.workspaceCanvas.update({
-        where: { id: input.canvasId },
-        data: { updatedAt: new Date() },
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "node_added",
+          after: { nodeId: created.id, targetType: input.targetType, targetId: input.targetId },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return created;
       });
       return { id: node.id };
     },
@@ -5512,21 +5555,34 @@ export const mcpTools = {
         select: { id: true, canvasId: true },
       });
       if (!node) throw new Error("Canvas node not found.");
-      await db.workspaceCanvasNode.update({
-        where: { id: input.id },
-        data: {
-          x: input.x,
-          y: input.y,
-          width: input.width,
-          height: input.height,
-          zIndex: input.zIndex,
-          collapsed: input.collapsed,
-          viewMode: input.viewMode === undefined ? undefined : input.viewMode,
-        },
-      });
-      await db.workspaceCanvas.update({
-        where: { id: node.canvasId },
-        data: { updatedAt: new Date() },
+      await db.$transaction(async (tx) => {
+        await tx.workspaceCanvasNode.update({
+          where: { id: input.id },
+          data: {
+            x: input.x,
+            y: input.y,
+            width: input.width,
+            height: input.height,
+            zIndex: input.zIndex,
+            collapsed: input.collapsed,
+            viewMode: input.viewMode === undefined ? undefined : input.viewMode,
+          },
+        });
+        await tx.workspaceCanvas.update({
+          where: { id: node.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: node.canvasId,
+          action: "node_updated",
+          after: { nodeId: input.id },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: node.canvasId,
+        });
       });
       return { ok: true };
     },
@@ -5541,19 +5597,30 @@ export const mcpTools = {
         select: { id: true, canvasId: true },
       });
       if (!node) throw new Error("Canvas node not found.");
-      await db.$transaction([
-        db.workspaceCanvasEdge.deleteMany({
+      await db.$transaction(async (tx) => {
+        await tx.workspaceCanvasEdge.deleteMany({
           where: {
             workspaceId: ctx.workspaceId,
             OR: [{ fromNodeId: input.id }, { toNodeId: input.id }],
           },
-        }),
-        db.workspaceCanvasNode.delete({ where: { id: input.id } }),
-        db.workspaceCanvas.update({
+        });
+        await tx.workspaceCanvasNode.delete({ where: { id: input.id } });
+        await tx.workspaceCanvas.update({
           where: { id: node.canvasId },
           data: { updatedAt: new Date() },
-        }),
-      ]);
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: node.canvasId,
+          action: "node_removed",
+          before: { nodeId: input.id },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: node.canvasId,
+        });
+      });
       return { ok: true };
     },
   },
@@ -5602,15 +5669,33 @@ export const mcpTools = {
       if (!canvas || !from || !to) {
         throw new Error("Canvas, fromNode, or toNode missing from this workspace.");
       }
-      const edge = await db.workspaceCanvasEdge.create({
-        data: {
+      const edge = await db.$transaction(async (tx) => {
+        const created = await tx.workspaceCanvasEdge.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            canvasId: input.canvasId,
+            fromNodeId: input.fromNodeId,
+            toNodeId: input.toNodeId,
+            label: input.label ?? null,
+            kind: input.kind ?? null,
+          },
+        });
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
           workspaceId: ctx.workspaceId,
-          canvasId: input.canvasId,
-          fromNodeId: input.fromNodeId,
-          toNodeId: input.toNodeId,
-          label: input.label ?? null,
-          kind: input.kind ?? null,
-        },
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "edge_added",
+          after: { edgeId: created.id, fromNodeId: input.fromNodeId, toNodeId: input.toNodeId },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return created;
       });
       return { id: edge.id };
     },
@@ -5622,10 +5707,27 @@ export const mcpTools = {
     async run(input: { id: string }, ctx: McpContext) {
       const edge = await db.workspaceCanvasEdge.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: { id: true },
+        select: { id: true, canvasId: true },
       });
       if (!edge) throw new Error("Canvas edge not found.");
-      await db.workspaceCanvasEdge.delete({ where: { id: input.id } });
+      await db.$transaction(async (tx) => {
+        await tx.workspaceCanvasEdge.delete({ where: { id: input.id } });
+        await tx.workspaceCanvas.update({
+          where: { id: edge.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: edge.canvasId,
+          action: "edge_removed",
+          before: { edgeId: input.id },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: edge.canvasId,
+        });
+      });
       return { ok: true };
     },
   },
