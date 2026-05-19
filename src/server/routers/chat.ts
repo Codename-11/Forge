@@ -1,23 +1,29 @@
 import { z } from "zod";
-import { ChatRole, EventKind } from "@prisma/client";
+import { AgentRunStatus, ChatRole, EventKind } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import { STALE_RUN_MS } from "@/server/services/agent-presence";
+import { deliverWebhook } from "@/server/services/plugin-runtime";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // the same loose validator the rest of the codebase uses for entity ids.
 const idString = z.string().min(1).max(40);
 
-const ChatContextSchema = z.object({
-  route: z.string().optional(),
-  slug: z.string().optional(),
-  issueId: z.string().optional(),
-  selectedIds: z.array(z.string()).optional(),
-  visibleEntities: z.array(z.object({ kind: z.string(), ids: z.array(z.string()) })).optional(),
-  pinnedRunIds: z.array(z.string()).optional(),
-  liveRunIds: z.array(z.string()).optional(),
-}).partial();
+const ThreadStateSchema = z.enum(["all", "waiting", "stalled", "has_attachments"]);
+
+const ChatContextSchema = z
+  .object({
+    route: z.string().optional(),
+    slug: z.string().optional(),
+    issueId: z.string().optional(),
+    selectedIds: z.array(z.string()).optional(),
+    visibleEntities: z.array(z.object({ kind: z.string(), ids: z.array(z.string()) })).optional(),
+    pinnedRunIds: z.array(z.string()).optional(),
+    liveRunIds: z.array(z.string()).optional(),
+  })
+  .partial();
 
 const chatAttachmentSelect = {
   id: true,
@@ -56,6 +62,162 @@ function chatEventPayload(input: {
 const visibleChatMessageWhere = {
   OR: [{ role: { not: ChatRole.USER } }, { dispatchedAt: { not: null } }],
 } satisfies Prisma.ChatMessageWhereInput;
+
+type ChatThreadDiagnostics = {
+  latestUserMessageId: string | null;
+  latestUserMessageAt: Date | null;
+  latestAgentMessageAt: Date | null;
+  waitingForReply: boolean;
+  waitingMs: number | null;
+  lastSourceRunId: string | null;
+  lastRun: {
+    id: string;
+    status: AgentRunStatus;
+    startedAt: Date;
+    completedAt: Date | null;
+    currentStep: string | null;
+    lastEventAt: Date;
+    idleMs: number;
+  } | null;
+  lastDelivery: {
+    id: string;
+    status: string;
+    attempts: number;
+    lastError: string | null;
+    updatedAt: Date;
+  } | null;
+};
+
+function redactDiagnosticText(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const redacted = value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(
+      /(token|secret|key|authorization|signature)([\"'\s:=]+)[^\s\"'&}]+/gi,
+      "$1$2[REDACTED]",
+    )
+    .replace(/https?:\/\/[^\s\"']+/gi, "[REDACTED_URL]");
+  return redacted.length > 500 ? `${redacted.slice(0, 497)}…` : redacted;
+}
+
+async function buildThreadDiagnostics(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  threadId: string,
+): Promise<ChatThreadDiagnostics> {
+  const [latestUser, latestAgent, latestSourceMessage, lastEvent] = await Promise.all([
+    tx.chatMessage.findFirst({
+      where: { workspaceId, threadId, role: ChatRole.USER, dispatchedAt: { not: null } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, createdAt: true },
+    }),
+    tx.chatMessage.findFirst({
+      where: { workspaceId, threadId, role: ChatRole.AGENT },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, createdAt: true, sourceRunId: true },
+    }),
+    tx.chatMessage.findFirst({
+      where: { workspaceId, threadId, sourceRunId: { not: null } },
+      orderBy: { createdAt: "desc" },
+      select: { sourceRunId: true },
+    }),
+    tx.activityEvent.findFirst({
+      where: {
+        workspaceId,
+        kind: EventKind.CHAT_MESSAGE_POSTED,
+        subjectType: "chat-thread",
+        subjectId: threadId,
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        deliveries: {
+          orderBy: { scheduledAt: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            attempt: true,
+            responseBody: true,
+            responseStatus: true,
+            scheduledAt: true,
+            deliveredAt: true,
+          },
+        },
+      },
+    }),
+  ]);
+
+  const lastSourceRunId = latestSourceMessage?.sourceRunId ?? null;
+  const run = lastSourceRunId
+    ? await tx.agentRun.findFirst({
+        where: { id: lastSourceRunId, workspaceId },
+        select: {
+          id: true,
+          status: true,
+          startedAt: true,
+          finishedAt: true,
+          currentStep: true,
+          lastEventAt: true,
+        },
+      })
+    : null;
+  const waitingForReply = Boolean(
+    latestUser &&
+    (!latestAgent || latestUser.createdAt.getTime() > latestAgent.createdAt.getTime()),
+  );
+  const delivery = lastEvent?.deliveries[0] ?? null;
+  const now = Date.now();
+  return {
+    latestUserMessageId: latestUser?.id ?? null,
+    latestUserMessageAt: latestUser?.createdAt ?? null,
+    latestAgentMessageAt: latestAgent?.createdAt ?? null,
+    waitingForReply,
+    waitingMs:
+      waitingForReply && latestUser ? Math.max(0, now - latestUser.createdAt.getTime()) : null,
+    lastSourceRunId,
+    lastRun: run
+      ? {
+          id: run.id,
+          status: run.status,
+          startedAt: run.startedAt,
+          completedAt: run.finishedAt,
+          currentStep: run.currentStep,
+          lastEventAt: run.lastEventAt,
+          idleMs: Math.max(0, now - run.lastEventAt.getTime()),
+        }
+      : null,
+    lastDelivery: delivery
+      ? {
+          id: delivery.id,
+          status: delivery.status,
+          attempts: delivery.attempt,
+          lastError: redactDiagnosticText(
+            delivery.responseBody ??
+              (delivery.responseStatus ? `HTTP ${delivery.responseStatus}` : null),
+          ),
+          updatedAt: delivery.deliveredAt ?? delivery.scheduledAt,
+        }
+      : null,
+  };
+}
+
+async function threadHasFinalizedAttachments(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  messageIds: string[],
+): Promise<boolean> {
+  if (messageIds.length === 0) return false;
+  const count = await tx.attachment.count({
+    where: {
+      workspaceId,
+      targetType: "chat-message",
+      targetId: { in: messageIds },
+      NOT: { url: { startsWith: "pending:" } },
+    },
+  });
+  return count > 0;
+}
 
 type ChatAttachmentSummary = Prisma.AttachmentGetPayload<{ select: typeof chatAttachmentSelect }>;
 
@@ -122,52 +284,109 @@ export const chatRouter = router({
    * List chat threads the current user has with any agent. Empty when
    * the user hasn't started any chats yet.
    */
-  threads: workspaceProcedure.query(async ({ ctx }) => {
-    const threads = await ctx.db.chatThread.findMany({
-      where: {
-        workspaceId: ctx.workspaceId,
-        userId: ctx.session.user.id,
-        archivedAt: null,
-      },
-      orderBy: { lastMessageAt: "desc" },
-      include: {
-        agent: { select: { id: true, name: true, profileKey: true, avatar: true, status: true, role: true } },
-        messages: {
-          where: visibleChatMessageWhere,
-          orderBy: { createdAt: "desc" },
-          take: 1,
-          select: { id: true, role: true, body: true, createdAt: true, sourceRunId: true },
+  threads: workspaceProcedure
+    .input(
+      z
+        .object({
+          archived: z.boolean().optional(),
+          query: z.string().trim().max(200).optional(),
+          state: ThreadStateSchema.default("all"),
+        })
+        .optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const query = input?.query?.trim();
+      const threads = await ctx.db.chatThread.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.session.user.id,
+          archivedAt: input?.archived ? { not: null } : null,
+          ...(query
+            ? {
+                OR: [
+                  { title: { contains: query, mode: "insensitive" } },
+                  { agent: { name: { contains: query, mode: "insensitive" } } },
+                  { agent: { profileKey: { contains: query, mode: "insensitive" } } },
+                  { messages: { some: { body: { contains: query, mode: "insensitive" } } } },
+                ],
+              }
+            : {}),
         },
-        _count: { select: { messages: true } },
-      },
-      take: 50,
-    });
-    const latestMessages = threads.flatMap((thread) => thread.messages);
-    const latestWithAttachments = await attachChatMessageMetadata(
-      ctx.db,
-      ctx.workspaceId,
-      latestMessages,
-    );
-    const latestById = new Map(latestWithAttachments.map((message) => [message.id, message]));
-    return threads.map(({ messages, ...thread }) => {
-      const latest = messages[0] ? latestById.get(messages[0].id) : null;
-      return {
-        ...thread,
-        latestMessage: latest
-          ? {
-              id: latest.id,
-              role: latest.role,
-              body: latest.body,
-              createdAt: latest.createdAt,
-              sourceRunId: latest.sourceRunId,
-              attachmentCount: latest.attachments.length,
-              hasImageAttachment: latest.attachments.some((attachment) => isImageMime(attachment.mimeType)),
-              attachments: latest.attachments,
-            }
-          : null,
-      };
-    });
-  }),
+        orderBy: { lastMessageAt: "desc" },
+        include: {
+          agent: {
+            select: {
+              id: true,
+              name: true,
+              profileKey: true,
+              avatar: true,
+              status: true,
+              role: true,
+            },
+          },
+          messages: {
+            where: visibleChatMessageWhere,
+            orderBy: { createdAt: "desc" },
+            take: 20,
+            select: { id: true, role: true, body: true, createdAt: true, sourceRunId: true },
+          },
+          _count: { select: { messages: true } },
+        },
+        take: 75,
+      });
+      const visibleMessages = threads.flatMap((thread) => thread.messages);
+      const latestWithAttachments = await attachChatMessageMetadata(
+        ctx.db,
+        ctx.workspaceId,
+        visibleMessages,
+      );
+      const byId = new Map(latestWithAttachments.map((message) => [message.id, message]));
+      const enriched = [];
+      for (const { messages, ...thread } of threads) {
+        const latest = messages[0] ? byId.get(messages[0].id) : null;
+        const diagnostics = await buildThreadDiagnostics(ctx.db, ctx.workspaceId, thread.id);
+        const hasAttachments = await threadHasFinalizedAttachments(
+          ctx.db,
+          ctx.workspaceId,
+          messages.map((message) => message.id),
+        );
+        enriched.push({
+          ...thread,
+          diagnostics,
+          hasAttachments,
+          latestMessage: latest
+            ? {
+                id: latest.id,
+                role: latest.role,
+                body: latest.body,
+                createdAt: latest.createdAt,
+                sourceRunId: latest.sourceRunId,
+                attachmentCount: latest.attachments.length,
+                hasImageAttachment: latest.attachments.some((attachment) =>
+                  isImageMime(attachment.mimeType),
+                ),
+                attachments: latest.attachments,
+              }
+            : null,
+        });
+      }
+      const state = input?.state ?? "all";
+      return enriched.filter((thread) => {
+        if (state === "waiting") return thread.diagnostics.waitingForReply;
+        if (state === "stalled") {
+          return (
+            thread.diagnostics.lastRun?.status === AgentRunStatus.STALLED ||
+            Boolean(
+              thread.diagnostics.lastRun &&
+              thread.diagnostics.lastRun.status === AgentRunStatus.ACTIVE &&
+              thread.diagnostics.lastRun.idleMs >= STALE_RUN_MS,
+            )
+          );
+        }
+        if (state === "has_attachments") return thread.hasAttachments;
+        return true;
+      });
+    }),
 
   /**
    * Open / get a thread by agent. Upserts via the (workspaceId, userId,
@@ -223,7 +442,16 @@ export const chatRouter = router({
           archivedAt: null,
         },
         include: {
-          agent: { select: { id: true, name: true, profileKey: true, avatar: true, status: true, role: true } },
+          agent: {
+            select: {
+              id: true,
+              name: true,
+              profileKey: true,
+              avatar: true,
+              status: true,
+              role: true,
+            },
+          },
         },
       });
       if (!thread) return null;
@@ -241,7 +469,8 @@ export const chatRouter = router({
         ctx.workspaceId,
         messages,
       );
-      return { ...thread, messages: messagesWithAttachments };
+      const diagnostics = await buildThreadDiagnostics(ctx.db, ctx.workspaceId, thread.id);
+      return { ...thread, messages: messagesWithAttachments, diagnostics };
     }),
 
   /**
@@ -250,11 +479,13 @@ export const chatRouter = router({
    * webhooks/agents can respond.
    */
   send: workspaceProcedure
-    .input(z.object({
-      agentId: idString,
-      body: z.string().min(1).max(8000),
-      context: ChatContextSchema.optional(),
-    }))
+    .input(
+      z.object({
+        agentId: idString,
+        body: z.string().min(1).max(8000),
+        context: ChatContextSchema.optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       return ctx.db.$transaction(async (tx) => {
         const now = new Date();
@@ -314,11 +545,13 @@ export const chatRouter = router({
    * invoked before the inbound attachments existed.
    */
   createPendingMessage: workspaceProcedure
-    .input(z.object({
-      agentId: idString,
-      body: z.string().max(8000).default(""),
-      context: ChatContextSchema.optional(),
-    }))
+    .input(
+      z.object({
+        agentId: idString,
+        body: z.string().max(8000).default(""),
+        context: ChatContextSchema.optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const agent = await ctx.db.agent.findFirst({
         where: { id: input.agentId, workspaceId: ctx.workspaceId, archivedAt: null },
@@ -368,10 +601,16 @@ export const chatRouter = router({
         });
         if (!message) throw new TRPCError({ code: "NOT_FOUND", message: "Message not found" });
         if (message.role !== ChatRole.USER) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Only user messages can be dispatched" });
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Only user messages can be dispatched",
+          });
         }
         if (message.thread.userId !== ctx.session.user.id) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Only the thread owner may dispatch this message" });
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only the thread owner may dispatch this message",
+          });
         }
         const attachments = await tx.attachment.findMany({
           where: {
@@ -432,11 +671,13 @@ export const chatRouter = router({
    * matches the thread's agent.
    */
   appendAgentMessage: workspaceProcedure
-    .input(z.object({
-      threadId: idString,
-      body: z.string().min(1).max(16_000),
-      sourceRunId: idString.optional(),
-    }))
+    .input(
+      z.object({
+        threadId: idString,
+        body: z.string().min(1).max(16_000),
+        sourceRunId: idString.optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const thread = await ctx.db.chatThread.findFirst({
         where: { id: input.threadId, workspaceId: ctx.workspaceId },
@@ -482,15 +723,227 @@ export const chatRouter = router({
       });
     }),
 
+  threadDiagnostics: workspaceProcedure
+    .input(z.object({ threadId: idString }))
+    .query(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
+        select: { id: true },
+      });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+      return buildThreadDiagnostics(ctx.db, ctx.workspaceId, thread.id);
+    }),
+
+  retryLastUserMessage: workspaceProcedure
+    .input(z.object({ threadId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      const latest = await ctx.db.chatMessage.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          threadId: input.threadId,
+          role: ChatRole.USER,
+          dispatchedAt: { not: null },
+          thread: { userId: ctx.session.user.id },
+        },
+        orderBy: { createdAt: "desc" },
+        include: { thread: { select: { id: true, agentId: true, userId: true } } },
+      });
+      if (!latest) {
+        return {
+          ok: false,
+          action: "retry",
+          message: "No dispatched user message is available to retry.",
+        } as const;
+      }
+      const attachments = await loadChatAttachmentsByMessageId(ctx.db, ctx.workspaceId, [
+        latest.id,
+      ]);
+      await ctx.db.$transaction(async (tx) => {
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "ChatMessage",
+          entityId: latest.id,
+          action: "retry-dispatch",
+          eventKind: EventKind.CHAT_MESSAGE_POSTED,
+          subjectType: "chat-thread",
+          subjectId: latest.thread.id,
+          payload: {
+            ...chatEventPayload({
+              threadId: latest.thread.id,
+              messageId: latest.id,
+              agentId: latest.thread.agentId,
+              role: "USER",
+              body: latest.body,
+              context: latest.contextSnapshot ?? {},
+              attachments: (attachments.get(latest.id) ?? []) as unknown as Prisma.InputJsonArray,
+            }),
+            retry: true,
+            retriedAt: new Date().toISOString(),
+          },
+        });
+      });
+      return {
+        ok: true,
+        action: "retry",
+        message: "Retry event queued for the latest user message.",
+      } as const;
+    }),
+
+  kickThreadRun: workspaceProcedure
+    .input(z.object({ threadId: idString, runId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
+        select: { id: true, agentId: true },
+      });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+      const run = await ctx.db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId, agentId: thread.agentId },
+        select: {
+          id: true,
+          issueId: true,
+          status: true,
+          lastEventAt: true,
+          currentStep: true,
+          agent: { select: { id: true, webhookUrl: true, webhookSecret: true } },
+        },
+      });
+      if (!run)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Run not found for this thread agent." });
+      if (run.status !== AgentRunStatus.ACTIVE) {
+        return {
+          ok: false,
+          action: "kick",
+          message: `Run is ${run.status}; only active stale runs can be kicked.`,
+        } as const;
+      }
+      const idleMs = Date.now() - run.lastEventAt.getTime();
+      if (idleMs < STALE_RUN_MS) {
+        return {
+          ok: true,
+          action: "kick",
+          kicked: false,
+          idleMs,
+          message: "Run is still fresh; no kick was sent.",
+        } as const;
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "AgentRun",
+          entityId: run.id,
+          action: "kick",
+          eventKind: EventKind.AGENT_RUN_KICKED,
+          subjectType: "agent-run",
+          subjectId: run.id,
+          payload: {
+            runId: run.id,
+            issueId: run.issueId,
+            agentId: run.agent.id,
+            threadId: thread.id,
+            idleMs,
+            currentStep: run.currentStep,
+          },
+        });
+      });
+      if (run.agent.webhookUrl && run.agent.webhookSecret) {
+        void deliverWebhook({
+          url: run.agent.webhookUrl,
+          secret: run.agent.webhookSecret,
+          timeoutMs: 5000,
+          body: {
+            id: `chat-run-kick-${run.id}-${Date.now()}`,
+            kind: "AGENT_RUN_KICKED",
+            subjectType: "agent-run",
+            subjectId: run.id,
+            payload: {
+              runId: run.id,
+              issueId: run.issueId,
+              agentId: run.agent.id,
+              workspaceId: ctx.workspaceId,
+              threadId: thread.id,
+              idleMs,
+              reason: "operator-chat-kick",
+            },
+            createdAt: new Date().toISOString(),
+          },
+        }).catch(() => {});
+      }
+      return {
+        ok: true,
+        action: "kick",
+        kicked: true,
+        idleMs,
+        message: "Stale run kick event sent.",
+      } as const;
+    }),
+
+  archiveThread: workspaceProcedure
+    .input(z.object({ threadId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
+        select: { id: true, archivedAt: true },
+      });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+      if (thread.archivedAt) return { ok: true, archived: true } as const;
+      const now = new Date();
+      await ctx.db.$transaction(async (tx) => {
+        await tx.chatThread.update({ where: { id: thread.id }, data: { archivedAt: now } });
+        await tx.auditLog.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            entity: "ChatThread",
+            entityId: thread.id,
+            action: "archive",
+            before: { archivedAt: null },
+            after: { archivedAt: now.toISOString() },
+          },
+        });
+      });
+      return { ok: true, archived: true } as const;
+    }),
+
+  restoreThread: workspaceProcedure
+    .input(z.object({ threadId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
+        select: { id: true, archivedAt: true },
+      });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+      if (!thread.archivedAt) return { ok: true, archived: false } as const;
+      await ctx.db.$transaction(async (tx) => {
+        await tx.chatThread.update({ where: { id: thread.id }, data: { archivedAt: null } });
+        await tx.auditLog.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            entity: "ChatThread",
+            entityId: thread.id,
+            action: "restore",
+            before: { archivedAt: thread.archivedAt.toISOString() },
+            after: { archivedAt: null },
+          },
+        });
+      });
+      return { ok: true, archived: false } as const;
+    }),
+
   /**
    * Paginate older messages.
    */
   history: workspaceProcedure
-    .input(z.object({
-      threadId: idString,
-      before: z.coerce.date().optional(),
-      limit: z.number().int().min(1).max(100).default(50),
-    }))
+    .input(
+      z.object({
+        threadId: idString,
+        before: z.coerce.date().optional(),
+        limit: z.number().int().min(1).max(100).default(50),
+      }),
+    )
     .query(async ({ ctx, input }) => {
       const thread = await ctx.db.chatThread.findFirst({
         where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
