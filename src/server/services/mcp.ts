@@ -1,6 +1,5 @@
 import "server-only";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
 import {
   AgentProvider,
   AgentRunStatus,
@@ -9,6 +8,7 @@ import {
   CycleStatus,
   EventKind,
   InitiativeStatus,
+  Prisma,
   RelationKind,
   RuntimeKind,
   StatusCategory,
@@ -590,6 +590,22 @@ export const mcpTools = {
         .describe("Pass null to clear the parent (un-nest)."),
       dueDate: z.coerce.date().nullable().optional(),
       estimate: z.number().min(0).nullable().optional(),
+      /** Wave 5: completion contract — see runs.complete docstring. */
+      expectedOutput: z.string().max(50_000).nullable().optional(),
+      verificationChecklist: z
+        .array(
+          z.object({
+            id: z.string().min(1).optional(),
+            label: z.string().min(1).max(500),
+            kind: z.enum(["manual", "command", "artifact"]).optional(),
+            value: z.string().max(2_000).optional(),
+            done: z.boolean().optional(),
+          }),
+        )
+        .max(50)
+        .nullable()
+        .optional(),
+      artifactRequired: z.boolean().optional(),
     }),
     async run(
       input: {
@@ -602,6 +618,15 @@ export const mcpTools = {
         parentId?: string | null;
         dueDate?: Date | null;
         estimate?: number | null;
+        expectedOutput?: string | null;
+        verificationChecklist?: Array<{
+          id?: string;
+          label: string;
+          kind?: "manual" | "command" | "artifact";
+          value?: string;
+          done?: boolean;
+        }> | null;
+        artifactRequired?: boolean;
       },
       ctx: McpContext,
     ) {
@@ -642,9 +667,16 @@ export const mcpTools = {
           if (!parent) throw new Error("Parent issue not found in this workspace.");
         }
 
+        const { verificationChecklist, ...patchRest } = patch;
+        const checklistData =
+          verificationChecklist === undefined
+            ? {}
+            : verificationChecklist === null
+              ? { verificationChecklist: Prisma.JsonNull }
+              : { verificationChecklist: verificationChecklist as Prisma.InputJsonValue };
         const updateRes = await tx.issue.updateMany({
           where: { id, workspaceId: ctx.workspaceId },
-          data: patch,
+          data: { ...patchRest, ...checklistData },
         });
         if (updateRes.count === 0) {
           throw new Error("Issue not found in this workspace.");
@@ -4102,6 +4134,112 @@ export const mcpTools = {
   },
 
   /**
+   * Wave 5: structured completion submission. The agent calls this once
+   * at the end of a run with the deliverables that satisfy the issue's
+   * completion contract:
+   *   - `summary`           — markdown explaining what was done
+   *   - `producedArtifactIds` — Artifact rows the agent created/updated
+   *   - `verificationResult` — checklist snapshot with `done` flags
+   *   - `followUps`         — array of follow-up items the operator can
+   *                            triage later
+   *
+   * The tool only sets the AgentRun fields; lifecycle transitions
+   * (status COMPLETED, finishedAt) stay with the existing run.complete
+   * path so the audit trail and webhook fan-out remain unchanged.
+   */
+  "runs.complete": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      runId: z.string().min(1).max(40),
+      summary: z.string().max(50_000).optional(),
+      producedArtifactIds: z.array(z.string().cuid()).max(50).optional(),
+      verificationResult: z
+        .array(
+          z.object({
+            id: z.string().min(1).optional(),
+            label: z.string().min(1).max(500),
+            kind: z.enum(["manual", "command", "artifact"]).optional(),
+            value: z.string().max(2_000).optional(),
+            done: z.boolean(),
+          }),
+        )
+        .max(50)
+        .optional(),
+      followUps: z
+        .array(
+          z.object({
+            title: z.string().min(1).max(300),
+            body: z.string().max(5_000).optional(),
+            kind: z.string().max(40).optional(),
+          }),
+        )
+        .max(20)
+        .optional(),
+    }),
+    async run(
+      input: {
+        runId: string;
+        summary?: string;
+        producedArtifactIds?: string[];
+        verificationResult?: Array<{
+          id?: string;
+          label: string;
+          kind?: "manual" | "command" | "artifact";
+          value?: string;
+          done: boolean;
+        }>;
+        followUps?: Array<{ title: string; body?: string; kind?: string }>;
+      },
+      ctx: McpContext,
+    ) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      const run = await db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        select: { id: true, agentId: true, issueId: true },
+      });
+      if (!run) throw new Error("AgentRun not found in this workspace.");
+      if (linkedAgentId && run.agentId !== linkedAgentId) {
+        throw new Error("AgentRun belongs to a different agent than the calling key.");
+      }
+      // Validate every producedArtifactId belongs to this workspace.
+      if (input.producedArtifactIds?.length) {
+        const found = await db.artifact.findMany({
+          where: {
+            id: { in: input.producedArtifactIds },
+            workspaceId: ctx.workspaceId,
+          },
+          select: { id: true },
+        });
+        if (found.length !== input.producedArtifactIds.length) {
+          throw new Error("One or more producedArtifactIds not found in this workspace.");
+        }
+      }
+      const data: Prisma.AgentRunUpdateInput = {};
+      if (input.summary !== undefined) data.summary = input.summary;
+      if (input.producedArtifactIds !== undefined) {
+        data.producedArtifactIds = input.producedArtifactIds;
+      }
+      if (input.verificationResult !== undefined) {
+        data.verificationResult = input.verificationResult as Prisma.InputJsonValue;
+      }
+      if (input.followUps !== undefined) {
+        data.followUps = input.followUps as Prisma.InputJsonValue;
+      }
+      return db.agentRun.update({
+        where: { id: run.id },
+        data,
+        select: {
+          id: true,
+          summary: true,
+          producedArtifactIds: true,
+          verificationResult: true,
+          followUps: true,
+        },
+      });
+    },
+  },
+
+  /**
    * List AgentRun rows. Useful for agents that want to scan their own
    * recent history (e.g., "did I already touch this issue today"). Cursor-
    * paginated by `startedAt DESC` via `before`. Defaults exclude nothing
@@ -4523,6 +4661,14 @@ export const mcpTools = {
           }),
         ]);
 
+        // Wave 5: completion contract — surfaced so agents know
+        // exactly what "done" looks like before starting work.
+        const completionContract = {
+          expectedOutput: issue.expectedOutput,
+          verificationChecklist: issue.verificationChecklist,
+          artifactRequired: issue.artifactRequired,
+        };
+
         return {
           workspace,
           issue,
@@ -4532,6 +4678,7 @@ export const mcpTools = {
           relations,
           currentRun,
           artifacts,
+          completionContract,
         };
       }
 

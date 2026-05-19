@@ -713,6 +713,26 @@ export const issueRouter = router({
         assignedAgentId: agentIdSchema.nullable().optional(),
         dueDate: z.date().nullable().optional(),
         estimate: z.number().min(0).nullable().optional(),
+        /**
+         * Agent completion contract. `null` clears the field; omit to
+         * leave unchanged. See agent-completion-contract.ts for the
+         * structured shape of verificationChecklist.
+         */
+        expectedOutput: z.string().max(50_000).nullable().optional(),
+        verificationChecklist: z
+          .array(
+            z.object({
+              id: z.string().min(1).optional(),
+              label: z.string().min(1).max(500),
+              kind: z.enum(["manual", "command", "artifact"]).optional(),
+              value: z.string().max(2_000).optional(),
+              done: z.boolean().optional(),
+            }),
+          )
+          .max(50)
+          .nullable()
+          .optional(),
+        artifactRequired: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -778,9 +798,19 @@ export const issueRouter = router({
           if (next.category !== "CANCELED") extra.canceledAt = null;
         }
 
+        // verificationChecklist is a Json column — split it out so the
+        // generic spread doesn't trip Prisma's Json-narrowing type union
+        // (which is picky about null vs Prisma.JsonNull).
+        const { verificationChecklist, ...patchRest } = patch;
+        const checklistData =
+          verificationChecklist === undefined
+            ? {}
+            : verificationChecklist === null
+              ? { verificationChecklist: Prisma.JsonNull }
+              : { verificationChecklist: verificationChecklist as Prisma.InputJsonValue };
         const updateRes = await tx.issue.updateMany({
           where: { id, workspaceId: ctx.workspaceId },
-          data: { ...patch, ...extra },
+          data: { ...patchRest, ...checklistData, ...extra },
         });
         if (updateRes.count === 0) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found in this workspace." });
