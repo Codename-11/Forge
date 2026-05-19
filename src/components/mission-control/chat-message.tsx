@@ -9,6 +9,7 @@ import {
   isImageMime,
   type AttachmentChipData,
 } from "@/components/attachments/attachment-chip";
+import { PromoteToArtifactButton } from "@/components/capture/promote-to-artifact-button";
 
 export interface ChatMessageRow {
   id: string;
@@ -98,8 +99,18 @@ export function ChatMessageBubble({
           <ChatMarkdown body={msg.body} />
         )}
         {!msg.isDraft && <ChatMessageAttachments messageId={msg.id} />}
-        <div className="mt-0.5 text-right text-[0.5625rem] text-muted-foreground/60">
-          {relativeTime(msg.createdAt)}
+        <div className="mt-0.5 flex items-center justify-between gap-2 text-[0.5625rem] text-muted-foreground/60">
+          {!isUser && !msg.isDraft && !msg.id.startsWith("_") ? (
+            <PromoteToArtifactButton
+              sourceType="chat-message"
+              sourceId={msg.id}
+              defaultTitle={msg.body.slice(0, 60)}
+              size="icon"
+            />
+          ) : (
+            <span />
+          )}
+          <span>{relativeTime(msg.createdAt)}</span>
         </div>
       </div>
     </div>
