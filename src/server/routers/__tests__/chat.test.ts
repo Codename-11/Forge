@@ -357,6 +357,48 @@ describe("chatRouter deferred dispatch", () => {
     });
     expect(diagnostics.waitingMs).toBeGreaterThanOrEqual(0);
     expect(threads.map((thread) => thread.id)).toContain(sent.threadId);
+    // Canonical dispatch state — fresh user message without a wake yet
+    // should be "queued"; the user message lifecycle snapshot is
+    // present so the chat UI can render counts/timestamps.
+    expect(diagnostics.dispatchState).toBe("queued");
+    expect(diagnostics.latestUserMessage).toMatchObject({
+      id: sent.messageId,
+      acknowledgedAt: null,
+      outputStartedAt: null,
+    });
+  });
+
+  it("transitions dispatchState through wake-sent → acknowledged → running", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "ping" });
+
+    // Wake delivered (worker would set this).
+    await prisma.chatMessage.update({
+      where: { id: sent.messageId },
+      data: { lastWakeAt: new Date(), wakeAttempts: 1 },
+    });
+    let diagnostics = await caller.threadDiagnostics({ threadId: sent.threadId });
+    expect(diagnostics.dispatchState).toBe("wake-sent");
+    expect(diagnostics.latestUserMessage?.wakeAttempts).toBe(1);
+
+    // Agent acknowledges (MCP agent.inbox.ack would set this).
+    await prisma.chatMessage.update({
+      where: { id: sent.messageId },
+      data: { acknowledgedAt: new Date() },
+    });
+    diagnostics = await caller.threadDiagnostics({ threadId: sent.threadId });
+    expect(diagnostics.dispatchState).toBe("acknowledged");
+
+    // Agent starts drafting (chat.startDraft would set this).
+    await prisma.chatMessage.update({
+      where: { id: sent.messageId },
+      data: { outputStartedAt: new Date() },
+    });
+    diagnostics = await caller.threadDiagnostics({ threadId: sent.threadId });
+    expect(diagnostics.dispatchState).toBe("running");
+
+    // Suppress unused var warnings.
+    void fixture;
   });
 
   it("clears waiting diagnostics when an agent reply is newer than the user message", async () => {

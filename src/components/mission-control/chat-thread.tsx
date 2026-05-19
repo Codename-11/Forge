@@ -72,6 +72,58 @@ function AgentThinkingBubble({ stale, detail }: { stale: boolean; detail?: strin
   );
 }
 
+/**
+ * Pre-typing diagnostic — shown when the wake has been sent (or queued
+ * / stalled) but the agent has NOT yet acknowledged the message.
+ * Replaces the misleading "infinite thinking" animation the legacy
+ * heuristic produced when an agent receiver was offline or the wake
+ * delivery failed.
+ */
+function AgentWakeDiagnostic({
+  state,
+  agentName,
+  wakeAttempts,
+  lastWakeAt,
+}: {
+  state: "queued" | "wake-sent" | "stalled";
+  agentName?: string;
+  wakeAttempts: number;
+  lastWakeAt: Date | string | null;
+}) {
+  const label =
+    state === "queued"
+      ? "Queued · waking…"
+      : state === "wake-sent"
+        ? `Wake sent · waiting for ${agentName ?? "agent"} to ack`
+        : `${agentName ?? "Agent"} hasn't replied`;
+  const sub =
+    state === "stalled"
+      ? `${wakeAttempts} wake attempt${wakeAttempts === 1 ? "" : "s"}${lastWakeAt ? ` · last ${relativeTime(lastWakeAt)}` : ""}. Retry wake or kick from the status rail.`
+      : wakeAttempts > 0 && lastWakeAt
+        ? `Last wake ${relativeTime(lastWakeAt)} (${wakeAttempts} attempt${wakeAttempts === 1 ? "" : "s"}).`
+        : null;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-start gap-2">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted/40 text-muted-foreground">
+          <Bot className="h-3 w-3" />
+        </span>
+        <div
+          className={cn(
+            "rounded-md border bg-card/40 px-3 py-1.5 text-[0.6875rem]",
+            state === "stalled"
+              ? "border-amber-500/30 text-amber-700 dark:text-amber-300"
+              : "border-border text-muted-foreground",
+          )}
+        >
+          {label}
+        </div>
+      </div>
+      {sub && <p className="text-meta pl-7 italic text-muted-foreground/60">{sub}</p>}
+    </div>
+  );
+}
+
 /** Streaming draft bubble — renders partial agent response with a blinking cursor. */
 function AgentDraftBubble({ body, agentName }: { body: string; agentName?: string }) {
   return (
@@ -389,35 +441,76 @@ export function ChatThreadView({ agentId, threadId: selectedThreadId }: { agentI
     }
   }
 
-  // ---------- Thinking indicator logic ----------
-  // Show when last message is USER and was sent within the last 60s.
-  // Don't show the static three-dot bubble when a draft is active.
+  // ---------- Thinking indicator logic (canonical dispatch state) ----------
+  // Driven by `diagnostics.dispatchState` rather than a clock-only
+  // heuristic, so the chat panel transitions from "wake sent" →
+  // "acknowledged" → "running" the moment Hermes acks the inbox row
+  // (or starts streaming a draft). Falls back to the legacy
+  // "lastMessageIsUser + age" check only when diagnostics haven't
+  // hydrated yet so the first render isn't blank.
   const lastMessage = displayRows[displayRows.length - 1];
   const lastPersistedMessage = messageRows[messageRows.length - 1];
   const lastMessageIsUser = lastPersistedMessage?.role === "USER";
   const lastMessageAge = lastPersistedMessage
     ? Date.now() - new Date(lastPersistedMessage.createdAt).getTime()
     : Infinity;
-  // Also show while send is in flight (the draft bubble is present but not committed).
   const composerBusy =
     sendM.isPending ||
     createPendingM.isPending ||
     initUploadM.isPending ||
     finalizeM.isPending ||
     dispatchM.isPending;
+  const dispatchState = diagnostics?.dispatchState ?? null;
+  // Canonical: show the typing bubble only when canonical state says
+  // the agent is acknowledged/running. Wake-sent/queued get a
+  // diagnostic line instead of the misleading typing animation.
+  // When diagnostics haven't loaded yet, fall back to the old age
+  // heuristic so the first paint is sensible.
+  const canonicalKnown = dispatchState !== null;
+  const canonicalShowsThinking =
+    canonicalKnown &&
+    (dispatchState === "acknowledged" || dispatchState === "running");
+  const fallbackShowsThinking =
+    !canonicalKnown && lastMessageIsUser && lastMessageAge < 300_000;
   const showThinking =
     !composerBusy &&
-    !draft && // suppress static bubble when draft stream is active
-    lastMessageIsUser &&
-    lastMessageAge < 300_000; // 5 min
-  const thinkingIsStale = showThinking && lastMessageAge >= 60_000;
-  const thinkingDetail = diagnostics?.lastRun
-    ? diagnostics.lastRun.status === "ACTIVE"
-      ? `Still active: ${diagnostics.lastRun.currentStep ?? "running"}`
-      : `Run ${diagnostics.lastRun.status.toLowerCase()} · inspect status rail.`
-    : diagnostics?.lastDelivery?.status === "FAILED"
-      ? "Webhook delivery failed; retry is available in the status rail."
-      : "No run/delivery record found yet; inspect agent status.";
+    !draft &&
+    (canonicalShowsThinking || fallbackShowsThinking);
+  const thinkingIsStale = canonicalKnown
+    ? dispatchState === "stalled"
+    : showThinking && lastMessageAge >= 60_000;
+  const thinkingDetail =
+    canonicalKnown
+      ? dispatchState === "wake-sent"
+        ? `Wake delivered · waiting for ${agent?.name ?? "agent"} to ack.`
+        : dispatchState === "queued"
+          ? "Queued · waking…"
+          : dispatchState === "stalled"
+            ? `${agent?.name ?? "Agent"} hasn't replied. Retry wake or kick from the status rail.`
+            : dispatchState === "acknowledged"
+              ? `${agent?.name ?? "Agent"} acknowledged the message · drafting…`
+              : diagnostics?.lastRun?.status === "ACTIVE"
+                ? `Still active: ${diagnostics.lastRun.currentStep ?? "running"}`
+                : undefined
+      : diagnostics?.lastRun
+        ? diagnostics.lastRun.status === "ACTIVE"
+          ? `Still active: ${diagnostics.lastRun.currentStep ?? "running"}`
+          : `Run ${diagnostics.lastRun.status.toLowerCase()} · inspect status rail.`
+        : diagnostics?.lastDelivery?.status === "FAILED"
+          ? "Webhook delivery failed; retry is available in the status rail."
+          : "No run/delivery record found yet; inspect agent status.";
+
+  // Show a pre-typing diagnostic rail when the wake was sent but the
+  // agent hasn't acknowledged yet — replaces the misleading
+  // "infinite thinking" animation that the original heuristic produced.
+  const showWakeDiagnostic =
+    !composerBusy &&
+    !draft &&
+    !showThinking &&
+    canonicalKnown &&
+    (dispatchState === "queued" ||
+      dispatchState === "wake-sent" ||
+      dispatchState === "stalled");
 
   // Suppress unused var warning — lastMessage is used for list rendering logic.
   void lastMessage;
@@ -496,9 +589,18 @@ export function ChatThreadView({ agentId, threadId: selectedThreadId }: { agentI
         {/* Draft bubble — shows while agent is streaming. Replaces static thinking bubble. */}
         {draft ? (
           <AgentDraftBubble body={draft.body} agentName={agent?.name} />
-        ) : (
-          showThinking && <AgentThinkingBubble stale={thinkingIsStale} detail={thinkingDetail} />
-        )}
+        ) : showThinking ? (
+          <AgentThinkingBubble stale={thinkingIsStale} detail={thinkingDetail} />
+        ) : showWakeDiagnostic ? (
+          <AgentWakeDiagnostic
+            state={
+              dispatchState as "queued" | "wake-sent" | "stalled"
+            }
+            agentName={agent?.name}
+            wakeAttempts={diagnostics?.latestUserMessage?.wakeAttempts ?? 0}
+            lastWakeAt={diagnostics?.latestUserMessage?.lastWakeAt ?? null}
+          />
+        ) : null}
       </div>
       <ChatComposer
         onSend={handleSend}

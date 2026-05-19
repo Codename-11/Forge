@@ -2,6 +2,101 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Durable agent dispatch inbox (single-operator)
+
+### Summary
+
+Closed the long-standing "fire-and-forget Hermes webhook" gap by making
+Forge's own database the canonical record of "agent X owes work on Y".
+Webhooks remain the low-latency wake path but no longer own work-state
+creation: AgentRun (for issue-routed events) and ChatMessage (for chat
+turns) are opened in the same transaction as the ActivityEvent and
+carry the new lifecycle dimensions (`triggerEventId`, `triggerKind`,
+`acknowledgedAt`, `outputStartedAt`, `lastWakeAt`, `wakeAttempts`,
+`lastWakeDeliveryId`). The Forge UI now transitions chat from
+"queued → wake-sent → acknowledged → running" using canonical state
+instead of a clock heuristic, so an unacked agent no longer leaves the
+chat panel showing infinite "thinking".
+
+### What changed
+
+1. **Schema (migration 0039_agent_dispatch_inbox).** `AgentRun` gained
+   `triggerEventId / triggerKind / acknowledgedAt / outputStartedAt /
+   lastWakeAt / wakeAttempts / lastWakeDeliveryId` plus two indexes
+   (`(workspaceId, agentId, acknowledgedAt, lastEventAt)` and
+   `(workspaceId, triggerEventId)`). `ChatMessage` gained the
+   parallel set without `triggerEventId` (the row id IS the
+   trigger). All columns nullable / defaulted — existing rows
+   stay valid.
+2. **Service `agent-dispatch-inbox.ts`** in `src/server/services/`.
+   Idempotent helpers: `ensureCanonicalFromEvent` (called from
+   audit), `recordWakeAttempt` (called from worker on success AND
+   failure), `ackInboxItem`, `markOutputStarted`, `listInbox`,
+   `deriveRunDispatchState`, `deriveChatDispatchState`.
+3. **`audit.ts` recordChange** now resolves the agent set (branches
+   a–e) into a `resolvedAgentIds` array and calls
+   `ensureCanonicalFromEvent` in the same tx as the
+   `ActivityEvent`. Webhook delivery rows are still created in
+   parallel, but they are no longer the only source of agent
+   ownership.
+4. **`worker.ts` webhook delivery** stopped calling
+   `recordAgentAction(... DISPATCH_RECEIVED ...)`. Successful AND
+   failed deliveries now flow through `recordWakeAttempt`, which
+   bumps `lastWakeAt / wakeAttempts / lastWakeDeliveryId` on the
+   canonical row and (on success) appends a `WAKE_DELIVERED`
+   timeline event so the pulse strip still has the row.
+5. **MCP additions** in `src/server/services/mcp.ts`:
+   - `agent.inbox.list({ status, limit, staleAfterSeconds? })`
+   - `agent.inbox.ack({ runId | chatMessageId })`
+   - `agent.inbox.outputStarted({ runId | chatMessageId })`
+   All three require a key with `linkedAgentId`; the ack/output
+   tools reject cross-agent ownership. `chat.startDraft`,
+   `chat.appendMessage`, and `chat.finalizeDraft` now also flip
+   the latest pending USER ChatMessage to `acknowledged +
+   outputStarted` so the UI clears its diagnostic rail in
+   lock-step with the visible reply.
+6. **Hermes dispatch prompts** (`~/.hermes/webhook_subscriptions.json`
+   + `~/.hermes/profiles/mizu/webhook_subscriptions.json`) rewritten
+   to spell out the new contract: wake → `agent.inbox.list` →
+   `agent.inbox.ack` → `agent.context.bundle` → act. The payload is
+   a hint, not a task spec. `docs/agents/hermes.md` and
+   `docs/automation/webhooks.md` got the equivalent operator-facing
+   callouts.
+7. **Chat UI ack-aware diagnostics.** `buildThreadDiagnostics`
+   exposes a derived `dispatchState` plus the user message's
+   lifecycle snapshot. `chat-thread.tsx` drives its typing /
+   diagnostic rail off `dispatchState`: an `AgentWakeDiagnostic`
+   bubble replaces the misleading "thinking" animation when a wake
+   has been delivered but the agent has not yet acknowledged.
+8. **Issue run strip** (`agent-run-strip.tsx`) distinguishes
+   queued / wake-sent / acknowledged / running / stalled with
+   amber treatment for stalled rows. The chronological STATUS
+   comment fix from earlier in the day is preserved.
+9. **Design notes** at `docs/plans/agent-dispatch-inbox-design.md`
+   (final decisions) and `docs/plans/agent-dispatch-inbox-map.md`
+   (codebase orientation) for future readers.
+
+### Tests
+
+- `agent-dispatch-inbox.test.ts` — 11 new integration tests covering
+  ensureCanonicalFromEvent (assign, mention, no-webhook), ack
+  idempotency, cross-agent rejection, wake telemetry, inbox listing
+  filters, state derivation.
+- `mcp.test.ts` — 5 new tests for `agent.inbox.list`,
+  `agent.inbox.ack`, including linkedAgentId enforcement,
+  cross-agent rejection, and project scope narrowing.
+- `chat.test.ts` — 2 new tests for `dispatchState` transitions
+  through wake-sent → acknowledged → running and queued initial
+  state.
+
+### Verification
+
+- `pnpm lint` → pass (no warnings).
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass.
+- `pnpm test` → 50 files / 369 tests passed.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` → pass
+  (Next.js + VitePress docs).
+
 ## 2026-05-19 — Align agent status comments with issue chronology
 
 ### Summary

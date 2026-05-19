@@ -88,6 +88,31 @@ type ChatThreadDiagnostics = {
     lastError: string | null;
     updatedAt: Date;
   } | null;
+  /**
+   * Canonical dispatch state derived from the latest USER message's
+   * lifecycle fields. Drives the chat panel's typing/wake/stalled UI
+   * directly — preferred over the `lastMessageAge < 60s` heuristic.
+   */
+  dispatchState:
+    | "idle"
+    | "queued"
+    | "wake-sent"
+    | "acknowledged"
+    | "running"
+    | "stalled";
+  /**
+   * USER-message-level lifecycle snapshot. `null` when no dispatched
+   * user message exists for the thread (idle).
+   */
+  latestUserMessage: {
+    id: string;
+    createdAt: Date;
+    acknowledgedAt: Date | null;
+    outputStartedAt: Date | null;
+    lastWakeAt: Date | null;
+    wakeAttempts: number;
+    lastWakeDeliveryId: string | null;
+  } | null;
 };
 
 function redactDiagnosticText(value: string | null | undefined): string | null {
@@ -111,7 +136,15 @@ async function buildThreadDiagnostics(
     tx.chatMessage.findFirst({
       where: { workspaceId, threadId, role: ChatRole.USER, dispatchedAt: { not: null } },
       orderBy: { createdAt: "desc" },
-      select: { id: true, createdAt: true },
+      select: {
+        id: true,
+        createdAt: true,
+        acknowledgedAt: true,
+        outputStartedAt: true,
+        lastWakeAt: true,
+        wakeAttempts: true,
+        lastWakeDeliveryId: true,
+      },
     }),
     tx.chatMessage.findFirst({
       where: { workspaceId, threadId, role: ChatRole.AGENT },
@@ -170,6 +203,36 @@ async function buildThreadDiagnostics(
   );
   const delivery = lastEvent?.deliveries[0] ?? null;
   const now = Date.now();
+
+  // Canonical dispatch state derivation. When the latest USER message
+  // is "done" (an AGENT message landed after it), report idle; otherwise
+  // map the user message's lifecycle fields to the same state machine
+  // the inbox surfaces. 60s is the soft "stalled" cutoff for chat —
+  // chosen to match the existing legacy thinking-bubble threshold so
+  // the UI's "Still waiting" copy still kicks in at the same moment,
+  // just driven by canonical state instead of clock-only heuristics.
+  const STALE_CHAT_MS = 60_000;
+  let dispatchState: ChatThreadDiagnostics["dispatchState"] = "idle";
+  if (waitingForReply && latestUser) {
+    if (latestUser.outputStartedAt) {
+      dispatchState = "running";
+    } else if (latestUser.acknowledgedAt) {
+      dispatchState =
+        now - latestUser.acknowledgedAt.getTime() > STALE_CHAT_MS
+          ? "stalled"
+          : "acknowledged";
+    } else if (latestUser.lastWakeAt) {
+      dispatchState =
+        now - latestUser.lastWakeAt.getTime() > STALE_CHAT_MS
+          ? "stalled"
+          : "wake-sent";
+    } else if (now - latestUser.createdAt.getTime() > STALE_CHAT_MS) {
+      dispatchState = "stalled";
+    } else {
+      dispatchState = "queued";
+    }
+  }
+
   return {
     latestUserMessageId: latestUser?.id ?? null,
     latestUserMessageAt: latestUser?.createdAt ?? null,
@@ -199,6 +262,18 @@ async function buildThreadDiagnostics(
               (delivery.responseStatus ? `HTTP ${delivery.responseStatus}` : null),
           ),
           updatedAt: delivery.deliveredAt ?? delivery.scheduledAt,
+        }
+      : null,
+    dispatchState,
+    latestUserMessage: latestUser
+      ? {
+          id: latestUser.id,
+          createdAt: latestUser.createdAt,
+          acknowledgedAt: latestUser.acknowledgedAt,
+          outputStartedAt: latestUser.outputStartedAt,
+          lastWakeAt: latestUser.lastWakeAt,
+          wakeAttempts: latestUser.wakeAttempts,
+          lastWakeDeliveryId: latestUser.lastWakeDeliveryId,
         }
       : null,
   };
