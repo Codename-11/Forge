@@ -405,6 +405,8 @@ model User {
   ownedContextSets      ContextSet[]        @relation("ContextSetOwnerUser")
   createdExecutionPlans ExecutionPlan[]     @relation("ExecutionPlanCreator")
   executionSteps        ExecutionStep[]     @relation("ExecutionStepUser")
+  requestedReviewGates  ReviewGate[]        @relation("ReviewGateRequester")
+  resolvedReviewGates   ReviewGate[]        @relation("ReviewGateResolver")
 
   @@index([handle])
 }
@@ -603,6 +605,9 @@ model Workspace {
   contextSetItems    ContextSetItem[]
   executionPlans     ExecutionPlan[]
   executionSteps     ExecutionStep[]
+  agentCrews         AgentCrew[]
+  agentCrewMembers   AgentCrewMember[]
+  reviewGates        ReviewGate[]
   startedStatus      Status?             @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
@@ -1457,6 +1462,9 @@ model Agent {
   ownedContextSets         ContextSet[]      @relation("ContextSetOwnerAgent")
   createdExecutionPlans    ExecutionPlan[]   @relation("ExecutionPlanCreatorAgent")
   executionSteps           ExecutionStep[]   @relation("ExecutionStepAgent")
+  crewMemberships          AgentCrewMember[] @relation("AgentCrewMember")
+  requestedReviewGates     ReviewGate[]      @relation("ReviewGateRequesterAgent")
+  resolvedReviewGates      ReviewGate[]      @relation("ReviewGateResolverAgent")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
@@ -1977,6 +1985,7 @@ model ExecutionPlan {
   createdBy      User?           @relation("ExecutionPlanCreator", fields: [createdById], references: [id], onDelete: SetNull)
   createdByAgent Agent?          @relation("ExecutionPlanCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
   contextSet     ContextSet?     @relation("ExecutionPlanContext", fields: [contextSetId], references: [id], onDelete: SetNull)
+  crew           AgentCrew?      @relation("ExecutionPlanCrew", fields: [crewId], references: [id], onDelete: SetNull)
   steps          ExecutionStep[]
 
   @@index([workspaceId, status, updatedAt])
@@ -2022,4 +2031,99 @@ model ExecutionStep {
   @@index([workspaceId, status])
   @@index([assignedAgentId, status])
   @@index([assignedUserId, status])
+}
+
+// ----------------------------------------------------------------------------
+// Agentic work OS — AgentCrew / ReviewGate (added 2026-05-19, migration 0036)
+// ----------------------------------------------------------------------------
+
+/// A grouping of agents that work together on plans. Crew members
+/// take roles (planner/worker/reviewer/observer/operator_proxy) so a
+/// plan can know which agent to ask for what.
+model AgentCrew {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?   @db.Text
+  /// Cap on simultaneously-running steps across the crew. 0 = unlimited.
+  maxParallel Int       @default(1)
+  /// Optional JSON policy blob — reserved for future controls.
+  policy      Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  archivedAt  DateTime?
+
+  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members        AgentCrewMember[]
+  executionPlans ExecutionPlan[]   @relation("ExecutionPlanCrew")
+  reviewGates    ReviewGate[]      @relation("ReviewGateCrew")
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, updatedAt])
+}
+
+/// Membership row tying an Agent into an AgentCrew with a role. The
+/// same agent can hold multiple roles on the same crew (e.g.,
+/// PLANNER + REVIEWER) — unique key includes the role.
+model AgentCrewMember {
+  id          String   @id @default(cuid())
+  workspaceId String
+  crewId      String
+  agentId     String
+  /// PLANNER | WORKER | REVIEWER | OBSERVER | OPERATOR_PROXY. Free-form
+  /// string so new roles don't require enum migrations.
+  role        String
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  crew      AgentCrew @relation(fields: [crewId], references: [id], onDelete: Cascade)
+  agent     Agent     @relation("AgentCrewMember", fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([crewId, agentId, role])
+  @@index([workspaceId, agentId])
+}
+
+/// Lifecycle for a ReviewGate.
+enum ReviewGateStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELED
+}
+
+/// A human/agent approval checkpoint attached to any reviewable
+/// surface (artifact, execution-plan, execution-step, action-request,
+/// agent-run, …). Gates block downstream automation until they
+/// resolve. `requiredRole` optionally narrows who can approve.
+model ReviewGate {
+  id                 String           @id @default(cuid())
+  workspaceId        String
+  targetType         String
+  targetId           String
+  status             ReviewGateStatus @default(PENDING)
+  /// Optional role string the resolver must satisfy (e.g., "REVIEWER",
+  /// "OWNER"). Empty = anyone with workspace write can resolve.
+  requiredRole       String?
+  requestedById      String?
+  requestedByAgentId String?
+  resolvedById       String?
+  resolvedByAgentId  String?
+  prompt             String           @db.Text
+  resolution         String?          @db.Text
+  /// Optional pointer at the AgentCrew that owns this gate's
+  /// resolution. Mirrors ExecutionPlan.crewId.
+  crewId             String?
+  createdAt          DateTime         @default(now())
+  resolvedAt         DateTime?
+
+  workspace        Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requestedBy      User?      @relation("ReviewGateRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  requestedByAgent Agent?     @relation("ReviewGateRequesterAgent", fields: [requestedByAgentId], references: [id], onDelete: SetNull)
+  resolvedBy       User?      @relation("ReviewGateResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolvedByAgent  Agent?     @relation("ReviewGateResolverAgent", fields: [resolvedByAgentId], references: [id], onDelete: SetNull)
+  crew             AgentCrew? @relation("ReviewGateCrew", fields: [crewId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, targetType, targetId])
 }

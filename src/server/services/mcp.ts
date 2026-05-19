@@ -5293,6 +5293,114 @@ export const mcpTools = {
     },
   },
 
+  // --------------------------------------------------------- AgentCrews / Gates
+  //
+  // Crews bind agents to a plan with roles (planner/worker/reviewer);
+  // gates are explicit approval checkpoints attached to any reviewable
+  // surface. Agents read pending gates targeting them via
+  // `reviewGates.listForMe`; humans + agents resolve via `.resolve`.
+
+  "agentCrews.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      includeArchived: z.boolean().default(false),
+      limit: z.number().int().min(1).max(100).default(50),
+    }),
+    async run(input: { includeArchived: boolean; limit: number }, ctx: McpContext) {
+      return db.agentCrew.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          archivedAt: input.includeArchived ? undefined : null,
+        },
+        orderBy: { updatedAt: "desc" },
+        take: input.limit,
+        include: {
+          _count: { select: { members: true, executionPlans: true } },
+        },
+      });
+    },
+  },
+
+  "reviewGates.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      status: z.enum(["PENDING", "APPROVED", "REJECTED", "CANCELED"]).optional(),
+      targetType: z.string().min(1).max(40).optional(),
+      limit: z.number().int().min(1).max(100).default(50),
+    }),
+    async run(
+      input: { status?: "PENDING" | "APPROVED" | "REJECTED" | "CANCELED"; targetType?: string; limit: number },
+      ctx: McpContext,
+    ) {
+      return db.reviewGate.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          status: input.status,
+          targetType: input.targetType,
+        },
+        orderBy: { createdAt: "desc" },
+        take: input.limit,
+      });
+    },
+  },
+
+  "reviewGates.open": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      targetType: z.string().min(1).max(40),
+      targetId: z.string().min(1).max(40),
+      prompt: z.string().min(1).max(10_000),
+      requiredRole: z.string().max(40).nullable().optional(),
+      crewId: z.string().cuid().nullable().optional(),
+    }),
+    async run(
+      input: {
+        targetType: string;
+        targetId: string;
+        prompt: string;
+        requiredRole?: string | null;
+        crewId?: string | null;
+      },
+      ctx: McpContext,
+    ) {
+      const { openReviewGate } = await import("@/server/services/agent-crew-service");
+      return openReviewGate(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        prompt: input.prompt,
+        requiredRole: input.requiredRole ?? null,
+        crewId: input.crewId ?? null,
+      });
+    },
+  },
+
+  "reviewGates.resolve": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      decision: z.enum(["APPROVED", "REJECTED", "CANCELED"]),
+      resolution: z.string().max(10_000).nullable().optional(),
+    }),
+    async run(
+      input: { id: string; decision: "APPROVED" | "REJECTED" | "CANCELED"; resolution?: string | null },
+      ctx: McpContext,
+    ) {
+      const { resolveReviewGate } = await import("@/server/services/agent-crew-service");
+      await resolveReviewGate(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        gateId: input.id,
+        decision: input.decision,
+        resolution: input.resolution ?? null,
+      });
+      return { ok: true };
+    },
+  },
+
   // ---------------------------------------------------------------------- Notes
   //
   // Per-(workspace, user) markdown scratchpad. The dashboard's
