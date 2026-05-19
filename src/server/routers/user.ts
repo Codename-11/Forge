@@ -25,6 +25,7 @@ const ME_SELECT = {
   timeFormat: true,
   density: true,
   textSize: true,
+  missionControlDefaultTab: true,
   onboardingDismissedAt: true,
   onboardingSkippedSteps: true,
   pomodoroEnabled: true,
@@ -50,6 +51,29 @@ export const userRouter = router({
         density: z.enum(["compact", "comfortable"]).nullable().optional(),
         textSize: z.enum(["default", "larger"]).nullable().optional(),
         theme: z.enum(["light", "dark", "system"]).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.user.update({
+        where: { id: ctx.session.user.id },
+        data: input,
+        select: ME_SELECT,
+      });
+    }),
+
+  /**
+   * Per-user Mission Control preferences. Currently only the default
+   * tab; future widget knobs (default size, sound, etc.) can land here.
+   * Null clears the pref so the widget falls back to its built-in
+   * default ("live").
+   */
+  updateMissionControlPrefs: protectedProcedure
+    .input(
+      z.object({
+        missionControlDefaultTab: z
+          .enum(["live", "queue", "agents", "history", "chat"])
+          .nullable()
+          .optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

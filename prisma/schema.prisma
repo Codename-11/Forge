@@ -316,6 +316,10 @@ enum ArtifactType {
   SPEC
   BRIEF
   VERIFICATION
+  /// Lightweight markdown sticky note. Surfaced by the Canvas
+  /// `addNote` flow; lives in the standard Artifact table so it's
+  /// searchable, attachable, and linkable like any other artifact.
+  NOTE
 }
 
 enum AgentRunStatus {
@@ -348,6 +352,11 @@ model User {
   density                String?
   /// "default" | "larger". Null = "default".
   textSize               String?
+  /// Default Mission Control tab. One of MissionControlTab values
+  /// ("live" | "queue" | "agents" | "history" | "chat"). Null = "live".
+  /// When set, the overlay opens to this tab if no per-workspace
+  /// state override exists yet.
+  missionControlDefaultTab String?
   /// Workspace id remembered across logins; UI loads this one by default.
   lastWorkspaceId        String?
   /// Server-persisted onboarding state. Null = not dismissed; the

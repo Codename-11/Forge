@@ -7,7 +7,7 @@ import { formatChatContextSummary, useChatContext } from "@/hooks/use-chat-conte
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
-import { ChatComposer } from "./chat-composer";
+import { ChatComposer, type MentionableAgent } from "./chat-composer";
 import { uploadAttachmentFile } from "@/components/attachments/attachment-upload-client";
 import { toast } from "sonner";
 import { ChatMarkdown } from "./chat-markdown";
@@ -172,15 +172,64 @@ type DraftBubble = {
   startedAt: number;
 };
 
-const EMPTY_STATE_BODY = `No messages yet.
+interface SuggestedPrompt {
+  label: string;
+  body: string;
+}
 
-{agentName} can: read your current page, look up issues + comments,
-and take actions on your behalf. Try:
-- "what am I assigned right now?"
-- "summarize this issue" (if you're on an issue page)
-- "@victor draft a status comment for AXI-31"`;
+/**
+ * Contextual prompt suggestions for an empty thread. We build a small,
+ * route-aware grid (3-4 items) so the operator has somewhere to land.
+ * Returns concrete prompt bodies — they fill the composer, not auto-send.
+ */
+function buildSuggestedPrompts(
+  agentName: string | undefined,
+  route: string | undefined,
+  issueId: string | undefined,
+): SuggestedPrompt[] {
+  const name = agentName ?? "the agent";
+  const out: SuggestedPrompt[] = [];
+  out.push({
+    label: "What's assigned to me?",
+    body: `What issues are assigned to me right now? Group by status.`,
+  });
+  if (issueId) {
+    out.push({
+      label: "Summarize this issue",
+      body: `Summarize the issue I'm currently viewing — status, blockers, recent activity.`,
+    });
+  } else if (route && route.startsWith("/w/")) {
+    out.push({
+      label: "Open issue from chat",
+      body: `Open the most recent issue I touched and summarize where it left off.`,
+    });
+  } else {
+    out.push({
+      label: "Open issue from chat",
+      body: `What's the most urgent thing on my plate right now? Open it for me.`,
+    });
+  }
+  out.push({
+    label: "Triage my queue",
+    body: `Walk through my unassigned queue and suggest who to assign each issue to.`,
+  });
+  out.push({
+    label: "What did I miss?",
+    body: `What changed since my last session, ${name}? Recent comments and runs.`,
+  });
+  return out;
+}
 
-export function ChatThreadView({ agentId, threadId: selectedThreadId }: { agentId: string; threadId?: string | null }) {
+export function ChatThreadView({
+  agentId,
+  threadId: selectedThreadId,
+  autoFocus = false,
+}: {
+  agentId: string;
+  threadId?: string | null;
+  /** Focus the composer textarea on mount (used when the Chat tab becomes active). */
+  autoFocus?: boolean;
+}) {
   const utils = trpc.useUtils();
   // Mutation that upserts + loads the default DM. Returns thread + agent + messages.
   const threadM = trpc.chat.thread.useMutation();
@@ -288,9 +337,19 @@ export function ChatThreadView({ agentId, threadId: selectedThreadId }: { agentI
     onSuccess: () => void utils.chat.threads.invalidate(),
   });
   const [pendingDraft, setPendingDraft] = useState<{ body: string; files: string[] } | null>(null);
+  const [fillRequest, setFillRequest] = useState<{ body: string; nonce: number } | null>(null);
 
   const ctx = useChatContext();
   const workspace = useMaybeWorkspace();
+
+  const { data: workspaceAgents } = trpc.agent.list.useQuery(
+    { includeArchived: false },
+    { enabled: Boolean(workspace), staleTime: 60_000 },
+  );
+  const mentionableAgents = useMemo<MentionableAgent[]>(
+    () => (workspaceAgents ?? []).map((a) => ({ profileKey: a.profileKey, name: a.name })),
+    [workspaceAgents],
+  );
 
   const currentContext = useMemo(
     () => ({
@@ -559,10 +618,36 @@ export function ChatThreadView({ agentId, threadId: selectedThreadId }: { agentI
         {displayRows.length === 0 && (
           <div className="px-2 py-4 text-[0.6875rem] text-muted-foreground">
             {agent ? (
-              <ChatMarkdown
-                body={EMPTY_STATE_BODY.replace("{agentName}", agent.name)}
-                className="text-muted-foreground"
-              />
+              <div className="space-y-3">
+                <p className="text-meta text-foreground/90">
+                  Talk to <span className="font-medium">{agent.name}</span>. They can read your
+                  current page, look up issues, and take actions on your behalf.
+                </p>
+                <div
+                  className="grid grid-cols-2 gap-1.5"
+                  data-testid="chat-suggested-prompts"
+                >
+                  {buildSuggestedPrompts(agent.name, ctx.route, ctx.issueId).map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() =>
+                        setFillRequest((prev) => ({
+                          body: p.body,
+                          nonce: (prev?.nonce ?? 0) + 1,
+                        }))
+                      }
+                      className="rounded-md border border-border/70 bg-card/40 px-2 py-1.5 text-left text-[0.6875rem] text-foreground/90 transition-colors hover:border-ember/40 hover:bg-ember/10"
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-meta italic text-muted-foreground/60">
+                  Type <span className="font-mono">/</span> for commands ·{" "}
+                  <span className="font-mono">@</span> to mention another agent.
+                </p>
+              </div>
             ) : (
               "Loading…"
             )}
@@ -610,6 +695,10 @@ export function ChatThreadView({ agentId, threadId: selectedThreadId }: { agentI
         banner={composerBanner}
         slashContext={slashContext}
         contextSummary={contextSummary}
+        autoFocus={autoFocus}
+        threadId={threadId}
+        mentionableAgents={mentionableAgents}
+        fillRequest={fillRequest ?? undefined}
       />
     </div>
   );

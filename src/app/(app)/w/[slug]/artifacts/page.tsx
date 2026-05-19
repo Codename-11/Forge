@@ -18,6 +18,7 @@ const TYPE_LABEL: Record<ArtifactType, string> = {
   SPEC: "Spec",
   BRIEF: "Brief",
   VERIFICATION: "Verification",
+  NOTE: "Note",
 };
 
 const STATUS_TONE: Record<ArtifactStatus, string> = {

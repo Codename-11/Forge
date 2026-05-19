@@ -9,6 +9,11 @@ import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
+import {
+  CanvasTemplatePicker,
+  getTemplate,
+  type CanvasTemplate,
+} from "@/components/canvas/canvas-templates";
 
 /**
  * Canvas index — lists every non-archived workspace canvas. "+ New
@@ -22,15 +27,56 @@ export default function CanvasIndexPage() {
   const { data, isLoading } = trpc.canvas.list.useQuery({ includeArchived: false });
   const [creating, setCreating] = useState(false);
   const [draftName, setDraftName] = useState("");
+  const [templateId, setTemplateId] = useState<string>("empty");
+  const [seeding, setSeeding] = useState(false);
 
   const items = useMemo(() => data?.items ?? [], [data]);
 
+  // Optional helper exposed by Agent H. When present we use it to seed
+  // sticky-note nodes from a template; when absent we skip notes and
+  // only seed edge-less canonical nodes.
+  const canvasRouterAny = (trpc as unknown as Record<string, unknown>).canvas as
+    | Record<string, unknown>
+    | undefined;
+  const addNoteAny = canvasRouterAny?.addNote as
+    | {
+        useMutation: () => {
+          mutateAsync: (input: {
+            canvasId: string;
+            body: string;
+            x: number;
+            y: number;
+          }) => Promise<{ id?: string; nodeId?: string }>;
+        };
+      }
+    | undefined;
+  const addNoteMutAny = addNoteAny?.useMutation();
+  const addNodeMut = trpc.canvas.addNode.useMutation();
+  const addEdgeMut = trpc.canvas.addEdge.useMutation();
+
   const create = trpc.canvas.create.useMutation({
-    onSuccess: ({ id }) => {
+    onSuccess: async ({ id }) => {
+      const tpl = getTemplate(templateId);
+      if (tpl && tpl.nodes.length > 0) {
+        setSeeding(true);
+        try {
+          await seedTemplate({
+            canvasId: id,
+            template: tpl,
+            addNode: addNodeMut.mutateAsync,
+            addEdge: addEdgeMut.mutateAsync,
+            addNote: addNoteMutAny?.mutateAsync,
+          });
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Failed to seed template");
+        }
+        setSeeding(false);
+      }
       toast.success("Canvas created");
       utils.canvas.list.invalidate();
       setCreating(false);
       setDraftName("");
+      setTemplateId("empty");
       router.push(`/w/${ws.slug}/canvas/${id}`);
     },
     onError: (e) => toast.error(e.message),
@@ -68,7 +114,7 @@ export default function CanvasIndexPage() {
               <li key={row.id}>
                 <Link
                   href={`/w/${ws.slug}/canvas/${row.id}`}
-                  className="group flex h-full flex-col gap-2 rounded-lg border border-border bg-card/40 p-3 transition hover:border-ember/40 hover:bg-subtle"
+                  className="group flex h-full flex-col gap-2 rounded-lg border border-border bg-card/40 p-3 transition-all duration-300 hover:border-ember/40 hover:bg-subtle hover:shadow-sm"
                 >
                   <div className="flex items-center gap-2 text-meta uppercase tracking-wide text-muted-foreground">
                     <Sparkles className="h-3 w-3" />
@@ -91,10 +137,12 @@ export default function CanvasIndexPage() {
       {creating && (
         <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4"
-          onClick={() => setCreating(false)}
+          onClick={() => {
+            if (!create.isPending && !seeding) setCreating(false);
+          }}
         >
           <div
-            className="w-full max-w-md rounded-lg border border-border bg-card p-4 shadow-xl"
+            className="w-full max-w-2xl rounded-lg border border-border bg-card p-4 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="mb-3 text-sm font-medium">New canvas</h2>
@@ -107,22 +155,38 @@ export default function CanvasIndexPage() {
                 if (e.key === "Enter" && draftName.trim()) {
                   create.mutate({ name: draftName.trim() });
                 }
-                if (e.key === "Escape") setCreating(false);
+                if (e.key === "Escape" && !create.isPending) setCreating(false);
               }}
               placeholder="Canvas name"
               className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
             />
-            <div className="mt-3 flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>
+            <div className="mt-3">
+              <div className="mb-1.5 text-meta uppercase tracking-wide text-muted-foreground">
+                Template
+              </div>
+              <CanvasTemplatePicker selectedId={templateId} onSelect={setTemplateId} />
+            </div>
+            {!addNoteAny && templateId !== "empty" ? (
+              <p className="mt-2 text-meta text-muted-foreground">
+                Note seeding requires <span className="font-mono">canvases.addNote</span> — only edges and structural nodes will be created.
+              </p>
+            ) : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setCreating(false)}
+                disabled={create.isPending || seeding}
+              >
                 Cancel
               </Button>
               <Button
                 variant="ember"
                 size="sm"
                 onClick={() => create.mutate({ name: draftName.trim() || "Untitled canvas" })}
-                disabled={create.isPending || !draftName.trim()}
+                disabled={create.isPending || seeding || !draftName.trim()}
               >
-                {create.isPending ? "Creating…" : "Create"}
+                {create.isPending || seeding ? "Creating…" : "Create"}
               </Button>
             </div>
           </div>
@@ -130,4 +194,75 @@ export default function CanvasIndexPage() {
       )}
     </>
   );
+}
+
+async function seedTemplate({
+  canvasId,
+  template,
+  addNode,
+  addEdge,
+  addNote,
+}: {
+  canvasId: string;
+  template: CanvasTemplate;
+  addNode: (input: {
+    canvasId: string;
+    targetType: "issue" | "artifact";
+    targetId: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => Promise<{ id: string }>;
+  addEdge: (input: {
+    canvasId: string;
+    fromNodeId: string;
+    toNodeId: string;
+    label?: string | null;
+    kind?: string | null;
+  }) => Promise<{ id: string }>;
+  addNote?: (input: {
+    canvasId: string;
+    body: string;
+    x: number;
+    y: number;
+  }) => Promise<{ id?: string; nodeId?: string }>;
+}) {
+  const keyToNodeId = new Map<string, string>();
+  for (const n of template.nodes) {
+    let nodeId: string | undefined;
+    if (n.noteBody !== undefined && addNote) {
+      const res = await addNote({
+        canvasId,
+        body: n.noteBody,
+        x: n.x,
+        y: n.y,
+      });
+      nodeId = res.nodeId ?? res.id;
+    } else if (n.targetType && n.targetId) {
+      const res = await addNode({
+        canvasId,
+        targetType: n.targetType as "issue" | "artifact",
+        targetId: n.targetId,
+        x: n.x,
+        y: n.y,
+        width: n.width ?? 240,
+        height: n.height ?? 140,
+      });
+      nodeId = res.id;
+    }
+    if (nodeId) keyToNodeId.set(n.key, nodeId);
+  }
+  for (const e of template.edges ?? []) {
+    const fromId = keyToNodeId.get(e.from);
+    const toId = keyToNodeId.get(e.to);
+    if (!fromId || !toId) continue;
+    await addEdge({
+      canvasId,
+      fromNodeId: fromId,
+      toNodeId: toId,
+      label: e.label ?? null,
+      kind: e.kind ?? null,
+    });
+  }
 }

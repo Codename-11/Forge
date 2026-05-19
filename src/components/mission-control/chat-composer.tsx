@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -28,6 +28,11 @@ export interface ChatComposerAttachmentDraft {
   includeInContext: boolean;
 }
 
+export interface MentionableAgent {
+  profileKey: string;
+  name: string;
+}
+
 interface ChatComposerProps {
   onSend: (body: string, files: File[]) => Promise<void> | void;
   disabled?: boolean;
@@ -40,6 +45,14 @@ interface ChatComposerProps {
   slashContext?: SlashCommandContext;
   /** Human-readable summary of route/entity context that will be attached to the dispatch payload. */
   contextSummary?: string[];
+  /** Auto-focus the textarea on mount (used when Chat tab becomes active). */
+  autoFocus?: boolean;
+  /** Thread id — drafts are persisted to localStorage keyed by this id. */
+  threadId?: string;
+  /** Agent profileKeys available for @-mention autocomplete. */
+  mentionableAgents?: MentionableAgent[];
+  /** When the parent wants to fill the composer (e.g. from a suggestion chip), it bumps `fillRequest`. */
+  fillRequest?: { body: string; nonce: number };
 }
 
 function fileIcon(file: File) {
@@ -56,6 +69,30 @@ function filesFromList(list: FileList | null | undefined): File[] {
   return list ? Array.from(list).filter((f) => f.size > 0) : [];
 }
 
+function draftStorageKey(threadId: string): string {
+  return `forge.chat.draft.${threadId}`;
+}
+
+/**
+ * Find the in-progress `@token` at the current caret. Returns `null`
+ * unless the caret sits at the end of a `@token` that begins at the
+ * start of the buffer or after whitespace. `token` excludes the `@`.
+ */
+function detectMentionToken(
+  body: string,
+  caret: number,
+): { token: string; start: number } | null {
+  if (caret <= 0) return null;
+  let i = caret - 1;
+  while (i >= 0 && /[A-Za-z0-9_-]/.test(body[i] ?? "")) i--;
+  if (body[i] !== "@") return null;
+  const prev = i === 0 ? " " : body[i - 1];
+  if (prev !== undefined && prev !== " " && prev !== "\n" && prev !== "\t") {
+    return null;
+  }
+  return { token: body.slice(i + 1, caret), start: i };
+}
+
 export function ChatComposer({
   onSend,
   disabled = false,
@@ -64,6 +101,10 @@ export function ChatComposer({
   banner,
   slashContext,
   contextSummary = [],
+  autoFocus = false,
+  threadId,
+  mentionableAgents = [],
+  fillRequest,
 }: ChatComposerProps) {
   const [body, setBody] = useState("");
   const [attachments, setAttachments] = useState<ChatComposerAttachmentDraft[]>([]);
@@ -77,6 +118,80 @@ export function ChatComposer({
   const [popoverMatches, setPopoverMatches] = useState<SlashCommand[]>([]);
   const [popoverHighlight, setPopoverHighlight] = useState(0);
 
+  // ---------- @-mention popover state ----------
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionMatches, setMentionMatches] = useState<MentionableAgent[]>([]);
+  const [mentionHighlight, setMentionHighlight] = useState(0);
+  const mentionStartRef = useRef<number | null>(null);
+
+  // ---------- Draft persistence (localStorage, per-thread) ----------
+  // Hydrate the draft when threadId changes. We use a ref to track which
+  // threadId we've already hydrated so React-strict-mode double-mount
+  // doesn't clobber a freshly-typed value.
+  const hydratedThreadRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!threadId) return;
+    if (hydratedThreadRef.current === threadId) return;
+    hydratedThreadRef.current = threadId;
+    try {
+      const raw = window.localStorage.getItem(draftStorageKey(threadId));
+      setBody(raw ?? "");
+    } catch {
+      setBody("");
+    }
+  }, [threadId]);
+
+  // Persist on body change (debounced via rAF to keep keystrokes cheap).
+  const persistRaf = useRef<number | null>(null);
+  useEffect(() => {
+    if (!threadId) return;
+    if (persistRaf.current != null) cancelAnimationFrame(persistRaf.current);
+    persistRaf.current = requestAnimationFrame(() => {
+      try {
+        if (body) {
+          window.localStorage.setItem(draftStorageKey(threadId), body);
+        } else {
+          window.localStorage.removeItem(draftStorageKey(threadId));
+        }
+      } catch {
+        /* ignore quota / private mode */
+      }
+    });
+    return () => {
+      if (persistRaf.current != null) cancelAnimationFrame(persistRaf.current);
+    };
+  }, [body, threadId]);
+
+  // ---------- Auto-focus on mount / tab activation ----------
+  useEffect(() => {
+    if (!autoFocus) return;
+    const ta = taRef.current;
+    if (!ta) return;
+    // Defer to next frame so the panel finishes mounting first.
+    const id = requestAnimationFrame(() => {
+      ta.focus();
+      const end = ta.value.length;
+      ta.setSelectionRange(end, end);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [autoFocus]);
+
+  // ---------- External fill (from suggested-prompt chips, etc.) ----------
+  const lastFillNonceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!fillRequest) return;
+    if (lastFillNonceRef.current === fillRequest.nonce) return;
+    lastFillNonceRef.current = fillRequest.nonce;
+    setBody(fillRequest.body);
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      const end = ta.value.length;
+      ta.setSelectionRange(end, end);
+    });
+  }, [fillRequest]);
+
   // Auto-resize textarea up to 6 lines.
   useEffect(() => {
     const ta = taRef.current;
@@ -85,7 +200,7 @@ export function ChatComposer({
     ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
   }, [body]);
 
-  // Update popover whenever body changes.
+  // Update slash-command popover whenever body changes.
   useEffect(() => {
     if (!slashContext) return;
     if (isSlashInput(body) && !body.includes(" ") && attachments.length === 0) {
@@ -116,7 +231,43 @@ export function ChatComposer({
     setPopoverMatches([]);
   }, []);
 
-  /** Accept a command from the popover. */
+  const closeMention = useCallback(() => {
+    setMentionOpen(false);
+    setMentionMatches([]);
+    mentionStartRef.current = null;
+  }, []);
+
+  /** Recompute the @-mention popover based on the caret position. */
+  const refreshMentionPopover = useCallback(
+    (nextBody: string, caret: number) => {
+      if (mentionableAgents.length === 0) {
+        closeMention();
+        return;
+      }
+      const detected = detectMentionToken(nextBody, caret);
+      if (!detected) {
+        closeMention();
+        return;
+      }
+      const frag = detected.token.toLowerCase();
+      const matches = mentionableAgents.filter(
+        (a) =>
+          a.profileKey.toLowerCase().startsWith(frag) ||
+          a.name.toLowerCase().startsWith(frag),
+      );
+      if (matches.length === 0) {
+        closeMention();
+        return;
+      }
+      mentionStartRef.current = detected.start;
+      setMentionMatches(matches.slice(0, 8));
+      setMentionHighlight(0);
+      setMentionOpen(true);
+    },
+    [mentionableAgents, closeMention],
+  );
+
+  /** Accept a command from the slash popover. */
   const acceptCommand = useCallback(
     (cmd: SlashCommand) => {
       closePopover();
@@ -137,6 +288,31 @@ export function ChatComposer({
       }
     },
     [closePopover, slashContext],
+  );
+
+  /** Accept an @-mention from the popover. */
+  const acceptMention = useCallback(
+    (agent: MentionableAgent) => {
+      const ta = taRef.current;
+      const start = mentionStartRef.current;
+      if (start == null || !ta) {
+        closeMention();
+        return;
+      }
+      const caret = ta.selectionEnd ?? body.length;
+      const replacement = `@${agent.profileKey} `;
+      const next = body.slice(0, start) + replacement + body.slice(caret);
+      setBody(next);
+      closeMention();
+      requestAnimationFrame(() => {
+        const t = taRef.current;
+        if (!t) return;
+        const pos = start + replacement.length;
+        t.focus();
+        t.setSelectionRange(pos, pos);
+      });
+    },
+    [body, closeMention],
   );
 
   const submit = useCallback(async () => {
@@ -163,14 +339,46 @@ export function ChatComposer({
       setBody("");
       setAttachments([]);
       closePopover();
+      closeMention();
+      if (threadId) {
+        try {
+          window.localStorage.removeItem(draftStorageKey(threadId));
+        } catch {
+          /* ignore */
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload failed";
       setAttachments((prev) => prev.map((a) => ({ ...a, status: "error", error: message })));
     }
-  }, [body, attachments, disabled, slashContext, onSend, closePopover]);
+  }, [body, attachments, disabled, slashContext, onSend, closePopover, closeMention, threadId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (mentionOpen && mentionMatches.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setMentionHighlight((h) => (h + 1) % mentionMatches.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setMentionHighlight((h) => (h - 1 + mentionMatches.length) % mentionMatches.length);
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          const a = mentionMatches[mentionHighlight];
+          if (a) acceptMention(a);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeMention();
+          return;
+        }
+      }
+
       if (popoverOpen) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -200,7 +408,19 @@ export function ChatComposer({
         void submit();
       }
     },
-    [popoverOpen, popoverMatches, popoverHighlight, acceptCommand, closePopover, submit],
+    [
+      mentionOpen,
+      mentionMatches,
+      mentionHighlight,
+      acceptMention,
+      closeMention,
+      popoverOpen,
+      popoverMatches,
+      popoverHighlight,
+      acceptCommand,
+      closePopover,
+      submit,
+    ],
   );
 
   const handlePaste = useCallback(
@@ -220,7 +440,102 @@ export function ChatComposer({
     [addFiles],
   );
 
+  const handleChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const next = e.target.value;
+      setBody(next);
+      refreshMentionPopover(next, e.target.selectionEnd ?? next.length);
+    },
+    [refreshMentionPopover],
+  );
+
+  const handleSelect = useCallback(
+    (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+      const ta = e.currentTarget;
+      refreshMentionPopover(ta.value, ta.selectionEnd ?? ta.value.length);
+    },
+    [refreshMentionPopover],
+  );
+
   const busy = disabled || isPending;
+
+  const popoverNode = useMemo(() => {
+    if (popoverOpen && popoverMatches.length > 0) {
+      return (
+        <div className="relative mx-2 mb-1" data-testid="chat-slash-popover">
+          <div className="absolute bottom-0 left-0 right-0 z-50 rounded-md border border-border bg-card/95 shadow-md backdrop-blur">
+            {popoverMatches.map((cmd, idx) => (
+              <button
+                key={cmd.name}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  acceptCommand(cmd);
+                }}
+                onMouseEnter={() => setPopoverHighlight(idx)}
+                className={cn(
+                  "flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors",
+                  idx === popoverHighlight
+                    ? "bg-ember/10 text-foreground"
+                    : "text-muted-foreground hover:bg-subtle/40",
+                  idx === 0 && "rounded-t-md",
+                  idx === popoverMatches.length - 1 && "rounded-b-md",
+                )}
+              >
+                <span className="text-meta font-mono text-foreground">/{cmd.name}</span>
+                {cmd.aliases && cmd.aliases.length > 0 && (
+                  <span className="text-meta font-mono text-muted-foreground/70">
+                    ({cmd.aliases.map((a) => `/${a}`).join(", ")})
+                  </span>
+                )}
+                <span className="text-meta ml-auto text-muted-foreground">{cmd.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    if (mentionOpen && mentionMatches.length > 0) {
+      return (
+        <div className="relative mx-2 mb-1" data-testid="chat-mention-popover">
+          <div className="absolute bottom-0 left-0 right-0 z-50 rounded-md border border-border bg-card/95 shadow-md backdrop-blur">
+            {mentionMatches.map((a, idx) => (
+              <button
+                key={a.profileKey}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  acceptMention(a);
+                }}
+                onMouseEnter={() => setMentionHighlight(idx)}
+                className={cn(
+                  "flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors",
+                  idx === mentionHighlight
+                    ? "bg-ember/10 text-foreground"
+                    : "text-muted-foreground hover:bg-subtle/40",
+                  idx === 0 && "rounded-t-md",
+                  idx === mentionMatches.length - 1 && "rounded-b-md",
+                )}
+              >
+                <span className="text-meta font-mono text-foreground">@{a.profileKey}</span>
+                <span className="text-meta ml-auto text-muted-foreground">{a.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    return null;
+  }, [
+    popoverOpen,
+    popoverMatches,
+    popoverHighlight,
+    acceptCommand,
+    mentionOpen,
+    mentionMatches,
+    mentionHighlight,
+    acceptMention,
+  ]);
 
   return (
     <div
@@ -289,39 +604,7 @@ export function ChatComposer({
         </div>
       )}
 
-      {popoverOpen && popoverMatches.length > 0 && (
-        <div className="relative mx-2 mb-1">
-          <div className="absolute bottom-0 left-0 right-0 z-50 rounded-md border border-border bg-card/95 shadow-md backdrop-blur">
-            {popoverMatches.map((cmd, idx) => (
-              <button
-                key={cmd.name}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  acceptCommand(cmd);
-                }}
-                onMouseEnter={() => setPopoverHighlight(idx)}
-                className={cn(
-                  "flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors",
-                  idx === popoverHighlight
-                    ? "bg-ember/10 text-foreground"
-                    : "text-muted-foreground hover:bg-subtle/40",
-                  idx === 0 && "rounded-t-md",
-                  idx === popoverMatches.length - 1 && "rounded-b-md",
-                )}
-              >
-                <span className="text-meta font-mono text-foreground">/{cmd.name}</span>
-                {cmd.aliases && cmd.aliases.length > 0 && (
-                  <span className="text-meta font-mono text-muted-foreground/70">
-                    ({cmd.aliases.map((a) => `/${a}`).join(", ")})
-                  </span>
-                )}
-                <span className="text-meta ml-auto text-muted-foreground">{cmd.description}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      {popoverNode}
 
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-2 pt-2" data-testid="chat-attachment-drafts">
@@ -403,7 +686,8 @@ export function ChatComposer({
         <textarea
           ref={taRef}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={handleChange}
+          onSelect={handleSelect}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={placeholder}

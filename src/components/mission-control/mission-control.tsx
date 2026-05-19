@@ -5,6 +5,7 @@ import {
   ChevronUp,
   ChevronDown,
   GripHorizontal,
+  MessageSquare,
   Pin,
   PinOff,
   X as XIcon,
@@ -110,6 +111,20 @@ export function MissionControl() {
     { enabled: Boolean(slug), staleTime: 30_000 },
   );
 
+  // Chat threads (used for unread bubble + preview on the pill). Only
+  // refetch occasionally; the realtime fan-out below invalidates this
+  // on CHAT_MESSAGE_POSTED so the pill stays honest.
+  const { data: chatThreads } = trpc.chat.threads.useQuery(undefined, {
+    enabled: Boolean(slug),
+    staleTime: 30_000,
+  });
+
+  // Per-user pref: default Mission Control tab.
+  const { data: me } = trpc.user.me.useQuery(undefined, {
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
   const activeCount = activeRuns?.length ?? 0;
   const queueCount = (queue ?? []).filter((q) => !q.assignedAgent).length;
   const stalledRuns = useMemo(() => {
@@ -165,6 +180,86 @@ export function MissionControl() {
       }
     }
   });
+
+  // ---------- Default-tab pref ----------
+  // Apply once per (slug, pref) combo: if the persisted tab is still the
+  // built-in default ("live") and the user has set a pref to something
+  // else, hydrate it. We don't override after the user has manually
+  // switched tabs in this workspace.
+  const appliedDefaultRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!slug) return;
+    const pref = me?.missionControlDefaultTab;
+    if (!pref || pref === "live") return;
+    const key = `${slug}:${pref}`;
+    if (appliedDefaultRef.current === key) return;
+    if (state.tab !== "live") {
+      appliedDefaultRef.current = key;
+      return;
+    }
+    appliedDefaultRef.current = key;
+    if (pref === "control" && !isAdmin) return;
+    setTab(pref as MissionControlTab);
+  }, [slug, me?.missionControlDefaultTab, state.tab, setTab, isAdmin]);
+
+  // ---------- Unread chat tracking ----------
+  // Per-thread "last seen" timestamp. Bumped whenever the user has the
+  // chat tab open in panel mode; threads with `latestMessage.createdAt`
+  // newer than `lastSeen` and `role === "AGENT"` count as unread.
+  const lastSeenKey = `forge.chat.lastSeen.${slug}`;
+  const [lastSeen, setLastSeen] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (typeof window === "undefined" || !slug) return;
+    try {
+      const raw = window.localStorage.getItem(lastSeenKey);
+      setLastSeen(raw ? (JSON.parse(raw) as Record<string, number>) : {});
+    } catch {
+      setLastSeen({});
+    }
+  }, [slug, lastSeenKey]);
+
+  // Bump lastSeen for every thread when the chat tab is active.
+  useEffect(() => {
+    if (typeof window === "undefined" || !slug) return;
+    if (!(state.size === "panel" && state.tab === "chat")) return;
+    if (!chatThreads || chatThreads.length === 0) return;
+    const next: Record<string, number> = { ...lastSeen };
+    const now = Date.now();
+    for (const t of chatThreads) {
+      next[t.id] = now;
+    }
+    setLastSeen(next);
+    try {
+      window.localStorage.setItem(lastSeenKey, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.size, state.tab, chatThreads, slug]);
+
+  const { unreadCount, unreadPreview } = useMemo(() => {
+    if (!chatThreads) return { unreadCount: 0, unreadPreview: null as null | string };
+    let count = 0;
+    let latestUnreadAt = 0;
+    let latestUnreadBody: string | null = null;
+    for (const t of chatThreads) {
+      const last = t.latestMessage;
+      if (!last) continue;
+      if (last.role !== "AGENT") continue;
+      const lastMs = new Date(last.createdAt).getTime();
+      const seenMs = lastSeen[t.id] ?? 0;
+      if (lastMs <= seenMs) continue;
+      count++;
+      if (lastMs > latestUnreadAt) {
+        latestUnreadAt = lastMs;
+        latestUnreadBody = last.body;
+      }
+    }
+    return {
+      unreadCount: count,
+      unreadPreview: latestUnreadBody,
+    };
+  }, [chatThreads, lastSeen]);
 
   // ---------- Drag handle ----------
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -359,6 +454,19 @@ export function MissionControl() {
   // the sidebar nav chords. Doesn't take focus.
   useChord("g", { m: () => setSize("panel") });
 
+  // Global `/` shortcut: open Mission Control directly to the Chat tab
+  // with the composer focused. Same vibe as Slack / Linear.
+  useHotkey(
+    "/",
+    (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.matches("input, textarea, [contenteditable=true]")) return;
+      e.preventDefault();
+      setTab("chat");
+    },
+    [setTab],
+  );
+
   if (!workspace) return null;
 
   // Common position class — corner anchors. The drag hook directly
@@ -375,11 +483,18 @@ export function MissionControl() {
     null;
 
   if (state.size === "pill") {
+    const previewLine = unreadPreview
+      ? unreadPreview.replace(/\s+/g, " ").slice(0, 80).trim()
+      : null;
+    const chatTitle =
+      unreadCount > 0
+        ? `${unreadCount} new agent ${unreadCount === 1 ? "reply" : "replies"}${previewLine ? ` — ${previewLine}` : ""}`
+        : "Open chat";
     return (
       <div
         ref={containerRef}
         className={cn(
-          "fixed z-40 select-none",
+          "group fixed z-40 flex select-none items-center gap-1",
           cornerClass,
           isDragging && "cursor-grabbing",
         )}
@@ -460,6 +575,36 @@ export function MissionControl() {
           )}
           <ChevronUp className="h-3 w-3 text-muted-foreground" />
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            setTab("chat");
+          }}
+          title={chatTitle}
+          aria-label="Open chat"
+          data-testid="mission-control-pill-chat"
+          className={cn(
+            "relative flex h-7 w-7 items-center justify-center rounded-full border bg-card/90 shadow-sm backdrop-blur transition-colors",
+            unreadCount > 0
+              ? "border-ember/40 text-ember hover:border-ember/60"
+              : "border-border text-muted-foreground hover:border-ember/40 hover:text-foreground",
+          )}
+        >
+          <MessageSquare className="h-3.5 w-3.5" />
+          {unreadCount > 0 && (
+            <span
+              className="absolute -right-1 -top-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-ember px-1 font-mono text-[0.5625rem] text-white"
+              aria-label={`${unreadCount} unread`}
+            >
+              {unreadCount > 9 ? "9+" : unreadCount}
+            </span>
+          )}
+        </button>
+        {unreadCount > 0 && previewLine && (
+          <span className="pointer-events-none ml-1 hidden max-w-[16rem] truncate rounded-md border border-border bg-card/80 px-2 py-0.5 text-meta text-muted-foreground shadow-sm backdrop-blur group-hover:block">
+            {previewLine}
+          </span>
+        )}
       </div>
     );
   }
@@ -628,7 +773,7 @@ export function MissionControl() {
         {state.tab === "queue" && <QueueTab slug={slug} />}
         {state.tab === "agents" && <AgentsTab slug={slug} />}
         {state.tab === "history" && <HistoryTab slug={slug} />}
-        {state.tab === "chat" && <ChatTab slug={slug} />}
+        {state.tab === "chat" && <ChatTab slug={slug} autoFocus />}
         {state.tab === "control" && isAdmin && <ControlTab slug={slug} />}
       </div>
     </div>
