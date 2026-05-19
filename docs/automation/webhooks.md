@@ -43,9 +43,9 @@ agent-routed events that also trigger webhook delivery to the agent's `webhookUr
 
 | EventKind | When it fires | Agent dispatch |
 |---|---|---|
-| `AGENT_ASSIGNED` | Dispatcher or manual assignment | Yes — routed to assigned agent. Payload embeds `issueSnapshot: { id, number, title, priority, statusId, projectId, labelNames }` so the receiver can act without an immediate `issues.get`. When `Workspace.startedStatusId` is set and the issue was eligible (BACKLOG/TODO category), payload also embeds `autoTransitionedTo: <statusId>` to mark a server-driven IN_PROGRESS transition; the embedded `issueSnapshot.statusId` reflects the post-transition state. |
+| `AGENT_ASSIGNED` | Dispatcher or manual assignment | Yes — routed to assigned agent. This is a work-start signal; no extra `@mention` is required. Payload embeds `issueSnapshot: { id, number, title, priority, statusId, projectId, labelNames }` for quick framing, but receivers should call the context-bundle/read API before acting so they see recent comments and attachments. When `Workspace.startedStatusId` is set and the issue was eligible (BACKLOG/TODO category), payload also embeds `autoTransitionedTo: <statusId>` to mark a server-driven IN_PROGRESS transition; the embedded `issueSnapshot.statusId` reflects the post-transition state. |
 | `ISSUE_QUEUED` | `queued` flips `true` | Yes — routed to assigned agent (if any) |
-| `COMMENT_CREATED` | New comment with agent @mention | Yes — per mentioned agent |
+| `COMMENT_CREATED` | New comment with agent @mention, or watched issue event | Yes — per mentioned/watching agent. Plain comments do not wake every assignee by default. |
 | `ISSUE_PRIORITY_CHANGED` | Priority → HIGH or URGENT | Yes — routed to assigned agent |
 | `CHAT_MESSAGE_POSTED` | User sends a chat message | Yes — routed to addressed agent (USER role only; agent replies do not loop back) |
 

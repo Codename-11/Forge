@@ -31,6 +31,17 @@ to the agent's `webhookUrl`. Hermes' inbound webhook adapter validates the
 signature, looks up the routed profile by the in-payload metadata, and hands
 the work off to the right agent loop.
 
+Manual assignment is enough to start a Hermes agent. Operators do **not** have
+to also `@mention` the agent on the same issue. The webhook prompt should load
+the full issue context — including recent comments and attachments — before
+acting, so a comment written immediately before assignment becomes part of the
+agent's instructions.
+
+For follow-up comments after an agent is already assigned, use an explicit
+`@profileKey` mention when you want the agent woken immediately. Plain comments
+are still persisted on the issue, but they are not treated as targeted agent
+dispatch unless the agent is mentioned or watching the issue.
+
 The minimum agent webhook contract:
 
 ```http

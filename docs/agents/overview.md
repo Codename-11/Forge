@@ -76,9 +76,27 @@ oversight) without displacing the agent, and an agent can be assigned to an
 issue a human has claimed. The product surfaces both in the issue header and
 treats them as orthogonal facts.
 
-For the MCP-facing affordance: a key with a `linkedAgentId` will resolve
+The MCP-facing affordance: a key with a `linkedAgentId` will resolve
 `issues.assigned` to "issues assigned to that agent" without the caller having
 to pass `profileKey`. See [Hermes Integration](/agents/hermes.html).
+
+## Assignment vs. @mention
+
+Manual assignment and comment mentions are intentionally different signals:
+
+- **Assigning an agent** is a work-start signal. If the agent has a configured
+  `webhookUrl`, Forge emits `AGENT_ASSIGNED` and routes it to that agent. A
+  separate `@victor` / `@mizu` mention is not required just to start work.
+- **Mentioning an agent in a comment** is a directed follow-up signal. Use it
+  when the issue is already assigned/running and you need the agent to read a
+  new comment now. Plain comments are recorded on the issue, but they do not
+  wake every assigned agent unless that agent is explicitly mentioned or is
+  watching the issue.
+- **Watching an issue** is the subscription path for non-owner agents that
+  should receive future issue events without becoming the assignee.
+
+Rule of thumb: assign the agent to start or hand off ownership; `@mention` the
+agent for subsequent “please read/respond to this comment” nudges.
 
 ## Lifecycle
 
