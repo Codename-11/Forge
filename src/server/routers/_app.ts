@@ -37,6 +37,7 @@ import { noteRouter } from "./note";
 import { notificationRouter } from "./notification";
 import { pinRouter } from "./pin";
 import { recentItemRouter } from "./recent-item";
+import { commandCenterRouter } from "./command-center";
 import { commandPaletteRouter } from "./command-palette";
 import { relationRouter } from "./relation";
 import { runtimeRouter } from "./runtime";
@@ -57,6 +58,7 @@ export const appRouter = router({
   analytics: analyticsRouter,
   attachment: attachmentRouter,
   comment: commentRouter,
+  commandCenter: commandCenterRouter,
   contextSet: contextSetRouter,
   cycle: cycleRouter,
   dashboard: dashboardRouter,

@@ -3,6 +3,7 @@ import {
   CircleDot,
   Clock,
   Compass,
+  Command,
   FileText,
   FolderKanban,
   Inbox,
@@ -44,6 +45,7 @@ export const WORKSPACE_NAV_SECTIONS: readonly WorkspaceNavSection[] = [
     label: "Work",
     items: [
       { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
+      { path: "/command-center", label: "Command Center", icon: Command, chord: "j" },
       { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
       { path: "/chat", label: "Chat", icon: MessageSquare, chord: "m" },
       { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },
