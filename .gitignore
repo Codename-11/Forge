@@ -25,3 +25,4 @@ output/
 # serve them at /docs/. Source lives in docs/; the staged copy is a
 # build artifact and should never be committed. See scripts/build-docs.sh.
 /public/docs/
+.hermes/

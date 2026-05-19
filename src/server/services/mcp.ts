@@ -4447,7 +4447,7 @@ export const mcpTools = {
         });
         if (!issue) throw new Error("Issue not found in this workspace.");
 
-        const [comments, attachments, relations, currentRun] = await Promise.all([
+        const [comments, attachments, relations, currentRun, artifacts] = await Promise.all([
           db.comment.findMany({
             where: {
               workspaceId: ctx.workspaceId,
@@ -4494,6 +4494,33 @@ export const mcpTools = {
             },
             orderBy: { startedAt: "desc" },
           }),
+          // Wave 2: surface linked artifacts in the agent's context bundle.
+          // Includes both artifacts directly linked via `issueId` AND
+          // artifacts promoted from a source on this issue (via sourceType
+          // = "issue", sourceId = this id). Hidden when archived.
+          db.artifact.findMany({
+            where: {
+              workspaceId: ctx.workspaceId,
+              archivedAt: null,
+              OR: [
+                { issueId },
+                { sourceType: "issue", sourceId: issueId },
+              ],
+            },
+            orderBy: { updatedAt: "desc" },
+            take: 20,
+            select: {
+              id: true,
+              slug: true,
+              title: true,
+              type: true,
+              status: true,
+              summary: true,
+              sourceType: true,
+              sourceId: true,
+              updatedAt: true,
+            },
+          }),
         ]);
 
         return {
@@ -4504,6 +4531,7 @@ export const mcpTools = {
           attachments,
           relations,
           currentRun,
+          artifacts,
         };
       }
 
@@ -4551,6 +4579,250 @@ export const mcpTools = {
         diagnostics: bundle.diagnostics,
         contextPolicy: bundle.contextPolicy,
       };
+    },
+  },
+
+  // -------------------------------------------------------------------- Artifacts
+  //
+  // Durable, versionable output objects: specs, decisions, runbooks,
+  // reports, briefs, verification logs, and accepted agent deliverables.
+  // Body changes snapshot a new ArtifactVersion automatically; metadata
+  // edits stay in-place. Promotions (chat-message/comment/note/agent-run
+  // /issue → Artifact) preserve the source ref so the UI can render
+  // provenance backlinks.
+
+  "artifacts.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      status: z.enum(["DRAFT", "IN_REVIEW", "ACCEPTED", "ARCHIVED"]).optional(),
+      type: z
+        .enum(["DOCUMENT", "DECISION", "RUNBOOK", "REPORT", "SPEC", "BRIEF", "VERIFICATION"])
+        .optional(),
+      issueId: z.string().cuid().optional(),
+      projectId: z.string().cuid().optional(),
+      includeArchived: z.boolean().default(false),
+      limit: z.number().int().min(1).max(100).default(20),
+    }),
+    async run(
+      input: {
+        status?: "DRAFT" | "IN_REVIEW" | "ACCEPTED" | "ARCHIVED";
+        type?: "DOCUMENT" | "DECISION" | "RUNBOOK" | "REPORT" | "SPEC" | "BRIEF" | "VERIFICATION";
+        issueId?: string;
+        projectId?: string;
+        includeArchived: boolean;
+        limit: number;
+      },
+      ctx: McpContext,
+    ) {
+      return db.artifact.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          status: input.status,
+          type: input.type,
+          issueId: input.issueId,
+          projectId: input.projectId,
+          archivedAt: input.includeArchived ? undefined : null,
+        },
+        orderBy: { updatedAt: "desc" },
+        take: input.limit,
+        select: {
+          id: true,
+          slug: true,
+          title: true,
+          type: true,
+          status: true,
+          summary: true,
+          issueId: true,
+          projectId: true,
+          sourceType: true,
+          sourceId: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+    },
+  },
+
+  "artifacts.get": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid().optional(),
+      slug: z.string().min(1).max(64).optional(),
+    }).refine((v) => v.id || v.slug, { message: "Provide id or slug." }),
+    async run(input: { id?: string; slug?: string }, ctx: McpContext) {
+      const row = await db.artifact.findFirst({
+        where: input.id
+          ? { id: input.id, workspaceId: ctx.workspaceId }
+          : { slug: input.slug!, workspaceId: ctx.workspaceId },
+        include: {
+          versions: {
+            orderBy: { version: "desc" },
+            take: 10,
+            select: {
+              id: true,
+              version: true,
+              title: true,
+              summary: true,
+              changelog: true,
+              createdAt: true,
+            },
+          },
+        },
+      });
+      if (!row) throw new Error("Artifact not found in this workspace.");
+      return row;
+    },
+  },
+
+  "artifacts.create": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      title: z.string().min(1).max(200),
+      body: z.string().max(200_000).default(""),
+      slug: z
+        .string()
+        .min(1)
+        .max(64)
+        .regex(/^[a-z0-9-]+$/)
+        .optional(),
+      type: z
+        .enum(["DOCUMENT", "DECISION", "RUNBOOK", "REPORT", "SPEC", "BRIEF", "VERIFICATION"])
+        .default("DOCUMENT"),
+      status: z.enum(["DRAFT", "IN_REVIEW", "ACCEPTED", "ARCHIVED"]).default("DRAFT"),
+      summary: z.string().max(2_000).nullable().optional(),
+      issueId: z.string().cuid().optional(),
+      projectId: z.string().cuid().optional(),
+    }),
+    async run(
+      input: {
+        title: string;
+        body: string;
+        slug?: string;
+        type: "DOCUMENT" | "DECISION" | "RUNBOOK" | "REPORT" | "SPEC" | "BRIEF" | "VERIFICATION";
+        status: "DRAFT" | "IN_REVIEW" | "ACCEPTED" | "ARCHIVED";
+        summary?: string | null;
+        issueId?: string;
+        projectId?: string;
+      },
+      ctx: McpContext,
+    ) {
+      const { createArtifact } = await import("@/server/services/artifact-service");
+      const actorId = ctx.userId ?? null;
+      return createArtifact(db, {
+        workspaceId: ctx.workspaceId,
+        actorId,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        title: input.title,
+        slug: input.slug,
+        body: input.body,
+        type: input.type,
+        status: input.status,
+        summary: input.summary ?? null,
+        issueId: input.issueId ?? null,
+        projectId: input.projectId ?? null,
+      });
+    },
+  },
+
+  "artifacts.update": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      title: z.string().min(1).max(200).optional(),
+      body: z.string().max(200_000).optional(),
+      summary: z.string().max(2_000).nullable().optional(),
+      type: z
+        .enum(["DOCUMENT", "DECISION", "RUNBOOK", "REPORT", "SPEC", "BRIEF", "VERIFICATION"])
+        .optional(),
+      status: z.enum(["DRAFT", "IN_REVIEW", "ACCEPTED", "ARCHIVED"]).optional(),
+      changelog: z.string().max(1_000).optional(),
+      publish: z.boolean().optional(),
+    }),
+    async run(
+      input: {
+        id: string;
+        title?: string;
+        body?: string;
+        summary?: string | null;
+        type?: "DOCUMENT" | "DECISION" | "RUNBOOK" | "REPORT" | "SPEC" | "BRIEF" | "VERIFICATION";
+        status?: "DRAFT" | "IN_REVIEW" | "ACCEPTED" | "ARCHIVED";
+        changelog?: string;
+        publish?: boolean;
+      },
+      ctx: McpContext,
+    ) {
+      const { updateArtifact } = await import("@/server/services/artifact-service");
+      return updateArtifact(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        artifactId: input.id,
+        title: input.title,
+        body: input.body,
+        summary: input.summary,
+        type: input.type,
+        status: input.status,
+        changelog: input.changelog,
+        publish: input.publish,
+      });
+    },
+  },
+
+  "artifacts.archive": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      const { archiveArtifact } = await import("@/server/services/artifact-service");
+      await archiveArtifact(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        artifactId: input.id,
+      });
+      return { ok: true };
+    },
+  },
+
+  "artifacts.promote": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      sourceType: z.enum(["chat-message", "comment", "note", "agent-run", "issue"]),
+      sourceId: z.string().cuid(),
+      title: z.string().min(1).max(200).optional(),
+      body: z.string().max(200_000).optional(),
+      summary: z.string().max(2_000).nullable().optional(),
+      type: z
+        .enum(["DOCUMENT", "DECISION", "RUNBOOK", "REPORT", "SPEC", "BRIEF", "VERIFICATION"])
+        .default("DOCUMENT"),
+      issueId: z.string().cuid().optional(),
+      projectId: z.string().cuid().optional(),
+    }),
+    async run(
+      input: {
+        sourceType: "chat-message" | "comment" | "note" | "agent-run" | "issue";
+        sourceId: string;
+        title?: string;
+        body?: string;
+        summary?: string | null;
+        type: "DOCUMENT" | "DECISION" | "RUNBOOK" | "REPORT" | "SPEC" | "BRIEF" | "VERIFICATION";
+        issueId?: string;
+        projectId?: string;
+      },
+      ctx: McpContext,
+    ) {
+      const { promoteToArtifact } = await import("@/server/services/artifact-service");
+      return promoteToArtifact(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+        title: input.title,
+        body: input.body,
+        summary: input.summary ?? null,
+        type: input.type,
+        issueId: input.issueId ?? null,
+        projectId: input.projectId ?? null,
+      });
     },
   },
 

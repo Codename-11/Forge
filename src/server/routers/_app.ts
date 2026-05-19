@@ -1,5 +1,6 @@
 import { router } from "@/server/trpc";
 import { agentRouter } from "./agent";
+import { artifactRouter } from "./artifact";
 import { integrationRouter } from "./integration";
 import { agentRunRouter } from "./agent-run";
 import { chatRouter } from "./chat";
@@ -43,6 +44,7 @@ export const appRouter = router({
   admin: adminRouter,
   agent: agentRouter,
   agentRun: agentRunRouter,
+  artifact: artifactRouter,
   ai: aiRouter,
   chat: chatRouter,
   analytics: analyticsRouter,

@@ -12,4 +12,13 @@ describe("workspace sidebar navigation", () => {
       chord: "m",
     });
   });
+
+  it("surfaces Artifacts under Planning with the g f shortcut", () => {
+    const planning = WORKSPACE_NAV_SECTIONS.find((section) => section.id === "planning");
+    expect(planning).toBeTruthy();
+    expect(planning?.items.find((item) => item.label === "Artifacts")).toMatchObject({
+      path: "/artifacts",
+      chord: "f",
+    });
+  });
 });

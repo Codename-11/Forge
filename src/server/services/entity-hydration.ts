@@ -328,7 +328,28 @@ async function hydrateOne(
         ),
       }));
     }
-    case "artifact":
+    case "artifact": {
+      const rows = await db.artifact.findMany({
+        where: { workspaceId, id: { in: ids }, archivedAt: null },
+        select: {
+          id: true,
+          title: true,
+          slug: true,
+          type: true,
+          status: true,
+          summary: true,
+        },
+      });
+      return rows.map((row) => ({
+        type: "artifact" as const,
+        id: row.id,
+        missing: false,
+        label: row.title,
+        subLabel: row.type.toLowerCase(),
+        url: workspaceUrl(workspaceSlug, `/artifacts/${row.slug}`),
+        meta: { status: row.status, slug: row.slug, summary: row.summary },
+      }));
+    }
     case "context-set":
     case "execution-plan":
     case "execution-step":
