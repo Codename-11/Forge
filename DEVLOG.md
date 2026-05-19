@@ -2,6 +2,100 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Agentic Work OS product-surface follow-up
+
+### Summary
+
+Shipped the remaining product surfaces on top of the substrate landed
+in the earlier 12-wave run. Existing routes (Issues, Chat, Agents,
+Hermes delivery) are untouched; all new code goes through the
+existing tRPC/services/MCP paths so audit, ActivityEvent, and
+workspace tenancy stay intact.
+
+### What changed
+
+1. **CaptureSheet** (`src/components/quick-create.tsx`,
+   `tests/unit/quick-create-modes.test.ts`). The single keyboard-first
+   capture surface now spans Issue / Sprint / Project / Initiative /
+   Note / Artifact / Action request. Per-mode chips (artifact type,
+   action-request severity) keep the single-line flow; ⌘⏎ either
+   expands a description textarea or opens the created artifact.
+   `/artifacts` now seeds artifact mode automatically.
+
+2. **ExecutionPlan UI** (`src/app/(app)/w/[slug]/plans/`). New list
+   page + detail viewer/builder. Plan detail shows editable head,
+   status selector, ordered step list with inline status pickers and
+   expected-output editors, "Add step" form, links to related
+   issue/project/context-set, and archive control. Sidebar entry
+   under Planning with chord `g l`.
+
+3. **AgentCrew admin + ReviewGate inbox**
+   (`src/app/(app)/w/[slug]/settings/crews/`,
+   `src/app/(app)/w/[slug]/review/`). Crews surface lists every active
+   crew with members, supports New crew / Add member / Remove member /
+   Archive crew. Review inbox filters PENDING/APPROVED/REJECTED/All
+   gates and resolves with Approve/Reject/Cancel plus optional
+   resolution note. Sidebar entry under Work with chord `g v`.
+
+4. **WorkspaceCanvas viewer**
+   (`src/app/(app)/w/[slug]/canvas/`). Spatial pan/zoom board: cards
+   are absolutely positioned, draggable to reposition (each drop
+   persists via `canvas.patchNode`), ⌘/Ctrl+wheel zooms, background
+   drag pans, and pan/zoom state is saved via `canvas.setViewport`.
+   Cards display canonical hydrated entity data; missing rows render
+   as warning-toned placeholders. Inline picker adds Issue or
+   Artifact cards. Edges are persisted but not yet rendered visually
+   — visualisation deferred. Sidebar entry under Planning with chord
+   `g k`.
+
+5. **Canvas mutation MCP tools** (`src/server/services/mcp.ts`,
+   `src/server/services/__tests__/mcp.test.ts`). Added
+   `canvases.create`, `addNode`, `patchNode`, `removeNode`,
+   `addEdge`, `removeEdge`. Schemas/behaviour mirror the tRPC canvas
+   router; `canvases.create` writes `AuditLog`/`ActivityEvent` via
+   `recordChange`. New tests cover create→add→patch→remove
+   round-tripping, cross-canvas edge rejection, and edge
+   add/remove idempotency.
+
+### Migrations
+
+None — all existing tables.
+
+### Verification
+
+- `pnpm test` → 49 files / 349 tests passed (was 48 / 339 — +1 file
+  / +10 tests).
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm typecheck` → pass.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm lint` → pass.
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm build` → pass; new
+  routes (`/plans`, `/plans/[planId]`, `/settings/crews`, `/review`,
+  `/canvas`, `/canvas/[canvasId]`) appear in the production route
+  manifest.
+
+### Deferred / open
+
+- Canvas edge visualisation (curves, hit-targets, label rendering).
+- Per-type card view modes (compact / live / full) — schema column
+  exists but the viewer ignores it.
+- ExecutionPlan crew assignment UI (schema FK landed in wave 7;
+  builder doesn't expose it yet).
+- CaptureSheet promotion entry points beyond chat message (notes,
+  comments, attachments).
+- Mobile-first polish pass for the canvas viewer; drag/zoom interactions
+  assume a precision pointer.
+
+### Files of note
+
+| Area | Path |
+|------|------|
+| CaptureSheet | `src/components/quick-create.tsx` |
+| Plans UI | `src/app/(app)/w/[slug]/plans/` |
+| Crews settings | `src/app/(app)/w/[slug]/settings/crews/page.tsx` |
+| Review gate inbox | `src/app/(app)/w/[slug]/review/page.tsx` |
+| Canvas viewer | `src/app/(app)/w/[slug]/canvas/` |
+| Canvas MCP | `src/server/services/mcp.ts` (canvases.create/addNode/…) |
+| Sidebar | `src/components/sidebar-nav.ts` (added Plans, Canvas, Review) |
+
 ## 2026-05-19 — Agentic Work OS plan status/handoff update
 
 ### Summary

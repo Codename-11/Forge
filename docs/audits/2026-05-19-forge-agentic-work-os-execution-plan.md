@@ -10,7 +10,7 @@
 
 ---
 
-**Execution status — updated 2026-05-19 11:10 EDT:** Core Agentic Work OS substrate is shipped, verified, pushed, migrated, and deployed to live Forge at commit `f911cff23c3e80e72de79a6f1687da900826bd45`. Production `forge` and `forge-worker` were rebuilt/recreated from `/home/bailey/docker/forge/docker-compose.yaml`; migrations `0032`–`0038` applied successfully; live smoke checks passed for signin, authenticated route redirects, worker boot, and MCP exposure/callability. The remaining work is product-surface completion on top of the new primitives, not unfinished schema/MCP foundation.
+**Execution status — updated 2026-05-19 11:55 EDT:** Core Agentic Work OS substrate is shipped, verified, pushed, migrated, and deployed to live Forge at commit `f911cff23c3e80e72de79a6f1687da900826bd45`. Remaining product surfaces (CaptureSheet, ExecutionPlan UI, AgentCrew admin, ReviewGate inbox, WorkspaceCanvas viewer, canvas mutation MCP) landed in a follow-up session through commits `fb59a8c…e3da769`; `pnpm test` 349/349, typecheck, lint, and build all pass. Deploy is the next manual step.
 
 ## Execution status matrix
 
@@ -19,16 +19,16 @@
 | Wave 0 — baseline and safety rails | ✅ Complete | Plan committed, baseline verified during rollout. | None. |
 | Wave 1 — entity refs / hydration foundation | ✅ Complete | `src/lib/entity-ref.ts`, `src/server/services/entity-hydration.ts`, tests. | Safe rich renderer unification may still need a follow-up audit if UI inconsistencies appear. |
 | Wave 2 — Artifact primitive v1 | ✅ Complete | `Artifact` / `ArtifactVersion`, artifact router/service/pages, MCP `artifacts.*`, migration `0032`. | More artifact templates and richer artifact creation UX are follow-ups. |
-| Wave 3 — Capture Sheet / promotion | 🟡 Partial | Chat-message promote-to-artifact affordance shipped. | Full CaptureSheet UI for issue / artifact / note / action-request capture remains. |
+| Wave 3 — Capture Sheet / promotion | ✅ Complete | CaptureSheet (extended QuickCreate) now spans Issue / Sprint / Project / Initiative / Note / Artifact / Action request with per-mode chips and ⌘⏎ description expansion. Chat-message promote-to-artifact still shipped. | Promotion entry points from comments/notes/attachments/run summaries remain. |
 | Wave 4 — ContextSet / context inspector | 🟡 Partial | `ContextSet` schema/service/router/MCP and hydration shipped, migration `0033`. | Full operator-facing context inspector/editor polish remains. |
 | Wave 5 — agent completion contract | ✅ Complete | Issue/run completion fields, MCP/run completion path, context bundle additions, migration `0034`. | UI polish around expected output/checklists can continue. |
-| Wave 6 — ExecutionPlan / ExecutionStep | 🟡 Partial | Schema/service/router/MCP foundation shipped, migration `0035`. | Human plan-builder UI, step assignment surface, progress timeline remain. |
-| Wave 7 — AgentCrew / ReviewGate | 🟡 Partial | Schema/service/router/MCP foundation shipped, migration `0036`. | Crew admin UI and ReviewGate approval surface remain. |
+| Wave 6 — ExecutionPlan / ExecutionStep | ✅ Complete | Schema/service/router/MCP plus `/w/[slug]/plans` list and `/w/[slug]/plans/[planId]` builder with editable head, status selectors, ordered steps, and inline transitions. | Crew assignment UI, plan progress timeline, and step-level agent/user pickers remain. |
+| Wave 7 — AgentCrew / ReviewGate | ✅ Complete | Schema/service/router/MCP plus `/w/[slug]/settings/crews` admin and `/w/[slug]/review` approval inbox. | Crew dispatch wiring into ExecutionPlan steps. |
 | Wave 8 — ActionRequest | ✅ Core complete | Schema/service/router/MCP and Inbox/Command Center integration shipped, migration `0037`. | Richer UI handling and notification ergonomics remain. |
 | Wave 9 — Command Center v0 | ✅ Complete v0 | `/w/[slug]/command-center`, `g j`, active/stalled/due/artifact/action aggregations. | Cross-workspace breadth/polish and operator actions can expand. |
-| Wave 10 — WorkspaceCanvas | 🟡 Foundation complete | Schema/router/read-only MCP `canvases.*`, migration `0038`. | Visual pan/zoom canvas viewer and mutation MCP tools remain. |
-| Wave 11 — MCP/Hermes integration | ✅ Complete for shipped primitives | 115 live MCP tools; new primitive list/get calls verified; `agent.context.bundle` extended. | Canvas mutation tools and deeper execution prompt wiring remain. |
-| Wave 12 — docs/deploy/live verification | ✅ Complete | Docs/DEVLOG updated, `pnpm test`/typecheck/lint/build passed pre-deploy, live services rebuilt and smoke-tested. | Keep this status matrix current as follow-ups land. |
+| Wave 10 — WorkspaceCanvas | ✅ Complete v0 | Schema/router/MCP plus `/w/[slug]/canvas` list and `/w/[slug]/canvas/[canvasId]` pan/zoom viewer with draggable cards and a card picker. | Edge visualisation, per-type card view modes (compact/live/full), and mobile-first polish remain. |
+| Wave 11 — MCP/Hermes integration | ✅ Complete | All shipped primitives + canvas mutation tools (`canvases.create/addNode/patchNode/removeNode/addEdge/removeEdge`); `agent.context.bundle` extended. | Deeper execution prompt wiring (plan-aware prompts, crew membership in bundle) remains. |
+| Wave 12 — docs/deploy/live verification | ✅ Complete | Docs/DEVLOG updated, `pnpm test`/typecheck/lint/build passed pre-deploy, live services rebuilt and smoke-tested. Follow-up session re-ran the same 4 commands cleanly. | Production rebuild on top of latest commits is the next deploy step. |
 
 ---
 
@@ -799,11 +799,11 @@ Do not let Canvas consume the whole follow-up. Tiny whiteboard hydra is charming
 
 ### Still required for follow-up product surfaces
 
-- [ ] Full CaptureSheet UI implemented and tested.
-- [ ] ExecutionPlan UI implemented and tested.
-- [ ] AgentCrew admin UI implemented and tested.
-- [ ] ReviewGate approval/resolve UI implemented and tested.
-- [ ] WorkspaceCanvas visual viewer implemented and tested at desktop/mobile widths.
-- [ ] Canvas mutation MCP tools implemented only after audited service paths exist.
-- [ ] Follow-up DEVLOG entry updates completed/deferred status.
-- [ ] Follow-up deploy smoke verifies web, worker, MCP, and relevant authenticated routes.
+- [x] Full CaptureSheet UI implemented and tested (CaptureSheet commit `fb59a8c`).
+- [x] ExecutionPlan UI implemented and tested (commit `851e36f`).
+- [x] AgentCrew admin UI implemented and tested (commit `dddf674`).
+- [x] ReviewGate approval/resolve UI implemented and tested (commit `dddf674`).
+- [x] WorkspaceCanvas visual viewer implemented (commit `33a9c04`). Desktop interactions are precision-pointer; mobile-first polish remains an open follow-up.
+- [x] Canvas mutation MCP tools implemented on top of the audited canvas service (commit `6cd98f4`).
+- [x] Follow-up DEVLOG entry updates completed/deferred status (this session's DEVLOG entry).
+- [ ] Follow-up deploy smoke verifies web, worker, MCP, and relevant authenticated routes against the new commits.
