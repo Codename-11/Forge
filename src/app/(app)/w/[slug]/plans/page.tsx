@@ -2,7 +2,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ExecutionPlanStatus } from "@prisma/client";
+import type { ExecutionPlanStatus } from "@prisma/client";
 import { ListChecks, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";

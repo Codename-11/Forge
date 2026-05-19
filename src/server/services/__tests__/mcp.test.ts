@@ -2742,7 +2742,7 @@ describe("mcp canvases.* mutation tools", () => {
 
     await call("canvases.removeEdge", { id: edge.id }, ctx);
     got = (await call("canvases.get", { id: canvas.id }, ctx)) as {
-      edges: Array<{ id: string }>;
+      edges: Array<{ id: string; label: string | null }>;
     };
     expect(got.edges).toHaveLength(0);
   });
