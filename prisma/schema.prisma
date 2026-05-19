@@ -951,7 +951,15 @@ model IssueLabel {
 model Comment {
   id               String      @id @default(cuid())
   workspaceId      String
-  issueId          String
+  /// Nullable since migration 0040 — a Comment hangs off EITHER an
+  /// issue or an execution step, never both. The router layer keeps
+  /// the "exactly one of {issueId, executionStepId}" invariant
+  /// (comment.create requires issueId; executionPlan.stepCommentCreate
+  /// requires executionStepId).
+  issueId          String?
+  /// New in migration 0040 — owning ExecutionStep for inline plan-step
+  /// threads. CASCADE on step delete so threads vanish with the step.
+  executionStepId  String?
   authorId         String
   /// When the comment was created via an API key whose `linkedAgentId`
   /// pointed at an Agent, we record that Agent here so the UI can
@@ -979,16 +987,18 @@ model Comment {
   updatedAt        DateTime    @updatedAt
   deletedAt        DateTime?
 
-  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  issue          Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  author         User      @relation(fields: [authorId], references: [id])
-  authoringAgent Agent?    @relation("AgentAuthoredComments", fields: [authoringAgentId], references: [id], onDelete: SetNull)
-  run            AgentRun? @relation("AgentRunStatusComment", fields: [runId], references: [id], onDelete: SetNull)
+  workspace      Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue          Issue?         @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  executionStep  ExecutionStep? @relation("ExecutionStepComments", fields: [executionStepId], references: [id], onDelete: Cascade)
+  author         User           @relation(fields: [authorId], references: [id])
+  authoringAgent Agent?         @relation("AgentAuthoredComments", fields: [authoringAgentId], references: [id], onDelete: SetNull)
+  run            AgentRun?      @relation("AgentRunStatusComment", fields: [runId], references: [id], onDelete: SetNull)
 
   @@index([issueId])
   @@index([workspaceId, createdAt])
   @@index([authoringAgentId])
   @@index([issueId, kind])
+  @@index([executionStepId, createdAt])
 }
 
 /// Polymorphic attachment: `targetType` is one of "issue" | "initiative" |
@@ -2089,6 +2099,7 @@ model ExecutionStep {
   plan          ExecutionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
   assignedAgent Agent?        @relation("ExecutionStepAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
   assignedUser  User?         @relation("ExecutionStepUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  comments      Comment[]     @relation("ExecutionStepComments")
 
   @@unique([planId, position])
   @@index([workspaceId, status])
