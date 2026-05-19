@@ -3,6 +3,7 @@ import { actionRequestRouter } from "./action-request";
 import { agentRouter } from "./agent";
 import { agentCrewRouter, reviewGateRouter } from "./agent-crew";
 import { artifactRouter } from "./artifact";
+import { canvasRouter } from "./canvas";
 import { integrationRouter } from "./integration";
 import { agentRunRouter } from "./agent-run";
 import { chatRouter } from "./chat";
@@ -52,6 +53,7 @@ export const appRouter = router({
   agentCrew: agentCrewRouter,
   agentRun: agentRunRouter,
   artifact: artifactRouter,
+  canvas: canvasRouter,
   reviewGate: reviewGateRouter,
   ai: aiRouter,
   chat: chatRouter,
