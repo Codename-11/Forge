@@ -1,6 +1,15 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { FileText, Image as ImageIcon, Loader2, Paperclip, Send, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Image as ImageIcon,
+  Loader2,
+  Paperclip,
+  Send,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DropOverlay } from "@/components/attachments/drop-overlay";
 import {
@@ -16,6 +25,7 @@ export interface ChatComposerAttachmentDraft {
   file: File;
   status: "pending" | "uploading" | "error";
   error?: string;
+  includeInContext: boolean;
 }
 
 interface ChatComposerProps {
@@ -28,6 +38,8 @@ interface ChatComposerProps {
   banner?: string;
   /** Slash-command execution context. When provided, enables slash commands. */
   slashContext?: SlashCommandContext;
+  /** Human-readable summary of route/entity context that will be attached to the dispatch payload. */
+  contextSummary?: string[];
 }
 
 function fileIcon(file: File) {
@@ -51,10 +63,12 @@ export function ChatComposer({
   placeholder = "Message agent…",
   banner,
   slashContext,
+  contextSummary = [],
 }: ChatComposerProps) {
   const [body, setBody] = useState("");
   const [attachments, setAttachments] = useState<ChatComposerAttachmentDraft[]>([]);
   const [isOver, setIsOver] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -92,6 +106,7 @@ export function ChatComposer({
         id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
         file,
         status: "pending" as const,
+        includeInContext: true,
       })),
     ]);
   }, []);
@@ -126,11 +141,11 @@ export function ChatComposer({
 
   const submit = useCallback(async () => {
     const trimmed = body.trim();
-    const files = attachments.map((a) => a.file);
+    const files = attachments.filter((a) => a.includeInContext).map((a) => a.file);
     if ((!trimmed && files.length === 0) || disabled) return;
 
     // Try to intercept as a slash command first when no files are attached.
-    if (files.length === 0 && slashContext && isSlashInput(trimmed)) {
+    if (attachments.length === 0 && slashContext && isSlashInput(trimmed)) {
       const parsed = parseSlashCommand(trimmed);
       if (parsed) {
         parsed.command.run(parsed.args, slashContext);
@@ -140,7 +155,9 @@ export function ChatComposer({
       }
     }
 
-    setAttachments((prev) => prev.map((a) => ({ ...a, status: "uploading" })));
+    setAttachments((prev) =>
+      prev.map((a) => ({ ...a, status: a.includeInContext ? "uploading" : "pending" })),
+    );
     try {
       await onSend(trimmed, files);
       setBody("");
@@ -222,8 +239,53 @@ export function ChatComposer({
     >
       <DropOverlay active={isOver} label="Drop files into chat" />
       {banner && (
-        <div className="bg-subtle/60 px-3 py-1.5 text-meta text-muted-foreground">
-          {banner}
+        <div className="text-meta bg-subtle/60 px-3 py-1.5 text-muted-foreground">{banner}</div>
+      )}
+
+      {(contextSummary.length > 0 || attachments.length > 0) && (
+        <div className="text-meta border-b border-border/50 bg-card/25 px-3 py-1.5 text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => setContextOpen((v) => !v)}
+            className="flex items-center gap-1 text-left hover:text-foreground"
+          >
+            {contextOpen ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            Context to send
+            <span className="text-muted-foreground/70">
+              · {contextSummary.length} page item{contextSummary.length === 1 ? "" : "s"},{" "}
+              {attachments.filter((a) => a.includeInContext).length}/{attachments.length} file
+              {attachments.length === 1 ? "" : "s"}
+            </span>
+          </button>
+          {contextOpen && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {contextSummary.map((item) => (
+                <span
+                  key={item}
+                  className="rounded border border-border/60 bg-background/60 px-1.5 py-0.5 font-mono text-[0.625rem]"
+                >
+                  {item}
+                </span>
+              ))}
+              {attachments.map((draft) => (
+                <span
+                  key={draft.id}
+                  className={cn(
+                    "rounded border px-1.5 py-0.5 font-mono text-[0.625rem]",
+                    draft.includeInContext
+                      ? "border-emerald-500/30 bg-emerald-500/10"
+                      : "border-border bg-subtle/40 line-through opacity-70",
+                  )}
+                >
+                  {draft.includeInContext ? "file" : "excluded"}: {draft.file.name || "attachment"}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -269,7 +331,7 @@ export function ChatComposer({
               <span
                 key={draft.id}
                 className={cn(
-                  "inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-card/60 px-1.5 py-1 text-meta",
+                  "text-meta inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-card/60 px-1.5 py-1",
                   draft.status === "error" && "border-red-500/40 bg-red-500/10",
                 )}
                 title={draft.error ?? draft.file.name}
@@ -279,8 +341,30 @@ export function ChatComposer({
                 ) : (
                   <Icon className="h-3 w-3 text-muted-foreground" />
                 )}
-                <span className="max-w-[11rem] truncate font-mono text-foreground/90">{draft.file.name || "attachment"}</span>
+                <span className="max-w-[11rem] truncate font-mono text-foreground/90">
+                  {draft.file.name || "attachment"}
+                </span>
                 <span className="text-muted-foreground">{prettyBytes(draft.file.size)}</span>
+                <button
+                  type="button"
+                  aria-label={`${draft.includeInContext ? "Exclude" : "Include"} ${draft.file.name || "attachment"} from context`}
+                  onClick={() =>
+                    setAttachments((prev) =>
+                      prev.map((a) =>
+                        a.id === draft.id ? { ...a, includeInContext: !a.includeInContext } : a,
+                      ),
+                    )
+                  }
+                  disabled={busy}
+                  className={cn(
+                    "rounded border px-1 py-0.5 text-[0.5625rem] uppercase tracking-wider disabled:opacity-50",
+                    draft.includeInContext
+                      ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                      : "border-border text-muted-foreground",
+                  )}
+                >
+                  {draft.includeInContext ? "include" : "excluded"}
+                </button>
                 <button
                   type="button"
                   aria-label={`Remove ${draft.file.name || "attachment"}`}
@@ -330,22 +414,24 @@ export function ChatComposer({
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={busy || (!body.trim() && attachments.length === 0)}
+          disabled={busy || (!body.trim() && attachments.every((a) => !a.includeInContext))}
           className={cn(
             "mb-0.5 rounded-md p-1.5 transition-colors",
-            body.trim() || attachments.length > 0
+            body.trim() || attachments.some((a) => a.includeInContext)
               ? "bg-ember text-white hover:bg-ember/90"
               : "bg-subtle text-muted-foreground",
             "disabled:cursor-not-allowed disabled:opacity-50",
           )}
           title={isPending ? "Sending…" : "Send"}
         >
-          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+          {isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Send className="h-3.5 w-3.5" />
+          )}
         </button>
       </div>
-      {isPending && (
-        <div className="px-3 pb-1.5 text-meta text-muted-foreground">sending…</div>
-      )}
+      {isPending && <div className="text-meta px-3 pb-1.5 text-muted-foreground">sending…</div>}
     </div>
   );
 }

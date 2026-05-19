@@ -1,10 +1,7 @@
 "use client";
 import { useEffect, useMemo, useId } from "react";
 import { usePathname } from "next/navigation";
-import {
-  useChatContextRegistry,
-  type ChatContextSnapshot,
-} from "@/contexts/chat-context-provider";
+import { useChatContextRegistry, type ChatContextSnapshot } from "@/contexts/chat-context-provider";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
 /**
@@ -42,4 +39,19 @@ export function useChatContextRegister(snapshot: ChatContextSnapshot): void {
     return register(id, snapshot);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, key, register]);
+}
+
+export function formatChatContextSummary(context: ChatContextSnapshot): string[] {
+  const items: string[] = [];
+  if (context.route)
+    items.push(`route:${context.route.replace(/https?:\/\/[^\s]+/gi, "[redacted-url]")}`);
+  if (context.issueId) items.push(`issue:${context.issueId}`);
+  if (context.selectedIds?.length) items.push(`selected:${context.selectedIds.length}`);
+  const visibleCount =
+    context.visibleEntities?.reduce((sum, entity) => sum + entity.ids.length, 0) ?? 0;
+  if (visibleCount) items.push(`visible:${visibleCount}`);
+  if (context.pinnedRunIds?.length) items.push(`pinned-runs:${context.pinnedRunIds.length}`);
+  if (context.liveRunIds?.length) items.push(`live-runs:${context.liveRunIds.length}`);
+  if (context.slug) items.push(`workspace:${context.slug}`);
+  return items;
 }
