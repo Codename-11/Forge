@@ -686,63 +686,78 @@ model Label {
 }
 
 model Issue {
-  id                  String          @id @default(cuid())
-  workspaceId         String
-  projectId           String?
-  parentId            String?
+  id                    String          @id @default(cuid())
+  workspaceId           String
+  projectId             String?
+  parentId              String?
   /// Optional cycle membership. SetNull on cycle delete so issues survive.
-  cycleId             String?
+  cycleId               String?
   /// Human-readable identifier: `${workspace.key}-${number}` e.g. `FRG-42`.
-  number              Int
-  kind                WorkItemKind    @default(ISSUE)
-  title               String
-  description         String?         @db.Text
-  statusId            String
-  priority            Priority        @default(NONE)
-  authorId            String
-  dueDate             DateTime?
-  startedAt           DateTime?
-  completedAt         DateTime?
-  canceledAt          DateTime?
-  estimate            Float?
+  number                Int
+  kind                  WorkItemKind    @default(ISSUE)
+  title                 String
+  description           String?         @db.Text
+  statusId              String
+  priority              Priority        @default(NONE)
+  authorId              String
+  dueDate               DateTime?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  canceledAt            DateTime?
+  estimate              Float?
   /// SLA target, in minutes from creation. Used for breach detection.
-  slaMinutes          Int?
+  slaMinutes            Int?
   /// AI triage state machine. Null = not run. Set to PENDING when the
   /// background triage call is fired, READY when a suggestion is
   /// available, APPLIED/DISMISSED after the operator acts, ERROR if
   /// the call failed. Lets the UI render the chip without a separate
   /// table.
-  aiTriageStatus      AiTriageStatus?
-  aiSuggestedPriority Priority?
-  aiSuggestedLabelIds String[]        @default([])
-  aiSuggestedAgentId  String?
-  aiTriageReasoning   String?         @db.Text
-  aiTriagedAt         DateTime?
-  aiTriageDecidedAt   DateTime?
+  aiTriageStatus        AiTriageStatus?
+  aiSuggestedPriority   Priority?
+  aiSuggestedLabelIds   String[]        @default([])
+  aiSuggestedAgentId    String?
+  aiTriageReasoning     String?         @db.Text
+  aiTriagedAt           DateTime?
+  aiTriageDecidedAt     DateTime?
   /// Agent queue — true means eligible for `issues.claim` via MCP.
-  queued              Boolean         @default(false)
-  claimedAt           DateTime?
-  claimedById         String?
-  claimExpiresAt      DateTime?
+  queued                Boolean         @default(false)
+  claimedAt             DateTime?
+  claimedById           String?
+  claimExpiresAt        DateTime?
   /// Explicit agent assignment. Independent of `claimedById` (human claim).
   /// Set by users or the auto-dispatcher; cleared on unassign.
-  assignedAgentId     String?
+  assignedAgentId       String?
   /// User-set "on hold" timestamp. When non-null AND in the future, the
   /// issue is hidden from inbox / stalled buckets — operators have asked
   /// the system to stop nagging them about it until then. Cleared via
   /// `issue.unsnooze`. Auto-clears on read in consumers (no background
   /// sweep — comparison is `snoozedUntil > now()` everywhere).
-  snoozedUntil        DateTime?
+  snoozedUntil          DateTime?
   /// Opaque blob recording the most recent dispatcher decision for this
   /// issue, mirroring what's emitted on the AGENT_ASSIGNED payload but
   /// pinned to the row for cheap "why was X picked" attribution. Shape:
   /// { mode, candidatesConsidered: string[], picked: string,
   ///   reasonText: string, decidedAt: DateTime }. See
   /// `src/server/services/dispatcher.ts` for the producer.
-  dispatchReason      Json?
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
-  deletedAt           DateTime?
+  dispatchReason        Json?
+  /// Agentic work OS — issue-level completion contract.
+  /// Markdown describing what "done" looks like for an agent acting on
+  /// this issue. Surfaced in the dispatch context bundle and in the
+  /// issue detail panel so operators and agents can agree before work
+  /// starts. Null = no explicit contract (legacy issues).
+  expectedOutput        String?         @db.Text
+  /// Structured verification checklist. Shape: array of
+  /// `{ id?: string, label: string, kind?: "manual"|"command"|"artifact",
+  ///   value?: string, done?: boolean }`. The agent reports completion
+  /// against this list in its final response; auto-mark via runner is a
+  /// future cleanup.
+  verificationChecklist Json?
+  /// When true, the agent's completion submission must include at least
+  /// one Artifact link (any kind). False (default) = optional.
+  artifactRequired      Boolean         @default(false)
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+  deletedAt             DateTime?
 
   workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   project       Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
@@ -1502,6 +1517,16 @@ model AgentRun {
   currentStep          String?
   /// Optional final summary populated when the agent reports completion.
   summary              String?              @db.Text
+  /// Optional list of artifact ids the agent produced for this run.
+  /// Populated by `runs.complete` so the UI can render evidence links
+  /// alongside the summary.
+  producedArtifactIds  String[]             @default([])
+  /// Optional structured verification result: snapshot of the issue's
+  /// verificationChecklist at completion time with `done` flags set.
+  verificationResult   Json?
+  /// Optional list of follow-up items the agent flagged for next steps.
+  /// Shape: array of `{ title: string, body?: string, kind?: string }`.
+  followUps            Json?
   /// Optional pointer at the AGENT_ASSIGNED ActivityEvent that triggered
   /// this run. Useful for ack-window reasoning later.
   assignmentEventId    String?

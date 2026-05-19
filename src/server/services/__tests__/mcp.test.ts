@@ -2534,3 +2534,92 @@ describe("mcp artifacts.*", () => {
     expect(artifact.type).toBe("SPEC");
   });
 });
+
+describe("mcp runs.complete + completion contract", () => {
+  it("issues.update accepts expectedOutput and verificationChecklist and surfaces them via agent.context.bundle", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CC1" });
+    fixtures.push(fixture);
+    const { ctx } = buildMcpCtx(fixture);
+    const issue = await createIssue(fixture);
+    await call(
+      "issues.update",
+      {
+        id: issue.id,
+        expectedOutput: "Ship the migration cleanly.",
+        verificationChecklist: [
+          { label: "Migration applied", kind: "command", value: "pnpm prisma migrate status" },
+        ],
+        artifactRequired: true,
+      },
+      ctx,
+    );
+    const bundle = (await call("agent.context.bundle", { issueId: issue.id }, ctx)) as {
+      completionContract: {
+        expectedOutput: string;
+        verificationChecklist: Array<{ label: string }>;
+        artifactRequired: boolean;
+      };
+    };
+    expect(bundle.completionContract.expectedOutput).toContain("migration");
+    expect(bundle.completionContract.artifactRequired).toBe(true);
+    expect(bundle.completionContract.verificationChecklist[0].label).toBe("Migration applied");
+  });
+
+  it("runs.complete stores summary + producedArtifactIds + verificationResult", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CC2" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+
+    // Create an artifact to link as evidence
+    const artifact = (await call(
+      "artifacts.create",
+      { title: "Evidence", body: "deliverable" },
+      ctx,
+    )) as { id: string };
+
+    // Build an AgentRun directly so we can target it.
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `rc-${Date.now()}`,
+        name: "Runner",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+      },
+    });
+
+    // Link the api key to this agent so the agent check passes.
+    const apiKey = { ...ctx.apiKey!, linkedAgentId: agent.id };
+    const scopedCtx = { ...ctx, apiKey };
+
+    const result = (await call(
+      "runs.complete",
+      {
+        runId: run.id,
+        summary: "Migration shipped.",
+        producedArtifactIds: [artifact.id],
+        verificationResult: [
+          { label: "Migration applied", done: true },
+        ],
+        followUps: [{ title: "Backfill historical rows" }],
+      },
+      scopedCtx,
+    )) as {
+      summary: string;
+      producedArtifactIds: string[];
+      verificationResult: unknown;
+      followUps: unknown;
+    };
+    expect(result.summary).toBe("Migration shipped.");
+    expect(result.producedArtifactIds).toEqual([artifact.id]);
+    expect(result.verificationResult).toBeTruthy();
+    expect(result.followUps).toBeTruthy();
+  });
+});
