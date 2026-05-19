@@ -22,6 +22,7 @@ import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { openOrTouchRun, appendRunEvent, finishRunsForIssue } from "@/server/services/agent-run";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
+import { buildChatContextBundle } from "@/server/services/chat-context";
 import {
   assertKeyScope,
   buildKeyScopeWhere,
@@ -3600,6 +3601,12 @@ export const mcpTools = {
           agentId: true,
           userId: true,
           title: true,
+          topic: true,
+          isDefault: true,
+          contextMode: true,
+          summaryMarkdown: true,
+          summarizedUntilMessageId: true,
+          summarizedAt: true,
           lastMessageAt: true,
           createdAt: true,
           archivedAt: true,
@@ -4505,44 +4512,18 @@ export const mcpTools = {
       const linkedAgentId = ctx.apiKey?.linkedAgentId ?? null;
       const thread = await db.chatThread.findFirst({
         where: { id: threadId, workspaceId: ctx.workspaceId },
-        select: {
-          id: true,
-          agentId: true,
-          userId: true,
-          lastMessageAt: true,
-          createdAt: true,
-        },
+        select: { id: true, agentId: true },
       });
       if (!thread) throw new Error("Chat thread not found in this workspace.");
       if (linkedAgentId && thread.agentId !== linkedAgentId) {
         throw new Error("Only the thread's agent may bundle this context.");
       }
 
-      const messages = await db.chatMessage.findMany({
-        where: {
-          threadId: thread.id,
-          OR: [{ role: { not: "USER" } }, { dispatchedAt: { not: null } }],
-        },
-        orderBy: { createdAt: "desc" },
-        take: 50,
-        select: {
-          id: true,
-          role: true,
-          body: true,
-          contextSnapshot: true,
-          sourceRunId: true,
-          createdAt: true,
-        },
+      const bundle = await buildChatContextBundle(db, {
+        workspaceId: ctx.workspaceId,
+        threadId: thread.id,
+        limit: 50,
       });
-
-      const attachmentMap = await loadChatAttachmentMap(
-        ctx.workspaceId,
-        messages.map((m) => m.id),
-      );
-
-      // Pull a peer summary if the thread's agent differs from the caller
-      // (shouldn't happen since we gate on linkedAgentId, but a session
-      // caller without an apiKey would skip the gate).
       const agent =
         linkedAgentId && linkedAgentId === thread.agentId
           ? null
@@ -4557,85 +4538,18 @@ export const mcpTools = {
               },
             });
 
-      // Bonus — if any message's contextSnapshot.issueId is set, hydrate a
-      // tiny issue summary for it. Most threads will have at most one or
-      // two distinct issueIds across recent messages; cap to 5 for safety.
-      const issueIds = new Set<string>();
-      for (const m of messages) {
-        const snap = m.contextSnapshot as { issueId?: string } | null | undefined;
-        if (snap && typeof snap.issueId === "string") {
-          issueIds.add(snap.issueId);
-          if (issueIds.size >= 5) break;
-        }
-      }
-      const linkedIssues = issueIds.size
-        ? await db.issue.findMany({
-            where: {
-              id: { in: [...issueIds] },
-              workspaceId: ctx.workspaceId,
-            },
-            select: {
-              id: true,
-              number: true,
-              title: true,
-              statusId: true,
-              status: { select: { category: true, name: true } },
-            },
-          })
-        : [];
-
-      const latestUser = messages.find((m) => m.role === "USER") ?? null;
-      const latestAgent = messages.find((m) => m.role === "AGENT") ?? null;
-      const lastSourceRunId = messages.find((m) => m.sourceRunId)?.sourceRunId ?? null;
-      const run = lastSourceRunId
-        ? await db.agentRun.findFirst({
-            where: { id: lastSourceRunId, workspaceId: ctx.workspaceId },
-            select: {
-              id: true,
-              status: true,
-              startedAt: true,
-              finishedAt: true,
-              currentStep: true,
-              lastEventAt: true,
-            },
-          })
-        : null;
-      const waitingForReply = Boolean(
-        latestUser &&
-        (!latestAgent || latestUser.createdAt.getTime() > latestAgent.createdAt.getTime()),
-      );
-      const now = Date.now();
-      const diagnostics = {
-        latestUserMessageId: latestUser?.id ?? null,
-        latestUserMessageAt: latestUser?.createdAt ?? null,
-        latestAgentMessageAt: latestAgent?.createdAt ?? null,
-        waitingForReply,
-        waitingMs:
-          waitingForReply && latestUser ? Math.max(0, now - latestUser.createdAt.getTime()) : null,
-        lastSourceRunId,
-        lastRun: run
-          ? {
-              id: run.id,
-              status: run.status,
-              startedAt: run.startedAt,
-              completedAt: run.finishedAt,
-              currentStep: run.currentStep,
-              lastEventAt: run.lastEventAt,
-              idleMs: Math.max(0, now - run.lastEventAt.getTime()),
-            }
-          : null,
-      };
-
       return {
         workspace,
-        thread,
-        messages: messages.map((m) => ({
-          ...m,
-          attachments: attachmentMap.get(m.id) ?? [],
-        })),
+        thread: bundle.thread,
+        conversation: bundle.conversation,
+        summary: bundle.summary,
+        messages: bundle.recentMessages,
+        recentMessages: bundle.recentMessages,
+        attachments: bundle.attachments,
         agent,
-        linkedIssues,
-        diagnostics,
+        linkedIssues: bundle.linkedIssues,
+        diagnostics: bundle.diagnostics,
+        contextPolicy: bundle.contextPolicy,
       };
     },
   },

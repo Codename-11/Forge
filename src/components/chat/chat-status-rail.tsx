@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, CheckCircle2, Radio, RefreshCw, RotateCcw, ShieldAlert } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Radio, RefreshCw, RotateCcw, ShieldAlert, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
@@ -46,6 +46,10 @@ export function ChatStatusRail({
     id: string;
     agent: { id: string; name: string; profileKey: string; status: string; role?: string | null };
     diagnostics?: Diagnostics | null;
+    contextMode?: string | null;
+    summaryMarkdown?: string | null;
+    summarizedUntilMessageId?: string | null;
+    summarizedAt?: Date | string | null;
   } | null;
 }) {
   const utils = trpc.useUtils();
@@ -64,6 +68,13 @@ export function ChatStatusRail({
       else toast.info(result.message);
       await utils.chat.threads.invalidate();
       if (thread?.id) await utils.chat.threadDiagnostics.invalidate({ threadId: thread.id });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const compact = trpc.chat.compactThread.useMutation({
+    onSuccess: async () => {
+      toast.success("Conversation compacted");
+      await utils.chat.threads.invalidate();
     },
     onError: (err) => toast.error(err.message),
   });
@@ -124,12 +135,26 @@ export function ChatStatusRail({
         {diagnostics?.lastDelivery?.lastError && <div className="mt-1 line-clamp-2 text-[0.625rem] text-amber-600 dark:text-amber-400">{diagnostics.lastDelivery.lastError}</div>}
       </div>
 
+      <div className="rounded-lg border border-border/60 bg-background/60 p-2 text-meta">
+        <div className="flex items-center gap-2 font-medium text-foreground"><Sparkles className="h-3.5 w-3.5" /> Context</div>
+        <div className="mt-1 space-y-1 text-muted-foreground">
+          <div>mode · {(thread.contextMode ?? "SMART").toLowerCase().replaceAll("_", " ")}</div>
+          <div>
+            summary · {thread.summaryMarkdown ? `through ${thread.summarizedUntilMessageId ?? "latest compacted message"}` : "not compacted"}
+          </div>
+          {thread.summarizedAt && <div>compacted · {new Date(thread.summarizedAt).toLocaleString()}</div>}
+        </div>
+      </div>
+
       <div className="space-y-2 border-t border-border/60 pt-3">
         <Button variant="subtle" size="sm" className="w-full justify-start" disabled={!canRetry || retry.isPending} onClick={() => retry.mutate({ threadId: thread.id })}>
           <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Retry dispatch
         </Button>
         <Button variant="subtle" size="sm" className="w-full justify-start" disabled={!canKick || kick.isPending || !diagnostics?.lastRun?.id} onClick={() => diagnostics?.lastRun?.id && kick.mutate({ threadId: thread.id, runId: diagnostics.lastRun.id })}>
           <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Kick run
+        </Button>
+        <Button variant="subtle" size="sm" className="w-full justify-start" disabled={compact.isPending} onClick={() => compact.mutate({ threadId: thread.id })}>
+          <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Compact now
         </Button>
       </div>
     </div>

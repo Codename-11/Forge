@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { AgentRunStatus, ChatRole, EventKind, WebhookDeliveryStatus } from "@prisma/client";
+import { AgentRunStatus, ChatContextMode, ChatRole, EventKind, WebhookDeliveryStatus } from "@prisma/client";
 import { chatRouter } from "@/server/routers/chat";
 import {
   buildContext,
@@ -36,6 +36,79 @@ async function setup() {
 }
 
 describe("chatRouter deferred dispatch", () => {
+  it("supports multiple named conversations with the same agent while preserving one default DM", async () => {
+    const { agent, caller } = await setup();
+
+    const defaultThread = await caller.thread({ agentId: agent.id });
+    const planning = await caller.createConversation({
+      agentId: agent.id,
+      title: "Launch planning",
+      topic: "Scope the launch",
+      contextMode: ChatContextMode.FULL_SUMMARY,
+    });
+    const debugging = await caller.createConversation({ agentId: agent.id, title: "Debugging" });
+
+    expect(defaultThread.thread.isDefault).toBe(true);
+    expect(planning.thread.isDefault).toBe(false);
+    expect(debugging.thread.isDefault).toBe(false);
+    expect(new Set([defaultThread.thread.id, planning.thread.id, debugging.thread.id]).size).toBe(3);
+
+    const threads = await caller.threads();
+    expect(threads.map((thread) => thread.id)).toEqual(
+      expect.arrayContaining([defaultThread.thread.id, planning.thread.id, debugging.thread.id]),
+    );
+    expect(threads.find((thread) => thread.id === planning.thread.id)).toMatchObject({
+      title: "Launch planning",
+      topic: "Scope the launch",
+      contextMode: "FULL_SUMMARY",
+    });
+  });
+
+  it("dispatches user messages to a selected named conversation", async () => {
+    const { agent, caller } = await setup();
+    const conversation = await caller.createConversation({ agentId: agent.id, title: "Named thread" });
+
+    const sent = await caller.send({
+      agentId: agent.id,
+      threadId: conversation.thread.id,
+      body: "stay inside the named thread",
+    });
+
+    const defaultThread = await caller.thread({ agentId: agent.id });
+    expect(sent.threadId).toBe(conversation.thread.id);
+    expect(defaultThread.thread.id).not.toBe(conversation.thread.id);
+    expect(defaultThread.messages).toHaveLength(0);
+  });
+
+  it("compacts a conversation into durable summary metadata", async () => {
+    const { agent, caller, prisma, fixture } = await setup();
+    const conversation = await caller.createConversation({ agentId: agent.id, title: "Compaction" });
+    for (let i = 0; i < 4; i += 1) {
+      await prisma.chatMessage.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          threadId: conversation.thread.id,
+          role: i % 2 === 0 ? ChatRole.USER : ChatRole.AGENT,
+          body: `decision ${i}: keep context compact`,
+          dispatchedAt: new Date(),
+        },
+      });
+    }
+
+    const result = await caller.compactThread({ threadId: conversation.thread.id });
+    const event = await prisma.activityEvent.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.CHAT_THREAD_COMPACTED,
+        subjectId: conversation.thread.id,
+      },
+    });
+
+    expect(result.thread.summaryMarkdown).toContain("Conversation Summary");
+    expect(result.summarizedMessageCount).toBeGreaterThan(0);
+    expect(event?.payload).toMatchObject({ threadId: conversation.thread.id });
+  });
+
   it("creates pending messages without dispatching until dispatchMessage is called", async () => {
     const { prisma, agent, caller, fixture } = await setup();
 

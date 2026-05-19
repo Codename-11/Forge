@@ -128,17 +128,23 @@ and take actions on your behalf. Try:
 - "summarize this issue" (if you're on an issue page)
 - "@victor draft a status comment for AXI-31"`;
 
-export function ChatThreadView({ agentId }: { agentId: string }) {
+export function ChatThreadView({ agentId, threadId: selectedThreadId }: { agentId: string; threadId?: string | null }) {
   const utils = trpc.useUtils();
-  // Mutation that upserts + loads. Returns thread + agent + messages.
+  // Mutation that upserts + loads the default DM. Returns thread + agent + messages.
   const threadM = trpc.chat.thread.useMutation();
-  // Run on mount whenever agentId changes.
+  const selectedThreadQ = trpc.chat.getThread.useQuery(
+    { threadId: selectedThreadId ?? "" },
+    { enabled: Boolean(selectedThreadId), staleTime: 10_000 },
+  );
+  // Run on mount whenever agentId changes and no concrete thread is selected.
   useEffect(() => {
-    threadM.mutate({ agentId });
+    if (!selectedThreadId) threadM.mutate({ agentId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
+  }, [agentId, selectedThreadId]);
 
-  const data = threadM.data;
+  const data = selectedThreadId && selectedThreadQ.data
+    ? { thread: selectedThreadQ.data, agent: selectedThreadQ.data.agent, messages: selectedThreadQ.data.messages }
+    : threadM.data;
   const threadId = data?.thread.id;
   const { data: diagnostics } = trpc.chat.threadDiagnostics.useQuery(
     { threadId: threadId ?? "" },
@@ -202,25 +208,33 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
     // Regular chat message posted — refetch.
     if (evt.subjectType !== "chat-thread") return;
     if (evt.subjectId !== threadId) return;
-    // Refetch by re-running the mutation. Simplest path; cheap.
-    threadM.mutate({ agentId });
+    if (selectedThreadId) {
+      void utils.chat.getThread.invalidate({ threadId: selectedThreadId });
+    } else {
+      threadM.mutate({ agentId });
+    }
   });
 
   const sendM = trpc.chat.send.useMutation({
     onSuccess: () => {
-      threadM.mutate({ agentId });
+      if (selectedThreadId) void utils.chat.getThread.invalidate({ threadId: selectedThreadId });
+      else threadM.mutate({ agentId });
       void utils.chat.threads.invalidate();
     },
   });
   const createPendingM = trpc.chat.createPendingMessage.useMutation();
   const dispatchM = trpc.chat.dispatchMessage.useMutation({
     onSuccess: () => {
-      threadM.mutate({ agentId });
+      if (selectedThreadId) void utils.chat.getThread.invalidate({ threadId: selectedThreadId });
+      else threadM.mutate({ agentId });
       void utils.chat.threads.invalidate();
     },
   });
   const initUploadM = trpc.attachment.initUpload.useMutation();
   const finalizeM = trpc.attachment.finalize.useMutation();
+  const compactM = trpc.chat.compactThread.useMutation({
+    onSuccess: () => void utils.chat.threads.invalidate(),
+  });
   const [pendingDraft, setPendingDraft] = useState<{ body: string; files: string[] } | null>(null);
 
   const ctx = useChatContext();
@@ -255,6 +269,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
       if (files.length === 0) {
         await sendM.mutateAsync({
           agentId,
+          threadId: selectedThreadId ?? undefined,
           body,
           context: currentContext,
         });
@@ -263,6 +278,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
 
       const pending = await createPendingM.mutateAsync({
         agentId,
+        threadId: selectedThreadId ?? undefined,
         body,
         context: currentContext,
       });
@@ -310,6 +326,10 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
       appendLocal,
       clearLocal,
       sendPrompt: handleSend,
+      compactThread: async () => {
+        if (!threadId) return;
+        await compactM.mutateAsync({ threadId });
+      },
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent?.id, agentFull?.runtimeMode, agentFull?.status, threadId, workspace?.slug]);
