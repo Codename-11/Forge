@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bot } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -9,15 +9,26 @@ import { ChatThreadView } from "./chat-thread";
  * Chat tab: left rail of agents (existing threads + all known agents),
  * right pane is the active thread.
  */
-export function ChatTab({ slug: _slug }: { slug: string }) {
+export function ChatTab({
+  slug: _slug,
+  autoFocus = false,
+}: {
+  slug: string;
+  /** Focus the composer when the tab becomes active. */
+  autoFocus?: boolean;
+}) {
   const { data: threads } = trpc.chat.threads.useQuery(undefined, { staleTime: 30_000 });
   const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false }, { staleTime: 60_000 });
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  // Once the user clicks into an agent we stop auto-shuffling under them.
+  const userPickedRef = useRef(false);
 
-  // Auto-pick the most recent thread on first load.
-  if (selectedAgentId == null && threads && threads.length > 0) {
-    setSelectedAgentId(threads[0].agent.id);
-  }
+  useEffect(() => {
+    if (userPickedRef.current) return;
+    if (selectedAgentId == null && threads && threads.length > 0) {
+      setSelectedAgentId(threads[0].agent.id);
+    }
+  }, [threads, selectedAgentId]);
 
   // Build the agent rail: existing threads first (with lastMessageAt), then
   // agents that have no thread yet.
@@ -70,7 +81,10 @@ export function ChatTab({ slug: _slug }: { slug: string }) {
             <button
               key={a.id}
               type="button"
-              onClick={() => setSelectedAgentId(a.id)}
+              onClick={() => {
+                userPickedRef.current = true;
+                setSelectedAgentId(a.id);
+              }}
               className={cn(
                 "group flex w-full items-center gap-1.5 border-b border-border/40 px-2 py-1.5 text-left text-[0.6875rem]",
                 isActive
@@ -105,7 +119,7 @@ export function ChatTab({ slug: _slug }: { slug: string }) {
       {/* Thread pane */}
       <div className="min-w-0 flex-1">
         {selectedAgentId ? (
-          <ChatThreadView agentId={selectedAgentId} />
+          <ChatThreadView agentId={selectedAgentId} autoFocus={autoFocus} />
         ) : (
           <div className="flex h-full items-center justify-center px-4 text-center text-[0.75rem] text-muted-foreground">
             <div>

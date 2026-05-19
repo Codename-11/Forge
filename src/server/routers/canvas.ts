@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, type PrismaClient } from "@prisma/client";
+import { ArtifactType, EventKind, ExecutionPlanStatus, type PrismaClient } from "@prisma/client";
+import { nanoid } from "nanoid";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { forgeEntityTypeSchema } from "@/lib/entity-ref";
 import { hydrateEntityRefs, type HydratedEntityRef } from "@/server/services/entity-hydration";
+import { createArtifact } from "@/server/services/artifact-service";
+import { publish } from "@/server/realtime";
 
 /**
  * Workspace canvas router — infinite spatial board for synthesis work.
@@ -154,6 +157,7 @@ export const canvasRouter = router({
           db: ctx.db,
           workspaceId: ctx.workspaceId,
           workspaceSlug: ctx.workspaceSlug ?? undefined,
+          userId: ctx.session?.user?.id ?? null,
         },
         refs,
       );
@@ -396,6 +400,401 @@ export const canvasRouter = router({
       }
       await ctx.db.workspaceCanvasEdge.delete({ where: { id: input.id } });
       return { ok: true };
+    }),
+
+  /**
+   * Spawn a markdown sticky-note Artifact (kind=NOTE) AND a canvas
+   * node pointing at it in one call. Notes live in the standard
+   * Artifact table so they're searchable, attachable, and linkable
+   * like any other artifact — the canvas surface is just one way of
+   * arranging them in space.
+   */
+  addNote: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        body: z.string().max(200_000).default(""),
+        x: z.number(),
+        y: z.number(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+
+      const trimmedBody = input.body.trim();
+      const firstLine = trimmedBody.split(/\r?\n/)[0]?.trim() ?? "";
+      const title = firstLine.length
+        ? firstLine.slice(0, 180)
+        : `Note ${new Date().toISOString().slice(0, 10)}`;
+
+      const { id: artifactId } = await createArtifact(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session?.user?.id ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        title,
+        body: input.body,
+        type: ArtifactType.NOTE,
+      });
+
+      const node = await ctx.db.workspaceCanvasNode.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          canvasId: input.canvasId,
+          targetType: "artifact",
+          targetId: artifactId,
+          x: input.x,
+          y: input.y,
+          width: 240,
+          height: 160,
+          zIndex: 0,
+          viewMode: "card",
+          meta: { kind: "NOTE" },
+        },
+      });
+      await ctx.db.workspaceCanvas.update({
+        where: { id: input.canvasId },
+        data: { updatedAt: new Date() },
+      });
+      return { nodeId: node.id, artifactId };
+    }),
+
+  /**
+   * Drop an existing ChatThread onto the canvas. Verifies the calling
+   * user owns the thread (same visibility rule as `chat.getThread`)
+   * before creating the canvas node.
+   */
+  addChatThread: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        threadId: z.string().cuid(),
+        x: z.number(),
+        y: z.number(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [canvas, thread] = await Promise.all([
+        ctx.db.workspaceCanvas.findFirst({
+          where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+          select: { id: true },
+        }),
+        ctx.db.chatThread.findFirst({
+          where: {
+            id: input.threadId,
+            workspaceId: ctx.workspaceId,
+            userId: ctx.session?.user?.id ?? "__none__",
+          },
+          select: { id: true },
+        }),
+      ]);
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      if (!thread) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Chat thread not found or not visible to caller.",
+        });
+      }
+      const node = await ctx.db.workspaceCanvasNode.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          canvasId: input.canvasId,
+          targetType: "chat-thread",
+          targetId: input.threadId,
+          x: input.x,
+          y: input.y,
+          width: 280,
+          height: 200,
+          zIndex: 0,
+          viewMode: "card",
+        },
+      });
+      await ctx.db.workspaceCanvas.update({
+        where: { id: input.canvasId },
+        data: { updatedAt: new Date() },
+      });
+      return { nodeId: node.id };
+    }),
+
+  /**
+   * Reverse of `createFromPlan`. Walks the canvas and synthesizes a
+   * new DRAFT ExecutionPlan whose steps come from (a) existing
+   * `execution-step` nodes (linked, not duplicated as new rows — see
+   * note below) and (b) Note artifacts whose first line becomes the
+   * step title. depends_on edges on the canvas map to ExecutionStep
+   * `dependsOnStepIds`. Other targetTypes are surfaced in
+   * `skippedNodes`.
+   *
+   * Existing `execution-step` nodes: we COPY them into the new plan as
+   * fresh ExecutionStep rows (one row per plan; can't re-parent a step
+   * across plans without breaking the @@unique([planId, position])
+   * invariant). The original steps stay where they were — this is a
+   * "extract a new plan from these ideas" tool, not a step migration.
+   */
+  convertToPlan: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        title: z.string().min(1).max(300).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        include: {
+          nodes: true,
+          edges: true,
+        },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+
+      const skippedNodes: Array<{ nodeId: string; reason: string }> = [];
+
+      // Sort nodes top-left → bottom-right for positional ordering.
+      const sortedNodes = [...canvas.nodes].sort((a, b) => {
+        if (a.y !== b.y) return a.y - b.y;
+        return a.x - b.x;
+      });
+
+      // Identify the artifact NOTE rows (need to read their bodies).
+      const artifactNodes = sortedNodes.filter((n) => n.targetType === "artifact");
+      const artifactIds = artifactNodes.map((n) => n.targetId);
+      const artifactRows = artifactIds.length
+        ? await ctx.db.artifact.findMany({
+            where: {
+              id: { in: artifactIds },
+              workspaceId: ctx.workspaceId,
+              archivedAt: null,
+            },
+            select: { id: true, title: true, body: true, type: true },
+          })
+        : [];
+      const artifactById = new Map(artifactRows.map((a) => [a.id, a] as const));
+
+      const existingStepIds = sortedNodes
+        .filter((n) => n.targetType === "execution-step")
+        .map((n) => n.targetId);
+      const existingStepRows = existingStepIds.length
+        ? await ctx.db.executionStep.findMany({
+            where: {
+              id: { in: existingStepIds },
+              workspaceId: ctx.workspaceId,
+            },
+            select: {
+              id: true,
+              title: true,
+              body: true,
+              expectedOutput: true,
+            },
+          })
+        : [];
+      const existingStepById = new Map(existingStepRows.map((s) => [s.id, s] as const));
+
+      // Walk the sorted nodes in order, deciding includes/skips. Each
+      // included node gets a placeholder step descriptor keyed by the
+      // canvasNodeId so we can resolve depends_on later.
+      interface PendingStep {
+        canvasNodeId: string;
+        title: string;
+        body: string | null;
+        expectedOutput: string | null;
+      }
+      const pending: PendingStep[] = [];
+
+      for (const node of sortedNodes) {
+        if (node.targetType === "execution-step") {
+          const row = existingStepById.get(node.targetId);
+          if (!row) {
+            skippedNodes.push({
+              nodeId: node.id,
+              reason: "execution-step target not found in this workspace",
+            });
+            continue;
+          }
+          pending.push({
+            canvasNodeId: node.id,
+            title: row.title,
+            body: row.body ?? null,
+            expectedOutput: row.expectedOutput ?? null,
+          });
+          continue;
+        }
+        if (node.targetType === "artifact") {
+          const artifact = artifactById.get(node.targetId);
+          if (!artifact) {
+            skippedNodes.push({
+              nodeId: node.id,
+              reason: "artifact target not found in this workspace",
+            });
+            continue;
+          }
+          const isNote =
+            artifact.type === ArtifactType.NOTE ||
+            (node.meta && typeof node.meta === "object" && (node.meta as { kind?: unknown }).kind === "NOTE");
+          if (!isNote) {
+            skippedNodes.push({
+              nodeId: node.id,
+              reason: `artifact target kind ${artifact.type} is not NOTE`,
+            });
+            continue;
+          }
+          const trimmed = (artifact.body ?? "").trim();
+          const lines = trimmed.length ? trimmed.split(/\r?\n/) : [];
+          const firstLine = lines[0]?.trim() ?? "";
+          const rest = lines.slice(1).join("\n").trim();
+          const title = firstLine.length ? firstLine.slice(0, 280) : artifact.title;
+          const body = rest.length ? rest : null;
+          pending.push({
+            canvasNodeId: node.id,
+            title: title || "Untitled step",
+            body,
+            expectedOutput: null,
+          });
+          continue;
+        }
+        skippedNodes.push({
+          nodeId: node.id,
+          reason: `targetType ${node.targetType} is not convertible (only execution-step and artifact NOTE)`,
+        });
+      }
+
+      const includedCanvasNodeIds = new Set(pending.map((p) => p.canvasNodeId));
+      const dependsByTo = new Map<string, string[]>();
+      for (const edge of canvas.edges) {
+        if (edge.kind !== "depends_on") continue;
+        if (!includedCanvasNodeIds.has(edge.fromNodeId)) continue;
+        if (!includedCanvasNodeIds.has(edge.toNodeId)) continue;
+        const list = dependsByTo.get(edge.toNodeId) ?? [];
+        list.push(edge.fromNodeId);
+        dependsByTo.set(edge.toNodeId, list);
+      }
+
+      const planTitle = (input.title ?? canvas.name).trim() || canvas.name;
+      const today = new Date().toISOString().slice(0, 10);
+      const planDescription = `Imported from canvas '${canvas.name}' on ${today}.`;
+
+      const result = await ctx.db.$transaction(async (tx) => {
+        const plan = await tx.executionPlan.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            title: planTitle,
+            description: planDescription,
+            status: ExecutionPlanStatus.DRAFT,
+            createdById: ctx.session?.user?.id ?? null,
+            createdByAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          },
+        });
+
+        const canvasNodeIdToStepId = new Map<string, string>();
+        for (let i = 0; i < pending.length; i++) {
+          const p = pending[i]!;
+          const step = await tx.executionStep.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              planId: plan.id,
+              title: p.title.trim() || "Untitled step",
+              body: p.body,
+              expectedOutput: p.expectedOutput,
+              position: i,
+              dependsOnStepIds: [],
+            },
+            select: { id: true },
+          });
+          canvasNodeIdToStepId.set(p.canvasNodeId, step.id);
+        }
+
+        // Second pass: resolve depends_on edges to real step ids.
+        for (const p of pending) {
+          const deps = dependsByTo.get(p.canvasNodeId);
+          if (!deps || deps.length === 0) continue;
+          const realIds = deps
+            .map((nodeId) => canvasNodeIdToStepId.get(nodeId))
+            .filter((id): id is string => Boolean(id));
+          if (realIds.length === 0) continue;
+          const stepId = canvasNodeIdToStepId.get(p.canvasNodeId)!;
+          await tx.executionStep.update({
+            where: { id: stepId },
+            data: { dependsOnStepIds: realIds },
+          });
+        }
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "execution-plan",
+          entityId: plan.id,
+          action: "created",
+          after: {
+            title: plan.title,
+            status: plan.status,
+            stepCount: pending.length,
+            sourceCanvasId: canvas.id,
+          },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "execution-plan",
+          subjectId: plan.id,
+        });
+
+        return { planId: plan.id, stepCount: pending.length };
+      });
+
+      return {
+        planId: result.planId,
+        stepCount: result.stepCount,
+        skippedNodes,
+      };
+    }),
+
+  /**
+   * Broadcast the calling user's cursor position on a canvas. Fire-and-
+   * forget Redis publish — no persistence, no audit. Workspace-scoped:
+   * only members of the workspace can publish (and the SSE channel
+   * is keyed by workspaceId so only workspace members receive it).
+   */
+  broadcastPresence: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        x: z.number(),
+        y: z.number(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      const userId = ctx.session?.user?.id ?? null;
+      const name = ctx.session?.user?.name ?? ctx.session?.user?.email ?? "Anonymous";
+      void publish({
+        id: nanoid(),
+        workspaceId: ctx.workspaceId,
+        kind: EventKind.ISSUE_UPDATED,
+        subjectType: "canvas-presence",
+        subjectId: input.canvasId,
+        payload: {
+          userId,
+          name,
+          x: input.x,
+          y: input.y,
+          ts: Date.now(),
+        },
+        actorId: userId,
+        createdAt: new Date().toISOString(),
+      });
+      return { ok: true as const };
     }),
 
   /**

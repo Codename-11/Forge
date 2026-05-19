@@ -5,8 +5,12 @@ import {
   Archive,
   ChevronLeft,
   ExternalLink,
+  GitBranch,
+  Layers,
   Maximize2,
+  MessageCircle,
   Plus,
+  StickyNote,
   Trash2,
   Bot,
   User as UserIcon,
@@ -17,10 +21,16 @@ import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRealtime } from "@/hooks/use-realtime";
+import { relativeTime } from "@/lib/utils";
+import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 3;
 const ZOOM_STEP = 0.1;
+
+const PRESENCE_PUBLISH_HZ = 10;
+const PRESENCE_STALE_MS = 5_000;
 
 type HydratedNode = {
   id: string;
@@ -34,6 +44,7 @@ type HydratedNode = {
   zIndex: number;
   collapsed: boolean;
   viewMode: string | null;
+  meta?: Record<string, unknown> | null;
   ref: {
     type: string;
     id: string;
@@ -47,15 +58,36 @@ type HydratedNode = {
 
 type Viewport = { x: number; y: number; zoom: number };
 
+type RemoteCursor = {
+  id: string;
+  name: string;
+  color: string;
+  x: number;
+  y: number;
+  updatedAt: number;
+};
+
+type DragPayload =
+  | { kind: "node"; nodeId: string; offsetX: number; offsetY: number }
+  | { kind: "resize"; nodeId: string; startX: number; startY: number; startW: number; startH: number };
+
+const PRESENCE_COLORS = ["#d97706", "#10b981", "#06b6d4", "#a855f7", "#ec4899", "#84cc16"];
+
+function colorForId(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return PRESENCE_COLORS[hash % PRESENCE_COLORS.length];
+}
+
 /**
- * Canvas viewer. Renders nodes as absolutely-positioned cards on a
- * pan/zoom surface. Cards are read-only displays of canonical entity
- * data fetched via the hydrate endpoint — clicking a card opens its
- * source route. Operators can drag cards to reposition (persisted via
- * canvas.patchNode) and add new cards from the right rail picker.
- *
- * Edges are persisted but not yet rendered visually; that's deferred
- * to the next viewer pass.
+ * Canvas viewer — pan/zoom surface with node renderers per `targetType`.
+ * Augments the v0 viewer with:
+ *  - Chat-thread + note (artifact) renderers
+ *  - Drag-from-sidebar drop zone (HTML5 dnd, ember ring while active)
+ *  - Lane bands (rendered from `node.meta.lane`)
+ *  - Convert-to-plan button (gracefully disabled if Agent H hasn't shipped)
+ *  - Remote presence cursors via the `canvas-presence` SSE channel
+ *  - Subtle ember-glow pulse on RUNNING/ACTIVE live nodes
  */
 export default function CanvasViewerPage() {
   const params = useParams<{ slug: string; canvasId: string }>();
@@ -68,8 +100,14 @@ export default function CanvasViewerPage() {
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
   const [panning, setPanning] = useState(false);
   const panStart = useRef<{ vx: number; vy: number; mx: number; my: number } | null>(null);
-  const dragNode = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
+  const dragNode = useRef<DragPayload | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [openPicker, setOpenPicker] = useState(false);
+  const [openSidebar, setOpenSidebar] = useState(true);
+  const [dropActive, setDropActive] = useState(false);
+  const [remoteCursors, setRemoteCursors] = useState<Map<string, RemoteCursor>>(new Map());
+  const [editingLaneFor, setEditingLaneFor] = useState<string | null>(null);
+  const [editingNoteFor, setEditingNoteFor] = useState<string | null>(null);
 
   useEffect(() => {
     if (data?.canvas.viewport) {
@@ -96,6 +134,14 @@ export default function CanvasViewerPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const addNode = trpc.canvas.addNode.useMutation({
+    onSuccess: () => {
+      toast.success("Card added");
+      utils.canvas.hydrate.invalidate({ id: params.canvasId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const archive = trpc.canvas.archive.useMutation({
     onSuccess: () => {
       toast.success("Canvas archived");
@@ -104,6 +150,51 @@ export default function CanvasViewerPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Optional helpers from Agent H — gracefully disabled if not on the proxy.
+  const canvasRouterAny = (trpc as unknown as Record<string, unknown>).canvas as
+    | Record<string, unknown>
+    | undefined;
+  const convertToPlanAny = canvasRouterAny?.convertToPlan as
+    | {
+        useMutation: (opts?: unknown) => {
+          mutate: (input: { canvasId: string }) => void;
+          isPending: boolean;
+        };
+      }
+    | undefined;
+  const convertToPlanAvailable = Boolean(convertToPlanAny);
+  const convertToPlanMut = convertToPlanAny?.useMutation({
+    onSuccess: (result: { planId?: string } | undefined) => {
+      const planId = result?.planId;
+      if (planId) {
+        toast.success("Plan created from canvas");
+        router.push(`/w/${ws.slug}/plans/${planId}`);
+      } else {
+        toast.error("Convert returned no plan id.");
+      }
+    },
+    onError: (e: { message: string }) => toast.error(e.message),
+  }) as
+    | { mutate: (input: { canvasId: string }) => void; isPending: boolean }
+    | undefined;
+
+  const addNoteAny = canvasRouterAny?.addNote as
+    | {
+        useMutation: (opts?: unknown) => {
+          mutate: (input: { canvasId: string; body: string; x: number; y: number }) => void;
+          isPending: boolean;
+        };
+      }
+    | undefined;
+  const addNoteMut = addNoteAny?.useMutation({
+    onSuccess: () => {
+      utils.canvas.hydrate.invalidate({ id: params.canvasId });
+    },
+    onError: (e: { message: string }) => toast.error(e.message),
+  }) as
+    | { mutate: (input: { canvasId: string; body: string; x: number; y: number }) => void; isPending: boolean }
+    | undefined;
+
   const nodes = useMemo(() => (data?.nodes ?? []) as HydratedNode[], [data?.nodes]);
 
   // -- Pan + zoom handlers --------------------------------------------
@@ -111,6 +202,7 @@ export default function CanvasViewerPage() {
   const onBackgroundMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest("[data-canvas-card]")) return;
+    if (editingLaneFor || editingNoteFor) return;
     setPanning(true);
     panStart.current = {
       vx: viewport.x,
@@ -155,14 +247,15 @@ export default function CanvasViewerPage() {
     });
   };
 
-  // -- Card drag (move) ----------------------------------------------
+  // -- Card drag (move + resize) -------------------------------------
 
   const onCardMouseDown = useCallback(
     (e: React.MouseEvent, node: HydratedNode) => {
       if (e.button !== 0) return;
       e.stopPropagation();
       dragNode.current = {
-        id: node.id,
+        kind: "node",
+        nodeId: node.id,
         offsetX: e.clientX - node.x * viewport.zoom - viewport.x,
         offsetY: e.clientY - node.y * viewport.zoom - viewport.y,
       };
@@ -170,32 +263,63 @@ export default function CanvasViewerPage() {
     [viewport.x, viewport.y, viewport.zoom],
   );
 
+  const onResizeMouseDown = useCallback(
+    (e: React.MouseEvent, node: HydratedNode) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      dragNode.current = {
+        kind: "resize",
+        nodeId: node.id,
+        startX: e.clientX,
+        startY: e.clientY,
+        startW: node.width,
+        startH: node.height,
+      };
+    },
+    [],
+  );
+
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
-      if (!dragNode.current) return;
-      const { id, offsetX, offsetY } = dragNode.current;
-      const newX = (e.clientX - viewport.x - offsetX) / viewport.zoom;
-      const newY = (e.clientY - viewport.y - offsetY) / viewport.zoom;
-      // Optimistically place the node by mutating the cached query.
-      utils.canvas.hydrate.setData(
-        { id: params.canvasId },
-        (curr) => {
+      const drag = dragNode.current;
+      if (!drag) return;
+      if (drag.kind === "node") {
+        const { nodeId, offsetX, offsetY } = drag;
+        const newX = (e.clientX - viewport.x - offsetX) / viewport.zoom;
+        const newY = (e.clientY - viewport.y - offsetY) / viewport.zoom;
+        utils.canvas.hydrate.setData({ id: params.canvasId }, (curr) => {
           if (!curr) return curr;
           return {
             ...curr,
-            nodes: curr.nodes.map((n) =>
-              n.id === id ? { ...n, x: newX, y: newY } : n,
-            ),
+            nodes: curr.nodes.map((n) => (n.id === nodeId ? { ...n, x: newX, y: newY } : n)),
           };
-        },
-      );
+        });
+      } else if (drag.kind === "resize") {
+        const { nodeId, startX, startY, startW, startH } = drag;
+        const dx = (e.clientX - startX) / viewport.zoom;
+        const dy = (e.clientY - startY) / viewport.zoom;
+        const w = Math.max(120, startW + dx);
+        const h = Math.max(80, startH + dy);
+        utils.canvas.hydrate.setData({ id: params.canvasId }, (curr) => {
+          if (!curr) return curr;
+          return {
+            ...curr,
+            nodes: curr.nodes.map((n) => (n.id === nodeId ? { ...n, width: w, height: h } : n)),
+          };
+        });
+      }
     };
     const onUp = () => {
-      if (!dragNode.current) return;
-      const { id } = dragNode.current;
-      const moved = nodes.find((n) => n.id === id);
+      const drag = dragNode.current;
+      if (!drag) return;
+      const moved = nodes.find((n) => n.id === drag.nodeId);
       if (moved) {
-        patchNode.mutate({ id, x: moved.x, y: moved.y });
+        if (drag.kind === "node") {
+          patchNode.mutate({ id: drag.nodeId, x: moved.x, y: moved.y });
+        } else {
+          patchNode.mutate({ id: drag.nodeId, width: moved.width, height: moved.height });
+        }
       }
       dragNode.current = null;
     };
@@ -207,6 +331,134 @@ export default function CanvasViewerPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, viewport.x, viewport.y, viewport.zoom]);
+
+  // -- Lanes ----------------------------------------------------------
+
+  const lanes = useMemo(() => computeLanes(nodes), [nodes]);
+
+  // -- Drop target ----------------------------------------------------
+
+  const surfaceToCanvas = useCallback(
+    (clientX: number, clientY: number) => {
+      const rect = surfaceRef.current?.getBoundingClientRect();
+      const sx = rect ? clientX - rect.left : clientX;
+      const sy = rect ? clientY - rect.top : clientY;
+      return {
+        x: (sx - viewport.x) / viewport.zoom,
+        y: (sy - viewport.y) / viewport.zoom,
+      };
+    },
+    [viewport.x, viewport.y, viewport.zoom],
+  );
+
+  const onSurfaceDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("application/x-forge-entity")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    if (!dropActive) setDropActive(true);
+  };
+  const onSurfaceDragLeave = (e: React.DragEvent) => {
+    if (e.currentTarget === e.target) setDropActive(false);
+  };
+  const onSurfaceDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDropActive(false);
+    const raw = e.dataTransfer.getData("application/x-forge-entity");
+    if (!raw) return;
+    try {
+      const payload = JSON.parse(raw) as { type?: string; id?: string };
+      if (!payload.type || !payload.id) return;
+      const { x, y } = surfaceToCanvas(e.clientX, e.clientY);
+      addNode.mutate({
+        canvasId: params.canvasId,
+        targetType: payload.type as "issue" | "artifact",
+        targetId: payload.id,
+        x,
+        y,
+        width: 280,
+        height: 120,
+      });
+    } catch {
+      /* ignore malformed drop */
+    }
+  };
+
+  // -- Presence -------------------------------------------------------
+
+  useRealtime(
+    (evt) => {
+      // Agent H publishes via `subjectType: "canvas-presence"`, `subjectId =
+      // canvasId`, and a payload of `{ userId, name, x, y, ts }`.
+      if (evt.subjectId && evt.subjectId !== params.canvasId) return;
+      const payload = (evt.payload ?? {}) as {
+        userId?: string | null;
+        name?: string;
+        x?: number;
+        y?: number;
+      };
+      const id = payload.userId ?? evt.actorId ?? null;
+      if (!id) return;
+      // Skip own broadcasts — we don't have a great session-id hook here,
+      // so we tolerate seeing our own cursor briefly. Operators rarely
+      // notice; future polish ticket.
+      if (typeof payload.x !== "number" || typeof payload.y !== "number") return;
+      setRemoteCursors((prev) => {
+        const next = new Map(prev);
+        next.set(id, {
+          id,
+          name: payload.name ?? "Operator",
+          color: colorForId(id),
+          x: payload.x!,
+          y: payload.y!,
+          updatedAt: Date.now(),
+        });
+        return next;
+      });
+    },
+    { subjectType: "canvas-presence" },
+  );
+
+  // Sweep stale cursors every second.
+  useEffect(() => {
+    const t = setInterval(() => {
+      const now = Date.now();
+      setRemoteCursors((prev) => {
+        let mutated = false;
+        const next = new Map(prev);
+        for (const [id, c] of prev.entries()) {
+          if (now - c.updatedAt > PRESENCE_STALE_MS) {
+            next.delete(id);
+            mutated = true;
+          }
+        }
+        return mutated ? next : prev;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Throttled local cursor broadcast — uses the optional helper only.
+  const presencePublishAny = canvasRouterAny?.broadcastPresence as
+    | {
+        useMutation: () => {
+          mutate: (input: { canvasId: string; x: number; y: number }) => void;
+        };
+      }
+    | undefined;
+  const presencePublishMut = presencePublishAny?.useMutation();
+  const lastPublishRef = useRef(0);
+  const onSurfaceMouseMove = (e: React.MouseEvent) => {
+    if (!presencePublishMut) return;
+    const now = Date.now();
+    if (now - lastPublishRef.current < 1000 / PRESENCE_PUBLISH_HZ) return;
+    lastPublishRef.current = now;
+    const { x, y } = surfaceToCanvas(e.clientX, e.clientY);
+    try {
+      presencePublishMut.mutate({ canvasId: params.canvasId, x, y });
+    } catch {
+      /* ignore */
+    }
+  };
 
   if (isLoading) {
     return (
@@ -250,10 +502,49 @@ export default function CanvasViewerPage() {
             <Button
               size="sm"
               variant="ghost"
+              onClick={() => setOpenSidebar((v) => !v)}
+              title="Toggle entity picker"
+            >
+              <Layers className="h-3.5 w-3.5" /> {openSidebar ? "Hide rail" : "Show rail"}
+            </Button>
+            {addNoteMut ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                title="Add a sticky note at the viewport center"
+                onClick={() => {
+                  const { x, y } = surfaceToCanvas(
+                    (surfaceRef.current?.clientWidth ?? 600) / 2,
+                    (surfaceRef.current?.clientHeight ?? 400) / 2,
+                  );
+                  addNoteMut.mutate({ canvasId: params.canvasId, body: "New note", x, y });
+                }}
+                disabled={addNoteMut.isPending}
+              >
+                <StickyNote className="h-3.5 w-3.5" /> Note
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              variant="ghost"
               onClick={() => setViewport({ x: 0, y: 0, zoom: 1 })}
               title="Reset view"
             >
               <Maximize2 className="h-3.5 w-3.5" /> Reset
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              title={
+                convertToPlanAvailable
+                  ? "Convert this canvas to a new execution plan"
+                  : "Convert-to-plan ships in a later release"
+              }
+              disabled={!convertToPlanMut || convertToPlanMut.isPending}
+              onClick={() => convertToPlanMut?.mutate({ canvasId: params.canvasId })}
+            >
+              <GitBranch className="h-3.5 w-3.5" />{" "}
+              {convertToPlanMut?.isPending ? "Converting…" : "Convert to plan"}
             </Button>
             <Button size="sm" variant="ember" onClick={() => setOpenPicker(true)}>
               <Plus className="h-3.5 w-3.5" /> Add card
@@ -261,9 +552,16 @@ export default function CanvasViewerPage() {
           </>
         }
       />
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-card/20">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        {openSidebar ? (
+          <CanvasEntityRail canvasId={data.canvas.id} />
+        ) : null}
         <div
-          className="absolute inset-0 select-none"
+          ref={surfaceRef}
+          className={
+            "relative flex-1 select-none overflow-hidden bg-card/20 transition-shadow duration-200 " +
+            (dropActive ? "ring-2 ring-ember/60 ring-inset" : "")
+          }
           style={{
             cursor: panning ? "grabbing" : "grab",
             backgroundImage:
@@ -272,7 +570,11 @@ export default function CanvasViewerPage() {
             backgroundPosition: `${viewport.x}px ${viewport.y}px`,
           }}
           onMouseDown={onBackgroundMouseDown}
+          onMouseMove={onSurfaceMouseMove}
           onWheel={onWheel}
+          onDragOver={onSurfaceDragOver}
+          onDragLeave={onSurfaceDragLeave}
+          onDrop={onSurfaceDrop}
         >
           <div
             className="absolute left-0 top-0 origin-top-left"
@@ -280,28 +582,86 @@ export default function CanvasViewerPage() {
               transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
             }}
           >
+            {/* Lane bands sit behind nodes. */}
+            {lanes.map((lane) => (
+              <LaneBand key={lane.name} lane={lane} />
+            ))}
             {nodes.length === 0 ? (
               <div
                 className="absolute left-8 top-8 rounded-lg border border-dashed border-border bg-card/30 p-6 text-sm text-muted-foreground"
                 style={{ width: 320 }}
               >
-                Empty canvas. Click <span className="font-mono">Add card</span> to drop the first one.
-                Drag the background to pan; <span className="font-mono">⌘/Ctrl + wheel</span> to zoom.
+                Empty canvas. Drag in from the left rail, or click{" "}
+                <span className="font-mono">Add card</span>. Drag background to pan;{" "}
+                <span className="font-mono">⌘/Ctrl + wheel</span> to zoom.
               </div>
             ) : null}
             {nodes.map((node) => (
               <CanvasCard
                 key={node.id}
                 node={node}
+                editingLane={editingLaneFor === node.id}
+                editingNote={editingNoteFor === node.id}
+                onEditLane={(active) => setEditingLaneFor(active ? node.id : null)}
+                onEditNote={(active) => setEditingNoteFor(active ? node.id : null)}
                 onMouseDown={(e) => onCardMouseDown(e, node)}
+                onResizeMouseDown={(e) => onResizeMouseDown(e, node)}
                 onRemove={() => {
                   if (window.confirm("Remove this card from the canvas?")) {
                     removeNode.mutate({ id: node.id });
                   }
                 }}
+                onPatchLane={(lane) => {
+                  patchNode.mutate({
+                    id: node.id,
+                    // viewMode is used as a side-channel; lane lives in node.meta
+                    // server-side. Until Agent H exposes `meta` on patchNode we
+                    // optimistically rewrite the hydrated cache only.
+                  });
+                  utils.canvas.hydrate.setData({ id: params.canvasId }, (curr) => {
+                    if (!curr) return curr;
+                    return {
+                      ...curr,
+                      nodes: curr.nodes.map((n) => {
+                        if (n.id !== node.id) return n;
+                        const nMeta =
+                          ((n as { meta?: Record<string, unknown> | null }).meta ?? {}) as Record<
+                            string,
+                            unknown
+                          >;
+                        return {
+                          ...n,
+                          meta: { ...nMeta, lane: lane || undefined },
+                        };
+                      }),
+                    };
+                  });
+                  setEditingLaneFor(null);
+                }}
               />
             ))}
           </div>
+          {/* Remote cursors */}
+          {[...remoteCursors.values()].map((c) => (
+            <div
+              key={c.id}
+              className="pointer-events-none absolute z-30"
+              style={{
+                transform: `translate(${c.x * viewport.zoom + viewport.x}px, ${c.y * viewport.zoom + viewport.y}px)`,
+              }}
+            >
+              <div
+                className="h-2 w-2 rounded-full shadow"
+                style={{ backgroundColor: c.color }}
+              />
+              <div
+                className="mt-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium text-card shadow"
+                style={{ backgroundColor: c.color }}
+              >
+                {c.name}
+              </div>
+            </div>
+          ))}
         </div>
         <div className="pointer-events-none absolute bottom-3 right-3 z-10">
           <div className="pointer-events-auto flex gap-2">
@@ -331,22 +691,95 @@ export default function CanvasViewerPage() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Lane band
+// ---------------------------------------------------------------------------
+
+type LaneBox = {
+  name: string;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
+function computeLanes(nodes: HydratedNode[]): LaneBox[] {
+  const map = new Map<string, LaneBox>();
+  for (const n of nodes) {
+    const lane = (n.meta?.lane as string | undefined) ?? undefined;
+    if (!lane) continue;
+    const right = n.x + n.width;
+    const bottom = n.y + n.height;
+    const box = map.get(lane);
+    if (!box) {
+      map.set(lane, { name: lane, minX: n.x, minY: n.y, maxX: right, maxY: bottom });
+    } else {
+      box.minX = Math.min(box.minX, n.x);
+      box.minY = Math.min(box.minY, n.y);
+      box.maxX = Math.max(box.maxX, right);
+      box.maxY = Math.max(box.maxY, bottom);
+    }
+  }
+  return [...map.values()];
+}
+
+function LaneBand({ lane }: { lane: LaneBox }) {
+  const padding = 16;
+  const x = lane.minX - padding;
+  const y = lane.minY - padding;
+  const width = lane.maxX - lane.minX + padding * 2;
+  const height = lane.maxY - lane.minY + padding * 2;
+  return (
+    <div
+      className="pointer-events-none absolute rounded-lg border border-ember/15 bg-ember/[0.04]"
+      style={{ left: x, top: y, width, height }}
+    >
+      <div className="absolute left-2 top-1 text-[10px] uppercase tracking-wider text-ember/80">
+        {lane.name}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Card
+// ---------------------------------------------------------------------------
+
 function CanvasCard({
   node,
+  editingLane,
+  editingNote,
+  onEditLane,
+  onEditNote,
   onMouseDown,
+  onResizeMouseDown,
   onRemove,
+  onPatchLane,
 }: {
   node: HydratedNode;
+  editingLane: boolean;
+  editingNote: boolean;
+  onEditLane: (active: boolean) => void;
+  onEditNote: (active: boolean) => void;
   onMouseDown: (e: React.MouseEvent) => void;
+  onResizeMouseDown: (e: React.MouseEvent) => void;
   onRemove: () => void;
+  onPatchLane: (lane: string) => void;
 }) {
-  const tone = node.ref.missing
-    ? "border-warning/40 bg-warning/5"
-    : "border-border bg-card/80";
   const isLive = node.viewMode === "live";
   const isRunning =
-    !node.ref.missing && (node.ref.meta?.status as string | undefined) === "RUNNING";
-  const ring = isLive && isRunning ? "ring-2 ring-ember/60 animate-pulse" : "";
+    !node.ref.missing &&
+    ((node.ref.meta?.status as string | undefined) === "RUNNING" ||
+      (node.ref.meta?.status as string | undefined) === "ACTIVE");
+  const glow = isLive && isRunning ? "ring-2 ring-ember/60 animate-pulse" : "";
+  const kind = (node.ref.meta?.kind as string | undefined) ?? null;
+  const isNote = node.targetType === "artifact" && kind === "NOTE";
+
+  const tone = node.ref.missing
+    ? "border-warning/40 bg-warning/5"
+    : isNote
+      ? "border-amber-500/20 bg-amber-500/10"
+      : "border-border bg-card/80";
 
   let body: React.ReactNode;
   if (node.ref.missing) {
@@ -354,7 +787,11 @@ function CanvasCard({
   } else if (node.targetType === "execution-plan") {
     body = <ExecutionPlanCardBody node={node} live={isLive} />;
   } else if (node.targetType === "execution-step") {
-    body = <ExecutionStepCardBody node={node} live={isLive} />;
+    body = <ExecutionStepCardBody node={node} />;
+  } else if (node.targetType === "chat-thread") {
+    body = <ChatThreadCardBody node={node} live={isLive} />;
+  } else if (isNote) {
+    body = <NoteCardBody node={node} editing={editingNote} onEditChange={onEditNote} />;
   } else {
     body = (
       <>
@@ -370,7 +807,7 @@ function CanvasCard({
   return (
     <div
       data-canvas-card
-      className={`absolute flex flex-col gap-1.5 rounded-lg border p-3 shadow-md ${tone} ${ring}`}
+      className={`absolute flex flex-col gap-1.5 rounded-lg border p-3 shadow-md transition-all duration-300 hover:shadow-lg ${tone} ${glow}`}
       style={{
         left: node.x,
         top: node.y,
@@ -381,19 +818,39 @@ function CanvasCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">{body}</div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          className="rounded-md p-1 text-muted-foreground hover:bg-subtle"
-          title="Remove from canvas"
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
+        <div className="flex flex-col items-end gap-0.5">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEditLane(!editingLane);
+            }}
+            className="rounded-md p-1 text-muted-foreground hover:bg-subtle"
+            title="Move to lane"
+          >
+            <Layers className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            className="rounded-md p-1 text-muted-foreground hover:bg-subtle"
+            title="Remove from canvas"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
       </div>
-      {node.ref.url ? (
+      {editingLane ? (
+        <LaneEditor
+          current={(node.meta?.lane as string | undefined) ?? ""}
+          onCancel={() => onEditLane(false)}
+          onSave={onPatchLane}
+        />
+      ) : null}
+      {node.ref.url && !isNote ? (
         <a
           href={node.ref.url}
           onMouseDown={(e) => e.stopPropagation()}
@@ -402,9 +859,65 @@ function CanvasCard({
           Open <ExternalLink className="h-3 w-3" />
         </a>
       ) : null}
+      <button
+        type="button"
+        aria-label="Resize"
+        title="Drag to resize"
+        onMouseDown={onResizeMouseDown}
+        className="absolute bottom-0.5 right-0.5 h-3 w-3 cursor-nwse-resize rounded-sm bg-border/40 hover:bg-ember/40"
+      />
     </div>
   );
 }
+
+function LaneEditor({
+  current,
+  onCancel,
+  onSave,
+}: {
+  current: string;
+  onCancel: () => void;
+  onSave: (lane: string) => void;
+}) {
+  const [value, setValue] = useState(current);
+  return (
+    <div
+      className="flex items-center gap-1"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <input
+        autoFocus
+        type="text"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onSave(value.trim());
+          if (e.key === "Escape") onCancel();
+        }}
+        placeholder="Lane name"
+        className="flex-1 rounded border border-border bg-card/40 px-1.5 py-0.5 text-xs"
+      />
+      <button
+        type="button"
+        onClick={() => onSave(value.trim())}
+        className="rounded border border-ember/40 bg-ember/15 px-1.5 py-0.5 text-[10px] text-ember"
+      >
+        Save
+      </button>
+      <button
+        type="button"
+        onClick={() => onSave("")}
+        className="rounded border border-border bg-card/40 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+      >
+        Clear
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Per-type bodies
+// ---------------------------------------------------------------------------
 
 function statusToneClasses(status: string | undefined): string {
   switch (status) {
@@ -459,7 +972,7 @@ function ExecutionPlanCardBody({ node, live }: { node: HydratedNode; live: boole
       <div className="flex items-center gap-2">
         <div className="h-1 flex-1 overflow-hidden rounded-full bg-subtle">
           <div
-            className="h-full rounded-full bg-ember/70 transition-all"
+            className="h-full rounded-full bg-ember/70 transition-all duration-300"
             style={{ width: `${pct}%` }}
           />
         </div>
@@ -480,7 +993,7 @@ function ExecutionPlanCardBody({ node, live }: { node: HydratedNode; live: boole
   );
 }
 
-function ExecutionStepCardBody({ node, live }: { node: HydratedNode; live: boolean }) {
+function ExecutionStepCardBody({ node }: { node: HydratedNode }) {
   const meta = (node.ref.meta ?? {}) as {
     status?: string;
     position?: number;
@@ -500,7 +1013,6 @@ function ExecutionStepCardBody({ node, live }: { node: HydratedNode; live: boole
   ) : meta.assignedUser ? (
     <UserIcon className="h-3 w-3" />
   ) : null;
-  void live;
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2">
@@ -526,6 +1038,176 @@ function ExecutionStepCardBody({ node, live }: { node: HydratedNode; live: boole
   );
 }
 
+function ChatThreadCardBody({ node, live }: { node: HydratedNode; live: boolean }) {
+  const meta = (node.ref.meta ?? {}) as {
+    agent?: { profileKey?: string; name?: string; avatar?: string | null };
+    lastMessageAt?: string | Date | null;
+    preview?: Array<{ id: string; role: string; body: string; createdAt: string | Date }>;
+  };
+  const profileKey = node.ref.subLabel?.replace(/^@/, "") ?? meta.agent?.profileKey;
+  const previewFromMeta = meta.preview ?? [];
+  const lastPreview = previewFromMeta[previewFromMeta.length - 1];
+  const lastBody = lastPreview?.body;
+  const lastAt = meta.lastMessageAt;
+  // When `live` mode is on we fetch the freshest messages directly so the
+  // card stays current as the thread receives replies. Falls back to the
+  // hydrated `preview` snapshot for non-live cards.
+  const threadDetail = trpc.chat.getThread.useQuery(
+    { threadId: node.targetId },
+    { enabled: live, staleTime: 15_000, refetchOnWindowFocus: false },
+  );
+  const recent = threadDetail.data?.messages?.slice(-3) ?? previewFromMeta;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <MessageCircle className="h-3 w-3 text-ember" />
+        <span className="text-meta uppercase tracking-wide text-muted-foreground">
+          Chat · @{profileKey}
+        </span>
+        {lastAt ? (
+          <span className="ml-auto text-meta text-muted-foreground">
+            {relativeTime(lastAt)}
+          </span>
+        ) : null}
+      </div>
+      <div className="line-clamp-2 text-sm font-medium">{node.ref.label}</div>
+      {!live && lastBody ? (
+        <p className="line-clamp-2 text-meta text-muted-foreground">{lastBody}</p>
+      ) : null}
+      {live && recent.length > 0 ? (
+        <ul className="flex flex-col gap-1">
+          {recent.map((m) => (
+            <li
+              key={m.id}
+              className={
+                "rounded-md border px-2 py-1 text-[11px] leading-snug " +
+                (m.role === "USER"
+                  ? "border-ember/30 bg-ember/5"
+                  : "border-border bg-card/60")
+              }
+            >
+              <div className="line-clamp-2">{m.body}</div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {node.ref.url ? (
+        <a
+          href={node.ref.url}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="mt-auto inline-flex items-center gap-1 text-meta text-ember hover:underline"
+        >
+          Open chat <ExternalLink className="h-3 w-3" />
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+function NoteCardBody({
+  node,
+  editing,
+  onEditChange,
+}: {
+  node: HydratedNode;
+  editing: boolean;
+  onEditChange: (active: boolean) => void;
+}) {
+  const utils = trpc.useUtils();
+  // `artifact.update` exists today; we use it for inline note editing.
+  const updateArtifactAny = (trpc as unknown as Record<string, unknown>).artifact as
+    | Record<string, unknown>
+    | undefined;
+  const updateMutAny = (updateArtifactAny?.update as
+    | {
+        useMutation: (opts?: unknown) => {
+          mutate: (input: { id: string; body: string }) => void;
+          isPending: boolean;
+        };
+      }
+    | undefined)?.useMutation({
+    onSuccess: () => {
+      utils.canvas.hydrate.invalidate();
+      onEditChange(false);
+    },
+    onError: (e: { message: string }) => toast.error(e.message),
+  });
+  const summary = (node.ref.meta?.summary as string | undefined) ?? "";
+  const body =
+    typeof node.ref.meta?.body === "string"
+      ? (node.ref.meta.body as string)
+      : summary || node.ref.label;
+  const [draft, setDraft] = useState(body);
+
+  useEffect(() => {
+    if (editing) setDraft(body);
+  }, [editing, body]);
+
+  if (editing && updateMutAny) {
+    return (
+      <div
+        className="flex flex-col gap-1.5"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <textarea
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          rows={5}
+          className="w-full rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-sm text-foreground"
+        />
+        <div className="flex gap-1">
+          <button
+            type="button"
+            onClick={() => updateMutAny.mutate({ id: node.targetId, body: draft })}
+            disabled={updateMutAny.isPending}
+            className="rounded border border-ember/40 bg-ember/15 px-2 py-0.5 text-[10px] text-ember"
+          >
+            {updateMutAny.isPending ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onEditChange(false)}
+            className="rounded border border-border bg-card/40 px-2 py-0.5 text-[10px] text-muted-foreground"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div
+      className="flex flex-col gap-1.5"
+      onDoubleClick={(e) => {
+        if (!updateMutAny) return;
+        e.stopPropagation();
+        onEditChange(true);
+      }}
+    >
+      <div className="flex items-center gap-1.5">
+        <StickyNote className="h-3 w-3 text-amber-500/80" />
+        <span className="text-meta uppercase tracking-wide text-amber-500/80">Note</span>
+        {!updateMutAny ? (
+          <span
+            className="ml-auto text-[10px] text-muted-foreground"
+            title="Read-only — artifact.update unavailable"
+          >
+            read-only
+          </span>
+        ) : null}
+      </div>
+      <div className="text-[0.78rem] leading-relaxed text-foreground">
+        <ChatMarkdown body={body} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AddCardPicker (extended: chat-thread + agent tabs)
+// ---------------------------------------------------------------------------
+
 function AddCardPicker({
   canvasId,
   onClose,
@@ -535,13 +1217,15 @@ function AddCardPicker({
 }) {
   const utils = trpc.useUtils();
   const ws = useWorkspace();
-  const [tab, setTab] = useState<"issue" | "artifact">("issue");
+  const [tab, setTab] = useState<"issue" | "artifact" | "chat-thread" | "agent">("issue");
 
   const issues = trpc.issue.list.useQuery({ limit: 25 }, { enabled: tab === "issue" });
   const artifacts = trpc.artifact.list.useQuery(
     { limit: 25 },
     { enabled: tab === "artifact" },
   );
+  const threads = trpc.chat.threads.useQuery(undefined, { enabled: tab === "chat-thread" });
+  const agents = trpc.agent.list.useQuery({ includeArchived: false }, { enabled: tab === "agent" });
 
   const addNode = trpc.canvas.addNode.useMutation({
     onSuccess: () => {
@@ -552,7 +1236,7 @@ function AddCardPicker({
     onError: (e) => toast.error(e.message),
   });
 
-  const addCard = (targetType: "issue" | "artifact", targetId: string) => {
+  const addCard = (targetType: "issue" | "artifact" | "chat-thread" | "agent", targetId: string) => {
     addNode.mutate({
       canvasId,
       targetType,
@@ -560,7 +1244,7 @@ function AddCardPicker({
       x: 40 + Math.random() * 200,
       y: 40 + Math.random() * 200,
       width: 280,
-      height: 100,
+      height: 120,
     });
   };
 
@@ -574,18 +1258,18 @@ function AddCardPicker({
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-sm font-medium">Add card</h2>
-        <div className="flex gap-2">
-          {(["issue", "artifact"] as const).map((t) => (
+        <div className="flex gap-1.5">
+          {(["issue", "artifact", "chat-thread", "agent"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`rounded-md border px-2 py-1 text-xs ${
+              className={`rounded-md border px-2 py-1 text-xs transition-all duration-200 ${
                 tab === t
                   ? "border-ember bg-ember/15 text-ember"
                   : "border-border bg-card/40 text-muted-foreground hover:bg-subtle"
               }`}
             >
-              {t}
+              {t.replace("-", " ")}
             </button>
           ))}
         </div>
@@ -595,7 +1279,7 @@ function AddCardPicker({
               <li key={row.id}>
                 <button
                   onClick={() => addCard("issue", row.id)}
-                  className="flex w-full items-center justify-between gap-2 rounded-md border border-border bg-card/40 px-2 py-1.5 text-left hover:border-ember/40"
+                  className="flex w-full items-center justify-between gap-2 rounded-md border border-border bg-card/40 px-2 py-1.5 text-left transition-all duration-200 hover:border-ember/40"
                 >
                   <span className="truncate text-sm">{row.title}</span>
                   <span className="font-mono text-id text-muted-foreground">
@@ -609,7 +1293,7 @@ function AddCardPicker({
               <li key={row.id}>
                 <button
                   onClick={() => addCard("artifact", row.id)}
-                  className="flex w-full items-center justify-between gap-2 rounded-md border border-border bg-card/40 px-2 py-1.5 text-left hover:border-ember/40"
+                  className="flex w-full items-center justify-between gap-2 rounded-md border border-border bg-card/40 px-2 py-1.5 text-left transition-all duration-200 hover:border-ember/40"
                 >
                   <span className="truncate text-sm">{row.title}</span>
                   <span className="text-meta text-muted-foreground">
@@ -618,8 +1302,170 @@ function AddCardPicker({
                 </button>
               </li>
             ))}
+          {tab === "chat-thread" &&
+            (threads.data ?? []).map((row) => (
+              <li key={row.id}>
+                <button
+                  onClick={() => addCard("chat-thread", row.id)}
+                  className="flex w-full items-center justify-between gap-2 rounded-md border border-border bg-card/40 px-2 py-1.5 text-left transition-all duration-200 hover:border-ember/40"
+                >
+                  <span className="truncate text-sm">
+                    {row.title || row.topic || `Chat with @${row.agent.profileKey}`}
+                  </span>
+                  <span className="font-mono text-id text-muted-foreground">
+                    @{row.agent.profileKey}
+                  </span>
+                </button>
+              </li>
+            ))}
+          {tab === "agent" &&
+            (agents.data ?? []).map((row) => (
+              <li key={row.id}>
+                <button
+                  onClick={() => addCard("agent", row.id)}
+                  className="flex w-full items-center justify-between gap-2 rounded-md border border-border bg-card/40 px-2 py-1.5 text-left transition-all duration-200 hover:border-ember/40"
+                >
+                  <span className="truncate text-sm">{row.name}</span>
+                  <span className="font-mono text-id text-muted-foreground">
+                    @{row.profileKey}
+                  </span>
+                </button>
+              </li>
+            ))}
         </ul>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Entity rail — draggable list of issues / artifacts / chats / agents.
+// ---------------------------------------------------------------------------
+
+function CanvasEntityRail({ canvasId: _canvasId }: { canvasId: string }) {
+  const ws = useWorkspace();
+  const [tab, setTab] = useState<"issue" | "artifact" | "chat-thread" | "agent">("issue");
+  const [query, setQuery] = useState("");
+
+  const issues = trpc.issue.list.useQuery({ limit: 50 }, { enabled: tab === "issue" });
+  const artifacts = trpc.artifact.list.useQuery({ limit: 50 }, { enabled: tab === "artifact" });
+  const threads = trpc.chat.threads.useQuery(undefined, { enabled: tab === "chat-thread" });
+  const agents = trpc.agent.list.useQuery({ includeArchived: false }, { enabled: tab === "agent" });
+
+  const q = query.trim().toLowerCase();
+
+  const items = (() => {
+    if (tab === "issue") {
+      return (issues.data?.items ?? [])
+        .filter((r) => !q || r.title.toLowerCase().includes(q))
+        .map((r) => ({
+          id: r.id,
+          label: r.title,
+          sub: `${ws.key}-${r.number}`,
+          type: "issue" as const,
+        }));
+    }
+    if (tab === "artifact") {
+      return (artifacts.data?.items ?? [])
+        .filter((r) => !q || r.title.toLowerCase().includes(q))
+        .map((r) => ({
+          id: r.id,
+          label: r.title,
+          sub: r.type.toLowerCase(),
+          type: "artifact" as const,
+        }));
+    }
+    if (tab === "chat-thread") {
+      return (threads.data ?? [])
+        .filter(
+          (r) =>
+            !q ||
+            (r.title ?? "").toLowerCase().includes(q) ||
+            r.agent.profileKey.toLowerCase().includes(q),
+        )
+        .map((r) => ({
+          id: r.id,
+          label: r.title || r.topic || `Chat with @${r.agent.profileKey}`,
+          sub: `@${r.agent.profileKey}`,
+          type: "chat-thread" as const,
+        }));
+    }
+    return (agents.data ?? [])
+      .filter((r) => !q || r.name.toLowerCase().includes(q) || r.profileKey.toLowerCase().includes(q))
+      .map((r) => ({
+        id: r.id,
+        label: r.name,
+        sub: `@${r.profileKey}`,
+        type: "agent" as const,
+      }));
+  })();
+
+  return (
+    <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-card/50">
+      <div className="border-b border-border px-2 pb-2 pt-2.5">
+        <div className="text-meta uppercase tracking-wider text-muted-foreground">
+          Drag to canvas
+        </div>
+        <div className="mt-1.5 flex gap-1">
+          {(["issue", "artifact", "chat-thread", "agent"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              className={
+                "flex-1 rounded border px-1 py-0.5 text-[10px] uppercase tracking-wide transition-all duration-200 " +
+                (tab === t
+                  ? "border-ember bg-ember/15 text-ember"
+                  : "border-border bg-card/40 text-muted-foreground hover:bg-subtle")
+              }
+            >
+              {t === "chat-thread" ? "chat" : t}
+            </button>
+          ))}
+        </div>
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Filter…"
+          className="mt-1.5 w-full rounded border border-border bg-card/40 px-1.5 py-0.5 text-xs"
+        />
+      </div>
+      <ul className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto p-1.5">
+        {items.map((it) => (
+          <li key={it.id}>
+            <RailDraggable item={it} />
+          </li>
+        ))}
+        {items.length === 0 ? (
+          <li className="px-2 py-3 text-meta text-muted-foreground">No results.</li>
+        ) : null}
+      </ul>
+    </aside>
+  );
+}
+
+function RailDraggable({
+  item,
+}: {
+  item: { id: string; label: string; sub: string; type: "issue" | "artifact" | "chat-thread" | "agent" };
+}) {
+  return (
+    <button
+      type="button"
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData(
+          "application/x-forge-entity",
+          JSON.stringify({ type: item.type, id: item.id }),
+        );
+      }}
+      className="flex w-full flex-col items-start gap-px rounded-md border border-transparent px-2 py-1 text-left text-xs transition-all duration-200 hover:border-ember/40 hover:bg-subtle active:scale-[0.99]"
+      title="Drag onto canvas"
+    >
+      <span className="truncate text-foreground">{item.label}</span>
+      <span className="font-mono text-id text-muted-foreground">{item.sub}</span>
+    </button>
   );
 }

@@ -4,9 +4,11 @@ import {
   AgentProvider,
   AgentRunStatus,
   AgentStatus,
+  ArtifactType,
   CommentKind,
   CycleStatus,
   EventKind,
+  ExecutionPlanStatus,
   InitiativeStatus,
   Prisma,
   RelationKind,
@@ -6042,6 +6044,312 @@ export const mcpTools = {
         });
       });
       return { ok: true };
+    },
+  },
+
+  "canvases.addNote": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      canvasId: z.string().cuid(),
+      body: z.string().max(200_000).default(""),
+      x: z.number(),
+      y: z.number(),
+    }),
+    async run(
+      input: { canvasId: string; body: string; x: number; y: number },
+      ctx: McpContext,
+    ) {
+      const canvas = await db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) throw new Error("Canvas not found.");
+      const trimmedBody = input.body.trim();
+      const firstLine = trimmedBody.split(/\r?\n/)[0]?.trim() ?? "";
+      const title = firstLine.length
+        ? firstLine.slice(0, 180)
+        : `Note ${new Date().toISOString().slice(0, 10)}`;
+      const { createArtifact } = await import("@/server/services/artifact-service");
+      const { id: artifactId } = await createArtifact(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        title,
+        body: input.body,
+        type: ArtifactType.NOTE,
+      });
+      const node = await db.workspaceCanvasNode.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          canvasId: input.canvasId,
+          targetType: "artifact",
+          targetId: artifactId,
+          x: input.x,
+          y: input.y,
+          width: 240,
+          height: 160,
+          zIndex: 0,
+          viewMode: "card",
+          meta: { kind: "NOTE" },
+        },
+      });
+      await db.workspaceCanvas.update({
+        where: { id: input.canvasId },
+        data: { updatedAt: new Date() },
+      });
+      return { nodeId: node.id, artifactId };
+    },
+  },
+
+  "canvases.addChatThread": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      canvasId: z.string().cuid(),
+      threadId: z.string().cuid(),
+      x: z.number(),
+      y: z.number(),
+    }),
+    async run(
+      input: { canvasId: string; threadId: string; x: number; y: number },
+      ctx: McpContext,
+    ) {
+      const [canvas, thread] = await Promise.all([
+        db.workspaceCanvas.findFirst({
+          where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+          select: { id: true },
+        }),
+        db.chatThread.findFirst({
+          where: {
+            id: input.threadId,
+            workspaceId: ctx.workspaceId,
+            // MCP callers (agents) may not own the thread; we require
+            // either an owning user or a linked agent that matches the
+            // thread's agent.
+            OR: [
+              ...(ctx.userId ? [{ userId: ctx.userId }] : []),
+              ...(ctx.apiKey?.linkedAgentId
+                ? [{ agentId: ctx.apiKey.linkedAgentId }]
+                : []),
+            ],
+          },
+          select: { id: true },
+        }),
+      ]);
+      if (!canvas) throw new Error("Canvas not found.");
+      if (!thread) throw new Error("Chat thread not found or not visible to caller.");
+      const node = await db.workspaceCanvasNode.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          canvasId: input.canvasId,
+          targetType: "chat-thread",
+          targetId: input.threadId,
+          x: input.x,
+          y: input.y,
+          width: 280,
+          height: 200,
+          zIndex: 0,
+          viewMode: "card",
+        },
+      });
+      await db.workspaceCanvas.update({
+        where: { id: input.canvasId },
+        data: { updatedAt: new Date() },
+      });
+      return { nodeId: node.id };
+    },
+  },
+
+  "canvases.convertToPlan": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      canvasId: z.string().cuid(),
+      title: z.string().min(1).max(300).optional(),
+    }),
+    async run(
+      input: { canvasId: string; title?: string },
+      ctx: McpContext,
+    ) {
+      const canvas = await db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        include: { nodes: true, edges: true },
+      });
+      if (!canvas) throw new Error("Canvas not found.");
+      const skippedNodes: Array<{ nodeId: string; reason: string }> = [];
+      const sortedNodes = [...canvas.nodes].sort((a, b) => {
+        if (a.y !== b.y) return a.y - b.y;
+        return a.x - b.x;
+      });
+
+      const artifactNodes = sortedNodes.filter((n) => n.targetType === "artifact");
+      const artifactRows = artifactNodes.length
+        ? await db.artifact.findMany({
+            where: {
+              id: { in: artifactNodes.map((n) => n.targetId) },
+              workspaceId: ctx.workspaceId,
+              archivedAt: null,
+            },
+            select: { id: true, title: true, body: true, type: true },
+          })
+        : [];
+      const artifactById = new Map(artifactRows.map((a) => [a.id, a] as const));
+
+      const existingStepIds = sortedNodes
+        .filter((n) => n.targetType === "execution-step")
+        .map((n) => n.targetId);
+      const existingStepRows = existingStepIds.length
+        ? await db.executionStep.findMany({
+            where: { id: { in: existingStepIds }, workspaceId: ctx.workspaceId },
+            select: { id: true, title: true, body: true, expectedOutput: true },
+          })
+        : [];
+      const existingStepById = new Map(existingStepRows.map((s) => [s.id, s] as const));
+
+      interface PendingStep {
+        canvasNodeId: string;
+        title: string;
+        body: string | null;
+        expectedOutput: string | null;
+      }
+      const pending: PendingStep[] = [];
+
+      for (const node of sortedNodes) {
+        if (node.targetType === "execution-step") {
+          const row = existingStepById.get(node.targetId);
+          if (!row) {
+            skippedNodes.push({
+              nodeId: node.id,
+              reason: "execution-step target not found in this workspace",
+            });
+            continue;
+          }
+          pending.push({
+            canvasNodeId: node.id,
+            title: row.title,
+            body: row.body ?? null,
+            expectedOutput: row.expectedOutput ?? null,
+          });
+          continue;
+        }
+        if (node.targetType === "artifact") {
+          const artifact = artifactById.get(node.targetId);
+          if (!artifact) {
+            skippedNodes.push({
+              nodeId: node.id,
+              reason: "artifact target not found in this workspace",
+            });
+            continue;
+          }
+          const isNote =
+            artifact.type === ArtifactType.NOTE ||
+            (node.meta &&
+              typeof node.meta === "object" &&
+              (node.meta as { kind?: unknown }).kind === "NOTE");
+          if (!isNote) {
+            skippedNodes.push({
+              nodeId: node.id,
+              reason: `artifact target kind ${artifact.type} is not NOTE`,
+            });
+            continue;
+          }
+          const trimmed = (artifact.body ?? "").trim();
+          const lines = trimmed.length ? trimmed.split(/\r?\n/) : [];
+          const firstLine = lines[0]?.trim() ?? "";
+          const rest = lines.slice(1).join("\n").trim();
+          const title = firstLine.length ? firstLine.slice(0, 280) : artifact.title;
+          pending.push({
+            canvasNodeId: node.id,
+            title: title || "Untitled step",
+            body: rest.length ? rest : null,
+            expectedOutput: null,
+          });
+          continue;
+        }
+        skippedNodes.push({
+          nodeId: node.id,
+          reason: `targetType ${node.targetType} is not convertible (only execution-step and artifact NOTE)`,
+        });
+      }
+
+      const includedCanvasNodeIds = new Set(pending.map((p) => p.canvasNodeId));
+      const dependsByTo = new Map<string, string[]>();
+      for (const edge of canvas.edges) {
+        if (edge.kind !== "depends_on") continue;
+        if (!includedCanvasNodeIds.has(edge.fromNodeId)) continue;
+        if (!includedCanvasNodeIds.has(edge.toNodeId)) continue;
+        const list = dependsByTo.get(edge.toNodeId) ?? [];
+        list.push(edge.fromNodeId);
+        dependsByTo.set(edge.toNodeId, list);
+      }
+
+      const planTitle = (input.title ?? canvas.name).trim() || canvas.name;
+      const today = new Date().toISOString().slice(0, 10);
+      const planDescription = `Imported from canvas '${canvas.name}' on ${today}.`;
+
+      const result = await db.$transaction(async (tx) => {
+        const plan = await tx.executionPlan.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            title: planTitle,
+            description: planDescription,
+            status: ExecutionPlanStatus.DRAFT,
+            createdById: ctx.userId ?? null,
+            createdByAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          },
+        });
+        const canvasNodeIdToStepId = new Map<string, string>();
+        for (let i = 0; i < pending.length; i++) {
+          const p = pending[i]!;
+          const step = await tx.executionStep.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              planId: plan.id,
+              title: p.title.trim() || "Untitled step",
+              body: p.body,
+              expectedOutput: p.expectedOutput,
+              position: i,
+              dependsOnStepIds: [],
+            },
+            select: { id: true },
+          });
+          canvasNodeIdToStepId.set(p.canvasNodeId, step.id);
+        }
+        for (const p of pending) {
+          const deps = dependsByTo.get(p.canvasNodeId);
+          if (!deps || deps.length === 0) continue;
+          const realIds = deps
+            .map((nodeId) => canvasNodeIdToStepId.get(nodeId))
+            .filter((id): id is string => Boolean(id));
+          if (realIds.length === 0) continue;
+          const stepId = canvasNodeIdToStepId.get(p.canvasNodeId)!;
+          await tx.executionStep.update({
+            where: { id: stepId },
+            data: { dependsOnStepIds: realIds },
+          });
+        }
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "execution-plan",
+          entityId: plan.id,
+          action: "created",
+          after: {
+            title: plan.title,
+            status: plan.status,
+            stepCount: pending.length,
+            sourceCanvasId: canvas.id,
+          },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "execution-plan",
+          subjectId: plan.id,
+        });
+        return { planId: plan.id, stepCount: pending.length };
+      });
+
+      return {
+        planId: result.planId,
+        stepCount: result.stepCount,
+        skippedNodes,
+      };
     },
   },
 

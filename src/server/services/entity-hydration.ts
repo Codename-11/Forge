@@ -43,6 +43,13 @@ interface HydrationContext {
    * `id` and the `type`, but URL is omitted.
    */
   workspaceSlug?: string;
+  /**
+   * Optional calling user id. When supplied, user-scoped entity types
+   * (notably `chat-thread`) filter to rows owned by this user — refs
+   * to other users' threads surface as `missing: true`. Omitted in
+   * agent/MCP code paths where there is no human "viewer".
+   */
+  userId?: string | null;
 }
 
 function workspaceUrl(slug: string | undefined, path: string): string | undefined {
@@ -194,23 +201,70 @@ async function hydrateOne(
       }));
     }
     case "chat-thread": {
+      const userId = ctx.userId ?? undefined;
       const rows = await db.chatThread.findMany({
-        where: { workspaceId, id: { in: ids } },
+        where: {
+          workspaceId,
+          id: { in: ids },
+          // When a viewer is in context, only return threads they own.
+          // Without a viewer (agent/MCP path), workspace scope is the
+          // only filter — agents see threads they're addressed in
+          // through the chat router's own auth checks, not here.
+          ...(userId ? { userId } : {}),
+        },
         select: {
           id: true,
           title: true,
           topic: true,
-          agent: { select: { profileKey: true } },
+          lastMessageAt: true,
+          agent: {
+            select: {
+              id: true,
+              name: true,
+              profileKey: true,
+              avatar: true,
+            },
+          },
+          messages: {
+            orderBy: { createdAt: "desc" },
+            take: 3,
+            select: {
+              id: true,
+              role: true,
+              body: true,
+              createdAt: true,
+            },
+          },
         },
       });
-      return rows.map((row) => ({
-        type: "chat-thread" as const,
-        id: row.id,
-        missing: false,
-        label: row.title || row.topic || `Chat with @${row.agent.profileKey}`,
-        subLabel: `@${row.agent.profileKey}`,
-        url: workspaceUrl(workspaceSlug, `/chat?thread=${row.id}`),
-      }));
+      return rows.map((row) => {
+        const preview = [...row.messages].reverse();
+        return {
+          type: "chat-thread" as const,
+          id: row.id,
+          missing: false,
+          label: row.title || row.topic || `Chat with @${row.agent.profileKey}`,
+          subLabel: `@${row.agent.profileKey}`,
+          url: workspaceUrl(workspaceSlug, `/chat?thread=${row.id}`),
+          meta: {
+            title: row.title,
+            topic: row.topic,
+            lastMessageAt: row.lastMessageAt,
+            agent: {
+              id: row.agent.id,
+              name: row.agent.name,
+              profileKey: row.agent.profileKey,
+              avatar: row.agent.avatar,
+            },
+            preview: preview.map((m) => ({
+              id: m.id,
+              role: m.role,
+              body: m.body.length > 240 ? `${m.body.slice(0, 240)}…` : m.body,
+              createdAt: m.createdAt,
+            })),
+          },
+        };
+      });
     }
     case "chat-message": {
       const rows = await db.chatMessage.findMany({
@@ -349,17 +403,33 @@ async function hydrateOne(
           type: true,
           status: true,
           summary: true,
+          body: true,
+          updatedAt: true,
         },
       });
-      return rows.map((row) => ({
-        type: "artifact" as const,
-        id: row.id,
-        missing: false,
-        label: row.title,
-        subLabel: row.type.toLowerCase(),
-        url: workspaceUrl(workspaceSlug, `/artifacts/${row.slug}`),
-        meta: { status: row.status, slug: row.slug, summary: row.summary },
-      }));
+      return rows.map((row) => {
+        const isNote = row.type === "NOTE";
+        const meta: Record<string, unknown> = {
+          status: row.status,
+          slug: row.slug,
+          summary: row.summary,
+          kind: row.type,
+          updatedAt: row.updatedAt,
+        };
+        if (isNote) {
+          // Notes carry their full body for inline canvas rendering.
+          meta.body = row.body;
+        }
+        return {
+          type: "artifact" as const,
+          id: row.id,
+          missing: false,
+          label: row.title,
+          subLabel: row.type.toLowerCase(),
+          url: workspaceUrl(workspaceSlug, `/artifacts/${row.slug}`),
+          meta,
+        };
+      });
     }
     case "context-set": {
       const rows = await db.contextSet.findMany({

@@ -2,6 +2,123 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Chat overlay flow + Canvas first-class board (parallel team round 2)
+
+### Summary
+
+Ran a 3-agent parallel team (F/G/H) to fix the Mission Control chat
+flow + promote Canvas from "spatial entity arrangement" to a real
+idea/planning/execution surface with chat threads, sticky notes,
+drag-from-sidebar, lanes, templates, presence cursors, and a
+convert-canvas-to-plan round-trip. All three landed clean: lint +
+typecheck + 386/386 tests + build.
+
+### What changed
+
+**Chat overlay (Agent F)**
+1. **Default-tab pref** — `User.missionControlDefaultTab` (migration
+   0042), applied on mount only when state is still "live", surfaced
+   as a dropdown in the new `settings-popover.tsx`. Per-user, global
+   across workspaces (per-workspace deferred).
+2. **Quick chat icon on the pill** — `MessageSquare` next to the main
+   pill button; click jumps to Chat tab without disturbing the
+   pill-expand path.
+3. **Composer auto-focus** — fires on tab switch + thread mount via
+   an `autoFocus` prop deferred to next frame.
+4. **Per-thread localStorage drafts** — keyed
+   `forge.chat.draft.{threadId}`, hydrated on mount, rAF-debounced
+   persist, cleared on send. SSR-safe.
+5. **@-mention autocomplete** — `detectMentionToken` + popover in
+   `chat-composer.tsx`; arrow/Enter/Tab to accept, Esc to dismiss;
+   inserts `@profileKey ` at caret. Slash-command popover preserved
+   as-is.
+6. **Smart empty-state prompts** — `buildSuggestedPrompts` returns
+   3-4 contextual chips (route-aware "Summarize this issue" when
+   the operator is on an issue page); tap fills the composer
+   without auto-send.
+7. **Unread bubble + hover preview on the pill** — keyed off
+   `chat.threads` + per-thread `lastSeen` in localStorage; 9+ cap;
+   `group-hover:block` reveals the last-1-line preview.
+8. **Global `/` shortcut** — `useHotkey("/", …)` opens Mission
+   Control to Chat with the composer focused (Slack/Linear vibe);
+   ignored when an input already has focus.
+
+**Canvas frontend (Agent G)** — `canvas/[canvasId]/page.tsx`
+expanded ~626 → ~1468 lines, plus a new
+`canvas/canvas-templates.tsx` and a left `CanvasEntityRail`:
+1. **Chat-thread renderer** — card view shows agent + last-message
+   preview + relative time; live view shows last 3 message bubbles
+   + composer-on-expand affordance routing to Mission Control chat.
+2. **Note renderer** (sticky-style) — `ArtifactType.NOTE` rendered
+   inline with `ChatMarkdown`, click-to-edit via `artifact.update`,
+   amber sticky tone (warm tokens — no pure yellow).
+3. **Sidebar drag-to-canvas** — new `CanvasEntityRail` with
+   searchable issues/artifacts/chat-threads/agents emitting
+   `application/x-forge-entity` payloads. Drop targets accept and
+   create nodes at the drop coords. Ember ring on the canvas
+   during a drag.
+4. **Canvas templates** — Empty / Decision matrix / Architecture /
+   Standup / Retro / OKR tree, each seeding nodes + edges via
+   `canvas.addNote` + `canvases.addNode` + `canvases.addEdge`.
+   Preview-card grid in the create dialog.
+5. **Lanes** — `meta.lane` (string) renders as soft-tinted
+   background bands with auto-fit horizontal bounds; right-side
+   menu lets the operator move a node to a lane.
+   ⚠ Persistence is client-only for v1 — `canvas.patchNode`
+   doesn't accept `meta` updates yet; a future `patchNodeMeta`
+   would close the loop.
+6. **Convert canvas → plan** toolbar button — calls
+   `canvas.convertToPlan`, routes to `/w/{slug}/plans/{newPlanId}`
+   on success. Gracefully disabled if procedure missing.
+7. **Presence cursor overlay** — subscribes to
+   `subjectType="canvas-presence"` events; renders dot + name
+   per remote operator. Local cursor broadcasts throttled to
+   ~10 fps via `canvas.broadcastPresence`.
+8. **Subtle animations** — `transition-all duration-300` on
+   hover/focus + ember glow pulse on RUNNING-status nodes
+   (matches Plans timeline).
+
+**Canvas backend (Agent H)**
+1. **`ArtifactType.NOTE`** — migration 0041 added the enum value;
+   schema kept in sync.
+2. **`canvas.addNote / addChatThread / convertToPlan /
+   broadcastPresence`** tRPC procedures + matching MCP tools
+   (`canvases.addNote`, `canvases.addChatThread`,
+   `canvases.convertToPlan`).
+3. **`convertToPlan`** walks the canvas nodes, takes existing
+   execution-step refs verbatim, treats NOTE artifacts as new
+   steps (title = first line of body, body = rest), maps
+   `kind="depends_on"` edges to `dependsOnStepIds`, and returns
+   `skippedNodes` for unsupported types (issue / agent-run /
+   chat-thread are ignored with a reason).
+4. **`broadcastPresence`** publishes Redis events
+   (`subjectType="canvas-presence"`, payload `{ userId, name,
+   x, y, ts }`) — fire-and-forget, mirrors `agent-run.ts`
+   patterns.
+5. **Entity-hydration extensions** — chat-thread returns
+   `meta.agent { name, profileKey, avatar }`, `meta.lastMessageAt`,
+   `meta.preview[3]` (user-filtered); artifact returns `meta.kind`,
+   `meta.updatedAt`, and (NOTE-only) `meta.body`.
+6. **6 new integration tests** covering note + chat-thread + convert
+   + presence + cross-workspace rejection.
+
+### Tests + verification
+
+- `pnpm lint` → clean.
+- `pnpm typecheck` → clean.
+- `pnpm test` → 50 files / 386 tests passed.
+- `pnpm build` → clean.
+
+### Open follow-ups noted by agents
+
+- Canvas: `patchNodeMeta` for lane persistence; self-cursor filter
+  for presence; edge SVG overlay (templates seed edges that are
+  currently invisible); multi-select drag-rectangle for bulk-lane;
+  right-click context menu; convert-to-plan dry-run toast.
+- Chat overlay: per-workspace default-tab pref; pre-thread-id draft
+  fallback key; fuzzy mention match; `cmd+shift+/` for "panel+chat
+  directly".
+
 ## 2026-05-19 — Plans + Canvas UX overhaul (parallel agent team)
 
 ### Summary
