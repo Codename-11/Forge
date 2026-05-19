@@ -4713,6 +4713,48 @@ export const mcpTools = {
               },
             });
 
+      // Wave 11: surface open action requests + recent artifacts +
+      // pending review gates targeting this thread's agent so the
+      // chat bundle gives a full "what's outstanding" picture.
+      const [pendingActionRequests, recentArtifacts] = await Promise.all([
+        linkedAgentId
+          ? db.actionRequest.findMany({
+              where: {
+                workspaceId: ctx.workspaceId,
+                assignedAgentId: linkedAgentId,
+                status: "OPEN",
+              },
+              orderBy: [{ severity: "desc" }, { createdAt: "desc" }],
+              take: 10,
+              select: {
+                id: true,
+                title: true,
+                body: true,
+                severity: true,
+                createdAt: true,
+                issueId: true,
+              },
+            })
+          : Promise.resolve([]),
+        db.artifact.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            archivedAt: null,
+            createdByAgentId: linkedAgentId ?? undefined,
+          },
+          orderBy: { updatedAt: "desc" },
+          take: 10,
+          select: {
+            id: true,
+            slug: true,
+            title: true,
+            type: true,
+            status: true,
+            updatedAt: true,
+          },
+        }),
+      ]);
+
       return {
         workspace,
         thread: bundle.thread,
@@ -4725,6 +4767,8 @@ export const mcpTools = {
         linkedIssues: bundle.linkedIssues,
         diagnostics: bundle.diagnostics,
         contextPolicy: bundle.contextPolicy,
+        pendingActionRequests,
+        recentArtifacts,
       };
     },
   },
