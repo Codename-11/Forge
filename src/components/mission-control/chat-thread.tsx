@@ -12,6 +12,7 @@ import { uploadAttachmentFile } from "@/components/attachments/attachment-upload
 import { toast } from "sonner";
 import { ChatMarkdown } from "./chat-markdown";
 import type { SlashCommandContext } from "@/lib/chat-slash-commands";
+import { AgentAvatar } from "@/components/agents/agent-avatar";
 
 /**
  * Active chat thread between the operator and one agent. Polls via
@@ -396,9 +397,7 @@ export function ChatThreadView({ agentId }: { agentId: string }) {
     <div className="flex h-full flex-col">
       {agent && (
         <div className="flex items-center gap-2 border-b border-border/70 bg-card/40 px-3 py-1.5">
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-ember/15 font-mono text-[0.625rem] uppercase text-ember">
-            {agent.profileKey.slice(0, 2)}
-          </span>
+          <AgentAvatar agent={agent} size="xs" shape="circle" active />
           <span className="text-[0.75rem] font-medium text-foreground">{agent.name}</span>
           <span className="text-[0.625rem] text-muted-foreground">
             @{agent.profileKey}
