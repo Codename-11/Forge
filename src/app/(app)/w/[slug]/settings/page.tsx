@@ -65,6 +65,12 @@ const AUTOMATION: Entry[] = [
     description:
       "Declarative routing layer: pin issues matching priority / label / project to a specific agent before the mode-based picker runs.",
   },
+  {
+    path: "/settings/crews",
+    title: "Agent crews",
+    description:
+      "Bind agents into named crews with planner/worker/reviewer roles. Crews drive multi-agent execution plans and review gates.",
+  },
 ];
 
 const INTEGRATIONS: Entry[] = [
