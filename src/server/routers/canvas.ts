@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind } from "@prisma/client";
+import { EventKind, type PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { forgeEntityTypeSchema } from "@/lib/entity-ref";
@@ -43,6 +43,45 @@ const nodeInputSchema = z.object({
   collapsed: z.boolean().optional(),
   viewMode: z.string().max(20).nullable().optional(),
 });
+
+async function assertCanvasTarget(
+  ctx: { db: PrismaClient; workspaceId: string },
+  type: z.infer<typeof forgeEntityTypeSchema>,
+  id: string,
+) {
+  const [hydrated] = await hydrateEntityRefs({ db: ctx.db, workspaceId: ctx.workspaceId }, [
+    { type, id },
+  ]);
+  if (!hydrated || hydrated.missing) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `${type} target not found in this workspace.`,
+    });
+  }
+}
+
+async function validateCanvasScope(
+  ctx: { db: PrismaClient; workspaceId: string },
+  scopeType: string | null | undefined,
+  scopeId: string | null | undefined,
+): Promise<{ scopeType: z.infer<typeof forgeEntityTypeSchema> | null; scopeId: string | null }> {
+  if (!scopeType && !scopeId) return { scopeType: null, scopeId: null };
+  if (!scopeType || !scopeId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Canvas scopeType and scopeId must be provided together.",
+    });
+  }
+  const parsed = forgeEntityTypeSchema.safeParse(scopeType);
+  if (!parsed.success) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Canvas scopeType must be a known Forge entity type.",
+    });
+  }
+  await assertCanvasTarget(ctx, parsed.data, scopeId);
+  return { scopeType: parsed.data, scopeId };
+}
 
 export const canvasRouter = router({
   list: workspaceProcedure
@@ -135,13 +174,14 @@ export const canvasRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const scope = await validateCanvasScope(ctx, input.scopeType, input.scopeId);
       const created = await ctx.db.$transaction(async (tx) => {
         const canvas = await tx.workspaceCanvas.create({
           data: {
             workspaceId: ctx.workspaceId,
             name: input.name.trim(),
-            scopeType: input.scopeType ?? null,
-            scopeId: input.scopeId ?? null,
+            scopeType: scope.scopeType,
+            scopeId: scope.scopeId,
             viewport: input.viewport ?? undefined,
             createdById: ctx.session?.user?.id ?? null,
           },
@@ -204,6 +244,7 @@ export const canvasRouter = router({
   addNode: workspaceProcedure
     .input(z.object({ canvasId: z.string().cuid() }).merge(nodeInputSchema))
     .mutation(async ({ ctx, input }) => {
+      await assertCanvasTarget(ctx, input.targetType, input.targetId);
       const canvas = await ctx.db.workspaceCanvas.findFirst({
         where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
         select: { id: true },

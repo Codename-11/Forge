@@ -89,6 +89,7 @@ export async function addCrewMember(
     crewId: string;
     agentId: string;
     role: AgentCrewRole;
+    actorId?: string | null;
   },
 ): Promise<{ id: string }> {
   const [crew, agent] = await Promise.all([
@@ -109,23 +110,37 @@ export async function addCrewMember(
     orderBy: { position: "desc" },
     select: { position: true },
   });
-  const row = await db.agentCrewMember.upsert({
-    where: {
-      crewId_agentId_role: {
+  const row = await db.$transaction(async (tx) => {
+    const member = await tx.agentCrewMember.upsert({
+      where: {
+        crewId_agentId_role: {
+          crewId: params.crewId,
+          agentId: params.agentId,
+          role: params.role,
+        },
+      },
+      create: {
+        workspaceId: params.workspaceId,
         crewId: params.crewId,
         agentId: params.agentId,
         role: params.role,
+        position: (last?.position ?? -1) + 1,
       },
-    },
-    create: {
+      update: {},
+      select: { id: true },
+    });
+    await recordChange(tx, {
       workspaceId: params.workspaceId,
-      crewId: params.crewId,
-      agentId: params.agentId,
-      role: params.role,
-      position: (last?.position ?? -1) + 1,
-    },
-    update: {},
-    select: { id: true },
+      actorId: params.actorId ?? null,
+      entity: "agent-crew",
+      entityId: params.crewId,
+      action: "member_added",
+      after: { agentId: params.agentId, role: params.role },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "agent-crew",
+      subjectId: params.crewId,
+    });
+    return member;
   });
   return { id: row.id };
 }

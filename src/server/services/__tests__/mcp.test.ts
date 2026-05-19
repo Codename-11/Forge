@@ -2746,4 +2746,58 @@ describe("mcp canvases.* mutation tools", () => {
     };
     expect(got.edges).toHaveLength(0);
   });
+
+  it("rejects out-of-workspace and narrowed-scope canvas refs", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CV4" });
+    fixtures.push(fixture);
+    const other = await createWorkspaceFixture({ keyPrefix: "CV5" });
+    fixtures.push(other);
+    const prisma = getPrisma();
+    const allowedProject = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "CVA",
+        name: "Allowed",
+        createdById: fixture.user.id,
+      },
+    });
+    const blockedProject = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "CVB",
+        name: "Blocked",
+        createdById: fixture.user.id,
+      },
+    });
+    const allowedIssue = await createIssue(fixture, { projectId: allowedProject.id });
+    const blockedIssue = await createIssue(fixture, { projectId: blockedProject.id });
+    const foreignIssue = await createIssue(other);
+    const { ctx: scopedCtx } = buildMcpCtx(fixture, { projectIds: [allowedProject.id] });
+    const { ctx: broadCtx } = buildMcpCtx(fixture);
+
+    const canvas = (await call("canvases.create", { name: "Scoped" }, scopedCtx)) as { id: string };
+    await call(
+      "canvases.addNode",
+      { canvasId: canvas.id, targetType: "issue", targetId: allowedIssue.id, x: 0, y: 0 },
+      scopedCtx,
+    );
+
+    await expect(
+      call(
+        "canvases.addNode",
+        { canvasId: canvas.id, targetType: "issue", targetId: blockedIssue.id, x: 0, y: 0 },
+        scopedCtx,
+      ),
+    ).rejects.toThrow(/scope/i);
+    await expect(
+      call(
+        "canvases.create",
+        { name: "Foreign", scopeType: "issue", scopeId: foreignIssue.id },
+        broadCtx,
+      ),
+    ).rejects.toThrow(/not found/);
+    await expect(
+      call("canvases.create", { name: "Half", scopeType: "issue" }, broadCtx),
+    ).rejects.toThrow(/provided together/);
+  });
 });

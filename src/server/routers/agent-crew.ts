@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { ReviewGateStatus } from "@prisma/client";
-import { router, workspaceProcedure } from "@/server/trpc";
+import { EventKind, ReviewGateStatus } from "@prisma/client";
+import { router, adminProcedure, workspaceProcedure } from "@/server/trpc";
+import { recordChange } from "@/server/audit";
 import {
   AGENT_CREW_ROLES,
   addCrewMember,
@@ -59,7 +60,7 @@ export const agentCrewRouter = router({
       return row;
     }),
 
-  create: workspaceProcedure
+  create: adminProcedure
     .input(
       z.object({
         name: z.string().min(1).max(200),
@@ -91,7 +92,7 @@ export const agentCrewRouter = router({
       return result;
     }),
 
-  archive: workspaceProcedure
+  archive: adminProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
       const crew = await ctx.db.agentCrew.findFirst({
@@ -99,14 +100,26 @@ export const agentCrewRouter = router({
         select: { id: true },
       });
       if (!crew) throw new TRPCError({ code: "NOT_FOUND", message: "Crew not found." });
-      await ctx.db.agentCrew.update({
-        where: { id: input.id },
-        data: { archivedAt: new Date() },
+      await ctx.db.$transaction(async (tx) => {
+        await tx.agentCrew.update({
+          where: { id: input.id },
+          data: { archivedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "agent-crew",
+          entityId: input.id,
+          action: "archived",
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "agent-crew",
+          subjectId: input.id,
+        });
       });
       return { ok: true };
     }),
 
-  addMember: workspaceProcedure
+  addMember: adminProcedure
     .input(
       z.object({
         crewId: z.string().cuid(),
@@ -120,21 +133,35 @@ export const agentCrewRouter = router({
         crewId: input.crewId,
         agentId: input.agentId,
         role: input.role as AgentCrewRole,
+        actorId: ctx.session?.user?.id ?? null,
       });
       return result;
     }),
 
-  removeMember: workspaceProcedure
+  removeMember: adminProcedure
     .input(z.object({ memberId: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
       const member = await ctx.db.agentCrewMember.findFirst({
         where: { id: input.memberId, workspaceId: ctx.workspaceId },
-        select: { id: true },
+        select: { id: true, crewId: true, agentId: true, role: true },
       });
       if (!member) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Crew member not found." });
       }
-      await ctx.db.agentCrewMember.delete({ where: { id: input.memberId } });
+      await ctx.db.$transaction(async (tx) => {
+        await tx.agentCrewMember.delete({ where: { id: input.memberId } });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "agent-crew",
+          entityId: member.crewId,
+          action: "member_removed",
+          before: { agentId: member.agentId, role: member.role },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "agent-crew",
+          subjectId: member.crewId,
+        });
+      });
       return { ok: true };
     }),
 });
@@ -197,7 +224,7 @@ export const reviewGateRouter = router({
       return result;
     }),
 
-  resolve: workspaceProcedure
+  resolve: adminProcedure
     .input(
       z.object({
         id: z.string().cuid(),
