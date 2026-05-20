@@ -1,13 +1,15 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ExecutionPlanStatus } from "@prisma/client";
-import { ListChecks, Plus } from "lucide-react";
+import { Archive, Copy, ListChecks, MoreHorizontal, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { Confirm } from "@/components/ui/modal";
+import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -121,24 +123,37 @@ const PLAN_TEMPLATES: PlanTemplate[] = [
   },
 ];
 
+type PlanRow = {
+  id: string;
+  title: string;
+  description: string | null;
+  status: ExecutionPlanStatus;
+  _count: { steps: number };
+};
+
+type Tab = "active" | "archived";
+
 /**
- * Execution plans index. Lists every non-archived plan in the workspace
- * along with its status, target issue/project (when set), and step
- * count. "+ New plan" opens a tiny dialog that creates a DRAFT plan
- * and routes to its detail page so the operator can start adding
- * steps immediately.
+ * Execution plans index. Active tab lists non-archived plans (the
+ * default). Archived tab surfaces soft-deleted plans so operators can
+ * restore or hard-delete them. Each card has a "..." menu exposing
+ * Duplicate / Archive on Active and Restore / Delete on Archived.
  */
 export default function PlansPage() {
   const ws = useWorkspace();
   const router = useRouter();
   const utils = trpc.useUtils();
-  const { data, isLoading } = trpc.executionPlan.list.useQuery({
-    includeArchived: false,
-  });
+  const [tab, setTab] = useState<Tab>("active");
+  const { data, isLoading } = trpc.executionPlan.list.useQuery(
+    tab === "archived"
+      ? { archivedOnly: true }
+      : { includeArchived: false },
+  );
   const [creating, setCreating] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [templateId, setTemplateId] = useState<string>("blank");
   const [seeding, setSeeding] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<PlanRow | null>(null);
 
   const items = useMemo(() => data?.items ?? [], [data]);
   const selectedTemplate = useMemo(
@@ -146,8 +161,42 @@ export default function PlansPage() {
     [templateId],
   );
 
+  const invalidateLists = () => {
+    void utils.executionPlan.list.invalidate();
+  };
+
   const addStep = trpc.executionPlan.addStep.useMutation();
   const create = trpc.executionPlan.create.useMutation({
+    onError: (e) => toast.error(e.message),
+  });
+  const archive = trpc.executionPlan.archive.useMutation({
+    onSuccess: () => {
+      toast.success("Plan archived");
+      invalidateLists();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const restore = trpc.executionPlan.restore.useMutation({
+    onSuccess: () => {
+      toast.success("Plan restored");
+      invalidateLists();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const duplicate = trpc.executionPlan.duplicate.useMutation({
+    onSuccess: ({ id }) => {
+      toast.success("Plan duplicated");
+      invalidateLists();
+      router.push(`/w/${ws.slug}/plans/${id}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const deleteM = trpc.executionPlan.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Plan deleted");
+      invalidateLists();
+      setDeleteTarget(null);
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -186,7 +235,7 @@ export default function PlansPage() {
       } else {
         toast.success("Plan created");
       }
-      utils.executionPlan.list.invalidate();
+      invalidateLists();
       setCreating(false);
       setDraftTitle("");
       setTemplateId("blank");
@@ -207,7 +256,11 @@ export default function PlansPage() {
     <>
       <Topbar
         title="Plans"
-        subtitle={data ? `${items.length} active` : undefined}
+        subtitle={
+          data
+            ? `${items.length} ${tab === "archived" ? "archived" : "active"}`
+            : undefined
+        }
         actions={
           <Button variant="ember" size="sm" onClick={() => setCreating(true)}>
             <Plus className="h-3.5 w-3.5" /> New plan
@@ -216,34 +269,78 @@ export default function PlansPage() {
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="mb-3 inline-flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5">
+          <button
+            type="button"
+            onClick={() => setTab("active")}
+            className={cn(
+              "rounded px-2.5 py-1 text-xs transition",
+              tab === "active"
+                ? "bg-subtle text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Active
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("archived")}
+            className={cn(
+              "rounded px-2.5 py-1 text-xs transition",
+              tab === "archived"
+                ? "bg-subtle text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Archived
+          </button>
+        </div>
+
         {isLoading ? (
           <SkeletonList rows={4} />
         ) : items.length === 0 ? (
-          <EmptyState
-            variant="page"
-            icon={<ListChecks />}
-            title="No execution plans yet"
-            description={
-              <span>
-                Plans coordinate multi-step work across humans and agent
-                crews. Draft one to break a goal into ordered steps with
-                expected outputs and verification, then approve when
-                ready.
-              </span>
-            }
-            action={
-              <Button variant="ember" size="sm" onClick={() => setCreating(true)}>
-                Draft plan
-              </Button>
-            }
-          />
+          tab === "archived" ? (
+            <EmptyState
+              variant="page"
+              icon={<Archive />}
+              title="No archived plans"
+              description={
+                <span>
+                  Archived plans show up here so you can restore them or
+                  hard-delete with a type-to-confirm gate. Nothing yet.
+                </span>
+              }
+            />
+          ) : (
+            <EmptyState
+              variant="page"
+              icon={<ListChecks />}
+              title="No execution plans yet"
+              description={
+                <span>
+                  Plans coordinate multi-step work across humans and agent
+                  crews. Draft one to break a goal into ordered steps with
+                  expected outputs and verification, then approve when
+                  ready.
+                </span>
+              }
+              action={
+                <Button variant="ember" size="sm" onClick={() => setCreating(true)}>
+                  Draft plan
+                </Button>
+              }
+            />
+          )
         ) : (
           <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
             {items.map((row) => (
-              <li key={row.id}>
+              <li key={row.id} className="relative">
                 <Link
                   href={`/w/${ws.slug}/plans/${row.id}`}
-                  className="group flex h-full flex-col gap-2 rounded-lg border border-border bg-card/40 p-3 transition hover:border-ember/40 hover:bg-subtle"
+                  className={cn(
+                    "group flex h-full flex-col gap-2 rounded-lg border border-border bg-card/40 p-3 transition hover:border-ember/40 hover:bg-subtle",
+                    tab === "archived" && "opacity-70",
+                  )}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2 text-meta uppercase tracking-wide text-muted-foreground">
@@ -265,6 +362,20 @@ export default function PlansPage() {
                     {row._count.steps} step{row._count.steps === 1 ? "" : "s"}
                   </p>
                 </Link>
+                <RowMenu
+                  align="right"
+                  tab={tab}
+                  busy={
+                    archive.isPending ||
+                    restore.isPending ||
+                    duplicate.isPending ||
+                    deleteM.isPending
+                  }
+                  onDuplicate={() => duplicate.mutate({ id: row.id })}
+                  onArchive={() => archive.mutate({ id: row.id })}
+                  onRestore={() => restore.mutate({ id: row.id })}
+                  onDelete={() => setDeleteTarget(row)}
+                />
               </li>
             ))}
           </ul>
@@ -342,6 +453,171 @@ export default function PlansPage() {
           </div>
         </div>
       )}
+
+      <Confirm
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title="Delete plan?"
+        description={
+          deleteTarget ? (
+            <>
+              This permanently removes the plan and its steps. Type the
+              plan&apos;s title to confirm.
+            </>
+          ) : null
+        }
+        variant="destructive"
+        typeToConfirm={deleteTarget?.title}
+        primaryLabel="Delete plan"
+        loading={deleteM.isPending}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          deleteM.mutate({ id: deleteTarget.id, confirm: deleteTarget.title });
+        }}
+      />
     </>
+  );
+}
+
+function RowMenu({
+  tab,
+  busy,
+  onDuplicate,
+  onArchive,
+  onRestore,
+  onDelete,
+  align = "right",
+}: {
+  tab: Tab;
+  busy: boolean;
+  onDuplicate: () => void;
+  onArchive: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
+  align?: "left" | "right";
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="absolute right-2 top-2">
+      <button
+        type="button"
+        aria-label="Plan actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={busy}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        className={cn(
+          "focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md bg-card/80 text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-40",
+          open && "bg-subtle text-foreground",
+        )}
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          className={cn(
+            "absolute top-full z-30 mt-1 w-40 rounded-md border border-border bg-card py-1 shadow-md",
+            align === "right" ? "right-0" : "left-0",
+          )}
+        >
+          {tab === "active" ? (
+            <>
+              <MenuItem
+                icon={<Copy className="h-3.5 w-3.5" />}
+                label="Duplicate"
+                onClick={() => {
+                  setOpen(false);
+                  onDuplicate();
+                }}
+              />
+              <MenuItem
+                icon={<Archive className="h-3.5 w-3.5" />}
+                label="Archive"
+                onClick={() => {
+                  setOpen(false);
+                  onArchive();
+                }}
+              />
+            </>
+          ) : (
+            <>
+              <MenuItem
+                icon={<RotateCcw className="h-3.5 w-3.5" />}
+                label="Restore"
+                onClick={() => {
+                  setOpen(false);
+                  onRestore();
+                }}
+              />
+              <MenuItem
+                icon={<Trash2 className="h-3.5 w-3.5 text-ember" />}
+                label="Delete…"
+                destructive
+                onClick={() => {
+                  setOpen(false);
+                  onDelete();
+                }}
+              />
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({
+  icon,
+  label,
+  onClick,
+  destructive,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  destructive?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className={cn(
+        "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.75rem] hover:bg-subtle",
+        destructive && "text-ember",
+      )}
+    >
+      <span className="text-muted-foreground">{icon}</span>
+      <span>{label}</span>
+    </button>
   );
 }

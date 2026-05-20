@@ -330,6 +330,7 @@ async function hydrateOne(
           filename: true,
           mimeType: true,
           kind: true,
+          size: true,
           externalUrl: true,
           linkTitle: true,
         },
@@ -341,7 +342,18 @@ async function hydrateOne(
         label: row.linkTitle || row.filename,
         subLabel: row.mimeType,
         url: row.externalUrl ?? undefined,
-        meta: { kind: row.kind, mimeType: row.mimeType },
+        // `size` + `kind` let the canvas inline preview decide whether
+        // to inline-render (under 25 MB) or fall back to a chip. The
+        // presigned `previewUrl` itself is fetched lazily on the client
+        // via `attachment.getDownloadUrl` — keeping the hydration call
+        // a single SELECT instead of one S3 presign per node.
+        meta: {
+          kind: row.kind,
+          mimeType: row.mimeType,
+          filename: row.filename,
+          size: row.size,
+          externalUrl: row.externalUrl ?? null,
+        },
       }));
     }
     case "note": {
@@ -419,6 +431,14 @@ async function hydrateOne(
         if (isNote) {
           // Notes carry their full body for inline canvas rendering.
           meta.body = row.body;
+          meta.bodyKind = "markdown";
+        } else if (row.body && row.body.length > 0) {
+          // Non-NOTE artifacts: surface the body + a coarse "what kind
+          // of text is this" hint so the canvas inline preview can pick
+          // markdown vs code-style rendering. Anything not obviously
+          // markdown defaults to plain text.
+          meta.body = row.body;
+          meta.bodyKind = inferArtifactBodyKind(row.type, row.body);
         }
         return {
           type: "artifact" as const,
@@ -564,6 +584,33 @@ async function hydrateOne(
       return [];
     }
   }
+}
+
+/**
+ * Heuristic-only — the canvas preview uses this to pick markdown vs
+ * code rendering. Real Artifact subtypes don't carry a "language"
+ * field today; sniff the body for the common signals.
+ */
+function inferArtifactBodyKind(
+  artifactType: string,
+  body: string,
+): "markdown" | "code" | "text" {
+  // RUNBOOK / SPEC / DECISION / DOCUMENT are conventionally markdown.
+  if (
+    artifactType === "RUNBOOK" ||
+    artifactType === "SPEC" ||
+    artifactType === "DECISION" ||
+    artifactType === "DOCUMENT" ||
+    artifactType === "BRIEF"
+  ) {
+    return "markdown";
+  }
+  // Cheap markdown probe — headings, lists, fences.
+  const head = body.slice(0, 512);
+  if (/^#{1,6}\s|\n#{1,6}\s|```|^\s*[-*+]\s|^\s*\d+\.\s/.test(head)) {
+    return "markdown";
+  }
+  return "text";
 }
 
 /**

@@ -412,9 +412,16 @@ export async function recordChange(
     params.eventKind === EventKind.CHAT_MESSAGE_POSTED &&
     params.subjectType === "chat-thread"
   ) {
-    const payload = params.payload as { agentId?: string; role?: string } | undefined;
+    const payload = params.payload as
+      | { agentId?: string; role?: string; streamed?: boolean }
+      | undefined;
+    // Skip dispatch when the interactive streaming path (/api/chat/stream)
+    // is already handling this user turn — the audit + activity-event row
+    // still gets emitted (for consistency across consumers) but we must
+    // not queue a Hermes webhook delivery or we'll get a duplicate reply.
+    const isStreamed = payload?.streamed === true;
     // Only dispatch on USER messages (don't loop agent's own posts back).
-    if (payload?.agentId && payload?.role === "USER") {
+    if (!isStreamed && payload?.agentId && payload?.role === "USER") {
       const agent = await tx.agent.findFirst({
         where: {
           workspaceId: params.workspaceId,

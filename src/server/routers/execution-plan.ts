@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
+import {
+  EventKind,
+  ExecutionPlanStatus,
+  ExecutionStepStatus,
+  Prisma,
+} from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { extractMentions } from "@/server/services/mentions";
@@ -42,18 +47,24 @@ export const executionPlanRouter = router({
           issueId: z.string().cuid().optional(),
           projectId: z.string().cuid().optional(),
           includeArchived: z.boolean().default(false),
+          archivedOnly: z.boolean().default(false),
           limit: z.number().int().positive().max(100).default(50),
         })
         .default({}),
     )
     .query(async ({ ctx, input }) => {
+      const archivedFilter = input.archivedOnly
+        ? { not: null }
+        : input.includeArchived
+          ? undefined
+          : null;
       const rows = await ctx.db.executionPlan.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           status: input.status,
           issueId: input.issueId,
           projectId: input.projectId,
-          archivedAt: input.includeArchived ? undefined : null,
+          archivedAt: archivedFilter,
         },
         orderBy: { updatedAt: "desc" },
         take: input.limit,
@@ -156,6 +167,185 @@ export const executionPlanRouter = router({
       await ctx.db.executionPlan.update({
         where: { id: input.id },
         data: { archivedAt: new Date() },
+      });
+      return { ok: true };
+    }),
+
+  restore: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const plan = await ctx.db.executionPlan.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, title: true, status: true, archivedAt: true },
+      });
+      if (!plan) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
+      }
+      const archivedAt = plan.archivedAt;
+      if (!archivedAt) return { ok: true };
+      await ctx.db.$transaction(async (tx) => {
+        await tx.executionPlan.update({
+          where: { id: input.id },
+          data: { archivedAt: null },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "execution-plan",
+          entityId: input.id,
+          action: "restore",
+          before: { archivedAt: archivedAt.toISOString() },
+          after: { archivedAt: null },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "execution-plan",
+          subjectId: input.id,
+          payload: { action: "restored", planTitle: plan.title },
+        });
+      });
+      return { ok: true };
+    }),
+
+  duplicate: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        newTitle: z.string().min(1).max(300).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const source = await ctx.db.executionPlan.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        include: { steps: { orderBy: { position: "asc" } } },
+      });
+      if (!source) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
+      }
+
+      const newTitle = input.newTitle?.trim() || `Copy of ${source.title}`;
+
+      const result = await ctx.db.$transaction(async (tx) => {
+        const plan = await tx.executionPlan.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            title: newTitle,
+            description: source.description,
+            issueId: source.issueId,
+            projectId: source.projectId,
+            contextSetId: source.contextSetId,
+            status: ExecutionPlanStatus.DRAFT,
+            createdById: ctx.session?.user?.id ?? null,
+            createdByAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          },
+        });
+
+        const idMap = new Map<string, string>();
+        for (let i = 0; i < source.steps.length; i++) {
+          const step = source.steps[i];
+          const created = await tx.executionStep.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              planId: plan.id,
+              title: step.title,
+              body: step.body,
+              position: step.position,
+              assignedAgentId: step.assignedAgentId,
+              assignedUserId: step.assignedUserId,
+              expectedOutput: step.expectedOutput,
+              verification:
+                step.verification === null
+                  ? Prisma.JsonNull
+                  : (step.verification as Prisma.InputJsonValue),
+              dependsOnStepIds: [],
+            },
+          });
+          idMap.set(step.id, created.id);
+        }
+
+        for (const step of source.steps) {
+          if (!step.dependsOnStepIds.length) continue;
+          const remapped = step.dependsOnStepIds
+            .map((sid) => idMap.get(sid))
+            .filter((sid): sid is string => Boolean(sid));
+          if (remapped.length === 0) continue;
+          const newStepId = idMap.get(step.id);
+          if (!newStepId) continue;
+          await tx.executionStep.update({
+            where: { id: newStepId },
+            data: { dependsOnStepIds: remapped },
+          });
+        }
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "execution-plan",
+          entityId: plan.id,
+          action: "duplicate",
+          after: {
+            title: plan.title,
+            sourcePlanId: source.id,
+            stepCount: source.steps.length,
+          },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "execution-plan",
+          subjectId: plan.id,
+          payload: {
+            action: "duplicated",
+            sourcePlanId: source.id,
+            stepCount: source.steps.length,
+          },
+        });
+
+        return { id: plan.id };
+      });
+
+      return result;
+    }),
+
+  delete: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        confirm: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (
+        ctx.membership.role !== "OWNER" &&
+        ctx.membership.role !== "ADMIN"
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Admin role required to hard-delete an execution plan.",
+        });
+      }
+      const plan = await ctx.db.executionPlan.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, title: true, status: true },
+      });
+      if (!plan) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
+      }
+      if (input.confirm !== plan.title) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Confirmation text does not match the plan title.",
+        });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "execution-plan",
+          entityId: plan.id,
+          action: "delete",
+          before: { title: plan.title, status: plan.status },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "execution-plan",
+          subjectId: plan.id,
+          payload: { action: "deleted", planTitle: plan.title },
+        });
+        await tx.executionPlan.delete({ where: { id: plan.id } });
       });
       return { ok: true };
     }),

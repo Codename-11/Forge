@@ -7,6 +7,7 @@ import { ArtifactStatus, ArtifactType } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { Confirm } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
@@ -42,6 +43,7 @@ export default function ArtifactDetailPage() {
   const [draftBody, setDraftBody] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [changelog, setChangelog] = useState("");
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const { data: artifact, isLoading } = trpc.artifact.getBySlug.useQuery({
     slug: params.artifactSlug,
@@ -252,17 +254,29 @@ export default function ArtifactDetailPage() {
             size="sm"
             variant="ghost"
             className="text-warning"
-            onClick={() => {
-              if (window.confirm("Archive this artifact?")) {
-                archive.mutate({ id: artifact.id });
-              }
-            }}
+            onClick={() => setArchiveOpen(true)}
             disabled={archive.isPending}
           >
             <Archive className="h-3.5 w-3.5" /> Archive artifact
           </Button>
         </aside>
       </div>
+
+      <Confirm
+        open={archiveOpen}
+        onOpenChange={setArchiveOpen}
+        title="Archive artifact?"
+        description="Hides the artifact from active listings. Version history is preserved."
+        primaryLabel="Archive artifact"
+        variant="destructive"
+        loading={archive.isPending}
+        onConfirm={() =>
+          archive.mutate(
+            { id: artifact.id },
+            { onSettled: () => setArchiveOpen(false) },
+          )
+        }
+      />
     </>
   );
 }
