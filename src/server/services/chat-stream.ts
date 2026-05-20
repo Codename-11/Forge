@@ -265,6 +265,16 @@ export interface RunChatLoopArgs {
   onDone?: () => void;
   /** Executor invoked once per surfaced tool call. */
   executeToolCall: (call: ChatToolCall) => Promise<ChatToolExecResult>;
+  /**
+   * Optional: rebuild the leading system message before each turn so the
+   * agent sees up-to-date state (e.g. a canvas it just edited). Called
+   * once per turn with no args; should return either a new prompt string
+   * or null to leave the existing system message untouched.
+   *
+   * The returned prompt REPLACES messages[0] when messages[0].role ===
+   * "system" — otherwise the prompt is prepended.
+   */
+  rebuildSystemPrompt?: () => Promise<string | null>;
 }
 
 /**
@@ -282,6 +292,21 @@ export async function runChatLoop(args: RunChatLoopArgs): Promise<void> {
     if (args.signal?.aborted) {
       args.onError?.("Stream aborted.");
       break;
+    }
+
+    if (args.rebuildSystemPrompt) {
+      try {
+        const next = await args.rebuildSystemPrompt();
+        if (typeof next === "string") {
+          if (messages[0]?.role === "system") {
+            messages[0] = { role: "system", content: next };
+          } else {
+            messages.unshift({ role: "system", content: next });
+          }
+        }
+      } catch {
+        /* best-effort — fall through with the prior prompt */
+      }
     }
 
     const assistantContent: string[] = [];

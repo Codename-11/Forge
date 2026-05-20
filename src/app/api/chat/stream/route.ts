@@ -16,6 +16,7 @@ import {
 } from "@/server/services/chat-tools-allowlist";
 import { executeChatTool } from "@/server/services/chat-tool-exec";
 import { pendingApprovals } from "@/server/services/chat-stream-state";
+import { loadCanvasContextSummary } from "@/server/services/chat-context-canvas";
 import { logger } from "@/server/logger";
 
 /**
@@ -44,6 +45,10 @@ interface RequestBody {
   threadId: string;
   body: string;
   attachments?: string[];
+  /** Optional cuid — the canvas the operator is currently viewing.
+   * Validated to belong to the same workspace as the thread before
+   * being injected into the system prompt. */
+  canvasId?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -70,6 +75,10 @@ export async function POST(req: NextRequest) {
   if (body.length > 8000) {
     return NextResponse.json({ error: "body exceeds 8000 chars" }, { status: 400 });
   }
+  const canvasId =
+    typeof parsed.canvasId === "string" && parsed.canvasId.length > 0
+      ? parsed.canvasId
+      : null;
 
   // Owner + workspace scoping. We do this before opening the stream so
   // unauthorised requests get a clean 4xx instead of an empty SSE.
@@ -150,13 +159,32 @@ export async function POST(req: NextRequest) {
   });
   const history = recent.reverse();
 
-  const systemPrompt =
+  // Resolve the canvas binding once up-front so an invalid id fails fast
+  // (rather than silently dropping the binding mid-stream).
+  let boundCanvasId: string | null = null;
+  if (canvasId) {
+    const canvas = await db.workspaceCanvas.findFirst({
+      where: { id: canvasId, workspaceId, archivedAt: null },
+      select: { id: true },
+    });
+    if (canvas) boundCanvasId = canvas.id;
+  }
+
+  const baseSystemPrompt =
     `You are ${agent.name}. You're chatting with the operator inside Forge, a project ` +
     `management workspace. Be concise and direct. ` +
     (agent.capabilities && agent.capabilities.length > 0
       ? `Your capabilities: ${agent.capabilities.join(", ")}.\n\n`
       : "") +
     (agent.templateMarkdown ? `${agent.templateMarkdown}\n` : "");
+
+  const buildSystemPrompt = async (): Promise<string> => {
+    if (!boundCanvasId) return baseSystemPrompt;
+    const canvasSummary = await loadCanvasContextSummary(workspaceId, boundCanvasId);
+    if (!canvasSummary) return baseSystemPrompt;
+    return `${baseSystemPrompt}\n\n${canvasSummary}`;
+  };
+  const systemPrompt = await buildSystemPrompt();
 
   const messages: ChatStreamMessage[] = [
     { role: "system", content: systemPrompt },
@@ -326,6 +354,9 @@ export async function POST(req: NextRequest) {
           messages,
           tools: chatToolsAsOpenAITools(),
           signal: abortController.signal,
+          rebuildSystemPrompt: boundCanvasId
+            ? async () => buildSystemPrompt()
+            : undefined,
           onContent: (delta) => {
             assembled.push(delta);
             enqueue(sse("content", { delta }));

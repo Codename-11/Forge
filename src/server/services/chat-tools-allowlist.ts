@@ -494,6 +494,151 @@ const WRITE_TOOLS: ChatToolDef[] = [
     },
   },
   {
+    name: "canvases.bulkAddShapes",
+    mcpName: "canvases_bulkAddShapes",
+    requiresConfirm: true,
+    description:
+      "Add up to 50 drawing primitives to a canvas in one call. Each shape entry uses the same shape as canvases.shapeAdd.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        shapes: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: "object",
+            properties: {
+              kind: {
+                type: "string",
+                enum: ["box", "ellipse", "line", "arrow", "text", "freehand"],
+              },
+              x: { type: "number" },
+              y: { type: "number" },
+              width: { type: "number" },
+              height: { type: "number" },
+              path: {},
+              style: {},
+              text: { type: "string" },
+              groupId: { type: "string" },
+              zIndex: { type: "integer" },
+            },
+            required: ["kind", "x", "y"],
+            additionalProperties: true,
+          },
+        },
+      },
+      required: ["canvasId", "shapes"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "canvases.applyTemplate",
+    mcpName: "canvases_applyTemplate",
+    requiresConfirm: true,
+    description:
+      "Drop a named template (decision_matrix / retro / architecture / standup / okr_tree / empty) onto a canvas at an optional (x,y).",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        templateId: {
+          type: "string",
+          enum: [
+            "decision_matrix",
+            "retro",
+            "architecture",
+            "standup",
+            "okr_tree",
+            "empty",
+          ],
+        },
+        position: {
+          type: "object",
+          properties: {
+            x: { type: "number" },
+            y: { type: "number" },
+          },
+          required: ["x", "y"],
+          additionalProperties: false,
+        },
+      },
+      required: ["canvasId", "templateId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "canvases.layout",
+    mcpName: "canvases_layout",
+    requiresConfirm: true,
+    description:
+      "Re-flow canvas node positions using `topological`, `force`, or `grid` layout.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        algorithm: {
+          type: "string",
+          enum: ["topological", "force", "grid"],
+        },
+      },
+      required: ["canvasId", "algorithm"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "canvases.addNote",
+    mcpName: "canvases_addNote",
+    requiresConfirm: true,
+    description:
+      "Create a sticky-note artifact and place it on a canvas at (x,y). Body is markdown; first line becomes the title.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        body: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+      },
+      required: ["canvasId", "x", "y"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "canvases.addChatThread",
+    mcpName: "canvases_addChatThread",
+    requiresConfirm: true,
+    description: "Place an existing ChatThread on a canvas at (x,y).",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        threadId: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+      },
+      required: ["canvasId", "threadId", "x", "y"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "canvases.convertToPlan",
+    mcpName: "canvases_convertToPlan",
+    requiresConfirm: true,
+    description:
+      "Synthesize a DRAFT ExecutionPlan from a canvas — execution-step nodes + Note artifacts become steps, depends_on edges become dependencies.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        title: { type: "string" },
+      },
+      required: ["canvasId"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "notes.create",
     mcpName: "notes_create",
     requiresConfirm: true,

@@ -239,6 +239,260 @@ async function findBlockedIssueIds(workspaceId: string): Promise<Set<string>> {
 }
 
 // ---------------------------------------------------------------------------
+// Canvas templates + layout helpers (used by canvases.applyTemplate /
+// canvases.layout). Kept in-file rather than importing from the client
+// `canvas-templates.tsx` because that module is "use client" + pulls in
+// Lucide icons. The shapes intentionally mirror the client copy.
+// ---------------------------------------------------------------------------
+
+type McpTemplateNode = {
+  key: string;
+  noteBody?: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  lane?: string;
+};
+type McpTemplateEdge = { from: string; to: string; label?: string; kind?: string };
+type McpCanvasTemplate = { nodes: McpTemplateNode[]; edges?: McpTemplateEdge[] };
+
+const MCP_NOTE_W = 220;
+const MCP_COL = 280;
+const MCP_ROW = 200;
+
+const MCP_CANVAS_TEMPLATES: Record<string, McpCanvasTemplate> = {
+  empty: { nodes: [] },
+  decision_matrix: {
+    nodes: [
+      { key: "axis-x", noteBody: "**Effort →**", x: 200, y: -80, width: 200, height: 60 },
+      { key: "axis-y", noteBody: "**Impact ↑**", x: -200, y: 200, width: 200, height: 60 },
+      { key: "q1", noteBody: "**High impact · Low effort**\nQuick wins", x: 60, y: 60, lane: "Top-right" },
+      { key: "q2", noteBody: "**High impact · High effort**\nBig bets", x: 320, y: 60, lane: "Top-right" },
+      { key: "q3", noteBody: "**Low impact · Low effort**\nFill-in", x: 60, y: 320, lane: "Bottom" },
+      { key: "q4", noteBody: "**Low impact · High effort**\nAvoid", x: 320, y: 320, lane: "Bottom" },
+    ],
+  },
+  architecture: {
+    nodes: [
+      { key: "system", noteBody: "**System**\nName + one-line purpose.", x: 120, y: -40, width: 320, lane: "System" },
+      { key: "c1", noteBody: "Component A\n_purpose_", x: -80, y: 200, lane: "Components" },
+      { key: "c2", noteBody: "Component B\n_purpose_", x: 200, y: 200, lane: "Components" },
+      { key: "c3", noteBody: "Component C\n_purpose_", x: 480, y: 200, lane: "Components" },
+      { key: "d1", noteBody: "Dependency · external", x: -80, y: 440, lane: "Dependencies" },
+      { key: "d2", noteBody: "Dependency · internal", x: 200, y: 440, lane: "Dependencies" },
+      { key: "d3", noteBody: "Dependency · data", x: 480, y: 440, lane: "Dependencies" },
+    ],
+    edges: [
+      { from: "system", to: "c1", kind: "contains" },
+      { from: "system", to: "c2", kind: "contains" },
+      { from: "system", to: "c3", kind: "contains" },
+      { from: "c1", to: "d1", kind: "depends_on" },
+      { from: "c2", to: "d2", kind: "depends_on" },
+      { from: "c3", to: "d3", kind: "depends_on" },
+    ],
+  },
+  standup: {
+    nodes: [
+      { key: "y-h", noteBody: "**Yesterday**", x: 0, y: -60, width: MCP_NOTE_W, height: 50, lane: "Yesterday" },
+      { key: "y1", noteBody: "Wrapped: …", x: 0, y: 40, lane: "Yesterday" },
+      { key: "y2", noteBody: "Shipped: …", x: 0, y: 40 + MCP_ROW, lane: "Yesterday" },
+      { key: "t-h", noteBody: "**Today**", x: MCP_COL, y: -60, width: MCP_NOTE_W, height: 50, lane: "Today" },
+      { key: "t1", noteBody: "Focus: …", x: MCP_COL, y: 40, lane: "Today" },
+      { key: "t2", noteBody: "Stretch: …", x: MCP_COL, y: 40 + MCP_ROW, lane: "Today" },
+      { key: "b-h", noteBody: "**Blockers**", x: MCP_COL * 2, y: -60, width: MCP_NOTE_W, height: 50, lane: "Blockers" },
+      { key: "b1", noteBody: "Waiting on: …", x: MCP_COL * 2, y: 40, lane: "Blockers" },
+    ],
+  },
+  retro: {
+    nodes: [
+      { key: "ww-h", noteBody: "**Went well**", x: 0, y: -60, width: MCP_NOTE_W, height: 50, lane: "Went well" },
+      { key: "ww1", noteBody: "Win: …", x: 0, y: 40, lane: "Went well" },
+      { key: "dd-h", noteBody: "**Didn't go well**", x: MCP_COL, y: -60, width: MCP_NOTE_W, height: 50, lane: "Didn't" },
+      { key: "dd1", noteBody: "Friction: …", x: MCP_COL, y: 40, lane: "Didn't" },
+      { key: "cb-h", noteBody: "**Confused by**", x: 0, y: 40 + MCP_ROW, width: MCP_NOTE_W, height: 50, lane: "Confused by" },
+      { key: "cb1", noteBody: "Unclear: …", x: 0, y: 40 + MCP_ROW + 100, lane: "Confused by" },
+      { key: "ai-h", noteBody: "**Action items**", x: MCP_COL, y: 40 + MCP_ROW, width: MCP_NOTE_W, height: 50, lane: "Action items" },
+      { key: "ai1", noteBody: "[ ] Owner — task", x: MCP_COL, y: 40 + MCP_ROW + 100, lane: "Action items" },
+    ],
+  },
+  okr_tree: {
+    nodes: [
+      { key: "obj", noteBody: "**Objective**\nThe outcome we want.", x: 200, y: -40, width: 320, lane: "Objective" },
+      { key: "kr1", noteBody: "**KR 1**\nMeasure → target.", x: -80, y: 220, lane: "Key Results" },
+      { key: "kr2", noteBody: "**KR 2**\nMeasure → target.", x: 200, y: 220, lane: "Key Results" },
+      { key: "kr3", noteBody: "**KR 3**\nMeasure → target.", x: 480, y: 220, lane: "Key Results" },
+      { key: "a1", noteBody: "Action: …", x: -80, y: 440, lane: "Actions" },
+      { key: "a2", noteBody: "Action: …", x: 200, y: 440, lane: "Actions" },
+      { key: "a3", noteBody: "Action: …", x: 480, y: 440, lane: "Actions" },
+    ],
+    edges: [
+      { from: "obj", to: "kr1", kind: "contains" },
+      { from: "obj", to: "kr2", kind: "contains" },
+      { from: "obj", to: "kr3", kind: "contains" },
+      { from: "kr1", to: "a1", kind: "contains" },
+      { from: "kr2", to: "a2", kind: "contains" },
+      { from: "kr3", to: "a3", kind: "contains" },
+    ],
+  },
+};
+
+interface McpLayoutNode {
+  id: string;
+  x: number;
+  y: number;
+  targetType: string;
+  targetId: string;
+}
+interface McpLayoutEdge {
+  fromNodeId: string;
+  toNodeId: string;
+}
+type McpLayoutPositions = Map<string, { x: number; y: number }>;
+
+const MCP_LAYOUT_LAYER_X = 280;
+const MCP_LAYOUT_ROW_Y = 160;
+const MCP_LAYOUT_GRID_X = 240;
+const MCP_LAYOUT_GRID_Y = 180;
+const MCP_LAYOUT_FORCE_BOX = 4000;
+
+function mcpTopologicalLayout(nodes: McpLayoutNode[], edges: McpLayoutEdge[]): McpLayoutPositions {
+  const adj = new Map<string, string[]>();
+  const inDeg = new Map<string, number>();
+  for (const n of nodes) {
+    adj.set(n.id, []);
+    inDeg.set(n.id, 0);
+  }
+  for (const e of edges) {
+    if (!adj.has(e.fromNodeId) || !adj.has(e.toNodeId)) continue;
+    adj.get(e.fromNodeId)!.push(e.toNodeId);
+    inDeg.set(e.toNodeId, (inDeg.get(e.toNodeId) ?? 0) + 1);
+  }
+  const depth = new Map<string, number>();
+  const queue: string[] = [];
+  for (const n of nodes) {
+    if ((inDeg.get(n.id) ?? 0) === 0) {
+      depth.set(n.id, 0);
+      queue.push(n.id);
+    }
+  }
+  while (queue.length) {
+    const cur = queue.shift()!;
+    const d = depth.get(cur) ?? 0;
+    for (const next of adj.get(cur) ?? []) {
+      const nextD = depth.get(next);
+      if (nextD === undefined || d + 1 > nextD) {
+        depth.set(next, d + 1);
+        queue.push(next);
+      }
+    }
+  }
+  for (const n of nodes) if (!depth.has(n.id)) depth.set(n.id, 0);
+
+  const byLayer = new Map<number, string[]>();
+  for (const n of nodes) {
+    const d = depth.get(n.id) ?? 0;
+    const list = byLayer.get(d) ?? [];
+    list.push(n.id);
+    byLayer.set(d, list);
+  }
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  for (const list of byLayer.values()) {
+    list.sort((a, b) => {
+      const A = nodeById.get(a)!;
+      const B = nodeById.get(b)!;
+      if (A.y !== B.y) return A.y - B.y;
+      return a.localeCompare(b);
+    });
+  }
+  const positions: McpLayoutPositions = new Map();
+  for (const [d, list] of byLayer.entries()) {
+    list.forEach((id, idx) => {
+      positions.set(id, { x: d * MCP_LAYOUT_LAYER_X, y: idx * MCP_LAYOUT_ROW_Y });
+    });
+  }
+  return positions;
+}
+
+function mcpGridLayout(nodes: McpLayoutNode[]): McpLayoutPositions {
+  const sorted = [...nodes].sort((a, b) => {
+    if (a.targetType !== b.targetType) return a.targetType.localeCompare(b.targetType);
+    return a.targetId.localeCompare(b.targetId);
+  });
+  const cols = Math.max(1, Math.ceil(Math.sqrt(sorted.length)));
+  const positions: McpLayoutPositions = new Map();
+  sorted.forEach((n, idx) => {
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    positions.set(n.id, { x: col * MCP_LAYOUT_GRID_X, y: row * MCP_LAYOUT_GRID_Y });
+  });
+  return positions;
+}
+
+function mcpForceLayout(nodes: McpLayoutNode[], edges: McpLayoutEdge[]): McpLayoutPositions {
+  const ITER = 50;
+  const EDGE_LEN = 240;
+  const W = MCP_LAYOUT_FORCE_BOX;
+  const H = MCP_LAYOUT_FORCE_BOX;
+  const k = Math.sqrt((W * H) / Math.max(1, nodes.length));
+  const pos = new Map<string, { x: number; y: number }>();
+  for (const n of nodes) pos.set(n.id, { x: n.x, y: n.y });
+  const cooled = (t: number) => Math.max(0.1, 1 - t / ITER) * (W / 10);
+  for (let iter = 0; iter < ITER; iter++) {
+    const disp = new Map<string, { x: number; y: number }>();
+    for (const n of nodes) disp.set(n.id, { x: 0, y: 0 });
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i]!;
+        const b = nodes[j]!;
+        const pa = pos.get(a.id)!;
+        const pb = pos.get(b.id)!;
+        const dx = pa.x - pb.x;
+        const dy = pa.y - pb.y;
+        const dist = Math.max(0.01, Math.hypot(dx, dy));
+        const force = (k * k) / dist;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        const da = disp.get(a.id)!;
+        const db = disp.get(b.id)!;
+        da.x += fx;
+        da.y += fy;
+        db.x -= fx;
+        db.y -= fy;
+      }
+    }
+    for (const e of edges) {
+      const pa = pos.get(e.fromNodeId);
+      const pb = pos.get(e.toNodeId);
+      if (!pa || !pb) continue;
+      const dx = pa.x - pb.x;
+      const dy = pa.y - pb.y;
+      const dist = Math.max(0.01, Math.hypot(dx, dy));
+      const force = (dist * dist) / EDGE_LEN;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      const da = disp.get(e.fromNodeId)!;
+      const db = disp.get(e.toNodeId)!;
+      da.x -= fx;
+      da.y -= fy;
+      db.x += fx;
+      db.y += fy;
+    }
+    const temp = cooled(iter);
+    for (const n of nodes) {
+      const p = pos.get(n.id)!;
+      const d = disp.get(n.id)!;
+      const mag = Math.max(0.01, Math.hypot(d.x, d.y));
+      p.x += (d.x / mag) * Math.min(mag, temp);
+      p.y += (d.y / mag) * Math.min(mag, temp);
+      p.x = Math.min(W / 2, Math.max(-W / 2, p.x));
+      p.y = Math.min(H / 2, Math.max(-H / 2, p.y));
+    }
+  }
+  return pos;
+}
+
+// ---------------------------------------------------------------------------
 // Tool registry
 // ---------------------------------------------------------------------------
 
@@ -6279,6 +6533,276 @@ export const mcpTools = {
         });
       });
       return { ok: true };
+    },
+  },
+
+  "canvases.bulkAddShapes": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      canvasId: z.string().cuid(),
+      shapes: z
+        .array(
+          z.object({
+            kind: z.enum(["box", "ellipse", "line", "arrow", "text", "freehand"]),
+            x: z.number(),
+            y: z.number(),
+            width: z.number().optional(),
+            height: z.number().optional(),
+            path: z.unknown().optional(),
+            style: z.unknown().optional(),
+            text: z.string().max(50_000).optional(),
+            groupId: z.string().max(80).optional(),
+            zIndex: z.number().int().optional(),
+          }),
+        )
+        .min(1)
+        .max(50),
+    }),
+    async run(
+      input: {
+        canvasId: string;
+        shapes: Array<{
+          kind: "box" | "ellipse" | "line" | "arrow" | "text" | "freehand";
+          x: number;
+          y: number;
+          width?: number;
+          height?: number;
+          path?: unknown;
+          style?: unknown;
+          text?: string;
+          groupId?: string;
+          zIndex?: number;
+        }>;
+      },
+      ctx: McpContext,
+    ) {
+      const canvas = await db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) throw new Error("Canvas not found.");
+      const ids = await db.$transaction(async (tx) => {
+        const created: string[] = [];
+        for (const s of input.shapes) {
+          const row = await tx.canvasShape.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: input.canvasId,
+              kind: s.kind,
+              x: s.x,
+              y: s.y,
+              width: s.width ?? null,
+              height: s.height ?? null,
+              path: (s.path ?? undefined) as Prisma.InputJsonValue | undefined,
+              style: (s.style ?? undefined) as Prisma.InputJsonValue | undefined,
+              text: s.text ?? null,
+              groupId: s.groupId ?? null,
+              zIndex: s.zIndex ?? 0,
+              createdById: ctx.userId ?? null,
+            },
+            select: { id: true },
+          });
+          created.push(row.id);
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "shapes_bulk_added",
+          after: { count: created.length, ids: created },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return created;
+      });
+      return { ok: true as const, ids };
+    },
+  },
+
+  "canvases.applyTemplate": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      canvasId: z.string().cuid(),
+      templateId: z.enum([
+        "decision_matrix",
+        "retro",
+        "architecture",
+        "standup",
+        "okr_tree",
+        "empty",
+      ]),
+      position: z
+        .object({ x: z.number(), y: z.number() })
+        .optional(),
+    }),
+    async run(
+      input: {
+        canvasId: string;
+        templateId:
+          | "decision_matrix"
+          | "retro"
+          | "architecture"
+          | "standup"
+          | "okr_tree"
+          | "empty";
+        position?: { x: number; y: number };
+      },
+      ctx: McpContext,
+    ) {
+      const canvas = await db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) throw new Error("Canvas not found.");
+      const template = MCP_CANVAS_TEMPLATES[input.templateId];
+      if (!template) throw new Error("Unknown template id.");
+      const offsetX = input.position?.x ?? 0;
+      const offsetY = input.position?.y ?? 0;
+
+      const { createArtifact } = await import("@/server/services/artifact-service");
+      const noteArtifactByKey = new Map<string, string>();
+      for (const n of template.nodes) {
+        const trimmedBody = (n.noteBody ?? "").trim();
+        const firstLine = trimmedBody.split(/\r?\n/)[0]?.trim() ?? "";
+        const title = firstLine.length
+          ? firstLine.slice(0, 180)
+          : `Note ${new Date().toISOString().slice(0, 10)}`;
+        const artifact = await createArtifact(db, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          title,
+          body: n.noteBody ?? "",
+          type: ArtifactType.NOTE,
+        });
+        noteArtifactByKey.set(n.key, artifact.id);
+      }
+
+      const ids = await db.$transaction(async (tx) => {
+        const created: string[] = [];
+        const keyToNodeId = new Map<string, string>();
+        for (const n of template.nodes) {
+          const artifactId = noteArtifactByKey.get(n.key)!;
+          const node = await tx.workspaceCanvasNode.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: input.canvasId,
+              targetType: "artifact",
+              targetId: artifactId,
+              x: n.x + offsetX,
+              y: n.y + offsetY,
+              width: n.width ?? 240,
+              height: n.height ?? 160,
+              zIndex: 0,
+              viewMode: "card",
+              meta: { kind: "NOTE", ...(n.lane ? { lane: n.lane } : {}) },
+            },
+            select: { id: true },
+          });
+          created.push(node.id);
+          keyToNodeId.set(n.key, node.id);
+        }
+        for (const e of template.edges ?? []) {
+          const fromId = keyToNodeId.get(e.from);
+          const toId = keyToNodeId.get(e.to);
+          if (!fromId || !toId) continue;
+          await tx.workspaceCanvasEdge.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: input.canvasId,
+              fromNodeId: fromId,
+              toNodeId: toId,
+              label: e.label ?? null,
+              kind: e.kind ?? null,
+            },
+          });
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "template_applied",
+          after: {
+            templateId: input.templateId,
+            nodeCount: created.length,
+            edgeCount: template.edges?.length ?? 0,
+          },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return created;
+      });
+      return { ok: true as const, ids };
+    },
+  },
+
+  "canvases.layout": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      canvasId: z.string().cuid(),
+      algorithm: z.enum(["topological", "force", "grid"]),
+    }),
+    async run(
+      input: { canvasId: string; algorithm: "topological" | "force" | "grid" },
+      ctx: McpContext,
+    ) {
+      const canvas = await db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        include: {
+          nodes: { select: { id: true, x: true, y: true, targetType: true, targetId: true } },
+          edges: { select: { fromNodeId: true, toNodeId: true } },
+        },
+      });
+      if (!canvas) throw new Error("Canvas not found.");
+      if (canvas.nodes.length === 0) return { ok: true as const, count: 0 };
+
+      const positions =
+        input.algorithm === "topological"
+          ? mcpTopologicalLayout(canvas.nodes, canvas.edges)
+          : input.algorithm === "force"
+            ? mcpForceLayout(canvas.nodes, canvas.edges)
+            : mcpGridLayout(canvas.nodes);
+
+      let updated = 0;
+      await db.$transaction(async (tx) => {
+        for (const node of canvas.nodes) {
+          const pos = positions.get(node.id);
+          if (!pos) continue;
+          await tx.workspaceCanvasNode.update({
+            where: { id: node.id },
+            data: { x: pos.x, y: pos.y },
+          });
+          updated += 1;
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "layout_applied",
+          after: { algorithm: input.algorithm, count: updated },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+      });
+      return { ok: true as const, count: updated };
     },
   },
 
