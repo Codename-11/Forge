@@ -671,7 +671,16 @@ export const chatRouter = router({
         },
         orderBy: { createdAt: "asc" },
         take: 100,
-        select: { id: true, role: true, body: true, createdAt: true, sourceRunId: true },
+        // contextSnapshot is included so the streaming chat path can
+        // rehydrate `thinking` + `tool_use` blocks on page reload.
+        select: {
+          id: true,
+          role: true,
+          body: true,
+          createdAt: true,
+          sourceRunId: true,
+          contextSnapshot: true,
+        },
       });
       const messagesWithAttachments = await attachChatMessageMetadata(
         ctx.db,

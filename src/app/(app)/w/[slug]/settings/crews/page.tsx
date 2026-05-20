@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { Confirm } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 
 const ROLES = [
@@ -43,6 +44,9 @@ export default function CrewsSettingsPage() {
   const [newDescription, setNewDescription] = useState("");
   const [seedAgentId, setSeedAgentId] = useState<string>("");
   const [seedRole, setSeedRole] = useState<Role>("PLANNER");
+  const [archiveTarget, setArchiveTarget] = useState<
+    { id: string; name: string } | null
+  >(null);
 
   const createCrew = trpc.agentCrew.create.useMutation({
     onSuccess: () => {
@@ -126,11 +130,9 @@ export default function CrewsSettingsPage() {
                     size="sm"
                     variant="ghost"
                     className="text-warning"
-                    onClick={() => {
-                      if (window.confirm(`Archive crew "${crew.name}"?`)) {
-                        archive.mutate({ id: crew.id });
-                      }
-                    }}
+                    onClick={() =>
+                      setArchiveTarget({ id: crew.id, name: crew.name })
+                    }
                     disabled={archive.isPending}
                   >
                     <Archive className="h-3 w-3" />
@@ -181,6 +183,26 @@ export default function CrewsSettingsPage() {
           </ul>
         )}
       </div>
+
+      <Confirm
+        open={archiveTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setArchiveTarget(null);
+        }}
+        title={archiveTarget ? `Archive ${archiveTarget.name}?` : "Archive crew?"}
+        description="Hides the crew from active listings. Members are preserved; you can restore later."
+        primaryLabel={archiveTarget ? `Archive ${archiveTarget.name}` : "Archive crew"}
+        variant="destructive"
+        typeToConfirm={archiveTarget?.name}
+        loading={archive.isPending}
+        onConfirm={() => {
+          if (!archiveTarget) return;
+          archive.mutate(
+            { id: archiveTarget.id },
+            { onSettled: () => setArchiveTarget(null) },
+          );
+        }}
+      />
 
       {creating && (
         <div

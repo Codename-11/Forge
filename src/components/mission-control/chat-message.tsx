@@ -1,5 +1,6 @@
 "use client";
-import { Bot, User as UserIcon } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Bot, ChevronDown, ChevronRight, User as UserIcon, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { ChatMarkdown } from "./chat-markdown";
@@ -18,6 +19,34 @@ export interface ChatMessageRow {
   createdAt: Date | string;
   /** Set on streaming drafts that haven't committed yet. */
   isDraft?: boolean;
+  /**
+   * Rehydration blob for messages produced by /api/chat/stream — the
+   * server stashes `thinking` and `tool_use` here on `contextSnapshot`
+   * so a page reload can re-render the same expandable sections.
+   */
+  contextSnapshot?: unknown;
+}
+
+interface StreamedSnapshot {
+  thinking?: string;
+  tool_use?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
+  elapsedMs?: number;
+}
+
+function readStreamedSnapshot(value: unknown): StreamedSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  if (obj.streamed !== true) return null;
+  const out: StreamedSnapshot = {};
+  if (typeof obj.thinking === "string") out.thinking = obj.thinking;
+  if (Array.isArray(obj.tool_use)) {
+    out.tool_use = obj.tool_use.filter(
+      (b): b is { id: string; name: string; args: Record<string, unknown> } =>
+        Boolean(b && typeof b === "object" && "id" in b && "name" in b),
+    );
+  }
+  if (typeof obj.elapsedMs === "number") out.elapsedMs = obj.elapsedMs;
+  return out;
 }
 
 /**
@@ -96,7 +125,10 @@ export function ChatMessageBubble({
             {msg.isDraft && <span className="ml-1 inline-block animate-pulse">▍</span>}
           </div>
         ) : (
-          <ChatMarkdown body={msg.body} />
+          <>
+            <StreamedRehydration snapshot={readStreamedSnapshot(msg.contextSnapshot)} />
+            <ChatMarkdown body={msg.body} />
+          </>
         )}
         {!msg.isDraft && <ChatMessageAttachments messageId={msg.id} />}
         <div className="mt-0.5 flex items-center justify-between gap-2 text-[0.5625rem] text-muted-foreground/60">
@@ -169,6 +201,97 @@ function ChatMessageAttachments({ messageId }: { messageId: string }) {
               target={target}
             />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Rehydration block for persisted streamed AGENT messages. Renders the
+ * collapsible thinking section and the tool-use intent cards above the
+ * markdown body, matching the in-flight `AgentStreamBubble` layout.
+ */
+function StreamedRehydration({ snapshot }: { snapshot: StreamedSnapshot | null }) {
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  if (!snapshot) return null;
+  const hasThinking = Boolean(snapshot.thinking);
+  const tools = snapshot.tool_use ?? [];
+  if (!hasThinking && tools.length === 0) return null;
+  const elapsed = snapshot.elapsedMs
+    ? (snapshot.elapsedMs / 1000).toFixed(1)
+    : null;
+  return (
+    <div className="mb-1.5 space-y-1.5">
+      {hasThinking && (
+        <>
+          <button
+            type="button"
+            onClick={() => setThinkingOpen((v) => !v)}
+            className="flex w-full items-center gap-1 rounded border border-border/60 bg-subtle/30 px-1.5 py-1 text-left text-[0.6875rem] text-muted-foreground hover:bg-subtle/50"
+          >
+            {thinkingOpen ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            <span className="font-mono">
+              {elapsed ? `Thought for ${elapsed}s` : "Thinking"}
+            </span>
+          </button>
+          {thinkingOpen && snapshot.thinking && (
+            <div className="rounded border border-border/40 bg-background/40 px-2 py-1.5 text-[0.6875rem] italic text-muted-foreground">
+              <ChatMarkdown body={snapshot.thinking} className="text-muted-foreground" />
+            </div>
+          )}
+        </>
+      )}
+      {tools.map((tb) => (
+        <ToolUseCard key={tb.id} name={tb.name} args={tb.args} />
+      ))}
+    </div>
+  );
+}
+
+function ToolUseCard({
+  name,
+  args,
+}: {
+  name: string;
+  args: Record<string, unknown>;
+}) {
+  const [open, setOpen] = useState(false);
+  const json = useMemo(() => {
+    try {
+      return JSON.stringify(args, null, 2);
+    } catch {
+      return String(args);
+    }
+  }, [args]);
+  return (
+    <div className="rounded border border-border/60 bg-subtle/30 text-[0.6875rem]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-1.5 py-1 text-left text-muted-foreground hover:text-foreground"
+      >
+        {open ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
+        <Wrench className="h-3 w-3 text-ember" />
+        <span className="font-mono text-foreground">{name}</span>
+        <span className="ml-auto text-[0.5625rem] uppercase tracking-wider text-muted-foreground/70">
+          tool intent
+        </span>
+      </button>
+      {open && (
+        <div className="border-t border-border/40 px-2 py-1.5">
+          <ChatMarkdown body={"```json\n" + json + "\n```"} />
+          <p className="mt-1 text-[0.5625rem] italic text-muted-foreground/60">
+            (display only — v2 will let you run it)
+          </p>
         </div>
       )}
     </div>

@@ -2,6 +2,138 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Confirm modal, canvas perf, CRUD lifecycle, chat streaming, canvas previews (5-agent round)
+
+### Summary
+
+Five-agent parallel team (I/J/K/L/M) covering four operator asks in
+one session: replace `window.confirm` with the existing polished
+`<Confirm>` modal, fix canvas drag/click lag, add restore/duplicate/
+delete CRUD lifecycle to plans + artifacts, swap chat from dispatch-
+webhook to a proper streaming endpoint with thinking + tool-use
+rendering, and turn canvas attachment/artifact cards into real inline
+preview surfaces (images / PDFs / text / sandboxed HTML).
+
+### What changed
+
+**Confirm modal sweep (Agent I)** — every `window.confirm` in
+`plans/[planId]`, `settings/crews`, `artifacts/[artifactSlug]` now
+uses the existing `Confirm` modal (`src/components/ui/modal/
+confirm.tsx`) with destructive variant + `typeToConfirm` gating where
+appropriate. Discriminated `confirmState` union pattern for files
+that host multiple confirms. Mutation loading state threads through
+via the modal's `loading` prop.
+
+**Canvas perf + canvas confirms (Agent J)** — substantial work on
+`canvas/[canvasId]/page.tsx`:
+- Drag state moved from `setData` cache writes to a `dragOverridesRef:
+  Map<id, override>` + rAF-bumped `dragRev` counter. Only the moving
+  card re-renders, not the whole tree.
+- `CanvasCard` wrapped in `React.memo` with a custom equality
+  comparing id/x/y/width/height/viewMode/meta-by-reference. Parent
+  callbacks lifted into `useCallback` taking `nodeId` so they don't
+  close over per-node state.
+- `EdgesOverlay` memoized with bbox `useMemo`.
+- Realtime hydrate refetch paused during drag (single trailing
+  invalidate on mouseup); narrowed the invalidation filter to
+  canvas-relevant subjectTypes.
+- Remote-cursor positions moved to a `useRef<Map>` + `cursorsRev`
+  counter so cursor ticks repaint only the cursor subtree. Local
+  presence broadcast rAF-throttled.
+- `window.confirm` sites swapped: archive canvas, remove card,
+  convert-to-plan (default variant with dry-run preview).
+
+**CRUD lifecycle (Agent K)** — both routers gained the full set:
+- `executionPlan.restore({ id }) → { ok }`.
+- `executionPlan.duplicate({ id, newTitle? }) → { id }` — clones
+  description, steps, and remaps `dependsOnStepIds` from old→new
+  step ids. New plan is DRAFT.
+- `executionPlan.delete({ id, confirm }) → { ok }` — admin-gated
+  (OWNER/ADMIN); `confirm` must match plan title. Cascades to
+  `ExecutionStep`.
+- `executionPlan.list({ archivedOnly? | includeArchived? })`.
+- `artifact.restore`, `artifact.duplicate`, `artifact.delete`,
+  `artifact.list` archived variant — symmetric.
+- 20 new integration tests covering restore/duplicate/delete +
+  cross-workspace + admin gates + cascade.
+- `plans/page.tsx` + `artifacts/page.tsx` UI: Active/Archived
+  segmented tabs, per-row "..." menu (Duplicate/Archive on Active,
+  Restore/Delete on Archived), destructive `Confirm` with
+  `typeToConfirm={row.title}` for hard delete.
+
+**Chat streaming (Agent L)** — `/api/chat/stream` is the new
+primary chat path for text-only sends:
+- POST endpoint accepts `{ threadId, body }`, persists the USER
+  ChatMessage immediately, streams the agent's reply back as
+  Server-Sent Events.
+- Provider routing via `Agent.provider`: HERMES → gateway,
+  CLAUDE → Anthropic (with `thinking: { type: "enabled",
+  budget_tokens: 4000 }`), CODEX → OpenAI, CUSTOM → custom base
+  URL. Each falls back to Hermes if its provider env is unset.
+- SSE event types: `meta` (placeholder messageId), `thinking`
+  (extended-thinking delta), `content` (token delta), `tool_use`
+  (tool intent — display only for v1), `done`, `error`.
+- `chat-thread.tsx`: `AgentStreamBubble` renders thinking +
+  content + tool-use cards live; persisted-row dedupe for ~800ms
+  during swap so users never see a flash of two copies.
+- `chat-message.tsx`: `StreamedRehydration` re-renders thinking +
+  tool-use blocks on page reload from `ChatMessage.contextSnapshot`.
+- `audit.ts` short-circuits webhook fan-out when payload
+  `streamed: true` so the stream endpoint and Hermes webhook
+  don't both reply.
+- Attachment messages still flow through the dispatch path
+  (existing `chat.send` mutation); only text-only sends go via
+  the streaming path. Existing `chat.send` tests still pass.
+
+**Canvas attachment previews (Agent M)** — new
+`canvas-preview.tsx` shared component renders attachments + non-NOTE
+artifacts inline on the canvas:
+- Kind matrix: image (`<img>` cover, click → lightbox), PDF
+  (`<iframe>`), HTML (`<iframe sandbox="allow-popups
+  allow-forms">`), LINK (sandboxed iframe → new tab), markdown
+  (`<ChatMarkdown>`), text/code (fetched `<pre>` capped at 40 lines
+  with "Open full" → lightbox), video/audio (native controls),
+  unsupported (warning chip).
+- Reuses the existing lightbox's `classifyAttachmentKind` heuristic
+  (now exported) so the canvas and lightbox stay in sync.
+- 25 MB size cap on inline preview.
+- Entity-hydration enriched: attachment meta gains `size`,
+  `filename`, `externalUrl`; non-NOTE artifact meta gains `body`
+  + `bodyKind` (`markdown` / `code` / `text`).
+- Card-level preview/card toggle button; new attachment / non-NOTE
+  artifact drops default to `preview` viewMode.
+- `onTogglePreview` is `useCallback`-stable + threaded into the
+  `React.memo` equality so Agent J's perf wins stay intact.
+
+### Hotfix included
+
+- `chat-tab.tsx` rail builder now buckets by `agent.id` (one row
+  per agent, most-recent thread's timestamp). Fixes the "3 Victors"
+  duplication operators reported.
+
+### Verification
+
+- `pnpm lint` → clean.
+- `pnpm typecheck` → clean.
+- `pnpm test` → 52 files / 406 tests pass.
+- `pnpm build` → clean.
+
+### Follow-ups noted by agents
+
+- Streaming chat with attachments — `/api/chat/stream` still
+  ignores the `attachments[]` field; uploads fall through to the
+  dispatch path. Unify when the operator wants stream+files.
+- Stop-generating button on the streaming bubble (abort wired,
+  needs UI).
+- Auto-execution of tool calls (intentional v2 hold; needs operator
+  confirmation gate on writes).
+- Per-thread provider/model override controls (currently only the
+  agent's default provider).
+- Lane persistence already lands via `patchNodeMeta` (round 3);
+  but the convert-to-plan dry-run loop iterates `displayNodes`
+  (drag overrides) which is fine for now since overrides don't
+  touch `targetType`/`meta.kind` — worth a one-line audit later.
+
 ## 2026-05-19 — Plans/Canvas/Chat follow-ups + Victor-dedup hotfix
 
 ### Summary

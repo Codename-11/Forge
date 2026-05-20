@@ -1,14 +1,16 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   Archive,
   ChevronLeft,
   ExternalLink,
   GitBranch,
+  Image as ImageIcon,
   Layers,
   Maximize2,
   MessageCircle,
+  Minimize2,
   Plus,
   StickyNote,
   Trash2,
@@ -19,11 +21,19 @@ import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { Confirm } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
 import { relativeTime } from "@/lib/utils";
 import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
+import { useAttachmentLightbox } from "@/components/attachments/attachment-lightbox";
+import {
+  CanvasPreview,
+  canvasKindForArtifact,
+  canvasKindForAttachment,
+  type CanvasPreviewKind,
+} from "@/components/canvas/canvas-preview";
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 3;
@@ -71,6 +81,21 @@ type DragPayload =
   | { kind: "node"; nodeId: string; offsetX: number; offsetY: number }
   | { kind: "resize"; nodeId: string; startX: number; startY: number; startW: number; startH: number };
 
+// Per-node visual overlay applied during a drag/resize. Ref-driven so the
+// pointer-move stream doesn't fire React state updates 60+ times/sec; a
+// single `dragRev` counter coalesces re-renders to one per animation frame.
+type DragOverride = { x?: number; y?: number; width?: number; height?: number };
+
+type ConfirmState =
+  | { kind: "archive" }
+  | { kind: "remove-card"; id: string }
+  | {
+      kind: "convert";
+      stepCount: number;
+      skipped: Array<{ targetType: string; reason: string }>;
+    }
+  | null;
+
 const PRESENCE_COLORS = ["#d97706", "#10b981", "#06b6d4", "#a855f7", "#ec4899", "#84cc16"];
 
 function colorForId(id: string): string {
@@ -107,9 +132,30 @@ export default function CanvasViewerPage() {
   const [openPicker, setOpenPicker] = useState(false);
   const [openSidebar, setOpenSidebar] = useState(true);
   const [dropActive, setDropActive] = useState(false);
-  const [remoteCursors, setRemoteCursors] = useState<Map<string, RemoteCursor>>(new Map());
   const [editingLaneFor, setEditingLaneFor] = useState<string | null>(null);
   const [editingNoteFor, setEditingNoteFor] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmState>(null);
+
+  // Ref-based drag overrides — see DragOverride type. `dragRev` is bumped
+  // once per rAF tick during an active drag so we re-render at paint
+  // cadence instead of mousemove cadence.
+  const dragOverridesRef = useRef<Map<string, DragOverride>>(new Map());
+  const [dragRev, setDragRev] = useState(0);
+  const dragRafRef = useRef<number | null>(null);
+  const draggingRef = useRef(false);
+
+  // Ref-based remote cursors so SSE ticks don't re-render the whole
+  // node tree — only the cursor overlay reads `cursorsRev`.
+  const remoteCursorsRef = useRef<Map<string, RemoteCursor>>(new Map());
+  const [cursorsRev, setCursorsRev] = useState(0);
+  const cursorsRafRef = useRef<number | null>(null);
+  const scheduleCursorsRender = useCallback(() => {
+    if (cursorsRafRef.current != null) return;
+    cursorsRafRef.current = requestAnimationFrame(() => {
+      cursorsRafRef.current = null;
+      setCursorsRev((r) => r + 1);
+    });
+  }, []);
 
   useEffect(() => {
     if (data?.canvas.viewport) {
@@ -215,6 +261,27 @@ export default function CanvasViewerPage() {
     [data?.edges],
   );
 
+  // Apply any active drag overrides on top of the server-hydrated nodes.
+  // While no drag is active the override map is empty and the returned
+  // array shares identity with `nodes` — so memoized children skip work.
+  const displayNodes = useMemo(() => {
+    const overrides = dragOverridesRef.current;
+    if (overrides.size === 0) return nodes;
+    return nodes.map((n) => {
+      const ov = overrides.get(n.id);
+      if (!ov) return n;
+      return {
+        ...n,
+        x: ov.x ?? n.x,
+        y: ov.y ?? n.y,
+        width: ov.width ?? n.width,
+        height: ov.height ?? n.height,
+      };
+    });
+    // dragRev forces recomputation each rAF tick during a drag.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, dragRev]);
+
   // -- Pan + zoom handlers --------------------------------------------
 
   const onBackgroundMouseDown = (e: React.MouseEvent) => {
@@ -277,6 +344,7 @@ export default function CanvasViewerPage() {
         offsetX: e.clientX - node.x * viewport.zoom - viewport.x,
         offsetY: e.clientY - node.y * viewport.zoom - viewport.y,
       };
+      draggingRef.current = true;
     },
     [viewport.x, viewport.y, viewport.zoom],
   );
@@ -294,65 +362,83 @@ export default function CanvasViewerPage() {
         startW: node.width,
         startH: node.height,
       };
+      draggingRef.current = true;
     },
     [],
   );
 
   useEffect(() => {
+    const scheduleDragRender = () => {
+      if (dragRafRef.current != null) return;
+      dragRafRef.current = requestAnimationFrame(() => {
+        dragRafRef.current = null;
+        setDragRev((r) => r + 1);
+      });
+    };
+
     const onMove = (e: MouseEvent) => {
       const drag = dragNode.current;
       if (!drag) return;
+      const overrides = dragOverridesRef.current;
       if (drag.kind === "node") {
         const { nodeId, offsetX, offsetY } = drag;
         const newX = (e.clientX - viewport.x - offsetX) / viewport.zoom;
         const newY = (e.clientY - viewport.y - offsetY) / viewport.zoom;
-        utils.canvas.hydrate.setData({ id: params.canvasId }, (curr) => {
-          if (!curr) return curr;
-          return {
-            ...curr,
-            nodes: curr.nodes.map((n) => (n.id === nodeId ? { ...n, x: newX, y: newY } : n)),
-          };
-        });
+        overrides.set(nodeId, { ...overrides.get(nodeId), x: newX, y: newY });
       } else if (drag.kind === "resize") {
         const { nodeId, startX, startY, startW, startH } = drag;
         const dx = (e.clientX - startX) / viewport.zoom;
         const dy = (e.clientY - startY) / viewport.zoom;
         const w = Math.max(120, startW + dx);
         const h = Math.max(80, startH + dy);
-        utils.canvas.hydrate.setData({ id: params.canvasId }, (curr) => {
-          if (!curr) return curr;
-          return {
-            ...curr,
-            nodes: curr.nodes.map((n) => (n.id === nodeId ? { ...n, width: w, height: h } : n)),
-          };
-        });
+        overrides.set(nodeId, { ...overrides.get(nodeId), width: w, height: h });
       }
+      scheduleDragRender();
     };
     const onUp = () => {
       const drag = dragNode.current;
       if (!drag) return;
-      const moved = nodes.find((n) => n.id === drag.nodeId);
-      if (moved) {
-        if (drag.kind === "node") {
-          patchNode.mutate({ id: drag.nodeId, x: moved.x, y: moved.y });
-        } else {
-          patchNode.mutate({ id: drag.nodeId, width: moved.width, height: moved.height });
+      const overrides = dragOverridesRef.current;
+      const ov = overrides.get(drag.nodeId);
+      if (ov) {
+        if (drag.kind === "node" && typeof ov.x === "number" && typeof ov.y === "number") {
+          patchNode.mutate({ id: drag.nodeId, x: ov.x, y: ov.y });
+        } else if (
+          drag.kind === "resize" &&
+          typeof ov.width === "number" &&
+          typeof ov.height === "number"
+        ) {
+          patchNode.mutate({
+            id: drag.nodeId,
+            width: ov.width,
+            height: ov.height,
+          });
         }
       }
+      overrides.delete(drag.nodeId);
       dragNode.current = null;
+      draggingRef.current = false;
+      // Trailing realtime refresh — we suppressed invalidations during
+      // the drag, so pull once on release in case anything changed.
+      utils.canvas.hydrate.invalidate({ id: params.canvasId });
+      setDragRev((r) => r + 1);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      if (dragRafRef.current != null) {
+        cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, viewport.x, viewport.y, viewport.zoom]);
+  }, [viewport.x, viewport.y, viewport.zoom]);
 
   // -- Lanes ----------------------------------------------------------
 
-  const lanes = useMemo(() => computeLanes(nodes), [nodes]);
+  const lanes = useMemo(() => computeLanes(displayNodes), [displayNodes]);
 
   // -- Drop target ----------------------------------------------------
 
@@ -387,14 +473,24 @@ export default function CanvasViewerPage() {
       const payload = JSON.parse(raw) as { type?: string; id?: string };
       if (!payload.type || !payload.id) return;
       const { x, y } = surfaceToCanvas(e.clientX, e.clientY);
+      const tt = payload.type;
+      // New attachment / artifact cards default to inline `preview`
+      // mode so file drops render as a thumbnail/iframe immediately;
+      // other types keep the existing card layout.
+      const viewMode =
+        tt === "attachment" || tt === "artifact" ? "preview" : undefined;
+      // Larger default box for preview cards — a 120px-tall image is
+      // a thumbnail; the preview component fills its container.
+      const initialHeight = viewMode === "preview" ? 220 : 120;
       addNode.mutate({
         canvasId: params.canvasId,
-        targetType: payload.type as "issue" | "artifact",
+        targetType: tt as "issue" | "artifact",
         targetId: payload.id,
         x,
         y,
         width: 280,
-        height: 120,
+        height: initialHeight,
+        viewMode,
       });
     } catch {
       /* ignore malformed drop */
@@ -421,40 +517,48 @@ export default function CanvasViewerPage() {
       // dot for them.
       if (myUserId && id === myUserId) return;
       if (typeof payload.x !== "number" || typeof payload.y !== "number") return;
-      setRemoteCursors((prev) => {
-        const next = new Map(prev);
-        next.set(id, {
-          id,
-          name: payload.name ?? "Operator",
-          color: colorForId(id),
-          x: payload.x!,
-          y: payload.y!,
-          updatedAt: Date.now(),
-        });
-        return next;
+      // Mutate the ref and coalesce paint via rAF — full state replacement
+      // on every cursor tick was triggering whole-canvas re-renders.
+      remoteCursorsRef.current.set(id, {
+        id,
+        name: payload.name ?? "Operator",
+        color: colorForId(id),
+        x: payload.x,
+        y: payload.y,
+        updatedAt: Date.now(),
       });
+      scheduleCursorsRender();
     },
     { subjectType: "canvas-presence" },
+  );
+
+  // Workspace entity events normally invalidate the hydrate query. While
+  // the operator is mid-drag we suppress that — the trailing invalidate
+  // on mouseup catches anything that landed during the gesture.
+  useRealtime(
+    () => {
+      if (draggingRef.current) return;
+      utils.canvas.hydrate.invalidate({ id: params.canvasId });
+    },
+    { subjectType: ["canvas", "issue", "artifact", "execution-step", "execution-plan"] },
   );
 
   // Sweep stale cursors every second.
   useEffect(() => {
     const t = setInterval(() => {
       const now = Date.now();
-      setRemoteCursors((prev) => {
-        let mutated = false;
-        const next = new Map(prev);
-        for (const [id, c] of prev.entries()) {
-          if (now - c.updatedAt > PRESENCE_STALE_MS) {
-            next.delete(id);
-            mutated = true;
-          }
+      const cursors = remoteCursorsRef.current;
+      let mutated = false;
+      for (const [id, c] of cursors) {
+        if (now - c.updatedAt > PRESENCE_STALE_MS) {
+          cursors.delete(id);
+          mutated = true;
         }
-        return mutated ? next : prev;
-      });
+      }
+      if (mutated) scheduleCursorsRender();
     }, 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [scheduleCursorsRender]);
 
   // Throttled local cursor broadcast — uses the optional helper only.
   const presencePublishAny = canvasRouterAny?.broadcastPresence as
@@ -465,19 +569,108 @@ export default function CanvasViewerPage() {
       }
     | undefined;
   const presencePublishMut = presencePublishAny?.useMutation();
+  // rAF-aligned throttle so the broadcast cadence rides paint frames
+  // instead of the setTimeout queue.
   const lastPublishRef = useRef(0);
+  const pendingPublishRef = useRef<{ x: number; y: number } | null>(null);
+  const publishRafRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (publishRafRef.current != null) {
+        cancelAnimationFrame(publishRafRef.current);
+        publishRafRef.current = null;
+      }
+    };
+  }, []);
   const onSurfaceMouseMove = (e: React.MouseEvent) => {
     if (!presencePublishMut) return;
-    const now = Date.now();
-    if (now - lastPublishRef.current < 1000 / PRESENCE_PUBLISH_HZ) return;
-    lastPublishRef.current = now;
     const { x, y } = surfaceToCanvas(e.clientX, e.clientY);
-    try {
-      presencePublishMut.mutate({ canvasId: params.canvasId, x, y });
-    } catch {
-      /* ignore */
-    }
+    pendingPublishRef.current = { x, y };
+    if (publishRafRef.current != null) return;
+    publishRafRef.current = requestAnimationFrame(() => {
+      publishRafRef.current = null;
+      const now = performance.now();
+      if (now - lastPublishRef.current < 1000 / PRESENCE_PUBLISH_HZ) return;
+      const pending = pendingPublishRef.current;
+      if (!pending) return;
+      lastPublishRef.current = now;
+      pendingPublishRef.current = null;
+      try {
+        presencePublishMut.mutate({ canvasId: params.canvasId, ...pending });
+      } catch {
+        /* ignore */
+      }
+    });
   };
+
+  // Stable callbacks so memoized cards don't churn.
+  const handleEditLane = useCallback(
+    (nodeId: string, active: boolean) =>
+      setEditingLaneFor(active ? nodeId : null),
+    [],
+  );
+  const handleEditNote = useCallback(
+    (nodeId: string, active: boolean) =>
+      setEditingNoteFor(active ? nodeId : null),
+    [],
+  );
+  const handleRemoveCard = useCallback(
+    (nodeId: string) => setConfirm({ kind: "remove-card", id: nodeId }),
+    [],
+  );
+  // Toggle between "preview" (inline file/iframe) and "card" (chip)
+  // viewModes. Optimistic — flips the cached row immediately so the
+  // toggle feels instant; the mutation's onSuccess re-syncs.
+  const handleTogglePreview = useCallback(
+    (nodeId: string, next: "preview" | "card") => {
+      patchNode.mutate({ id: nodeId, viewMode: next });
+      utils.canvas.hydrate.setData({ id: params.canvasId }, (curr) => {
+        if (!curr) return curr;
+        return {
+          ...curr,
+          nodes: curr.nodes.map((n) =>
+            n.id === nodeId ? { ...n, viewMode: next } : n,
+          ),
+        };
+      });
+    },
+    [patchNode, utils, params.canvasId],
+  );
+  const handlePatchLane = useCallback(
+    (nodeId: string, lane: string) => {
+      patchNodeMeta.mutate({
+        id: nodeId,
+        meta: { lane: lane.trim() ? lane.trim() : null },
+      });
+      utils.canvas.hydrate.setData({ id: params.canvasId }, (curr) => {
+        if (!curr) return curr;
+        return {
+          ...curr,
+          nodes: curr.nodes.map((n) => {
+            if (n.id !== nodeId) return n;
+            const nMeta =
+              ((n as { meta?: Record<string, unknown> | null }).meta ?? {}) as Record<
+                string,
+                unknown
+              >;
+            const nextMeta: Record<string, unknown> = { ...nMeta };
+            if (lane.trim()) {
+              nextMeta.lane = lane.trim();
+            } else {
+              delete nextMeta.lane;
+            }
+            // Cast through unknown: tRPC's response shape uses
+            // Prisma.JsonValue (union including arrays/null) while
+            // we're storing a plain object — same wire shape, just
+            // narrower at compile time.
+            return { ...n, meta: nextMeta as unknown as typeof n.meta };
+          }),
+        };
+      });
+      setEditingLaneFor(null);
+    },
+    [patchNodeMeta, utils, params.canvasId],
+  );
 
   if (isLoading) {
     return (
@@ -508,7 +701,7 @@ export default function CanvasViewerPage() {
     <>
       <Topbar
         title={data.canvas.name}
-        subtitle={`Canvas · ${nodes.length} card${nodes.length === 1 ? "" : "s"} · ${(viewport.zoom * 100).toFixed(0)}%`}
+        subtitle={`Canvas · ${displayNodes.length} card${displayNodes.length === 1 ? "" : "s"} · ${(viewport.zoom * 100).toFixed(0)}%`}
         actions={
           <>
             <Button
@@ -564,10 +757,11 @@ export default function CanvasViewerPage() {
                 if (!convertToPlanMut) return;
                 // Client-side dry-run preview — mirror the backend's
                 // include/skip rules so the operator can confirm before
-                // a plan row is created.
+                // a plan row is created. Runs BEFORE opening the modal
+                // so an empty canvas bails out with a toast.
                 let stepCount = 0;
                 const skipped: Array<{ targetType: string; reason: string }> = [];
-                for (const n of nodes) {
+                for (const n of displayNodes) {
                   if (n.targetType === "execution-step") {
                     stepCount++;
                   } else if (
@@ -586,17 +780,7 @@ export default function CanvasViewerPage() {
                   toast.error("Nothing convertible on this canvas — add steps or NOTE artifacts first.");
                   return;
                 }
-                const skippedLabel =
-                  skipped.length === 0
-                    ? "no nodes will be skipped"
-                    : `${skipped.length} node${skipped.length === 1 ? "" : "s"} will be skipped (${[
-                        ...new Set(skipped.map((s) => s.targetType)),
-                      ].join(", ")})`;
-                const ok = window.confirm(
-                  `Create a new plan with ${stepCount} step${stepCount === 1 ? "" : "s"} from this canvas?\n\n${skippedLabel}.`,
-                );
-                if (!ok) return;
-                convertToPlanMut.mutate({ canvasId: params.canvasId });
+                setConfirm({ kind: "convert", stepCount, skipped });
               }}
             >
               <GitBranch className="h-3.5 w-3.5" />{" "}
@@ -643,8 +827,8 @@ export default function CanvasViewerPage() {
               <LaneBand key={lane.name} lane={lane} />
             ))}
             {/* Edges sit between lane bands and node cards. */}
-            <EdgesOverlay nodes={nodes} edges={edges} />
-            {nodes.length === 0 ? (
+            <EdgesOverlay nodes={displayNodes} edges={edges} />
+            {displayNodes.length === 0 ? (
               <div
                 className="absolute left-8 top-8 rounded-lg border border-dashed border-border bg-card/30 p-6 text-sm text-muted-foreground"
                 style={{ width: 320 }}
@@ -654,79 +838,29 @@ export default function CanvasViewerPage() {
                 <span className="font-mono">⌘/Ctrl + wheel</span> to zoom.
               </div>
             ) : null}
-            {nodes.map((node) => (
+            {displayNodes.map((node) => (
               <CanvasCard
                 key={node.id}
                 node={node}
                 editingLane={editingLaneFor === node.id}
                 editingNote={editingNoteFor === node.id}
-                onEditLane={(active) => setEditingLaneFor(active ? node.id : null)}
-                onEditNote={(active) => setEditingNoteFor(active ? node.id : null)}
-                onMouseDown={(e) => onCardMouseDown(e, node)}
-                onResizeMouseDown={(e) => onResizeMouseDown(e, node)}
-                onRemove={() => {
-                  if (window.confirm("Remove this card from the canvas?")) {
-                    removeNode.mutate({ id: node.id });
-                  }
-                }}
-                onPatchLane={(lane) => {
-                  // Persist via canvas.patchNodeMeta (set lane=null to
-                  // delete the key when the operator clears the field).
-                  patchNodeMeta.mutate({
-                    id: node.id,
-                    meta: { lane: lane.trim() ? lane.trim() : null },
-                  });
-                  utils.canvas.hydrate.setData({ id: params.canvasId }, (curr) => {
-                    if (!curr) return curr;
-                    return {
-                      ...curr,
-                      nodes: curr.nodes.map((n) => {
-                        if (n.id !== node.id) return n;
-                        const nMeta =
-                          ((n as { meta?: Record<string, unknown> | null }).meta ?? {}) as Record<
-                            string,
-                            unknown
-                          >;
-                        const nextMeta: Record<string, unknown> = { ...nMeta };
-                        if (lane.trim()) {
-                          nextMeta.lane = lane.trim();
-                        } else {
-                          delete nextMeta.lane;
-                        }
-                        // Cast through unknown: tRPC's response shape uses
-                        // Prisma.JsonValue (union including arrays/null) while
-                        // we're storing a plain object — same wire shape, just
-                        // narrower at compile time.
-                        return { ...n, meta: nextMeta as unknown as typeof n.meta };
-                      }),
-                    };
-                  });
-                  setEditingLaneFor(null);
-                }}
+                onEditLane={handleEditLane}
+                onEditNote={handleEditNote}
+                onMouseDown={onCardMouseDown}
+                onResizeMouseDown={onResizeMouseDown}
+                onRemove={handleRemoveCard}
+                onPatchLane={handlePatchLane}
+                onTogglePreview={handleTogglePreview}
               />
             ))}
           </div>
-          {/* Remote cursors */}
-          {[...remoteCursors.values()].map((c) => (
-            <div
-              key={c.id}
-              className="pointer-events-none absolute z-30"
-              style={{
-                transform: `translate(${c.x * viewport.zoom + viewport.x}px, ${c.y * viewport.zoom + viewport.y}px)`,
-              }}
-            >
-              <div
-                className="h-2 w-2 rounded-full shadow"
-                style={{ backgroundColor: c.color }}
-              />
-              <div
-                className="mt-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium text-card shadow"
-                style={{ backgroundColor: c.color }}
-              >
-                {c.name}
-              </div>
-            </div>
-          ))}
+          {/* Remote cursors — read from ref via cursorsRev so the rest
+              of the tree doesn't repaint when peers move. */}
+          <RemoteCursorsLayer
+            cursorsRef={remoteCursorsRef}
+            viewport={viewport}
+            rev={cursorsRev}
+          />
         </div>
         <div className="pointer-events-none absolute bottom-3 right-3 z-10">
           <div className="pointer-events-auto flex gap-2">
@@ -734,11 +868,7 @@ export default function CanvasViewerPage() {
               size="sm"
               variant="ghost"
               className="bg-card/80 backdrop-blur"
-              onClick={() => {
-                if (window.confirm("Archive this canvas?")) {
-                  archive.mutate({ id: data.canvas.id });
-                }
-              }}
+              onClick={() => setConfirm({ kind: "archive" })}
               disabled={archive.isPending}
             >
               <Archive className="h-3.5 w-3.5" /> Archive
@@ -752,6 +882,111 @@ export default function CanvasViewerPage() {
           onClose={() => setOpenPicker(false)}
         />
       )}
+      <Confirm
+        open={confirm?.kind === "archive"}
+        onOpenChange={(o) => {
+          if (!o) setConfirm(null);
+        }}
+        title="Archive canvas?"
+        description="Hides this canvas from the active list. You can restore it later."
+        primaryLabel="Archive canvas"
+        variant="destructive"
+        loading={archive.isPending}
+        onConfirm={() => {
+          if (confirm?.kind !== "archive") return;
+          archive.mutate(
+            { id: data.canvas.id },
+            { onSettled: () => setConfirm(null) },
+          );
+        }}
+      />
+      <Confirm
+        open={confirm?.kind === "remove-card"}
+        onOpenChange={(o) => {
+          if (!o) setConfirm(null);
+        }}
+        title="Remove card?"
+        description="The card will be removed from this canvas. The underlying entity isn't deleted."
+        primaryLabel="Remove card"
+        variant="destructive"
+        loading={removeNode.isPending}
+        onConfirm={() => {
+          if (confirm?.kind !== "remove-card") return;
+          const id = confirm.id;
+          removeNode.mutate(
+            { id },
+            { onSettled: () => setConfirm(null) },
+          );
+        }}
+      />
+      <Confirm
+        open={confirm?.kind === "convert"}
+        onOpenChange={(o) => {
+          if (!o) setConfirm(null);
+        }}
+        title="Convert canvas to plan?"
+        description={
+          confirm?.kind === "convert"
+            ? `Create a new plan with ${confirm.stepCount} step${confirm.stepCount === 1 ? "" : "s"} from this canvas. ${
+                confirm.skipped.length === 0
+                  ? "No nodes will be skipped."
+                  : `${confirm.skipped.length} node${confirm.skipped.length === 1 ? "" : "s"} will be skipped (${[
+                      ...new Set(confirm.skipped.map((s) => s.targetType)),
+                    ].join(", ")}).`
+              }`
+            : undefined
+        }
+        primaryLabel="Create plan"
+        loading={convertToPlanMut?.isPending ?? false}
+        onConfirm={() => {
+          if (confirm?.kind !== "convert") return;
+          if (!convertToPlanMut) return;
+          convertToPlanMut.mutate({ canvasId: params.canvasId });
+          setConfirm(null);
+        }}
+      />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Remote cursors layer — isolated subtree so cursor SSE ticks don't ripple
+// through the rest of the canvas. Reads the cursor map from a ref, kicked
+// by a `rev` counter from the parent.
+// ---------------------------------------------------------------------------
+
+function RemoteCursorsLayer({
+  cursorsRef,
+  viewport,
+  rev: _rev,
+}: {
+  cursorsRef: React.MutableRefObject<Map<string, RemoteCursor>>;
+  viewport: Viewport;
+  rev: number;
+}) {
+  const cursors = [...cursorsRef.current.values()];
+  return (
+    <>
+      {cursors.map((c) => (
+        <div
+          key={c.id}
+          className="pointer-events-none absolute z-30"
+          style={{
+            transform: `translate(${c.x * viewport.zoom + viewport.x}px, ${c.y * viewport.zoom + viewport.y}px)`,
+          }}
+        >
+          <div
+            className="h-2 w-2 rounded-full shadow"
+            style={{ backgroundColor: c.color }}
+          />
+          <div
+            className="mt-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium text-card shadow"
+            style={{ backgroundColor: c.color }}
+          >
+            {c.name}
+          </div>
+        </div>
+      ))}
     </>
   );
 }
@@ -812,7 +1047,7 @@ function LaneBand({ lane }: { lane: LaneBox }) {
 // is computed from the node bounding box (with margin) so it covers them.
 // ---------------------------------------------------------------------------
 
-function EdgesOverlay({
+const EdgesOverlay = memo(function EdgesOverlay({
   nodes,
   edges,
 }: {
@@ -831,6 +1066,29 @@ function EdgesOverlay({
     return m;
   }, [nodes]);
 
+  // Bounding box across nodes — memoized so non-drag re-renders skip the
+  // O(N) sweep. Recomputes whenever `nodes` identity changes (which happens
+  // exactly once per rAF tick during a drag).
+  const bbox = useMemo(() => {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const n of nodes) {
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + n.width);
+      maxY = Math.max(maxY, n.y + n.height);
+    }
+    const margin = 80;
+    return {
+      left: Math.floor(minX - margin),
+      top: Math.floor(minY - margin),
+      width: Math.ceil(maxX - minX + margin * 2),
+      height: Math.ceil(maxY - minY + margin * 2),
+    };
+  }, [nodes]);
+
   if (edges.length === 0) return null;
 
   // Pick stroke + opacity by edge.kind so the timeline-style "depends_on"
@@ -846,25 +1104,7 @@ function EdgesOverlay({
     }
   };
 
-  // Bounding box across nodes — used to size the SVG and to translate
-  // it so the arrowheads stay aligned at any pan/zoom (the parent
-  // already applies the transform; we just need a big-enough canvas
-  // and the right origin).
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const n of nodes) {
-    minX = Math.min(minX, n.x);
-    minY = Math.min(minY, n.y);
-    maxX = Math.max(maxX, n.x + n.width);
-    maxY = Math.max(maxY, n.y + n.height);
-  }
-  const margin = 80;
-  const left = Math.floor(minX - margin);
-  const top = Math.floor(minY - margin);
-  const width = Math.ceil(maxX - minX + margin * 2);
-  const height = Math.ceil(maxY - minY + margin * 2);
+  const { left, top, width, height } = bbox;
 
   return (
     <svg
@@ -961,7 +1201,7 @@ function EdgesOverlay({
       })}
     </svg>
   );
-}
+});
 
 function projectToRect(
   cx: number,
@@ -985,130 +1225,209 @@ function projectToRect(
 // Card
 // ---------------------------------------------------------------------------
 
-function CanvasCard({
-  node,
-  editingLane,
-  editingNote,
-  onEditLane,
-  onEditNote,
-  onMouseDown,
-  onResizeMouseDown,
-  onRemove,
-  onPatchLane,
-}: {
+type CanvasCardProps = {
   node: HydratedNode;
   editingLane: boolean;
   editingNote: boolean;
-  onEditLane: (active: boolean) => void;
-  onEditNote: (active: boolean) => void;
-  onMouseDown: (e: React.MouseEvent) => void;
-  onResizeMouseDown: (e: React.MouseEvent) => void;
-  onRemove: () => void;
-  onPatchLane: (lane: string) => void;
-}) {
-  const isLive = node.viewMode === "live";
-  const isRunning =
-    !node.ref.missing &&
-    ((node.ref.meta?.status as string | undefined) === "RUNNING" ||
-      (node.ref.meta?.status as string | undefined) === "ACTIVE");
-  const glow = isLive && isRunning ? "ring-2 ring-ember/60 animate-pulse" : "";
-  const kind = (node.ref.meta?.kind as string | undefined) ?? null;
-  const isNote = node.targetType === "artifact" && kind === "NOTE";
+  onEditLane: (nodeId: string, active: boolean) => void;
+  onEditNote: (nodeId: string, active: boolean) => void;
+  onMouseDown: (e: React.MouseEvent, node: HydratedNode) => void;
+  onResizeMouseDown: (e: React.MouseEvent, node: HydratedNode) => void;
+  onRemove: (nodeId: string) => void;
+  onPatchLane: (nodeId: string, lane: string) => void;
+  onTogglePreview: (nodeId: string, next: "preview" | "card") => void;
+};
 
-  const tone = node.ref.missing
-    ? "border-warning/40 bg-warning/5"
-    : isNote
-      ? "border-amber-500/20 bg-amber-500/10"
-      : "border-border bg-card/80";
+// `React.memo` with a shallow geometry/meta check — during a drag only the
+// moving card's `node` reference changes (overrides on the rest are absent),
+// so memoized siblings skip work entirely.
+const CanvasCard = memo(
+  function CanvasCard({
+    node,
+    editingLane,
+    editingNote,
+    onEditLane,
+    onEditNote,
+    onMouseDown,
+    onResizeMouseDown,
+    onRemove,
+    onPatchLane,
+    onTogglePreview,
+  }: CanvasCardProps) {
+    const isLive = node.viewMode === "live";
+    const isRunning =
+      !node.ref.missing &&
+      ((node.ref.meta?.status as string | undefined) === "RUNNING" ||
+        (node.ref.meta?.status as string | undefined) === "ACTIVE");
+    const glow = isLive && isRunning ? "ring-2 ring-ember/60 animate-pulse" : "";
+    const kind = (node.ref.meta?.kind as string | undefined) ?? null;
+    const isNote = node.targetType === "artifact" && kind === "NOTE";
 
-  let body: React.ReactNode;
-  if (node.ref.missing) {
-    body = <div className="text-sm font-medium">Missing {node.targetType}</div>;
-  } else if (node.targetType === "execution-plan") {
-    body = <ExecutionPlanCardBody node={node} live={isLive} />;
-  } else if (node.targetType === "execution-step") {
-    body = <ExecutionStepCardBody node={node} />;
-  } else if (node.targetType === "chat-thread") {
-    body = <ChatThreadCardBody node={node} live={isLive} />;
-  } else if (isNote) {
-    body = <NoteCardBody node={node} editing={editingNote} onEditChange={onEditNote} />;
-  } else {
-    body = (
-      <>
-        <div className="text-meta uppercase tracking-wide text-muted-foreground">
-          {node.targetType.replace("-", " ")}
-          {node.ref.subLabel ? <span> · {node.ref.subLabel}</span> : null}
-        </div>
-        <div className="line-clamp-3 text-sm font-medium">{node.ref.label}</div>
-      </>
-    );
-  }
+    // Which node types support the inline-preview toggle. Attachments
+    // always do; non-NOTE artifacts do iff their body hydrated through.
+    const artifactPreviewKind: CanvasPreviewKind | null =
+      !node.ref.missing &&
+      node.targetType === "artifact" &&
+      !isNote
+        ? canvasKindForArtifact(node.ref.meta ?? {})
+        : null;
+    const isAttachment = !node.ref.missing && node.targetType === "attachment";
+    const previewSupported =
+      isAttachment ||
+      (artifactPreviewKind !== null && artifactPreviewKind !== "unsupported");
+    const previewActive = previewSupported && node.viewMode === "preview";
 
-  return (
-    <div
-      data-canvas-card
-      className={`absolute flex flex-col gap-1.5 rounded-lg border p-3 shadow-md transition-all duration-300 hover:shadow-lg ${tone} ${glow}`}
-      style={{
-        left: node.x,
-        top: node.y,
-        width: node.width,
-        minHeight: node.height,
-      }}
-      onMouseDown={onMouseDown}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">{body}</div>
-        <div className="flex flex-col items-end gap-0.5">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onEditLane(!editingLane);
-            }}
-            className="rounded-md p-1 text-muted-foreground hover:bg-subtle"
-            title="Move to lane"
-          >
-            <Layers className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemove();
-            }}
-            className="rounded-md p-1 text-muted-foreground hover:bg-subtle"
-            title="Remove from canvas"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
-      {editingLane ? (
-        <LaneEditor
-          current={(node.meta?.lane as string | undefined) ?? ""}
-          onCancel={() => onEditLane(false)}
-          onSave={onPatchLane}
+    const tone = node.ref.missing
+      ? "border-warning/40 bg-warning/5"
+      : isNote
+        ? "border-amber-500/20 bg-amber-500/10"
+        : "border-border bg-card/80";
+
+    let body: React.ReactNode;
+    if (node.ref.missing) {
+      body = <div className="text-sm font-medium">Missing {node.targetType}</div>;
+    } else if (node.targetType === "execution-plan") {
+      body = <ExecutionPlanCardBody node={node} live={isLive} />;
+    } else if (node.targetType === "execution-step") {
+      body = <ExecutionStepCardBody node={node} />;
+    } else if (node.targetType === "chat-thread") {
+      body = <ChatThreadCardBody node={node} live={isLive} />;
+    } else if (isNote) {
+      body = (
+        <NoteCardBody
+          node={node}
+          editing={editingNote}
+          onEditChange={(active) => onEditNote(node.id, active)}
         />
-      ) : null}
-      {node.ref.url && !isNote ? (
-        <a
-          href={node.ref.url}
-          onMouseDown={(e) => e.stopPropagation()}
-          className="mt-auto inline-flex items-center gap-1 text-meta text-ember hover:underline"
-        >
-          Open <ExternalLink className="h-3 w-3" />
-        </a>
-      ) : null}
-      <button
-        type="button"
-        aria-label="Resize"
-        title="Drag to resize"
-        onMouseDown={onResizeMouseDown}
-        className="absolute bottom-0.5 right-0.5 h-3 w-3 cursor-nwse-resize rounded-sm bg-border/40 hover:bg-ember/40"
-      />
-    </div>
-  );
-}
+      );
+    } else if (isAttachment && previewActive) {
+      body = <AttachmentPreviewCardBody node={node} />;
+    } else if (
+      artifactPreviewKind &&
+      artifactPreviewKind !== "unsupported" &&
+      previewActive
+    ) {
+      body = (
+        <ArtifactPreviewCardBody
+          node={node}
+          previewKind={artifactPreviewKind}
+        />
+      );
+    } else {
+      body = (
+        <>
+          <div className="text-meta uppercase tracking-wide text-muted-foreground">
+            {node.targetType.replace("-", " ")}
+            {node.ref.subLabel ? <span> · {node.ref.subLabel}</span> : null}
+          </div>
+          <div className="line-clamp-3 text-sm font-medium">{node.ref.label}</div>
+        </>
+      );
+    }
+
+    return (
+      <div
+        data-canvas-card
+        className={`absolute flex flex-col gap-1.5 rounded-lg border p-3 shadow-md transition-all duration-300 hover:shadow-lg ${tone} ${glow}`}
+        style={{
+          left: node.x,
+          top: node.y,
+          width: node.width,
+          minHeight: node.height,
+        }}
+        onMouseDown={(e) => onMouseDown(e, node)}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">{body}</div>
+          <div className="flex flex-col items-end gap-0.5">
+            {previewSupported ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTogglePreview(node.id, previewActive ? "card" : "preview");
+                }}
+                className="rounded-md p-1 text-muted-foreground hover:bg-subtle"
+                title={previewActive ? "Collapse to chip" : "Show inline preview"}
+              >
+                {previewActive ? (
+                  <Minimize2 className="h-3 w-3" />
+                ) : (
+                  <ImageIcon className="h-3 w-3" />
+                )}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onEditLane(node.id, !editingLane);
+              }}
+              className="rounded-md p-1 text-muted-foreground hover:bg-subtle"
+              title="Move to lane"
+            >
+              <Layers className="h-3 w-3" />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove(node.id);
+              }}
+              className="rounded-md p-1 text-muted-foreground hover:bg-subtle"
+              title="Remove from canvas"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+        {editingLane ? (
+          <LaneEditor
+            current={(node.meta?.lane as string | undefined) ?? ""}
+            onCancel={() => onEditLane(node.id, false)}
+            onSave={(lane) => onPatchLane(node.id, lane)}
+          />
+        ) : null}
+        {node.ref.url && !isNote ? (
+          <a
+            href={node.ref.url}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="mt-auto inline-flex items-center gap-1 text-meta text-ember hover:underline"
+          >
+            Open <ExternalLink className="h-3 w-3" />
+          </a>
+        ) : null}
+        <button
+          type="button"
+          aria-label="Resize"
+          title="Drag to resize"
+          onMouseDown={(e) => onResizeMouseDown(e, node)}
+          className="absolute bottom-0.5 right-0.5 h-3 w-3 cursor-nwse-resize rounded-sm bg-border/40 hover:bg-ember/40"
+        />
+      </div>
+    );
+  },
+  (prev, next) =>
+    prev.node.id === next.node.id &&
+    prev.node.x === next.node.x &&
+    prev.node.y === next.node.y &&
+    prev.node.width === next.node.width &&
+    prev.node.height === next.node.height &&
+    prev.node.viewMode === next.node.viewMode &&
+    // Reference-equal meta/ref is enough — hydrate returns fresh refs
+    // only when the underlying entity actually changed.
+    prev.node.meta === next.node.meta &&
+    prev.node.ref === next.node.ref &&
+    prev.editingLane === next.editingLane &&
+    prev.editingNote === next.editingNote &&
+    prev.onEditLane === next.onEditLane &&
+    prev.onEditNote === next.onEditNote &&
+    prev.onMouseDown === next.onMouseDown &&
+    prev.onResizeMouseDown === next.onResizeMouseDown &&
+    prev.onRemove === next.onRemove &&
+    prev.onPatchLane === next.onPatchLane &&
+    prev.onTogglePreview === next.onTogglePreview,
+);
 
 function LaneEditor({
   current,
@@ -1445,6 +1764,123 @@ function NoteCardBody({
 }
 
 // ---------------------------------------------------------------------------
+// Inline preview bodies — attachments (lazy presigned URL fetch) and
+// non-NOTE artifacts (body / bodyKind from hydration). Both render
+// through the shared `CanvasPreview` component so the kind matrix stays
+// in one place.
+// ---------------------------------------------------------------------------
+
+function AttachmentPreviewCardBody({ node }: { node: HydratedNode }) {
+  const lightbox = useAttachmentLightbox();
+  const meta = (node.ref.meta ?? {}) as {
+    kind?: string;
+    mimeType?: string;
+    filename?: string;
+    size?: number;
+    externalUrl?: string | null;
+  };
+  const isLink = meta.kind === "LINK" || meta.mimeType === "text/url";
+  // Lazy presigned URL — same query the lightbox uses, so hovering /
+  // expanding the card hits the same 5-min staleTime cache. LINK rows
+  // skip the call and route to `externalUrl` directly.
+  const dl = trpc.attachment.getDownloadUrl.useQuery(
+    { attachmentId: node.targetId },
+    {
+      enabled: !isLink,
+      staleTime: 5 * 60_000,
+      retry: false,
+    },
+  );
+  const previewKind = canvasKindForAttachment(meta);
+  const url = isLink ? meta.externalUrl ?? null : dl.data?.url ?? null;
+  // Header — filename + mime chip. Padding mirrors the legacy card body.
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <span className="text-meta uppercase tracking-wide text-muted-foreground">
+          attachment
+        </span>
+        {meta.mimeType ? (
+          <span className="truncate font-mono text-id text-muted-foreground">
+            {meta.mimeType}
+          </span>
+        ) : null}
+      </div>
+      <div className="truncate text-filename text-foreground">
+        {meta.filename ?? node.ref.label}
+      </div>
+      <CanvasPreview
+        kind={previewKind}
+        mimeType={meta.mimeType ?? null}
+        filename={meta.filename ?? null}
+        url={url}
+        height={Math.max(120, node.height - 60)}
+        onExpand={() => {
+          if (isLink) {
+            if (meta.externalUrl) {
+              window.open(meta.externalUrl, "_blank", "noopener,noreferrer");
+            }
+            return;
+          }
+          // FILE rows open the existing lightbox — same source of truth
+          // for keyboard paging and delete confirmation.
+          lightbox.open({
+            attachmentId: node.targetId,
+            attachments: [
+              {
+                id: node.targetId,
+                filename: meta.filename ?? node.ref.label,
+                mimeType: meta.mimeType ?? "",
+                size: meta.size ?? 0,
+                kind: (meta.kind as "FILE" | "LINK" | undefined) ?? "FILE",
+                externalUrl: meta.externalUrl ?? null,
+              },
+            ],
+          });
+        }}
+      />
+    </div>
+  );
+}
+
+function ArtifactPreviewCardBody({
+  node,
+  previewKind,
+}: {
+  node: HydratedNode;
+  previewKind: CanvasPreviewKind;
+}) {
+  const meta = (node.ref.meta ?? {}) as {
+    kind?: string;
+    body?: string;
+    summary?: string;
+  };
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <span className="text-meta uppercase tracking-wide text-muted-foreground">
+          {(meta.kind ?? "artifact").toLowerCase()}
+        </span>
+        {node.ref.subLabel && node.ref.subLabel !== (meta.kind ?? "").toLowerCase() ? (
+          <span className="truncate text-meta text-muted-foreground">
+            {node.ref.subLabel}
+          </span>
+        ) : null}
+      </div>
+      <div className="truncate text-sm font-medium text-foreground">
+        {node.ref.label}
+      </div>
+      <CanvasPreview
+        kind={previewKind}
+        body={meta.body ?? null}
+        filename={node.ref.label}
+        height={Math.max(120, node.height - 60)}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // AddCardPicker (extended: chat-thread + agent tabs)
 // ---------------------------------------------------------------------------
 
@@ -1477,6 +1913,9 @@ function AddCardPicker({
   });
 
   const addCard = (targetType: "issue" | "artifact" | "chat-thread" | "agent", targetId: string) => {
+    // Mirror the drop-target default: artifact cards open in `preview`
+    // so the operator immediately sees the rendered body / file.
+    const viewMode = targetType === "artifact" ? "preview" : undefined;
     addNode.mutate({
       canvasId,
       targetType,
@@ -1484,7 +1923,8 @@ function AddCardPicker({
       x: 40 + Math.random() * 200,
       y: 40 + Math.random() * 200,
       width: 280,
-      height: 120,
+      height: viewMode === "preview" ? 220 : 120,
+      viewMode,
     });
   };
 

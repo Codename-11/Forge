@@ -825,7 +825,34 @@ function ActionButton({
   );
 }
 
-type Kind = "image" | "pdf" | "html" | "video" | "audio" | "text" | "other";
+/**
+ * Format buckets the lightbox renders. Exported so other surfaces
+ * (e.g. CanvasPreview) can branch on the same set without forking
+ * the heuristic.
+ */
+export type AttachmentKindLabel =
+  | "image"
+  | "pdf"
+  | "html"
+  | "video"
+  | "audio"
+  | "text"
+  | "other";
+
+/**
+ * Classify a mime+filename pair into one of the renderable buckets.
+ * The lightbox owns the heuristic — exported so callers like the
+ * canvas inline preview share the same fallbacks (extension sniffing,
+ * `application/json` → text, etc.).
+ */
+export function classifyAttachmentKind(
+  mime: string,
+  filename: string,
+): AttachmentKindLabel {
+  return classifyMime(mime, filename);
+}
+
+type Kind = AttachmentKindLabel;
 
 function classifyMime(mime: string, filename: string): Kind {
   const m = (mime || "").toLowerCase();

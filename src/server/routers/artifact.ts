@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { ArtifactStatus, ArtifactType } from "@prisma/client";
+import { ArtifactStatus, ArtifactType, EventKind } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
+import { recordChange } from "@/server/audit";
 import {
   archiveArtifact,
   createArtifact,
@@ -67,12 +68,19 @@ export const artifactRouter = router({
           projectId: z.string().cuid().optional(),
           /** When true, include archived rows (default: hide). */
           includeArchived: z.boolean().default(false),
+          /** When true, return ONLY archived rows. Wins over includeArchived. */
+          archivedOnly: z.boolean().default(false),
           limit: z.number().int().positive().max(100).default(50),
           cursor: z.string().optional(),
         })
         .default({}),
     )
     .query(async ({ ctx, input }) => {
+      const archivedFilter = input.archivedOnly
+        ? { not: null }
+        : input.includeArchived
+          ? undefined
+          : null;
       const rows = await ctx.db.artifact.findMany({
         where: {
           workspaceId: ctx.workspaceId,
@@ -80,7 +88,7 @@ export const artifactRouter = router({
           type: input.type,
           issueId: input.issueId,
           projectId: input.projectId,
-          archivedAt: input.includeArchived ? undefined : null,
+          archivedAt: archivedFilter,
         },
         orderBy: { updatedAt: "desc" },
         take: input.limit + 1,
@@ -243,6 +251,157 @@ export const artifactRouter = router({
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
         artifactId: input.id,
+      });
+      return { ok: true };
+    }),
+
+  /** Clear `archivedAt`, restoring the artifact to its prior status. */
+  restore: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.artifact.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, title: true, status: true, archivedAt: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Artifact not found." });
+      }
+      const archivedAt = existing.archivedAt;
+      if (!archivedAt) return { ok: true };
+      const nextStatus =
+        existing.status === ArtifactStatus.ARCHIVED
+          ? ArtifactStatus.DRAFT
+          : existing.status;
+      await ctx.db.$transaction(async (tx) => {
+        await tx.artifact.update({
+          where: { id: input.id },
+          data: { archivedAt: null, status: nextStatus },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "artifact",
+          entityId: input.id,
+          action: "restore",
+          before: {
+            archivedAt: archivedAt.toISOString(),
+            status: existing.status,
+          } as Prisma.InputJsonValue,
+          after: { archivedAt: null, status: nextStatus } as Prisma.InputJsonValue,
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "artifact",
+          subjectId: input.id,
+          payload: { action: "restored", artifactTitle: existing.title } as Prisma.InputJsonValue,
+        });
+      });
+      return { ok: true };
+    }),
+
+  /**
+   * Clone an artifact into a new DRAFT row. Title defaults to
+   * `Copy of <original>` unless `newTitle` is supplied; the body is
+   * copied so version 1 of the new artifact matches the source's
+   * current published body. Versions/attachments are NOT cloned in v1.
+   */
+  duplicate: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        newTitle: z.string().min(1).max(200).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const source = await ctx.db.artifact.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          title: true,
+          body: true,
+          type: true,
+          summary: true,
+          issueId: true,
+          projectId: true,
+        },
+      });
+      if (!source) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Artifact not found." });
+      }
+      const newTitle = input.newTitle?.trim() || `Copy of ${source.title}`;
+      const { id, slug } = await createArtifact(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session?.user?.id ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        title: newTitle,
+        body: source.body,
+        summary: source.summary,
+        type: source.type,
+        status: ArtifactStatus.DRAFT,
+        issueId: source.issueId ?? null,
+        projectId: source.projectId ?? null,
+      });
+      return { id, slug };
+    }),
+
+  /**
+   * Hard-delete an artifact + all its versions. `confirm` must match
+   * the artifact's current title (case-sensitive). Admin-only.
+   */
+  delete: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        confirm: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (
+        ctx.membership.role !== "OWNER" &&
+        ctx.membership.role !== "ADMIN"
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Admin role required to hard-delete an artifact.",
+        });
+      }
+      const existing = await ctx.db.artifact.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, title: true, status: true, slug: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Artifact not found." });
+      }
+      if (input.confirm !== existing.title) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Confirmation text does not match the artifact title.",
+        });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "artifact",
+          entityId: existing.id,
+          action: "delete",
+          before: {
+            title: existing.title,
+            slug: existing.slug,
+            status: existing.status,
+          } as Prisma.InputJsonValue,
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "artifact",
+          subjectId: existing.id,
+          payload: { action: "deleted", artifactTitle: existing.title } as Prisma.InputJsonValue,
+        });
+        // currentVersionId references a version row; clear it before
+        // we drop the versions (no SetNull cycle handling needed since
+        // both rows go away in the same txn).
+        await tx.artifact.update({
+          where: { id: existing.id },
+          data: { currentVersionId: null },
+        });
+        await tx.artifactVersion.deleteMany({ where: { artifactId: existing.id } });
+        await tx.artifact.delete({ where: { id: existing.id } });
       });
       return { ok: true };
     }),

@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Bot, ChevronDown, ChevronRight, RefreshCw, Wrench } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatChatContextSummary, useChatContext } from "@/hooks/use-chat-context";
@@ -172,6 +172,173 @@ type DraftBubble = {
   startedAt: number;
 };
 
+/** In-flight streaming bubble from /api/chat/stream (distinct from the
+ * legacy MCP-driven draft bubble above, which is still used by the
+ * dispatch path when Hermes streams via `chat.startDraft`). */
+type StreamBubble = {
+  messageId: string | null;
+  body: string;
+  thinking: string;
+  toolBlocks: Array<{ id: string; name: string; args: Record<string, unknown> }>;
+  startedAt: number;
+  finishedAt: number | null;
+  error: string | null;
+  /** Original prompt — kept so the Retry button can re-fire it. */
+  lastPrompt: string;
+};
+
+/**
+ * Streaming bubble UI. Shows a collapsible thinking section, the live
+ * content, and one card per tool_use intent (display-only in v1).
+ */
+function AgentStreamBubble({
+  bubble,
+  agentName,
+  onRetry,
+}: {
+  bubble: StreamBubble;
+  agentName?: string;
+  onRetry?: () => void;
+}) {
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const elapsedSec = bubble.finishedAt
+    ? ((bubble.finishedAt - bubble.startedAt) / 1000).toFixed(1)
+    : null;
+  const isLive = bubble.finishedAt === null && !bubble.error;
+  return (
+    <div className="flex items-start gap-2">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ember/15 text-ember">
+        <Bot className="h-3 w-3" />
+      </span>
+      <div className="min-w-0 max-w-[85%] space-y-1.5 rounded-md border border-border bg-card/60 px-2 py-1.5 text-[0.75rem] text-foreground">
+        {agentName && (
+          <div className="text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+            {agentName}
+          </div>
+        )}
+
+        {bubble.thinking && (
+          <button
+            type="button"
+            onClick={() => setThinkingOpen((v) => !v)}
+            className="flex w-full items-center gap-1 rounded border border-border/60 bg-subtle/30 px-1.5 py-1 text-left text-[0.6875rem] text-muted-foreground hover:bg-subtle/50"
+          >
+            {thinkingOpen ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            <span className="font-mono">
+              {isLive
+                ? "Thinking…"
+                : elapsedSec
+                  ? `Thought for ${elapsedSec}s`
+                  : "Thinking"}
+            </span>
+          </button>
+        )}
+        {bubble.thinking && thinkingOpen && (
+          <div className="rounded border border-border/40 bg-background/40 px-2 py-1.5 text-[0.6875rem] italic text-muted-foreground">
+            <ChatMarkdown body={bubble.thinking} className="text-muted-foreground" />
+          </div>
+        )}
+
+        {bubble.body ? (
+          <div className="relative">
+            <ChatMarkdown body={bubble.body} />
+            {isLive && <span className="inline-block animate-pulse text-muted-foreground">▍</span>}
+          </div>
+        ) : isLive ? (
+          <span className="flex gap-1">
+            <span
+              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
+              style={{ animationDelay: "0ms" }}
+            />
+            <span
+              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
+              style={{ animationDelay: "150ms" }}
+            />
+            <span
+              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
+              style={{ animationDelay: "300ms" }}
+            />
+          </span>
+        ) : null}
+
+        {bubble.toolBlocks.length > 0 && (
+          <div className="space-y-1">
+            {bubble.toolBlocks.map((tb) => (
+              <ToolUseCard key={tb.id} name={tb.name} args={tb.args} />
+            ))}
+          </div>
+        )}
+
+        {bubble.error && (
+          <div className="flex items-center justify-between gap-2 rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-1 text-[0.6875rem] text-amber-700 dark:text-amber-300">
+            <span className="truncate">{bubble.error}</span>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[0.625rem] hover:bg-amber-500/20"
+              >
+                <RefreshCw className="h-2.5 w-2.5" />
+                Retry
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Display-only tool-use card. v2 will let the operator confirm + run. */
+function ToolUseCard({
+  name,
+  args,
+}: {
+  name: string;
+  args: Record<string, unknown>;
+}) {
+  const [open, setOpen] = useState(false);
+  const json = useMemo(() => {
+    try {
+      return JSON.stringify(args, null, 2);
+    } catch {
+      return String(args);
+    }
+  }, [args]);
+  return (
+    <div className="rounded border border-border/60 bg-subtle/30 text-[0.6875rem]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-1.5 py-1 text-left text-muted-foreground hover:text-foreground"
+      >
+        {open ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
+        <Wrench className="h-3 w-3 text-ember" />
+        <span className="font-mono text-foreground">{name}</span>
+        <span className="ml-auto text-[0.5625rem] uppercase tracking-wider text-muted-foreground/70">
+          tool intent
+        </span>
+      </button>
+      {open && (
+        <div className="border-t border-border/40 px-2 py-1.5">
+          <ChatMarkdown body={"```json\n" + json + "\n```"} />
+          <p className="mt-1 text-[0.5625rem] italic text-muted-foreground/60">
+            (display only — v2 will let you run it)
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface SuggestedPrompt {
   label: string;
   body: string;
@@ -273,8 +440,17 @@ export function ChatThreadView({
     setLocalMessages([]);
   };
 
-  // ---------- Streaming draft bubble ----------
+  // ---------- Streaming draft bubble (legacy MCP path) ----------
   const [draft, setDraft] = useState<DraftBubble | null>(null);
+
+  // ---------- Direct streaming bubble (new /api/chat/stream path) ----------
+  // Distinct from `draft` above so the two paths can co-exist while we
+  // migrate. `streamBubble === null` means no active stream; non-null
+  // means we're either mid-stream or just finished (held briefly while
+  // the persisted AGENT message refetches).
+  const [streamBubble, setStreamBubble] = useState<StreamBubble | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const streamAbortRef = useRef<AbortController | null>(null);
 
   // Realtime — invalidate on chat events for this thread.
   useRealtime((evt) => {
@@ -374,10 +550,210 @@ export function ChatThreadView({
 
   const contextSummary = useMemo(() => formatChatContextSummary(currentContext), [currentContext]);
 
+  /**
+   * Run a streamed reply against /api/chat/stream. Parses SSE event blocks
+   * inline; updates `streamBubble` for every delta so React paints the
+   * partial response. Resolves once the server emits `done` or `error`.
+   *
+   * The dispatch path is NOT invoked — the route persists the USER row
+   * with `streamed: true` and audit.ts short-circuits the webhook fan-out
+   * for that case (see audit.ts branch (d)).
+   */
+  const runStreamingSend = useCallback(
+    async (targetThreadId: string, body: string) => {
+      // Cancel any in-flight stream before starting a new one.
+      streamAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      streamAbortRef.current = ctrl;
+
+      setStreamBubble({
+        messageId: null,
+        body: "",
+        thinking: "",
+        toolBlocks: [],
+        startedAt: Date.now(),
+        finishedAt: null,
+        error: null,
+        lastPrompt: body,
+      });
+      setIsStreaming(true);
+
+      let res: Response;
+      try {
+        res = await fetch("/api/chat/stream", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ threadId: targetThreadId, body }),
+          signal: ctrl.signal,
+        });
+      } catch (err) {
+        if (ctrl.signal.aborted) return;
+        const msg = err instanceof Error ? err.message : "Network error";
+        setStreamBubble((b) =>
+          b ? { ...b, error: msg, finishedAt: Date.now() } : b,
+        );
+        setIsStreaming(false);
+        return;
+      }
+
+      if (!res.ok || !res.body) {
+        const text = await res.text().catch(() => "");
+        const msg = text || `Stream request failed (${res.status})`;
+        setStreamBubble((b) =>
+          b ? { ...b, error: msg, finishedAt: Date.now() } : b,
+        );
+        setIsStreaming(false);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = "";
+
+      const handleEvent = (event: string, data: string) => {
+        let parsed: unknown = null;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          return;
+        }
+        if (event === "meta") {
+          const { messageId } = parsed as { messageId?: string };
+          if (messageId) {
+            setStreamBubble((b) => (b ? { ...b, messageId } : b));
+          }
+        } else if (event === "content") {
+          const { delta } = parsed as { delta?: string };
+          if (typeof delta === "string") {
+            setStreamBubble((b) => (b ? { ...b, body: b.body + delta } : b));
+          }
+        } else if (event === "thinking") {
+          const { delta } = parsed as { delta?: string };
+          if (typeof delta === "string") {
+            setStreamBubble((b) =>
+              b ? { ...b, thinking: b.thinking + delta } : b,
+            );
+          }
+        } else if (event === "tool_use") {
+          const tb = parsed as {
+            id?: string;
+            name?: string;
+            args?: Record<string, unknown>;
+          };
+          if (tb.id && tb.name) {
+            setStreamBubble((b) =>
+              b
+                ? {
+                    ...b,
+                    toolBlocks: [
+                      ...b.toolBlocks,
+                      { id: tb.id!, name: tb.name!, args: tb.args ?? {} },
+                    ],
+                  }
+                : b,
+            );
+          }
+        } else if (event === "error") {
+          const { message } = parsed as { message?: string };
+          setStreamBubble((b) =>
+            b
+              ? {
+                  ...b,
+                  error: message ?? "Stream error",
+                  finishedAt: b.finishedAt ?? Date.now(),
+                }
+              : b,
+          );
+        } else if (event === "done") {
+          setStreamBubble((b) =>
+            b ? { ...b, finishedAt: Date.now() } : b,
+          );
+        }
+      };
+
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          pending += decoder.decode(value, { stream: true });
+          // SSE separator is a blank line — split on it and parse complete
+          // events. Whatever's after the last blank line gets carried to
+          // the next iteration.
+          let sepIdx = pending.indexOf("\n\n");
+          while (sepIdx !== -1) {
+            const block = pending.slice(0, sepIdx);
+            pending = pending.slice(sepIdx + 2);
+            let eventName = "message";
+            const dataLines: string[] = [];
+            for (const line of block.split("\n")) {
+              if (line.startsWith(":")) continue;
+              if (line.startsWith("event:")) {
+                eventName = line.slice(6).trim();
+              } else if (line.startsWith("data:")) {
+                dataLines.push(line.slice(5).trim());
+              }
+            }
+            if (dataLines.length > 0) {
+              handleEvent(eventName, dataLines.join("\n"));
+            }
+            sepIdx = pending.indexOf("\n\n");
+          }
+        }
+      } catch (err) {
+        if (!ctrl.signal.aborted) {
+          const msg = err instanceof Error ? err.message : "Stream interrupted";
+          setStreamBubble((b) =>
+            b
+              ? { ...b, error: msg, finishedAt: b.finishedAt ?? Date.now() }
+              : b,
+          );
+        }
+      } finally {
+        setIsStreaming(false);
+        if (streamAbortRef.current === ctrl) streamAbortRef.current = null;
+      }
+
+      // Trigger a refetch so the persisted AGENT row replaces the bubble.
+      // We hold the bubble visible briefly so the swap doesn't flicker.
+      if (selectedThreadId) {
+        void utils.chat.getThread.invalidate({ threadId: selectedThreadId });
+      } else {
+        threadM.mutate({ agentId });
+      }
+      void utils.chat.threads.invalidate();
+      setTimeout(() => {
+        // Only clear if not replaced by a newer stream.
+        setStreamBubble((b) => (b && b.finishedAt ? null : b));
+      }, 800);
+    },
+    // utils + threadM are stable refs from trpc; the linter doesn't know.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [agentId, selectedThreadId],
+  );
+
+  // Abort any in-flight stream on unmount.
+  useEffect(() => {
+    return () => {
+      streamAbortRef.current?.abort();
+    };
+  }, []);
+
   const handleSend = async (body: string, files: File[] = []) => {
     setPendingDraft({ body, files: files.map((f) => f.name || "attachment") });
     try {
+      // Streaming path: text-only, requires a resolved threadId.
+      if (files.length === 0 && threadId) {
+        // Persist the USER row visually right away — runStreamingSend will
+        // do the actual server write; the invalidate after `done` brings
+        // the canonical row back. setPendingDraft drives the placeholder
+        // bubble so the user sees their message instantly.
+        await runStreamingSend(threadId, body);
+        return;
+      }
       if (files.length === 0) {
+        // No resolved threadId yet (initial mount race) — fall back to
+        // chat.send so the thread gets created server-side.
         await sendM.mutateAsync({
           agentId,
           threadId: selectedThreadId ?? undefined,
@@ -451,7 +827,7 @@ export function ChatThreadView({
     const el = scrollerRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages.length, localMessages.length, draft?.body]);
+  }, [messages.length, localMessages.length, draft?.body, streamBubble?.body]);
 
   const messageRows: ChatMessageRow[] = useMemo(
     () =>
@@ -460,15 +836,33 @@ export function ChatThreadView({
         role: m.role as ChatMessageRow["role"],
         body: m.body,
         createdAt: m.createdAt,
+        // Streaming path stashes thinking/tool_use blocks in
+        // `contextSnapshot`. Forward whatever the router returns —
+        // `chat-message.tsx` guards against missing/unrelated shapes.
+        contextSnapshot:
+          (m as { contextSnapshot?: unknown }).contextSnapshot ?? undefined,
       })),
     [messages],
+  );
+
+  // While a stream is in-flight (or held briefly after `done`), the
+  // persisted AGENT row with the same messageId may also be in
+  // `messageRows`. Suppress it so we don't show two copies of the same
+  // reply during the swap window.
+  const suppressedMessageId = streamBubble?.messageId ?? null;
+  const visibleMessageRows = useMemo(
+    () =>
+      suppressedMessageId
+        ? messageRows.filter((m) => m.id !== suppressedMessageId)
+        : messageRows,
+    [messageRows, suppressedMessageId],
   );
 
   // Merged display rows: persisted + local SYSTEM messages interleaved.
   // Local messages appear after the last persisted message.
   const displayRows: ChatMessageRow[] = useMemo(
-    () => [...messageRows, ...localMessages],
-    [messageRows, localMessages],
+    () => [...visibleMessageRows, ...localMessages],
+    [visibleMessageRows, localMessages],
   );
 
   // ---------- Presence-aware derived values ----------
@@ -518,7 +912,8 @@ export function ChatThreadView({
     createPendingM.isPending ||
     initUploadM.isPending ||
     finalizeM.isPending ||
-    dispatchM.isPending;
+    dispatchM.isPending ||
+    isStreaming;
   const dispatchState = diagnostics?.dispatchState ?? null;
   // Canonical: show the typing bubble only when canonical state says
   // the agent is acknowledged/running. Wake-sent/queued get a
@@ -671,8 +1066,25 @@ export function ChatThreadView({
             }}
           />
         )}
-        {/* Draft bubble — shows while agent is streaming. Replaces static thinking bubble. */}
-        {draft ? (
+        {/* Streaming bubble (new /api/chat/stream path). Takes precedence
+            over the legacy MCP draft + thinking/wake diagnostics so the
+            direct streaming UI is what the operator sees while the model
+            is actively responding. */}
+        {streamBubble ? (
+          <AgentStreamBubble
+            bubble={streamBubble}
+            agentName={agent?.name}
+            onRetry={
+              streamBubble.error && threadId
+                ? () => {
+                    const prompt = streamBubble.lastPrompt;
+                    setStreamBubble(null);
+                    void runStreamingSend(threadId, prompt);
+                  }
+                : undefined
+            }
+          />
+        ) : draft ? (
           <AgentDraftBubble body={draft.body} agentName={agent?.name} />
         ) : showThinking ? (
           <AgentThinkingBubble stale={thinkingIsStale} detail={thinkingDetail} />

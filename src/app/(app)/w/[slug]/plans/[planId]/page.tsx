@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { Confirm } from "@/components/ui/modal";
 import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
 import { StepComments } from "@/components/plans/step-comments";
 import { trpc } from "@/lib/trpc";
@@ -205,6 +206,12 @@ export default function PlanDetailPage() {
 
   // View toggle.
   const [view, setView] = useState<ViewMode>("list");
+
+  type ConfirmState =
+    | { kind: "remove-step"; stepId: string }
+    | { kind: "archive" }
+    | null;
+  const [confirmState, setConfirmState] = useState<ConfirmState>(null);
 
   // Track the operator's recent manual scroll so auto-scroll doesn't fight them.
   const lastUserScrollAt = useRef(0);
@@ -444,11 +451,7 @@ export default function PlanDetailPage() {
               runningRef={runningRef}
               onTransitionStep={(id, status) => updateStep.mutate({ id, status })}
               onPatchStep={(id, patch) => updateStep.mutate({ id, ...patch })}
-              onRemoveStep={(id) => {
-                if (window.confirm("Remove this step?")) {
-                  removeStep.mutate({ id });
-                }
-              }}
+              onRemoveStep={(id) => setConfirmState({ kind: "remove-step", stepId: id })}
             />
           ) : (
             <TimelineView
@@ -533,17 +536,51 @@ export default function PlanDetailPage() {
             size="sm"
             variant="ghost"
             className="text-warning"
-            onClick={() => {
-              if (window.confirm("Archive this plan?")) {
-                archive.mutate({ id: plan.id });
-              }
-            }}
+            onClick={() => setConfirmState({ kind: "archive" })}
             disabled={archive.isPending}
           >
             <Archive className="h-3.5 w-3.5" /> Archive plan
           </Button>
         </aside>
       </div>
+
+      <Confirm
+        open={confirmState?.kind === "remove-step"}
+        onOpenChange={(o) => {
+          if (!o) setConfirmState(null);
+        }}
+        title="Remove step?"
+        description="The step will be deleted from this plan."
+        primaryLabel="Remove step"
+        variant="destructive"
+        loading={removeStep.isPending}
+        onConfirm={() => {
+          if (confirmState?.kind !== "remove-step") return;
+          const stepId = confirmState.stepId;
+          removeStep.mutate(
+            { id: stepId },
+            { onSettled: () => setConfirmState(null) },
+          );
+        }}
+      />
+
+      <Confirm
+        open={confirmState?.kind === "archive"}
+        onOpenChange={(o) => {
+          if (!o) setConfirmState(null);
+        }}
+        title="Archive plan?"
+        description="Hides the plan from the active list. You can restore it later."
+        primaryLabel="Archive plan"
+        variant="destructive"
+        loading={archive.isPending}
+        onConfirm={() =>
+          archive.mutate(
+            { id: plan.id },
+            { onSettled: () => setConfirmState(null) },
+          )
+        }
+      />
     </>
   );
 }
