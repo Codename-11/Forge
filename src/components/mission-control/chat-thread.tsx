@@ -1,6 +1,7 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, ChevronDown, ChevronRight, RefreshCw, Wrench } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { Bot, ChevronDown, ChevronRight, Layers, RefreshCw, Wrench } from "lucide-react";
+import { usePathname } from "next/navigation";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatChatContextSummary, useChatContext } from "@/hooks/use-chat-context";
@@ -172,6 +173,27 @@ type DraftBubble = {
   startedAt: number;
 };
 
+const ALWAYS_ALLOW_KEY = (threadId: string, toolName: string) =>
+  `forge.chat.alwaysAllow.${threadId}.${toolName}`;
+
+function isAlwaysAllowed(threadId: string, toolName: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(ALWAYS_ALLOW_KEY(threadId, toolName)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberAlwaysAllowed(threadId: string, toolName: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ALWAYS_ALLOW_KEY(threadId, toolName), "1");
+  } catch {
+    /* localStorage may be blocked — silently degrade to per-call confirm */
+  }
+}
+
 /** In-flight streaming bubble from /api/chat/stream (distinct from the
  * legacy MCP-driven draft bubble above, which is still used by the
  * dispatch path when Hermes streams via `chat.startDraft`). */
@@ -208,12 +230,14 @@ function AgentStreamBubble({
   onRetry,
   onApprove,
   onDecline,
+  threadId,
 }: {
   bubble: StreamBubble;
   agentName?: string;
   onRetry?: () => void;
-  onApprove?: (callId: string) => void;
+  onApprove?: (callId: string, alwaysAllow?: boolean) => void;
   onDecline?: (callId: string) => void;
+  threadId?: string;
 }) {
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const elapsedSec = bubble.finishedAt
@@ -288,6 +312,7 @@ function AgentStreamBubble({
                 call={tb}
                 onApprove={onApprove}
                 onDecline={onDecline}
+                threadId={threadId}
               />
             ))}
           </div>
@@ -314,6 +339,150 @@ function AgentStreamBubble({
 }
 
 /**
+ * Render a canvas-specific preview block for write-class canvas tools so
+ * the operator sees what they're approving (where it lands, what shape
+ * kind, etc.) instead of only a JSON dump.
+ *
+ * Returns null when the tool isn't a canvas write — the card falls back
+ * to the generic JSON preview.
+ */
+function renderCanvasToolPreview(call: StreamToolCall): ReactElement | null {
+  const a = call.args as Record<string, unknown>;
+  switch (call.name) {
+    case "canvases.addNode":
+    case "canvases_addNode": {
+      const targetType = String(a.targetType ?? "node");
+      const targetId = a.targetId ? String(a.targetId) : null;
+      const x = typeof a.x === "number" ? Math.round(a.x) : 0;
+      const y = typeof a.y === "number" ? Math.round(a.y) : 0;
+      return (
+        <div className="space-y-1">
+          <p className="text-[0.625rem] text-muted-foreground">
+            Add <span className="text-foreground">{targetType}</span>
+            {targetId && <span className="ml-1 font-mono text-foreground/80">{targetId}</span>}
+            <span className="ml-1">at</span>
+            <span className="ml-1 font-mono">({x}, {y})</span>
+          </p>
+          <div className="flex h-12 w-full items-center justify-center rounded border border-dashed border-border bg-card/40 text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+            preview · {targetType}
+          </div>
+        </div>
+      );
+    }
+    case "canvases.addEdge":
+    case "canvases_addEdge": {
+      const from = a.fromNodeId ? String(a.fromNodeId).slice(-6) : "?";
+      const to = a.toNodeId ? String(a.toNodeId).slice(-6) : "?";
+      const label = a.label ? String(a.label) : null;
+      return (
+        <div className="space-y-1">
+          <p className="text-[0.625rem] text-muted-foreground">
+            Connect <span className="font-mono text-foreground">{from}</span>
+            <span className="mx-1">→</span>
+            <span className="font-mono text-foreground">{to}</span>
+            {label && <span className="ml-1 italic">&ldquo;{label}&rdquo;</span>}
+          </p>
+          <svg viewBox="0 0 200 40" className="h-10 w-full">
+            <defs>
+              <marker
+                id="tcc-arrow"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto"
+              >
+                <path d="M0,0 L10,5 L0,10 z" className="fill-foreground/60" />
+              </marker>
+            </defs>
+            <path
+              d="M 20,20 C 80,20 120,20 180,20"
+              className="fill-none stroke-foreground/60"
+              strokeWidth={1.5}
+              markerEnd="url(#tcc-arrow)"
+            />
+          </svg>
+        </div>
+      );
+    }
+    case "canvases.shapeAdd":
+    case "canvases_shapeAdd": {
+      const kind = String(a.kind ?? "box");
+      const w = typeof a.width === "number" ? a.width : 120;
+      const h = typeof a.height === "number" ? a.height : 60;
+      const x = typeof a.x === "number" ? Math.round(a.x) : 0;
+      const y = typeof a.y === "number" ? Math.round(a.y) : 0;
+      return (
+        <div className="space-y-1">
+          <p className="text-[0.625rem] text-muted-foreground">
+            Add <span className="text-foreground">{kind}</span>
+            <span className="ml-1">at</span>
+            <span className="ml-1 font-mono">({x}, {y})</span>
+          </p>
+          <svg viewBox={`0 0 200 80`} className="h-16 w-full">
+            {kind === "ellipse" ? (
+              <ellipse cx={100} cy={40} rx={Math.min(80, w / 2)} ry={Math.min(30, h / 2)}
+                className="fill-transparent stroke-foreground/60" strokeWidth={1.5} />
+            ) : kind === "line" || kind === "arrow" ? (
+              <line x1={20} y1={40} x2={180} y2={40}
+                className="stroke-foreground/60" strokeWidth={1.5} />
+            ) : kind === "text" ? (
+              <text x={100} y={45} textAnchor="middle"
+                className="fill-foreground/80 text-[14px]">{String(a.text ?? "Text")}</text>
+            ) : (
+              <rect x={20} y={10} width={160} height={60} rx={6}
+                className="fill-transparent stroke-foreground/60" strokeWidth={1.5} />
+            )}
+          </svg>
+        </div>
+      );
+    }
+    case "canvases.bulkAddShapes":
+    case "canvases_bulkAddShapes": {
+      const shapes = Array.isArray(a.shapes) ? (a.shapes as Array<Record<string, unknown>>) : [];
+      const counts: Record<string, number> = {};
+      for (const s of shapes) {
+        const k = String(s.kind ?? "?");
+        counts[k] = (counts[k] ?? 0) + 1;
+      }
+      return (
+        <div className="space-y-1">
+          <p className="text-[0.625rem] text-muted-foreground">
+            <span className="text-foreground">{shapes.length}</span> shape{shapes.length === 1 ? "" : "s"}
+            {Object.keys(counts).length > 0 && (
+              <span className="ml-1">
+                ({Object.entries(counts).map(([k, n]) => `${k}:${n}`).join(", ")})
+              </span>
+            )}
+          </p>
+        </div>
+      );
+    }
+    case "canvases.applyTemplate":
+    case "canvases_applyTemplate": {
+      const template = String(a.templateId ?? "?");
+      return (
+        <p className="text-[0.625rem] text-muted-foreground">
+          Apply template <span className="font-mono text-foreground">{template}</span>
+        </p>
+      );
+    }
+    case "canvases.layout":
+    case "canvases_layout": {
+      const algo = String(a.algorithm ?? "topological");
+      return (
+        <p className="text-[0.625rem] text-muted-foreground">
+          Re-layout using <span className="font-mono text-foreground">{algo}</span>
+        </p>
+      );
+    }
+    default:
+      return null;
+  }
+}
+
+/**
  * Live tool-call card. Renders started → confirm → executed/error states,
  * surfacing an Approve / Decline pair for write-class tools that need
  * operator sign-off before the loop resumes.
@@ -322,12 +491,15 @@ function ToolCallCard({
   call,
   onApprove,
   onDecline,
+  threadId,
 }: {
   call: StreamToolCall;
-  onApprove?: (callId: string) => void;
+  onApprove?: (callId: string, alwaysAllow?: boolean) => void;
   onDecline?: (callId: string) => void;
+  threadId?: string;
 }) {
   const [open, setOpen] = useState(call.status === "pending" && call.requiresConfirm);
+  const [alwaysAllow, setAlwaysAllow] = useState(false);
   const json = useMemo(() => {
     try {
       return JSON.stringify(call.args, null, 2);
@@ -338,6 +510,7 @@ function ToolCallCard({
 
   const awaitingConfirm = call.status === "pending" && call.requiresConfirm;
   const running = call.status === "pending" || call.status === "approved";
+  const canvasPreview = useMemo(() => renderCanvasToolPreview(call), [call]);
 
   let statusLabel: string;
   switch (call.status) {
@@ -385,23 +558,36 @@ function ToolCallCard({
       </button>
       {open && (
         <div className="space-y-1.5 border-t border-border/40 px-2 py-1.5">
-          <ChatMarkdown body={"```json\n" + json + "\n```"} />
+          {canvasPreview ?? <ChatMarkdown body={"```json\n" + json + "\n```"} />}
           {awaitingConfirm && (
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => onApprove?.(call.id)}
-                className="rounded border border-ember/40 bg-ember/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-ember hover:bg-ember/25"
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                onClick={() => onDecline?.(call.id)}
-                className="rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground"
-              >
-                Decline
-              </button>
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onApprove?.(call.id, alwaysAllow)}
+                  className="rounded border border-ember/40 bg-ember/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-ember hover:bg-ember/25"
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDecline?.(call.id)}
+                  className="rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground"
+                >
+                  Decline
+                </button>
+              </div>
+              {threadId && (
+                <label className="flex cursor-pointer items-center gap-1.5 text-[0.5625rem] text-muted-foreground hover:text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={alwaysAllow}
+                    onChange={(e) => setAlwaysAllow(e.target.checked)}
+                    className="h-3 w-3 rounded border-border bg-card/40 text-ember focus:ring-ember/40"
+                  />
+                  Always allow <span className="font-mono">{call.name}</span> for this thread
+                </label>
+              )}
             </div>
           )}
           {running && !awaitingConfirm && (
@@ -609,6 +795,27 @@ export function ChatThreadView({
 
   const ctx = useChatContext();
   const workspace = useMaybeWorkspace();
+  const pathname = usePathname();
+
+  // Detect the canvas the operator is currently viewing. URL shape is
+  // `/w/{slug}/canvas/{canvasId}`. The id is passed to /api/chat/stream
+  // so the agent's system prompt sees the canvas state and can act on it.
+  const canvasIdFromRoute = useMemo(() => {
+    if (!pathname) return null;
+    const match = pathname.match(/\/w\/[^/]+\/canvas\/([^/?#]+)/);
+    return match?.[1] ?? null;
+  }, [pathname]);
+  const { data: boundCanvas } = trpc.canvas.get.useQuery(
+    { id: canvasIdFromRoute ?? "" },
+    {
+      enabled: Boolean(canvasIdFromRoute),
+      staleTime: 30_000,
+    },
+  );
+  // Stable ref so runStreamingSend doesn't have to depend on canvasId
+  // and re-bind on every navigation.
+  const canvasIdRef = useRef<string | null>(null);
+  canvasIdRef.current = canvasIdFromRoute;
 
   const { data: workspaceAgents } = trpc.agent.list.useQuery(
     { includeArchived: false },
@@ -676,7 +883,11 @@ export function ChatThreadView({
           method: "POST",
           credentials: "same-origin",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ threadId: targetThreadId, body }),
+          body: JSON.stringify({
+            threadId: targetThreadId,
+            body,
+            canvasId: canvasIdRef.current ?? undefined,
+          }),
           signal: ctrl.signal,
         });
       } catch (err) {
@@ -816,6 +1027,9 @@ export function ChatThreadView({
                 ],
               };
             });
+            if (isAlwaysAllowed(targetThreadId, tb.name)) {
+              void respondToToolRef.current?.(tb.id, true);
+            }
           }
         } else if (event === "tool_result") {
           const tr = parsed as {
@@ -933,18 +1147,24 @@ export function ChatThreadView({
   }, []);
 
   const respondToTool = useCallback(
-    async (callId: string, approved: boolean) => {
+    async (callId: string, approved: boolean, alwaysAllow?: boolean) => {
+      let toolName: string | null = null;
       setStreamBubble((b) => {
         if (!b) return b;
         return {
           ...b,
-          toolCalls: b.toolCalls.map((c) =>
-            c.id === callId
-              ? { ...c, status: approved ? "approved" : "declined" }
-              : c,
-          ),
+          toolCalls: b.toolCalls.map((c) => {
+            if (c.id === callId) {
+              toolName = c.name;
+              return { ...c, status: approved ? "approved" : "declined" };
+            }
+            return c;
+          }),
         };
       });
+      if (approved && alwaysAllow && toolName && threadId) {
+        rememberAlwaysAllowed(threadId, toolName);
+      }
       try {
         const res = await fetch("/api/chat/tool/approve", {
           method: "POST",
@@ -960,8 +1180,12 @@ export function ChatThreadView({
         toast.error(msg);
       }
     },
-    [],
+    [threadId],
   );
+  // Held in a ref so the SSE handler inside runStreamingSend can reach the
+  // latest closure without re-binding the callback on every threadId tick.
+  const respondToToolRef = useRef(respondToTool);
+  respondToToolRef.current = respondToTool;
 
   const handleSend = async (body: string, files: File[] = []) => {
     setPendingDraft({ body, files: files.map((f) => f.name || "attachment") });
@@ -1298,6 +1522,7 @@ export function ChatThreadView({
           <AgentStreamBubble
             bubble={streamBubble}
             agentName={agent?.name}
+            threadId={threadId ?? undefined}
             onRetry={
               streamBubble.error && threadId
                 ? () => {
@@ -1307,7 +1532,7 @@ export function ChatThreadView({
                   }
                 : undefined
             }
-            onApprove={(callId) => void respondToTool(callId, true)}
+            onApprove={(callId, alwaysAllow) => void respondToTool(callId, true, alwaysAllow)}
             onDecline={(callId) => void respondToTool(callId, false)}
           />
         ) : draft ? (
@@ -1325,6 +1550,15 @@ export function ChatThreadView({
           />
         ) : null}
       </div>
+      {boundCanvas && (
+        <div className="px-2 pt-1">
+          <div className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/40 px-2 py-0.5 text-meta text-muted-foreground">
+            <Layers className="h-3 w-3 text-ember" />
+            Bound to canvas
+            <span className="font-mono text-foreground">{boundCanvas.name}</span>
+          </div>
+        </div>
+      )}
       <ChatComposer
         onSend={handleSend}
         disabled={composerBusy}

@@ -1114,6 +1114,283 @@ export const canvasRouter = router({
     }),
 
   /**
+   * Bulk-add drawing primitives to a canvas. One transaction, one audit
+   * row — the agent-driven "drop a 4-quadrant retro" pattern doesn't
+   * need N webhook fan-outs. Caller passes pre-validated shape inputs
+   * shaped like `shapeAdd` payloads; we mirror the same defaults.
+   */
+  bulkAddShapes: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        shapes: z
+          .array(
+            z.object({
+              kind: z.enum(["box", "ellipse", "line", "arrow", "text", "freehand"]),
+              x: z.number(),
+              y: z.number(),
+              width: z.number().optional(),
+              height: z.number().optional(),
+              path: z.unknown().optional(),
+              style: z.unknown().optional(),
+              text: z.string().max(50_000).optional(),
+              groupId: z.string().max(80).optional(),
+              zIndex: z.number().int().optional(),
+            }),
+          )
+          .min(1)
+          .max(50),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      const ids = await ctx.db.$transaction(async (tx) => {
+        const created: string[] = [];
+        for (const s of input.shapes) {
+          const row = await tx.canvasShape.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: input.canvasId,
+              kind: s.kind,
+              x: s.x,
+              y: s.y,
+              width: s.width ?? null,
+              height: s.height ?? null,
+              path: (s.path ?? undefined) as Prisma.InputJsonValue | undefined,
+              style: (s.style ?? undefined) as Prisma.InputJsonValue | undefined,
+              text: s.text ?? null,
+              groupId: s.groupId ?? null,
+              zIndex: s.zIndex ?? 0,
+              createdById: ctx.session?.user?.id ?? null,
+            },
+            select: { id: true },
+          });
+          created.push(row.id);
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "shapes_bulk_added",
+          after: { count: created.length, ids: created },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return created;
+      });
+      return { ok: true as const, ids };
+    }),
+
+  /**
+   * Drop a named template onto a canvas. Mirrors the client-side
+   * `CANVAS_TEMPLATES` layouts so the agent can build a retro /
+   * decision-matrix / OKR tree in one call. Notes become artifact-backed
+   * nodes (same as `addNote`); inter-node edges piggyback on the existing
+   * `addEdge` shape.
+   */
+  applyTemplate: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        templateId: z.enum([
+          "decision_matrix",
+          "retro",
+          "architecture",
+          "standup",
+          "okr_tree",
+          "empty",
+        ]),
+        position: z
+          .object({ x: z.number(), y: z.number() })
+          .optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      const template = SERVER_CANVAS_TEMPLATES[input.templateId];
+      if (!template) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown template id." });
+      }
+      const offsetX = input.position?.x ?? 0;
+      const offsetY = input.position?.y ?? 0;
+      const userId = ctx.session?.user?.id ?? null;
+      const actorAgentId = ctx.apiKey?.linkedAgentId ?? null;
+
+      // createArtifact takes a PrismaClient, not a TransactionClient, so
+      // we materialise notes first (matches the addNote pattern). Each
+      // call is independent and idempotent on slug collision.
+      const noteArtifactByKey = new Map<string, string>();
+      for (const n of template.nodes) {
+        const trimmedBody = (n.noteBody ?? "").trim();
+        const firstLine = trimmedBody.split(/\r?\n/)[0]?.trim() ?? "";
+        const title = firstLine.length
+          ? firstLine.slice(0, 180)
+          : `Note ${new Date().toISOString().slice(0, 10)}`;
+        const artifact = await createArtifact(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          actorId: userId,
+          actorAgentId,
+          title,
+          body: n.noteBody ?? "",
+          type: ArtifactType.NOTE,
+        });
+        noteArtifactByKey.set(n.key, artifact.id);
+      }
+
+      const ids = await ctx.db.$transaction(async (tx) => {
+        const created: string[] = [];
+        const keyToNodeId = new Map<string, string>();
+
+        for (const n of template.nodes) {
+          const artifactId = noteArtifactByKey.get(n.key)!;
+          const node = await tx.workspaceCanvasNode.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: input.canvasId,
+              targetType: "artifact",
+              targetId: artifactId,
+              x: n.x + offsetX,
+              y: n.y + offsetY,
+              width: n.width ?? 240,
+              height: n.height ?? 160,
+              zIndex: 0,
+              viewMode: "card",
+              meta: { kind: "NOTE", ...(n.lane ? { lane: n.lane } : {}) },
+            },
+            select: { id: true },
+          });
+          created.push(node.id);
+          keyToNodeId.set(n.key, node.id);
+        }
+        for (const e of template.edges ?? []) {
+          const fromId = keyToNodeId.get(e.from);
+          const toId = keyToNodeId.get(e.to);
+          if (!fromId || !toId) continue;
+          await tx.workspaceCanvasEdge.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: input.canvasId,
+              fromNodeId: fromId,
+              toNodeId: toId,
+              label: e.label ?? null,
+              kind: e.kind ?? null,
+            },
+          });
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: userId,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "template_applied",
+          after: {
+            templateId: input.templateId,
+            nodeCount: created.length,
+            edgeCount: template.edges?.length ?? 0,
+          },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return created;
+      });
+      return { ok: true as const, ids };
+    }),
+
+  /**
+   * Re-flow a canvas using one of three layout algorithms.
+   *
+   * - `topological`: BFS from roots (no inbound edges), columns by
+   *   depth. 280px per layer, 160px per row inside a layer.
+   * - `force`: Fruchterman-Reingold, ~50 iterations. Seeds from current
+   *   x/y for stability; clamps to a 4000×4000 box.
+   * - `grid`: deterministic snap to 240×180 grid, sorted by
+   *   `(targetType, title-of-id)` for stability across runs.
+   *
+   * Single audit row per layout op.
+   */
+  layout: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        algorithm: z.enum(["topological", "force", "grid"]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        include: {
+          nodes: { select: { id: true, x: true, y: true, targetType: true, targetId: true } },
+          edges: { select: { fromNodeId: true, toNodeId: true } },
+        },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      if (canvas.nodes.length === 0) {
+        return { ok: true as const, count: 0 };
+      }
+
+      const positions =
+        input.algorithm === "topological"
+          ? computeTopologicalLayout(canvas.nodes, canvas.edges)
+          : input.algorithm === "force"
+            ? computeForceLayout(canvas.nodes, canvas.edges)
+            : computeGridLayout(canvas.nodes);
+
+      let updated = 0;
+      await ctx.db.$transaction(async (tx) => {
+        for (const node of canvas.nodes) {
+          const pos = positions.get(node.id);
+          if (!pos) continue;
+          await tx.workspaceCanvasNode.update({
+            where: { id: node.id },
+            data: { x: pos.x, y: pos.y },
+          });
+          updated += 1;
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "layout_applied",
+          after: { algorithm: input.algorithm, count: updated },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+      });
+      return { ok: true as const, count: updated };
+    }),
+
+  /**
    * Broadcast the calling user's cursor position on a canvas. Fire-and-
    * forget Redis publish — no persistence, no audit. Workspace-scoped:
    * only members of the workspace can publish (and the SSE channel
@@ -1286,6 +1563,292 @@ export const canvasRouter = router({
       return result;
     }),
 });
+
+// ---------------------------------------------------------------------------
+// Server-side canvas templates
+//
+// Mirrors `src/components/canvas/canvas-templates.tsx` so the agent can drop
+// a layout via MCP without round-tripping through the client. Kept inline
+// rather than imported because the client module pulls Lucide icons +
+// "use client" — neither belongs in a server router.
+// ---------------------------------------------------------------------------
+
+type ServerTemplateNode = {
+  key: string;
+  noteBody?: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  lane?: string;
+};
+type ServerTemplateEdge = {
+  from: string;
+  to: string;
+  label?: string;
+  kind?: string;
+};
+type ServerCanvasTemplate = {
+  nodes: ServerTemplateNode[];
+  edges?: ServerTemplateEdge[];
+};
+
+const SERVER_NOTE_W = 220;
+const SERVER_COL = 280;
+const SERVER_ROW = 200;
+
+const SERVER_CANVAS_TEMPLATES: Record<string, ServerCanvasTemplate> = {
+  empty: { nodes: [] },
+  decision_matrix: {
+    nodes: [
+      { key: "axis-x", noteBody: "**Effort →**", x: 200, y: -80, width: 200, height: 60 },
+      { key: "axis-y", noteBody: "**Impact ↑**", x: -200, y: 200, width: 200, height: 60 },
+      { key: "q1", noteBody: "**High impact · Low effort**\nQuick wins", x: 60, y: 60, lane: "Top-right" },
+      { key: "q2", noteBody: "**High impact · High effort**\nBig bets", x: 320, y: 60, lane: "Top-right" },
+      { key: "q3", noteBody: "**Low impact · Low effort**\nFill-in", x: 60, y: 320, lane: "Bottom" },
+      { key: "q4", noteBody: "**Low impact · High effort**\nAvoid", x: 320, y: 320, lane: "Bottom" },
+    ],
+  },
+  architecture: {
+    nodes: [
+      { key: "system", noteBody: "**System**\nName + one-line purpose.", x: 120, y: -40, width: 320, lane: "System" },
+      { key: "c1", noteBody: "Component A\n_purpose_", x: -80, y: 200, lane: "Components" },
+      { key: "c2", noteBody: "Component B\n_purpose_", x: 200, y: 200, lane: "Components" },
+      { key: "c3", noteBody: "Component C\n_purpose_", x: 480, y: 200, lane: "Components" },
+      { key: "d1", noteBody: "Dependency · external", x: -80, y: 440, lane: "Dependencies" },
+      { key: "d2", noteBody: "Dependency · internal", x: 200, y: 440, lane: "Dependencies" },
+      { key: "d3", noteBody: "Dependency · data", x: 480, y: 440, lane: "Dependencies" },
+    ],
+    edges: [
+      { from: "system", to: "c1", kind: "contains" },
+      { from: "system", to: "c2", kind: "contains" },
+      { from: "system", to: "c3", kind: "contains" },
+      { from: "c1", to: "d1", kind: "depends_on" },
+      { from: "c2", to: "d2", kind: "depends_on" },
+      { from: "c3", to: "d3", kind: "depends_on" },
+    ],
+  },
+  standup: {
+    nodes: [
+      { key: "y-h", noteBody: "**Yesterday**", x: 0, y: -60, width: SERVER_NOTE_W, height: 50, lane: "Yesterday" },
+      { key: "y1", noteBody: "Wrapped: …", x: 0, y: 40, lane: "Yesterday" },
+      { key: "y2", noteBody: "Shipped: …", x: 0, y: 40 + SERVER_ROW, lane: "Yesterday" },
+      { key: "t-h", noteBody: "**Today**", x: SERVER_COL, y: -60, width: SERVER_NOTE_W, height: 50, lane: "Today" },
+      { key: "t1", noteBody: "Focus: …", x: SERVER_COL, y: 40, lane: "Today" },
+      { key: "t2", noteBody: "Stretch: …", x: SERVER_COL, y: 40 + SERVER_ROW, lane: "Today" },
+      { key: "b-h", noteBody: "**Blockers**", x: SERVER_COL * 2, y: -60, width: SERVER_NOTE_W, height: 50, lane: "Blockers" },
+      { key: "b1", noteBody: "Waiting on: …", x: SERVER_COL * 2, y: 40, lane: "Blockers" },
+    ],
+  },
+  retro: {
+    nodes: [
+      { key: "ww-h", noteBody: "**Went well**", x: 0, y: -60, width: SERVER_NOTE_W, height: 50, lane: "Went well" },
+      { key: "ww1", noteBody: "Win: …", x: 0, y: 40, lane: "Went well" },
+      { key: "dd-h", noteBody: "**Didn't go well**", x: SERVER_COL, y: -60, width: SERVER_NOTE_W, height: 50, lane: "Didn't" },
+      { key: "dd1", noteBody: "Friction: …", x: SERVER_COL, y: 40, lane: "Didn't" },
+      { key: "cb-h", noteBody: "**Confused by**", x: 0, y: 40 + SERVER_ROW, width: SERVER_NOTE_W, height: 50, lane: "Confused by" },
+      { key: "cb1", noteBody: "Unclear: …", x: 0, y: 40 + SERVER_ROW + 100, lane: "Confused by" },
+      { key: "ai-h", noteBody: "**Action items**", x: SERVER_COL, y: 40 + SERVER_ROW, width: SERVER_NOTE_W, height: 50, lane: "Action items" },
+      { key: "ai1", noteBody: "[ ] Owner — task", x: SERVER_COL, y: 40 + SERVER_ROW + 100, lane: "Action items" },
+    ],
+  },
+  okr_tree: {
+    nodes: [
+      { key: "obj", noteBody: "**Objective**\nThe outcome we want.", x: 200, y: -40, width: 320, lane: "Objective" },
+      { key: "kr1", noteBody: "**KR 1**\nMeasure → target.", x: -80, y: 220, lane: "Key Results" },
+      { key: "kr2", noteBody: "**KR 2**\nMeasure → target.", x: 200, y: 220, lane: "Key Results" },
+      { key: "kr3", noteBody: "**KR 3**\nMeasure → target.", x: 480, y: 220, lane: "Key Results" },
+      { key: "a1", noteBody: "Action: …", x: -80, y: 440, lane: "Actions" },
+      { key: "a2", noteBody: "Action: …", x: 200, y: 440, lane: "Actions" },
+      { key: "a3", noteBody: "Action: …", x: 480, y: 440, lane: "Actions" },
+    ],
+    edges: [
+      { from: "obj", to: "kr1", kind: "contains" },
+      { from: "obj", to: "kr2", kind: "contains" },
+      { from: "obj", to: "kr3", kind: "contains" },
+      { from: "kr1", to: "a1", kind: "contains" },
+      { from: "kr2", to: "a2", kind: "contains" },
+      { from: "kr3", to: "a3", kind: "contains" },
+    ],
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Layout algorithms (mutate-position helpers for the `layout` proc)
+// ---------------------------------------------------------------------------
+
+interface LayoutNode {
+  id: string;
+  x: number;
+  y: number;
+  targetType: string;
+  targetId: string;
+}
+interface LayoutEdge {
+  fromNodeId: string;
+  toNodeId: string;
+}
+type LayoutPositions = Map<string, { x: number; y: number }>;
+
+const LAYOUT_LAYER_X = 280;
+const LAYOUT_ROW_Y = 160;
+const LAYOUT_GRID_X = 240;
+const LAYOUT_GRID_Y = 180;
+const LAYOUT_FORCE_BOX = 4000;
+
+function computeTopologicalLayout(nodes: LayoutNode[], edges: LayoutEdge[]): LayoutPositions {
+  const adj = new Map<string, string[]>();
+  const inDeg = new Map<string, number>();
+  for (const n of nodes) {
+    adj.set(n.id, []);
+    inDeg.set(n.id, 0);
+  }
+  for (const e of edges) {
+    if (!adj.has(e.fromNodeId) || !adj.has(e.toNodeId)) continue;
+    adj.get(e.fromNodeId)!.push(e.toNodeId);
+    inDeg.set(e.toNodeId, (inDeg.get(e.toNodeId) ?? 0) + 1);
+  }
+  // BFS layered by depth, seeded by all roots (inDeg 0). Cycle survivors
+  // (still inDeg>0 after the BFS) get appended to depth=0 so they don't
+  // disappear.
+  const depth = new Map<string, number>();
+  const queue: string[] = [];
+  for (const n of nodes) {
+    if ((inDeg.get(n.id) ?? 0) === 0) {
+      depth.set(n.id, 0);
+      queue.push(n.id);
+    }
+  }
+  while (queue.length) {
+    const cur = queue.shift()!;
+    const d = depth.get(cur) ?? 0;
+    for (const next of adj.get(cur) ?? []) {
+      const nextD = depth.get(next);
+      if (nextD === undefined || d + 1 > nextD) {
+        depth.set(next, d + 1);
+        queue.push(next);
+      }
+    }
+  }
+  for (const n of nodes) if (!depth.has(n.id)) depth.set(n.id, 0);
+
+  const byLayer = new Map<number, string[]>();
+  for (const n of nodes) {
+    const d = depth.get(n.id) ?? 0;
+    const list = byLayer.get(d) ?? [];
+    list.push(n.id);
+    byLayer.set(d, list);
+  }
+  // Stable sort within a layer by current y then id so the layout isn't
+  // jittery across runs that share input.
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  for (const list of byLayer.values()) {
+    list.sort((a, b) => {
+      const A = nodeById.get(a)!;
+      const B = nodeById.get(b)!;
+      if (A.y !== B.y) return A.y - B.y;
+      return a.localeCompare(b);
+    });
+  }
+
+  const positions: LayoutPositions = new Map();
+  for (const [d, list] of byLayer.entries()) {
+    list.forEach((id, idx) => {
+      positions.set(id, { x: d * LAYOUT_LAYER_X, y: idx * LAYOUT_ROW_Y });
+    });
+  }
+  return positions;
+}
+
+function computeGridLayout(nodes: LayoutNode[]): LayoutPositions {
+  const sorted = [...nodes].sort((a, b) => {
+    if (a.targetType !== b.targetType) return a.targetType.localeCompare(b.targetType);
+    return a.targetId.localeCompare(b.targetId);
+  });
+  const cols = Math.max(1, Math.ceil(Math.sqrt(sorted.length)));
+  const positions: LayoutPositions = new Map();
+  sorted.forEach((n, idx) => {
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    positions.set(n.id, { x: col * LAYOUT_GRID_X, y: row * LAYOUT_GRID_Y });
+  });
+  return positions;
+}
+
+/**
+ * Fruchterman-Reingold over the existing geometry. Seeded from current
+ * positions so a re-layout in "force" mode doesn't relocate already-
+ * arranged content. Final positions are clamped to a 4000×4000 box so
+ * even pathological graphs stay scrollable.
+ */
+function computeForceLayout(nodes: LayoutNode[], edges: LayoutEdge[]): LayoutPositions {
+  const ITER = 50;
+  const EDGE_LEN = 240;
+  const W = LAYOUT_FORCE_BOX;
+  const H = LAYOUT_FORCE_BOX;
+  const area = W * H;
+  const k = Math.sqrt(area / Math.max(1, nodes.length));
+  const pos = new Map<string, { x: number; y: number }>();
+  for (const n of nodes) pos.set(n.id, { x: n.x, y: n.y });
+
+  const cooled = (t: number) => Math.max(0.1, 1 - t / ITER) * (W / 10);
+
+  for (let iter = 0; iter < ITER; iter++) {
+    const disp = new Map<string, { x: number; y: number }>();
+    for (const n of nodes) disp.set(n.id, { x: 0, y: 0 });
+    // Repulsive: O(n²). Fine for canvas sizes we expect (<200 nodes).
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i]!;
+        const b = nodes[j]!;
+        const pa = pos.get(a.id)!;
+        const pb = pos.get(b.id)!;
+        const dx = pa.x - pb.x;
+        const dy = pa.y - pb.y;
+        const dist = Math.max(0.01, Math.hypot(dx, dy));
+        const force = (k * k) / dist;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        const da = disp.get(a.id)!;
+        const db = disp.get(b.id)!;
+        da.x += fx;
+        da.y += fy;
+        db.x -= fx;
+        db.y -= fy;
+      }
+    }
+    // Attractive (edges).
+    for (const e of edges) {
+      const pa = pos.get(e.fromNodeId);
+      const pb = pos.get(e.toNodeId);
+      if (!pa || !pb) continue;
+      const dx = pa.x - pb.x;
+      const dy = pa.y - pb.y;
+      const dist = Math.max(0.01, Math.hypot(dx, dy));
+      const force = (dist * dist) / EDGE_LEN;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      const da = disp.get(e.fromNodeId)!;
+      const db = disp.get(e.toNodeId)!;
+      da.x -= fx;
+      da.y -= fy;
+      db.x += fx;
+      db.y += fy;
+    }
+    const temp = cooled(iter);
+    for (const n of nodes) {
+      const p = pos.get(n.id)!;
+      const d = disp.get(n.id)!;
+      const mag = Math.max(0.01, Math.hypot(d.x, d.y));
+      p.x += (d.x / mag) * Math.min(mag, temp);
+      p.y += (d.y / mag) * Math.min(mag, temp);
+      // Clamp to box (centered around origin).
+      p.x = Math.min(W / 2, Math.max(-W / 2, p.x));
+      p.y = Math.min(H / 2, Math.max(-H / 2, p.y));
+    }
+  }
+  return pos;
+}
 
 interface PlanStepForLayout {
   id: string;
