@@ -233,7 +233,7 @@ export function Sidebar({
         </span>
       </button>
 
-      <nav className="mt-3 flex flex-1 flex-col gap-3 overflow-y-auto px-2 pb-2">
+      <nav className="mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-2 pb-2">
         {sections.map((sec) => (
           <div key={sec.id} className="flex flex-col gap-px">
             <div
@@ -255,31 +255,38 @@ export function Sidebar({
             ))}
           </div>
         ))}
+      </nav>
 
-        {/* Pinned items live below the workflow nav. The section + header
-            only render when the user has at least one pin (this workspace
-            or cross-workspace) so a fresh workspace doesn't show an empty
-            "Pinned" eyebrow. Header matches the rest of the nav-section
-            visual; in collapsed/icon-rail mode the label hides and only
-            the row icons remain. */}
-        {workspace && hasPins && (
-          <div className="flex flex-col gap-px">
-            <div
-              className={cn(
-                "px-2 pb-0.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/70",
-                collapsed ? "hidden" : "max-md:hidden",
-              )}
-            >
-              Pinned
-            </div>
+      {/* Pinned section lives in its OWN bounded region below the
+          scrollable workflow nav and above the footer. Capped at
+          roughly 10 rows tall (`max-h-[16rem]`) with internal scroll
+          so a wallet of pins never crowds the workflow nav (which
+          scrolls independently above). Server enforces 5 max per scope
+          + 5 cross-workspace = up to ~10 rows in this section before
+          internal scroll kicks in. The section + header only render
+          when the user has at least one pin so a fresh workspace
+          doesn't show an empty "Pinned" eyebrow. In collapsed / icon-
+          rail mode the eyebrow label hides and only the row icons
+          remain (and the bounded scroll still applies). */}
+      {workspace && hasPins && (
+        <div className="mx-2 flex shrink-0 flex-col gap-px border-t border-border/60 pt-2">
+          <div
+            className={cn(
+              "px-2 pb-0.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/70",
+              collapsed ? "hidden" : "max-md:hidden",
+            )}
+          >
+            Pinned
+          </div>
+          <div className="max-h-64 overflow-y-auto pb-1">
             <PinnedSidebarSection
               workspaceId={workspace.id}
               workspaceSlug={workspace.slug}
               collapsed={collapsed}
             />
           </div>
-        )}
-      </nav>
+        </div>
+      )}
 
       {/* Footer block: utility surfaces (Docs + Settings) pinned to the
           bottom, separated from the workflow nav by a thin border. The

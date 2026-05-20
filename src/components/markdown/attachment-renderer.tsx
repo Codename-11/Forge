@@ -1,5 +1,5 @@
 "use client";
-import { Fragment, useMemo } from "react";
+import { Fragment, useId, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   FileText,
@@ -11,125 +11,283 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
-import { useAttachmentLightbox, type AttachmentLite } from "@/components/attachments/attachment-lightbox";
+import {
+  useAttachmentLightbox,
+  type AttachmentLite,
+} from "@/components/attachments/attachment-lightbox";
 import { LinkFavicon } from "@/components/attachments/attachment-chip";
 
 /**
- * Inline attachment + reference renderer.
+ * Rich body renderer for descriptions, comments, artifacts, and notes.
  *
- * We don't run the full markdown pipeline here — the project currently
- * displays descriptions + comments as `whitespace-pre-wrap` plain text.
- * What we *do* want to pick out are first-class Forge primitives so
- * comments can act like teammates instead of plain prose:
+ * The body is treated as a markdown-flavored string with first-class
+ * Forge primitives mixed in:
  *
- *   - ![alt](forge-attachment:cuid)       → inline <img>
- *   - [filename.ext](forge-attachment:cuid) → file chip link
- *   - [label](forge-link:https://…)       → external-link chip with favicon
- *   - bare `KEY-NN`                        → link to issue page
- *   - bare `@profileKey`                   → agent mention chip
+ *   Block-level (parsed line-by-line):
+ *     - ATX headings    `# / ## / ### / #### / ##### / ######`
+ *     - Setext heading  underline form (rare; skipped — ATX covers it)
+ *     - Horizontal rule `---` / `***` / `___`
+ *     - Code fences     ```` ``` `` ` ```` and ```` ~~~ ~~~ ```` with optional lang
+ *     - Blockquote      `> …` (recursive on adjacent lines)
+ *     - Unordered list  `- ` / `* ` / `+ ` (nested via two-space indent)
+ *     - Ordered list    `1. … ` / `2) …`
+ *     - GFM task lists  `- [ ]` / `- [x]`
+ *     - Pipe tables     header row + separator row + body rows
+ *     - Paragraph       everything else, joined across consecutive lines
  *
- * The `forge-attachment` pass runs first (CUID-anchored) so it always
- * claims its own tokens before the second pass scans for forge-link +
- * issue refs + mentions. forge-link only matches http/https URLs;
- * anything else falls through as plain text.
+ *   Inline (within block text):
+ *     - **bold**, *italic* / _italic_, `inline code`, ~~strike~~
+ *     - [label](url) explicit links and bare http(s):// URLs
+ *     - Forge tokens:
+ *         ![alt](forge-attachment:cuid)        → inline <img>
+ *         [filename](forge-attachment:cuid)    → file chip → lightbox
+ *         [label](forge-link:https://…)        → external-link chip
+ *         bare `KEY-NN`                         → link to issue page
+ *         bare `@profileKey`                    → agent mention chip
+ *
+ * The forge-token pass runs first so a CUID-anchored token always wins
+ * over the more permissive markdown link form. forge-link only matches
+ * http(s) so other schemes fall through as plain text.
  */
 
-const TOKEN_RE = /(!?)\[([^\]]*)\]\(forge-attachment:([a-z0-9]{20,})\)/gi;
+// ---------------------------------------------------------------------------
+// Forge primitive tokenization
+// ---------------------------------------------------------------------------
 
-// External-link chip: `[label](forge-link:https://...)`. Only matches
-// http(s); other schemes silently fall through as plain text. Trailing
-// `\)` is excluded from the URL so a real closing paren in the URL
-// would need percent-encoding — same constraint as standard markdown.
+const FORGE_ATTACHMENT_RE =
+  /(!?)\[([^\]]*)\]\(forge-attachment:([a-z0-9]{20,})\)/gi;
 const FORGE_LINK_RE = /\[([^\]]*)\]\(forge-link:(https?:\/\/[^\s)]+)\)/gi;
+// Issue refs (KEY-NN) and agent mentions (@profileKey). The lookbehind on
+// `@` keeps `email@host` from accidentally matching as a mention.
+const REF_RE =
+  /(\b[A-Z][A-Z0-9]{1,9}-\d+\b)|(?<=^|[\s(,.;:!?])@([a-z0-9][a-z0-9_-]*)/gi;
+// Standard markdown link (used after forge-attachment / forge-link).
+// Excludes the `forge-` schemes so they always win their own pass.
+const MD_LINK_RE = /\[([^\]]+)\]\((?!forge-)([^)\s]+(?:\s+"[^"]*")?)\)/g;
+// Bare URLs — trailing punctuation is stripped during tokenization so a
+// URL at the end of a sentence reads naturally.
+const URL_RE = /https?:\/\/[^\s<]+[^\s<.,;:!?)}\]'"]/g;
 
-// Issue refs and agent mentions are matched on word boundaries so
-// `forklift-mention` doesn't match `@mention`, and `axion-42` doesn't
-// match `AXI-42`. The capture groups feed straight into the renderer.
-const REF_RE = /(\b[A-Z][A-Z0-9]{1,9}-\d+\b)|(?<=^|[\s(,.;:!?])@([a-z0-9][a-z0-9_-]*)/gi;
-
-type Segment =
+type InlineSegment =
   | { type: "text"; value: string }
   | { type: "image"; alt: string; attachmentId: string }
-  | { type: "link"; label: string; attachmentId: string }
+  | { type: "attachmentLink"; label: string; attachmentId: string }
   | { type: "linkChip"; label: string; url: string }
   | { type: "issueRef"; key: string }
-  | { type: "mention"; profileKey: string };
+  | { type: "mention"; profileKey: string }
+  | { type: "mdLink"; label: string; url: string }
+  | { type: "url"; url: string }
+  | { type: "bold"; children: InlineSegment[] }
+  | { type: "italic"; children: InlineSegment[] }
+  | { type: "code"; value: string }
+  | { type: "strike"; children: InlineSegment[] };
 
-function tokenize(body: string): Segment[] {
-  const segs: Segment[] = [];
+/**
+ * Tokenize a single inline text run into a tree of InlineSegments.
+ * Forge primitives win first (CUID-anchored), then markdown links and
+ * URLs, then inline emphasis / code / strike on the remaining text.
+ */
+function tokenizeInline(text: string): InlineSegment[] {
+  // Pass A: forge-attachment tokens. These are the most specific (CUID
+  // tail), so they consume their match space before anything else looks.
+  const passA: InlineSegment[] = [];
   let last = 0;
-  for (const m of body.matchAll(TOKEN_RE)) {
+  FORGE_ATTACHMENT_RE.lastIndex = 0;
+  for (const m of text.matchAll(FORGE_ATTACHMENT_RE)) {
     const idx = m.index ?? 0;
-    if (idx > last) segs.push(...tokenizeText(body.slice(last, idx)));
+    if (idx > last) passA.push({ type: "text", value: text.slice(last, idx) });
     const bang = m[1];
     const label = m[2] ?? "";
     const id = m[3] ?? "";
     if (bang === "!") {
-      segs.push({ type: "image", alt: label, attachmentId: id });
+      passA.push({ type: "image", alt: label, attachmentId: id });
     } else {
-      segs.push({ type: "link", label: label || "Attachment", attachmentId: id });
+      passA.push({
+        type: "attachmentLink",
+        label: label || "Attachment",
+        attachmentId: id,
+      });
     }
     last = idx + m[0].length;
   }
-  if (last < body.length) segs.push(...tokenizeText(body.slice(last)));
-  return segs;
+  if (last < text.length) passA.push({ type: "text", value: text.slice(last) });
+
+  // Pass B: forge-link chips on any remaining text spans.
+  const passB: InlineSegment[] = [];
+  for (const seg of passA) {
+    if (seg.type !== "text") {
+      passB.push(seg);
+      continue;
+    }
+    const t = seg.value;
+    let lo = 0;
+    FORGE_LINK_RE.lastIndex = 0;
+    for (const m of t.matchAll(FORGE_LINK_RE)) {
+      const idx = m.index ?? 0;
+      if (idx > lo) passB.push({ type: "text", value: t.slice(lo, idx) });
+      const label = (m[1] ?? "").trim();
+      const url = m[2] ?? "";
+      if (/^https?:\/\//i.test(url)) {
+        passB.push({
+          type: "linkChip",
+          label: label || hostnameOf(url),
+          url,
+        });
+      } else {
+        passB.push({ type: "text", value: m[0] });
+      }
+      lo = idx + m[0].length;
+    }
+    if (lo < t.length) passB.push({ type: "text", value: t.slice(lo) });
+  }
+
+  // Pass C: standard markdown links `[label](url)`.
+  const passC: InlineSegment[] = [];
+  for (const seg of passB) {
+    if (seg.type !== "text") {
+      passC.push(seg);
+      continue;
+    }
+    const t = seg.value;
+    let lo = 0;
+    MD_LINK_RE.lastIndex = 0;
+    for (const m of t.matchAll(MD_LINK_RE)) {
+      const idx = m.index ?? 0;
+      if (idx > lo) passC.push({ type: "text", value: t.slice(lo, idx) });
+      const label = (m[1] ?? "").trim();
+      const url = (m[2] ?? "").split(/\s+/)[0]; // strip optional " title"
+      passC.push({ type: "mdLink", label, url });
+      lo = idx + m[0].length;
+    }
+    if (lo < t.length) passC.push({ type: "text", value: t.slice(lo) });
+  }
+
+  // Pass D: issue refs + agent mentions.
+  const passD: InlineSegment[] = [];
+  for (const seg of passC) {
+    if (seg.type !== "text") {
+      passD.push(seg);
+      continue;
+    }
+    const t = seg.value;
+    let lo = 0;
+    REF_RE.lastIndex = 0;
+    for (const m of t.matchAll(REF_RE)) {
+      const idx = m.index ?? 0;
+      if (idx > lo) passD.push({ type: "text", value: t.slice(lo, idx) });
+      if (m[1]) passD.push({ type: "issueRef", key: m[1].toUpperCase() });
+      else if (m[2])
+        passD.push({ type: "mention", profileKey: m[2].toLowerCase() });
+      lo = idx + m[0].length;
+    }
+    if (lo < t.length) passD.push({ type: "text", value: t.slice(lo) });
+  }
+
+  // Pass E: bare URLs on what's left.
+  const passE: InlineSegment[] = [];
+  for (const seg of passD) {
+    if (seg.type !== "text") {
+      passE.push(seg);
+      continue;
+    }
+    const t = seg.value;
+    let lo = 0;
+    URL_RE.lastIndex = 0;
+    for (const m of t.matchAll(URL_RE)) {
+      const idx = m.index ?? 0;
+      if (idx > lo) passE.push({ type: "text", value: t.slice(lo, idx) });
+      passE.push({ type: "url", url: m[0] });
+      lo = idx + m[0].length;
+    }
+    if (lo < t.length) passE.push({ type: "text", value: t.slice(lo) });
+  }
+
+  // Pass F: inline emphasis (bold, italic, code, strikethrough) on
+  // remaining text spans. We do this last so emphasis can't "swallow"
+  // the URL of an inline link (`*foo [bar](url)*` still highlights the
+  // link), and so an attachment chip wrapped in `*…*` works naturally.
+  const out: InlineSegment[] = [];
+  for (const seg of passE) {
+    if (seg.type !== "text") {
+      out.push(seg);
+      continue;
+    }
+    out.push(...parseEmphasis(seg.value));
+  }
+  return out;
 }
 
 /**
- * Second-pass tokenizer: splits raw text into [text, linkChip, issueRef,
- * mention] segments. Run after the attachment-token pass so
- * `forge-attachment:` tokens have already been claimed and won't be
- * re-tokenized as `forge-link:` (different prefix anyway, but ordering
- * keeps the contract explicit).
- *
- * Pass A claims `[label](forge-link:https://…)` chips; Pass B handles
- * KEY-NN and @profileKey on the leftover text.
+ * Parse inline emphasis (bold, italic, code, strike). Recursive on the
+ * children so `**bold *italic* bold**` nests cleanly. We tokenize on
+ * the leftmost matching delimiter at each step to keep the algorithm
+ * O(n) and avoid the classic GFM ambiguity around overlapping runs.
  */
-function tokenizeText(text: string): Segment[] {
-  // Pass A: forge-link chips. Split text on link tokens, then run the
-  // ref/mention pass on the remaining text-only spans.
-  const linkSegs: Segment[] = [];
-  let last = 0;
-  FORGE_LINK_RE.lastIndex = 0;
-  for (const m of text.matchAll(FORGE_LINK_RE)) {
-    const idx = m.index ?? 0;
-    if (idx > last) {
-      linkSegs.push(...tokenizeRefsAndMentions(text.slice(last, idx)));
-    }
-    const label = (m[1] ?? "").trim();
-    const url = m[2] ?? "";
-    // Belt-and-suspenders scheme guard — the regex already enforces
-    // http(s), but we re-check before constructing the segment so any
-    // future regex relaxation can't sneak through `javascript:` etc.
-    if (/^https?:\/\//i.test(url)) {
-      linkSegs.push({ type: "linkChip", label: label || hostnameOf(url), url });
-    } else {
-      linkSegs.push({ type: "text", value: m[0] });
-    }
-    last = idx + m[0].length;
-  }
-  if (last < text.length) {
-    linkSegs.push(...tokenizeRefsAndMentions(text.slice(last)));
-  }
-  return linkSegs.length ? linkSegs : [{ type: "text", value: text }];
-}
+function parseEmphasis(text: string): InlineSegment[] {
+  if (!text) return [];
+  const out: InlineSegment[] = [];
 
-function tokenizeRefsAndMentions(text: string): Segment[] {
-  const segs: Segment[] = [];
-  let last = 0;
-  REF_RE.lastIndex = 0;
-  for (const m of text.matchAll(REF_RE)) {
-    const idx = m.index ?? 0;
-    if (idx > last) segs.push({ type: "text", value: text.slice(last, idx) });
-    if (m[1]) {
-      segs.push({ type: "issueRef", key: m[1].toUpperCase() });
-    } else if (m[2]) {
-      segs.push({ type: "mention", profileKey: m[2].toLowerCase() });
-    }
-    last = idx + m[0].length;
+  // Inline code wins first — its contents are opaque (no further parsing).
+  const codeRe = /`([^`\n]+)`/;
+  const codeMatch = text.match(codeRe);
+  if (codeMatch && codeMatch.index !== undefined) {
+    if (codeMatch.index > 0)
+      out.push(...parseEmphasis(text.slice(0, codeMatch.index)));
+    out.push({ type: "code", value: codeMatch[1] });
+    out.push(
+      ...parseEmphasis(text.slice(codeMatch.index + codeMatch[0].length)),
+    );
+    return out;
   }
-  if (last < text.length) segs.push({ type: "text", value: text.slice(last) });
-  return segs.length ? segs : [{ type: "text", value: text }];
+
+  // Bold (**…** or __…__)
+  const boldRe = /\*\*([^*\n]+?)\*\*|__([^_\n]+?)__/;
+  const boldMatch = text.match(boldRe);
+  if (boldMatch && boldMatch.index !== undefined) {
+    if (boldMatch.index > 0)
+      out.push(...parseEmphasis(text.slice(0, boldMatch.index)));
+    const inner = boldMatch[1] ?? boldMatch[2] ?? "";
+    out.push({ type: "bold", children: parseEmphasis(inner) });
+    out.push(
+      ...parseEmphasis(text.slice(boldMatch.index + boldMatch[0].length)),
+    );
+    return out;
+  }
+
+  // Strikethrough (~~…~~)
+  const strikeRe = /~~([^~\n]+?)~~/;
+  const strikeMatch = text.match(strikeRe);
+  if (strikeMatch && strikeMatch.index !== undefined) {
+    if (strikeMatch.index > 0)
+      out.push(...parseEmphasis(text.slice(0, strikeMatch.index)));
+    out.push({
+      type: "strike",
+      children: parseEmphasis(strikeMatch[1] ?? ""),
+    });
+    out.push(
+      ...parseEmphasis(text.slice(strikeMatch.index + strikeMatch[0].length)),
+    );
+    return out;
+  }
+
+  // Italic (*…* or _…_). The non-greedy run + a guard against the
+  // delimiter starting a list marker (` * ` at line start is a list,
+  // already consumed at block level by the time we get here).
+  const italicRe = /(?<!\w)\*([^*\n]+?)\*(?!\w)|(?<!\w)_([^_\n]+?)_(?!\w)/;
+  const italicMatch = text.match(italicRe);
+  if (italicMatch && italicMatch.index !== undefined) {
+    if (italicMatch.index > 0)
+      out.push(...parseEmphasis(text.slice(0, italicMatch.index)));
+    const inner = italicMatch[1] ?? italicMatch[2] ?? "";
+    out.push({ type: "italic", children: parseEmphasis(inner) });
+    out.push(
+      ...parseEmphasis(text.slice(italicMatch.index + italicMatch[0].length)),
+    );
+    return out;
+  }
+
+  out.push({ type: "text", value: text });
+  return out;
 }
 
 function hostnameOf(url: string): string {
@@ -140,10 +298,407 @@ function hostnameOf(url: string): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Block-level parser
+// ---------------------------------------------------------------------------
+
+type Block =
+  | { type: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6; text: string }
+  | { type: "hr" }
+  | { type: "code"; lang: string; code: string }
+  | { type: "blockquote"; lines: string[] }
+  | {
+      type: "list";
+      ordered: boolean;
+      items: { text: string; checked: boolean | null }[];
+    }
+  | { type: "table"; header: string[]; rows: string[][]; align: Align[] }
+  | { type: "paragraph"; text: string };
+
+type Align = "left" | "center" | "right" | null;
+
+function isHr(line: string): boolean {
+  const t = line.trim();
+  return /^(-{3,}|\*{3,}|_{3,})$/.test(t);
+}
+
+function tableAlignFromSeparator(sep: string): Align[] | null {
+  const cells = splitTableRow(sep);
+  if (cells.length === 0) return null;
+  const aligns: Align[] = [];
+  for (const c of cells) {
+    const t = c.trim();
+    if (!/^:?-{3,}:?$/.test(t) && !/^:?-+:?$/.test(t)) return null;
+    const left = t.startsWith(":");
+    const right = t.endsWith(":");
+    if (left && right) aligns.push("center");
+    else if (right) aligns.push("right");
+    else if (left) aligns.push("left");
+    else aligns.push(null);
+  }
+  return aligns;
+}
+
+function splitTableRow(line: string): string[] {
+  // Strip a leading and trailing pipe, then split on pipes that aren't
+  // escaped. Cells get trimmed by the caller.
+  let trimmed = line.trim();
+  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+  // Negative lookbehind for backslash escaping.
+  return trimmed.split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, "|").trim());
+}
+
+function parseBlocks(body: string): Block[] {
+  const lines = body.split("\n");
+  const out: Block[] = [];
+  let i = 0;
+
+  function consumeParagraph(start: number): { block: Block; nextI: number } {
+    const buf: string[] = [];
+    let j = start;
+    while (j < lines.length) {
+      const ln = lines[j];
+      if (ln.trim() === "") break;
+      if (
+        /^#{1,6}\s/.test(ln) ||
+        ln.startsWith("```") ||
+        ln.startsWith("~~~") ||
+        isHr(ln) ||
+        /^\s*[-*+]\s/.test(ln) ||
+        /^\s*\d+[.)]\s/.test(ln) ||
+        /^\s*>\s?/.test(ln)
+      )
+        break;
+      buf.push(ln);
+      j++;
+    }
+    return {
+      block: { type: "paragraph", text: buf.join("\n") },
+      nextI: j,
+    };
+  }
+
+  while (i < lines.length) {
+    const ln = lines[i];
+
+    // Blank line — collapses; we just skip it. Block boundaries are
+    // already implicit in the parser.
+    if (ln.trim() === "") {
+      i++;
+      continue;
+    }
+
+    // Code fence (``` or ~~~)
+    const fenceMatch = ln.match(/^(```|~~~)(.*)$/);
+    if (fenceMatch) {
+      const fence = fenceMatch[1];
+      const lang = (fenceMatch[2] ?? "").trim().toLowerCase();
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith(fence)) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      if (i < lines.length) i++; // consume closing fence
+      out.push({ type: "code", lang, code: codeLines.join("\n") });
+      continue;
+    }
+
+    // ATX heading
+    const headingMatch = ln.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6;
+      out.push({ type: "heading", level, text: headingMatch[2] });
+      i++;
+      continue;
+    }
+
+    // Horizontal rule
+    if (isHr(ln)) {
+      out.push({ type: "hr" });
+      i++;
+      continue;
+    }
+
+    // Blockquote — consume a contiguous block of `>`-prefixed lines.
+    if (/^\s*>\s?/.test(ln)) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        quoteLines.push(lines[i].replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      out.push({ type: "blockquote", lines: quoteLines });
+      continue;
+    }
+
+    // Table — header row + separator row + at least 0 body rows. We
+    // require the next line to be a valid alignment separator before
+    // committing; otherwise the line is just a paragraph that happens
+    // to contain pipes.
+    if (ln.includes("|") && i + 1 < lines.length) {
+      const sep = lines[i + 1];
+      if (sep && sep.includes("|") && sep.includes("-")) {
+        const align = tableAlignFromSeparator(sep);
+        if (align) {
+          const header = splitTableRow(ln);
+          // Pad align to header width
+          while (align.length < header.length) align.push(null);
+          const rows: string[][] = [];
+          let j = i + 2;
+          while (
+            j < lines.length &&
+            lines[j].includes("|") &&
+            lines[j].trim() !== ""
+          ) {
+            const row = splitTableRow(lines[j]);
+            // Pad / truncate to header width so cell layout stays stable
+            while (row.length < header.length) row.push("");
+            rows.push(row.slice(0, header.length));
+            j++;
+          }
+          out.push({ type: "table", header, rows, align });
+          i = j;
+          continue;
+        }
+      }
+    }
+
+    // Unordered list (-, *, +). Captures task-list checkboxes.
+    if (/^\s*[-*+]\s/.test(ln)) {
+      const items: { text: string; checked: boolean | null }[] = [];
+      while (i < lines.length && /^\s*[-*+]\s/.test(lines[i])) {
+        let item = lines[i].replace(/^\s*[-*+]\s+/, "");
+        let checked: boolean | null = null;
+        const task = item.match(/^\[([ xX])\]\s+(.*)$/);
+        if (task) {
+          checked = task[1].toLowerCase() === "x";
+          item = task[2];
+        }
+        // Continuation lines: indented further by at least 2 spaces.
+        let k = i + 1;
+        while (
+          k < lines.length &&
+          lines[k].trim() !== "" &&
+          !/^\s*[-*+]\s/.test(lines[k]) &&
+          !/^\s*\d+[.)]\s/.test(lines[k]) &&
+          /^\s{2,}/.test(lines[k])
+        ) {
+          item += "\n" + lines[k].replace(/^\s{2}/, "");
+          k++;
+        }
+        items.push({ text: item, checked });
+        i = k;
+      }
+      out.push({ type: "list", ordered: false, items });
+      continue;
+    }
+
+    // Ordered list (1., 2., 1) etc.)
+    if (/^\s*\d+[.)]\s/.test(ln)) {
+      const items: { text: string; checked: boolean | null }[] = [];
+      while (i < lines.length && /^\s*\d+[.)]\s/.test(lines[i])) {
+        const item = lines[i].replace(/^\s*\d+[.)]\s+/, "");
+        let k = i + 1;
+        let merged = item;
+        while (
+          k < lines.length &&
+          lines[k].trim() !== "" &&
+          !/^\s*[-*+]\s/.test(lines[k]) &&
+          !/^\s*\d+[.)]\s/.test(lines[k]) &&
+          /^\s{2,}/.test(lines[k])
+        ) {
+          merged += "\n" + lines[k].replace(/^\s{2}/, "");
+          k++;
+        }
+        items.push({ text: merged, checked: null });
+        i = k;
+      }
+      out.push({ type: "list", ordered: true, items });
+      continue;
+    }
+
+    // Paragraph — soak up consecutive non-block lines.
+    const para = consumeParagraph(i);
+    out.push(para.block);
+    i = para.nextI;
+  }
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Inline collection: walk every block and collect ordered attachment refs
+// so the lightbox pager can flip through them on click.
+// ---------------------------------------------------------------------------
+
+function collectInlineAttachments(
+  blocks: Block[],
+): { id: string; label: string; isImage: boolean }[] {
+  const out: { id: string; label: string; isImage: boolean }[] = [];
+  function walk(text: string) {
+    for (const seg of tokenizeInline(text)) {
+      walkSeg(seg);
+    }
+  }
+  function walkSeg(seg: InlineSegment) {
+    if (seg.type === "image")
+      out.push({ id: seg.attachmentId, label: seg.alt || "image", isImage: true });
+    else if (seg.type === "attachmentLink")
+      out.push({ id: seg.attachmentId, label: seg.label, isImage: false });
+    else if (
+      seg.type === "bold" ||
+      seg.type === "italic" ||
+      seg.type === "strike"
+    )
+      for (const c of seg.children) walkSeg(c);
+  }
+  for (const b of blocks) {
+    if (b.type === "heading") walk(b.text);
+    else if (b.type === "paragraph") walk(b.text);
+    else if (b.type === "blockquote") walk(b.lines.join("\n"));
+    else if (b.type === "list") for (const it of b.items) walk(it.text);
+    else if (b.type === "table") {
+      for (const h of b.header) walk(h);
+      for (const r of b.rows) for (const c of r) walk(c);
+    }
+    // code blocks: opaque, no inline tokenization.
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// React render
+// ---------------------------------------------------------------------------
+
+type InlineList = { id: string; label: string; isImage: boolean }[];
+
+function renderInlineSegs(
+  segs: InlineSegment[],
+  inlineList: InlineList,
+  keyBase: string,
+): ReactNode[] {
+  return segs.map((s, i) => {
+    const key = `${keyBase}-${i}`;
+    if (s.type === "text") return <Fragment key={key}>{s.value}</Fragment>;
+    if (s.type === "image")
+      return (
+        <InlineAttachmentImage
+          key={key}
+          attachmentId={s.attachmentId}
+          alt={s.alt}
+          inlineList={inlineList}
+        />
+      );
+    if (s.type === "attachmentLink")
+      return (
+        <InlineAttachmentLink
+          key={key}
+          attachmentId={s.attachmentId}
+          label={s.label}
+          inlineList={inlineList}
+        />
+      );
+    if (s.type === "linkChip")
+      return <InlineForgeLink key={key} label={s.label} url={s.url} />;
+    if (s.type === "issueRef")
+      return <InlineIssueRef key={key} issueKey={s.key} />;
+    if (s.type === "mention")
+      return <InlineAgentMention key={key} profileKey={s.profileKey} />;
+    if (s.type === "mdLink") {
+      // External markdown link — open in a new tab. Internal absolute
+      // paths (e.g. `/w/foo/issues/abc`) get an in-app Link.
+      if (/^https?:\/\//i.test(s.url)) {
+        return (
+          <a
+            key={key}
+            href={s.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-ember underline-offset-2 hover:underline"
+          >
+            {s.label || s.url}
+          </a>
+        );
+      }
+      if (s.url.startsWith("/")) {
+        return (
+          <Link
+            key={key}
+            href={s.url}
+            className="text-ember underline-offset-2 hover:underline"
+          >
+            {s.label || s.url}
+          </Link>
+        );
+      }
+      // Other schemes (mailto:, etc.) render as plain anchors.
+      return (
+        <a
+          key={key}
+          href={s.url}
+          className="text-ember underline-offset-2 hover:underline"
+        >
+          {s.label || s.url}
+        </a>
+      );
+    }
+    if (s.type === "url")
+      return (
+        <a
+          key={key}
+          href={s.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-ember underline-offset-2 hover:underline"
+        >
+          {s.url}
+        </a>
+      );
+    if (s.type === "bold")
+      return (
+        <strong key={key} className="font-semibold text-foreground">
+          {renderInlineSegs(s.children, inlineList, key)}
+        </strong>
+      );
+    if (s.type === "italic")
+      return (
+        <em key={key} className="italic">
+          {renderInlineSegs(s.children, inlineList, key)}
+        </em>
+      );
+    if (s.type === "strike")
+      return (
+        <span key={key} className="line-through text-muted-foreground">
+          {renderInlineSegs(s.children, inlineList, key)}
+        </span>
+      );
+    if (s.type === "code")
+      return (
+        <code
+          key={key}
+          className="rounded border border-border/60 bg-subtle/60 px-1 py-px font-mono text-[0.85em] text-foreground"
+        >
+          {s.value}
+        </code>
+      );
+    return null;
+  });
+}
+
+function renderInline(
+  text: string,
+  inlineList: InlineList,
+  keyBase: string,
+): ReactNode[] {
+  return renderInlineSegs(tokenizeInline(text), inlineList, keyBase);
+}
+
 /**
- * Renders a body that may embed `forge-attachment:` references.
- * Outer element is a <div> preserving whitespace so plain-text blocks
- * still look right.
+ * Public component. Same API as the previous flat renderer — accepts a
+ * `body: string` and an optional `className`. The wrapping div renders
+ * block children with consistent vertical rhythm; no `whitespace-pre-wrap`
+ * because the block parser handles spacing structurally now.
  */
 export function MarkdownWithAttachments({
   body,
@@ -152,108 +707,224 @@ export function MarkdownWithAttachments({
   body: string;
   className?: string;
 }) {
-  const segments = useMemo(() => tokenize(body ?? ""), [body]);
+  const blocks = useMemo(() => parseBlocks(body ?? ""), [body]);
+  const inlineList = useMemo(() => collectInlineAttachments(blocks), [blocks]);
 
-  // Build the list of inline attachment ids in order — used for paging
-  // when the user clicks any inline chip, so ←/→ walks through every
-  // attachment referenced in the body.
-  const inlineList = useMemo<{ id: string; label: string; isImage: boolean }[]>(
-    () => {
-      const out: { id: string; label: string; isImage: boolean }[] = [];
-      for (const s of segments) {
-        if (s.type === "image") {
-          out.push({ id: s.attachmentId, label: s.alt || "image", isImage: true });
-        } else if (s.type === "link") {
-          out.push({ id: s.attachmentId, label: s.label, isImage: false });
-        }
-      }
-      return out;
-    },
-    [segments],
-  );
-
-  if (segments.length === 1 && segments[0].type === "text") {
-    return (
-      <div className={className} style={{ whiteSpace: "pre-wrap" }}>
-        {segments[0].value}
-      </div>
-    );
+  if (!body || blocks.length === 0) {
+    return <div className={className} />;
   }
 
   return (
-    <div className={className} style={{ whiteSpace: "pre-wrap" }}>
-      {segments.map((s, i) => {
-        if (s.type === "text") return <Fragment key={i}>{s.value}</Fragment>;
-        if (s.type === "image")
-          return (
-            <InlineAttachmentImage
-              key={`${s.attachmentId}-${i}`}
-              attachmentId={s.attachmentId}
-              alt={s.alt}
-              inlineList={inlineList}
-            />
-          );
-        if (s.type === "link")
-          return (
-            <InlineAttachmentLink
-              key={`${s.attachmentId}-${i}`}
-              attachmentId={s.attachmentId}
-              label={s.label}
-              inlineList={inlineList}
-            />
-          );
-        if (s.type === "linkChip")
-          return (
-            <InlineForgeLink
-              key={`fl-${i}-${s.url}`}
-              label={s.label}
-              url={s.url}
-            />
-          );
-        if (s.type === "issueRef")
-          return <InlineIssueRef key={`r-${i}-${s.key}`} issueKey={s.key} />;
-        return (
-          <InlineAgentMention
-            key={`m-${i}-${s.profileKey}`}
-            profileKey={s.profileKey}
-          />
-        );
-      })}
+    <div className={`${className ?? ""} forge-md min-w-0 break-words`}>
+      {blocks.map((b, i) => renderBlock(b, i, inlineList))}
     </div>
   );
 }
 
-/**
- * Resolve the surrounding inline-attachment list to the AttachmentLite
- * shape the lightbox wants. Filenames on inline references aren't always
- * the on-disk filename (the user can write any markdown alt/label) but
- * they're the best label we have without an extra round-trip to
- * `attachment.list`.
- */
-function inlineListToAttachments(
-  inlineList: { id: string; label: string; isImage: boolean }[],
-): AttachmentLite[] {
+function renderBlock(
+  block: Block,
+  idx: number,
+  inlineList: InlineList,
+): ReactNode {
+  const k = `b-${idx}`;
+  if (block.type === "heading") {
+    const sizeClass =
+      block.level === 1
+        ? "mt-3 mb-2 text-[0.9375rem] font-semibold tracking-tight"
+        : block.level === 2
+          ? "mt-3 mb-1.5 text-[0.875rem] font-semibold tracking-tight"
+          : block.level === 3
+            ? "mt-2.5 mb-1 text-[0.8125rem] font-semibold tracking-tight"
+            : "mt-2 mb-0.5 text-[0.75rem] font-semibold uppercase tracking-wider text-muted-foreground";
+    const inner = renderInline(block.text, inlineList, k);
+    // Switch is verbose but keeps element type narrowed; tried a
+    // `keyof JSX.IntrinsicElements` cast first but tsc balks on the
+    // dynamic-string-to-IntrinsicElements widening in strict mode.
+    switch (block.level) {
+      case 1:
+        return <h1 key={k} className={sizeClass}>{inner}</h1>;
+      case 2:
+        return <h2 key={k} className={sizeClass}>{inner}</h2>;
+      case 3:
+        return <h3 key={k} className={sizeClass}>{inner}</h3>;
+      case 4:
+        return <h4 key={k} className={sizeClass}>{inner}</h4>;
+      case 5:
+        return <h5 key={k} className={sizeClass}>{inner}</h5>;
+      default:
+        return <h6 key={k} className={sizeClass}>{inner}</h6>;
+    }
+  }
+  if (block.type === "hr") {
+    return <hr key={k} className="my-3 border-border" />;
+  }
+  if (block.type === "code") {
+    return <CodeBlock key={k} code={block.code} lang={block.lang} />;
+  }
+  if (block.type === "blockquote") {
+    return (
+      <blockquote
+        key={k}
+        className="my-2 border-l-2 border-ember/50 bg-subtle/30 px-3 py-1 text-foreground/85"
+      >
+        {/* Recursively parse the inner lines so quoted markdown still
+            renders (nested lists, code, etc. inside a quote). */}
+        <MarkdownWithAttachments body={block.lines.join("\n")} />
+      </blockquote>
+    );
+  }
+  if (block.type === "list") {
+    if (block.ordered) {
+      return (
+        <ol key={k} className="my-1.5 ml-5 list-decimal space-y-0.5 marker:text-muted-foreground marker:font-mono marker:text-[0.85em]">
+          {block.items.map((it, j) => (
+            <li key={`${k}-${j}`} className="pl-0.5">
+              {renderInline(it.text, inlineList, `${k}-${j}`)}
+            </li>
+          ))}
+        </ol>
+      );
+    }
+    return (
+      <ul key={k} className="my-1.5 space-y-0.5">
+        {block.items.map((it, j) => (
+          <li key={`${k}-${j}`} className="flex gap-2">
+            {it.checked === null ? (
+              <span aria-hidden className="mt-1 shrink-0 text-ember/80">
+                •
+              </span>
+            ) : (
+              <span
+                aria-hidden
+                className={`mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border ${
+                  it.checked
+                    ? "border-ember bg-ember/20 text-ember"
+                    : "border-border bg-background"
+                }`}
+              >
+                {it.checked ? "✓" : ""}
+              </span>
+            )}
+            <span className={it.checked ? "text-muted-foreground line-through" : undefined}>
+              {renderInline(it.text, inlineList, `${k}-${j}`)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  if (block.type === "table") {
+    return (
+      <div
+        key={k}
+        className="my-2 overflow-x-auto rounded-md border border-border bg-card/30"
+      >
+        <table className="w-full border-collapse text-[0.8125rem]">
+          <thead>
+            <tr className="border-b border-border bg-card/60">
+              {block.header.map((h, j) => (
+                <th
+                  key={`${k}-h-${j}`}
+                  className={`px-2 py-1.5 text-left font-semibold ${alignClass(block.align[j])}`}
+                >
+                  {renderInline(h, inlineList, `${k}-h-${j}`)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, j) => (
+              <tr
+                key={`${k}-r-${j}`}
+                className="border-b border-border/40 last:border-b-0"
+              >
+                {row.map((c, l) => (
+                  <td
+                    key={`${k}-r-${j}-${l}`}
+                    className={`px-2 py-1.5 align-top text-foreground/90 ${alignClass(block.align[l])}`}
+                  >
+                    {renderInline(c, inlineList, `${k}-r-${j}-${l}`)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+  // Paragraph — preserve hard newlines inside paragraphs (a real
+  // newline in the source between paragraph lines stays as a <br/>).
+  return (
+    <p key={k} className="my-1.5 whitespace-pre-wrap leading-relaxed">
+      {renderInline(block.text, inlineList, k)}
+    </p>
+  );
+}
+
+function alignClass(a: Align): string {
+  if (a === "left") return "text-left";
+  if (a === "right") return "text-right";
+  if (a === "center") return "text-center";
+  return "";
+}
+
+// ---------------------------------------------------------------------------
+// Code block — preformatted with a copy button. No syntax highlighter
+// is bundled (avoids ~250kb of prism/shiki on every page); the language
+// label sits above the block so engineers still get the at-a-glance
+// signal.
+// ---------------------------------------------------------------------------
+function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  const [copied, setCopied] = useState(false);
+  const reactId = useId();
+  function handleCopy() {
+    void navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  }
+  return (
+    <div className="relative my-2 overflow-hidden rounded-md border border-border bg-card/40">
+      <div className="flex items-center justify-between border-b border-border/60 bg-card/60 px-3 py-1">
+        <span className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+          {lang || "code"}
+        </span>
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label="Copy code"
+          id={`copy-${reactId}`}
+          className="focus-ring rounded border border-border/60 bg-background/70 px-1.5 py-0.5 font-sans text-[0.625rem] text-muted-foreground hover:bg-background hover:text-foreground"
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre className="overflow-x-auto px-3 py-2 font-mono text-[0.75rem] leading-relaxed text-foreground">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inline forge primitive components
+// (Same behaviour as before — these are the leaves the inline renderer
+// produces. UnavailablePill, InlineAttachmentImage, InlineAttachmentLink,
+// InlineForgeLink, InlineIssueRef, InlineAgentMention.)
+// ---------------------------------------------------------------------------
+
+function inlineListToAttachments(inlineList: InlineList): AttachmentLite[] {
   return inlineList.map((it) => ({
     id: it.id,
     filename: it.label,
-    // Best-effort mime from the label extension. The lightbox does its own
-    // mime sniffing and falls back to the filename if mime is empty.
     mimeType: it.isImage ? "image/*" : "",
     size: 0,
-    // Inline markdown refs only point at FILE attachments today —
-    // `[label](forge-attachment:cuid)` is the only token shape. Kept
-    // explicit so future LINK-token support drops in cleanly.
     kind: "FILE" as const,
     externalUrl: null,
   }));
 }
 
-/**
- * Distinct "unavailable" pill used by both inline image + link variants.
- * Surfaces the concrete error message via `title` so admins can hover to
- * see *why* the attachment failed (storage misconfig, expired URL, etc.)
- * instead of the previous vague "attachment missing" text.
- */
 function UnavailablePill({
   label,
   errorMessage,
@@ -282,7 +953,7 @@ function InlineAttachmentImage({
 }: {
   attachmentId: string;
   alt: string;
-  inlineList: { id: string; label: string; isImage: boolean }[];
+  inlineList: InlineList;
 }) {
   const lightbox = useAttachmentLightbox();
   const { data, isLoading, error } = trpc.attachment.getDownloadUrl.useQuery(
@@ -296,15 +967,8 @@ function InlineAttachmentImage({
       </span>
     );
   }
-  // Any error from getDownloadUrl (misconfig, not-found, expired) gets
-  // the same loud-but-useful pill — better than silently rendering a
-  // broken image or a vague "missing" tag.
-  if (error) {
-    return <UnavailablePill label={alt} errorMessage={error.message} />;
-  }
-  if (!data?.url) {
-    return <UnavailablePill label={alt} />;
-  }
+  if (error) return <UnavailablePill label={alt} errorMessage={error.message} />;
+  if (!data?.url) return <UnavailablePill label={alt} />;
   return (
     <span className="my-2 block">
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -325,20 +989,9 @@ function InlineAttachmentImage({
   );
 }
 
-/**
- * Bare `KEY-NN` becomes a link to the issue page. We resolve via the
- * `/w/{slug}/i/{KEY-NN}` short-link route — the server picks up the
- * cuid lookup and redirects to the canonical URL, so we don't need a
- * client-side roundtrip on render. If the workspace key in the ref
- * doesn't match the current workspace, we still render the link as a
- * safety net (the route will 404 cleanly) — this lets cross-workspace
- * pasted refs surface visually instead of silently going as plain text.
- */
 function InlineIssueRef({ issueKey }: { issueKey: string }) {
   const ws = useMaybeWorkspace();
   if (!ws) {
-    // No workspace context (e.g. account-level page rendering a comment).
-    // Fall back to plain text so we don't link into the wrong place.
     return <span className="font-mono text-[0.75rem]">{issueKey}</span>;
   }
   return (
@@ -352,13 +1005,6 @@ function InlineIssueRef({ issueKey }: { issueKey: string }) {
   );
 }
 
-/**
- * Bare `@profileKey` renders as a small agent chip. We don't query the
- * `Agent` table on render — most comments have no mentions, and the
- * chip's presence already cues the reader. The `agent` icon + the
- * mono profileKey are enough; a follow-up tooltip could add the agent's
- * display name on hover.
- */
 function InlineAgentMention({ profileKey }: { profileKey: string }) {
   return (
     <span
@@ -370,12 +1016,6 @@ function InlineAgentMention({ profileKey }: { profileKey: string }) {
   );
 }
 
-/**
- * `[label](forge-link:https://…)` chip. Visually mirrors
- * `InlineAttachmentLink` so chat/comments stay consistent. Click opens
- * the URL in a new tab — no DB lookup, no lightbox. Favicon falls back
- * to a lucide ExternalLink glyph if the host doesn't serve `/favicon.ico`.
- */
 function InlineForgeLink({ label, url }: { label: string; url: string }) {
   return (
     <a
@@ -399,18 +1039,14 @@ function InlineAttachmentLink({
 }: {
   attachmentId: string;
   label: string;
-  inlineList: { id: string; label: string; isImage: boolean }[];
+  inlineList: InlineList;
 }) {
   const lightbox = useAttachmentLightbox();
-  // We don't need the URL up front — the lightbox resolves it on open.
-  // We do still query it so an error pill can replace a broken chip.
   const { error } = trpc.attachment.getDownloadUrl.useQuery(
     { attachmentId },
     { staleTime: 5 * 60_000, retry: false },
   );
-  if (error) {
-    return <UnavailablePill label={label} errorMessage={error.message} />;
-  }
+  if (error) return <UnavailablePill label={label} errorMessage={error.message} />;
   const isPdf = label.toLowerCase().endsWith(".pdf");
   const Icon = isPdf ? FileText : FileIcon;
   return (

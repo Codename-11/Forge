@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { callTool } from "../mcp.js";
 import type { AuthFile } from "../auth.js";
 import type {
   ChatMessageHistoryRow,
@@ -7,6 +6,14 @@ import type {
   InlineAttachment,
   IssueBundle,
 } from "./types.js";
+import {
+  finalizeDraft,
+  openDraft,
+  pushDelta,
+  summarizeIssueBundle,
+  summarizeThreadHistory,
+  type ProviderUsage,
+} from "./shared.js";
 
 /**
  * Claude Code adapter — bridges Forge dispatch (chat OR issue work) to a
@@ -56,14 +63,11 @@ import type {
 
 const CLAUDE_BIN = process.env.FORGE_CLAUDE_BIN ?? "claude";
 
-// ---------------------------------------------------------------- shared
+// Re-export for issue-loop.ts which imports the shape (keeps the public
+// surface stable while moving the canonical definition to shared.ts).
+export type ClaudeUsage = ProviderUsage;
 
-export interface ClaudeUsage {
-  tokensIn?: number;
-  tokensOut?: number;
-  tokensCached?: number;
-  costUsd?: number;
-}
+// ---------------------------------------------------------------- shared
 
 interface ClaudeStreamEvent {
   type: string;
@@ -131,56 +135,6 @@ function attachmentsToBlocks(atts: InlineAttachment[]): ContentBlock[] {
   return blocks;
 }
 
-function summarizeIssueBundle(b: IssueBundle): string {
-  const issue = b.issue as Record<string, unknown> & {
-    number?: number;
-    title?: string;
-    priority?: string;
-    statusId?: string;
-    status?: { name?: string } | null;
-    project?: { name?: string } | null;
-  };
-  const lines: string[] = [];
-  const ident = `${b.workspace.key ?? ""}-${issue.number ?? "?"}`;
-  lines.push(`# Issue ${ident}: ${issue.title ?? "(untitled)"}`);
-  if (issue.priority) lines.push(`Priority: ${issue.priority}`);
-  if (issue.status?.name) lines.push(`Status: ${issue.status.name}`);
-  if (issue.project?.name) lines.push(`Project: ${issue.project.name}`);
-  if (b.relations?.length) {
-    lines.push(`Relations: ${b.relations.length}`);
-  }
-  if (b.description) {
-    lines.push("\n## Description");
-    lines.push(String(b.description));
-  }
-  if (b.comments?.length) {
-    lines.push(`\n## Recent comments (${b.comments.length}, newest-first)`);
-    for (const c of b.comments.slice(0, 10)) {
-      const author = (c as { author?: { name?: string } }).author?.name ?? "?";
-      lines.push(`- [${author}] ${String(c.body).slice(0, 400)}`);
-    }
-  }
-  if (b.attachments?.length) {
-    lines.push(
-      `\nAttachments on issue: ${b.attachments.length} (image/pdf/text inlined separately)`,
-    );
-  }
-  return lines.join("\n");
-}
-
-function summarizeThreadHistory(history: ChatMessageHistoryRow[]): string {
-  if (!history.length) return "";
-  const lines = ["# Thread history (newest-first, recent N)"];
-  // Skip the message currently being responded to — `userMessage` carries it.
-  // We render in chronological order for grounding.
-  const ordered = [...history].reverse();
-  for (const m of ordered) {
-    const role = String(m.role).toLowerCase();
-    lines.push(`[${role}] ${String(m.body).slice(0, 800)}`);
-  }
-  return lines.join("\n");
-}
-
 // ---------------------------------------------------------------- chat path
 
 export interface ClaudeChatContext {
@@ -220,61 +174,8 @@ function buildChatSystemPrompt(ctx: ClaudeChatContext): string {
 export async function runClaudeChat(ctx: ClaudeChatContext): Promise<void> {
   // Open the draft FIRST — that way even if claude crashes immediately
   // we already own a draftId and can finalize a graceful fallback.
-  let draft: DraftHandle | null = null;
-  try {
-    const res = await callTool<{ draftId: string; threadId: string }>(
-      ctx.auth,
-      "chat.startDraft",
-      { threadId: ctx.threadId },
-    );
-    if (res.isError || !res.data?.draftId) {
-      console.error(`[claude-code] chat.startDraft failed: ${res.text}`);
-      return;
-    }
-    draft = {
-      draftId: res.data.draftId,
-      assembled: "",
-      pendingDelta: "",
-      flushTimer: null,
-      finalized: false,
-    };
-  } catch (err) {
-    console.error(`[claude-code] failed to start draft:`, err);
-    return;
-  }
-
-  const flush = async (force = false) => {
-    if (!draft) return;
-    if (!draft.pendingDelta) return;
-    if (!force && draft.pendingDelta.length < 60) return; // batch a bit
-    const delta = draft.pendingDelta;
-    draft.pendingDelta = "";
-    try {
-      await callTool(ctx.auth, "chat.appendDraftChunk", {
-        threadId: ctx.threadId,
-        draftId: draft.draftId,
-        delta,
-      });
-    } catch (err) {
-      console.error(`[claude-code] appendDraftChunk failed:`, err);
-    }
-  };
-
-  const finalize = async (body: string) => {
-    if (!draft || draft.finalized) return;
-    draft.finalized = true;
-    if (draft.flushTimer) clearTimeout(draft.flushTimer);
-    await flush(true);
-    try {
-      await callTool(ctx.auth, "chat.finalizeDraft", {
-        threadId: ctx.threadId,
-        draftId: draft.draftId,
-        body: body || "[no reply]",
-      });
-    } catch (err) {
-      console.error(`[claude-code] finalizeDraft failed:`, err);
-    }
-  };
+  const draft = await openDraft(ctx.auth, ctx.threadId);
+  if (!draft) return;
 
   const userBlocks: ContentBlock[] = [
     ...attachmentsToBlocks(ctx.attachments),
@@ -286,36 +187,36 @@ export async function runClaudeChat(ctx: ClaudeChatContext): Promise<void> {
     userContent: userBlocks,
     model: ctx.model,
     onTextDelta: (delta) => {
-      if (!draft) return;
-      draft.pendingDelta += delta;
-      if (draft.flushTimer) clearTimeout(draft.flushTimer);
-      draft.flushTimer = setTimeout(() => void flush(true), 120);
+      pushDelta(ctx.auth, ctx.threadId, draft, delta);
     },
     onComplete: async ({ assembledFinal, exitCode }) => {
       if (exitCode === 0 && assembledFinal) {
-        await finalize(assembledFinal);
+        await finalizeDraft(ctx.auth, ctx.threadId, draft, assembledFinal);
       } else if (exitCode === 0) {
-        await finalize("[claude returned no content]");
+        await finalizeDraft(
+          ctx.auth,
+          ctx.threadId,
+          draft,
+          "[claude returned no content]",
+        );
       } else {
-        await finalize(
+        await finalizeDraft(
+          ctx.auth,
+          ctx.threadId,
+          draft,
           `[OFFLINE] Claude Code exited with code ${exitCode}. Check daemon logs for stderr.`,
         );
       }
     },
     onSpawnError: async (err) => {
-      await finalize(
+      await finalizeDraft(
+        ctx.auth,
+        ctx.threadId,
+        draft,
         `[OFFLINE] Local daemon could not spawn \`${CLAUDE_BIN}\`: ${err}`,
       );
     },
   });
-}
-
-interface DraftHandle {
-  draftId: string;
-  assembled: string;
-  pendingDelta: string;
-  flushTimer: NodeJS.Timeout | null;
-  finalized: boolean;
 }
 
 // ---------------------------------------------------------------- issue path

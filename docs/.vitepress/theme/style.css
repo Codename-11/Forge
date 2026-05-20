@@ -810,14 +810,30 @@ kbd {
 }
 
 /* When the docs are rendered inside the dashboard iframe (via the
-   /docs route), drop the top chrome so the docs feel embedded. */
+   /docs route), drop the top chrome so the docs feel embedded.
+   Zeroing --vp-nav-height collapses every derived offset in VitePress's
+   default theme in one shot (margins on .VPContent, top: on .VPSidebar,
+   padding-top on the doc container, etc.) so we don't have to chase
+   each selector individually — that's what was clipping the top of
+   the docs before this rule. */
+html[data-embed="dashboard"] {
+  --vp-nav-height: 0px;
+  --vp-layout-top-height: 0px;
+}
 html[data-embed="dashboard"] .VPNav,
-html[data-embed="dashboard"] .VPLocalNav {
+html[data-embed="dashboard"] .VPLocalNav,
+html[data-embed="dashboard"] .VPNavBar {
   display: none !important;
 }
 html[data-embed="dashboard"] .VPContent {
   padding-top: 0 !important;
+  margin-top: 0 !important;
 }
-html[data-embed="dashboard"] .VPSidebar {
+html[data-embed="dashboard"] .VPSidebar,
+html[data-embed="dashboard"] .VPSidebarNav {
   top: 0 !important;
+  padding-top: 1rem !important;
+}
+html[data-embed="dashboard"] .VPDoc {
+  padding-top: 1rem !important;
 }

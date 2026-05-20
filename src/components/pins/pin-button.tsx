@@ -1,4 +1,5 @@
 "use client";
+import { useEffect } from "react";
 import { Pin as PinIcon } from "lucide-react";
 import { toast } from "sonner";
 import { type PinTargetType } from "@prisma/client";
@@ -34,6 +35,7 @@ export function PinButton({
   className,
   size = "sm",
   labelOnHover = false,
+  shortcut,
 }: {
   targetType: PinTargetType;
   targetId: string;
@@ -41,6 +43,13 @@ export function PinButton({
   className?: string;
   size?: "sm" | "md";
   labelOnHover?: boolean;
+  /**
+   * Optional single-character keyboard shortcut to bind to this
+   * button's toggle while it's mounted. Skips when a textarea/input
+   * is focused or any modifier is held. Use this for the surface's
+   * primary pin (e.g. `"p"` on the issue detail page).
+   */
+  shortcut?: string;
 }) {
   const utils = trpc.useUtils();
 
@@ -84,6 +93,28 @@ export function PinButton({
       broadcastCrossTab({ type: "pins:updated" });
     },
   });
+
+  // Optional keyboard shortcut — bound for the lifetime of this mount.
+  // Lives here (not in a parent) so the binding tracks the button's
+  // appearance and disappearance in the DOM exactly.
+  useEffect(() => {
+    if (!shortcut) return;
+    const target = shortcut.toLowerCase();
+    const handler = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const isEditable =
+        el?.tagName === "INPUT" ||
+        el?.tagName === "TEXTAREA" ||
+        el?.isContentEditable;
+      if (isEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (e.key.toLowerCase() !== target) return;
+      e.preventDefault();
+      toggle.mutate({ workspaceId, targetType, targetId });
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [shortcut, toggle, workspaceId, targetType, targetId]);
 
   const dim = size === "md" ? "h-7 w-7" : "h-6 w-6";
   const iconDim = size === "md" ? "h-3.5 w-3.5" : "h-3 w-3";

@@ -30,7 +30,19 @@ function isTabId(v: string | null | undefined): v is TabId {
   return v === "attachments" || v === "relations" || v === "activity";
 }
 
-export function IssueRail({ issueId }: { issueId: string }) {
+export function IssueRail({
+  issueId,
+  header,
+}: {
+  issueId: string;
+  /**
+   * Optional content rendered above the tab strip — the issue detail
+   * page passes its "Properties" group (project / labels / due / agent
+   * queue) here so the metadata sits in the rail instead of dangling at
+   * the bottom of the main column.
+   */
+  header?: React.ReactNode;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -77,6 +89,11 @@ export function IssueRail({ issueId }: { issueId: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {header && (
+        <div className="border-b border-border bg-card/20 px-3 py-3">
+          {header}
+        </div>
+      )}
       <div
         role="tablist"
         aria-label="Issue detail sections"
