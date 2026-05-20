@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { type PinTargetType } from "@prisma/client";
 import { cn } from "@/lib/utils";
+import { IssueHoverPreview } from "@/components/issue-hover-preview";
 import type { HydratedPin } from "@/server/routers/pin";
 
 /**
@@ -88,11 +89,29 @@ export function RecentItemsRail({
             </button>
           );
         }
-        return (
+        // Only wrap ISSUE chips in the current workspace — `issue.summary`
+        // is workspace-scoped and would NOT_FOUND on cross-workspace pins.
+        const showIssuePreview =
+          p.target.targetType === "ISSUE" &&
+          p.target.workspaceSlug === workspaceSlug;
+        const chip = (
           <Link key={p.id} href={href} title={label} className={className}>
             {inner}
           </Link>
         );
+        if (showIssuePreview && p.target.targetType === "ISSUE") {
+          return (
+            <IssueHoverPreview
+              key={p.id}
+              issueKey={p.target.key}
+              workspaceSlug={slug}
+              className="relative inline-flex"
+            >
+              {chip}
+            </IssueHoverPreview>
+          );
+        }
+        return chip;
       })}
     </div>
   );

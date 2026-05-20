@@ -473,6 +473,7 @@ model User {
   resolvedReviewGates     ReviewGate[]        @relation("ReviewGateResolver")
   requestedActionRequests ActionRequest[]     @relation("ActionRequestRequester")
   assignedActionRequests  ActionRequest[]     @relation("ActionRequestAssignee")
+  resolvedActionRequests  ActionRequest[]     @relation("ActionRequestResolver")
   createdCanvases         WorkspaceCanvas[]   @relation("WorkspaceCanvasCreator")
   ownedCanvases           WorkspaceCanvas[]   @relation("WorkspaceCanvasOwner")
   createdShapes           CanvasShape[]       @relation("CanvasShapeCreator")
@@ -1076,6 +1077,14 @@ model Comment {
   /// pushes the previous body + timestamp so the agent's earlier turns
   /// aren't lost. Stored as `[{ body, currentStep, ts }]` JSON.
   revisions        Json?
+  /// Optional bag of short quick-reply chips an agent attached to the
+  /// comment (added 2026-05-20, migration 0048). The thread renders
+  /// these as clickable pills below the comment body when the comment
+  /// is agent-authored AND it's the most recent BODY comment in the
+  /// thread (so old chips don't linger). Capped to 4 strings, each
+  /// ≤80 chars by the create handler. Defaults to an empty array so
+  /// existing rows don't need a backfill.
+  suggestedReplies String[]    @default([])
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
   deletedAt        DateTime?
@@ -2328,6 +2337,24 @@ enum ActionRequestStatus {
   RESOLVED
   DISMISSED
   SNOOZED
+  REJECTED
+}
+
+/// Typed action kinds carried by an ActionRequest (added 2026-05-20,
+/// migration 0048). FREE_FORM is the legacy default — pure prose,
+/// no executable hook on Accept. The remaining kinds are executable:
+/// when an authorized human Accepts, the action-request service
+/// dispatches the matching operation (transition / setLabels / etc.)
+/// using the `payload` Json column for kind-specific args. Reject /
+/// Decline never dispatches, regardless of kind.
+enum ActionRequestKind {
+  FREE_FORM
+  TRANSITION
+  SET_LABELS
+  ASSIGN
+  ASSIGN_AGENT
+  ARCHIVE
+  CLOSE_AS_DUPLICATE
 }
 
 /// A precise, resolvable ask. Replaces vague notifications: instead of
@@ -2341,6 +2368,20 @@ model ActionRequest {
   body               String?              @db.Text
   status             ActionRequestStatus  @default(OPEN)
   severity           NotificationSeverity @default(INFO)
+  /// Discriminator for the executable action (if any) bundled with this
+  /// request. FREE_FORM (default) is a pure ask with no dispatch hook.
+  /// Other kinds carry their args in `payload` and run on Accept.
+  kind               ActionRequestKind    @default(FREE_FORM)
+  /// Kind-specific args. Shape varies by `kind`:
+  ///   TRANSITION         → { statusId: string }
+  ///   SET_LABELS         → { add?: string[]; remove?: string[] }
+  ///   ASSIGN             → { userIds: string[] }
+  ///   ASSIGN_AGENT       → { agentId: string }
+  ///   ARCHIVE            → {} (no args needed; targets `issueId`)
+  ///   CLOSE_AS_DUPLICATE → { duplicateOfIssueId: string; statusId?: string }
+  /// Validated at create time by the action-request service; rejected
+  /// if any referenced id lives outside the workspace.
+  payload            Json?
   requestedByUserId  String?
   requestedByAgentId String?
   assignedUserId     String?
@@ -2354,6 +2395,7 @@ model ActionRequest {
   issueId            String?
   dueAt              DateTime?
   resolvedAt         DateTime?
+  resolvedByUserId   String?
   resolution         String?              @db.Text
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
@@ -2363,12 +2405,14 @@ model ActionRequest {
   requestedByAgent Agent?    @relation("ActionRequestRequesterAgent", fields: [requestedByAgentId], references: [id], onDelete: SetNull)
   assignedUser     User?     @relation("ActionRequestAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
   assignedAgent    Agent?    @relation("ActionRequestAssigneeAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  resolvedByUser   User?     @relation("ActionRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
   issue            Issue?    @relation(fields: [issueId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, status, createdAt])
   @@index([assignedUserId, status])
   @@index([assignedAgentId, status])
   @@index([issueId])
+  @@index([sourceType, sourceId])
 }
 
 // ----------------------------------------------------------------------------

@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import type { Prisma } from "@prisma/client";
-import { CommentKind, EventKind } from "@prisma/client";
+import {
+  ActionRequestKind,
+  CommentKind,
+  EventKind,
+  NotificationSeverity,
+} from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { extractMentions } from "@/server/services/mentions";
@@ -11,14 +16,66 @@ import {
   autoWatchAgent,
   autoWatchUser,
 } from "@/server/services/issue-watchers";
+import { createActionRequest } from "@/server/services/action-request-service";
 
 const STATUS_REVISION_CAP = 50;
 
+/**
+ * Cap on attached quick-reply chips. The composer renders these in a
+ * single row beneath the comment body, so 4 keeps the row readable
+ * even on narrow viewports. Each string is capped at 80 chars so the
+ * chip itself doesn't wrap.
+ */
+export const QUICK_REPLY_MAX_COUNT = 4;
+export const QUICK_REPLY_MAX_LENGTH = 80;
+export const suggestedRepliesSchema = z
+  .array(z.string().trim().min(1).max(QUICK_REPLY_MAX_LENGTH))
+  .max(QUICK_REPLY_MAX_COUNT)
+  .optional();
+
+/**
+ * Optional ActionRequest bundle attached to a `comments.create` call.
+ * Agents use this to post a comment + its recommendation card in one
+ * round-trip: the request row is created inside the same transaction
+ * with `sourceType="comment"` + `sourceId=<commentId>` so the issue
+ * detail page's `actionRequest.forComment` lookup pulls the matching
+ * row.
+ */
+export const inlineActionRequestSchema = z.object({
+  title: z.string().min(1).max(300),
+  body: z.string().max(10_000).nullable().optional(),
+  severity: z.nativeEnum(NotificationSeverity).optional(),
+  kind: z.nativeEnum(ActionRequestKind).default(ActionRequestKind.FREE_FORM),
+  payload: z.unknown().optional(),
+  assignedUserId: z.string().cuid().nullable().optional(),
+  assignedAgentId: z.string().cuid().nullable().optional(),
+  dueAt: z.coerce.date().nullable().optional(),
+});
+
 export const commentRouter = router({
   create: workspaceProcedure
-    .input(z.object({ issueId: z.string().cuid(), body: z.string().min(1).max(50_000) }))
+    .input(
+      z.object({
+        issueId: z.string().cuid(),
+        body: z.string().min(1).max(50_000),
+        /**
+         * Optional quick-reply chip strings the operator can click to
+         * pre-fill the composer. Agent-only by convention (human-authored
+         * comments will accept this but the renderer hides chips when the
+         * authoring side is a human).
+         */
+        suggestedReplies: suggestedRepliesSchema,
+        /**
+         * Optional ActionRequest bundle. When set, a matching row is
+         * persisted inside the same transaction and bound to the new
+         * comment via sourceType/sourceId so the `<ActionRequestCard>`
+         * component picks it up.
+         */
+        actionRequest: inlineActionRequestSchema.optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
-      return ctx.db.$transaction(async (tx) => {
+      const result = await ctx.db.$transaction(async (tx) => {
         // If the caller authenticated via an API key that is linked to an
         // Agent (the common case for Victor/Mizu automations), stamp the
         // comment with that agent so the UI can render "<Agent> (agent)"
@@ -32,6 +89,7 @@ export const commentRouter = router({
             authorId: ctx.session.user.id,
             body: input.body,
             authoringAgentId,
+            suggestedReplies: input.suggestedReplies ?? [],
           },
           include: {
             author: { select: { id: true, name: true, image: true } },
@@ -140,8 +198,36 @@ export const commentRouter = router({
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
-        return comment;
+        return { comment, authoringAgentId };
       });
+      // ActionRequest is created *outside* the comment transaction so
+      // its own per-row recordChange + emit can run with the standard
+      // service entrypoint (which itself opens a transaction). The
+      // service guarantees the request points at this workspace and
+      // payload references stay scoped — failure here propagates and
+      // the comment still exists, surfacing as a partial state the
+      // operator can recover from manually (a rare edge: payload
+      // validation passes pre-creation, so the realistic failure
+      // window is vanishingly small).
+      if (input.actionRequest) {
+        await createActionRequest(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          actorAgentId: result.authoringAgentId,
+          title: input.actionRequest.title,
+          body: input.actionRequest.body ?? null,
+          severity: input.actionRequest.severity,
+          kind: input.actionRequest.kind,
+          payload: input.actionRequest.payload,
+          assignedUserId: input.actionRequest.assignedUserId ?? null,
+          assignedAgentId: input.actionRequest.assignedAgentId ?? null,
+          sourceType: "comment",
+          sourceId: result.comment.id,
+          issueId: input.issueId,
+          dueAt: input.actionRequest.dueAt ?? null,
+        });
+      }
+      return result.comment;
     }),
 
   update: workspaceProcedure

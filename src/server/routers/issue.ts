@@ -535,6 +535,77 @@ export const issueRouter = router({
       return rows;
     }),
 
+  /**
+   * Narrow "card-shape" summary used by the issue-key hover preview.
+   * Looks up an issue by its `KEY-NN` token within the current workspace
+   * — refuses cross-tenant resolves (the lookup is workspace-scoped, and
+   * we reject when the prefix doesn't match the workspace's own `key`).
+   *
+   * The select shape is intentionally tight: status pill, priority,
+   * a few assignees (cap 4 — UI shows up to 3 + a "+N" overflow), the
+   * assigned agent, and project chip. Cacheable per-issue; the client
+   * sets a generous `staleTime` so hovering the same ref twice doesn't
+   * double-fetch.
+   */
+  summary: workspaceProcedure
+    .input(z.object({ key: z.string().min(3).max(32) }))
+    .query(async ({ ctx, input }) => {
+      const m = /^([A-Z0-9]+)-(\d+)$/i.exec(input.key);
+      if (!m) throw new TRPCError({ code: "NOT_FOUND" });
+      const wsKey = m[1].toUpperCase();
+      const number = parseInt(m[2], 10);
+      const workspace = await ctx.db.workspace.findUnique({
+        where: { id: ctx.workspaceId },
+        select: { key: true, slug: true },
+      });
+      if (!workspace) throw new TRPCError({ code: "NOT_FOUND" });
+      // Cross-workspace check — `summary({ key: 'OTHER-1' })` from inside
+      // workspace `AXI` should not resolve OTHER's issue. Refuse early.
+      if (wsKey !== workspace.key) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      const issue = await ctx.db.issue.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          number,
+          deletedAt: null,
+        },
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          priority: true,
+          status: {
+            select: { id: true, name: true, color: true, category: true },
+          },
+          assignees: {
+            take: 4,
+            include: {
+              user: { select: { id: true, name: true, image: true } },
+            },
+          },
+          assignedAgent: {
+            select: {
+              id: true,
+              name: true,
+              profileKey: true,
+              avatar: true,
+              status: true,
+            },
+          },
+          project: {
+            select: { id: true, key: true, name: true, color: true },
+          },
+        },
+      });
+      if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+      return {
+        ...issue,
+        key: `${workspace.key}-${issue.number}`,
+        workspaceSlug: workspace.slug,
+      };
+    }),
+
   create: workspaceProcedure
     .input(
       z.object({

@@ -2209,8 +2209,74 @@ export const mcpTools = {
     input: z.object({
       issueId: z.string(),
       body: z.string().min(1).max(50_000),
+      /**
+       * Quick-reply chip strings the operator can click to seed the
+       * composer with a canned response. Capped at 4 × 80 chars by
+       * the row-level Zod schema; an empty / omitted array means no
+       * chips render. Agent-authored use case — humans can pass them
+       * but the renderer hides chips on human-authored comments.
+       */
+      suggestedReplies: z
+        .array(z.string().trim().min(1).max(80))
+        .max(4)
+        .optional(),
+      /**
+       * Optional ActionRequest bundle. When present, a matching row
+       * is created in the same flow with `sourceType="comment"` +
+       * `sourceId=<commentId>` so `actionRequest.forComment` resolves
+       * it back. Use this to post a recommendation card alongside an
+       * explanatory comment in one round-trip.
+       */
+      actionRequest: z
+        .object({
+          title: z.string().min(1).max(300),
+          body: z.string().max(10_000).nullable().optional(),
+          severity: z
+            .enum(["INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"])
+            .default("INFO"),
+          kind: z
+            .enum([
+              "FREE_FORM",
+              "TRANSITION",
+              "SET_LABELS",
+              "ASSIGN",
+              "ASSIGN_AGENT",
+              "ARCHIVE",
+              "CLOSE_AS_DUPLICATE",
+            ])
+            .default("FREE_FORM"),
+          payload: z.unknown().optional(),
+          assignedUserId: z.string().cuid().nullable().optional(),
+          assignedAgentId: z.string().cuid().nullable().optional(),
+          dueAt: z.coerce.date().nullable().optional(),
+        })
+        .optional(),
     }),
-    async run(input: { issueId: string; body: string }, ctx: McpContext) {
+    async run(
+      input: {
+        issueId: string;
+        body: string;
+        suggestedReplies?: string[];
+        actionRequest?: {
+          title: string;
+          body?: string | null;
+          severity: "INFO" | "SUCCESS" | "WARNING" | "ERROR" | "CRITICAL";
+          kind:
+            | "FREE_FORM"
+            | "TRANSITION"
+            | "SET_LABELS"
+            | "ASSIGN"
+            | "ASSIGN_AGENT"
+            | "ARCHIVE"
+            | "CLOSE_AS_DUPLICATE";
+          payload?: unknown;
+          assignedUserId?: string | null;
+          assignedAgentId?: string | null;
+          dueAt?: Date | null;
+        };
+      },
+      ctx: McpContext,
+    ) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       const authorId = await resolveActorId(ctx);
       // When the API key is linked to an Agent, record it on the comment so
@@ -2224,6 +2290,7 @@ export const mcpTools = {
           authorId,
           body: input.body,
           authoringAgentId,
+          suggestedReplies: input.suggestedReplies ?? [],
         },
       });
       // Touch the agent run on every agent-authored comment so the live
@@ -2249,7 +2316,32 @@ export const mcpTools = {
           }
         });
       }
-      return comment;
+      // Optional inline ActionRequest — created after the comment is
+      // persisted so we have a stable id to bind via sourceType/sourceId.
+      let actionRequestId: string | null = null;
+      if (input.actionRequest) {
+        const { createActionRequest } = await import(
+          "@/server/services/action-request-service"
+        );
+        const created = await createActionRequest(db, {
+          workspaceId: ctx.workspaceId,
+          actorId: authorId,
+          actorAgentId: authoringAgentId,
+          title: input.actionRequest.title,
+          body: input.actionRequest.body ?? null,
+          severity: input.actionRequest.severity as never,
+          kind: input.actionRequest.kind as never,
+          payload: input.actionRequest.payload,
+          assignedUserId: input.actionRequest.assignedUserId ?? null,
+          assignedAgentId: input.actionRequest.assignedAgentId ?? null,
+          sourceType: "comment",
+          sourceId: comment.id,
+          issueId: input.issueId,
+          dueAt: input.actionRequest.dueAt ?? null,
+        });
+        actionRequestId = created.id;
+      }
+      return { ...comment, actionRequestId };
     },
   },
 
@@ -9786,6 +9878,33 @@ export const mcpTools = {
       severity: z
         .enum(["INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"])
         .default("INFO"),
+      /**
+       * Action kind — discriminates what Forge should do when an
+       * authorized operator clicks Accept. FREE_FORM (default) is
+       * pure prose with no executable hook. Others dispatch the
+       * matching operation against `issueId` using `payload`.
+       */
+      kind: z
+        .enum([
+          "FREE_FORM",
+          "TRANSITION",
+          "SET_LABELS",
+          "ASSIGN",
+          "ASSIGN_AGENT",
+          "ARCHIVE",
+          "CLOSE_AS_DUPLICATE",
+        ])
+        .default("FREE_FORM"),
+      /**
+       * Kind-specific args. Shape:
+       *   TRANSITION         → { statusId }
+       *   SET_LABELS         → { add?: string[]; remove?: string[] }
+       *   ASSIGN             → { userIds: string[] }
+       *   ASSIGN_AGENT       → { agentId }
+       *   ARCHIVE            → {} (targets `issueId`)
+       *   CLOSE_AS_DUPLICATE → { duplicateOfIssueId; statusId? }
+       */
+      payload: z.unknown().optional(),
       assignedUserId: z.string().cuid().nullable().optional(),
       assignedAgentId: z.string().cuid().nullable().optional(),
       sourceType: z.string().max(40).nullable().optional(),
@@ -9798,6 +9917,15 @@ export const mcpTools = {
         title: string;
         body?: string | null;
         severity: "INFO" | "SUCCESS" | "WARNING" | "ERROR" | "CRITICAL";
+        kind:
+          | "FREE_FORM"
+          | "TRANSITION"
+          | "SET_LABELS"
+          | "ASSIGN"
+          | "ASSIGN_AGENT"
+          | "ARCHIVE"
+          | "CLOSE_AS_DUPLICATE";
+        payload?: unknown;
         assignedUserId?: string | null;
         assignedAgentId?: string | null;
         sourceType?: string | null;
@@ -9817,6 +9945,8 @@ export const mcpTools = {
         title: input.title,
         body: input.body ?? null,
         severity: input.severity as never,
+        kind: input.kind as never,
+        payload: input.payload,
         assignedUserId: input.assignedUserId ?? null,
         assignedAgentId: input.assignedAgentId ?? null,
         sourceType: input.sourceType ?? null,
@@ -9831,13 +9961,13 @@ export const mcpTools = {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({
       id: z.string().cuid(),
-      status: z.enum(["OPEN", "RESOLVED", "DISMISSED", "SNOOZED"]),
+      status: z.enum(["OPEN", "RESOLVED", "DISMISSED", "SNOOZED", "REJECTED"]),
       resolution: z.string().max(10_000).nullable().optional(),
     }),
     async run(
       input: {
         id: string;
-        status: "OPEN" | "RESOLVED" | "DISMISSED" | "SNOOZED";
+        status: "OPEN" | "RESOLVED" | "DISMISSED" | "SNOOZED" | "REJECTED";
         resolution?: string | null;
       },
       ctx: McpContext,
@@ -9853,6 +9983,72 @@ export const mcpTools = {
         resolution: input.resolution ?? null,
       });
       return { ok: true };
+    },
+  },
+
+  /**
+   * Accept an action request — runs the bound dispatch (transition /
+   * setLabels / etc.) and flips status=RESOLVED in one transaction.
+   * Permission-gated to assignee / watcher / OWNER / ADMIN. Agents
+   * shouldn't call this directly except in narrow self-service flows
+   * (and even then, the caller must be linked to a human account
+   * with the requisite role).
+   */
+  "actionRequests.accept": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      resolution: z.string().max(2_000).nullable().optional(),
+    }),
+    async run(
+      input: { id: string; resolution?: string | null },
+      ctx: McpContext,
+    ) {
+      if (!ctx.userId) {
+        throw new Error(
+          "actionRequests.accept requires a human user context (no anonymous accept).",
+        );
+      }
+      const { acceptActionRequest } = await import(
+        "@/server/services/action-request-service"
+      );
+      return acceptActionRequest(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId,
+        requestId: input.id,
+        resolution: input.resolution ?? null,
+      });
+    },
+  },
+
+  /**
+   * Decline an action request — flips status=REJECTED, records the
+   * optional reason, and does NOT dispatch the bound action.
+   */
+  "actionRequests.decline": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      reason: z.string().max(2_000).nullable().optional(),
+    }),
+    async run(
+      input: { id: string; reason?: string | null },
+      ctx: McpContext,
+    ) {
+      if (!ctx.userId) {
+        throw new Error(
+          "actionRequests.decline requires a human user context.",
+        );
+      }
+      const { declineActionRequest } = await import(
+        "@/server/services/action-request-service"
+      );
+      return declineActionRequest(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId,
+        requestId: input.id,
+        reason: input.reason ?? null,
+      });
     },
   },
 

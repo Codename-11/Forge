@@ -1,11 +1,21 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { ActionRequestStatus, NotificationSeverity } from "@prisma/client";
+import { ActionRequestKind, ActionRequestStatus, NotificationSeverity } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import {
+  acceptActionRequest,
   createActionRequest,
+  declineActionRequest,
   transitionActionRequest,
 } from "@/server/services/action-request-service";
+
+/**
+ * Zod-side mirror of `ActionRequestKind` so the router can accept the
+ * literal at the API boundary. The service layer re-parses the
+ * payload against the right per-kind schema, so this stays a thin
+ * shape — no need to discriminated-union it here.
+ */
+const actionRequestKindSchema = z.nativeEnum(ActionRequestKind);
 
 export const actionRequestRouter = router({
   list: workspaceProcedure
@@ -67,10 +77,41 @@ export const actionRequestRouter = router({
     .query(async ({ ctx, input }) => {
       const row = await ctx.db.actionRequest.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
+        include: {
+          requestedByUser: { select: { id: true, name: true, image: true, handle: true } },
+          requestedByAgent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+          assignedUser: { select: { id: true, name: true, image: true, handle: true } },
+          assignedAgent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+          resolvedByUser: { select: { id: true, name: true, image: true, handle: true } },
+        },
       });
       if (!row) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Action request not found." });
       }
+      return row;
+    }),
+
+  /**
+   * Look up the ActionRequest attached to a comment (if any). Used by
+   * the issue detail timeline to render the `<ActionRequestCard>` above
+   * an agent's comment. Returns `null` when no row is bound, so the
+   * caller can render unconditionally.
+   */
+  forComment: workspaceProcedure
+    .input(z.object({ commentId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const row = await ctx.db.actionRequest.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          sourceType: "comment",
+          sourceId: input.commentId,
+        },
+        include: {
+          requestedByUser: { select: { id: true, name: true, image: true, handle: true } },
+          requestedByAgent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+          resolvedByUser: { select: { id: true, name: true, image: true, handle: true } },
+        },
+      });
       return row;
     }),
 
@@ -80,6 +121,8 @@ export const actionRequestRouter = router({
         title: z.string().min(1).max(300),
         body: z.string().max(10_000).nullable().optional(),
         severity: z.nativeEnum(NotificationSeverity).optional(),
+        kind: actionRequestKindSchema.optional(),
+        payload: z.unknown().optional(),
         assignedUserId: z.string().cuid().nullable().optional(),
         assignedAgentId: z.string().cuid().nullable().optional(),
         sourceType: z.string().max(40).nullable().optional(),
@@ -96,6 +139,8 @@ export const actionRequestRouter = router({
         title: input.title,
         body: input.body ?? null,
         severity: input.severity,
+        kind: input.kind,
+        payload: input.payload,
         assignedUserId: input.assignedUserId ?? null,
         assignedAgentId: input.assignedAgentId ?? null,
         sourceType: input.sourceType ?? null,
@@ -104,6 +149,56 @@ export const actionRequestRouter = router({
         dueAt: input.dueAt ?? null,
       });
       return result;
+    }),
+
+  /**
+   * Accept the request: run the kind-specific dispatch (transition /
+   * setLabels / etc.) and flip status=RESOLVED in the same transaction.
+   * Permission-gated to assignee / watcher / OWNER / ADMIN.
+   */
+  accept: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        resolution: z.string().max(2_000).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session?.user?.id;
+      if (!userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
+      }
+      return acceptActionRequest(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: userId,
+        requestId: input.id,
+        resolution: input.resolution ?? null,
+      });
+    }),
+
+  /**
+   * Decline the request: flip status=REJECTED with the operator's
+   * reason. Never dispatches the bound action. Same permission gate
+   * as `accept`.
+   */
+  decline: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        reason: z.string().max(2_000).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session?.user?.id;
+      if (!userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
+      }
+      return declineActionRequest(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: userId,
+        requestId: input.id,
+        reason: input.reason ?? null,
+      });
     }),
 
   resolve: workspaceProcedure
