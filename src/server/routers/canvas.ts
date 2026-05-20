@@ -596,7 +596,17 @@ export const canvasRouter = router({
     .input(
       z.object({
         canvasId: z.string().cuid(),
-        kind: z.enum(["box", "ellipse", "line", "arrow", "text", "freehand"]),
+        kind: z.enum([
+          "box",
+          "ellipse",
+          "line",
+          "arrow",
+          "text",
+          "freehand",
+          "sticky",
+          "comment-pin",
+          "stamp",
+        ]),
         x: z.number(),
         y: z.number(),
         width: z.number().optional(),
@@ -1312,7 +1322,17 @@ export const canvasRouter = router({
         shapes: z
           .array(
             z.object({
-              kind: z.enum(["box", "ellipse", "line", "arrow", "text", "freehand"]),
+              kind: z.enum([
+                "box",
+                "ellipse",
+                "line",
+                "arrow",
+                "text",
+                "freehand",
+                "sticky",
+                "comment-pin",
+                "stamp",
+              ]),
               x: z.number(),
               y: z.number(),
               width: z.number().optional(),

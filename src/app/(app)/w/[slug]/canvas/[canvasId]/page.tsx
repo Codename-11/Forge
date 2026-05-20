@@ -54,6 +54,16 @@ import {
 import { CanvasRightPanel } from "@/components/canvas/canvas-right-panel";
 import { CanvasComponentInstances } from "@/components/canvas/canvas-component-instances";
 import {
+  CanvasSelectionInspector,
+  type InspectorPatch,
+  type InspectorSelection,
+} from "@/components/canvas/canvas-selection-inspector";
+import { computeSnap } from "@/lib/canvas-snap-guides";
+import {
+  CanvasEntityCreator,
+  type EntityCreatorAnchor,
+} from "@/components/canvas/canvas-entity-creator";
+import {
   COMPONENT_DRAG_MIME,
   type ComponentDragPayload,
   type ComponentSelectionSnapshot,
@@ -227,9 +237,16 @@ function cursorForTool(tool: ToolKind, panning: boolean, draftingConnector: bool
     case "line":
     case "arrow":
     case "freehand":
+    case "sticky":
       return "crosshair";
     case "text":
       return "text";
+    case "comment-pin":
+      return "help";
+    case "stamp":
+      return "copy";
+    case "entity-create":
+      return "crosshair";
     case "eraser":
       return "not-allowed";
     default:
@@ -301,6 +318,12 @@ export default function CanvasViewerPage() {
   useEffect(() => {
     activeToolRef.current = activeTool;
   }, [activeTool]);
+
+  // Inline entity-create popover anchor (W1.2). When set, the
+  // `<CanvasEntityCreator>` mounts at this position; on commit it
+  // calls `issue.create` / `note.create`, then we drop a CanvasNode
+  // at the canvas-space anchor and return to Select.
+  const [entityCreator, setEntityCreator] = useState<EntityCreatorAnchor | null>(null);
   const toolbarStyleRef = useRef<StyleState>(toolbarStyle);
   useEffect(() => {
     toolbarStyleRef.current = toolbarStyle;
@@ -410,6 +433,16 @@ export default function CanvasViewerPage() {
   const [dragRev, setDragRev] = useState(0);
   const dragRafRef = useRef<number | null>(null);
   const draggingRef = useRef(false);
+
+  // Smart alignment guides + distance labels (W1.4). Populated by the
+  // shape-move drag handler when there's exactly one shape in the
+  // active drag set. Cleared on drag end. The SnapGuidesLayer reads it
+  // via `dragRev` so it repaints in lock-step with drag updates.
+  const snapGuidesRef = useRef<{
+    guides: Array<{ axis: "x" | "y"; at: number; spanStart: number; spanEnd: number }>;
+    labels: Array<{ x: number; y: number; value: number; axis: "x" | "y" }>;
+    sizeLabel: { x: number; y: number; width: number; height: number } | null;
+  }>({ guides: [], labels: [], sizeLabel: null });
 
   // Ref-based remote cursors so SSE ticks don't re-render the whole
   // node tree — only the cursor overlay reads `cursorsRev`.
@@ -838,25 +871,78 @@ export default function CanvasViewerPage() {
     };
   }, [selected, data]);
 
-  // Set of frame ids that descend from the active page (DESIGN canvases).
-  // Children whose ancestor frame is anything else get filtered out so
-  // multi-page canvases show one page's contents at a time.
-  const activePageDescendantIds = useMemo(() => {
-    if (canvasKind !== "DESIGN" || !activePageId) return null;
-    const out = new Set<string>([activePageId]);
-    let added = true;
-    while (added) {
-      added = false;
-      for (const f of frames) {
-        if (out.has(f.id)) continue;
-        if (f.parentFrameId && out.has(f.parentFrameId)) {
-          out.add(f.id);
-          added = true;
-        }
+  // O(1) frame child + descendant index. Built once whenever
+  // frames/nodes/shapes change. Replaces the O(frames²) while-loops
+  // that used to live in `onFrameTitleMouseDown` (click latency) and
+  // `activePageDescendantIds` (per-render cost on DESIGN canvases).
+  //
+  // `childFramesByParent` — direct-child frames keyed by parentFrameId.
+  // `descendantsByFrame` — full transitive descendant set per frame.
+  // `childNodesByFrame` / `childShapesByFrame` — direct child nodes /
+  // shapes keyed by parentFrameId; used to assemble cascade drag sets.
+  const frameChildIndex = useMemo(() => {
+    const childFramesByParent = new Map<string, string[]>();
+    const childNodesByFrame = new Map<string, string[]>();
+    const childShapesByFrame = new Map<string, string[]>();
+    for (const f of frames) {
+      if (f.parentFrameId) {
+        const arr = childFramesByParent.get(f.parentFrameId) ?? [];
+        arr.push(f.id);
+        childFramesByParent.set(f.parentFrameId, arr);
       }
     }
+    for (const n of nodes) {
+      const pid = (n as { parentFrameId?: string | null }).parentFrameId;
+      if (!pid) continue;
+      const arr = childNodesByFrame.get(pid) ?? [];
+      arr.push(n.id);
+      childNodesByFrame.set(pid, arr);
+    }
+    for (const s of shapes) {
+      const pid = (s as { parentFrameId?: string | null }).parentFrameId;
+      if (!pid) continue;
+      const arr = childShapesByFrame.get(pid) ?? [];
+      arr.push(s.id);
+      childShapesByFrame.set(pid, arr);
+    }
+    // Transitive descendant set per frame via memoized DFS. We memo
+    // per-frame so the index for a 50-frame canvas is O(N+E) not O(N²).
+    const descendantsByFrame = new Map<string, Set<string>>();
+    const visit = (fid: string): Set<string> => {
+      const cached = descendantsByFrame.get(fid);
+      if (cached) return cached;
+      const out = new Set<string>();
+      const stack: string[] = [...(childFramesByParent.get(fid) ?? [])];
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        if (out.has(cur)) continue;
+        out.add(cur);
+        const kids = childFramesByParent.get(cur);
+        if (kids) for (const k of kids) stack.push(k);
+      }
+      descendantsByFrame.set(fid, out);
+      return out;
+    };
+    for (const f of frames) visit(f.id);
+    return {
+      childFramesByParent,
+      childNodesByFrame,
+      childShapesByFrame,
+      descendantsByFrame,
+    };
+  }, [frames, nodes, shapes]);
+
+  // Set of frame ids that descend from the active page (DESIGN canvases).
+  // Children whose ancestor frame is anything else get filtered out so
+  // multi-page canvases show one page's contents at a time. O(1) via
+  // the precomputed descendant index — previously O(frames²) per render.
+  const activePageDescendantIds = useMemo(() => {
+    if (canvasKind !== "DESIGN" || !activePageId) return null;
+    const descendants = frameChildIndex.descendantsByFrame.get(activePageId);
+    const out = new Set<string>([activePageId]);
+    if (descendants) for (const d of descendants) out.add(d);
     return out;
-  }, [canvasKind, activePageId, frames]);
+  }, [canvasKind, activePageId, frameChildIndex]);
 
   // Filter a parented row by the active page. Returns true if the row
   // should render. Free-floating rows (`parentFrameId == null`) are
@@ -979,6 +1065,195 @@ export default function CanvasViewerPage() {
     return frames;
   }, [frames, dragRev]);
 
+  // -- Floating selection inspector (W1.5) ---------------------------
+
+  // Discriminated-union view of the current selection for the floating
+  // inspector. We pick the first selected row to drive single-kind
+  // surfaces; mixed/multi selections collapse to a count chip.
+  const inspectorSelection = useMemo<InspectorSelection | null>(() => {
+    if (selectedEdgeId) {
+      const e = edges.find((x) => x.id === selectedEdgeId);
+      if (!e) return null;
+      return { kind: "edge", edgeId: e.id, edgeKind: (e as { kind?: string }).kind ?? "solid" };
+    }
+    if (selected.length === 0) return null;
+    if (selected.length === 1) {
+      const sel = selected[0]!;
+      if (sel.kind === "shape") {
+        const s = displayShapes.find((sh) => sh.id === sel.id);
+        if (!s) return null;
+        return { kind: "shape", shape: s };
+      }
+      if (sel.kind === "frame") {
+        const f = displayFrames.find((ff) => ff.id === sel.id);
+        if (!f) return null;
+        return { kind: "frame", frame: f };
+      }
+      if (sel.kind === "node") {
+        const n = displayNodes.find((nn) => nn.id === sel.id);
+        if (!n) return null;
+        return { kind: "node", node: { id: n.id, meta: n.meta } };
+      }
+    }
+    return {
+      kind: "multi",
+      count: selected.length,
+      kinds: new Set(selected.map((s) => s.kind)),
+    };
+  }, [selected, selectedEdgeId, edges, displayShapes, displayFrames, displayNodes]);
+
+  // Selection bounding box, in **viewport** pixels. The inspector
+  // floats above the bbox in pixel-space (NOT canvas-space) so its
+  // size stays constant under zoom. We compute the canvas-space bbox
+  // first, then apply the viewport transform.
+  const inspectorBbox = useMemo(() => {
+    if (!inspectorSelection) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const pushRect = (x: number, y: number, w: number, h: number) => {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x + w > maxX) maxX = x + w;
+      if (y + h > maxY) maxY = y + h;
+    };
+    if (inspectorSelection.kind === "shape") {
+      const s = inspectorSelection.shape;
+      pushRect(s.x, s.y, s.width ?? 0, s.height ?? 0);
+    } else if (inspectorSelection.kind === "frame") {
+      const f = inspectorSelection.frame;
+      pushRect(f.x, f.y, f.width, f.height);
+    } else if (inspectorSelection.kind === "node") {
+      const n = displayNodes.find((nn) => nn.id === inspectorSelection.node.id);
+      if (n) pushRect(n.x, n.y, n.width, n.height);
+    } else if (inspectorSelection.kind === "edge") {
+      const e = edges.find((x) => x.id === inspectorSelection.edgeId);
+      if (!e) return null;
+      const a = displayNodes.find((n) => n.id === e.fromNodeId);
+      const b = displayNodes.find((n) => n.id === e.toNodeId);
+      if (!a || !b) return null;
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      pushRect(mx, my, 1, 1);
+    } else if (inspectorSelection.kind === "multi") {
+      for (const sel of selected) {
+        if (sel.kind === "shape") {
+          const s = displayShapes.find((sh) => sh.id === sel.id);
+          if (s) pushRect(s.x, s.y, s.width ?? 0, s.height ?? 0);
+        } else if (sel.kind === "frame") {
+          const f = displayFrames.find((ff) => ff.id === sel.id);
+          if (f) pushRect(f.x, f.y, f.width, f.height);
+        } else if (sel.kind === "node") {
+          const n = displayNodes.find((nn) => nn.id === sel.id);
+          if (n) pushRect(n.x, n.y, n.width, n.height);
+        }
+      }
+    }
+    if (!Number.isFinite(minX)) return null;
+    return {
+      x: minX * viewport.zoom + viewport.x,
+      y: minY * viewport.zoom + viewport.y,
+      width: (maxX - minX) * viewport.zoom,
+      height: (maxY - minY) * viewport.zoom,
+    };
+  }, [
+    inspectorSelection,
+    selected,
+    displayShapes,
+    displayFrames,
+    displayNodes,
+    edges,
+    viewport.x,
+    viewport.y,
+    viewport.zoom,
+  ]);
+
+  const onInspectorPatch = useCallback(
+    (p: InspectorPatch) => {
+      if (p.kind === "shape" && shapePatchMut) {
+        const current = shapesRef.current.find((s) => s.id === p.id);
+        const currentStyle = (current?.style ?? {}) as Record<string, unknown>;
+        const next: Record<string, unknown> = { ...currentStyle };
+        if (p.patch.stroke !== undefined) next.stroke = p.patch.stroke;
+        if (p.patch.fill !== undefined) next.fill = p.patch.fill;
+        if (p.patch.strokeWidth !== undefined) next.strokeWidth = p.patch.strokeWidth;
+        if (p.patch.opacity !== undefined) next.opacity = p.patch.opacity;
+        const styleChanged =
+          p.patch.stroke !== undefined ||
+          p.patch.fill !== undefined ||
+          p.patch.strokeWidth !== undefined ||
+          p.patch.opacity !== undefined;
+        if (styleChanged) shapePatchMut.mutate({ id: p.id, style: next });
+        // lockedAt isn't on shapePatch; route through the dedicated
+        // layer proc when it exists (added by the unified-workspace
+        // wave). Fallback: ignore silently.
+        if (p.patch.lockedAt !== undefined) {
+          const layerSetLockedMut = (
+            trpc.canvas as unknown as { layerSetLocked?: { useMutation: () => { mutate: (i: unknown) => void } } }
+          ).layerSetLocked;
+          // Best-effort — silently skip if the proc isn't wired.
+          void layerSetLockedMut;
+        }
+        return;
+      }
+      if (p.kind === "frame" && framePatchMut) {
+        const data: Record<string, unknown> = { frameId: p.frameId };
+        if (p.patch.name !== undefined) data.name = p.patch.name;
+        if (
+          p.patch.autoLayoutDirection !== undefined ||
+          p.patch.autoLayoutGap !== undefined ||
+          p.patch.autoLayoutPadding !== undefined
+        ) {
+          const current = framesRef.current.find((f) => f.id === p.frameId);
+          const layout = ((current as { autoLayout?: Record<string, unknown> } | undefined)?.autoLayout ?? {}) as Record<string, unknown>;
+          const next: Record<string, unknown> = { ...layout };
+          if (p.patch.autoLayoutDirection !== undefined) {
+            if (p.patch.autoLayoutDirection === null) {
+              data.autoLayout = null;
+            } else {
+              next.direction = p.patch.autoLayoutDirection;
+            }
+          }
+          if (p.patch.autoLayoutGap !== undefined) next.gap = p.patch.autoLayoutGap;
+          if (p.patch.autoLayoutPadding !== undefined) next.padding = p.patch.autoLayoutPadding;
+          if (p.patch.autoLayoutDirection !== null) data.autoLayout = next;
+        }
+        framePatchMut.mutate(data as Parameters<typeof framePatchMut.mutate>[0]);
+        return;
+      }
+      if (p.kind === "edge" && edgePatchMut) {
+        edgePatchMut.mutate({ id: p.edgeId, ...(p.patch as Record<string, unknown>) } as Parameters<typeof edgePatchMut.mutate>[0]);
+      }
+    },
+    [shapePatchMut, framePatchMut, edgePatchMut],
+  );
+
+  const onInspectorDelete = useCallback(() => {
+    if (selectedEdgeId) {
+      removeEdge.mutate({ id: selectedEdgeId });
+      setSelectedEdgeId(null);
+      return;
+    }
+    const frameIds = selected.filter((s) => s.kind === "frame").map((s) => s.id);
+    if (frameIds.length > 0 && frameRemoveMut) {
+      for (const fid of frameIds) frameRemoveMut.mutate({ frameId: fid, reparentChildren: true });
+      setSelected((prev) => prev.filter((s) => s.kind !== "frame"));
+      return;
+    }
+    const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
+    if (shapeIds.length > 0 && shapeRemoveMut) {
+      for (const id of shapeIds) shapeRemoveMut.mutate({ id });
+      setSelected((prev) => prev.filter((s) => s.kind !== "shape"));
+    }
+  }, [
+    selected,
+    selectedEdgeId,
+    removeEdge,
+    frameRemoveMut,
+    shapeRemoveMut,
+  ]);
+
   // -- Pan + zoom handlers --------------------------------------------
 
   // Map of canvas-space drag-set ids based on grouping. Given a primary
@@ -1001,6 +1276,48 @@ export default function CanvasViewerPage() {
     if ((e.target as HTMLElement).closest("[data-canvas-shape]")) return;
     if (editingLaneFor || editingNoteFor) return;
     const tool = activeToolRef.current;
+    // Single-click drop tool — entity-create. Opens an inline popover
+    // anchored to the click; commit fires issue.create / note.create
+    // and drops a CanvasNode reference at the canvas-space position.
+    if (tool === "entity-create") {
+      const { x, y } = surfaceToCanvasRef.current?.(e.clientX, e.clientY) ?? { x: 0, y: 0 };
+      setEntityCreator({
+        viewportX: e.clientX - (surfaceRef.current?.getBoundingClientRect().left ?? 0),
+        viewportY: e.clientY - (surfaceRef.current?.getBoundingClientRect().top ?? 0),
+        canvasX: x,
+        canvasY: y,
+      });
+      return;
+    }
+    // Single-click drop tools — comment-pin + stamp. No drag gesture;
+    // just stamp the shape at click position and return to select.
+    if (tool === "comment-pin" || tool === "stamp") {
+      if (!shapeAddMut) return;
+      const { x, y } = surfaceToCanvasRef.current?.(e.clientX, e.clientY) ?? { x: 0, y: 0 };
+      if (tool === "comment-pin") {
+        shapeAddMut.mutate({
+          canvasId: params.canvasId,
+          kind: "comment-pin",
+          x,
+          y,
+          width: 24,
+          height: 24,
+        });
+      } else {
+        const emoji = toolbarStyleRef.current.stampEmoji ?? "👍";
+        shapeAddMut.mutate({
+          canvasId: params.canvasId,
+          kind: "stamp",
+          x,
+          y,
+          width: 48,
+          height: 48,
+          style: { emoji },
+        });
+      }
+      setActiveTool("select");
+      return;
+    }
     const drawKinds: ToolKind[] = [
       "box",
       "ellipse",
@@ -1009,6 +1326,7 @@ export default function CanvasViewerPage() {
       "text",
       "freehand",
       "frame",
+      "sticky",
     ];
     if (drawKinds.includes(tool)) {
       // Begin a draw gesture. Convert pointer to canvas-space; the
@@ -1180,13 +1498,65 @@ export default function CanvasViewerPage() {
         const pointerY = (e.clientY - viewport.y) / viewport.zoom;
         let targetX = pointerX - primary.ox;
         let targetY = pointerY - primary.oy;
-        if (snapToGridRef.current) {
+        const primaryShape = shapesRef.current.find((s) => s.id === drag.primaryShapeId);
+        if (!primaryShape) return;
+
+        // Smart alignment guides — only when dragging exactly one shape
+        // (otherwise the guides ambiguate). Snap wins over grid-snap if
+        // both apply. We sample siblings sharing the same parent frame
+        // (or all top-level shapes if the primary is unparented).
+        let snapApplied = false;
+        if (drag.shapeIds.length === 1) {
+          const primaryParent =
+            (primaryShape as { parentFrameId?: string | null }).parentFrameId ?? null;
+          const w = primaryShape.width ?? 0;
+          const h = primaryShape.height ?? 0;
+          if (w > 0 && h > 0) {
+            const sibs: Array<{ id: string; x: number; y: number; width: number; height: number }> = [];
+            for (const s of shapesRef.current) {
+              if (s.id === drag.primaryShapeId) continue;
+              const sp =
+                (s as { parentFrameId?: string | null }).parentFrameId ?? null;
+              if (sp !== primaryParent) continue;
+              const sw = s.width ?? 0;
+              const sh = s.height ?? 0;
+              if (sw <= 0 || sh <= 0) continue;
+              sibs.push({ id: s.id, x: s.x, y: s.y, width: sw, height: sh });
+            }
+            // Include nodes in the same frame so shapes snap to cards.
+            for (const n of nodes) {
+              const np = (n as { parentFrameId?: string | null }).parentFrameId ?? null;
+              if (np !== primaryParent) continue;
+              sibs.push({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height });
+            }
+            const snap = computeSnap(
+              { x: targetX, y: targetY, width: w, height: h },
+              sibs,
+              viewport.zoom,
+            );
+            if (snap.guides.length > 0) {
+              targetX = snap.bbox.x;
+              targetY = snap.bbox.y;
+              snapApplied = true;
+              snapGuidesRef.current = {
+                guides: snap.guides,
+                labels: snap.labels,
+                sizeLabel: snap.sizeLabel,
+              };
+            } else {
+              snapGuidesRef.current = {
+                guides: [],
+                labels: [],
+                sizeLabel: snap.sizeLabel,
+              };
+            }
+          }
+        }
+        if (!snapApplied && snapToGridRef.current) {
           targetX = Math.round(targetX / GRID_SIZE_PX) * GRID_SIZE_PX;
           targetY = Math.round(targetY / GRID_SIZE_PX) * GRID_SIZE_PX;
         }
         // dx/dy applied to every shape relative to its *initial* (x,y).
-        const primaryShape = shapesRef.current.find((s) => s.id === drag.primaryShapeId);
-        if (!primaryShape) return;
         const dx = targetX - primaryShape.x;
         const dy = targetY - primaryShape.y;
         const shapeOverrides = shapeDragOverridesRef.current;
@@ -1312,6 +1682,8 @@ export default function CanvasViewerPage() {
       }
       dragNode.current = null;
       draggingRef.current = false;
+      // Clear smart-guide state so the overlay disappears.
+      snapGuidesRef.current = { guides: [], labels: [], sizeLabel: null };
       // Trailing realtime refresh — we suppressed invalidations during
       // the drag, so pull once on release in case anything changed.
       utils.canvas.hydrate.invalidate({ id: params.canvasId });
@@ -1405,47 +1777,40 @@ export default function CanvasViewerPage() {
   // node / shape ids so the live drag translates everything in lock-
   // step. The server's framePatch cascades the persisted move via SQL;
   // we mirror it here for the optimistic preview.
+  //
+  // Cascade lookup is O(descendants), not O(frames²) — the diagnosed
+  // root cause of the "frame click feels laggy" perception lived in
+  // the previous nested while-loop. Pre-baked indices come from
+  // `frameChildIndex` above.
   const onFrameTitleMouseDown = useCallback(
     (id: string, event: React.MouseEvent) => {
       if (event.button !== 0) return;
       const primary = framesRef.current.find((f) => f.id === id);
       if (!primary) return;
       if (primary.lockedAt) return;
-      const all = framesRef.current;
-      const cascade = new Set<string>([id]);
-      let added = true;
-      while (added) {
-        added = false;
-        for (const f of all) {
-          if (cascade.has(f.id)) continue;
-          if (f.parentFrameId && cascade.has(f.parentFrameId)) {
-            cascade.add(f.id);
-            added = true;
-          }
-        }
-      }
+      const descendants = frameChildIndex.descendantsByFrame.get(id);
+      const cascade: string[] = [id];
+      if (descendants) for (const d of descendants) cascade.push(d);
       const frameOrigins: Record<string, { x: number; y: number }> = {};
       for (const fid of cascade) {
-        const f = all.find((ff) => ff.id === fid);
+        const f = framesRef.current.find((ff) => ff.id === fid);
         if (!f) continue;
         frameOrigins[fid] = { x: f.x, y: f.y };
       }
       const childNodeIds: string[] = [];
-      for (const n of nodes) {
-        const pid = (n as { parentFrameId?: string | null }).parentFrameId ?? null;
-        if (pid && cascade.has(pid)) childNodeIds.push(n.id);
-      }
       const childShapeIds: string[] = [];
-      for (const s of shapes) {
-        const pid = (s as { parentFrameId?: string | null }).parentFrameId ?? null;
-        if (pid && cascade.has(pid)) childShapeIds.push(s.id);
+      for (const fid of cascade) {
+        const ns = frameChildIndex.childNodesByFrame.get(fid);
+        if (ns) for (const nid of ns) childNodeIds.push(nid);
+        const ss = frameChildIndex.childShapesByFrame.get(fid);
+        if (ss) for (const sid of ss) childShapeIds.push(sid);
       }
       const pointerX = (event.clientX - viewport.x) / viewport.zoom;
       const pointerY = (event.clientY - viewport.y) / viewport.zoom;
       dragNode.current = {
         kind: "frame-move",
         primaryFrameId: id,
-        frameIds: [...cascade],
+        frameIds: cascade,
         offsetX: pointerX - primary.x,
         offsetY: pointerY - primary.y,
         frameOrigins,
@@ -1454,7 +1819,7 @@ export default function CanvasViewerPage() {
       };
       draggingRef.current = true;
     },
-    [nodes, shapes, viewport.x, viewport.y, viewport.zoom],
+    [frameChildIndex, viewport.x, viewport.y, viewport.zoom],
   );
 
   // Pointer-move for an active draw draft / rubber-band. Lives in its own
@@ -1581,6 +1946,35 @@ export default function CanvasViewerPage() {
               },
             });
           }
+        } else if (tool === "sticky") {
+          // Single-click (no drag) drops a default-sized sticky at the
+          // click point. Drag defines a custom bbox, snapped to a sane
+          // minimum so the inline editor has room to breathe.
+          const dragged = w >= minSize || h >= minSize;
+          const stickyW = dragged ? Math.max(120, w) : 200;
+          const stickyH = dragged ? Math.max(80, h) : 120;
+          const startX = dragged ? Math.min(draft.startX, draft.endX) : draft.startX;
+          const startY = dragged ? Math.min(draft.startY, draft.endY) : draft.startY;
+          const paletteKey = toolbarStyleRef.current.stickyPalette ?? "sand";
+          shapeAddMut
+            .mutateAsync({
+              canvasId: params.canvasId,
+              kind: "sticky",
+              x: startX,
+              y: startY,
+              width: stickyW,
+              height: stickyH,
+              text: "",
+              style: { fill: paletteKey, fontSize: 14 },
+            })
+            .then((res: { id: string }) => {
+              // Drop straight into inline edit — same UX as the text
+              // tool. Operator never sees a placeholder sticky.
+              setEditingShapeFor(res.id);
+            })
+            .catch(() => {
+              /* error already toasted by shapeAddMut.onError */
+            });
         }
         shapeDraftRef.current = null;
         scheduleShapeDraftRender();
@@ -1749,6 +2143,29 @@ export default function CanvasViewerPage() {
       if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "f" || e.key === "F")) {
         e.preventDefault();
         setActiveTool("frame");
+        return;
+      }
+      // S = sticky, M = comment-pin, Y = stamp. Same modifier guard as
+      // F so they stay out of the way of platform shortcuts.
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "s" || e.key === "S")) {
+        e.preventDefault();
+        setActiveTool("sticky");
+        return;
+      }
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "m" || e.key === "M")) {
+        e.preventDefault();
+        setActiveTool("comment-pin");
+        return;
+      }
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        setActiveTool("stamp");
+        return;
+      }
+      // I = entity-create (issue / note inline composer).
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "i" || e.key === "I")) {
+        e.preventDefault();
+        setActiveTool("entity-create");
         return;
       }
       // +/- zoom in/out around viewport center. ⌘+ / ⌘- also work
@@ -2614,6 +3031,10 @@ export default function CanvasViewerPage() {
                 });
               }}
             />
+            {/* Smart alignment guides + size label (W1.4). Lives inside
+                the scaling transform so the line positions track canvas
+                coordinates; readers re-mount on dragRev. */}
+            <SnapGuidesLayer guidesRef={snapGuidesRef} rev={dragRev} zoom={viewport.zoom} />
             {selectedEdgeId
               ? (() => {
                   const edge = edges.find((x) => x.id === selectedEdgeId);
@@ -2651,6 +3072,42 @@ export default function CanvasViewerPage() {
               rev={cursorsRev}
             />
           ) : null}
+          {/* Floating selection inspector (W1.5) — mounts in
+              viewport-space (sibling of the scaling transform div) so
+              its UI stays a constant pixel size regardless of zoom. */}
+          {inspectorSelection && inspectorBbox && (
+            <CanvasSelectionInspector
+              selection={inspectorSelection}
+              bbox={inspectorBbox}
+              onPatch={onInspectorPatch}
+              onDelete={onInspectorDelete}
+            />
+          )}
+          {/* Inline entity-create popover (W1.2). Mounts at the
+              click site, dispatches issue.create / note.create, then
+              drops a CanvasNode at the canvas-space anchor. */}
+          {entityCreator && (
+            <CanvasEntityCreator
+              anchor={entityCreator}
+              onClose={() => {
+                setEntityCreator(null);
+                setActiveTool("select");
+              }}
+              onCreated={(e) => {
+                addNode.mutate({
+                  canvasId: params.canvasId,
+                  targetType: e.kind === "issue" ? "issue" : "note",
+                  targetId: e.id,
+                  x: e.canvasX,
+                  y: e.canvasY,
+                  width: 280,
+                  height: 120,
+                });
+                setEntityCreator(null);
+                setActiveTool("select");
+              }}
+            />
+          )}
         </div>
         <CanvasRightPanel
           slug={ws.slug}
@@ -2851,6 +3308,25 @@ function ShapeDraftPreview({
       />
     );
   }
+  if (kind === "sticky") {
+    // Filled preview using the active sticky palette, so the operator
+    // sees the color they're about to drop while dragging the bbox.
+    const paletteKey = style.stickyPalette ?? "sand";
+    const cssVar = `--sticky-${paletteKey}`;
+    return (
+      <div
+        className="pointer-events-none absolute rounded-md shadow-md"
+        style={{
+          left: minX,
+          top: minY,
+          width: Math.max(20, w),
+          height: Math.max(20, h),
+          background: `hsl(var(${cssVar}) / 0.6)`,
+          border: `1px dashed hsl(var(${cssVar}))`,
+        }}
+      />
+    );
+  }
   if (kind === "freehand") {
     const pts = draft.path.map(([dx, dy]) => [startX + dx, startY + dy] as [number, number]);
     if (pts.length === 0) return null;
@@ -2910,6 +3386,101 @@ function RubberBandPreview({
       className="pointer-events-none absolute rounded-sm border border-ember/60 bg-ember/10"
       style={{ left, top, width, height }}
     />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Smart alignment guides overlay (W1.4). Pure SVG. Reads from a ref so
+// drag-move can mutate without re-rendering this component until the
+// `rev` counter ticks. Sits inside the scaling transform so coordinates
+// are in canvas-space; line stroke is scaled inverse to zoom so guides
+// stay 1px in viewport pixels regardless of zoom.
+// ---------------------------------------------------------------------------
+
+function SnapGuidesLayer({
+  guidesRef,
+  rev: _rev,
+  zoom,
+}: {
+  guidesRef: React.MutableRefObject<{
+    guides: Array<{ axis: "x" | "y"; at: number; spanStart: number; spanEnd: number }>;
+    labels: Array<{ x: number; y: number; value: number; axis: "x" | "y" }>;
+    sizeLabel: { x: number; y: number; width: number; height: number } | null;
+  }>;
+  rev: number;
+  zoom: number;
+}) {
+  const state = guidesRef.current;
+  if (state.guides.length === 0 && !state.sizeLabel) return null;
+  const stroke = 1 / Math.max(0.01, zoom);
+  const labelScale = 1 / Math.max(0.01, zoom);
+  return (
+    <svg
+      className="pointer-events-none absolute left-0 top-0"
+      style={{ overflow: "visible" }}
+      width={1}
+      height={1}
+    >
+      {state.guides.map((g, i) =>
+        g.axis === "x" ? (
+          <line
+            key={`g${i}`}
+            x1={g.at}
+            x2={g.at}
+            y1={g.spanStart}
+            y2={g.spanEnd}
+            stroke="hsl(var(--ember))"
+            strokeWidth={stroke}
+            strokeDasharray={`${4 * stroke} ${4 * stroke}`}
+            opacity={0.85}
+          />
+        ) : (
+          <line
+            key={`g${i}`}
+            x1={g.spanStart}
+            x2={g.spanEnd}
+            y1={g.at}
+            y2={g.at}
+            stroke="hsl(var(--ember))"
+            strokeWidth={stroke}
+            strokeDasharray={`${4 * stroke} ${4 * stroke}`}
+            opacity={0.85}
+          />
+        ),
+      )}
+      {state.labels.map((l, i) => (
+        <g key={`l${i}`} transform={`translate(${l.x}, ${l.y}) scale(${labelScale})`}>
+          <rect x={-14} y={-7} width={28} height={14} rx={2} fill="hsl(var(--ember))" />
+          <text
+            x={0}
+            y={3}
+            fill="hsl(var(--ember-foreground))"
+            fontSize={10}
+            fontFamily="ui-monospace, monospace"
+            textAnchor="middle"
+          >
+            {Math.round(l.value)}
+          </text>
+        </g>
+      ))}
+      {state.sizeLabel && (
+        <g
+          transform={`translate(${state.sizeLabel.x}, ${state.sizeLabel.y}) scale(${labelScale})`}
+        >
+          <rect x={-30} y={-7} width={60} height={14} rx={2} fill="hsl(var(--foreground) / 0.85)" />
+          <text
+            x={0}
+            y={3}
+            fill="hsl(var(--background))"
+            fontSize={10}
+            fontFamily="ui-monospace, monospace"
+            textAnchor="middle"
+          >
+            {Math.round(state.sizeLabel.width)} × {Math.round(state.sizeLabel.height)}
+          </text>
+        </g>
+      )}
+    </svg>
   );
 }
 

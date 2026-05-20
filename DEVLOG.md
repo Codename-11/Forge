@@ -2,6 +2,39 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-20 — Canvas Polish Wave 1
+
+Plan: `docs/plans/canvas-polish-wave.md`. Goal: stop the canvas feeling
+like a placeholder — first-paint smoothness, on-canvas authoring, real
+selection inspector, alignment guides, and sticky-note primitives.
+
+- **W1.1**: frame drag cascade is now O(descendants), not O(frames²).
+  Added unified `frameChildIndex` memo (`childFramesByParent`,
+  `childNodesByFrame`, `childShapesByFrame`, `descendantsByFrame`)
+  and refactored `onFrameTitleMouseDown` + `activePageDescendantIds`
+  to use it. Click-to-first-paint on nested frames is no longer
+  perceptibly delayed.
+- **W1.2**: new `entity-create` tool (toolbar icon + `I` shortcut).
+  Click on the canvas opens an inline composer popover with
+  Issue / Note tabs; `Enter` commits via `issue.create` / `note.create`
+  and drops a `CanvasNode` at the click position. Returns to Select.
+- **W1.3**: sticky / comment-pin / stamp shape kinds + toolbar palettes.
+- **W1.4**: smart alignment guides during shape drag. New
+  `src/lib/canvas-snap-guides.ts` + 8 unit tests. Edge/center snap
+  within 4px (scaled by zoom), guide lines rendered in ember dashed,
+  inline distance labels between the active item and its nearest
+  sibling, plus a `W × H` size label on the active bbox. Grid-snap
+  still works when no smart-snap fires.
+- **W1.5**: floating selection inspector. New
+  `src/components/canvas/canvas-selection-inspector.tsx` — mini
+  toolbar that hovers 8px above the selection bbox (auto-flips
+  below near the top of the viewport). Per-kind property surfaces:
+  shape (color / stroke / opacity / lock), frame (name /
+  auto-layout direction / gap / padding), edge (kind), node (open
+  detail), multi (count chip). Patches debounced 200ms, routed
+  through `shapePatch` / `framePatch` / `edgePatch`. Delete button
+  reuses the existing keyboard-delete path.
+
 ## 2026-05-20 — Unified workspace flow — Wave 1
 
 ### Summary
