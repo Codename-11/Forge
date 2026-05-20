@@ -68,6 +68,7 @@ export function CanvasSettingsModal({
       toast.success("Canvas archived");
       setConfirmArchive(false);
       onOpenChange(false);
+      utils.canvas.list.invalidate();
       onArchived();
     },
     onError: (e) => toast.error(e.message),

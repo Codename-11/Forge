@@ -80,6 +80,7 @@ export default function ArtifactDetailPage() {
   const archive = trpc.artifact.archive.useMutation({
     onSuccess: () => {
       toast.success("Archived");
+      utils.artifact.list.invalidate();
       router.push(`/w/${ws.slug}/artifacts`);
     },
     onError: (e) => toast.error(e.message),
@@ -88,6 +89,8 @@ export default function ArtifactDetailPage() {
   const deleteM = trpc.artifact.delete.useMutation({
     onSuccess: () => {
       toast.success("Artifact deleted");
+      utils.artifact.list.invalidate();
+      if (artifact?.id) utils.artifact.get.invalidate({ id: artifact.id });
       router.push(`/w/${ws.slug}/artifacts`);
     },
     onError: (e) => toast.error(e.message),

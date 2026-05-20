@@ -1,6 +1,7 @@
 "use client";
 import { useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+import { writeAppearanceCookie } from "@/lib/appearance-cookie";
 
 /**
  * AppearanceProvider
@@ -9,13 +10,11 @@ import { trpc } from "@/lib/trpc";
  * the <html> element so the CSS utilities in `globals.css` (`.text-id`,
  * `.text-meta`, `.text-filename`, `.text-subtitle`) cascade correctly.
  *
- * Defaults to compact / default until the query resolves so SSR markup
- * is stable across renders. Mounted inside the workspace shell layout
- * so it sits behind the auth gate.
- *
- * The `apply-density` agent owns swapping ad-hoc `text-[0.6875rem]` etc.
- * across components for the named utility classes; this provider is
- * the single source of truth that wires the preference to the DOM.
+ * First paint is handled by the root server layout, which reads the
+ * `forge.appearance` cookie and stamps `data-density` / `data-textsize`
+ * before any HTML is sent — no flash on reload. This provider keeps
+ * the in-session DOM + cookie in sync once `trpc.user.me` resolves so
+ * a new device with a stale cookie self-heals on the first load.
  */
 export function AppearanceProvider({ children }: { children: React.ReactNode }) {
   const { data } = trpc.user.me.useQuery(undefined, {
@@ -25,12 +24,14 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
 
   useEffect(() => {
     if (typeof document === "undefined") return;
+    if (!data) return;
     const html = document.documentElement;
-    const density = data?.density === "comfortable" ? "comfortable" : "compact";
-    const textSize = data?.textSize === "larger" ? "larger" : "default";
+    const density = data.density === "comfortable" ? "comfortable" : "compact";
+    const textSize = data.textSize === "larger" ? "larger" : "default";
     html.setAttribute("data-density", density);
     html.setAttribute("data-textsize", textSize);
-  }, [data?.density, data?.textSize]);
+    writeAppearanceCookie({ density, textSize });
+  }, [data?.density, data?.textSize, data]);
 
   return <>{children}</>;
 }

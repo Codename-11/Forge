@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Section } from "@/components/settings/section";
 import { trpc } from "@/lib/trpc";
+import { writeAppearanceCookie } from "@/lib/appearance-cookie";
 
 type Density = "compact" | "comfortable";
 type TextSize = "default" | "larger";
@@ -56,8 +57,10 @@ export default function AppearancePage() {
     if (next === density) return;
     setDensity(next);
     // Optimistic DOM update so the preview row + the rest of the app
-    // re-flow before the round-trip resolves.
+    // re-flow before the round-trip resolves. Cookie is mirrored so
+    // the next page reload skips the FOUC entirely.
     document.documentElement.setAttribute("data-density", next);
+    writeAppearanceCookie({ density: next, textSize });
     update.mutate({ density: next });
   }
 
@@ -65,6 +68,7 @@ export default function AppearancePage() {
     if (next === textSize) return;
     setTextSize(next);
     document.documentElement.setAttribute("data-textsize", next);
+    writeAppearanceCookie({ density, textSize: next });
     update.mutate({ textSize: next });
   }
 

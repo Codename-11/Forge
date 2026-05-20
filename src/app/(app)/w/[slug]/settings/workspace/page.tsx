@@ -90,6 +90,8 @@ export default function WorkspaceSettingsPage() {
   const archive = trpc.workspace.archive.useMutation({
     onSuccess: () => {
       toast.success("Workspace archived.");
+      utils.workspace.list.invalidate();
+      utils.workspace.current.invalidate();
       router.push("/settings/workspaces");
     },
     onError: (e) => toast.error(e.message),
@@ -98,6 +100,8 @@ export default function WorkspaceSettingsPage() {
   const del = trpc.workspace.delete.useMutation({
     onSuccess: () => {
       toast.success("Workspace deleted.");
+      utils.workspace.list.invalidate();
+      utils.workspace.current.invalidate();
       router.push("/settings/workspaces");
     },
     onError: (e) => toast.error(e.message),
