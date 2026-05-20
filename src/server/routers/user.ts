@@ -62,10 +62,11 @@ export const userRouter = router({
     }),
 
   /**
-   * Per-user Mission Control preferences. Currently only the default
-   * tab; future widget knobs (default size, sound, etc.) can land here.
-   * Null clears the pref so the widget falls back to its built-in
-   * default ("live").
+   * Per-user Mission Control preferences. Default-tab can be either
+   * global (User-scoped) or per-workspace (Membership-scoped, when a
+   * `workspaceId` is provided). Membership values win over the
+   * User-global value when both are set; null clears whichever scope
+   * was targeted.
    */
   updateMissionControlPrefs: protectedProcedure
     .input(
@@ -74,14 +75,77 @@ export const userRouter = router({
           .enum(["live", "queue", "agents", "history", "chat"])
           .nullable()
           .optional(),
+        /**
+         * Optional workspace scope. When supplied, the pref is
+         * written to the caller's Membership row in that workspace
+         * (per-workspace override). When omitted, the pref is
+         * written to the global User row.
+         */
+        workspaceId: z.string().cuid().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      return ctx.db.user.update({
+      if (input.workspaceId) {
+        // Per-workspace override. Confirm membership exists, then
+        // patch missionControlDefaultTab on that row.
+        const m = await ctx.db.membership.findFirst({
+          where: { userId: ctx.session.user.id, workspaceId: input.workspaceId },
+          select: { id: true },
+        });
+        if (!m) {
+          throw new Error("Not a member of that workspace.");
+        }
+        await ctx.db.membership.update({
+          where: { id: m.id },
+          data: {
+            missionControlDefaultTab:
+              input.missionControlDefaultTab === undefined
+                ? undefined
+                : input.missionControlDefaultTab,
+          },
+        });
+      } else {
+        await ctx.db.user.update({
+          where: { id: ctx.session.user.id },
+          data: {
+            missionControlDefaultTab:
+              input.missionControlDefaultTab === undefined
+                ? undefined
+                : input.missionControlDefaultTab,
+          },
+        });
+      }
+      return ctx.db.user.findUniqueOrThrow({
         where: { id: ctx.session.user.id },
-        data: input,
         select: ME_SELECT,
       });
+    }),
+
+  /**
+   * Returns the resolved Mission Control default tab for the caller
+   * in the given workspace: Membership override → User global → null
+   * (caller falls back to "live"). Cheap to call on every Mission
+   * Control mount.
+   */
+  missionControlDefaultTabFor: protectedProcedure
+    .input(z.object({ workspaceId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const [user, membership] = await Promise.all([
+        ctx.db.user.findUnique({
+          where: { id: ctx.session.user.id },
+          select: { missionControlDefaultTab: true },
+        }),
+        ctx.db.membership.findFirst({
+          where: { userId: ctx.session.user.id, workspaceId: input.workspaceId },
+          select: { missionControlDefaultTab: true },
+        }),
+      ]);
+      return {
+        resolved:
+          membership?.missionControlDefaultTab ?? user?.missionControlDefaultTab ?? null,
+        membership: membership?.missionControlDefaultTab ?? null,
+        user: user?.missionControlDefaultTab ?? null,
+      };
     }),
 
   dismissOnboarding: protectedProcedure.mutation(async ({ ctx }) => {

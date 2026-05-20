@@ -634,6 +634,11 @@ model Membership {
   userId      String
   workspaceId String
   role        Role     @default(MEMBER)
+  /// Per-workspace override for Mission Control's default tab. Empty
+  /// (null) falls back to `User.missionControlDefaultTab`, then to
+  /// "live". Lets an operator say "Chat is my default in Workspace A,
+  /// Live is my default in Workspace B" without juggling global prefs.
+  missionControlDefaultTab String?
   createdAt   DateTime @default(now())
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)

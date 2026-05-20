@@ -94,6 +94,8 @@ export default function CanvasViewerPage() {
   const router = useRouter();
   const ws = useWorkspace();
   const utils = trpc.useUtils();
+  const meQ = trpc.user.me.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const myUserId = meQ.data?.id ?? null;
 
   const { data, isLoading } = trpc.canvas.hydrate.useQuery({ id: params.canvasId });
 
@@ -121,6 +123,11 @@ export default function CanvasViewerPage() {
   }, [data?.canvas.viewport]);
 
   const patchNode = trpc.canvas.patchNode.useMutation({
+    onError: (e) => toast.error(e.message),
+    onSuccess: () => utils.canvas.hydrate.invalidate({ id: params.canvasId }),
+  });
+
+  const patchNodeMeta = trpc.canvas.patchNodeMeta.useMutation({
     onError: (e) => toast.error(e.message),
     onSuccess: () => utils.canvas.hydrate.invalidate({ id: params.canvasId }),
   });
@@ -196,6 +203,17 @@ export default function CanvasViewerPage() {
     | undefined;
 
   const nodes = useMemo(() => (data?.nodes ?? []) as HydratedNode[], [data?.nodes]);
+  const edges = useMemo(
+    () =>
+      (data?.edges ?? []) as Array<{
+        id: string;
+        fromNodeId: string;
+        toNodeId: string;
+        label: string | null;
+        kind: string | null;
+      }>,
+    [data?.edges],
+  );
 
   // -- Pan + zoom handlers --------------------------------------------
 
@@ -398,9 +416,10 @@ export default function CanvasViewerPage() {
       };
       const id = payload.userId ?? evt.actorId ?? null;
       if (!id) return;
-      // Skip own broadcasts — we don't have a great session-id hook here,
-      // so we tolerate seeing our own cursor briefly. Operators rarely
-      // notice; future polish ticket.
+      // Suppress self — the local operator's own broadcasts come back
+      // through the workspace SSE bus and we don't want to render a
+      // dot for them.
+      if (myUserId && id === myUserId) return;
       if (typeof payload.x !== "number" || typeof payload.y !== "number") return;
       setRemoteCursors((prev) => {
         const next = new Map(prev);
@@ -541,7 +560,44 @@ export default function CanvasViewerPage() {
                   : "Convert-to-plan ships in a later release"
               }
               disabled={!convertToPlanMut || convertToPlanMut.isPending}
-              onClick={() => convertToPlanMut?.mutate({ canvasId: params.canvasId })}
+              onClick={() => {
+                if (!convertToPlanMut) return;
+                // Client-side dry-run preview — mirror the backend's
+                // include/skip rules so the operator can confirm before
+                // a plan row is created.
+                let stepCount = 0;
+                const skipped: Array<{ targetType: string; reason: string }> = [];
+                for (const n of nodes) {
+                  if (n.targetType === "execution-step") {
+                    stepCount++;
+                  } else if (
+                    n.targetType === "artifact" &&
+                    ((n.meta as { kind?: string } | null)?.kind ?? "") === "NOTE"
+                  ) {
+                    stepCount++;
+                  } else {
+                    skipped.push({
+                      targetType: n.targetType,
+                      reason: "type not convertible to a plan step",
+                    });
+                  }
+                }
+                if (stepCount === 0) {
+                  toast.error("Nothing convertible on this canvas — add steps or NOTE artifacts first.");
+                  return;
+                }
+                const skippedLabel =
+                  skipped.length === 0
+                    ? "no nodes will be skipped"
+                    : `${skipped.length} node${skipped.length === 1 ? "" : "s"} will be skipped (${[
+                        ...new Set(skipped.map((s) => s.targetType)),
+                      ].join(", ")})`;
+                const ok = window.confirm(
+                  `Create a new plan with ${stepCount} step${stepCount === 1 ? "" : "s"} from this canvas?\n\n${skippedLabel}.`,
+                );
+                if (!ok) return;
+                convertToPlanMut.mutate({ canvasId: params.canvasId });
+              }}
             >
               <GitBranch className="h-3.5 w-3.5" />{" "}
               {convertToPlanMut?.isPending ? "Converting…" : "Convert to plan"}
@@ -586,6 +642,8 @@ export default function CanvasViewerPage() {
             {lanes.map((lane) => (
               <LaneBand key={lane.name} lane={lane} />
             ))}
+            {/* Edges sit between lane bands and node cards. */}
+            <EdgesOverlay nodes={nodes} edges={edges} />
             {nodes.length === 0 ? (
               <div
                 className="absolute left-8 top-8 rounded-lg border border-dashed border-border bg-card/30 p-6 text-sm text-muted-foreground"
@@ -612,11 +670,11 @@ export default function CanvasViewerPage() {
                   }
                 }}
                 onPatchLane={(lane) => {
-                  patchNode.mutate({
+                  // Persist via canvas.patchNodeMeta (set lane=null to
+                  // delete the key when the operator clears the field).
+                  patchNodeMeta.mutate({
                     id: node.id,
-                    // viewMode is used as a side-channel; lane lives in node.meta
-                    // server-side. Until Agent H exposes `meta` on patchNode we
-                    // optimistically rewrite the hydrated cache only.
+                    meta: { lane: lane.trim() ? lane.trim() : null },
                   });
                   utils.canvas.hydrate.setData({ id: params.canvasId }, (curr) => {
                     if (!curr) return curr;
@@ -629,10 +687,17 @@ export default function CanvasViewerPage() {
                             string,
                             unknown
                           >;
-                        return {
-                          ...n,
-                          meta: { ...nMeta, lane: lane || undefined },
-                        };
+                        const nextMeta: Record<string, unknown> = { ...nMeta };
+                        if (lane.trim()) {
+                          nextMeta.lane = lane.trim();
+                        } else {
+                          delete nextMeta.lane;
+                        }
+                        // Cast through unknown: tRPC's response shape uses
+                        // Prisma.JsonValue (union including arrays/null) while
+                        // we're storing a plain object — same wire shape, just
+                        // narrower at compile time.
+                        return { ...n, meta: nextMeta as unknown as typeof n.meta };
                       }),
                     };
                   });
@@ -739,6 +804,181 @@ function LaneBand({ lane }: { lane: LaneBox }) {
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Edges overlay — labeled arrows between node cards. Inside the transformed
+// surface so it shares the same coordinate space as the cards; SVG sizing
+// is computed from the node bounding box (with margin) so it covers them.
+// ---------------------------------------------------------------------------
+
+function EdgesOverlay({
+  nodes,
+  edges,
+}: {
+  nodes: HydratedNode[];
+  edges: Array<{
+    id: string;
+    fromNodeId: string;
+    toNodeId: string;
+    label: string | null;
+    kind: string | null;
+  }>;
+}) {
+  const nodeById = useMemo(() => {
+    const m = new Map<string, HydratedNode>();
+    for (const n of nodes) m.set(n.id, n);
+    return m;
+  }, [nodes]);
+
+  if (edges.length === 0) return null;
+
+  // Pick stroke + opacity by edge.kind so the timeline-style "depends_on"
+  // chain stands out from the structural "contains" plumbing.
+  const styleFor = (kind: string | null): { stroke: string; dash?: string; opacity: number } => {
+    switch (kind) {
+      case "depends_on":
+        return { stroke: "var(--ember, #d97706)", opacity: 0.7 };
+      case "contains":
+        return { stroke: "var(--muted-foreground, #78716c)", dash: "4 4", opacity: 0.4 };
+      default:
+        return { stroke: "var(--muted-foreground, #78716c)", opacity: 0.55 };
+    }
+  };
+
+  // Bounding box across nodes — used to size the SVG and to translate
+  // it so the arrowheads stay aligned at any pan/zoom (the parent
+  // already applies the transform; we just need a big-enough canvas
+  // and the right origin).
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    minX = Math.min(minX, n.x);
+    minY = Math.min(minY, n.y);
+    maxX = Math.max(maxX, n.x + n.width);
+    maxY = Math.max(maxY, n.y + n.height);
+  }
+  const margin = 80;
+  const left = Math.floor(minX - margin);
+  const top = Math.floor(minY - margin);
+  const width = Math.ceil(maxX - minX + margin * 2);
+  const height = Math.ceil(maxY - minY + margin * 2);
+
+  return (
+    <svg
+      className="pointer-events-none absolute"
+      style={{ left, top, width, height }}
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+    >
+      <defs>
+        <marker
+          id="edge-arrow-ember"
+          viewBox="0 -5 10 10"
+          refX="9"
+          refY="0"
+          markerWidth="6"
+          markerHeight="6"
+          orient="auto"
+        >
+          <path d="M0,-4 L8,0 L0,4 Z" fill="var(--ember, #d97706)" />
+        </marker>
+        <marker
+          id="edge-arrow-muted"
+          viewBox="0 -5 10 10"
+          refX="9"
+          refY="0"
+          markerWidth="6"
+          markerHeight="6"
+          orient="auto"
+        >
+          <path d="M0,-4 L8,0 L0,4 Z" fill="var(--muted-foreground, #78716c)" />
+        </marker>
+      </defs>
+      {edges.map((e) => {
+        const from = nodeById.get(e.fromNodeId);
+        const to = nodeById.get(e.toNodeId);
+        if (!from || !to) return null;
+        // Connect from the centers projected onto each node's nearest
+        // border. Simpler than full ortho routing; good enough for v1.
+        const fromCx = from.x + from.width / 2;
+        const fromCy = from.y + from.height / 2;
+        const toCx = to.x + to.width / 2;
+        const toCy = to.y + to.height / 2;
+        const dx = toCx - fromCx;
+        const dy = toCy - fromCy;
+        const fromEdge = projectToRect(fromCx, fromCy, from, dx, dy);
+        const toEdge = projectToRect(toCx, toCy, to, -dx, -dy);
+        const x1 = fromEdge.x - left;
+        const y1 = fromEdge.y - top;
+        const x2 = toEdge.x - left;
+        const y2 = toEdge.y - top;
+        const style = styleFor(e.kind);
+        const marker =
+          e.kind === "depends_on" ? "url(#edge-arrow-ember)" : "url(#edge-arrow-muted)";
+        // Mid-point for the label.
+        const mx = (x1 + x2) / 2;
+        const my = (y1 + y2) / 2;
+        return (
+          <g key={e.id} opacity={style.opacity}>
+            <line
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              stroke={style.stroke}
+              strokeWidth={1.5}
+              strokeDasharray={style.dash}
+              markerEnd={marker}
+            />
+            {e.label && (
+              <g transform={`translate(${mx}, ${my})`}>
+                <rect
+                  x={-Math.min(60, e.label.length * 3 + 8)}
+                  y={-9}
+                  width={Math.min(120, e.label.length * 6 + 16)}
+                  height={16}
+                  rx={4}
+                  fill="var(--card, #fafaf9)"
+                  fillOpacity={0.85}
+                  stroke="var(--border, #d6d3d1)"
+                />
+                <text
+                  textAnchor="middle"
+                  dy="0.32em"
+                  fontSize={10}
+                  fill="var(--muted-foreground, #57534e)"
+                >
+                  {e.label}
+                </text>
+              </g>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function projectToRect(
+  cx: number,
+  cy: number,
+  rect: { x: number; y: number; width: number; height: number },
+  vx: number,
+  vy: number,
+): { x: number; y: number } {
+  // Cast a ray from center along (vx,vy) and find where it hits the
+  // rect's border. Returns the border point.
+  if (vx === 0 && vy === 0) return { x: cx, y: cy };
+  const hx = rect.width / 2;
+  const hy = rect.height / 2;
+  const tx = vx === 0 ? Infinity : (vx > 0 ? hx : -hx) / vx;
+  const ty = vy === 0 ? Infinity : (vy > 0 ? hy : -hy) / vy;
+  const t = Math.min(Math.abs(tx), Math.abs(ty));
+  return { x: cx + vx * t, y: cy + vy * t };
 }
 
 // ---------------------------------------------------------------------------

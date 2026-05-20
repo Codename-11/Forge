@@ -2,6 +2,60 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Plans/Canvas/Chat follow-ups + Victor-dedup hotfix
+
+### Summary
+
+Closed the five follow-ups noted by the round-2 agent team and fixed
+a regression operators noticed in production: the chat overlay was
+showing one row per ChatThread, so an agent with multiple threads
+(e.g. Victor with 3) appeared three times in the agent rail.
+
+### What changed
+
+1. **Chat overlay agent rail dedupe** (`chat-tab.tsx`) — rebuilt
+   the rail builder to bucket by `agent.id` and pick the
+   most-recent `lastMessageAt` per agent. Final list is sorted by
+   `lastMessageAt desc` with alphabetical name as the tie-break.
+   Fixes "3 Victors" in the chat tab.
+2. **`canvas.patchNodeMeta` tRPC + lane persistence** — added a
+   shallow-merge `meta` update procedure (null deletes a key) and
+   swapped the canvas lane editor's optimistic-only path to call
+   it. Lanes now survive a page refresh.
+3. **Edge SVG overlay on canvas** — `EdgesOverlay` renders all
+   canvas edges as labeled SVG arrows inside the transformed
+   surface so they pan/zoom with the cards. Styled by `edge.kind`
+   (`depends_on` ember-solid, `contains` muted-dashed, default
+   muted-solid). Borders projected to each node's rect so arrowheads
+   land on the card edge, not the center. Closes the gap where
+   templates seeded edges that didn't render.
+4. **Convert-to-plan dry-run** — the toolbar button now runs a
+   client-side preview using the same include/skip rules as the
+   backend (`execution-step` ✓; `artifact` with `meta.kind="NOTE"`
+   ✓; everything else skipped), shows a confirm dialog with the
+   step count and skipped-node-type summary, and only fires the
+   mutation on operator confirm. No more silent skips.
+5. **Self-cursor filter** — Mission Control queries `trpc.user.me`
+   in the canvas page and the presence subscriber suppresses any
+   `canvas-presence` event whose `userId` matches. Operators no
+   longer see their own ghost dot.
+6. **Per-workspace Mission Control default tab** (migration 0043)
+   — added `Membership.missionControlDefaultTab String?` and a new
+   `trpc.user.missionControlDefaultTabFor({ workspaceId })` resolver
+   that returns `{ resolved, membership, user }`. `updateMissionControlPrefs`
+   now optionally takes a `workspaceId` to write the per-workspace
+   override. Settings popover surfaces two dropdowns: "Open on
+   (this workspace)" with an "Inherit ({userPref})" option, and
+   "Open on (all workspaces)". Mount-time tab application reads
+   the resolved value so per-workspace wins.
+
+### Tests + verification
+
+- `pnpm lint` → clean.
+- `pnpm typecheck` → clean.
+- `pnpm test` → 50 files / 386 tests pass.
+- `pnpm build` → clean.
+
 ## 2026-05-19 — Chat overlay flow + Canvas first-class board (parallel team round 2)
 
 ### Summary

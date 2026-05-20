@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { ArtifactType, EventKind, ExecutionPlanStatus, type PrismaClient } from "@prisma/client";
+import { ArtifactType, EventKind, ExecutionPlanStatus, type Prisma, type PrismaClient } from "@prisma/client";
 import { nanoid } from "nanoid";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -310,6 +310,55 @@ export const canvasRouter = router({
           collapsed: input.collapsed,
           viewMode: input.viewMode === undefined ? undefined : input.viewMode,
         },
+      });
+      await ctx.db.workspaceCanvas.update({
+        where: { id: node.canvasId },
+        data: { updatedAt: new Date() },
+      });
+      return { ok: true };
+    }),
+
+  /**
+   * Shallow-merge update for `WorkspaceCanvasNode.meta`. Lets the UI
+   * stamp lane / kind / arbitrary card-state on a node without
+   * needing a dedicated column per field. Pass `null` for a key to
+   * delete it from the stored meta object.
+   *
+   * Returns the merged meta so the caller can reconcile its
+   * optimistic local state against the canonical row.
+   */
+  patchNodeMeta: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        meta: z.record(z.unknown()).describe(
+          "Object of meta keys to merge. Keys with value=null are deleted from the stored meta object.",
+        ),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const node = await ctx.db.workspaceCanvasNode.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true, meta: true },
+      });
+      if (!node) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas node not found." });
+      }
+      const current =
+        node.meta && typeof node.meta === "object" && !Array.isArray(node.meta)
+          ? (node.meta as Record<string, unknown>)
+          : {};
+      const next: Record<string, unknown> = { ...current };
+      for (const [k, v] of Object.entries(input.meta)) {
+        if (v === null) {
+          delete next[k];
+        } else {
+          next[k] = v;
+        }
+      }
+      await ctx.db.workspaceCanvasNode.update({
+        where: { id: input.id },
+        data: { meta: next as Prisma.InputJsonValue },
       });
       await ctx.db.workspaceCanvas.update({
         where: { id: node.canvasId },
