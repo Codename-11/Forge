@@ -119,6 +119,7 @@ export default function PlanDetailPage() {
   const archive = trpc.executionPlan.archive.useMutation({
     onSuccess: () => {
       toast.success("Plan archived");
+      utils.executionPlan.list.invalidate();
       router.push(`/w/${ws.slug}/plans`);
     },
     onError: (e) => toast.error(e.message),
@@ -127,6 +128,8 @@ export default function PlanDetailPage() {
   const deleteM = trpc.executionPlan.delete.useMutation({
     onSuccess: () => {
       toast.success("Plan deleted");
+      utils.executionPlan.list.invalidate();
+      utils.executionPlan.get.invalidate({ id: params.planId });
       router.push(`/w/${ws.slug}/plans`);
     },
     onError: (e) => toast.error(e.message),

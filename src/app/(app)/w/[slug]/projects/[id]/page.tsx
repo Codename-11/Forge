@@ -59,9 +59,11 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
+  const trpcUtils = trpc.useUtils();
   const archive = trpc.project.archive.useMutation({
     onSuccess: () => {
       toast.success("Project archived.");
+      trpcUtils.project.list.invalidate();
       router.push(`/w/${slug}/projects`);
     },
     onError: (e) => toast.error(e.message),
@@ -70,6 +72,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const del = trpc.project.softDelete.useMutation({
     onSuccess: () => {
       toast.success("Project deleted.");
+      trpcUtils.project.list.invalidate();
+      trpcUtils.project.byId.invalidate({ id });
       router.push(`/w/${slug}/projects`);
     },
     onError: (e) => toast.error(e.message),

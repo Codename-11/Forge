@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "sonner";
+import { readAppearance } from "@/server/appearance";
 import "./globals.css";
 
 const SITE_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://forge.axiom-labs.dev";
@@ -49,9 +50,20 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Stamp the operator's appearance prefs onto <html> at SSR so the very
+  // first paint already has the correct density + text size — the legacy
+  // AppearanceProvider effect was the source of a noticeable resize flash
+  // on every reload. AppearanceProvider still runs the catch-up + cookie
+  // sync once trpc.user.me resolves on the client.
+  const appearance = await readAppearance();
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      data-density={appearance.density}
+      data-textsize={appearance.textSize}
+      suppressHydrationWarning
+    >
       <body className="font-sans">
         <ThemeProvider>
           {children}
