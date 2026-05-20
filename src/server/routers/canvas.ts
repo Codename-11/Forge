@@ -223,6 +223,23 @@ export const canvasRouter = router({
       return { ok: true };
     }),
 
+  rename: workspaceProcedure
+    .input(z.object({ id: z.string().cuid(), name: z.string().min(1).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      await ctx.db.workspaceCanvas.update({
+        where: { id: input.id },
+        data: { name: input.name.trim(), updatedAt: new Date() },
+      });
+      return { ok: true };
+    }),
+
   setViewport: workspaceProcedure
     .input(
       z.object({

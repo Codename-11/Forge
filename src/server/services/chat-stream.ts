@@ -19,18 +19,33 @@ import { logger } from "@/server/logger";
  * a follow-on v2 will offer a confirm-and-run button.
  */
 
-export type ChatStreamRole = "system" | "user" | "assistant";
+export type ChatStreamRole = "system" | "user" | "assistant" | "tool";
 
 export interface ChatStreamMessage {
   role: ChatStreamRole;
   content: string;
+  /** Present on assistant messages that requested tool calls. */
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>;
+  /** Present on tool result messages. */
+  tool_call_id?: string;
 }
 
 export type ChatStreamEvent =
   | { kind: "content"; delta: string }
   | { kind: "thinking"; delta: string }
   | { kind: "tool_use"; id: string; name: string; args: Record<string, unknown> }
-  | { kind: "done" }
+  | {
+      kind: "tool_result";
+      id: string;
+      ok: boolean;
+      summary: string;
+      result?: unknown;
+    }
+  | { kind: "done"; hasToolCalls: boolean }
   | { kind: "error"; message: string };
 
 /** Maps Agent.provider → the ai-providers.ts ProviderId. */
@@ -57,6 +72,8 @@ interface StreamArgs {
   signal?: AbortSignal;
   /** Optional model override; otherwise the provider default is used. */
   model?: string;
+  /** Optional tool catalog. Empty/omitted disables function-calling. */
+  tools?: OpenAI.Chat.Completions.ChatCompletionTool[];
 }
 
 /**
@@ -74,7 +91,7 @@ export async function* streamChatReply(
       kind: "error",
       message: `Provider ${providerId} is not configured. Set the matching API key in env.`,
     };
-    yield { kind: "done" };
+    yield { kind: "done", hasToolCalls: false };
     return;
   }
 
@@ -86,6 +103,11 @@ export async function* streamChatReply(
     temperature: 0.4,
     max_tokens: 2048,
   };
+
+  if (args.tools && args.tools.length > 0) {
+    requestBody.tools = args.tools;
+    requestBody.tool_choice = "auto";
+  }
 
   // Anthropic supports an extended-thinking signal via its OpenAI-compat
   // layer. The OpenAI SDK accepts unknown keys, so we pass it through
@@ -110,7 +132,7 @@ export async function* streamChatReply(
       kind: "error",
       message: err instanceof Error ? err.message : "Upstream stream failed.",
     };
-    yield { kind: "done" };
+    yield { kind: "done", hasToolCalls: false };
     return;
   }
 
@@ -199,7 +221,7 @@ export async function* streamChatReply(
     if (!emittedAny) {
       yield { kind: "error", message: "Upstream returned an empty stream." };
     }
-    yield { kind: "done" };
+    yield { kind: "done", hasToolCalls: toolBuffers.size > 0 };
   } catch (err) {
     logger.warn(
       { err, provider: providerId },
@@ -209,6 +231,152 @@ export async function* streamChatReply(
       kind: "error",
       message: err instanceof Error ? err.message : "Stream interrupted.",
     };
-    yield { kind: "done" };
+    yield { kind: "done", hasToolCalls: false };
   }
+}
+
+export interface ChatToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  /** Original stringified arguments — needed when echoing into the next-turn message history. */
+  argsText: string;
+}
+
+export interface ChatToolExecResult {
+  ok: boolean;
+  summary: string;
+  result?: unknown;
+}
+
+export interface RunChatLoopArgs {
+  provider: AgentProvider;
+  messages: ChatStreamMessage[];
+  tools: OpenAI.Chat.Completions.ChatCompletionTool[];
+  model?: string;
+  signal?: AbortSignal;
+  /** Maximum number of model turns. Defaults to 5. */
+  maxTurns?: number;
+  onContent?: (delta: string) => void;
+  onThinking?: (delta: string) => void;
+  onToolUseStart?: (call: ChatToolCall) => void;
+  onToolResult?: (id: string, result: ChatToolExecResult) => void;
+  onError?: (message: string) => void;
+  onDone?: () => void;
+  /** Executor invoked once per surfaced tool call. */
+  executeToolCall: (call: ChatToolCall) => Promise<ChatToolExecResult>;
+}
+
+/**
+ * Multi-turn chat loop with tool execution. Drives `streamChatReply`,
+ * accumulates assistant content + tool calls, hands tool calls off to the
+ * caller's executor, appends both the assistant turn and the tool results
+ * to the running message array, and re-enters the loop until either no
+ * tool calls are made or `maxTurns` is hit.
+ */
+export async function runChatLoop(args: RunChatLoopArgs): Promise<void> {
+  const maxTurns = args.maxTurns ?? 5;
+  const messages = [...args.messages];
+
+  for (let turn = 0; turn < maxTurns; turn++) {
+    if (args.signal?.aborted) {
+      args.onError?.("Stream aborted.");
+      break;
+    }
+
+    const assistantContent: string[] = [];
+    // Preserve provider stream order so tool_calls land in the same slots
+    // when we echo them back as the assistant turn.
+    const toolCalls = new Map<string, ChatToolCall>();
+    let streamErrored = false;
+    let hasToolCalls = false;
+
+    for await (const evt of streamChatReply({
+      provider: args.provider,
+      messages,
+      signal: args.signal,
+      model: args.model,
+      tools: args.tools,
+    })) {
+      if (args.signal?.aborted) break;
+      switch (evt.kind) {
+        case "content":
+          assistantContent.push(evt.delta);
+          args.onContent?.(evt.delta);
+          break;
+        case "thinking":
+          args.onThinking?.(evt.delta);
+          break;
+        case "tool_use": {
+          const call: ChatToolCall = {
+            id: evt.id,
+            name: evt.name,
+            args: evt.args,
+            argsText: JSON.stringify(evt.args ?? {}),
+          };
+          toolCalls.set(evt.id, call);
+          args.onToolUseStart?.(call);
+          break;
+        }
+        case "error":
+          streamErrored = true;
+          args.onError?.(evt.message);
+          break;
+        case "done":
+          hasToolCalls = evt.hasToolCalls;
+          break;
+      }
+    }
+
+    if (streamErrored) break;
+    if (!hasToolCalls && toolCalls.size === 0) {
+      args.onDone?.();
+      return;
+    }
+
+    // Append the assistant turn (with tool_calls) so the next streamed
+    // call sees the same shape OpenAI expects, then run each tool and
+    // append tool result messages.
+    const assistantMsg: ChatStreamMessage = {
+      role: "assistant",
+      content: assistantContent.join(""),
+      tool_calls: Array.from(toolCalls.values()).map((c) => ({
+        id: c.id,
+        type: "function" as const,
+        function: { name: c.name, arguments: c.argsText },
+      })),
+    };
+    messages.push(assistantMsg);
+
+    for (const call of toolCalls.values()) {
+      let result: ChatToolExecResult;
+      try {
+        result = await args.executeToolCall(call);
+      } catch (err) {
+        result = {
+          ok: false,
+          summary:
+            err instanceof Error
+              ? err.message
+              : `Tool ${call.name} executor threw.`,
+        };
+      }
+      args.onToolResult?.(call.id, result);
+      const toolBody = result.ok
+        ? JSON.stringify(result.result ?? { ok: true, summary: result.summary })
+        : JSON.stringify({ ok: false, error: result.summary });
+      messages.push({
+        role: "tool",
+        content: toolBody.slice(0, 16_000),
+        tool_call_id: call.id,
+      });
+    }
+
+    if (args.signal?.aborted) {
+      args.onError?.("Stream aborted.");
+      break;
+    }
+  }
+
+  args.onDone?.();
 }

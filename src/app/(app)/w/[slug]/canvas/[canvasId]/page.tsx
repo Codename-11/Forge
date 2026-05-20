@@ -2,7 +2,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
-  Archive,
   ChevronLeft,
   ExternalLink,
   GitBranch,
@@ -12,6 +11,7 @@ import {
   MessageCircle,
   Minimize2,
   Plus,
+  Settings,
   StickyNote,
   Trash2,
   Bot,
@@ -34,6 +34,13 @@ import {
   canvasKindForAttachment,
   type CanvasPreviewKind,
 } from "@/components/canvas/canvas-preview";
+import { CanvasSettingsModal } from "@/components/canvas/canvas-settings-modal";
+
+const SIDEBAR_MIN_WIDTH = 180;
+const SIDEBAR_MAX_WIDTH = 480;
+const SIDEBAR_DEFAULT_WIDTH = 280;
+const SIDEBAR_STORAGE_PREFIX = "forge.canvas.sidebar.";
+const GRID_SIZE_PX = 20;
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 3;
@@ -87,7 +94,6 @@ type DragPayload =
 type DragOverride = { x?: number; y?: number; width?: number; height?: number };
 
 type ConfirmState =
-  | { kind: "archive" }
   | { kind: "remove-card"; id: string }
   | {
       kind: "convert";
@@ -131,10 +137,76 @@ export default function CanvasViewerPage() {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [openPicker, setOpenPicker] = useState(false);
   const [openSidebar, setOpenSidebar] = useState(true);
+  const [openSettings, setOpenSettings] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [editingLaneFor, setEditingLaneFor] = useState<string | null>(null);
   const [editingNoteFor, setEditingNoteFor] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
+
+  // Sidebar width — persisted per workspace slug. `sidebarRef` is used by
+  // the drag handler so live moves only touch the DOM, not React state.
+  const sidebarStorageKey = `${SIDEBAR_STORAGE_PREFIX}${ws.slug}`;
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return SIDEBAR_DEFAULT_WIDTH;
+    const raw = window.localStorage.getItem(sidebarStorageKey);
+    const parsed = raw ? Number(raw) : NaN;
+    if (!Number.isFinite(parsed)) return SIDEBAR_DEFAULT_WIDTH;
+    return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, parsed));
+  });
+  const sidebarRef = useRef<HTMLDivElement | null>(null);
+  const sidebarDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+
+  // View settings — persisted per workspace slug so the modal sticks. Grid
+  // dots and presence cursors honor these toggles; snap-to-grid quantizes
+  // the active drag position.
+  const viewStorageKey = `forge.canvas.view.${ws.slug}`;
+  type CanvasViewPrefs = { showGrid: boolean; snapToGrid: boolean; presenceVisible: boolean };
+  const defaultViewPrefs: CanvasViewPrefs = {
+    showGrid: true,
+    snapToGrid: false,
+    presenceVisible: true,
+  };
+  const [viewPrefs, setViewPrefs] = useState<CanvasViewPrefs>(() => {
+    if (typeof window === "undefined") return defaultViewPrefs;
+    try {
+      const raw = window.localStorage.getItem(viewStorageKey);
+      if (!raw) return defaultViewPrefs;
+      const parsed = JSON.parse(raw) as Partial<CanvasViewPrefs>;
+      return { ...defaultViewPrefs, ...parsed };
+    } catch {
+      return defaultViewPrefs;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(viewStorageKey, JSON.stringify(viewPrefs));
+    } catch {
+      /* ignore quota */
+    }
+  }, [viewPrefs, viewStorageKey]);
+  const setShowGrid = useCallback(
+    (v: boolean) => setViewPrefs((p) => ({ ...p, showGrid: v })),
+    [],
+  );
+  const setSnapToGrid = useCallback(
+    (v: boolean) => setViewPrefs((p) => ({ ...p, snapToGrid: v })),
+    [],
+  );
+  const setPresenceVisible = useCallback(
+    (v: boolean) => setViewPrefs((p) => ({ ...p, presenceVisible: v })),
+    [],
+  );
+  // Refs so the drag-move and mousemove publish reads stay in sync with the
+  // latest toggle without re-binding global listeners.
+  const snapToGridRef = useRef(viewPrefs.snapToGrid);
+  const presenceVisibleRef = useRef(viewPrefs.presenceVisible);
+  useEffect(() => {
+    snapToGridRef.current = viewPrefs.snapToGrid;
+  }, [viewPrefs.snapToGrid]);
+  useEffect(() => {
+    presenceVisibleRef.current = viewPrefs.presenceVisible;
+  }, [viewPrefs.presenceVisible]);
 
   // Ref-based drag overrides — see DragOverride type. `dragRev` is bumped
   // once per rAF tick during an active drag so we re-render at paint
@@ -191,14 +263,6 @@ export default function CanvasViewerPage() {
     onSuccess: () => {
       toast.success("Card added");
       utils.canvas.hydrate.invalidate({ id: params.canvasId });
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const archive = trpc.canvas.archive.useMutation({
-    onSuccess: () => {
-      toast.success("Canvas archived");
-      router.push(`/w/${ws.slug}/canvas`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -382,8 +446,12 @@ export default function CanvasViewerPage() {
       const overrides = dragOverridesRef.current;
       if (drag.kind === "node") {
         const { nodeId, offsetX, offsetY } = drag;
-        const newX = (e.clientX - viewport.x - offsetX) / viewport.zoom;
-        const newY = (e.clientY - viewport.y - offsetY) / viewport.zoom;
+        let newX = (e.clientX - viewport.x - offsetX) / viewport.zoom;
+        let newY = (e.clientY - viewport.y - offsetY) / viewport.zoom;
+        if (snapToGridRef.current) {
+          newX = Math.round(newX / GRID_SIZE_PX) * GRID_SIZE_PX;
+          newY = Math.round(newY / GRID_SIZE_PX) * GRID_SIZE_PX;
+        }
         overrides.set(nodeId, { ...overrides.get(nodeId), x: newX, y: newY });
       } else if (drag.kind === "resize") {
         const { nodeId, startX, startY, startW, startH } = drag;
@@ -584,6 +652,7 @@ export default function CanvasViewerPage() {
   }, []);
   const onSurfaceMouseMove = (e: React.MouseEvent) => {
     if (!presencePublishMut) return;
+    if (!presenceVisibleRef.current) return;
     const { x, y } = surfaceToCanvas(e.clientX, e.clientY);
     pendingPublishRef.current = { x, y };
     if (publishRafRef.current != null) return;
@@ -670,6 +739,57 @@ export default function CanvasViewerPage() {
       setEditingLaneFor(null);
     },
     [patchNodeMeta, utils, params.canvasId],
+  );
+
+  // Sidebar resize — pointer-driven, writes width directly to the DOM during
+  // the drag (refs only), then commits to React state + localStorage on
+  // release so React doesn't re-render the whole canvas tree per mousemove.
+  const onSidebarHandleDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const node = sidebarRef.current;
+      if (!node) return;
+      sidebarDragRef.current = {
+        startX: e.clientX,
+        startW: node.getBoundingClientRect().width,
+      };
+      setSidebarResizing(true);
+      let rafId: number | null = null;
+      let lastWidth = sidebarDragRef.current.startW;
+      const onMove = (ev: MouseEvent) => {
+        const start = sidebarDragRef.current;
+        if (!start) return;
+        const next = Math.min(
+          SIDEBAR_MAX_WIDTH,
+          Math.max(SIDEBAR_MIN_WIDTH, start.startW + (ev.clientX - start.startX)),
+        );
+        lastWidth = next;
+        if (rafId != null) return;
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          if (sidebarRef.current) sidebarRef.current.style.width = `${lastWidth}px`;
+        });
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        if (rafId != null) cancelAnimationFrame(rafId);
+        sidebarDragRef.current = null;
+        setSidebarResizing(false);
+        const finalWidth = Math.round(lastWidth);
+        setSidebarWidth(finalWidth);
+        try {
+          window.localStorage.setItem(sidebarStorageKey, String(finalWidth));
+        } catch {
+          /* ignore quota */
+        }
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [sidebarStorageKey],
   );
 
   if (isLoading) {
@@ -789,12 +909,36 @@ export default function CanvasViewerPage() {
             <Button size="sm" variant="ember" onClick={() => setOpenPicker(true)}>
               <Plus className="h-3.5 w-3.5" /> Add card
             </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              title="Canvas settings"
+              onClick={() => setOpenSettings(true)}
+            >
+              <Settings className="h-3.5 w-3.5" />
+            </Button>
           </>
         }
       />
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {openSidebar ? (
-          <CanvasEntityRail canvasId={data.canvas.id} />
+          <div
+            ref={sidebarRef}
+            className="relative flex shrink-0"
+            style={{ width: sidebarWidth }}
+          >
+            <CanvasEntityRail canvasId={data.canvas.id} />
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize sidebar"
+              onMouseDown={onSidebarHandleDown}
+              className={
+                "absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize bg-transparent transition-colors hover:bg-ember/40 " +
+                (sidebarResizing ? "bg-ember/60" : "")
+              }
+            />
+          </div>
         ) : null}
         <div
           ref={surfaceRef}
@@ -804,10 +948,15 @@ export default function CanvasViewerPage() {
           }
           style={{
             cursor: panning ? "grabbing" : "grab",
-            backgroundImage:
-              "radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px)",
-            backgroundSize: `${20 * viewport.zoom}px ${20 * viewport.zoom}px`,
-            backgroundPosition: `${viewport.x}px ${viewport.y}px`,
+            backgroundImage: viewPrefs.showGrid
+              ? "radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px)"
+              : undefined,
+            backgroundSize: viewPrefs.showGrid
+              ? `${20 * viewport.zoom}px ${20 * viewport.zoom}px`
+              : undefined,
+            backgroundPosition: viewPrefs.showGrid
+              ? `${viewport.x}px ${viewport.y}px`
+              : undefined,
           }}
           onMouseDown={onBackgroundMouseDown}
           onMouseMove={onSurfaceMouseMove}
@@ -856,24 +1005,13 @@ export default function CanvasViewerPage() {
           </div>
           {/* Remote cursors — read from ref via cursorsRev so the rest
               of the tree doesn't repaint when peers move. */}
-          <RemoteCursorsLayer
-            cursorsRef={remoteCursorsRef}
-            viewport={viewport}
-            rev={cursorsRev}
-          />
-        </div>
-        <div className="pointer-events-none absolute bottom-3 right-3 z-10">
-          <div className="pointer-events-auto flex gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              className="bg-card/80 backdrop-blur"
-              onClick={() => setConfirm({ kind: "archive" })}
-              disabled={archive.isPending}
-            >
-              <Archive className="h-3.5 w-3.5" /> Archive
-            </Button>
-          </div>
+          {viewPrefs.presenceVisible ? (
+            <RemoteCursorsLayer
+              cursorsRef={remoteCursorsRef}
+              viewport={viewport}
+              rev={cursorsRev}
+            />
+          ) : null}
         </div>
       </div>
       {openPicker && (
@@ -882,23 +1020,19 @@ export default function CanvasViewerPage() {
           onClose={() => setOpenPicker(false)}
         />
       )}
-      <Confirm
-        open={confirm?.kind === "archive"}
-        onOpenChange={(o) => {
-          if (!o) setConfirm(null);
-        }}
-        title="Archive canvas?"
-        description="Hides this canvas from the active list. You can restore it later."
-        primaryLabel="Archive canvas"
-        variant="destructive"
-        loading={archive.isPending}
-        onConfirm={() => {
-          if (confirm?.kind !== "archive") return;
-          archive.mutate(
-            { id: data.canvas.id },
-            { onSettled: () => setConfirm(null) },
-          );
-        }}
+      <CanvasSettingsModal
+        open={openSettings}
+        onOpenChange={setOpenSettings}
+        canvasId={data.canvas.id}
+        name={data.canvas.name}
+        scopeType={data.canvas.scopeType ?? null}
+        showGrid={viewPrefs.showGrid}
+        snapToGrid={viewPrefs.snapToGrid}
+        presenceVisible={viewPrefs.presenceVisible}
+        onShowGridChange={setShowGrid}
+        onSnapToGridChange={setSnapToGrid}
+        onPresenceVisibleChange={setPresenceVisible}
+        onArchived={() => router.push(`/w/${ws.slug}/canvas`)}
       />
       <Confirm
         open={confirm?.kind === "remove-card"}
@@ -2081,7 +2215,7 @@ function CanvasEntityRail({ canvasId: _canvasId }: { canvasId: string }) {
   })();
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-card/50">
+    <aside className="flex h-full w-full min-w-0 flex-col border-r border-border bg-card/50">
       <div className="border-b border-border px-2 pb-2 pt-2.5">
         <div className="text-meta uppercase tracking-wider text-muted-foreground">
           Drag to canvas
