@@ -2654,6 +2654,209 @@ describe("mcp runs.complete + completion contract", () => {
   });
 });
 
+describe("mcp runs.setWaiting + runs.resumeWork", () => {
+  it("setWaiting flips an ACTIVE run to WAITING and bumps lastEventAt", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "RW1" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `rw1-${Date.now()}`,
+        name: "Patient",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+        currentStep: "working",
+      },
+    });
+
+    const apiKey = { ...ctx.apiKey!, linkedAgentId: agent.id };
+    const scopedCtx = { ...ctx, apiKey };
+
+    // Backdate so we can confirm setWaiting bumps `lastEventAt`.
+    await prisma.$executeRawUnsafe(
+      `UPDATE "AgentRun" SET "lastEventAt" = $1 WHERE "id" = $2`,
+      new Date(Date.now() - 60 * 60_000),
+      run.id,
+    );
+
+    const result = (await call(
+      "runs.setWaiting",
+      { runId: run.id, reason: "awaiting prod creds" },
+      scopedCtx,
+    )) as { status: string; currentStep: string | null; lastEventAt: Date };
+
+    expect(result.status).toBe("WAITING");
+    expect(result.currentStep).toBe("awaiting prod creds");
+    // lastEventAt bumped well after the backdate
+    expect(new Date(result.lastEventAt).getTime()).toBeGreaterThan(
+      Date.now() - 30_000,
+    );
+
+    const events = await prisma.agentRunEvent.findMany({
+      where: { runId: run.id },
+    });
+    expect(events.find((e) => e.kind === "WAITING")).toBeTruthy();
+  });
+
+  it("setWaiting with blocking:true emits AGENT_RUN_BLOCKED", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "RW2" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `rw2-${Date.now()}`,
+        name: "Patient2",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+
+    const apiKey = { ...ctx.apiKey!, linkedAgentId: agent.id };
+    const scopedCtx = { ...ctx, apiKey };
+
+    await call(
+      "runs.setWaiting",
+      { runId: run.id, reason: "review needed", blocking: true },
+      scopedCtx,
+    );
+
+    const blockedEvents = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_RUN_BLOCKED,
+        subjectId: run.id,
+      },
+    });
+    expect(blockedEvents).toHaveLength(1);
+    const payload = blockedEvents[0].payload as Record<string, unknown>;
+    expect(payload.reason).toBe("review needed");
+    expect(payload.agentId).toBe(agent.id);
+  });
+
+  it("setWaiting without linkedAgentId is rejected", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "RW3" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture); // no linkedAgentId
+
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `rw3-${Date.now()}`,
+        name: "X",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+
+    await expect(
+      call("runs.setWaiting", { runId: run.id }, ctx),
+    ).rejects.toThrow(/linkedAgentId/);
+  });
+
+  it("setWaiting from a different agent's key is rejected", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "RW4" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+
+    const owner = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `rw4-owner-${Date.now()}`,
+        name: "Owner",
+      },
+    });
+    const intruder = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `rw4-intruder-${Date.now()}`,
+        name: "Intruder",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: owner.id,
+        status: "ACTIVE",
+      },
+    });
+
+    const apiKey = { ...ctx.apiKey!, linkedAgentId: intruder.id };
+    const scopedCtx = { ...ctx, apiKey };
+
+    await expect(
+      call("runs.setWaiting", { runId: run.id }, scopedCtx),
+    ).rejects.toThrow(/different agent/);
+  });
+
+  it("resumeWork flips WAITING back to ACTIVE", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "RW5" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `rw5-${Date.now()}`,
+        name: "Returner",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "WAITING",
+        currentStep: "Waiting on operator",
+      },
+    });
+
+    const apiKey = { ...ctx.apiKey!, linkedAgentId: agent.id };
+    const scopedCtx = { ...ctx, apiKey };
+
+    const result = (await call(
+      "runs.resumeWork",
+      { runId: run.id, currentStep: "resuming" },
+      scopedCtx,
+    )) as { status: string; currentStep: string | null };
+
+    expect(result.status).toBe("ACTIVE");
+    expect(result.currentStep).toBe("resuming");
+  });
+});
+
 describe("mcp canvases.* mutation tools", () => {
   it("creates a canvas, adds/patches/removes a node, and round-trips via canvases.get", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "CV1" });

@@ -1238,7 +1238,7 @@ function MinePanel({
                   </span>
                 }
                 title={issue.title}
-                meta={`${c.author.name ?? "someone"} · ${relativeTime(c.createdAt)}`}
+                meta={`${c.author?.name ?? "someone"} · ${relativeTime(c.createdAt)}`}
               />
             );
           })}

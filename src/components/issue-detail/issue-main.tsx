@@ -21,6 +21,7 @@ import {
   SlashAutocomplete,
   useSlashAutocomplete,
 } from "@/components/slash-autocomplete";
+import { MentionInput } from "@/components/inputs/mention-input";
 
 /**
  * Main column of the issue detail page — description (inline-editable)
@@ -37,14 +38,17 @@ type Comment = {
    * Comment kind. STATUS comments are pinned above the thread and
    * surfaced as the rolling agent run status (one per run, upserted
    * via `comments.upsertStatus`). BODY comments render in the regular
-   * chronological list.
+   * chronological list. SYSTEM comments are server-authored notices
+   * (assignment, dispatch provenance) with no author — rendered as
+   * ambient narration.
    */
-  kind?: "BODY" | "STATUS";
+  kind?: "BODY" | "STATUS" | "SYSTEM";
   /** Last update time (server-side `updatedAt`). Drives "updated Ns ago" on STATUS pins. */
   updatedAt?: Date | string;
   /** Compact step label rendered next to STATUS pins. Always null on BODY. */
   currentStep?: string | null;
-  author: { id: string; name: string | null; image: string | null };
+  /** SYSTEM rows have no author; renderer handles the null case. */
+  author: { id: string; name: string | null; image: string | null } | null;
   /**
    * When set, the comment was authored via an API key linked to this agent
    * (e.g. Victor / Mizu). Overrides the human author in the byline.
@@ -57,7 +61,7 @@ type Comment = {
   } | null;
   run?: {
     id: string;
-    status: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED";
+    status: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED" | "WAITING";
     finishedAt: Date | string | null;
   } | null;
 };
@@ -79,8 +83,14 @@ function isPinnedStatusComment(comment: Comment): boolean {
   if (comment.kind !== "STATUS") return false;
   // Pin only live/problem run status. Completed/abandoned status rows are
   // historical summaries and belong in the chronological conversation.
+  // WAITING is a live state (agent self-blocked on operator), so it also
+  // pins — the operator's eye should land on it.
   if (!comment.run) return true;
-  return comment.run.status === "ACTIVE" || comment.run.status === "STALLED";
+  return (
+    comment.run.status === "ACTIVE" ||
+    comment.run.status === "STALLED" ||
+    comment.run.status === "WAITING"
+  );
 }
 
 /**
@@ -188,14 +198,20 @@ function DescriptionBlock({
           onDrop={drop.onDrop}
         >
           <DropOverlay active={drop.isOver} label="Drop to attach to description" />
-          <textarea
+          <MentionInput
             autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onPaste={paste.onPaste}
+            multiline
             rows={8}
+            value={draft}
+            onChange={setDraft}
+            onPaste={paste.onPaste}
+            onSubmit={() => {
+              onSave(draft.trim() || null);
+              setEditing(false);
+            }}
             placeholder="Description (Markdown-flavored). Paste or drop files to attach."
             className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
+            ariaLabel="Issue description"
           />
           <div className="flex gap-2">
             <Button
@@ -248,6 +264,9 @@ function Comments({
 }) {
   const utils = trpc.useUtils();
   const [draft, setDraft] = useState("");
+  // Synthetic textarea ref that mirrors MentionInput's underlying
+  // textarea — kept in sync via the imperative-handle callback below
+  // so the slash autocomplete hook can read / focus the real DOM node.
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   // Pending commands are stashed here when we fire `createComment` so
   // the success callback can dispatch `applyCommands` once the
@@ -367,21 +386,35 @@ function Comments({
       >
         <DropOverlay active={drop.isOver} label="Drop to attach to comment" />
         <div className="relative">
-          <textarea
-            ref={composerRef}
-            placeholder="Leave a comment… (paste or drop files to attach)"
+          <MentionInput
+            ref={(handle) => {
+              // Mirror the underlying textarea node into `composerRef`
+              // so the slash autocomplete hook can read it on every
+              // tick. Cast: when multiline=true the imperative handle
+              // exposes the textarea element.
+              composerRef.current =
+                (handle?.textarea as HTMLTextAreaElement | null) ?? null;
+            }}
+            multiline
+            rows={2}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={setDraft}
             onPaste={paste.onPaste}
             onKeyDown={(e) => {
-              // Let autocomplete consume nav / Enter / Tab / Escape
-              // when the dropdown is open. The form's submit button
+              // Slash autocomplete owns nav / Enter / Tab / Escape
+              // when its dropdown is open. The form's submit button
               // still drives explicit submission via click.
-              slash.onKeyDown(e);
+              slash.onKeyDown(e as React.KeyboardEvent);
             }}
-            {...slash.bind}
-            rows={2}
+            // Spread the slash hook's caret-tracking bindings onto the
+            // textarea — onKeyUp / onClick / onSelect / onFocus.
+            onKeyUp={slash.bind.onKeyUp}
+            onClick={slash.bind.onClick}
+            onSelect={slash.bind.onSelect}
+            onFocus={slash.bind.onFocus}
+            placeholder="Leave a comment… (paste or drop files to attach)"
             className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[0.8125rem]"
+            ariaLabel="Comment composer"
           />
           {slash.visible && <SlashAutocomplete {...slash.dropdownProps} />}
         </div>
@@ -423,16 +456,37 @@ function Comments({
 function TimelineCommentCard({ comment }: { comment: Comment }) {
   const isAgent = Boolean(comment.authoringAgent);
   const isStatus = comment.kind === "STATUS";
-  const displayName = comment.authoringAgent?.name ?? comment.author.name;
+  const displayName = comment.authoringAgent?.name ?? comment.author?.name ?? "System";
   const { provenance, rest } = useMemo(
     () => (isAgent ? splitProvenance(comment.body) : { provenance: null, rest: comment.body }),
     [comment.body, isAgent],
   );
+
+  // SYSTEM rows are server-authored ambient narration (assignment
+  // notices, dispatch provenance). They have no avatar, no card —
+  // they render as a thin centered separator-style line so the eye
+  // moves past them quickly. Conditional return lives AFTER the
+  // useMemo above so hook order stays stable across render paths.
+  if (comment.kind === "SYSTEM") {
+    return (
+      <div className="flex items-center gap-2 px-1 py-1.5 text-meta italic text-muted-foreground">
+        <span className="h-px flex-1 bg-border/60" />
+        <MarkdownWithAttachments
+          body={comment.body}
+          className="text-meta italic text-muted-foreground"
+        />
+        <span className="h-px flex-1 bg-border/60" />
+        <span className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+          {relativeTime(comment.createdAt)}
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="flex gap-2.5">
       <CommentAvatar
         name={displayName}
-        image={isAgent ? null : comment.author.image}
+        image={isAgent ? null : (comment.author?.image ?? null)}
         isAgent={isAgent}
       />
       <div
@@ -526,7 +580,7 @@ function CommentAvatar({
  */
 function StatusCommentPin({ comment }: { comment: Comment }) {
   const isAgent = Boolean(comment.authoringAgent);
-  const displayName = comment.authoringAgent?.name ?? comment.author.name;
+  const displayName = comment.authoringAgent?.name ?? comment.author?.name ?? "System";
   const updated = comment.updatedAt ?? comment.createdAt;
   const { provenance, rest } = useMemo(
     () => (isAgent ? splitProvenance(comment.body) : { provenance: null, rest: comment.body }),
@@ -536,7 +590,7 @@ function StatusCommentPin({ comment }: { comment: Comment }) {
     <div className="flex gap-2.5">
       <CommentAvatar
         name={displayName}
-        image={isAgent ? null : comment.author.image}
+        image={isAgent ? null : (comment.author?.image ?? null)}
         isAgent={isAgent}
       />
       <div className="min-w-0 flex-1 rounded-md border-l-2 border-l-ember border-y border-r border-border bg-ember/5 p-2.5">

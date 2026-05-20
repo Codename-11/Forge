@@ -20,6 +20,7 @@ import { WatchButton } from "@/components/watch-button";
 import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
+import { RunActivityChip } from "@/components/issue-detail/run-activity-chip";
 import { AiTriageCard } from "@/components/ai-triage-card";
 import { Breadcrumb } from "@/components/breadcrumb";
 import { ProjectChip } from "@/components/project-chip";
@@ -60,7 +61,14 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const workspace = useWorkspace();
   const slug = workspace.slug;
   const { data: ws } = trpc.workspace.current.useQuery();
-  const { data: issue, isLoading, error } = trpc.issue.byId.useQuery({ id });
+  // 15s refetch keeps the topbar's RunActivityChip (and other live
+  // surfaces on this page) honest without a manual reload while an
+  // agent is working the issue. Cheap — the byId payload is small
+  // relative to the page render cost.
+  const { data: issue, isLoading, error } = trpc.issue.byId.useQuery(
+    { id },
+    { refetchInterval: 15_000 },
+  );
   const { data: statuses } = trpc.status.list.useQuery();
   const { data: members } = trpc.workspace.members.useQuery();
   const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
@@ -402,6 +410,11 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               onChange={(userIds) => assign.mutate({ id: issue.id, userIds })}
             />
             <AgentChip current={issue.assignedAgent} onOpen={() => setAgentPickerOpen(true)} />
+            {/* "What's the agent doing right now?" — only renders when
+                there's an ACTIVE run on this issue. Lives next to the
+                AgentChip so the operator's eye lands on agent + status
+                together. */}
+            <RunActivityChip issueId={issue.id} />
           </div>
         }
         actions={

@@ -278,6 +278,14 @@ enum ApiKeyKind {
 enum CommentKind {
   BODY
   STATUS
+  /// Server-authored notice in the issue thread — assignment notes,
+  /// auto-runtime tags, dispatch provenance, etc. SYSTEM rows have a
+  /// null `authorId` and a null `authoringAgentId`; the renderer treats
+  /// them as ambient narration (italic, muted, no avatar bubble). These
+  /// rows are written directly inside the transaction that emits the
+  /// triggering event (e.g. AGENT_ASSIGNED) without going through
+  /// COMMENT_CREATED, so they don't re-fan-out / re-notify watchers.
+  SYSTEM
 }
 
 /// Note variants. NOTE is the default scratchpad; JOURNAL is a daily
@@ -363,6 +371,14 @@ enum AgentRunStatus {
   COMPLETED
   ABANDONED
   STALLED
+  /// Agent has self-blocked on the operator (or another agent) and is
+  /// not progressing on its own. The stale watchdog
+  /// (`agent-run-stale.ts`) intentionally skips WAITING runs so
+  /// patient agents aren't misclassified as dead. Set via MCP
+  /// `runs.setWaiting`; cleared via `runs.resumeWork` (back to ACTIVE)
+  /// or terminal `runs.complete`. The Comment timeline + live pulse
+  /// strip render WAITING in a soft ember tone (warning, not alarm).
+  WAITING
 }
 
 // ----------------------------------------------------------------------------
@@ -1033,7 +1049,11 @@ model Comment {
   /// New in migration 0040 — owning ExecutionStep for inline plan-step
   /// threads. CASCADE on step delete so threads vanish with the step.
   executionStepId  String?
-  authorId         String
+  /// Author user id. Nullable since migration 0047 to support SYSTEM-kind
+  /// comments (assignment notices, dispatch provenance) that have no
+  /// human author. BODY/STATUS rows still always carry an authorId
+  /// in practice — enforced by the application layer, not the schema.
+  authorId         String?
   /// When the comment was created via an API key whose `linkedAgentId`
   /// pointed at an Agent, we record that Agent here so the UI can
   /// render it as "Victor (agent)" rather than the human key owner.
@@ -1063,7 +1083,7 @@ model Comment {
   workspace      Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue          Issue?         @relation(fields: [issueId], references: [id], onDelete: Cascade)
   executionStep  ExecutionStep? @relation("ExecutionStepComments", fields: [executionStepId], references: [id], onDelete: Cascade)
-  author         User           @relation(fields: [authorId], references: [id])
+  author         User?          @relation(fields: [authorId], references: [id], onDelete: SetNull)
   authoringAgent Agent?         @relation("AgentAuthoredComments", fields: [authoringAgentId], references: [id], onDelete: SetNull)
   run            AgentRun?      @relation("AgentRunStatusComment", fields: [runId], references: [id], onDelete: SetNull)
 

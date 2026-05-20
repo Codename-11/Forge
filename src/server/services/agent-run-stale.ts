@@ -17,6 +17,13 @@ import { finishRun } from "@/server/services/agent-run";
  *
  * Idempotent by design: once a run flips to STALLED, the next sweep
  * skips it because the `status: ACTIVE` filter excludes it.
+ *
+ * WAITING runs are intentionally excluded — the agent has self-blocked
+ * via `runs.setWaiting` and is patiently waiting on the operator. The
+ * watchdog would misclassify a patient agent as dead otherwise. When
+ * the WAITING run flips back to ACTIVE (via `runs.resumeWork` or any
+ * agent activity routed through `openOrTouchRun`), `lastEventAt`
+ * is bumped to `now`, so the stale timer restarts fresh.
  */
 
 export interface StalledRunSweepResult {

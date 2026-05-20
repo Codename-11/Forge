@@ -120,12 +120,12 @@ function StepComments({ stepId, initiallyOpen = false }: StepCommentsProps) {
                 {items.map((c) => {
                   const isAgent = Boolean(c.authoringAgent);
                   const displayName =
-                    c.authoringAgent?.name ?? c.author.name ?? "Unknown";
+                    c.authoringAgent?.name ?? c.author?.name ?? "Unknown";
                   return (
                     <li key={c.id} className="flex gap-2">
                       <Avatar
                         name={displayName}
-                        image={isAgent ? null : c.author.image}
+                        image={isAgent ? null : (c.author?.image ?? null)}
                         size={20}
                       />
                       <div className="min-w-0 flex-1">

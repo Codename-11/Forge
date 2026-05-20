@@ -30,11 +30,15 @@ export const agentRunRouter = router({
   activeForIssue: workspaceProcedure
     .input(z.object({ issueId: idString }))
     .query(async ({ ctx, input }) => {
+      // Treat WAITING runs as "still in flight" for the live strip so a
+      // patient agent doesn't disappear from the issue page just because
+      // it self-blocked. The strip itself renders WAITING with a soft
+      // "Waiting on you" pill instead of the warming ember pulse.
       const run = await ctx.db.agentRun.findFirst({
         where: {
           workspaceId: ctx.workspaceId,
           issueId: input.issueId,
-          status: AgentRunStatus.ACTIVE,
+          status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
         },
         orderBy: { lastEventAt: "desc" },
         include: {
@@ -144,10 +148,16 @@ export const agentRunRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const cutoff = new Date(Date.now() - input.windowMinutes * 60_000);
+      // Terminal = COMPLETED / ABANDONED / STALLED. ACTIVE and WAITING
+      // are explicitly excluded — WAITING is non-terminal (the agent is
+      // paused on the operator) and should keep appearing on the live
+      // surfaces, not in the post-mortem History tab.
       return ctx.db.agentRun.findMany({
         where: {
           workspaceId: ctx.workspaceId,
-          status: { not: AgentRunStatus.ACTIVE },
+          status: {
+            notIn: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING],
+          },
           finishedAt: { gte: cutoff },
         },
         orderBy: { finishedAt: "desc" },
@@ -424,7 +434,7 @@ export const agentRunRouter = router({
     .input(
       z
         .object({
-          status: z.array(z.nativeEnum(AgentRunStatus)).max(4).optional(),
+          status: z.array(z.nativeEnum(AgentRunStatus)).max(5).optional(),
           agentId: idString.optional(),
           limit: z.number().int().min(1).max(100).default(30),
         })

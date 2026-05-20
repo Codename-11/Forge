@@ -59,9 +59,14 @@ function publishRunEvent(params: {
 
 /**
  * Returns the active (non-terminal) run for this (issue, agent) tuple,
- * or null. There can be at most one ACTIVE run per (issue, agent) by
- * convention — every call site goes through `openOrTouchRun()` which
+ * or null. There can be at most one non-terminal run per (issue, agent)
+ * by convention — every call site goes through `openOrTouchRun()` which
  * enforces it.
+ *
+ * "Non-terminal" includes both ACTIVE and WAITING. A WAITING run is a
+ * patient agent that's blocked on the operator; subsequent activity
+ * (operator nudge, MCP write) should resume it rather than open a
+ * fresh second run — `openOrTouchRun` handles the resume.
  */
 export async function findActiveRun(
   tx: Tx,
@@ -71,7 +76,7 @@ export async function findActiveRun(
     where: {
       issueId: params.issueId,
       agentId: params.agentId,
-      status: AgentRunStatus.ACTIVE,
+      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
     },
     orderBy: { startedAt: "desc" },
   });
@@ -103,10 +108,18 @@ export async function openOrTouchRun(
   });
 
   if (existing) {
+    // Auto-resume WAITING runs: a fresh action on a WAITING run is
+    // strong evidence the agent is back on the loop. Flip to ACTIVE
+    // and bump `lastEventAt` so the stale watchdog restarts fresh.
+    // Conscious choice not to emit a separate event here — the
+    // triggering caller (comment.create, MCP write, etc.) already
+    // records its own audit row.
+    const resumeFromWaiting = existing.status === AgentRunStatus.WAITING;
     const updated = await tx.agentRun.update({
       where: { id: existing.id },
       data: {
         lastEventAt: new Date(),
+        ...(resumeFromWaiting ? { status: AgentRunStatus.ACTIVE } : {}),
         ...(params.currentStep !== undefined ? { currentStep: params.currentStep } : {}),
       },
     });
