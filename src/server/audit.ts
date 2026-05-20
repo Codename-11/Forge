@@ -467,16 +467,46 @@ export async function recordChange(
 
   // (c) Comment @mentions — one delivery per mentioned agent, each against
   //     its own per-agent shim so the worker pushes to the right webhookUrl
-  //     instead of the issue's assigned agent.
+  //     instead of the issue's assigned agent. Reads the new structured
+  //     `mentions: { agentIds, userIds }` shape with a fallback to the
+  //     legacy `mentions: Array<{ agentId }>` shape for any in-flight
+  //     events still carrying the old payload. Human user-mentions
+  //     (`mentions.userIds`) don't trigger a webhook here — humans aren't
+  //     webhooks — but the payload still propagates to ActivityEvent so
+  //     downstream surfaces (notification materializer, inbox) can read
+  //     it for involvement detection / watcher gating.
   if (
     params.eventKind === EventKind.COMMENT_CREATED &&
     params.subjectType === "issue"
   ) {
     const payload = params.payload as
-      | { mentions?: Array<{ agentId: string; profileKey?: string }> }
+      | {
+          mentions?:
+            | {
+                agentIds?: string[];
+                userIds?: string[];
+                agents?: Array<{ agentId: string; profileKey?: string }>;
+              }
+            | Array<{ agentId: string; profileKey?: string }>;
+        }
       | undefined;
-    const mentions = payload?.mentions ?? [];
-    if (mentions.length) {
+    const mentionsRaw = payload?.mentions;
+    // Normalize to a flat list of agent ids regardless of incoming shape.
+    let mentionedAgentIds: string[] = [];
+    if (Array.isArray(mentionsRaw)) {
+      mentionedAgentIds = mentionsRaw.map((m) => m.agentId).filter(Boolean);
+    } else if (mentionsRaw && typeof mentionsRaw === "object") {
+      if (Array.isArray(mentionsRaw.agentIds)) {
+        mentionedAgentIds = mentionsRaw.agentIds.filter(
+          (id): id is string => typeof id === "string" && id.length > 0,
+        );
+      } else if (Array.isArray(mentionsRaw.agents)) {
+        mentionedAgentIds = mentionsRaw.agents
+          .map((m) => m.agentId)
+          .filter((id): id is string => typeof id === "string" && id.length > 0);
+      }
+    }
+    if (mentionedAgentIds.length) {
       // Load mentioned agents within workspace scope. We canonicalize
       // every mentioned active agent into the inbox so the operator's
       // intent is recoverable; webhook delivery is created only for
@@ -484,7 +514,7 @@ export async function recordChange(
       const agents = await tx.agent.findMany({
         where: {
           workspaceId: params.workspaceId,
-          id: { in: mentions.map((m) => m.agentId) },
+          id: { in: mentionedAgentIds },
           archivedAt: null,
         },
         select: { id: true, webhookUrl: true },

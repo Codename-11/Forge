@@ -848,6 +848,21 @@ export function QuickCreate() {
               <textarea
                 value={seedDescription}
                 onChange={(e) => setSeedDescription(e.target.value)}
+                onKeyDown={(e) => {
+                  // Match the title input's keymap: ⏎ submits primary,
+                  // ⌘/Ctrl+⏎ submits secondary (create + open). Inside a
+                  // textarea we require a modifier for both so plain ⏎
+                  // still inserts newlines for description paragraphs.
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    void submit(true);
+                  } else if (e.key === "Enter" && e.shiftKey === false && (e.altKey)) {
+                    // (Alt+Enter unused — leave for future use.)
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    close(true);
+                  }
+                }}
                 rows={4}
                 className="focus-ring mt-1 w-full resize-y rounded-md border border-input bg-background/40 p-2 text-[0.8125rem] placeholder:text-muted-foreground/60 focus:outline-none"
                 placeholder="Description (markdown ok)…"

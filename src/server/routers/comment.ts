@@ -6,6 +6,11 @@ import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { extractMentions } from "@/server/services/mentions";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
+import {
+  autoWatchActor,
+  autoWatchAgent,
+  autoWatchUser,
+} from "@/server/services/issue-watchers";
 
 const STATUS_REVISION_CAP = 50;
 
@@ -36,24 +41,72 @@ export const commentRouter = router({
           },
         });
 
-        // Resolve @profileKey tokens to Agents in this workspace so the
-        // COMMENT_CREATED event can carry a structured `mentions` array.
-        // Lane C's fan-out uses this to enqueue per-agent WebhookDelivery
-        // rows against the synthetic `agent:dispatch:{agentId}` webhook.
+        // Auto-watch the commenter (user OR agent). Commenting on a
+        // thread = wanting to hear about replies. Sticky — they keep
+        // watching until they manually unwatch.
+        await autoWatchActor(tx, {
+          workspaceId: ctx.workspaceId,
+          issueId: input.issueId,
+          userId: ctx.session.user.id,
+          callerAgentId: authoringAgentId,
+        });
+
+        // Resolve @-tokens against BOTH Agent.profileKey AND User.handle.
+        // The same token regex matches either (the namespace overlap is
+        // accepted by design — agents and humans share `@<name>`).
+        // Workspace membership gates the user side so a stray @-mention
+        // of a workspace-foreign account doesn't subscribe them.
         const tokens = extractMentions(input.body);
-        const mentions: Array<{ agentId: string; profileKey: string }> = [];
+        const mentionedAgents: Array<{ agentId: string; profileKey: string }> = [];
+        const mentionedUsers: Array<{ userId: string; handle: string }> = [];
         if (tokens.length) {
-          const matches = await tx.agent.findMany({
-            where: {
-              workspaceId: ctx.workspaceId,
-              profileKey: { in: tokens },
-              archivedAt: null,
-            },
-            select: { id: true, profileKey: true },
-          });
-          for (const a of matches) {
-            mentions.push({ agentId: a.id, profileKey: a.profileKey });
+          const [agentMatches, userMatches] = await Promise.all([
+            tx.agent.findMany({
+              where: {
+                workspaceId: ctx.workspaceId,
+                profileKey: { in: tokens },
+                archivedAt: null,
+              },
+              select: { id: true, profileKey: true },
+            }),
+            tx.user.findMany({
+              where: {
+                handle: { in: tokens },
+                memberships: { some: { workspaceId: ctx.workspaceId } },
+              },
+              select: { id: true, handle: true },
+            }),
+          ]);
+          for (const a of agentMatches) {
+            mentionedAgents.push({ agentId: a.id, profileKey: a.profileKey });
           }
+          for (const u of userMatches) {
+            // `handle` is `String?` on User but we filtered on `in: tokens`
+            // so the matched rows always carry a non-null handle.
+            if (u.handle) {
+              mentionedUsers.push({ userId: u.id, handle: u.handle });
+            }
+          }
+        }
+
+        // Subscribe mentioned agents + users to the issue so subsequent
+        // events route to them via the watcher fan-out (humans) or the
+        // per-agent shim (agents). Branch (c) in audit.ts already
+        // dispatches an immediate webhook for mentioned agents — the
+        // watcher row is for future events.
+        for (const m of mentionedAgents) {
+          await autoWatchAgent(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: input.issueId,
+            agentId: m.agentId,
+          });
+        }
+        for (const m of mentionedUsers) {
+          await autoWatchUser(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: input.issueId,
+            userId: m.userId,
+          });
         }
 
         await recordChange(tx, {
@@ -70,7 +123,19 @@ export const commentRouter = router({
             commentId: comment.id,
             issueId: input.issueId,
             preview: input.body.slice(0, 120),
-            mentions,
+            // Structured mentions payload. `agentIds[]` powers branch (c)
+            // in audit.ts's per-agent webhook dispatch; `userIds[]` is
+            // read by the notification materializer so human mentions
+            // count toward "involved" for notification gating.
+            mentions: {
+              agentIds: mentionedAgents.map((m) => m.agentId),
+              userIds: mentionedUsers.map((m) => m.userId),
+              // Legacy array shape preserved for any consumer that
+              // hasn't migrated yet (the audit branch reads `agents` /
+              // falls back). Slated for removal once all readers move
+              // to the structured fields.
+              agents: mentionedAgents,
+            },
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
@@ -210,21 +275,54 @@ export const commentRouter = router({
 
         // Mention fan-out — same pattern as comment.create so an agent
         // status that @-mentions another agent still routes to that
-        // agent's webhook.
+        // agent's webhook, and a status that @-mentions a human
+        // subscribes them as a watcher.
         const tokens = extractMentions(input.body);
-        const mentions: Array<{ agentId: string; profileKey: string }> = [];
+        const mentionedAgents: Array<{ agentId: string; profileKey: string }> = [];
+        const mentionedUsers: Array<{ userId: string; handle: string }> = [];
         if (tokens.length) {
-          const matches = await tx.agent.findMany({
-            where: {
-              workspaceId: ctx.workspaceId,
-              profileKey: { in: tokens },
-              archivedAt: null,
-            },
-            select: { id: true, profileKey: true },
-          });
-          for (const a of matches) {
-            mentions.push({ agentId: a.id, profileKey: a.profileKey });
+          const [agentMatches, userMatches] = await Promise.all([
+            tx.agent.findMany({
+              where: {
+                workspaceId: ctx.workspaceId,
+                profileKey: { in: tokens },
+                archivedAt: null,
+              },
+              select: { id: true, profileKey: true },
+            }),
+            tx.user.findMany({
+              where: {
+                handle: { in: tokens },
+                memberships: { some: { workspaceId: ctx.workspaceId } },
+              },
+              select: { id: true, handle: true },
+            }),
+          ]);
+          for (const a of agentMatches) {
+            mentionedAgents.push({ agentId: a.id, profileKey: a.profileKey });
           }
+          for (const u of userMatches) {
+            if (u.handle) {
+              mentionedUsers.push({ userId: u.id, handle: u.handle });
+            }
+          }
+        }
+
+        // Auto-watch mentioned humans (agent watchers are handled by
+        // the audit branch (c) + (e) fan-out plus the per-agent shim).
+        for (const m of mentionedUsers) {
+          await autoWatchUser(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: input.issueId,
+            userId: m.userId,
+          });
+        }
+        for (const m of mentionedAgents) {
+          await autoWatchAgent(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: input.issueId,
+            agentId: m.agentId,
+          });
         }
 
         await recordChange(tx, {
@@ -244,7 +342,11 @@ export const commentRouter = router({
             runId: run.id,
             preview: input.body.slice(0, 120),
             currentStep: input.currentStep ?? null,
-            mentions,
+            mentions: {
+              agentIds: mentionedAgents.map((m) => m.agentId),
+              userIds: mentionedUsers.map((m) => m.userId),
+              agents: mentionedAgents,
+            },
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,

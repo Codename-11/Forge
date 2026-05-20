@@ -101,3 +101,201 @@ describe("commentRouter.create — agent authorship", () => {
     expect(row.authoringAgentId).toBe(agent.id);
   });
 });
+
+describe("commentRouter.create — auto-watch + mention resolution", () => {
+  it("commenter (human) becomes a watcher", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+
+    const caller = commentRouter.createCaller(ctx);
+    await caller.create({ issueId: issue.id, body: "thinking out loud" });
+
+    const watcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: issue.id, userId: fixture.user.id },
+    });
+    expect(watcher).not.toBeNull();
+  });
+
+  it("commenter (agent via apiKey) becomes a watcher; human key owner does not", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: "victor-w",
+      },
+    });
+    const apiKey: ApiKeyContext = {
+      keyId: "k",
+      workspaceId: fixture.workspace.id,
+      userId: fixture.user.id,
+      pluginId: null,
+      scopes: ["WRITE_COMMENTS"],
+      projectIds: [],
+      labelIds: [],
+      initiativeIds: [],
+      linkedAgentId: agent.id,
+    };
+    const caller = commentRouter.createCaller({ ...ctx, apiKey });
+    await caller.create({ issueId: issue.id, body: "agent thinking" });
+
+    const agentWatcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: issue.id, agentId: agent.id },
+    });
+    expect(agentWatcher).not.toBeNull();
+    const userWatcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: issue.id, userId: fixture.user.id },
+    });
+    expect(userWatcher).toBeNull();
+  });
+
+  it("@profileKey resolves to a mentioned agent and upserts an agent watcher", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const target = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Mizu",
+        profileKey: "mizu-m",
+      },
+    });
+
+    const caller = commentRouter.createCaller(ctx);
+    const created = await caller.create({
+      issueId: issue.id,
+      body: "hey @mizu-m, take a look",
+    });
+
+    // Watcher row exists for the mentioned agent.
+    const watcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: issue.id, agentId: target.id },
+    });
+    expect(watcher).not.toBeNull();
+
+    // Event payload carries agentIds[] under the new structured shape.
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: { kind: "COMMENT_CREATED", subjectId: issue.id },
+      orderBy: { createdAt: "desc" },
+    });
+    const payload = event.payload as {
+      mentions?: { agentIds?: string[]; userIds?: string[] };
+    };
+    expect(payload.mentions?.agentIds).toContain(target.id);
+    // Suppress unused var warning.
+    expect(created.id).toBeTruthy();
+  });
+
+  it("@handle resolves to a workspace member and upserts a user watcher", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    // Give secondUser a handle the comment can mention.
+    await prisma.user.update({
+      where: { id: fixture.secondUser.id },
+      data: { handle: `u-${Date.now().toString(36)}` },
+    });
+    const updated = await prisma.user.findUniqueOrThrow({
+      where: { id: fixture.secondUser.id },
+      select: { handle: true },
+    });
+
+    const caller = commentRouter.createCaller(ctx);
+    await caller.create({
+      issueId: issue.id,
+      body: `hello @${updated.handle}`,
+    });
+
+    const watcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: issue.id, userId: fixture.secondUser.id },
+    });
+    expect(watcher).not.toBeNull();
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: { kind: "COMMENT_CREATED", subjectId: issue.id },
+      orderBy: { createdAt: "desc" },
+    });
+    const payload = event.payload as {
+      mentions?: { agentIds?: string[]; userIds?: string[] };
+    };
+    expect(payload.mentions?.userIds).toContain(fixture.secondUser.id);
+  });
+
+  it("mix of @agent + @user mentions resolves both and watches both", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: "victor-mix",
+      },
+    });
+    const handle = `mix-${Date.now().toString(36)}`;
+    await prisma.user.update({
+      where: { id: fixture.secondUser.id },
+      data: { handle },
+    });
+
+    const caller = commentRouter.createCaller(ctx);
+    await caller.create({
+      issueId: issue.id,
+      body: `cc @victor-mix and @${handle} please`,
+    });
+
+    const watchers = await prisma.issueWatcher.findMany({
+      where: { issueId: issue.id },
+    });
+    const agentIds = watchers.map((w) => w.agentId).filter(Boolean);
+    const userIds = watchers.map((w) => w.userId).filter(Boolean);
+    expect(agentIds).toContain(agent.id);
+    expect(userIds).toContain(fixture.secondUser.id);
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: { kind: "COMMENT_CREATED", subjectId: issue.id },
+      orderBy: { createdAt: "desc" },
+    });
+    const payload = event.payload as {
+      mentions?: { agentIds?: string[]; userIds?: string[] };
+    };
+    expect(payload.mentions?.agentIds).toContain(agent.id);
+    expect(payload.mentions?.userIds).toContain(fixture.secondUser.id);
+  });
+
+  it("unknown @handle (no matching User) does not upsert any watcher", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+
+    const before = await prisma.issueWatcher.count({
+      where: { issueId: issue.id },
+    });
+
+    const caller = commentRouter.createCaller(ctx);
+    await caller.create({
+      issueId: issue.id,
+      body: "ping @nobody-here-at-all-zzz",
+    });
+
+    // Only the auto-watch for the commenter himself was added.
+    const after = await prisma.issueWatcher.count({
+      where: { issueId: issue.id },
+    });
+    expect(after - before).toBe(1);
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: { kind: "COMMENT_CREATED", subjectId: issue.id },
+      orderBy: { createdAt: "desc" },
+    });
+    const payload = event.payload as {
+      mentions?: { agentIds?: string[]; userIds?: string[] };
+    };
+    expect(payload.mentions?.userIds ?? []).toEqual([]);
+    expect(payload.mentions?.agentIds ?? []).toEqual([]);
+    // Suppress lint warning for unused fixture binding.
+    expect(fixture.user.id).toBeTruthy();
+  });
+});

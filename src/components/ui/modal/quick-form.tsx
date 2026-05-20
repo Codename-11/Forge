@@ -174,19 +174,32 @@ export function QuickForm({
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLFormElement>) {
     if (e.key !== "Enter") return;
-    // ⌘⏎ / Ctrl⏎ / ⇧⏎ → secondary.
-    if ((e.metaKey || e.ctrlKey || e.shiftKey) && onSecondary) {
+    const inTextarea = (e.target as HTMLElement)?.tagName === "TEXTAREA";
+    // ⌘⏎ / Ctrl⏎ → secondary when defined, otherwise primary. Lets the
+    // power-user "send" gesture work from inside any textarea field, not
+    // just the single-line inputs that submit on plain Enter natively.
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      if (onSecondary) {
+        void doSecondary();
+      } else if (formRef.current) {
+        // Trigger the form's existing submit handler (which runs draft
+        // clearing + close + the parent's onSubmit). requestSubmit is
+        // preferred over .submit() because it dispatches a real submit
+        // event the React handler is bound to.
+        formRef.current.requestSubmit();
+      }
+      return;
+    }
+    // ⇧⏎ → secondary (mirrors keyboard-only "alt commit" affordance).
+    if (e.shiftKey && onSecondary) {
       e.preventDefault();
       void doSecondary();
+      return;
     }
     // Plain ⏎ in a textarea should still allow newlines — let the form's
     // native submit handle the non-textarea case.
-    if (
-      !e.metaKey &&
-      !e.ctrlKey &&
-      !e.shiftKey &&
-      (e.target as HTMLElement)?.tagName === "TEXTAREA"
-    ) {
+    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && inTextarea) {
       // default: insert newline
     }
   }

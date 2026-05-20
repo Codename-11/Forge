@@ -5197,6 +5197,16 @@ function NoteCardBody({
           autoFocus
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              updateMutAny.mutate({ id: node.targetId, body: draft });
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              setDraft(body);
+              onEditChange(false);
+            }
+          }}
           rows={5}
           className="w-full rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-sm text-foreground"
         />
@@ -5211,7 +5221,10 @@ function NoteCardBody({
           </button>
           <button
             type="button"
-            onClick={() => onEditChange(false)}
+            onClick={() => {
+              setDraft(body);
+              onEditChange(false);
+            }}
             className="rounded border border-border bg-card/40 px-2 py-0.5 text-[10px] text-muted-foreground"
           >
             Cancel

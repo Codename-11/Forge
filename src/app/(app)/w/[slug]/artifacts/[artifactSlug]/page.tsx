@@ -177,6 +177,17 @@ export default function ArtifactDetailPage() {
               <textarea
                 value={draftBody ?? ""}
                 onChange={(e) => setDraftBody(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    update.mutate({
+                      id: artifact.id,
+                      title: draftTitle ?? artifact.title,
+                      body: draftBody ?? artifact.body,
+                      changelog: changelog || undefined,
+                    });
+                  }
+                }}
                 rows={20}
                 className="w-full min-h-[480px] flex-1 resize-y rounded-md border border-border bg-card/40 px-3 py-2 font-mono text-sm"
               />

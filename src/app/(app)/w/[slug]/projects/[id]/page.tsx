@@ -324,6 +324,20 @@ function OverviewTab({
               autoFocus
               value={descDraft}
               onChange={(e) => setDescDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  update.mutate({
+                    id: project.id,
+                    description: descDraft.trim() || null,
+                  });
+                  setEditingDesc(false);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setDescDraft(project.description ?? "");
+                  setEditingDesc(false);
+                }
+              }}
               rows={4}
               className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
             />
@@ -345,7 +359,10 @@ function OverviewTab({
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => setEditingDesc(false)}
+                onClick={() => {
+                  setDescDraft(project.description ?? "");
+                  setEditingDesc(false);
+                }}
               >
                 Cancel
               </Button>
