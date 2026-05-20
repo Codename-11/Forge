@@ -46,6 +46,7 @@ import {
   type StyleState,
   type ToolKind,
 } from "@/components/canvas/canvas-toolbar";
+import { routeEdge, type HandleSide, type Rect } from "@/lib/canvas-routing";
 
 const SIDEBAR_MIN_WIDTH = 180;
 const SIDEBAR_MAX_WIDTH = 480;
@@ -118,6 +119,34 @@ type ShapeDraft = {
 };
 
 type RubberBand = { startX: number; startY: number; endX: number; endY: number };
+
+type EdgeRow = {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  label: string | null;
+  kind: string | null;
+  meta: Record<string, unknown> | null;
+};
+
+type EdgeMeta = {
+  fromHandle?: HandleSide;
+  toHandle?: HandleSide;
+};
+
+type ConnectorDraft = {
+  fromNodeId: string;
+  fromHandle: HandleSide;
+  toX: number;
+  toY: number;
+};
+
+const EDGE_KIND_STYLES: Array<{ kind: string; label: string; dash?: string }> = [
+  { kind: "solid", label: "Solid" },
+  { kind: "dashed", label: "Dashed", dash: "6 4" },
+  { kind: "dotted", label: "Dotted", dash: "2 4" },
+  { kind: "curved", label: "Curved" },
+];
 
 type SelectedRef = { kind: "node" | "shape"; id: string };
 
@@ -215,6 +244,16 @@ export default function CanvasViewerPage() {
   // Rubber-band marquee for select-tool drags on background.
   const rubberBandRef = useRef<RubberBand | null>(null);
   const [rubberBandRev, setRubberBandRev] = useState(0);
+
+  // Phase 3: drag-to-connect handle preview. Ref-driven so pointermove
+  // doesn't cycle through React state; a rev counter coalesces paints.
+  const connectorDraftRef = useRef<ConnectorDraft | null>(null);
+  const [connectorRev, setConnectorRev] = useState(0);
+  const scheduleConnectorRender = useCallback(() => {
+    setConnectorRev((r) => r + 1);
+  }, []);
+  const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
   // Stable ref to the latest `surfaceToCanvas` so handlers defined before
   // it (e.g. background-mousedown) can call through without re-binding.
@@ -342,6 +381,36 @@ export default function CanvasViewerPage() {
       utils.canvas.hydrate.invalidate({ id: params.canvasId });
     },
     onError: (e) => toast.error(e.message),
+  });
+
+  const addEdge = trpc.canvas.addEdge.useMutation({
+    onSuccess: () => utils.canvas.hydrate.invalidate({ id: params.canvasId }),
+    onError: (e) => toast.error(e.message),
+  });
+  const removeEdge = trpc.canvas.removeEdge.useMutation({
+    onSuccess: () => utils.canvas.hydrate.invalidate({ id: params.canvasId }),
+    onError: (e) => toast.error(e.message),
+  });
+  // edgePatch ships in Phase 3; older backends won't have it. Probe via the
+  // any-router so the page degrades gracefully on a stale server.
+  const edgePatchAny = (
+    (trpc as unknown as Record<string, unknown>).canvas as Record<string, unknown> | undefined
+  )?.edgePatch as
+    | {
+        useMutation: (opts?: unknown) => {
+          mutate: (input: {
+            id: string;
+            label?: string | null;
+            kind?: string | null;
+            meta?: unknown;
+          }) => void;
+          isPending: boolean;
+        };
+      }
+    | undefined;
+  const edgePatchMut = edgePatchAny?.useMutation({
+    onSuccess: () => utils.canvas.hydrate.invalidate({ id: params.canvasId }),
+    onError: (e: { message: string }) => toast.error(e.message),
   });
 
   // Optional helpers from Agent H — gracefully disabled if not on the proxy.
@@ -477,17 +546,27 @@ export default function CanvasViewerPage() {
   });
 
   const nodes = useMemo(() => (data?.nodes ?? []) as HydratedNode[], [data?.nodes]);
-  const edges = useMemo(
-    () =>
-      (data?.edges ?? []) as Array<{
-        id: string;
-        fromNodeId: string;
-        toNodeId: string;
-        label: string | null;
-        kind: string | null;
-      }>,
-    [data?.edges],
-  );
+  const edges = useMemo(() => {
+    const raw = (data?.edges ?? []) as Array<{
+      id: string;
+      fromNodeId: string;
+      toNodeId: string;
+      label: string | null;
+      kind: string | null;
+      meta?: unknown;
+    }>;
+    return raw.map((e) => ({
+      id: e.id,
+      fromNodeId: e.fromNodeId,
+      toNodeId: e.toNodeId,
+      label: e.label,
+      kind: e.kind,
+      meta:
+        e.meta && typeof e.meta === "object" && !Array.isArray(e.meta)
+          ? (e.meta as Record<string, unknown>)
+          : null,
+    })) as EdgeRow[];
+  }, [data?.edges]);
   // Phase 2: shapes from extended hydrate. `?? []` guards a transient
   // window where the migration hasn't run yet — the field is absent
   // rather than empty until the backend agent's slice lands.
@@ -585,6 +664,7 @@ export default function CanvasViewerPage() {
       }
       // Click on background with no modifier clears selection.
       if (selected.length > 0) setSelected([]);
+      if (selectedEdgeId) setSelectedEdgeId(null);
     }
     // Default: pan.
     setPanning(true);
@@ -987,6 +1067,75 @@ export default function CanvasViewerPage() {
     };
   }, [nodes, shapes, params.canvasId, shapeAddMut, scheduleShapeDraftRender]);
 
+  // -- Phase 3: connector preview drag (handle-to-node) -----------------
+
+  const beginConnectorDrag = useCallback(
+    (nodeId: string, side: HandleSide, clientX: number, clientY: number) => {
+      const { x, y } = surfaceToCanvasRef.current?.(clientX, clientY) ?? { x: 0, y: 0 };
+      connectorDraftRef.current = {
+        fromNodeId: nodeId,
+        fromHandle: side,
+        toX: x,
+        toY: y,
+      };
+      scheduleConnectorRender();
+    },
+    [scheduleConnectorRender],
+  );
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const draft = connectorDraftRef.current;
+      if (!draft) return;
+      const surfaceToCanvasFn = surfaceToCanvasRef.current;
+      if (!surfaceToCanvasFn) return;
+      const { x, y } = surfaceToCanvasFn(e.clientX, e.clientY);
+      draft.toX = x;
+      draft.toY = y;
+      scheduleConnectorRender();
+    };
+    const onUp = (e: MouseEvent) => {
+      const draft = connectorDraftRef.current;
+      if (!draft) return;
+      connectorDraftRef.current = null;
+      scheduleConnectorRender();
+      const target = e.target as HTMLElement | null;
+      const targetCard = target?.closest("[data-canvas-card]");
+      const targetNodeId = targetCard?.getAttribute("data-node-id") ?? null;
+      if (!targetNodeId || targetNodeId === draft.fromNodeId) return;
+      const fromNode = nodes.find((n) => n.id === draft.fromNodeId);
+      const toNode = nodes.find((n) => n.id === targetNodeId);
+      if (!fromNode || !toNode) return;
+      const toHandle = closestSideForPoint(toNode, draft.toX, draft.toY);
+      const fromHandle = draft.fromHandle;
+      // Persist the chosen handles via edgePatch once the row exists.
+      // Falls back to bare-add if edgePatch isn't available on the server.
+      void addEdge
+        .mutateAsync({
+          canvasId: params.canvasId,
+          fromNodeId: draft.fromNodeId,
+          toNodeId: targetNodeId,
+          kind: "links",
+        })
+        .then((res: { id: string }) => {
+          if (!edgePatchMut) return;
+          edgePatchMut.mutate({
+            id: res.id,
+            meta: { fromHandle, toHandle } as EdgeMeta,
+          });
+        })
+        .catch(() => {
+          /* surfaced via onError toast */
+        });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [addEdge, edgePatchMut, nodes, params.canvasId, scheduleConnectorRender]);
+
   // -- Keyboard shortcuts (Phase 2) -----------------------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -999,9 +1148,16 @@ export default function CanvasViewerPage() {
         setActiveTool("select");
         shapeDraftRef.current = null;
         scheduleShapeDraftRender();
+        if (selectedEdgeId) setSelectedEdgeId(null);
         return;
       }
       if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedEdgeId) {
+          e.preventDefault();
+          removeEdge.mutate({ id: selectedEdgeId });
+          setSelectedEdgeId(null);
+          return;
+        }
         const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
         if (shapeIds.length === 0) return;
         if (!shapeRemoveMut) return;
@@ -1058,7 +1214,17 @@ export default function CanvasViewerPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selected, shapes, shapeRemoveMut, shapeAddMut, shapeBulkPatchMut, params.canvasId, scheduleShapeDraftRender]);
+  }, [
+    selected,
+    shapes,
+    shapeRemoveMut,
+    shapeAddMut,
+    shapeBulkPatchMut,
+    params.canvasId,
+    scheduleShapeDraftRender,
+    selectedEdgeId,
+    removeEdge,
+  ]);
 
   // Toolbar style change — when shapes are selected, apply via bulkPatch;
   // otherwise update the default style for new shapes.
@@ -1292,6 +1458,17 @@ export default function CanvasViewerPage() {
   const handleRemoveCard = useCallback(
     (nodeId: string) => setConfirm({ kind: "remove-card", id: nodeId }),
     [],
+  );
+  const handleHoverChange = useCallback((nodeId: string | null) => {
+    setHoverNodeId(nodeId);
+  }, []);
+  const handleConnectorStart = useCallback(
+    (nodeId: string, side: HandleSide, e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      beginConnectorDrag(nodeId, side, e.clientX, e.clientY);
+    },
+    [beginConnectorDrag],
   );
   // Toggle between "preview" (inline file/iframe) and "card" (chip)
   // viewModes. Optimistic — flips the cached row immediately so the
@@ -1596,7 +1773,17 @@ export default function CanvasViewerPage() {
             {/* Rubber-band marquee while shift-dragging on background. */}
             <RubberBandPreview bandRef={rubberBandRef} rev={rubberBandRev} />
             {/* Edges sit between lane bands and node cards. */}
-            <EdgesOverlay nodes={displayNodes} edges={edges} />
+            <EdgesOverlay
+              nodes={displayNodes}
+              edges={edges}
+              selectedEdgeId={selectedEdgeId}
+              onSelectEdge={setSelectedEdgeId}
+            />
+            <ConnectorDraftLayer
+              draftRef={connectorDraftRef}
+              rev={connectorRev}
+              nodes={displayNodes}
+            />
             {displayNodes.length === 0 ? (
               <div
                 className="absolute left-8 top-8 rounded-lg border border-dashed border-border bg-card/30 p-6 text-sm text-muted-foreground"
@@ -1620,8 +1807,39 @@ export default function CanvasViewerPage() {
                 onRemove={handleRemoveCard}
                 onPatchLane={handlePatchLane}
                 onTogglePreview={handleTogglePreview}
+                handlesAlwaysShown={activeTool === "connect"}
+                hovered={hoverNodeId === node.id}
+                onHoverChange={handleHoverChange}
+                onConnectorStart={handleConnectorStart}
               />
             ))}
+            {selectedEdgeId
+              ? (() => {
+                  const edge = edges.find((x) => x.id === selectedEdgeId);
+                  if (!edge) return null;
+                  const fromNode = displayNodes.find((n) => n.id === edge.fromNodeId);
+                  const toNode = displayNodes.find((n) => n.id === edge.toNodeId);
+                  if (!fromNode || !toNode) return null;
+                  return (
+                    <EdgeEditPanel
+                      key={edge.id}
+                      edge={edge}
+                      fromNode={fromNode}
+                      toNode={toNode}
+                      onClose={() => setSelectedEdgeId(null)}
+                      onRemove={() => {
+                        removeEdge.mutate({ id: edge.id });
+                        setSelectedEdgeId(null);
+                      }}
+                      onPatch={
+                        edgePatchMut
+                          ? (patch) => edgePatchMut.mutate({ id: edge.id, ...patch })
+                          : null
+                      }
+                    />
+                  );
+                })()
+              : null}
           </div>
           {/* Remote cursors — read from ref via cursorsRev so the rest
               of the tree doesn't repaint when peers move. */}
@@ -1965,28 +2183,27 @@ function LaneBand({ lane }: { lane: LaneBox }) {
 // is computed from the node bounding box (with margin) so it covers them.
 // ---------------------------------------------------------------------------
 
+type EdgesOverlayProps = {
+  nodes: HydratedNode[];
+  edges: EdgeRow[];
+  selectedEdgeId: string | null;
+  onSelectEdge: (id: string | null) => void;
+};
+
 const EdgesOverlay = memo(function EdgesOverlay({
   nodes,
   edges,
-}: {
-  nodes: HydratedNode[];
-  edges: Array<{
-    id: string;
-    fromNodeId: string;
-    toNodeId: string;
-    label: string | null;
-    kind: string | null;
-  }>;
-}) {
+  selectedEdgeId,
+  onSelectEdge,
+}: EdgesOverlayProps) {
   const nodeById = useMemo(() => {
     const m = new Map<string, HydratedNode>();
     for (const n of nodes) m.set(n.id, n);
     return m;
   }, [nodes]);
 
-  // Bounding box across nodes — memoized so non-drag re-renders skip the
-  // O(N) sweep. Recomputes whenever `nodes` identity changes (which happens
-  // exactly once per rAF tick during a drag).
+  // Bounding box covering every node plus a margin for routed paths
+  // that arc outside the immediate cluster.
   const bbox = useMemo(() => {
     let minX = Infinity;
     let minY = Infinity;
@@ -1998,7 +2215,7 @@ const EdgesOverlay = memo(function EdgesOverlay({
       maxX = Math.max(maxX, n.x + n.width);
       maxY = Math.max(maxY, n.y + n.height);
     }
-    const margin = 80;
+    const margin = 200;
     return {
       left: Math.floor(minX - margin),
       top: Math.floor(minY - margin),
@@ -2007,27 +2224,26 @@ const EdgesOverlay = memo(function EdgesOverlay({
     };
   }, [nodes]);
 
-  if (edges.length === 0) return null;
-
-  // Pick stroke + opacity by edge.kind so the timeline-style "depends_on"
-  // chain stands out from the structural "contains" plumbing.
-  const styleFor = (kind: string | null): { stroke: string; dash?: string; opacity: number } => {
-    switch (kind) {
-      case "depends_on":
-        return { stroke: "var(--ember, #d97706)", opacity: 0.7 };
-      case "contains":
-        return { stroke: "var(--muted-foreground, #78716c)", dash: "4 4", opacity: 0.4 };
-      default:
-        return { stroke: "var(--muted-foreground, #78716c)", opacity: 0.55 };
+  // Hash for the obstacle set so per-edge memos can invalidate as a group
+  // when any non-incident node moves.
+  const obstaclesHash = useMemo(() => {
+    const parts: string[] = [];
+    for (const n of nodes) {
+      parts.push(
+        `${n.id}:${Math.round(n.x)}:${Math.round(n.y)}:${Math.round(n.width)}:${Math.round(n.height)}`,
+      );
     }
-  };
+    return parts.join("|");
+  }, [nodes]);
+
+  if (edges.length === 0) return null;
 
   const { left, top, width, height } = bbox;
 
   return (
     <svg
-      className="pointer-events-none absolute"
-      style={{ left, top, width, height }}
+      className="absolute"
+      style={{ left, top, width, height, pointerEvents: "none" }}
       width={width}
       height={height}
       viewBox={`0 0 ${width} ${height}`}
@@ -2042,7 +2258,7 @@ const EdgesOverlay = memo(function EdgesOverlay({
           markerHeight="6"
           orient="auto"
         >
-          <path d="M0,-4 L8,0 L0,4 Z" fill="var(--ember, #d97706)" />
+          <path d="M0,-4 L8,0 L0,4 Z" fill="hsl(var(--ember))" />
         </marker>
         <marker
           id="edge-arrow-muted"
@@ -2053,90 +2269,462 @@ const EdgesOverlay = memo(function EdgesOverlay({
           markerHeight="6"
           orient="auto"
         >
-          <path d="M0,-4 L8,0 L0,4 Z" fill="var(--muted-foreground, #78716c)" />
+          <path d="M0,-4 L8,0 L0,4 Z" fill="hsl(var(--muted-foreground))" />
         </marker>
       </defs>
       {edges.map((e) => {
         const from = nodeById.get(e.fromNodeId);
         const to = nodeById.get(e.toNodeId);
         if (!from || !to) return null;
-        // Connect from the centers projected onto each node's nearest
-        // border. Simpler than full ortho routing; good enough for v1.
-        const fromCx = from.x + from.width / 2;
-        const fromCy = from.y + from.height / 2;
-        const toCx = to.x + to.width / 2;
-        const toCy = to.y + to.height / 2;
-        const dx = toCx - fromCx;
-        const dy = toCy - fromCy;
-        const fromEdge = projectToRect(fromCx, fromCy, from, dx, dy);
-        const toEdge = projectToRect(toCx, toCy, to, -dx, -dy);
-        const x1 = fromEdge.x - left;
-        const y1 = fromEdge.y - top;
-        const x2 = toEdge.x - left;
-        const y2 = toEdge.y - top;
-        const style = styleFor(e.kind);
-        const marker =
-          e.kind === "depends_on" ? "url(#edge-arrow-ember)" : "url(#edge-arrow-muted)";
-        // Mid-point for the label.
-        const mx = (x1 + x2) / 2;
-        const my = (y1 + y2) / 2;
         return (
-          <g key={e.id} opacity={style.opacity}>
-            <line
-              x1={x1}
-              y1={y1}
-              x2={x2}
-              y2={y2}
-              stroke={style.stroke}
-              strokeWidth={1.5}
-              strokeDasharray={style.dash}
-              markerEnd={marker}
-            />
-            {e.label && (
-              <g transform={`translate(${mx}, ${my})`}>
-                <rect
-                  x={-Math.min(60, e.label.length * 3 + 8)}
-                  y={-9}
-                  width={Math.min(120, e.label.length * 6 + 16)}
-                  height={16}
-                  rx={4}
-                  fill="var(--card, #fafaf9)"
-                  fillOpacity={0.85}
-                  stroke="var(--border, #d6d3d1)"
-                />
-                <text
-                  textAnchor="middle"
-                  dy="0.32em"
-                  fontSize={10}
-                  fill="var(--muted-foreground, #57534e)"
-                >
-                  {e.label}
-                </text>
-              </g>
-            )}
-          </g>
+          <EdgePath
+            key={e.id}
+            edge={e}
+            from={from}
+            to={to}
+            nodes={nodes}
+            originX={left}
+            originY={top}
+            obstaclesHash={obstaclesHash}
+            selected={selectedEdgeId === e.id}
+            onSelectEdge={onSelectEdge}
+          />
         );
       })}
     </svg>
   );
 });
 
-function projectToRect(
-  cx: number,
-  cy: number,
-  rect: { x: number; y: number; width: number; height: number },
-  vx: number,
-  vy: number,
-): { x: number; y: number } {
-  // Cast a ray from center along (vx,vy) and find where it hits the
-  // rect's border. Returns the border point.
-  if (vx === 0 && vy === 0) return { x: cx, y: cy };
-  const hx = rect.width / 2;
-  const hy = rect.height / 2;
-  const tx = vx === 0 ? Infinity : (vx > 0 ? hx : -hx) / vx;
-  const ty = vy === 0 ? Infinity : (vy > 0 ? hy : -hy) / vy;
-  const t = Math.min(Math.abs(tx), Math.abs(ty));
-  return { x: cx + vx * t, y: cy + vy * t };
+type EdgePathProps = {
+  edge: EdgeRow;
+  from: HydratedNode;
+  to: HydratedNode;
+  nodes: HydratedNode[];
+  originX: number;
+  originY: number;
+  obstaclesHash: string;
+  selected: boolean;
+  onSelectEdge: (id: string | null) => void;
+};
+
+function geometricSides(
+  from: HydratedNode,
+  to: HydratedNode,
+): { fromSide: HandleSide; toSide: HandleSide } {
+  const fromCx = from.x + from.width / 2;
+  const fromCy = from.y + from.height / 2;
+  const toCx = to.x + to.width / 2;
+  const toCy = to.y + to.height / 2;
+  const dx = toCx - fromCx;
+  const dy = toCy - fromCy;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0
+      ? { fromSide: "right", toSide: "left" }
+      : { fromSide: "left", toSide: "right" };
+  }
+  return dy >= 0
+    ? { fromSide: "bottom", toSide: "top" }
+    : { fromSide: "top", toSide: "bottom" };
+}
+
+function nodeToRect(n: HydratedNode): Rect {
+  return { x: n.x, y: n.y, width: n.width, height: n.height };
+}
+
+function strokeForKind(kind: string | null): {
+  stroke: string;
+  dash?: string;
+  marker: string;
+} {
+  switch (kind) {
+    case "depends_on":
+      return { stroke: "hsl(var(--ember))", marker: "url(#edge-arrow-ember)" };
+    case "contains":
+      return {
+        stroke: "hsl(var(--muted-foreground))",
+        dash: "4 4",
+        marker: "url(#edge-arrow-muted)",
+      };
+    case "dashed":
+      return {
+        stroke: "hsl(var(--muted-foreground))",
+        dash: "6 4",
+        marker: "url(#edge-arrow-muted)",
+      };
+    case "dotted":
+      return {
+        stroke: "hsl(var(--muted-foreground))",
+        dash: "2 4",
+        marker: "url(#edge-arrow-muted)",
+      };
+    case "curved":
+    case "solid":
+    default:
+      return { stroke: "hsl(var(--muted-foreground))", marker: "url(#edge-arrow-muted)" };
+  }
+}
+
+const EdgePath = memo(
+  function EdgePath({
+    edge,
+    from,
+    to,
+    nodes,
+    originX,
+    originY,
+    selected,
+    onSelectEdge,
+  }: EdgePathProps) {
+    const meta: EdgeMeta = (edge.meta as EdgeMeta | null) ?? {};
+    const { fromSide, toSide } = (() => {
+      if (meta.fromHandle && meta.toHandle) {
+        return { fromSide: meta.fromHandle, toSide: meta.toHandle };
+      }
+      return geometricSides(from, to);
+    })();
+    const obstacles = useMemo(
+      () => nodes.filter((n) => n.id !== from.id && n.id !== to.id).map(nodeToRect),
+      [nodes, from.id, to.id],
+    );
+
+    const routed = useMemo(() => {
+      if (edge.kind === "curved") {
+        // Skip A* for the curved kind — just a straight cubic between
+        // anchor points, no obstacle avoidance.
+        return routeEdge({
+          from: { rect: nodeToRect(from), handle: fromSide },
+          to: { rect: nodeToRect(to), handle: toSide },
+          obstacles: [],
+        });
+      }
+      return routeEdge({
+        from: { rect: nodeToRect(from), handle: fromSide },
+        to: { rect: nodeToRect(to), handle: toSide },
+        obstacles,
+      });
+    }, [edge.kind, from, to, fromSide, toSide, obstacles]);
+
+    const style = strokeForKind(edge.kind);
+    const ax = routed.anchors[0]!;
+    const bx = routed.anchors[1]!;
+    const mx = (ax.x + bx.x) / 2 - originX;
+    const my = (ax.y + bx.y) / 2 - originY;
+    const transformed = `translate(${-originX}, ${-originY})`;
+    const baseWidth = selected ? 2.5 : 1.5;
+
+    return (
+      <g transform={transformed}>
+        {/* Wide invisible hit-target so the edge is easy to click. */}
+        <path
+          d={routed.d}
+          stroke="transparent"
+          strokeWidth={14}
+          fill="none"
+          style={{ pointerEvents: "stroke", cursor: "pointer" }}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onSelectEdge(edge.id);
+          }}
+        />
+        <path
+          d={routed.d}
+          stroke={style.stroke}
+          strokeWidth={baseWidth}
+          strokeDasharray={style.dash}
+          fill="none"
+          markerEnd={style.marker}
+          opacity={selected ? 1 : 0.65}
+          style={{ pointerEvents: "none" }}
+        />
+        {edge.label ? (
+          <g transform={`translate(${mx + originX}, ${my + originY})`}>
+            <rect
+              x={-Math.min(64, edge.label.length * 3 + 8)}
+              y={-9}
+              width={Math.min(128, edge.label.length * 6 + 16)}
+              height={16}
+              rx={4}
+              fill="hsl(var(--card))"
+              fillOpacity={0.9}
+              stroke="hsl(var(--border))"
+              style={{ pointerEvents: "none" }}
+            />
+            <text
+              textAnchor="middle"
+              dy="0.32em"
+              fontSize={10}
+              fill="hsl(var(--muted-foreground))"
+              style={{ pointerEvents: "none" }}
+            >
+              {edge.label}
+            </text>
+          </g>
+        ) : null}
+      </g>
+    );
+  },
+  (prev, next) =>
+    prev.edge.id === next.edge.id &&
+    prev.edge.label === next.edge.label &&
+    prev.edge.kind === next.edge.kind &&
+    prev.edge.meta === next.edge.meta &&
+    prev.from.x === next.from.x &&
+    prev.from.y === next.from.y &&
+    prev.from.width === next.from.width &&
+    prev.from.height === next.from.height &&
+    prev.to.x === next.to.x &&
+    prev.to.y === next.to.y &&
+    prev.to.width === next.to.width &&
+    prev.to.height === next.to.height &&
+    prev.originX === next.originX &&
+    prev.originY === next.originY &&
+    prev.obstaclesHash === next.obstaclesHash &&
+    prev.selected === next.selected &&
+    prev.onSelectEdge === next.onSelectEdge,
+);
+
+// ---------------------------------------------------------------------------
+// Connector draft layer — preview line that follows the cursor while
+// dragging from a handle. Ref-driven so pointer events don't re-render the
+// canvas; rev counter coalesces paints.
+// ---------------------------------------------------------------------------
+
+function ConnectorDraftLayer({
+  draftRef,
+  rev: _rev,
+  nodes,
+}: {
+  draftRef: React.MutableRefObject<ConnectorDraft | null>;
+  rev: number;
+  nodes: HydratedNode[];
+}) {
+  const draft = draftRef.current;
+  if (!draft) return null;
+  const fromNode = nodes.find((n) => n.id === draft.fromNodeId);
+  if (!fromNode) return null;
+  const cursorRect: Rect = {
+    x: draft.toX - 1,
+    y: draft.toY - 1,
+    width: 2,
+    height: 2,
+  };
+  const toSide: HandleSide = closestSideForPoint(fromNode, draft.toX, draft.toY) === "left"
+    ? "right"
+    : "left";
+  // We route from the fixed handle on the source to a tiny target rect at
+  // the cursor. Pick the cursor "side" based on its position relative to
+  // the source so the routed line approaches naturally.
+  const routed = routeEdge({
+    from: { rect: nodeToRect(fromNode), handle: draft.fromHandle },
+    to: { rect: cursorRect, handle: toSide },
+    obstacles: nodes.filter((n) => n.id !== fromNode.id).map(nodeToRect),
+  });
+  // Use a small SVG covering the bbox of from + cursor with padding.
+  const minX = Math.min(fromNode.x, draft.toX) - 80;
+  const minY = Math.min(fromNode.y, draft.toY) - 80;
+  const maxX = Math.max(fromNode.x + fromNode.width, draft.toX) + 80;
+  const maxY = Math.max(fromNode.y + fromNode.height, draft.toY) + 80;
+  return (
+    <svg
+      className="pointer-events-none absolute"
+      style={{ left: minX, top: minY, width: maxX - minX, height: maxY - minY }}
+      width={maxX - minX}
+      height={maxY - minY}
+      viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`}
+    >
+      <path
+        d={routed.d}
+        fill="none"
+        stroke="hsl(var(--ember))"
+        strokeWidth={2}
+        strokeDasharray="6 4"
+        opacity={0.85}
+      />
+    </svg>
+  );
+}
+
+function closestSideForPoint(
+  node: { x: number; y: number; width: number; height: number },
+  px: number,
+  py: number,
+): HandleSide {
+  const cx = node.x + node.width / 2;
+  const cy = node.y + node.height / 2;
+  const dx = px - cx;
+  const dy = py - cy;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? "right" : "left";
+  }
+  return dy >= 0 ? "bottom" : "top";
+}
+
+// ---------------------------------------------------------------------------
+// Edge edit panel — floating editor anchored to an edge midpoint. Renders in
+// canvas-space so it follows pan/zoom alongside the edges.
+// ---------------------------------------------------------------------------
+
+function EdgeEditPanel({
+  edge,
+  fromNode,
+  toNode,
+  onClose,
+  onRemove,
+  onPatch,
+}: {
+  edge: EdgeRow;
+  fromNode: HydratedNode;
+  toNode: HydratedNode;
+  onClose: () => void;
+  onRemove: () => void;
+  onPatch:
+    | ((patch: { label?: string | null; kind?: string | null; meta?: unknown }) => void)
+    | null;
+}) {
+  const meta: EdgeMeta = (edge.meta as EdgeMeta | null) ?? {};
+  const fromCenter = { x: fromNode.x + fromNode.width / 2, y: fromNode.y + fromNode.height / 2 };
+  const toCenter = { x: toNode.x + toNode.width / 2, y: toNode.y + toNode.height / 2 };
+  const mx = (fromCenter.x + toCenter.x) / 2;
+  const my = (fromCenter.y + toCenter.y) / 2;
+
+  const [draftLabel, setDraftLabel] = useState(edge.label ?? "");
+  useEffect(() => {
+    setDraftLabel(edge.label ?? "");
+  }, [edge.label, edge.id]);
+
+  // Debounce label commits so each keystroke doesn't fire a mutation.
+  const lastCommittedRef = useRef(edge.label ?? "");
+  useEffect(() => {
+    if (!onPatch) return;
+    const t = window.setTimeout(() => {
+      const next = draftLabel.trim();
+      const last = (lastCommittedRef.current ?? "").trim();
+      if (next === last) return;
+      lastCommittedRef.current = next;
+      onPatch({ label: next.length ? next : null });
+    }, 350);
+    return () => window.clearTimeout(t);
+  }, [draftLabel, onPatch]);
+
+  const currentKind = edge.kind ?? "solid";
+
+  const sideOptions: Array<{ value: HandleSide | "auto"; label: string }> = [
+    { value: "auto", label: "auto" },
+    { value: "top", label: "top" },
+    { value: "right", label: "right" },
+    { value: "bottom", label: "bottom" },
+    { value: "left", label: "left" },
+  ];
+
+  const updateHandle = (which: "from" | "to", side: HandleSide | "auto") => {
+    if (!onPatch) return;
+    const nextMeta: EdgeMeta = { ...meta };
+    if (which === "from") {
+      if (side === "auto") delete nextMeta.fromHandle;
+      else nextMeta.fromHandle = side;
+    } else {
+      if (side === "auto") delete nextMeta.toHandle;
+      else nextMeta.toHandle = side;
+    }
+    onPatch({
+      meta: Object.keys(nextMeta).length === 0 ? null : nextMeta,
+    });
+  };
+
+  return (
+    <div
+      data-canvas-edge-panel
+      className="absolute z-20 flex flex-col gap-1.5 rounded-lg border border-border bg-card/95 px-2 py-2 text-xs shadow-lg backdrop-blur-md"
+      style={{ left: mx, top: my, transform: "translate(-50%, -50%)", width: 240 }}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <input
+        type="text"
+        value={draftLabel}
+        placeholder="Edge label"
+        onChange={(e) => setDraftLabel(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+        }}
+        disabled={!onPatch}
+        className="w-full rounded border border-border bg-card/40 px-1.5 py-0.5 text-xs disabled:opacity-50"
+      />
+      <div className="flex items-center gap-1" role="group" aria-label="Edge style">
+        {EDGE_KIND_STYLES.map((k) => {
+          const active = currentKind === k.kind;
+          return (
+            <button
+              key={k.kind}
+              type="button"
+              disabled={!onPatch}
+              onClick={() => onPatch?.({ kind: k.kind })}
+              className={
+                "flex-1 rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide transition-colors disabled:opacity-50 " +
+                (active
+                  ? "border-ember bg-ember/15 text-ember"
+                  : "border-border bg-card/40 text-muted-foreground hover:bg-subtle")
+              }
+              title={k.label}
+            >
+              {k.label.toLowerCase()}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex items-center gap-1">
+        <label className="text-meta text-muted-foreground" htmlFor={`edge-from-${edge.id}`}>
+          from
+        </label>
+        <select
+          id={`edge-from-${edge.id}`}
+          value={meta.fromHandle ?? "auto"}
+          onChange={(e) => updateHandle("from", e.target.value as HandleSide | "auto")}
+          disabled={!onPatch}
+          className="flex-1 rounded border border-border bg-card/40 px-1 py-0.5 text-[10px] disabled:opacity-50"
+        >
+          {sideOptions.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <label className="text-meta text-muted-foreground" htmlFor={`edge-to-${edge.id}`}>
+          to
+        </label>
+        <select
+          id={`edge-to-${edge.id}`}
+          value={meta.toHandle ?? "auto"}
+          onChange={(e) => updateHandle("to", e.target.value as HandleSide | "auto")}
+          disabled={!onPatch}
+          className="flex-1 rounded border border-border bg-card/40 px-1 py-0.5 text-[10px] disabled:opacity-50"
+        >
+          {sideOptions.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex items-center justify-between gap-1 pt-0.5">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded border border-border bg-card/40 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-subtle"
+        >
+          Close
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="inline-flex items-center gap-1 rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning hover:bg-warning/20"
+          title="Delete edge"
+        >
+          <Trash2 className="h-3 w-3" /> Delete
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2154,6 +2742,10 @@ type CanvasCardProps = {
   onRemove: (nodeId: string) => void;
   onPatchLane: (nodeId: string, lane: string) => void;
   onTogglePreview: (nodeId: string, next: "preview" | "card") => void;
+  handlesAlwaysShown: boolean;
+  hovered: boolean;
+  onHoverChange: (nodeId: string | null) => void;
+  onConnectorStart: (nodeId: string, side: HandleSide, e: React.MouseEvent) => void;
 };
 
 // `React.memo` with a shallow geometry/meta check — during a drag only the
@@ -2171,6 +2763,10 @@ const CanvasCard = memo(
     onRemove,
     onPatchLane,
     onTogglePreview,
+    handlesAlwaysShown,
+    hovered,
+    onHoverChange,
+    onConnectorStart,
   }: CanvasCardProps) {
     const isLive = node.viewMode === "live";
     const isRunning =
@@ -2243,9 +2839,11 @@ const CanvasCard = memo(
       );
     }
 
+    const showHandles = handlesAlwaysShown || hovered;
     return (
       <div
         data-canvas-card
+        data-node-id={node.id}
         className={`absolute flex flex-col gap-1.5 rounded-lg border p-3 shadow-md transition-all duration-300 hover:shadow-lg ${tone} ${glow}`}
         style={{
           left: node.x,
@@ -2254,7 +2852,33 @@ const CanvasCard = memo(
           minHeight: node.height,
         }}
         onMouseDown={(e) => onMouseDown(e, node)}
+        onMouseEnter={() => onHoverChange(node.id)}
+        onMouseLeave={() => onHoverChange(null)}
       >
+        {showHandles ? (
+          <>
+            <ConnectorHandle
+              nodeId={node.id}
+              side="top"
+              onMouseDown={onConnectorStart}
+            />
+            <ConnectorHandle
+              nodeId={node.id}
+              side="right"
+              onMouseDown={onConnectorStart}
+            />
+            <ConnectorHandle
+              nodeId={node.id}
+              side="bottom"
+              onMouseDown={onConnectorStart}
+            />
+            <ConnectorHandle
+              nodeId={node.id}
+              side="left"
+              onMouseDown={onConnectorStart}
+            />
+          </>
+        ) : null}
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">{body}</div>
           <div className="flex flex-col items-end gap-0.5">
@@ -2338,14 +2962,56 @@ const CanvasCard = memo(
     prev.node.ref === next.node.ref &&
     prev.editingLane === next.editingLane &&
     prev.editingNote === next.editingNote &&
+    prev.handlesAlwaysShown === next.handlesAlwaysShown &&
+    prev.hovered === next.hovered &&
     prev.onEditLane === next.onEditLane &&
     prev.onEditNote === next.onEditNote &&
     prev.onMouseDown === next.onMouseDown &&
     prev.onResizeMouseDown === next.onResizeMouseDown &&
     prev.onRemove === next.onRemove &&
     prev.onPatchLane === next.onPatchLane &&
-    prev.onTogglePreview === next.onTogglePreview,
+    prev.onTogglePreview === next.onTogglePreview &&
+    prev.onHoverChange === next.onHoverChange &&
+    prev.onConnectorStart === next.onConnectorStart,
 );
+
+// ---------------------------------------------------------------------------
+// Connector handle — small dot rendered on each card side. Mousedown starts
+// a connector drag; the parent renders the preview line.
+// ---------------------------------------------------------------------------
+
+const ConnectorHandle = memo(function ConnectorHandle({
+  nodeId,
+  side,
+  onMouseDown,
+}: {
+  nodeId: string;
+  side: HandleSide;
+  onMouseDown: (nodeId: string, side: HandleSide, e: React.MouseEvent) => void;
+}) {
+  const pos: React.CSSProperties = (() => {
+    switch (side) {
+      case "top":
+        return { top: -5, left: "50%", transform: "translate(-50%, 0)" };
+      case "right":
+        return { top: "50%", right: -5, transform: "translate(0, -50%)" };
+      case "bottom":
+        return { bottom: -5, left: "50%", transform: "translate(-50%, 0)" };
+      case "left":
+        return { top: "50%", left: -5, transform: "translate(0, -50%)" };
+    }
+  })();
+  return (
+    <span
+      data-canvas-handle
+      role="button"
+      aria-label={`Connector handle ${side}`}
+      onMouseDown={(e) => onMouseDown(nodeId, side, e)}
+      className="absolute h-2.5 w-2.5 cursor-crosshair rounded-full border border-foreground/30 bg-card/80 text-foreground/60 shadow-sm transition-colors hover:border-ember hover:bg-ember hover:text-ember"
+      style={pos}
+    />
+  );
+});
 
 function LaneEditor({
   current,

@@ -6047,6 +6047,59 @@ export const mcpTools = {
     },
   },
 
+  "canvases.edgePatch": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      label: z.string().max(200).nullable().optional(),
+      kind: z.string().max(40).nullable().optional(),
+      meta: z.unknown().optional(),
+    }),
+    async run(
+      input: {
+        id: string;
+        label?: string | null;
+        kind?: string | null;
+        meta?: unknown;
+      },
+      ctx: McpContext,
+    ) {
+      const edge = await db.workspaceCanvasEdge.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true },
+      });
+      if (!edge) throw new Error("Canvas edge not found.");
+      const data: Prisma.WorkspaceCanvasEdgeUpdateInput = {};
+      if (input.label !== undefined) data.label = input.label;
+      if (input.kind !== undefined) data.kind = input.kind;
+      if (input.meta !== undefined) {
+        data.meta =
+          input.meta === null
+            ? Prisma.JsonNull
+            : (input.meta as Prisma.InputJsonValue);
+      }
+      await db.$transaction(async (tx) => {
+        await tx.workspaceCanvasEdge.update({ where: { id: input.id }, data });
+        await tx.workspaceCanvas.update({
+          where: { id: edge.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: edge.canvasId,
+          action: "edge_updated",
+          after: { edgeId: input.id },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: edge.canvasId,
+        });
+      });
+      return { ok: true };
+    },
+  },
+
   "canvases.shapeAdd": {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({

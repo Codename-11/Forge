@@ -709,6 +709,59 @@ export const canvasRouter = router({
     }),
 
   /**
+   * Patch a single canvas edge's label / kind / meta. Symmetric with
+   * `shapePatch`: passing `null` clears the column; omitting a field
+   * leaves it alone. `meta` is REPLACED on write — callers that want
+   * to merge should read first and send the full object.
+   */
+  edgePatch: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        label: z.string().max(200).nullable().optional(),
+        kind: z.string().max(40).nullable().optional(),
+        meta: z.unknown().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const edge = await ctx.db.workspaceCanvasEdge.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true },
+      });
+      if (!edge) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas edge not found." });
+      }
+      const data: Prisma.WorkspaceCanvasEdgeUpdateInput = {};
+      if (input.label !== undefined) data.label = input.label;
+      if (input.kind !== undefined) data.kind = input.kind;
+      if (input.meta !== undefined) {
+        data.meta =
+          input.meta === null
+            ? Prisma.JsonNull
+            : (input.meta as Prisma.InputJsonValue);
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.workspaceCanvasEdge.update({ where: { id: input.id }, data });
+        await tx.workspaceCanvas.update({
+          where: { id: edge.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: edge.canvasId,
+          action: "edge_updated",
+          after: { edgeId: input.id },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: edge.canvasId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  /**
    * Spawn a markdown sticky-note Artifact (kind=NOTE) AND a canvas
    * node pointing at it in one call. Notes live in the standard
    * Artifact table so they're searchable, attachable, and linkable

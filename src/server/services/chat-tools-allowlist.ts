@@ -412,6 +412,24 @@ const WRITE_TOOLS: ChatToolDef[] = [
     },
   },
   {
+    name: "canvases.edgePatch",
+    mcpName: "canvases_edgePatch",
+    requiresConfirm: true,
+    description:
+      "Patch a canvas edge's label / kind / meta. Pass null to clear a field; omit a field to leave it alone. `meta` is REPLACED on write.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        label: { type: ["string", "null"] },
+        kind: { type: ["string", "null"] },
+        meta: {},
+      },
+      required: ["id"],
+      additionalProperties: true,
+    },
+  },
+  {
     name: "canvases.shapeAdd",
     mcpName: "canvases_shapeAdd",
     requiresConfirm: true,
