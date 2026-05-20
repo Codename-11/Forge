@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { ArtifactType, EventKind, ExecutionPlanStatus, type Prisma, type PrismaClient } from "@prisma/client";
+import { ArtifactType, EventKind, ExecutionPlanStatus, Prisma, type PrismaClient } from "@prisma/client";
 import { nanoid } from "nanoid";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -121,6 +121,7 @@ export const canvasRouter = router({
         include: {
           nodes: { orderBy: { zIndex: "asc" } },
           edges: true,
+          shapes: { orderBy: { zIndex: "asc" } },
         },
       });
       if (!canvas) {
@@ -143,6 +144,7 @@ export const canvasRouter = router({
         include: {
           nodes: { orderBy: { zIndex: "asc" } },
           edges: true,
+          shapes: { orderBy: { zIndex: "asc" } },
         },
       });
       if (!canvas) {
@@ -165,7 +167,7 @@ export const canvasRouter = router({
         ...node,
         ref: hydrated[idx],
       }));
-      return { canvas, nodes, edges: canvas.edges };
+      return { canvas, nodes, edges: canvas.edges, shapes: canvas.shapes };
     }),
 
   create: workspaceProcedure
@@ -408,6 +410,244 @@ export const canvasRouter = router({
         }),
       ]);
       return { ok: true };
+    }),
+
+  /**
+   * Add a drawing primitive (box / ellipse / line / arrow / text /
+   * freehand) to a canvas. Shapes don't reference Forge entities —
+   * they're pure visual annotations.
+   */
+  shapeAdd: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        kind: z.enum(["box", "ellipse", "line", "arrow", "text", "freehand"]),
+        x: z.number(),
+        y: z.number(),
+        width: z.number().optional(),
+        height: z.number().optional(),
+        path: z.unknown().optional(),
+        style: z.unknown().optional(),
+        text: z.string().max(50_000).optional(),
+        groupId: z.string().max(80).optional(),
+        zIndex: z.number().int().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      const shape = await ctx.db.$transaction(async (tx) => {
+        const created = await tx.canvasShape.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            canvasId: input.canvasId,
+            kind: input.kind,
+            x: input.x,
+            y: input.y,
+            width: input.width ?? null,
+            height: input.height ?? null,
+            path: (input.path ?? undefined) as Prisma.InputJsonValue | undefined,
+            style: (input.style ?? undefined) as Prisma.InputJsonValue | undefined,
+            text: input.text ?? null,
+            groupId: input.groupId ?? null,
+            zIndex: input.zIndex ?? 0,
+            createdById: ctx.session?.user?.id ?? null,
+          },
+        });
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "shape_added",
+          after: { shapeId: created.id, kind: created.kind },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return created;
+      });
+      return { id: shape.id };
+    }),
+
+  /**
+   * Patch fields on a single shape. Pass `null` to clear an optional
+   * field (width/height/path/style/text/groupId). Style is REPLACED,
+   * not merged — callers that want a partial style update should
+   * read first then send the full object.
+   */
+  shapePatch: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        x: z.number().optional(),
+        y: z.number().optional(),
+        width: z.number().nullable().optional(),
+        height: z.number().nullable().optional(),
+        path: z.unknown().optional(),
+        style: z.unknown().optional(),
+        text: z.string().max(50_000).nullable().optional(),
+        groupId: z.string().max(80).nullable().optional(),
+        zIndex: z.number().int().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const shape = await ctx.db.canvasShape.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true },
+      });
+      if (!shape) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas shape not found." });
+      }
+      const data: Prisma.CanvasShapeUpdateInput = {};
+      if (input.x !== undefined) data.x = input.x;
+      if (input.y !== undefined) data.y = input.y;
+      if (input.width !== undefined) data.width = input.width;
+      if (input.height !== undefined) data.height = input.height;
+      if (input.path !== undefined) {
+        data.path =
+          input.path === null
+            ? Prisma.JsonNull
+            : (input.path as Prisma.InputJsonValue);
+      }
+      if (input.style !== undefined) {
+        data.style =
+          input.style === null
+            ? Prisma.JsonNull
+            : (input.style as Prisma.InputJsonValue);
+      }
+      if (input.text !== undefined) data.text = input.text;
+      if (input.groupId !== undefined) data.groupId = input.groupId;
+      if (input.zIndex !== undefined) data.zIndex = input.zIndex;
+
+      await ctx.db.$transaction(async (tx) => {
+        await tx.canvasShape.update({ where: { id: input.id }, data });
+        await tx.workspaceCanvas.update({
+          where: { id: shape.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: shape.canvasId,
+          action: "shape_updated",
+          after: { shapeId: input.id },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: shape.canvasId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  shapeRemove: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const shape = await ctx.db.canvasShape.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true },
+      });
+      if (!shape) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas shape not found." });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.canvasShape.delete({ where: { id: input.id } });
+        await tx.workspaceCanvas.update({
+          where: { id: shape.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: shape.canvasId,
+          action: "shape_removed",
+          before: { shapeId: input.id },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: shape.canvasId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  /**
+   * Apply the same change to many shapes at once. Use `dxdy` to
+   * translate (additive), `style` to REPLACE the style object on every
+   * matched row, and `groupId` to set/clear group membership (string
+   * sets, null clears, undefined leaves untouched). All matched shapes
+   * must belong to the caller's workspace.
+   */
+  shapeBulkPatch: workspaceProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string().cuid()).min(1).max(200),
+        style: z.unknown().optional(),
+        groupId: z.string().max(80).nullable().optional(),
+        dxdy: z
+          .object({ dx: z.number(), dy: z.number() })
+          .optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const shapes = await ctx.db.canvasShape.findMany({
+        where: { id: { in: input.ids }, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true, x: true, y: true },
+      });
+      if (shapes.length === 0) {
+        return { ok: true as const, count: 0 };
+      }
+      const canvasIds = new Set(shapes.map((s) => s.canvasId));
+      const styleSet = input.style !== undefined;
+      const groupSet = input.groupId !== undefined;
+      const translate = input.dxdy;
+      await ctx.db.$transaction(async (tx) => {
+        for (const s of shapes) {
+          const data: Prisma.CanvasShapeUpdateInput = {};
+          if (translate) {
+            data.x = s.x + translate.dx;
+            data.y = s.y + translate.dy;
+          }
+          if (styleSet) {
+            data.style =
+              input.style === null
+                ? Prisma.JsonNull
+                : (input.style as Prisma.InputJsonValue);
+          }
+          if (groupSet) {
+            data.groupId = input.groupId ?? null;
+          }
+          await tx.canvasShape.update({ where: { id: s.id }, data });
+        }
+        for (const canvasId of canvasIds) {
+          await tx.workspaceCanvas.update({
+            where: { id: canvasId },
+            data: { updatedAt: new Date() },
+          });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session?.user?.id ?? null,
+            entity: "workspace-canvas",
+            entityId: canvasId,
+            action: "shapes_bulk_updated",
+            after: { count: shapes.filter((s) => s.canvasId === canvasId).length },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "workspace-canvas",
+            subjectId: canvasId,
+          });
+        }
+      });
+      return { ok: true as const, count: shapes.length };
     }),
 
   addEdge: workspaceProcedure

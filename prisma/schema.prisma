@@ -419,6 +419,7 @@ model User {
   requestedActionRequests ActionRequest[]     @relation("ActionRequestRequester")
   assignedActionRequests  ActionRequest[]     @relation("ActionRequestAssignee")
   createdCanvases         WorkspaceCanvas[]   @relation("WorkspaceCanvasCreator")
+  createdShapes           CanvasShape[]       @relation("CanvasShapeCreator")
 
   @@index([handle])
 }
@@ -624,6 +625,7 @@ model Workspace {
   canvases           WorkspaceCanvas[]
   canvasNodes        WorkspaceCanvasNode[]
   canvasEdges        WorkspaceCanvasEdge[]
+  canvasShapes       CanvasShape[]
   startedStatus      Status?               @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
@@ -2300,6 +2302,7 @@ model WorkspaceCanvas {
   createdBy User?                 @relation("WorkspaceCanvasCreator", fields: [createdById], references: [id], onDelete: SetNull)
   nodes     WorkspaceCanvasNode[]
   edges     WorkspaceCanvasEdge[]
+  shapes    CanvasShape[]
 
   @@index([workspaceId, scopeType, scopeId])
   @@index([workspaceId, updatedAt])
@@ -2354,4 +2357,43 @@ model WorkspaceCanvasEdge {
   canvas    WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
 
   @@index([canvasId])
+}
+
+/// Excalidraw-style drawing primitive on a canvas. Unlike
+/// WorkspaceCanvasNode, shapes don't reference Forge entities — they
+/// are pure visual annotations (boxes, ellipses, arrows, text,
+/// freehand strokes) for ideation and grouping. Shapes with the same
+/// `groupId` are manipulated together.
+model CanvasShape {
+  id          String   @id @default(cuid())
+  workspaceId String
+  canvasId    String
+  /// box | ellipse | line | arrow | text | freehand
+  kind        String
+  /// Position. For bounded shapes (box/ellipse/text): x,y,width,height.
+  /// For path shapes (line/arrow/freehand): start at (x,y); points
+  /// stored in `path` JSON as an array of relative (dx, dy) tuples.
+  x           Float
+  y           Float
+  width       Float?
+  height      Float?
+  path        Json?
+  /// Style. stroke, fill, strokeWidth, dasharray, fontSize, color,
+  /// fontWeight, opacity. Free-form for v1; can tighten later.
+  style       Json?
+  /// Optional text content for text + arrow-label shapes.
+  text        String?  @db.Text
+  zIndex      Int      @default(0)
+  /// Optional grouping. Shapes with the same groupId move together.
+  groupId     String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  canvas    WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  createdBy User?           @relation("CanvasShapeCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([canvasId, zIndex])
+  @@index([workspaceId])
 }
