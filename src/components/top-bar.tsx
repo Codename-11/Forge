@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { PinsStrip } from "@/components/pins/pins-strip";
+import { Breadcrumbs } from "@/components/breadcrumbs";
 import ActivityDrawer, {
   ActivityBell,
 } from "@/components/activity-drawer";
@@ -42,8 +43,12 @@ export function TopBar({
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card/30 px-3">
-      {/* Left: reserved for breadcrumbs / per-page title injected by pages. */}
-      <div className="hidden min-w-0 items-center md:flex" aria-hidden />
+      {/* Left: workspace-shell breadcrumbs. Derived from pathname so
+          every page gets a consistent "where am I" trail without each
+          page rolling its own subtitle. */}
+      <div className="hidden min-w-0 items-center md:flex">
+        <Breadcrumbs />
+      </div>
 
       {/* Center: cross-workspace pins. Truncates aggressively on narrow widths. */}
       <div className="flex min-w-0 flex-1 items-center justify-center">

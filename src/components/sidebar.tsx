@@ -185,7 +185,7 @@ export function Sidebar({
             collapsed ? "justify-center max-md:justify-center" : "max-md:justify-center",
           )}
         >
-          <WorkspaceSwitcher />
+          <WorkspaceSwitcher collapsed={collapsed} />
         </div>
       </div>
 

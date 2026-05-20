@@ -275,8 +275,23 @@ export async function POST(req: NextRequest) {
   const buildSystemPrompt = async (): Promise<string> => {
     if (!boundCanvasId) return baseSystemPrompt;
     const canvasSummary = await loadCanvasContextSummary(workspaceId, boundCanvasId);
-    if (!canvasSummary) return baseSystemPrompt;
-    return `${baseSystemPrompt}\n\n${canvasSummary}`;
+    const storyboardHint =
+      `When the operator asks you to lay out, storyboard, sketch, ` +
+      `organize, or "set up a canvas for" something, reach for the ` +
+      `compound MCP gestures:\n` +
+      `- \`canvases.storyboardPlan({ planId })\` — labeled frame with ` +
+      `the plan card + notes lane + sources column + next-steps lane.\n` +
+      `- \`canvases.storyboardIssue({ issueId })\` — labeled frame ` +
+      `with the issue card + related + comments + attachments.\n` +
+      `- \`canvases.storyboardResearch({ topic })\` — labeled frame ` +
+      `with a scratchpad + sources column + next-steps lane.\n` +
+      `- \`canvases.storyboardCustom({ name, panels })\` — escape ` +
+      `hatch when the three presets don't fit. Provide a panels[] ` +
+      `array of \`{ label, body?, x, y, width, height }\`.\n` +
+      `One storyboard call is the grammar — don't scatter 25 floating ` +
+      `nodes by hand.`;
+    if (!canvasSummary) return `${baseSystemPrompt}\n\n${storyboardHint}`;
+    return `${baseSystemPrompt}\n\n${canvasSummary}\n\n${storyboardHint}`;
   };
   const systemPrompt = await buildSystemPrompt();
 

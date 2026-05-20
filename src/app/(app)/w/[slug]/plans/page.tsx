@@ -342,7 +342,7 @@ export default function PlansPage() {
                     tab === "archived" && "opacity-70",
                   )}
                 >
-                  <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start justify-between gap-2 pr-7">
                     <div className="flex items-center gap-2 text-meta uppercase tracking-wide text-muted-foreground">
                       <ListChecks className="h-3 w-3" /> Plan
                     </div>

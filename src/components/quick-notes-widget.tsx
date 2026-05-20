@@ -1,5 +1,8 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import type { NoteStatus } from "@prisma/client";
 import {
   Archive,
   ArchiveRestore,
@@ -7,15 +10,19 @@ import {
   ChevronDown,
   ChevronRight,
   FilePlus,
+  Folder,
   Pin,
   Plus,
+  Rocket,
+  Sparkles,
   StickyNote,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { useHotkey } from "@/lib/keyboard";
-import { cn, relativeTime } from "@/lib/utils";
+import { cn, formatIssueId, relativeTime } from "@/lib/utils";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 
 /**
@@ -29,12 +36,27 @@ import { MarkdownWithAttachments } from "@/components/markdown/attachment-render
  * Hotkey: `n` focuses the inline add row when the dashboard is mounted.
  * Suppressed when the cursor is in an input/textarea (per `useHotkey`).
  */
+type StatusFilter = "ALL" | NoteStatus;
+
+const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
+  { key: "ALL", label: "All" },
+  { key: "IDEA", label: "Ideas" },
+  { key: "SOMEDAY", label: "Someday" },
+  { key: "ACTIVE", label: "Active" },
+  { key: "ARCHIVED", label: "Archived" },
+];
+
 export function QuickNotesWidget() {
   const utils = trpc.useUtils();
+  const router = useRouter();
+  const ws = useMaybeWorkspace();
+  const slug = ws?.slug ?? null;
+  const workspaceKey = ws?.key ?? "";
 
   const [collapsed, setCollapsed] = useState(false);
   const [tab, setTab] = useState<"notes" | "journal">("notes");
   const [showArchived, setShowArchived] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [draft, setDraft] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
   const addRef = useRef<HTMLTextAreaElement | null>(null);
@@ -42,8 +64,11 @@ export function QuickNotesWidget() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
 
+  // Listing pulls the full slice (no server-side status filter) so the
+  // chip row can show counts per status without N queries. The active
+  // chip narrows the rendered set client-side.
   const listQ = trpc.note.list.useQuery(
-    { archived: showArchived, limit: 30 },
+    { archived: showArchived, limit: 100 },
     { staleTime: 30_000, enabled: tab === "notes" },
   );
 
@@ -69,6 +94,35 @@ export function QuickNotesWidget() {
   });
   const del = trpc.note.delete.useMutation({
     onSuccess: () => utils.note.list.invalidate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const setStatus = trpc.note.setStatus.useMutation({
+    onSuccess: () => utils.note.list.invalidate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const promote = trpc.note.promote.useMutation({
+    onSuccess: (res) => {
+      utils.note.list.invalidate();
+      if (!slug) {
+        toast.success(`Promoted note to ${res.target.kind}.`);
+        return;
+      }
+      const t = res.target;
+      let href: string | null = null;
+      let label = "";
+      if (t.kind === "issue") {
+        href = `/w/${slug}/issues/${t.id}`;
+        label = `Created ${t.key}`;
+      } else if (t.kind === "project") {
+        href = `/w/${slug}/projects/${t.id}`;
+        label = `Created project ${t.key}`;
+      } else {
+        href = `/w/${slug}/initiatives/${t.id}`;
+        label = `Created initiative ${t.title}`;
+      }
+      toast.success(label);
+      if (href) router.push(href);
+    },
     onError: (e) => toast.error(e.message),
   });
   // The headless convert proc still exists for agent / programmatic
@@ -142,8 +196,22 @@ export function QuickNotesWidget() {
     });
   }, []);
 
-  const items = listQ.data?.items ?? [];
+  const items = useMemo(() => listQ.data?.items ?? [], [listQ.data]);
   const count = items.length;
+  const statusCounts = useMemo(() => {
+    const c: Record<NoteStatus, number> = {
+      IDEA: 0,
+      SOMEDAY: 0,
+      ACTIVE: 0,
+      ARCHIVED: 0,
+    };
+    for (const n of items) c[n.status as NoteStatus] += 1;
+    return c;
+  }, [items]);
+  const filteredItems = useMemo(() => {
+    if (statusFilter === "ALL") return items;
+    return items.filter((n) => n.status === statusFilter);
+  }, [items, statusFilter]);
 
   const submitDraft = useCallback(() => {
     const body = draft.trim();
@@ -347,6 +415,42 @@ export function QuickNotesWidget() {
             </div>
           )}
 
+          {/* Status filter chip row */}
+          {!showArchived && items.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-2">
+              {STATUS_FILTERS.map((f) => {
+                const n =
+                  f.key === "ALL"
+                    ? items.length
+                    : statusCounts[f.key as NoteStatus];
+                const active = statusFilter === f.key;
+                return (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => setStatusFilter(f.key)}
+                    className={cn(
+                      "focus-ring inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-meta uppercase tracking-wider transition-colors",
+                      active
+                        ? "border-ember/40 bg-ember/10 text-ember"
+                        : "border-border bg-card/40 text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <span>{f.label}</span>
+                    <span
+                      className={cn(
+                        "rounded-full px-1 font-mono normal-case tracking-normal",
+                        active ? "bg-ember/15" : "bg-subtle/70",
+                      )}
+                    >
+                      {n}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {/* List */}
           {listQ.isLoading ? (
             <ul className="flex flex-col gap-1 p-3">
@@ -357,18 +461,22 @@ export function QuickNotesWidget() {
                 />
               ))}
             </ul>
-          ) : items.length === 0 ? (
+          ) : filteredItems.length === 0 ? (
             <div className="px-4 py-6 text-center text-xs text-muted-foreground">
               {showArchived
                 ? "No archived notes."
-                : "Quick thought? Press N."}
+                : statusFilter !== "ALL"
+                  ? `No notes with status ${statusFilter.toLowerCase()}.`
+                  : "Quick thought? Press N."}
             </div>
           ) : (
             <ul className="flex flex-col">
-              {items.map((n) => (
+              {filteredItems.map((n) => (
                 <NoteRow
                   key={n.id}
                   note={n}
+                  workspaceKey={workspaceKey}
+                  slug={slug}
                   expanded={expandedId === n.id}
                   editing={editingId === n.id}
                   editingValue={editingValue}
@@ -396,6 +504,13 @@ export function QuickNotesWidget() {
                   onUnarchive={() => unarchive.mutate({ id: n.id })}
                   onDelete={() => del.mutate({ id: n.id })}
                   onConvert={() => convertViaQuickCreate(n)}
+                  onSetStatus={(status) =>
+                    setStatus.mutate({ noteId: n.id, status })
+                  }
+                  onPromote={(kind) =>
+                    promote.mutate({ noteId: n.id, kind })
+                  }
+                  promoting={promote.isPending}
                 />
               ))}
             </ul>
@@ -584,9 +699,14 @@ type NoteRowProps = {
     title: string | null;
     body: string;
     pinned: boolean;
+    status: NoteStatus;
+    promotedToType: string | null;
+    promotedToId: string | null;
     archivedAt: Date | string | null;
     updatedAt: Date | string;
   };
+  workspaceKey: string;
+  slug: string | null;
   expanded: boolean;
   editing: boolean;
   editingValue: string;
@@ -600,10 +720,15 @@ type NoteRowProps = {
   onUnarchive: () => void;
   onDelete: () => void;
   onConvert: () => void;
+  onSetStatus: (status: NoteStatus) => void;
+  onPromote: (kind: "issue" | "project" | "initiative") => void;
+  promoting: boolean;
 };
 
 function NoteRow({
   note,
+  workspaceKey,
+  slug,
   expanded,
   editing,
   editingValue,
@@ -617,8 +742,13 @@ function NoteRow({
   onUnarchive,
   onDelete,
   onConvert,
+  onSetStatus,
+  onPromote,
+  promoting,
 }: NoteRowProps) {
   const archived = !!note.archivedAt;
+  const [convertOpen, setConvertOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
   const excerpt = useMemo(() => {
     if (note.title) return note.body;
     const firstLine = note.body.split("\n")[0] ?? "";
@@ -627,6 +757,7 @@ function NoteRow({
       : firstLine;
   }, [note.body, note.title]);
   const displayTitle = note.title?.trim() || note.body.split("\n")[0]?.trim() || "Untitled";
+  const alreadyPromoted = !!note.promotedToId && !!note.promotedToType;
 
   return (
     <li className="group border-b border-border/60 last:border-b-0">
@@ -698,6 +829,47 @@ function NoteRow({
           </button>
           <div className="mt-1 flex items-center gap-2 text-meta text-muted-foreground">
             <span>{relativeTime(note.updatedAt)}</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setStatusOpen((v) => !v);
+                setConvertOpen(false);
+              }}
+              className="focus-ring relative"
+              title="Change lifecycle status"
+            >
+              <NoteStatusChip status={note.status} />
+              {statusOpen && (
+                <div
+                  onClick={(ev) => ev.stopPropagation()}
+                  className="absolute left-0 top-full z-10 mt-1 flex flex-col rounded-md border border-border bg-card py-1 shadow-md"
+                  role="menu"
+                >
+                  {(["IDEA", "SOMEDAY", "ACTIVE", "ARCHIVED"] as NoteStatus[]).map(
+                    (s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => {
+                          onSetStatus(s);
+                          setStatusOpen(false);
+                        }}
+                        className={cn(
+                          "focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60",
+                          s === note.status && "text-foreground",
+                        )}
+                      >
+                        <NoteStatusChip status={s} />
+                      </button>
+                    ),
+                  )}
+                </div>
+              )}
+            </button>
+            {alreadyPromoted && (
+              <PromotedBadge note={note} slug={slug} workspaceKey={workspaceKey} />
+            )}
             {archived && (
               <span className="rounded bg-subtle/60 px-1 text-[0.6rem] uppercase tracking-wider">
                 archived
@@ -707,14 +879,82 @@ function NoteRow({
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-          <button
-            type="button"
-            onClick={onConvert}
-            className="focus-ring rounded p-1 text-muted-foreground hover:bg-subtle hover:text-foreground"
-            title="Convert to issue — opens the new issue with this note's body"
-          >
-            <FilePlus className="h-3.5 w-3.5" />
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setConvertOpen((v) => !v);
+                setStatusOpen(false);
+              }}
+              disabled={promoting || alreadyPromoted}
+              className={cn(
+                "focus-ring rounded p-1 text-muted-foreground hover:bg-subtle hover:text-foreground",
+                (promoting || alreadyPromoted) && "opacity-40",
+              )}
+              title={
+                alreadyPromoted
+                  ? `Already promoted to ${note.promotedToType}`
+                  : "Convert this note to an issue, project, or initiative"
+              }
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+            </button>
+            {convertOpen && !alreadyPromoted && (
+              <div
+                onClick={(ev) => ev.stopPropagation()}
+                className="absolute right-0 top-full z-10 mt-1 flex w-44 flex-col rounded-md border border-border bg-card py-1 shadow-md"
+                role="menu"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    onPromote("issue");
+                    setConvertOpen(false);
+                  }}
+                  className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
+                >
+                  <FilePlus className="h-3 w-3 text-muted-foreground" />
+                  <span>Convert to Issue</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onPromote("project");
+                    setConvertOpen(false);
+                  }}
+                  className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
+                >
+                  <Folder className="h-3 w-3 text-muted-foreground" />
+                  <span>Convert to Project</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onPromote("initiative");
+                    setConvertOpen(false);
+                  }}
+                  className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
+                >
+                  <Rocket className="h-3 w-3 text-muted-foreground" />
+                  <span>Convert to Initiative</span>
+                </button>
+                <div className="my-1 border-t border-border" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    onConvert();
+                    setConvertOpen(false);
+                  }}
+                  className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
+                  title="Open the quick-create dialog so you can tweak title and description"
+                >
+                  <FilePlus className="h-3 w-3 text-muted-foreground" />
+                  <span>Open in Quick Create…</span>
+                </button>
+              </div>
+            )}
+          </div>
           {archived ? (
             <button
               type="button"
@@ -755,4 +995,98 @@ function NoteRow({
       </div>
     </li>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Status chip + promoted-target badge — warm-earthy tokenized colors.
+// ---------------------------------------------------------------------------
+
+const STATUS_STYLES: Record<NoteStatus, string> = {
+  IDEA: "border-ember/40 bg-ember/10 text-ember",
+  SOMEDAY: "border-border bg-subtle/70 text-muted-foreground",
+  ACTIVE: "border-success/40 bg-success/10 text-success",
+  ARCHIVED: "border-border bg-subtle/40 text-muted-foreground/80",
+};
+
+function NoteStatusChip({ status }: { status: NoteStatus }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-1.5 text-meta uppercase tracking-wider",
+        STATUS_STYLES[status],
+      )}
+    >
+      {status.toLowerCase()}
+    </span>
+  );
+}
+
+function PromotedBadge({
+  note,
+  slug,
+  workspaceKey,
+}: {
+  note: { promotedToType: string | null; promotedToId: string | null };
+  slug: string | null;
+  workspaceKey: string;
+}) {
+  const targetInfo = usePromotedTarget(note.promotedToType, note.promotedToId);
+  if (!note.promotedToType || !note.promotedToId) return null;
+  let href: string | null = null;
+  let label = "";
+  if (note.promotedToType === "issue") {
+    href = slug ? `/w/${slug}/issues/${note.promotedToId}` : null;
+    label = targetInfo?.number
+      ? `→ ${formatIssueId(workspaceKey, targetInfo.number)}`
+      : "→ issue";
+  } else if (note.promotedToType === "project") {
+    href = slug ? `/w/${slug}/projects/${note.promotedToId}` : null;
+    label = targetInfo?.key ? `→ ${targetInfo.key}` : "→ project";
+  } else if (note.promotedToType === "initiative") {
+    href = slug ? `/w/${slug}/initiatives/${note.promotedToId}` : null;
+    label = targetInfo?.name ? `→ ${targetInfo.name}` : "→ initiative";
+  }
+  const className =
+    "inline-flex items-center rounded border border-border bg-subtle/60 px-1.5 text-meta font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground";
+  if (!href) {
+    return <span className={className}>{label}</span>;
+  }
+  return (
+    <Link
+      href={href}
+      onClick={(e) => e.stopPropagation()}
+      className={className}
+      title={`Promoted to ${note.promotedToType}`}
+    >
+      {label}
+    </Link>
+  );
+}
+
+function usePromotedTarget(
+  type: string | null,
+  id: string | null,
+): { number?: number; key?: string; name?: string } | null {
+  const issueQ = trpc.issue.byId.useQuery(
+    { id: id ?? "" },
+    { enabled: type === "issue" && !!id, staleTime: 60_000 },
+  );
+  const projectQ = trpc.project.byId.useQuery(
+    { id: id ?? "" },
+    { enabled: type === "project" && !!id, staleTime: 60_000 },
+  );
+  const initiativeQ = trpc.initiative.get.useQuery(
+    { id: id ?? "" },
+    { enabled: type === "initiative" && !!id, staleTime: 60_000 },
+  );
+  if (type === "issue" && issueQ.data) {
+    return { number: issueQ.data.number };
+  }
+  if (type === "project" && projectQ.data) {
+    return { key: projectQ.data.key };
+  }
+  if (type === "initiative" && initiativeQ.data) {
+    return { name: initiativeQ.data.name };
+  }
+  return null;
 }

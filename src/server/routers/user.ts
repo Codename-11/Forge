@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { router, protectedProcedure } from "@/server/trpc";
+import { router, protectedProcedure, workspaceProcedure } from "@/server/trpc";
+import { refreshTodayZone } from "@/server/services/today-zone";
 
 /**
  * Account-level user router.
@@ -26,6 +27,7 @@ const ME_SELECT = {
   density: true,
   textSize: true,
   missionControlDefaultTab: true,
+  dashboardView: true,
   onboardingDismissedAt: true,
   onboardingSkippedSteps: true,
   pomodoroEnabled: true,
@@ -57,6 +59,16 @@ export const userRouter = router({
       return ctx.db.user.update({
         where: { id: ctx.session.user.id },
         data: input,
+        select: ME_SELECT,
+      });
+    }),
+
+  setDashboardView: protectedProcedure
+    .input(z.object({ view: z.enum(["list", "canvas"]).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.user.update({
+        where: { id: ctx.session.user.id },
+        data: { dashboardView: input.view },
         select: ME_SELECT,
       });
     }),
@@ -225,4 +237,45 @@ export const userRouter = router({
         select: ME_SELECT,
       });
     }),
+
+  /**
+   * Return (auto-provisioning if needed) the viewer's Personal canvas
+   * for the active workspace. Each user gets exactly one PERSONAL
+   * canvas per workspace — the unique key on
+   * (workspaceId, kind, ownerUserId) enforces this. Cheap to call on
+   * every dashboard load; the create branch only fires once per user.
+   */
+  personalCanvas: workspaceProcedure.query(async ({ ctx }) => {
+    const existing = await ctx.db.workspaceCanvas.findFirst({
+      where: {
+        workspaceId: ctx.workspaceId,
+        kind: "PERSONAL",
+        ownerUserId: ctx.session.user.id,
+        archivedAt: null,
+      },
+      select: { id: true, name: true, kind: true, activePageId: true },
+    });
+    let canvas = existing;
+    if (!canvas) {
+      const me = await ctx.db.user.findUniqueOrThrow({
+        where: { id: ctx.session.user.id },
+        select: { name: true, email: true },
+      });
+      const label = me.name?.trim() || me.email.split("@")[0] || "Personal";
+      canvas = await ctx.db.workspaceCanvas.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          kind: "PERSONAL",
+          ownerUserId: ctx.session.user.id,
+          createdById: ctx.session.user.id,
+          name: `${label}'s workspace`,
+        },
+        select: { id: true, name: true, kind: true, activePageId: true },
+      });
+    }
+    // Refresh the locked Today zone on every fetch — cheap (handful of
+    // writes) and keeps the strip current without a background job.
+    await refreshTodayZone(ctx.db, ctx.workspaceId, ctx.session.user.id, canvas.id);
+    return canvas;
+  }),
 });

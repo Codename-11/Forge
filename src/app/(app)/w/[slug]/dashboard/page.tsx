@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { toast } from "sonner";
 import {
@@ -11,6 +12,8 @@ import {
   Clock3,
   Globe,
   KeyRound,
+  LayoutGrid,
+  List as ListIcon,
   Mail,
   Plus,
   Rocket,
@@ -25,6 +28,7 @@ import { CycleChip } from "@/components/cycle-chip";
 import { ProjectChip } from "@/components/project-chip";
 import { QuickNotesWidget } from "@/components/quick-notes-widget";
 import { TodayWidget } from "@/components/dashboard/today-widget";
+import { IdeasTile } from "@/components/dashboard/ideas-tile";
 import { WhatsNewTile } from "@/components/dashboard/whats-new-tile";
 import { AgentActivityTile } from "@/components/dashboard/agent-activity-tile";
 import { trpc } from "@/lib/trpc";
@@ -117,6 +121,7 @@ export default function DashboardPage() {
         subtitle="Workspace overview — onboarding, focus, recent done."
         actions={
           <div className="flex items-center gap-2">
+            <DashboardViewToggle slug={slug} />
             <ResumeSetupPill
               projectsCount={projects?.items.length ?? 0}
               issuesCount={anyIssue.data?.items.length ?? 0}
@@ -145,6 +150,8 @@ export default function DashboardPage() {
           <TodayWidget slug={slug} workspaceKey={workspaceKey} />
 
           <AgentActivityTile slug={slug} />
+
+          <IdeasTile slug={slug} />
 
           <QuickNotesWidget />
 
@@ -1269,6 +1276,68 @@ function SuggestionsCard({
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function DashboardViewToggle({ slug }: { slug: string }) {
+  const router = useRouter();
+  const personalCanvas = trpc.user.personalCanvas.useQuery(undefined, {
+    staleTime: 5 * 60_000,
+  });
+  const setView = trpc.user.setDashboardView.useMutation({
+    onError: () => {/* silent — view toggle is best-effort persistence */},
+  });
+  const onCanvas = useCallback(() => {
+    const id = personalCanvas.data?.id;
+    if (!id) {
+      toast.message("Preparing your canvas…");
+      return;
+    }
+    setView.mutate({ view: "canvas" });
+    router.push(`/w/${slug}/canvas/${id}`);
+  }, [personalCanvas.data?.id, router, setView, slug]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "\\") return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      e.preventDefault();
+      onCanvas();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCanvas]);
+  return (
+    <div
+      className="inline-flex items-center rounded-md border border-border bg-card/40 p-0.5 text-[0.6875rem]"
+      role="tablist"
+      aria-label="Dashboard view"
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected="true"
+        className="inline-flex items-center gap-1 rounded-sm bg-card px-2 py-1 text-foreground shadow-sm"
+        title="List view (current)"
+      >
+        <ListIcon className="h-3 w-3" />
+        List
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected="false"
+        className="focus-ring inline-flex items-center gap-1 rounded-sm px-2 py-1 text-muted-foreground hover:text-foreground"
+        onClick={onCanvas}
+        disabled={personalCanvas.isLoading}
+        title="Switch to your Personal canvas"
+      >
+        <LayoutGrid className="h-3 w-3" />
+        Canvas
+      </button>
     </div>
   );
 }

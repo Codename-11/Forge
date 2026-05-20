@@ -2,6 +2,166 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-20 — Unified workspace flow — Wave 1
+
+### Summary
+
+Landed the **unified-workspace-flow** plan
+(`docs/plans/unified-workspace-flow.md`) Wave 1: schema + server
+foundation for notes-as-ideas, dashboard-as-canvas, Figma-grade canvas
+primitives, agent storyboard MCP, and canvas-UX polish. Agent team
+ran in parallel after the schema migration landed.
+
+### Schema (migration `0046_unified_workspace_flow`)
+
+- `Note.status` enum (IDEA | SOMEDAY | ACTIVE | ARCHIVED) +
+  `promotedToType` / `promotedToId` backlinks. Existing JOURNAL rows
+  backfilled to ACTIVE; existing archived rows to ARCHIVED.
+- `Issue.sourceNoteId`, `Project.sourceNoteId`, `Initiative.sourceNoteId`
+  — backlinks for `notes.promote`.
+- `User.dashboardView` ("list" | "canvas") preference.
+- `WorkspaceCanvas.kind` enum (PROJECT | INITIATIVE | CYCLE | ISSUE |
+  PERSONAL | DESIGN), `ownerUserId`, `activePageId`. Unique key on
+  `(workspaceId, kind, ownerUserId)` enforces one PERSONAL per user.
+- New tables: `CanvasFrame`, `CanvasGroup`, `CanvasComponent`,
+  `CanvasComponentInstance`, `CanvasStyle`.
+- New columns on `WorkspaceCanvasNode` + `CanvasShape`:
+  `parentFrameId`, `groupId` / `canvasGroupId`, `styleRefs`,
+  `lockedAt`, `hiddenAt`.
+
+### Notes upgrade (Workstream D)
+
+- `notes.list` extended with `status` (single | array), `pinned`,
+  `search` filters. `notes.create` accepts initial `status`
+  (defaults: IDEA for NOTE, ACTIVE for JOURNAL).
+- `notes.setStatus` mutation + MCP tool.
+- `notes.promote({ noteId, kind, … })` mutation + MCP tool — creates
+  Issue/Project/Initiative, stamps `sourceNoteId`, flips note to
+  ACTIVE. Refuses to re-promote.
+- Frontend: `QuickNotesWidget` gets a status filter chip row + inline
+  status menu + "Convert →" popover. New `IdeasTile` lists top-N
+  IDEA-status notes on the dashboard with one-click promote.
+
+### Canvas core (Workstream B)
+
+- `canvas.frameAdd / framePatch / frameRemove`,
+  `canvas.groupCreate / groupDissolve`,
+  `canvas.pageAdd / pageRemove / pageReorder / pageActivate`,
+  `canvas.alignSelection`. Pure-function alignment / distribute /
+  tidy-up lives in `src/server/services/canvas-alignment.ts` so the
+  router and MCP path share one compute.
+- MCP wrappers added for `canvases.frameAdd` and
+  `canvases.alignSelection`; the rest of the wrappers
+  (group/page/styleRefs) will follow as the frontend learns to
+  render those primitives.
+
+### Styling / components / layers (Workstream C)
+
+- Style tokens: `canvas.styleCreate / List / Update / Delete` (soft
+  delete via `archivedAt`).
+- Components: `canvas.componentCreate / List / Get / Update / Archive`
+  + instances: `instanceCreate / Patch / Detach` (detach materializes
+  the definition into raw rows under the host frame).
+- Layers: `layerSetLocked / SetHidden / Rename / Reorder` (shared
+  helper across nodes/shapes/frames/groups/instances).
+- All exposed as `canvases.*` MCP tools.
+
+### Dashboard-as-canvas (Workstream E)
+
+- `user.personalCanvas` query auto-provisions one PERSONAL canvas per
+  user on first call. `user.setDashboardView` persists the preferred
+  view.
+- New `DashboardViewToggle` in the dashboard topbar — flips to the
+  Personal canvas via `next/navigation`. `\` chord toggles from
+  anywhere on the dashboard.
+
+### Canvas polish (Workstream F)
+
+- Per-tool cursor management (`cursorForTool`) — crosshair for
+  draw/connect tools, text I-beam for text, grab/grabbing for pan,
+  default for select.
+- Connector preview switched from orthogonal A* to a cheap quadratic
+  curve during drag — the root cause of "drawing node flows is
+  delayed". Orthogonal routing still runs once on drop.
+- Escape clears in-progress connector + active selection + reverts to
+  select tool.
+- `0` resets to 100% zoom centered; `1` zooms-to-fit all content
+  (nodes + shapes, with 80px padding).
+
+### Agent storyboard (Workstream G)
+
+- New compound MCP tools `canvases.storyboardPlan` and
+  `canvases.storyboardIssue` — drop a labeled frame containing the
+  primary card + a notes lane + a sources/links column + a next-steps
+  lane (or related / comments / attachments for issues). Audit emits
+  `storyboard_plan` / `storyboard_issue`.
+
+### Verification
+
+- `pnpm lint` → clean.
+- `pnpm typecheck` → clean.
+- `pnpm test` → 421/421 (52 files) pass.
+- Plan doc lives at `docs/plans/unified-workspace-flow.md`.
+
+### Wave 5 follow-on — frontend renderers + Today + storyboard fills
+
+Closing the DoD gap. A second pair of parallel agents went after the
+canvas frontend rendering while I did the server-side Today zone +
+the two remaining storyboard MCPs in this session.
+
+**Today zone server (`src/server/services/today-zone.ts`)**
+- Idempotent `refreshTodayZone(db, workspaceId, userId, canvasId)`.
+  Finds (or creates) a Today frame on the Personal canvas, identified
+  by `backgroundFill.kind = "today-zone"` so renames don't break
+  lookup. Locked + auto-arranged.
+- Collects assigned-active issues (top 7), issues due today (4),
+  recent chat threads from the last 7 days (3). Dedupes, places into
+  a 4-column grid inside the Today frame. Re-runs cleanly — wipes
+  prior children before re-inserting.
+- `user.personalCanvas` now calls `refreshTodayZone` on every fetch.
+  Cheap enough (small N) to run inline; no background job needed.
+
+**storyboardResearch + storyboardCustom MCP**
+- `canvases.storyboardResearch({ canvasId, topic })` — frame with
+  scratchpad + sources column + next-steps lane.
+- `canvases.storyboardCustom({ canvasId, name, panels })` — escape
+  hatch with up to 12 caller-defined text panels at arbitrary
+  positions inside the frame.
+- Chat system prompt updated with the full storyboard grammar (all
+  four gestures listed with their input shapes).
+- Chat tools allowlist now exposes all storyboard MCP entries +
+  `canvases.frameAdd` + `canvases.alignSelection` + `notes.promote`
+  + `notes.setStatus`.
+
+**Frontend canvas renderers** (delegated to parallel agents)
+- Visible frames (`src/components/canvas/canvas-frames.tsx`),
+  components panel, layers panel, draw-frame F-key tool, multi-page
+  tab bar for DESIGN canvases, drag-children-with-frame semantics.
+  See agent reports for the per-component breakdown.
+
+### Verification (post Wave 5)
+
+- `pnpm lint && pnpm typecheck && pnpm test` → clean. 53 files /
+  429 tests pass (8 new — 3 today-zone, 5 canvas-router Workstream B).
+- All DoD criteria addressed at the code level:
+  - Visible frames + drag-children-with-frame (`canvas-frames.tsx`
+    + `framePatch` server cascade).
+  - Multi-page tab bar for DESIGN canvases (`canvas-page-tabs.tsx`).
+  - Components panel + drag-onto-canvas (`canvas-components-panel.tsx`
+    + `CanvasComponentInstances` renderer; drop emits
+    `application/x-forge-canvas-component`).
+  - Layers panel — right-edge tree, hide/lock/rename/reorder
+    (`canvas-layers-panel.tsx` + `canvas-right-panel.tsx`).
+  - Today zone — `refreshTodayZone` runs inside `canvas.hydrate`
+    when `canvas.kind === "PERSONAL"`. Entry route
+    `/w/[slug]/personal` auto-provisions + redirects so the
+    Personal canvas has a stable bookmarkable URL.
+  - F-key + draw-frame gesture + per-tool cursor for "frame".
+  - All four storyboard MCP gestures (Plan, Issue, Research,
+    Custom) + chat-tools allowlist entries.
+- Visual smoke needs a browser pass — typecheck and lint passes
+  are the strongest signal we have without one.
+
 ## 2026-05-19 — Chat inbox backstop duplicate-wake guard
 
 ### Summary

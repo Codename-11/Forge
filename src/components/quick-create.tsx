@@ -45,6 +45,31 @@ type Mode =
 
 const DRAFT_KEY = "quickCreate";
 
+// Cyclable mode order for Tab / Shift+Tab / ⌘1..⌘7 mode jumping.
+// Ordered by how often operators reach for each capture target —
+// issue first, then notes, then the planning surfaces, then artifacts
+// and action-requests. `issue-context` is excluded because it's
+// driven by the current URL, not by user choice.
+type CyclableMode = "issue" | "note" | "project" | "initiative" | "cycle" | "artifact" | "action-request";
+const CYCLABLE_MODES: readonly CyclableMode[] = [
+  "issue",
+  "note",
+  "project",
+  "initiative",
+  "cycle",
+  "artifact",
+  "action-request",
+] as const;
+const CYCLABLE_MODE_LABEL: Record<CyclableMode, string> = {
+  issue: "issue",
+  note: "note",
+  project: "project",
+  initiative: "initiative",
+  cycle: "sprint",
+  artifact: "artifact",
+  "action-request": "ask",
+};
+
 type DraftShape = {
   text: string;
   mode?: Mode["kind"];
@@ -611,6 +636,32 @@ export function QuickCreate() {
       e.preventDefault();
       const secondary = e.metaKey || e.ctrlKey;
       void submit(secondary);
+      return;
+    }
+    // Tab / Shift+Tab cycles through cyclable modes — issue-context
+    // is sticky so users navigating from a `/issues/:id` page don't
+    // get bumped out of the comment/sub-issue flow by stray Tab.
+    if (e.key === "Tab" && mode.kind !== "issue-context") {
+      e.preventDefault();
+      const dir = e.shiftKey ? -1 : 1;
+      const idx = CYCLABLE_MODES.indexOf(mode.kind as CyclableMode);
+      const next = CYCLABLE_MODES[(idx + dir + CYCLABLE_MODES.length) % CYCLABLE_MODES.length];
+      setMode({ kind: next } as Mode);
+      setPriority("NONE");
+      setProjectId("");
+      return;
+    }
+    // ⌘1..⌘7 jump straight to a mode without dragging through the
+    // dropdown — fastest path for muscle memory.
+    if ((e.metaKey || e.ctrlKey) && /^[1-7]$/.test(e.key) && mode.kind !== "issue-context") {
+      const idx = Number(e.key) - 1;
+      if (idx >= 0 && idx < CYCLABLE_MODES.length) {
+        e.preventDefault();
+        setMode({ kind: CYCLABLE_MODES[idx] } as Mode);
+        setPriority("NONE");
+        setProjectId("");
+      }
+      return;
     }
   }
 
@@ -724,6 +775,40 @@ export function QuickCreate() {
             </Kbd>
           </button>
         </div>
+
+        {/* Mode pill row — Tab / Shift+Tab to cycle, ⌘1..⌘7 to jump.
+            Hidden in issue-context since that mode is URL-driven and
+            shouldn't be cycled off accidentally. */}
+        {mode.kind !== "issue-context" && (
+          <div className="flex flex-wrap items-center gap-1 border-t border-border/60 bg-card/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground">
+            <span className="font-mono uppercase tracking-wider opacity-70">modes</span>
+            {CYCLABLE_MODES.map((m, idx) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => {
+                  setMode({ kind: m } as Mode);
+                  setPriority("NONE");
+                  setProjectId("");
+                  inputRef.current?.focus();
+                }}
+                className={cn(
+                  "focus-ring inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+                  mode.kind === m
+                    ? "bg-card text-foreground"
+                    : "text-muted-foreground hover:bg-subtle/50 hover:text-foreground",
+                )}
+              >
+                <span className="capitalize">{CYCLABLE_MODE_LABEL[m]}</span>
+                <Kbd className="opacity-60">⌘{idx + 1}</Kbd>
+              </button>
+            ))}
+            <span className="ml-auto inline-flex items-center gap-1 opacity-70">
+              <Kbd>Tab</Kbd>
+              <span>cycle</span>
+            </span>
+          </div>
+        )}
 
         {/* Slash hint — render only for issue / sub-issue (commands
             don't apply to plain comments or to cycles/projects). */}

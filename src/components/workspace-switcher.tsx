@@ -19,7 +19,7 @@ import { useWorkspace } from "@/hooks/use-workspace";
  * palette; `g w` is the dedicated chord for this picker so it doesn't
  * conflict with the broader command surface.
  */
-export function WorkspaceSwitcher() {
+export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean } = {}) {
   const ws = useWorkspace();
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -68,11 +68,20 @@ export function WorkspaceSwitcher() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        title="Switch workspace  (g w)"
-        className="focus-ring group inline-flex h-7 items-center gap-2 rounded-md border border-border bg-card/60 pl-1 pr-2 text-left hover:bg-subtle"
+        title={`Switch workspace · ${ws.name} (g w)`}
+        aria-label={`Switch workspace, current ${ws.name}`}
+        className={cn(
+          "focus-ring group inline-flex h-7 items-center rounded-md border border-border bg-card/60 text-left hover:bg-subtle",
+          collapsed
+            ? "h-8 w-8 justify-center p-0 max-md:h-8 max-md:w-8 max-md:justify-center max-md:p-0"
+            : "gap-2 pl-1 pr-2 max-md:h-8 max-md:w-8 max-md:justify-center max-md:p-0",
+        )}
       >
         <span
-          className="grid h-5 w-5 shrink-0 place-items-center rounded-sm font-mono text-[0.6875rem] font-semibold"
+          className={cn(
+            "grid shrink-0 place-items-center rounded-sm font-mono font-semibold",
+            collapsed ? "h-5 w-5 text-[0.6875rem]" : "h-5 w-5 text-[0.6875rem]",
+          )}
           style={{
             backgroundColor: badge.bg,
             color: badge.fg,
@@ -81,8 +90,20 @@ export function WorkspaceSwitcher() {
         >
           {ws.key.slice(0, 2)}
         </span>
-        <span className="truncate text-[0.8125rem] font-medium tracking-tight">{ws.name}</span>
-        <ChevronsUpDown className="h-3 w-3 text-muted-foreground opacity-60 group-hover:opacity-100" />
+        <span
+          className={cn(
+            "truncate text-[0.8125rem] font-medium tracking-tight",
+            collapsed ? "hidden" : "max-md:hidden",
+          )}
+        >
+          {ws.name}
+        </span>
+        <ChevronsUpDown
+          className={cn(
+            "h-3 w-3 text-muted-foreground opacity-60 group-hover:opacity-100",
+            collapsed ? "hidden" : "max-md:hidden",
+          )}
+        />
       </button>
 
       <Dialog open={open} onClose={() => setOpen(false)} className="max-w-md">
