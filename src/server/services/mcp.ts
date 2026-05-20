@@ -6047,6 +6047,188 @@ export const mcpTools = {
     },
   },
 
+  "canvases.shapeAdd": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      canvasId: z.string().cuid(),
+      kind: z.enum(["box", "ellipse", "line", "arrow", "text", "freehand"]),
+      x: z.number(),
+      y: z.number(),
+      width: z.number().optional(),
+      height: z.number().optional(),
+      path: z.unknown().optional(),
+      style: z.unknown().optional(),
+      text: z.string().max(50_000).optional(),
+      groupId: z.string().max(80).optional(),
+      zIndex: z.number().int().optional(),
+    }),
+    async run(
+      input: {
+        canvasId: string;
+        kind: "box" | "ellipse" | "line" | "arrow" | "text" | "freehand";
+        x: number;
+        y: number;
+        width?: number;
+        height?: number;
+        path?: unknown;
+        style?: unknown;
+        text?: string;
+        groupId?: string;
+        zIndex?: number;
+      },
+      ctx: McpContext,
+    ) {
+      const canvas = await db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) throw new Error("Canvas not found.");
+      const shape = await db.$transaction(async (tx) => {
+        const created = await tx.canvasShape.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            canvasId: input.canvasId,
+            kind: input.kind,
+            x: input.x,
+            y: input.y,
+            width: input.width ?? null,
+            height: input.height ?? null,
+            path: (input.path ?? undefined) as Prisma.InputJsonValue | undefined,
+            style: (input.style ?? undefined) as Prisma.InputJsonValue | undefined,
+            text: input.text ?? null,
+            groupId: input.groupId ?? null,
+            zIndex: input.zIndex ?? 0,
+            createdById: ctx.userId ?? null,
+          },
+        });
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "shape_added",
+          after: { shapeId: created.id, kind: created.kind },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return created;
+      });
+      return { ok: true, id: shape.id };
+    },
+  },
+
+  "canvases.shapePatch": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      width: z.number().nullable().optional(),
+      height: z.number().nullable().optional(),
+      path: z.unknown().optional(),
+      style: z.unknown().optional(),
+      text: z.string().max(50_000).nullable().optional(),
+      groupId: z.string().max(80).nullable().optional(),
+      zIndex: z.number().int().optional(),
+    }),
+    async run(
+      input: {
+        id: string;
+        x?: number;
+        y?: number;
+        width?: number | null;
+        height?: number | null;
+        path?: unknown;
+        style?: unknown;
+        text?: string | null;
+        groupId?: string | null;
+        zIndex?: number;
+      },
+      ctx: McpContext,
+    ) {
+      const shape = await db.canvasShape.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true },
+      });
+      if (!shape) throw new Error("Canvas shape not found.");
+      const data: Prisma.CanvasShapeUpdateInput = {};
+      if (input.x !== undefined) data.x = input.x;
+      if (input.y !== undefined) data.y = input.y;
+      if (input.width !== undefined) data.width = input.width;
+      if (input.height !== undefined) data.height = input.height;
+      if (input.path !== undefined) {
+        data.path =
+          input.path === null
+            ? Prisma.JsonNull
+            : (input.path as Prisma.InputJsonValue);
+      }
+      if (input.style !== undefined) {
+        data.style =
+          input.style === null
+            ? Prisma.JsonNull
+            : (input.style as Prisma.InputJsonValue);
+      }
+      if (input.text !== undefined) data.text = input.text;
+      if (input.groupId !== undefined) data.groupId = input.groupId;
+      if (input.zIndex !== undefined) data.zIndex = input.zIndex;
+      await db.$transaction(async (tx) => {
+        await tx.canvasShape.update({ where: { id: input.id }, data });
+        await tx.workspaceCanvas.update({
+          where: { id: shape.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: shape.canvasId,
+          action: "shape_updated",
+          after: { shapeId: input.id },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: shape.canvasId,
+        });
+      });
+      return { ok: true };
+    },
+  },
+
+  "canvases.shapeRemove": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      const shape = await db.canvasShape.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true },
+      });
+      if (!shape) throw new Error("Canvas shape not found.");
+      await db.$transaction(async (tx) => {
+        await tx.canvasShape.delete({ where: { id: input.id } });
+        await tx.workspaceCanvas.update({
+          where: { id: shape.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          entity: "workspace-canvas",
+          entityId: shape.canvasId,
+          action: "shape_removed",
+          before: { shapeId: input.id },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: shape.canvasId,
+        });
+      });
+      return { ok: true };
+    },
+  },
+
   "canvases.addNote": {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({

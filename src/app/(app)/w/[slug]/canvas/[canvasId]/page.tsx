@@ -35,6 +35,17 @@ import {
   type CanvasPreviewKind,
 } from "@/components/canvas/canvas-preview";
 import { CanvasSettingsModal } from "@/components/canvas/canvas-settings-modal";
+import {
+  CanvasShapes,
+  type CanvasShapeRow,
+  type ShapeKind,
+} from "@/components/canvas/canvas-shapes";
+import {
+  CanvasToolbar,
+  DEFAULT_STYLE_STATE,
+  type StyleState,
+  type ToolKind,
+} from "@/components/canvas/canvas-toolbar";
 
 const SIDEBAR_MIN_WIDTH = 180;
 const SIDEBAR_MAX_WIDTH = 480;
@@ -86,7 +97,29 @@ type RemoteCursor = {
 
 type DragPayload =
   | { kind: "node"; nodeId: string; offsetX: number; offsetY: number }
-  | { kind: "resize"; nodeId: string; startX: number; startY: number; startW: number; startH: number };
+  | { kind: "resize"; nodeId: string; startX: number; startY: number; startW: number; startH: number }
+  | {
+      kind: "shape-move";
+      primaryShapeId: string;
+      // ids of all shapes (and grouped siblings) that should ride along.
+      shapeIds: string[];
+      // canvas-space offset from pointer to each shape's (x, y).
+      offsetsByShape: Record<string, { ox: number; oy: number }>;
+    };
+
+type ShapeDraft = {
+  kind: ShapeKind;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  path: Array<[number, number]>;
+  text?: string;
+};
+
+type RubberBand = { startX: number; startY: number; endX: number; endY: number };
+
+type SelectedRef = { kind: "node" | "shape"; id: string };
 
 // Per-node visual overlay applied during a drag/resize. Ref-driven so the
 // pointer-move stream doesn't fire React state updates 60+ times/sec; a
@@ -142,6 +175,50 @@ export default function CanvasViewerPage() {
   const [editingLaneFor, setEditingLaneFor] = useState<string | null>(null);
   const [editingNoteFor, setEditingNoteFor] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
+
+  // -- Phase 2: drawing primitives + selection ------------------------
+  const [activeTool, setActiveTool] = useState<ToolKind>("select");
+  const [toolbarStyle, setToolbarStyle] = useState<StyleState>(DEFAULT_STYLE_STATE);
+  // Unified selection set; entries tagged by kind so node-drag and
+  // shape-drag handlers can pull just their slice.
+  const [selected, setSelected] = useState<SelectedRef[]>([]);
+  // Reserved for future node-selection styling (Phase 2 keyboard +
+  // group-drag is shape-first; node selection plumbing can land later).
+  const _selectedNodeIds = useMemo(
+    () => new Set(selected.filter((s) => s.kind === "node").map((s) => s.id)),
+    [selected],
+  );
+  const selectedShapeIds = useMemo(
+    () => new Set(selected.filter((s) => s.kind === "shape").map((s) => s.id)),
+    [selected],
+  );
+  const activeToolRef = useRef<ToolKind>(activeTool);
+  useEffect(() => {
+    activeToolRef.current = activeTool;
+  }, [activeTool]);
+  const toolbarStyleRef = useRef<StyleState>(toolbarStyle);
+  useEffect(() => {
+    toolbarStyleRef.current = toolbarStyle;
+  }, [toolbarStyle]);
+
+  // Live drag overrides for shapes — mirrors the node `dragOverridesRef`
+  // pattern. Keyed by shape id; value is delta in canvas-space.
+  const shapeDragOverridesRef = useRef<Map<string, { dx: number; dy: number }>>(new Map());
+
+  // Ghost shape preview during a draw gesture (ref-driven, paint-coalesced).
+  const shapeDraftRef = useRef<ShapeDraft | null>(null);
+  const [shapeDraftRev, setShapeDraftRev] = useState(0);
+  const scheduleShapeDraftRender = useCallback(() => {
+    setShapeDraftRev((r) => r + 1);
+  }, []);
+
+  // Rubber-band marquee for select-tool drags on background.
+  const rubberBandRef = useRef<RubberBand | null>(null);
+  const [rubberBandRev, setRubberBandRev] = useState(0);
+
+  // Stable ref to the latest `surfaceToCanvas` so handlers defined before
+  // it (e.g. background-mousedown) can call through without re-binding.
+  const surfaceToCanvasRef = useRef<((clientX: number, clientY: number) => { x: number; y: number }) | null>(null);
 
   // Sidebar width — persisted per workspace slug. `sidebarRef` is used by
   // the drag handler so live moves only touch the DOM, not React state.
@@ -312,6 +389,93 @@ export default function CanvasViewerPage() {
     | { mutate: (input: { canvasId: string; body: string; x: number; y: number }) => void; isPending: boolean }
     | undefined;
 
+  // Phase 2: shape mutations. Backend may expose either flat (`shapeAdd`)
+  // or namespaced (`shape.add`) — probe both, fall through gracefully.
+  type ShapeAddInput = {
+    canvasId: string;
+    kind: ShapeKind;
+    x: number;
+    y: number;
+    width?: number;
+    height?: number;
+    path?: Array<[number, number]> | unknown;
+    style?: Record<string, unknown>;
+    text?: string;
+    groupId?: string;
+  };
+  type ShapePatchInput = {
+    id: string;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    path?: Array<[number, number]> | unknown;
+    style?: Record<string, unknown>;
+    text?: string;
+    groupId?: string | null;
+    zIndex?: number;
+  };
+  type ShapeBulkPatchInput = {
+    ids: string[];
+    style?: Record<string, unknown>;
+    groupId?: string | null;
+    dxdy?: { dx: number; dy: number };
+  };
+  type ShapeRemoveInput = { id: string };
+  type ShapeMutationHook<TInput, TOutput> = {
+    useMutation: (opts?: {
+      onSuccess?: (data: TOutput, vars: TInput) => void;
+      onError?: (e: { message: string }) => void;
+    }) => {
+      mutate: (input: TInput) => void;
+      mutateAsync: (input: TInput) => Promise<TOutput>;
+      isPending: boolean;
+    };
+  };
+  const shapeAddAny =
+    (canvasRouterAny?.shapeAdd as ShapeMutationHook<ShapeAddInput, { id: string }> | undefined) ??
+    ((canvasRouterAny?.shape as Record<string, unknown> | undefined)?.add as
+      | ShapeMutationHook<ShapeAddInput, { id: string }>
+      | undefined);
+  const shapePatchAny =
+    (canvasRouterAny?.shapePatch as ShapeMutationHook<ShapePatchInput, { ok: true }> | undefined) ??
+    ((canvasRouterAny?.shape as Record<string, unknown> | undefined)?.patch as
+      | ShapeMutationHook<ShapePatchInput, { ok: true }>
+      | undefined);
+  const shapeRemoveAny =
+    (canvasRouterAny?.shapeRemove as ShapeMutationHook<ShapeRemoveInput, { ok: true }> | undefined) ??
+    ((canvasRouterAny?.shape as Record<string, unknown> | undefined)?.remove as
+      | ShapeMutationHook<ShapeRemoveInput, { ok: true }>
+      | undefined);
+  const shapeBulkPatchAny =
+    (canvasRouterAny?.shapeBulkPatch as
+      | ShapeMutationHook<ShapeBulkPatchInput, { ok: true; count: number }>
+      | undefined) ??
+    ((canvasRouterAny?.shape as Record<string, unknown> | undefined)?.bulkPatch as
+      | ShapeMutationHook<ShapeBulkPatchInput, { ok: true; count: number }>
+      | undefined);
+
+  const invalidateHydrate = useCallback(() => {
+    utils.canvas.hydrate.invalidate({ id: params.canvasId });
+  }, [utils, params.canvasId]);
+
+  const shapeAddMut = shapeAddAny?.useMutation({
+    onSuccess: () => invalidateHydrate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const shapePatchMut = shapePatchAny?.useMutation({
+    onSuccess: () => invalidateHydrate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const shapeRemoveMut = shapeRemoveAny?.useMutation({
+    onSuccess: () => invalidateHydrate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const shapeBulkPatchMut = shapeBulkPatchAny?.useMutation({
+    onSuccess: () => invalidateHydrate(),
+    onError: (e) => toast.error(e.message),
+  });
+
   const nodes = useMemo(() => (data?.nodes ?? []) as HydratedNode[], [data?.nodes]);
   const edges = useMemo(
     () =>
@@ -324,6 +488,20 @@ export default function CanvasViewerPage() {
       }>,
     [data?.edges],
   );
+  // Phase 2: shapes from extended hydrate. `?? []` guards a transient
+  // window where the migration hasn't run yet — the field is absent
+  // rather than empty until the backend agent's slice lands.
+  const shapes = useMemo<CanvasShapeRow[]>(() => {
+    const raw = (data as unknown as { shapes?: unknown })?.shapes;
+    if (!Array.isArray(raw)) return [];
+    return raw as CanvasShapeRow[];
+  }, [data]);
+  // Ref mirror so long-running pointer handlers read the latest shapes
+  // without depending on a useEffect rebind.
+  const shapesRef = useRef<CanvasShapeRow[]>(shapes);
+  useEffect(() => {
+    shapesRef.current = shapes;
+  }, [shapes]);
 
   // Apply any active drag overrides on top of the server-hydrated nodes.
   // While no drag is active the override map is empty and the returned
@@ -346,12 +524,69 @@ export default function CanvasViewerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, dragRev]);
 
+  // Apply shape-drag overrides (delta from origin) on top of hydrated shapes.
+  const displayShapes = useMemo(() => {
+    const overrides = shapeDragOverridesRef.current;
+    if (overrides.size === 0) return shapes;
+    return shapes.map((s) => {
+      const ov = overrides.get(s.id);
+      if (!ov) return s;
+      return { ...s, x: s.x + ov.dx, y: s.y + ov.dy };
+    });
+    // dragRev forces recomputation each rAF tick during a drag.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shapes, dragRev]);
+
   // -- Pan + zoom handlers --------------------------------------------
+
+  // Map of canvas-space drag-set ids based on grouping. Given a primary
+  // shape, returns the primary + every sibling with the same non-null
+  // groupId. Pure — derived from `shapes` snapshot at call time.
+  const expandGroupedShapes = useCallback(
+    (primaryId: string): string[] => {
+      const primary = shapes.find((s) => s.id === primaryId);
+      if (!primary) return [primaryId];
+      if (!primary.groupId) return [primaryId];
+      const groupId = primary.groupId;
+      return shapes.filter((s) => s.groupId === groupId).map((s) => s.id);
+    },
+    [shapes],
+  );
 
   const onBackgroundMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest("[data-canvas-card]")) return;
+    if ((e.target as HTMLElement).closest("[data-canvas-shape]")) return;
     if (editingLaneFor || editingNoteFor) return;
+    const tool = activeToolRef.current;
+    const drawKinds: ToolKind[] = ["box", "ellipse", "arrow", "line", "text", "freehand"];
+    if (drawKinds.includes(tool)) {
+      // Begin a draw gesture. Convert pointer to canvas-space; the
+      // pointer-move handler updates the draft ref and rAF-paints.
+      const { x, y } = surfaceToCanvasRef.current?.(e.clientX, e.clientY) ?? { x: 0, y: 0 };
+      shapeDraftRef.current = {
+        kind: tool as ShapeKind,
+        startX: x,
+        startY: y,
+        endX: x,
+        endY: y,
+        path: tool === "freehand" ? [[0, 0]] : [],
+      };
+      scheduleShapeDraftRender();
+      return;
+    }
+    if (tool === "select") {
+      if (e.shiftKey) {
+        // Rubber-band marquee (additive when shift held).
+        const { x, y } = surfaceToCanvasRef.current?.(e.clientX, e.clientY) ?? { x: 0, y: 0 };
+        rubberBandRef.current = { startX: x, startY: y, endX: x, endY: y };
+        setRubberBandRev((r) => r + 1);
+        return;
+      }
+      // Click on background with no modifier clears selection.
+      if (selected.length > 0) setSelected([]);
+    }
+    // Default: pan.
     setPanning(true);
     panStart.current = {
       vx: viewport.x,
@@ -460,30 +695,73 @@ export default function CanvasViewerPage() {
         const w = Math.max(120, startW + dx);
         const h = Math.max(80, startH + dy);
         overrides.set(nodeId, { ...overrides.get(nodeId), width: w, height: h });
+      } else if (drag.kind === "shape-move") {
+        // Translate every shape in the drag set by the same delta from
+        // the gesture's anchor offset. The primary shape's offset gives
+        // us the canonical (dx, dy); siblings inherit it.
+        const primary = drag.offsetsByShape[drag.primaryShapeId];
+        if (!primary) return;
+        const pointerX = (e.clientX - viewport.x) / viewport.zoom;
+        const pointerY = (e.clientY - viewport.y) / viewport.zoom;
+        let targetX = pointerX - primary.ox;
+        let targetY = pointerY - primary.oy;
+        if (snapToGridRef.current) {
+          targetX = Math.round(targetX / GRID_SIZE_PX) * GRID_SIZE_PX;
+          targetY = Math.round(targetY / GRID_SIZE_PX) * GRID_SIZE_PX;
+        }
+        // dx/dy applied to every shape relative to its *initial* (x,y).
+        const primaryShape = shapesRef.current.find((s) => s.id === drag.primaryShapeId);
+        if (!primaryShape) return;
+        const dx = targetX - primaryShape.x;
+        const dy = targetY - primaryShape.y;
+        const shapeOverrides = shapeDragOverridesRef.current;
+        for (const id of drag.shapeIds) {
+          shapeOverrides.set(id, { dx, dy });
+        }
       }
       scheduleDragRender();
     };
     const onUp = () => {
       const drag = dragNode.current;
       if (!drag) return;
-      const overrides = dragOverridesRef.current;
-      const ov = overrides.get(drag.nodeId);
-      if (ov) {
-        if (drag.kind === "node" && typeof ov.x === "number" && typeof ov.y === "number") {
-          patchNode.mutate({ id: drag.nodeId, x: ov.x, y: ov.y });
-        } else if (
-          drag.kind === "resize" &&
-          typeof ov.width === "number" &&
-          typeof ov.height === "number"
-        ) {
-          patchNode.mutate({
-            id: drag.nodeId,
-            width: ov.width,
-            height: ov.height,
-          });
+      if (drag.kind === "shape-move") {
+        const shapeOverrides = shapeDragOverridesRef.current;
+        const primary = shapeOverrides.get(drag.primaryShapeId);
+        if (primary && (primary.dx !== 0 || primary.dy !== 0)) {
+          if (drag.shapeIds.length > 1 && shapeBulkPatchMut) {
+            shapeBulkPatchMut.mutate({
+              ids: drag.shapeIds,
+              dxdy: { dx: primary.dx, dy: primary.dy },
+            });
+          } else if (shapePatchMut) {
+            for (const id of drag.shapeIds) {
+              const s = shapesRef.current.find((sh) => sh.id === id);
+              if (!s) continue;
+              shapePatchMut.mutate({ id, x: s.x + primary.dx, y: s.y + primary.dy });
+            }
+          }
         }
+        for (const id of drag.shapeIds) shapeOverrides.delete(id);
+      } else {
+        const overrides = dragOverridesRef.current;
+        const ov = overrides.get(drag.nodeId);
+        if (ov) {
+          if (drag.kind === "node" && typeof ov.x === "number" && typeof ov.y === "number") {
+            patchNode.mutate({ id: drag.nodeId, x: ov.x, y: ov.y });
+          } else if (
+            drag.kind === "resize" &&
+            typeof ov.width === "number" &&
+            typeof ov.height === "number"
+          ) {
+            patchNode.mutate({
+              id: drag.nodeId,
+              width: ov.width,
+              height: ov.height,
+            });
+          }
+        }
+        overrides.delete(drag.nodeId);
       }
-      overrides.delete(drag.nodeId);
       dragNode.current = null;
       draggingRef.current = false;
       // Trailing realtime refresh — we suppressed invalidations during
@@ -504,6 +782,331 @@ export default function CanvasViewerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewport.x, viewport.y, viewport.zoom]);
 
+  // -- Shape draw + rubber-band selection ----------------------------
+
+  // Stable callback for shape selection — supports click + shift-click.
+  const onSelectShape = useCallback(
+    (id: string, event: React.MouseEvent) => {
+      const shape = shapes.find((s) => s.id === id);
+      if (!shape) return;
+      // Begin a shape-move gesture so the click that selects a shape
+      // also primes drag. If the pointer moves the drag handler picks
+      // it up; if it doesn't, mouseup falls through unchanged.
+      const additive = event.shiftKey;
+      const next = (() => {
+        if (additive) {
+          if (selected.some((s) => s.kind === "shape" && s.id === id)) {
+            return selected.filter((s) => !(s.kind === "shape" && s.id === id));
+          }
+          return [...selected, { kind: "shape" as const, id }];
+        }
+        if (selected.some((s) => s.kind === "shape" && s.id === id)) return selected;
+        return [{ kind: "shape" as const, id }];
+      })();
+      setSelected(next);
+
+      // Build the drag set — include grouped siblings and any other
+      // currently-selected shapes so multi-select drag moves them all.
+      const dragIds = new Set<string>();
+      dragIds.add(id);
+      for (const g of expandGroupedShapes(id)) dragIds.add(g);
+      for (const sel of next) {
+        if (sel.kind !== "shape") continue;
+        for (const g of expandGroupedShapes(sel.id)) dragIds.add(g);
+      }
+      const offsetsByShape: Record<string, { ox: number; oy: number }> = {};
+      const pointerX = (event.clientX - viewport.x) / viewport.zoom;
+      const pointerY = (event.clientY - viewport.y) / viewport.zoom;
+      for (const sid of dragIds) {
+        const s = shapes.find((sh) => sh.id === sid);
+        if (!s) continue;
+        offsetsByShape[sid] = { ox: pointerX - s.x, oy: pointerY - s.y };
+      }
+      dragNode.current = {
+        kind: "shape-move",
+        primaryShapeId: id,
+        shapeIds: [...dragIds],
+        offsetsByShape,
+      };
+      draggingRef.current = true;
+    },
+    [selected, shapes, expandGroupedShapes, viewport.x, viewport.y, viewport.zoom],
+  );
+
+  // Pointer-move for an active draw draft / rubber-band. Lives in its own
+  // effect so it can install only while a gesture is open.
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const surfaceToCanvasFn = surfaceToCanvasRef.current;
+      if (!surfaceToCanvasFn) return;
+      const draft = shapeDraftRef.current;
+      if (draft) {
+        const { x, y } = surfaceToCanvasFn(e.clientX, e.clientY);
+        draft.endX = x;
+        draft.endY = y;
+        if (draft.kind === "freehand") {
+          draft.path.push([x - draft.startX, y - draft.startY]);
+        }
+        scheduleShapeDraftRender();
+        return;
+      }
+      const band = rubberBandRef.current;
+      if (band) {
+        const { x, y } = surfaceToCanvasFn(e.clientX, e.clientY);
+        band.endX = x;
+        band.endY = y;
+        setRubberBandRev((r) => r + 1);
+        return;
+      }
+    };
+    const onUp = () => {
+      const draft = shapeDraftRef.current;
+      if (draft && shapeAddMut) {
+        const minSize = 4;
+        const w = Math.abs(draft.endX - draft.startX);
+        const h = Math.abs(draft.endY - draft.startY);
+        const tool = draft.kind;
+        if (tool === "freehand") {
+          if (draft.path.length >= 2) {
+            shapeAddMut.mutate({
+              canvasId: params.canvasId,
+              kind: "freehand",
+              x: draft.startX,
+              y: draft.startY,
+              path: draft.path,
+              style: { stroke: toolbarStyleRef.current.stroke, strokeWidth: toolbarStyleRef.current.strokeWidth },
+            });
+          }
+        } else if (tool === "line" || tool === "arrow") {
+          if (w + h >= minSize) {
+            shapeAddMut.mutate({
+              canvasId: params.canvasId,
+              kind: tool,
+              x: draft.startX,
+              y: draft.startY,
+              width: draft.endX - draft.startX,
+              height: draft.endY - draft.startY,
+              style: { stroke: toolbarStyleRef.current.stroke, strokeWidth: toolbarStyleRef.current.strokeWidth },
+            });
+          }
+        } else if (tool === "text") {
+          // For text, the drag defines the box; default body asks the
+          // operator to fill it in later via a future inline editor.
+          const boxW = Math.max(120, w);
+          const boxH = Math.max(40, h);
+          const startX = Math.min(draft.startX, draft.endX);
+          const startY = Math.min(draft.startY, draft.endY);
+          shapeAddMut.mutate({
+            canvasId: params.canvasId,
+            kind: "text",
+            x: startX,
+            y: startY,
+            width: boxW,
+            height: boxH,
+            text: "Text",
+            style: { color: toolbarStyleRef.current.stroke, fontSize: 14 },
+          });
+        } else if (tool === "box" || tool === "ellipse") {
+          if (w >= minSize && h >= minSize) {
+            const startX = Math.min(draft.startX, draft.endX);
+            const startY = Math.min(draft.startY, draft.endY);
+            shapeAddMut.mutate({
+              canvasId: params.canvasId,
+              kind: tool,
+              x: startX,
+              y: startY,
+              width: w,
+              height: h,
+              style: {
+                stroke: toolbarStyleRef.current.stroke,
+                fill: toolbarStyleRef.current.fill,
+                strokeWidth: toolbarStyleRef.current.strokeWidth,
+              },
+            });
+          }
+        }
+        shapeDraftRef.current = null;
+        scheduleShapeDraftRender();
+        // Drop back to select after each draw so single-shot drawing
+        // feels less stateful; persistent draw flows can flip the
+        // tool back manually.
+        setActiveTool("select");
+        return;
+      }
+      const band = rubberBandRef.current;
+      if (band) {
+        const minX = Math.min(band.startX, band.endX);
+        const maxX = Math.max(band.startX, band.endX);
+        const minY = Math.min(band.startY, band.endY);
+        const maxY = Math.max(band.startY, band.endY);
+        const hits: SelectedRef[] = [];
+        for (const n of nodes) {
+          if (
+            n.x + n.width >= minX &&
+            n.x <= maxX &&
+            n.y + n.height >= minY &&
+            n.y <= maxY
+          ) {
+            hits.push({ kind: "node", id: n.id });
+          }
+        }
+        for (const s of shapes) {
+          const w = s.width ?? 0;
+          const h = s.height ?? 0;
+          if (
+            s.x + w >= minX &&
+            s.x <= maxX &&
+            s.y + h >= minY &&
+            s.y <= maxY
+          ) {
+            hits.push({ kind: "shape", id: s.id });
+          }
+        }
+        setSelected((prev) => {
+          // Shift-drag is additive (intersect of existing + new).
+          const seen = new Set(prev.map((r) => `${r.kind}:${r.id}`));
+          const merged = [...prev];
+          for (const h of hits) {
+            const k = `${h.kind}:${h.id}`;
+            if (!seen.has(k)) {
+              merged.push(h);
+              seen.add(k);
+            }
+          }
+          return merged;
+        });
+        rubberBandRef.current = null;
+        setRubberBandRev((r) => r + 1);
+      }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [nodes, shapes, params.canvasId, shapeAddMut, scheduleShapeDraftRender]);
+
+  // -- Keyboard shortcuts (Phase 2) -----------------------------------
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Don't hijack typing.
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      if (e.key === "Escape") {
+        setActiveTool("select");
+        shapeDraftRef.current = null;
+        scheduleShapeDraftRender();
+        return;
+      }
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
+        if (shapeIds.length === 0) return;
+        if (!shapeRemoveMut) return;
+        e.preventDefault();
+        for (const id of shapeIds) shapeRemoveMut.mutate({ id });
+        setSelected((prev) => prev.filter((s) => s.kind !== "shape"));
+        return;
+      }
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (e.key === "d" || e.key === "D")) {
+        const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
+        if (shapeIds.length === 0) return;
+        if (!shapeAddMut) return;
+        e.preventDefault();
+        for (const id of shapeIds) {
+          const s = shapes.find((sh) => sh.id === id);
+          if (!s) continue;
+          const dup: ShapeAddInput = {
+            canvasId: params.canvasId,
+            kind: s.kind,
+            x: s.x + 20,
+            y: s.y + 20,
+          };
+          if (s.width != null) dup.width = s.width;
+          if (s.height != null) dup.height = s.height;
+          if (s.path != null) dup.path = s.path;
+          if (s.style != null) dup.style = s.style;
+          if (s.text != null) dup.text = s.text;
+          if (s.groupId != null) dup.groupId = s.groupId;
+          shapeAddMut.mutate(dup);
+        }
+        return;
+      }
+      if (mod && e.shiftKey && (e.key === "g" || e.key === "G")) {
+        const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
+        if (shapeIds.length < 1) return;
+        if (!shapeBulkPatchMut) return;
+        e.preventDefault();
+        shapeBulkPatchMut.mutate({ ids: shapeIds, groupId: null });
+        return;
+      }
+      if (mod && (e.key === "g" || e.key === "G")) {
+        const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
+        if (shapeIds.length < 2) return;
+        if (!shapeBulkPatchMut) return;
+        e.preventDefault();
+        const newGroupId =
+          typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `g_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        shapeBulkPatchMut.mutate({ ids: shapeIds, groupId: newGroupId });
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected, shapes, shapeRemoveMut, shapeAddMut, shapeBulkPatchMut, params.canvasId, scheduleShapeDraftRender]);
+
+  // Toolbar style change — when shapes are selected, apply via bulkPatch;
+  // otherwise update the default style for new shapes.
+  const onChangeStyle = useCallback(
+    (patch: Partial<StyleState>) => {
+      setToolbarStyle((s) => ({ ...s, ...patch }));
+      const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
+      if (shapeIds.length > 0 && shapeBulkPatchMut) {
+        const styleUpdate: Record<string, unknown> = {};
+        if (patch.stroke !== undefined) styleUpdate.stroke = patch.stroke;
+        if (patch.fill !== undefined) styleUpdate.fill = patch.fill;
+        if (patch.strokeWidth !== undefined) styleUpdate.strokeWidth = patch.strokeWidth;
+        if (Object.keys(styleUpdate).length > 0) {
+          shapeBulkPatchMut.mutate({ ids: shapeIds, style: styleUpdate });
+        }
+      }
+    },
+    [selected, shapeBulkPatchMut],
+  );
+
+  const onToolbarGroup = useCallback(() => {
+    const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
+    if (shapeIds.length < 2 || !shapeBulkPatchMut) return;
+    const newGroupId =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `g_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    shapeBulkPatchMut.mutate({ ids: shapeIds, groupId: newGroupId });
+  }, [selected, shapeBulkPatchMut]);
+  const onToolbarUngroup = useCallback(() => {
+    const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
+    if (shapeIds.length < 1 || !shapeBulkPatchMut) return;
+    shapeBulkPatchMut.mutate({ ids: shapeIds, groupId: null });
+  }, [selected, shapeBulkPatchMut]);
+
+  const canGroup = useMemo(
+    () => selected.filter((s) => s.kind === "shape").length >= 2,
+    [selected],
+  );
+  const canUngroup = useMemo(() => {
+    const sel = selected.filter((s) => s.kind === "shape");
+    if (sel.length === 0) return false;
+    return sel.some((s) => {
+      const sh = shapes.find((x) => x.id === s.id);
+      return sh?.groupId != null;
+    });
+  }, [selected, shapes]);
+
   // -- Lanes ----------------------------------------------------------
 
   const lanes = useMemo(() => computeLanes(displayNodes), [displayNodes]);
@@ -522,6 +1125,9 @@ export default function CanvasViewerPage() {
     },
     [viewport.x, viewport.y, viewport.zoom],
   );
+  useEffect(() => {
+    surfaceToCanvasRef.current = surfaceToCanvas;
+  }, [surfaceToCanvas]);
 
   const onSurfaceDragOver = (e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes("application/x-forge-entity")) return;
@@ -975,6 +1581,20 @@ export default function CanvasViewerPage() {
             {lanes.map((lane) => (
               <LaneBand key={lane.name} lane={lane} />
             ))}
+            {/* Shapes (Phase 2) sit BELOW edges + nodes by default. */}
+            <CanvasShapes
+              shapes={displayShapes}
+              selectedIds={selectedShapeIds}
+              onSelectShape={onSelectShape}
+            />
+            {/* Draft shape preview while drawing. */}
+            <ShapeDraftPreview
+              draftRef={shapeDraftRef}
+              rev={shapeDraftRev}
+              style={toolbarStyle}
+            />
+            {/* Rubber-band marquee while shift-dragging on background. */}
+            <RubberBandPreview bandRef={rubberBandRef} rev={rubberBandRev} />
             {/* Edges sit between lane bands and node cards. */}
             <EdgesOverlay nodes={displayNodes} edges={edges} />
             {displayNodes.length === 0 ? (
@@ -1014,6 +1634,17 @@ export default function CanvasViewerPage() {
           ) : null}
         </div>
       </div>
+      <CanvasToolbar
+        activeTool={activeTool}
+        onSelectTool={setActiveTool}
+        style={toolbarStyle}
+        onChangeStyle={onChangeStyle}
+        onGroup={onToolbarGroup}
+        onUngroup={onToolbarUngroup}
+        canGroup={canGroup}
+        canUngroup={canUngroup}
+        persistKey={ws.slug}
+      />
       {openPicker && (
         <AddCardPicker
           canvasId={data.canvas.id}
@@ -1080,6 +1711,159 @@ export default function CanvasViewerPage() {
         }}
       />
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Draft shape preview — read from a ref so pointermove ticks don't re-render
+// the parent. Renders nothing once the draft clears.
+// ---------------------------------------------------------------------------
+
+function ShapeDraftPreview({
+  draftRef,
+  rev: _rev,
+  style,
+}: {
+  draftRef: React.MutableRefObject<ShapeDraft | null>;
+  rev: number;
+  style: StyleState;
+}) {
+  const draft = draftRef.current;
+  if (!draft) return null;
+  const { kind, startX, startY, endX, endY } = draft;
+  const minX = Math.min(startX, endX);
+  const minY = Math.min(startY, endY);
+  const w = Math.abs(endX - startX);
+  const h = Math.abs(endY - startY);
+  const strokeColor = style.stroke;
+  const strokeWidth = style.strokeWidth;
+  if (kind === "box") {
+    return (
+      <div
+        className="pointer-events-none absolute rounded-md"
+        style={{
+          left: minX,
+          top: minY,
+          width: w,
+          height: h,
+          border: `${strokeWidth}px dashed ${strokeColor}`,
+        }}
+      />
+    );
+  }
+  if (kind === "ellipse") {
+    return (
+      <div
+        className="pointer-events-none absolute"
+        style={{
+          left: minX,
+          top: minY,
+          width: w,
+          height: h,
+          border: `${strokeWidth}px dashed ${strokeColor}`,
+          borderRadius: "9999px",
+        }}
+      />
+    );
+  }
+  if (kind === "line" || kind === "arrow") {
+    // SVG overlay so an arbitrary slope renders without rotation math.
+    const padding = 8;
+    const left = Math.min(startX, endX) - padding;
+    const top = Math.min(startY, endY) - padding;
+    const width = Math.abs(endX - startX) + padding * 2;
+    const height = Math.abs(endY - startY) + padding * 2;
+    return (
+      <svg
+        className="pointer-events-none absolute"
+        style={{ left, top, width, height, overflow: "visible" }}
+      >
+        <line
+          x1={startX - left}
+          y1={startY - top}
+          x2={endX - left}
+          y2={endY - top}
+          stroke={strokeColor}
+          strokeWidth={strokeWidth}
+          strokeDasharray="6 4"
+          markerEnd={kind === "arrow" ? "url(#canvas-shape-arrow)" : undefined}
+        />
+      </svg>
+    );
+  }
+  if (kind === "text") {
+    return (
+      <div
+        className="pointer-events-none absolute rounded-md"
+        style={{
+          left: minX,
+          top: minY,
+          width: w,
+          height: h,
+          border: `${strokeWidth}px dashed ${strokeColor}`,
+        }}
+      />
+    );
+  }
+  if (kind === "freehand") {
+    const pts = draft.path.map(([dx, dy]) => [startX + dx, startY + dy] as [number, number]);
+    if (pts.length === 0) return null;
+    let minPX = Infinity;
+    let minPY = Infinity;
+    let maxPX = -Infinity;
+    let maxPY = -Infinity;
+    for (const [px, py] of pts) {
+      if (px < minPX) minPX = px;
+      if (py < minPY) minPY = py;
+      if (px > maxPX) maxPX = px;
+      if (py > maxPY) maxPY = py;
+    }
+    const padding = 8;
+    const left = minPX - padding;
+    const top = minPY - padding;
+    const width = Math.max(1, maxPX - minPX) + padding * 2;
+    const height = Math.max(1, maxPY - minPY) + padding * 2;
+    const d = pts
+      .map((p, i) => `${i === 0 ? "M" : "L"} ${p[0] - left},${p[1] - top}`)
+      .join(" ");
+    return (
+      <svg
+        className="pointer-events-none absolute"
+        style={{ left, top, width, height, overflow: "visible" }}
+      >
+        <path
+          d={d}
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth={strokeWidth}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  return null;
+}
+
+function RubberBandPreview({
+  bandRef,
+  rev: _rev,
+}: {
+  bandRef: React.MutableRefObject<RubberBand | null>;
+  rev: number;
+}) {
+  const band = bandRef.current;
+  if (!band) return null;
+  const left = Math.min(band.startX, band.endX);
+  const top = Math.min(band.startY, band.endY);
+  const width = Math.abs(band.endX - band.startX);
+  const height = Math.abs(band.endY - band.startY);
+  if (width < 1 && height < 1) return null;
+  return (
+    <div
+      className="pointer-events-none absolute rounded-sm border border-ember/60 bg-ember/10"
+      style={{ left, top, width, height }}
+    />
   );
 }
 
