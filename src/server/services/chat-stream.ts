@@ -21,9 +21,22 @@ import { logger } from "@/server/logger";
 
 export type ChatStreamRole = "system" | "user" | "assistant" | "tool";
 
+/** A single content block. Mirrors the OpenAI vision shape — `image_url`
+ * is accepted by Anthropic's OpenAI-compat surface and by OpenAI directly.
+ * For providers without image support we strip image blocks back to text
+ * in `streamChatReply` before sending. */
+export type ChatStreamContentBlock =
+  | { type: "text"; text: string }
+  | {
+      type: "image_url";
+      image_url: { url: string; detail?: "auto" | "low" | "high" };
+      /** Optional sidecar — preserved so the text fallback can name the file. */
+      filename?: string;
+    };
+
 export interface ChatStreamMessage {
   role: ChatStreamRole;
-  content: string;
+  content: string | ChatStreamContentBlock[];
   /** Present on assistant messages that requested tool calls. */
   tool_calls?: Array<{
     id: string;
@@ -32,6 +45,26 @@ export interface ChatStreamMessage {
   }>;
   /** Present on tool result messages. */
   tool_call_id?: string;
+}
+
+/**
+ * Collapse a multimodal message back to a plain-text string for providers
+ * that don't accept image blocks. Image references become `[attachment:
+ * filename]` placeholders so the model still knows the user attached
+ * something — it just can't see the pixels.
+ */
+function flattenContentForTextOnly(
+  content: string | ChatStreamContentBlock[],
+): string {
+  if (typeof content === "string") return content;
+  return content
+    .map((block) => {
+      if (block.type === "text") return block.text;
+      const label = block.filename ?? "image";
+      return `[attachment: ${label}]`;
+    })
+    .join("\n")
+    .trim();
 }
 
 export type ChatStreamEvent =
@@ -96,9 +129,29 @@ export async function* streamChatReply(
   }
 
   const isAnthropicCompat = providerId === "anthropic";
+
+  // Normalise outbound messages. Providers without image-input support
+  // receive flattened text-only content with `[attachment: name]`
+  // placeholders. Image-capable providers keep the multimodal blocks but
+  // we drop the local-only `filename` sidecar before serialising — OpenAI
+  // doesn't recognise extra keys on content blocks and Anthropic ignores
+  // them too.
+  const outboundMessages = args.messages.map((m) => {
+    if (typeof m.content === "string") return m;
+    if (!ctx.supportsImageInput) {
+      return { ...m, content: flattenContentForTextOnly(m.content) };
+    }
+    const cleanedBlocks = m.content.map((block) =>
+      block.type === "image_url"
+        ? { type: "image_url" as const, image_url: block.image_url }
+        : block,
+    );
+    return { ...m, content: cleanedBlocks };
+  });
+
   const requestBody: Record<string, unknown> = {
     model: args.model || ctx.defaultModel,
-    messages: args.messages,
+    messages: outboundMessages,
     stream: true,
     temperature: 0.4,
     max_tokens: 2048,

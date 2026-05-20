@@ -6,6 +6,7 @@ import { db } from "@/server/db";
 import { recordChange } from "@/server/audit";
 import {
   runChatLoop,
+  type ChatStreamContentBlock,
   type ChatStreamMessage,
   type ChatToolCall,
   type ChatToolExecResult,
@@ -17,6 +18,7 @@ import {
 import { executeChatTool } from "@/server/services/chat-tool-exec";
 import { pendingApprovals } from "@/server/services/chat-stream-state";
 import { loadCanvasContextSummary } from "@/server/services/chat-context-canvas";
+import { presignDownloadUrl } from "@/server/services/storage";
 import { logger } from "@/server/logger";
 
 /**
@@ -102,10 +104,69 @@ export async function POST(req: NextRequest) {
   }
   const workspaceId = thread.workspaceId;
   const agent = thread.agent;
+  // Per-thread overrides win over the agent's default provider/model.
+  const effectiveProvider = thread.providerOverride ?? agent.provider;
+  const effectiveModel = thread.modelOverride ?? undefined;
+
+  // Resolve + verify attachments before opening the stream so we don't
+  // leave a half-written user message if one points outside the workspace.
+  // Only image attachments are passed to the model as vision blocks today;
+  // anything else is persisted on the message but skipped from the prompt.
+  const requestedAttachmentIds = Array.isArray(parsed.attachments)
+    ? parsed.attachments.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+  const attachmentRows = requestedAttachmentIds.length
+    ? await db.attachment.findMany({
+        where: {
+          id: { in: requestedAttachmentIds },
+          workspaceId,
+          NOT: { url: { startsWith: "pending:" } },
+        },
+      })
+    : [];
+  const imageBlocks: ChatStreamContentBlock[] = [];
+  for (const a of attachmentRows) {
+    const mime = (a.mimeType ?? "").toLowerCase();
+    if (a.kind === "LINK") {
+      if (!a.externalUrl) continue;
+      // Heuristic: treat any LINK whose URL points at an image-ish path
+      // as a vision block. Anything else is silently skipped — the model
+      // still sees the file name via the persisted attachment row but
+      // doesn't get the bytes.
+      if (/\.(png|jpe?g|gif|webp|svg)(?:\?|#|$)/i.test(a.externalUrl)) {
+        imageBlocks.push({
+          type: "image_url",
+          image_url: { url: a.externalUrl },
+          filename: a.linkTitle ?? a.filename ?? "image",
+        });
+      }
+      continue;
+    }
+    if (!mime.startsWith("image/")) continue;
+    try {
+      const presigned = await presignDownloadUrl(a.id);
+      imageBlocks.push({
+        type: "image_url",
+        image_url: { url: presigned.url },
+        filename: a.filename,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, attachmentId: a.id, threadId: thread.id },
+        "chat-stream: failed to presign image attachment; skipping",
+      );
+    }
+  }
 
   // Persist the USER row and the audit/event in one transaction. Mirrors
   // `chat.send` so the inbox lifecycle stays honest, but tags the payload
-  // `streamed: true` so the dispatch worker can no-op for this row.
+  // `streamed: true` so the dispatch worker can no-op for this row. Any
+  // resolved attachments get re-targeted at the new ChatMessage so the
+  // thread surface (and getThread reads) see them attached to the right
+  // turn — the upload flow targets `chat-message` placeholders by id, but
+  // streaming uploads at the composer happen *before* the message row
+  // exists, so we point them at this row here.
+  const attachmentIds = attachmentRows.map((a) => a.id);
   const { userMessageId } = await db.$transaction(async (tx) => {
     const now = new Date();
     await tx.chatThread.update({
@@ -122,6 +183,12 @@ export async function POST(req: NextRequest) {
         dispatchedAt: now,
       },
     });
+    if (attachmentIds.length > 0) {
+      await tx.attachment.updateMany({
+        where: { id: { in: attachmentIds }, workspaceId },
+        data: { targetType: "chat-message", targetId: message.id },
+      });
+    }
     await recordChange(tx, {
       workspaceId,
       actorId: userId,
@@ -138,7 +205,13 @@ export async function POST(req: NextRequest) {
         role: "USER",
         body,
         streamed: true,
-        attachments: [] as Prisma.InputJsonArray,
+        attachments: attachmentRows.map((a) => ({
+          id: a.id,
+          filename: a.filename,
+          mimeType: a.mimeType,
+          kind: a.kind,
+          externalUrl: a.externalUrl,
+        })) as unknown as Prisma.InputJsonArray,
       },
     });
     return { userMessageId: message.id };
@@ -186,13 +259,26 @@ export async function POST(req: NextRequest) {
   };
   const systemPrompt = await buildSystemPrompt();
 
+  // Build the model-facing message array. History rows stay plain text —
+  // we only attach image blocks to the *latest* user turn, which is the
+  // one we just persisted. (Historical attachments aren't replayed; the
+  // model already saw them in their original turn.)
   const messages: ChatStreamMessage[] = [
     { role: "system", content: systemPrompt },
-    ...history.map<ChatStreamMessage>((m) => ({
-      role: m.role === ChatRole.USER ? "user" : "assistant",
-      content: m.body,
-    })),
   ];
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i];
+    const isLatest = i === history.length - 1;
+    const role: "user" | "assistant" = m.role === ChatRole.USER ? "user" : "assistant";
+    if (isLatest && role === "user" && imageBlocks.length > 0) {
+      const blocks: ChatStreamContentBlock[] = [];
+      if (m.body) blocks.push({ type: "text", text: m.body });
+      blocks.push(...imageBlocks);
+      messages.push({ role, content: blocks });
+    } else {
+      messages.push({ role, content: m.body });
+    }
+  }
 
   // Create the placeholder AGENT row up front so the client gets a stable
   // messageId in the `meta` event — we fill its `body` + `contextSnapshot`
@@ -350,7 +436,8 @@ export async function POST(req: NextRequest) {
 
       try {
         await runChatLoop({
-          provider: agent.provider,
+          provider: effectiveProvider,
+          model: effectiveModel,
           messages,
           tools: chatToolsAsOpenAITools(),
           signal: abortController.signal,
@@ -408,7 +495,8 @@ export async function POST(req: NextRequest) {
               body: persistedBody,
               contextSnapshot: {
                 streamed: true,
-                provider: agent.provider,
+                provider: effectiveProvider,
+                model: effectiveModel ?? undefined,
                 thinking: thinkingFull || undefined,
                 tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
                 elapsedMs,

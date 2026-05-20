@@ -1686,6 +1686,13 @@ model ChatThread {
   summaryMarkdown          String?         @db.Text
   summarizedUntilMessageId String?
   summarizedAt             DateTime?
+  /// Per-thread override of the agent's default provider. Null = use
+  /// `Agent.provider`. Picked up by /api/chat/stream when building the
+  /// upstream request.
+  providerOverride         AgentProvider?
+  /// Per-thread override of the provider's default model. Null = use
+  /// the provider's `defaultModel` from `ai-providers.ts`.
+  modelOverride            String?
   lastMessageAt            DateTime        @default(now())
   createdAt                DateTime        @default(now())
   archivedAt               DateTime?
