@@ -630,8 +630,9 @@ async function listChatInbox(
   // Chat scope: USER messages on threads addressed to this agent that
   // are still pending an agent reply. "Pending" = the row's
   // `acknowledgedAt` is null AND no later AGENT message has been
-  // posted in the same thread (cheap heuristic via lastMessageAt).
-  // For v1 we trust the row state.
+  // posted in the same thread. The latter guard prevents the backstop
+  // from retrying legacy/user turns that visibly already have a reply
+  // but predate the newer ack lifecycle fields.
   const now = Date.now();
   const where: Prisma.ChatMessageWhereInput = {
     workspaceId: params.workspaceId,
@@ -666,12 +667,26 @@ async function listChatInbox(
       lastWakeDeliveryId: true,
       createdAt: true,
       dispatchedAt: true,
-      thread: { select: { agentId: true } },
+      thread: {
+        select: {
+          agentId: true,
+          messages: {
+            where: { role: "AGENT" },
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: { createdAt: true },
+          },
+        },
+      },
     },
   });
 
   return messages
     .filter((m) => m.dispatchedAt !== null)
+    .filter((m) => {
+      const latestAgentReply = m.thread.messages[0];
+      return !latestAgentReply || latestAgentReply.createdAt.getTime() <= m.createdAt.getTime();
+    })
     .map((m) => {
       const state = deriveChatDispatchState({
         acknowledgedAt: m.acknowledgedAt,
