@@ -4826,9 +4826,25 @@ export const mcpTools = {
           acknowledgedAt: null,
         },
         orderBy: { createdAt: "desc" },
-        select: { id: true, body: true, contextSnapshot: true },
+        select: { id: true, body: true, contextSnapshot: true, createdAt: true },
       });
       if (!latest) {
+        return {
+          ok: true,
+          kicked: false,
+          reason: "no-unacked-user-message",
+        } as const;
+      }
+      const laterAgentReply = await db.chatMessage.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          threadId: thread.id,
+          role: "AGENT",
+          createdAt: { gt: latest.createdAt },
+        },
+        select: { id: true },
+      });
+      if (laterAgentReply) {
         return {
           ok: true,
           kicked: false,

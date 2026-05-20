@@ -2867,6 +2867,51 @@ describe("mcp — agent.inbox.list / agent.inbox.ack / agent.inbox.outputStarted
     expect(result.items.some((i) => i.kind === "run" && i.runId === run.id)).toBe(true);
   });
 
+  it("agent.inbox.list suppresses chat turns already answered by the agent", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "INQ" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, name: "inq", profileKey: "inq", status: "ONLINE" },
+    });
+    const thread = await prisma.chatThread.create({
+      data: {
+        workspaceId: f.workspace.id,
+        userId: f.user.id,
+        agentId: agent.id,
+        title: "already answered",
+      },
+    });
+    const userMessage = await prisma.chatMessage.create({
+      data: {
+        workspaceId: f.workspace.id,
+        threadId: thread.id,
+        role: "USER",
+        body: "old ping",
+        dispatchedAt: new Date(),
+      },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        workspaceId: f.workspace.id,
+        threadId: thread.id,
+        role: "AGENT",
+        body: "already handled",
+      },
+    });
+
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+    const result = (await call(
+      "agent.inbox.list",
+      { status: "unacked", limit: 10 },
+      ctx,
+    )) as { items: Array<{ kind: string; chatMessageId?: string }> };
+
+    expect(result.items.some((i) => i.kind === "chat" && i.chatMessageId === userMessage.id)).toBe(
+      false,
+    );
+  });
+
   it("agent.inbox.ack flips acknowledgedAt and is idempotent", async () => {
     const f = await createWorkspaceFixture({ keyPrefix: "INK" });
     fixtures.push(f);
@@ -3007,6 +3052,64 @@ describe("mcp — agent.inbox.list / agent.inbox.ack / agent.inbox.outputStarted
     };
     expect(result.kicked).toBe(false);
     expect(result.reason).toBe("no-unacked-user-message");
+  });
+
+  it("chat.kickThread is a no-op when the latest unacked user message already has a later agent reply", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "INR" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, name: "inr", profileKey: "inr", status: "ONLINE" },
+    });
+    const thread = await prisma.chatThread.create({
+      data: {
+        workspaceId: f.workspace.id,
+        userId: f.user.id,
+        agentId: agent.id,
+        title: "answered",
+      },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        workspaceId: f.workspace.id,
+        threadId: thread.id,
+        role: "USER",
+        body: "ping",
+        dispatchedAt: new Date(),
+      },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        workspaceId: f.workspace.id,
+        threadId: thread.id,
+        role: "AGENT",
+        body: "pong",
+      },
+    });
+
+    const eventsBefore = await prisma.activityEvent.count({
+      where: {
+        workspaceId: f.workspace.id,
+        kind: EventKind.CHAT_MESSAGE_POSTED,
+        subjectId: thread.id,
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+    const result = (await call("chat.kickThread", { threadId: thread.id }, ctx)) as {
+      kicked: boolean;
+      reason?: string;
+    };
+    const eventsAfter = await prisma.activityEvent.count({
+      where: {
+        workspaceId: f.workspace.id,
+        kind: EventKind.CHAT_MESSAGE_POSTED,
+        subjectId: thread.id,
+      },
+    });
+
+    expect(result.kicked).toBe(false);
+    expect(result.reason).toBe("no-unacked-user-message");
+    expect(eventsAfter).toBe(eventsBefore);
   });
 
   it("chat.kickThread rejects cross-agent callers", async () => {

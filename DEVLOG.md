@@ -2,6 +2,33 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-19 — Chat inbox backstop duplicate-wake guard
+
+### Summary
+
+Fixed AXI-44: the durable agent inbox/backstop path no longer retries
+old chat USER turns after an AGENT reply already exists later in the
+same thread.
+
+### What changed
+
+- `agent.inbox.list` now filters chat inbox rows by canonical conversation
+  state, not only `acknowledgedAt`: dispatched USER messages are suppressed
+  when a later AGENT message exists in the thread.
+- `chat.kickThread` now no-ops for the same already-answered condition, so
+  the `inbox-poll-backstop` retry path does not re-emit stale
+  `CHAT_MESSAGE_POSTED` wakes.
+- Added MCP regression coverage for both inbox listing and kick retry
+  behavior on already-answered chat turns.
+
+### Verification
+
+- Added tests first; both new targeted tests failed on the old behavior.
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts -t "agent.inbox.list suppresses chat turns|chat.kickThread is a no-op when the latest unacked"` → pass.
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts` → 93/93 pass.
+- `pnpm lint && pnpm typecheck && pnpm test` → clean, 52 files / 408 tests pass.
+- `pnpm build` → clean.
+
 ## 2026-05-19 — Confirm modal, canvas perf, CRUD lifecycle, chat streaming, canvas previews (5-agent round)
 
 ### Summary
