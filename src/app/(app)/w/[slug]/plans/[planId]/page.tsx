@@ -395,6 +395,21 @@ export default function PlanDetailPage() {
                     setHeadDirty(true);
                   }}
                   onBlur={() => setHeadEditing(null)}
+                  onKeyDown={(e) => {
+                    // Cmd/Ctrl+Enter commits by blurring — the onBlur
+                    // handler then closes the editor and the parent
+                    // autosave effect picks up the dirty flag. Esc also
+                    // blurs (existing autosave runs on the dirty body —
+                    // matches the same "implicit save" semantics as
+                    // clicking outside).
+                    if (
+                      ((e.metaKey || e.ctrlKey) && e.key === "Enter") ||
+                      e.key === "Escape"
+                    ) {
+                      e.preventDefault();
+                      (e.currentTarget as HTMLTextAreaElement).blur();
+                    }
+                  }}
                   rows={6}
                   placeholder="Description (markdown supported)…"
                   className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
@@ -853,6 +868,15 @@ function StepCard({
                 setDirty((d) => ({ ...d, body: true }));
               }}
               onBlur={() => setEditingField(null)}
+              onKeyDown={(e) => {
+                if (
+                  ((e.metaKey || e.ctrlKey) && e.key === "Enter") ||
+                  e.key === "Escape"
+                ) {
+                  e.preventDefault();
+                  (e.currentTarget as HTMLTextAreaElement).blur();
+                }
+              }}
               rows={4}
               placeholder="Body (markdown supported)…"
               className="mt-1 w-full resize-y rounded-md border border-border bg-card/40 px-2 py-1 text-sm"
@@ -884,6 +908,15 @@ function StepCard({
                 setDirty((d) => ({ ...d, expected: true }));
               }}
               onBlur={() => setEditingField(null)}
+              onKeyDown={(e) => {
+                if (
+                  ((e.metaKey || e.ctrlKey) && e.key === "Enter") ||
+                  e.key === "Escape"
+                ) {
+                  e.preventDefault();
+                  (e.currentTarget as HTMLTextAreaElement).blur();
+                }
+              }}
               rows={3}
               placeholder="Expected output (markdown supported)…"
               className="mt-1 w-full resize-y rounded-md border border-border bg-card/40 px-2 py-1 text-meta"
@@ -1134,47 +1167,64 @@ function AddStepForm({
     );
   }
 
+  const cancel = () => {
+    setOpen(false);
+    setTitle("");
+    setExpected("");
+  };
+  const commit = () => {
+    if (disabled || !title.trim()) return;
+    onAdd({
+      title: title.trim(),
+      expectedOutput: expected.trim() || null,
+    });
+    setTitle("");
+    setExpected("");
+    setOpen(false);
+  };
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-card/20 p-3">
       <input
         autoFocus
         value={title}
         onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+        }}
         placeholder="Step title (what needs to happen)…"
         className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
       />
       <textarea
         value={expected}
         onChange={(e) => setExpected(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+        }}
         rows={3}
         placeholder="Expected output (optional, markdown supported)"
         className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-meta"
       />
       <div className="flex justify-end gap-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            setOpen(false);
-            setTitle("");
-            setExpected("");
-          }}
-        >
+        <Button variant="ghost" size="sm" onClick={cancel}>
           Cancel
         </Button>
         <Button
           variant="ember"
           size="sm"
           disabled={disabled || !title.trim()}
-          onClick={() => {
-            onAdd({
-              title: title.trim(),
-              expectedOutput: expected.trim() || null,
-            });
-            setTitle("");
-            setExpected("");
-            setOpen(false);
-          }}
+          onClick={commit}
         >
           <Plus className="h-3.5 w-3.5" /> Add
         </Button>

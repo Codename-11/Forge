@@ -251,7 +251,27 @@ export function ChatWorkspaceSurface() {
               </label>
               <label className="block text-meta text-muted-foreground">
                 Topic
-                <textarea value={newTopic} onChange={(event) => setNewTopic(event.target.value)} rows={3} placeholder="Optional operator context for this conversation." className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground" />
+                <textarea
+                  value={newTopic}
+                  onChange={(event) => setNewTopic(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      (event.metaKey || event.ctrlKey) &&
+                      event.key === "Enter" &&
+                      newAgentId &&
+                      !createConversationM.isPending
+                    ) {
+                      event.preventDefault();
+                      createConversation();
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      setNewConversationOpen(false);
+                    }
+                  }}
+                  rows={3}
+                  placeholder="Optional operator context for this conversation."
+                  className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"
+                />
               </label>
               <label className="block text-meta text-muted-foreground">
                 Context mode

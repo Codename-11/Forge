@@ -417,3 +417,177 @@ describe("issueRouter — bulkSetLabels / bulkAssign / bulkAssignAgent", () => {
     expect(rows.map((r) => r.issueId)).toEqual([ours.id]);
   });
 });
+
+describe("issueRouter — auto-watch on create / assign / agent-assign", () => {
+  it("create auto-watches the human author", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const created = await caller.create({
+      title: "Issue I should watch",
+      assigneeIds: [],
+      labelIds: [],
+      priority: "NONE",
+      kind: "ISSUE",
+    });
+    const watcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: created.id, userId: fixture.user.id },
+    });
+    expect(watcher).not.toBeNull();
+    expect(watcher?.workspaceId).toBe(fixture.workspace.id);
+  });
+
+  it("create auto-watches a pre-assigned agent (via assignedAgentId)", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: "victor",
+      },
+    });
+    const created = await caller.create({
+      title: "Pre-assigned to agent",
+      assigneeIds: [],
+      labelIds: [],
+      priority: "NONE",
+      kind: "ISSUE",
+      assignedAgentId: agent.id,
+    });
+    const watcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: created.id, agentId: agent.id },
+    });
+    expect(watcher).not.toBeNull();
+  });
+
+  it("create auto-watches initial human assignees", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const created = await caller.create({
+      title: "Initial assignee",
+      assigneeIds: [fixture.secondUser.id],
+      labelIds: [],
+      priority: "NONE",
+      kind: "ISSUE",
+    });
+    const watcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: created.id, userId: fixture.secondUser.id },
+    });
+    expect(watcher).not.toBeNull();
+  });
+
+  it("create via agent-linked API key auto-watches the agent (not the human key owner)", async () => {
+    const { ctx, fixture } = await setup();
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Mizu",
+        profileKey: "mizu",
+      },
+    });
+    const agentCtx = {
+      ...ctx,
+      apiKey: {
+        keyId: "k",
+        workspaceId: fixture.workspace.id,
+        userId: fixture.user.id,
+        pluginId: null,
+        scopes: ["WRITE_ISSUES"],
+        projectIds: [],
+        labelIds: [],
+        initiativeIds: [],
+        linkedAgentId: agent.id,
+      } satisfies ApiKeyContext,
+    };
+    const agentCaller = issueRouter.createCaller(agentCtx);
+    const created = await agentCaller.create({
+      title: "Agent-created issue",
+      assigneeIds: [],
+      labelIds: [],
+      priority: "NONE",
+      kind: "ISSUE",
+    });
+    const agentWatcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: created.id, agentId: agent.id },
+    });
+    expect(agentWatcher).not.toBeNull();
+    // The human key owner is NOT auto-watched — the agent acted.
+    const userWatcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: created.id, userId: fixture.user.id },
+    });
+    expect(userWatcher).toBeNull();
+  });
+
+  it("assign upserts watcher rows for newly-added human assignees", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const created = await caller.create({
+      title: "Reassign",
+      assigneeIds: [],
+      labelIds: [],
+      priority: "NONE",
+      kind: "ISSUE",
+    });
+    // Clear the auto-watch on the author so we can isolate the assign behavior.
+    await prisma.issueWatcher.deleteMany({
+      where: { issueId: created.id, userId: fixture.user.id },
+    });
+
+    await caller.assign({ id: created.id, userIds: [fixture.secondUser.id] });
+    const watchers = await prisma.issueWatcher.findMany({
+      where: { issueId: created.id, userId: { not: null } },
+    });
+    const watcherUserIds = new Set(watchers.map((w) => w.userId));
+    expect(watcherUserIds.has(fixture.secondUser.id)).toBe(true);
+  });
+
+  it("assign does NOT downgrade an existing watcher when their assignment is removed", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const created = await caller.create({
+      title: "Sticky",
+      assigneeIds: [fixture.secondUser.id],
+      labelIds: [],
+      priority: "NONE",
+      kind: "ISSUE",
+    });
+    // Sanity: secondUser is now both assigned and watching.
+    const before = await prisma.issueWatcher.findFirst({
+      where: { issueId: created.id, userId: fixture.secondUser.id },
+    });
+    expect(before).not.toBeNull();
+
+    // Remove their assignment by re-assigning to nobody.
+    await caller.assign({ id: created.id, userIds: [] });
+    // Watcher row should still exist — once watching, stays watching.
+    const after = await prisma.issueWatcher.findFirst({
+      where: { issueId: created.id, userId: fixture.secondUser.id },
+    });
+    expect(after).not.toBeNull();
+  });
+
+  it("update with new assignedAgentId upserts an agent watcher", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor 2",
+        profileKey: "victor2",
+      },
+    });
+    const created = await caller.create({
+      title: "Agent assign via update",
+      assigneeIds: [],
+      labelIds: [],
+      priority: "NONE",
+      kind: "ISSUE",
+    });
+    await caller.update({ id: created.id, assignedAgentId: agent.id });
+    const watcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: created.id, agentId: agent.id },
+    });
+    expect(watcher).not.toBeNull();
+  });
+});

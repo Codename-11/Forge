@@ -228,6 +228,23 @@ export default function InitiativeDetailPage({
                   autoFocus
                   value={descDraft}
                   onChange={(e) => setDescDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (
+                      (e.metaKey || e.ctrlKey) &&
+                      e.key === "Enter"
+                    ) {
+                      e.preventDefault();
+                      update.mutate({
+                        id: initiative.id,
+                        description: descDraft.trim() || null,
+                      });
+                      setEditingDesc(false);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      setDescDraft(initiative.description ?? "");
+                      setEditingDesc(false);
+                    }
+                  }}
                   rows={4}
                   className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
                 />
@@ -248,7 +265,10 @@ export default function InitiativeDetailPage({
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => setEditingDesc(false)}
+                    onClick={() => {
+                      setDescDraft(initiative.description ?? "");
+                      setEditingDesc(false);
+                    }}
                   >
                     Cancel
                   </Button>

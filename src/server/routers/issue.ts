@@ -12,6 +12,11 @@ import {
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
 import { finishRunsForIssue, recordAgentAction } from "@/server/services/agent-run";
+import {
+  autoWatchActor,
+  autoWatchAgent,
+  autoWatchUser,
+} from "@/server/services/issue-watchers";
 import { agentId as agentIdSchema } from "./agent";
 import { UPDATED_SINCE_VALUES, updatedSinceToDate } from "@/lib/saved-view-filters";
 import type { SlashCommand } from "@/lib/slash-commands";
@@ -612,6 +617,37 @@ export const issueRouter = router({
           },
           include: { status: true, assignees: true, labels: true },
         });
+        // Auto-watch on create. The author (or authoring agent) is the
+        // de-facto first watcher — every modern PM tool does this. When
+        // the create comes via an agent-linked API key we watch the
+        // agent instead; system-created issues (no actor) skip.
+        await autoWatchActor(tx, {
+          workspaceId: ctx.workspaceId,
+          issueId: issue.id,
+          userId: ctx.session.user.id,
+          callerAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        });
+        // Human assignees specified at create time are auto-watched too,
+        // so they get the post-create event fan-out (status changes,
+        // comments) without having to manually click WatchButton.
+        for (const userId of input.assigneeIds) {
+          await autoWatchUser(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: issue.id,
+            userId,
+          });
+        }
+        // Pre-assigned agent at create time also gets a watcher row so
+        // any subsequent issue-subject event reaches it via the
+        // watcher fan-out branch (in addition to the assignee branch).
+        if (input.assignedAgentId) {
+          await autoWatchAgent(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: issue.id,
+            agentId: input.assignedAgentId,
+          });
+        }
+
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
@@ -920,6 +956,15 @@ export const issueRouter = router({
           // an already-populated issue won't clobber prior content.
           if (patch.assignedAgentId) {
             await maybeApplyAgentTemplate(tx, id, patch.assignedAgentId);
+            // Auto-watch the newly-assigned agent so subsequent
+            // issue-subject events route to it via the watcher branch
+            // (in addition to the AGENT_ASSIGNED-and-route-to-assignee
+            // branch). Sticky — unassignment doesn't strip the watch.
+            await autoWatchAgent(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: id,
+              agentId: patch.assignedAgentId,
+            });
           }
         }
 
@@ -959,12 +1004,36 @@ export const issueRouter = router({
     .input(z.object({ id: z.string().cuid(), userIds: z.array(z.string().cuid()) }))
     .mutation(async ({ ctx, input }) => {
       return ctx.db.$transaction(async (tx) => {
+        // Snapshot current assignees so we can identify newly-added user
+        // ids (those get auto-watched). Removed assignees keep watching —
+        // once watching, stays watching until manual unwatch.
+        const before = await tx.issueAssignee.findMany({
+          where: { issueId: input.id },
+          select: { userId: true },
+        });
+        const previousUserIds = new Set(before.map((a) => a.userId));
+
         await tx.issueAssignee.deleteMany({ where: { issueId: input.id } });
         if (input.userIds.length) {
           await tx.issueAssignee.createMany({
             data: input.userIds.map((userId) => ({ issueId: input.id, userId })),
           });
         }
+
+        // Auto-watch the newly-added assignees. Existing assignees are
+        // either already watching (from a prior assign / create / etc.)
+        // or have manually unwatched at some point — we don't re-watch
+        // those on every re-assign, only the brand-new additions.
+        for (const userId of input.userIds) {
+          if (!previousUserIds.has(userId)) {
+            await autoWatchUser(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: input.id,
+              userId,
+            });
+          }
+        }
+
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,

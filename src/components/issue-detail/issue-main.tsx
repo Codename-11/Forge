@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Activity, Bot } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
@@ -22,6 +22,8 @@ import {
   useSlashAutocomplete,
 } from "@/components/slash-autocomplete";
 import { MentionInput } from "@/components/inputs/mention-input";
+import { Kbd } from "@/components/ui/kbd";
+import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
 
 /**
  * Main column of the issue detail page — description (inline-editable)
@@ -209,6 +211,16 @@ function DescriptionBlock({
               onSave(draft.trim() || null);
               setEditing(false);
             }}
+            onKeyDown={(e) => {
+              // Esc reverts the in-progress edit and drops back to read
+              // mode. Matches the title editor's cancel pattern at the
+              // top of the issue page.
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setDraft(description ?? "");
+                setEditing(false);
+              }
+            }}
             placeholder="Description (Markdown-flavored). Paste or drop files to attach."
             className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
             ariaLabel="Issue description"
@@ -263,7 +275,14 @@ function Comments({
   comments: Comment[];
 }) {
   const utils = trpc.useUtils();
+  // Draft persists per-issue under `forge.draft.comment:<issueId>` so a
+  // half-written comment survives accidental navigation. We hydrate from
+  // localStorage on first mount; subsequent renders own `draft` in state
+  // and write back debounced via the effect below. Successful submit
+  // clears the row.
+  const draftKey = `comment:${issueId}`;
   const [draft, setDraft] = useState("");
+  const [draftHydrated, setDraftHydrated] = useState(false);
   // Synthetic textarea ref that mirrors MentionInput's underlying
   // textarea — kept in sync via the imperative-handle callback below
   // so the slash autocomplete hook can read / focus the real DOM node.
@@ -273,6 +292,29 @@ function Comments({
   // comment is persisted. `useState` keeps it in scope across renders
   // without re-fetching the form's draft.
   const [pendingCommands, setPendingCommands] = useState<SlashCommand[]>([]);
+
+  // Hydrate the draft from localStorage on mount (and when the issue
+  // changes — guards against the page re-keying without remounting).
+  useEffect(() => {
+    const stored = readDraft<string>(draftKey);
+    if (stored && typeof stored === "string") setDraft(stored);
+    setDraftHydrated(true);
+    // We deliberately re-run on issue change; the hydration flag resets
+    // so the debounced writer below skips a stale "" save during the
+    // tick before hydration completes.
+    return () => setDraftHydrated(false);
+  }, [draftKey]);
+
+  // Persist the draft (debounced ~500ms) so quick edits don't thrash
+  // localStorage. Empty strings clear the row outright.
+  useEffect(() => {
+    if (!draftHydrated) return;
+    const t = setTimeout(() => {
+      if (draft.length === 0) clearDraft(draftKey);
+      else saveDraft<string>(draftKey, draft);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [draft, draftHydrated, draftKey]);
 
   // Autocomplete: fires on top-of-body slash lines, inserts stubs on
   // Enter / Tab / click. Same surface as QuickCreate; helps discover
@@ -313,9 +355,29 @@ function Comments({
         setPendingCommands([]);
       }
       setDraft("");
+      clearDraft(draftKey);
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Submit handler shared by the form's onSubmit and MentionInput's
+  // Cmd/Ctrl+Enter handler. Returns void; treats empty/command-only
+  // bodies the same as the form's existing submit logic does.
+  const submitDraft = useCallback(() => {
+    if (!draft.trim()) return;
+    if (createComment.isPending || applyCommandsM.isPending) return;
+    const { strippedBody, commands } = parseSlashCommands(draft);
+    const body = strippedBody.trim();
+    if (!body && commands.length === 0) return;
+    if (!body && commands.length > 0) {
+      applyCommandsM.mutate({ issueId, commands });
+      setDraft("");
+      clearDraft(draftKey);
+      return;
+    }
+    setPendingCommands(commands);
+    createComment.mutate({ issueId, body });
+  }, [draft, createComment, applyCommandsM, issueId, draftKey]);
 
   // Live preview: do we have any leading slash commands? Drives the
   // hint chip below the textarea.
@@ -360,23 +422,7 @@ function Comments({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (!draft.trim()) return;
-          // Parse leading slash commands. Anything in a fenced code
-          // block at the top is preserved verbatim. Cleaned body is
-          // what gets posted; commands fire as a separate mutation.
-          const { strippedBody, commands } = parseSlashCommands(draft);
-          const body = strippedBody.trim();
-          if (!body && commands.length === 0) return;
-          if (!body && commands.length > 0) {
-            // Pure command line — apply, no comment posted.
-            applyCommandsM.mutate({ issueId, commands });
-            setDraft("");
-            return;
-          }
-          // Stash commands so the create-comment success callback
-          // applies them once the comment is persisted.
-          setPendingCommands(commands);
-          createComment.mutate({ issueId, body });
+          submitDraft();
         }}
         className="relative mt-4 space-y-2"
         onDragEnter={drop.onDragEnter}
@@ -400,6 +446,13 @@ function Comments({
             value={draft}
             onChange={setDraft}
             onPaste={paste.onPaste}
+            onSubmit={() => {
+              // Cmd/Ctrl+Enter submits when the slash dropdown is closed.
+              // When it's open, the slash hook's `onKeyDown` consumes
+              // Enter for command insertion (and never sees Cmd+Enter
+              // either way), so this stays as the canonical send path.
+              if (!slash.visible) submitDraft();
+            }}
             onKeyDown={(e) => {
               // Slash autocomplete owns nav / Enter / Tab / Escape
               // when its dropdown is open. The form's submit button
@@ -423,7 +476,7 @@ function Comments({
             {SLASH_COMMAND_HINT}
           </div>
         )}
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-2">
           <Button
             type="submit"
             size="sm"
@@ -434,6 +487,7 @@ function Comments({
             }
           >
             Comment
+            <Kbd className="ml-1.5">⌘⏎</Kbd>
           </Button>
         </div>
       </form>

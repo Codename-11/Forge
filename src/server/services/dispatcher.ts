@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { AgentStatus, AutoDispatchMode, EventKind } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
+import { autoWatchAgent } from "@/server/services/issue-watchers";
 
 /**
  * Stamp a "manual assignment" `dispatchReason` blob onto an Issue row.
@@ -381,6 +382,12 @@ async function assignAndEmit(
       dispatchReason: reasonBlob,
     },
   });
+
+  // Auto-watch the dispatched agent so subsequent issue-subject events
+  // reach it via the watcher fan-out branch (in addition to the
+  // assignee branch). Sticky — re-dispatch to a different agent leaves
+  // the previous watcher row in place by design.
+  await autoWatchAgent(tx, { workspaceId, issueId, agentId });
 
   await recordChange(tx, {
     workspaceId,
