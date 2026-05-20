@@ -214,3 +214,11 @@
     @apply text-xs;
   }
 }
+
+/* W2.3: canvas shape hover outline. Subtle filter-drop-shadow that
+ * reads as a thin highlight on light AND dark themes. Disabled when
+ * the shape is selected so the selection ring takes priority. */
+svg [data-canvas-shape]:hover {
+  filter: drop-shadow(0 0 1px hsl(var(--foreground) / 0.45));
+  transition: filter 0.08s ease-out;
+}

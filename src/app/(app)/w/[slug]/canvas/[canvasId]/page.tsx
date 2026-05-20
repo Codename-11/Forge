@@ -248,7 +248,7 @@ function cursorForTool(tool: ToolKind, panning: boolean, draftingConnector: bool
     case "entity-create":
       return "crosshair";
     case "eraser":
-      return "not-allowed";
+      return "crosshair";
     default:
       return "default";
   }
@@ -324,6 +324,20 @@ export default function CanvasViewerPage() {
   // calls `issue.create` / `note.create`, then we drop a CanvasNode
   // at the canvas-space anchor and return to Select.
   const [entityCreator, setEntityCreator] = useState<EntityCreatorAnchor | null>(null);
+
+  // W2.1: tool sticky-lock. When true, draw tools don't auto-return
+  // to Select after a single commit. Toggled by Shift+click on the
+  // toolbar button. Indicator: ember dot on the active tool.
+  const [stickyToolLock, setStickyToolLock] = useState(false);
+  const stickyToolLockRef = useRef(stickyToolLock);
+  useEffect(() => {
+    stickyToolLockRef.current = stickyToolLock;
+  }, [stickyToolLock]);
+
+  // W2.1: space-to-pan. Holding Space temporarily flips any tool to
+  // Pan; releasing restores the previous tool. Stored as a ref so the
+  // global keyboard listener doesn't fight against React state churn.
+  const spacePanPrevToolRef = useRef<ToolKind | null>(null);
   const toolbarStyleRef = useRef<StyleState>(toolbarStyle);
   useEffect(() => {
     toolbarStyleRef.current = toolbarStyle;
@@ -443,6 +457,11 @@ export default function CanvasViewerPage() {
     labels: Array<{ x: number; y: number; value: number; axis: "x" | "y" }>;
     sizeLabel: { x: number; y: number; width: number; height: number } | null;
   }>({ guides: [], labels: [], sizeLabel: null });
+
+  // W2.4: grid-snap target highlight. Set during drag when grid-snap
+  // applies (and no smart-snap fired). Lets the operator see where the
+  // grid is pulling them — a 1-cell-wide ember band on the row+column.
+  const gridSnapHighlightRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
   // Ref-based remote cursors so SSE ticks don't re-render the whole
   // node tree — only the cursor overlay reads `cursorsRev`.
@@ -1315,7 +1334,7 @@ export default function CanvasViewerPage() {
           style: { emoji },
         });
       }
-      setActiveTool("select");
+      if (!stickyToolLockRef.current) setActiveTool("select");
       return;
     }
     const drawKinds: ToolKind[] = [
@@ -1555,6 +1574,16 @@ export default function CanvasViewerPage() {
         if (!snapApplied && snapToGridRef.current) {
           targetX = Math.round(targetX / GRID_SIZE_PX) * GRID_SIZE_PX;
           targetY = Math.round(targetY / GRID_SIZE_PX) * GRID_SIZE_PX;
+          // W2.4: surface a visible row/column highlight at the snap
+          // target so the operator sees where the grid is pulling.
+          gridSnapHighlightRef.current = {
+            x: targetX,
+            y: targetY,
+            w: primaryShape.width ?? 0,
+            h: primaryShape.height ?? 0,
+          };
+        } else {
+          gridSnapHighlightRef.current = null;
         }
         // dx/dy applied to every shape relative to its *initial* (x,y).
         const dx = targetX - primaryShape.x;
@@ -1684,6 +1713,7 @@ export default function CanvasViewerPage() {
       draggingRef.current = false;
       // Clear smart-guide state so the overlay disappears.
       snapGuidesRef.current = { guides: [], labels: [], sizeLabel: null };
+      gridSnapHighlightRef.current = null;
       // Trailing realtime refresh — we suppressed invalidations during
       // the drag, so pull once on release in case anything changed.
       utils.canvas.hydrate.invalidate({ id: params.canvasId });
@@ -1705,8 +1735,16 @@ export default function CanvasViewerPage() {
   // -- Shape draw + rubber-band selection ----------------------------
 
   // Stable callback for shape selection — supports click + shift-click.
+  // W2.1: when the eraser tool is active, clicks delete the shape
+  // instead of selecting it. Hold + drag continues to sweep-delete via
+  // the shape's onMouseEnter handler (wired in canvas-shapes).
   const onSelectShape = useCallback(
     (id: string, event: React.MouseEvent) => {
+      if (activeToolRef.current === "eraser" && shapeRemoveMut) {
+        event.stopPropagation();
+        shapeRemoveMut.mutate({ id });
+        return;
+      }
       const shape = shapes.find((s) => s.id === id);
       if (!shape) return;
       // Begin a shape-move gesture so the click that selects a shape
@@ -1750,7 +1788,7 @@ export default function CanvasViewerPage() {
       };
       draggingRef.current = true;
     },
-    [selected, shapes, expandGroupedShapes, viewport.x, viewport.y, viewport.zoom],
+    [selected, shapes, expandGroupedShapes, shapeRemoveMut, viewport.x, viewport.y, viewport.zoom],
   );
 
   // -- Frame selection + title-bar drag ------------------------------
@@ -1870,13 +1908,13 @@ export default function CanvasViewerPage() {
           }
           shapeDraftRef.current = null;
           scheduleShapeDraftRender();
-          setActiveTool("select");
+          if (!stickyToolLockRef.current) setActiveTool("select");
           return;
         }
         if (!shapeAddMut) {
           shapeDraftRef.current = null;
           scheduleShapeDraftRender();
-          setActiveTool("select");
+          if (!stickyToolLockRef.current) setActiveTool("select");
           return;
         }
         if (tool === "freehand") {
@@ -1979,9 +2017,9 @@ export default function CanvasViewerPage() {
         shapeDraftRef.current = null;
         scheduleShapeDraftRender();
         // Drop back to select after each draw so single-shot drawing
-        // feels less stateful; persistent draw flows can flip the
-        // tool back manually.
-        setActiveTool("select");
+        // feels less stateful. Shift+click on the toolbar button locks
+        // the tool sticky (W2.1) — when locked, skip the auto-return.
+        if (!stickyToolLockRef.current) setActiveTool("select");
         return;
       }
       const band = rubberBandRef.current;
@@ -2349,8 +2387,34 @@ export default function CanvasViewerPage() {
         return;
       }
     };
+    // W2.1: Space-to-pan. When held, flip whatever tool is active
+    // into Pan; on release, restore. We track via a ref so we don't
+    // fight the user pressing Space repeatedly.
+    const onSpaceDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))
+        return;
+      if (spacePanPrevToolRef.current != null) return;
+      spacePanPrevToolRef.current = activeToolRef.current;
+      setActiveTool("pan");
+      e.preventDefault();
+    };
+    const onSpaceUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      const prev = spacePanPrevToolRef.current;
+      if (prev == null) return;
+      spacePanPrevToolRef.current = null;
+      setActiveTool(prev);
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onSpaceDown);
+    window.addEventListener("keyup", onSpaceUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onSpaceDown);
+      window.removeEventListener("keyup", onSpaceUp);
+    };
   }, [
     selected,
     nodes,
@@ -2969,8 +3033,15 @@ export default function CanvasViewerPage() {
               rev={shapeDraftRev}
               style={toolbarStyle}
             />
-            {/* Rubber-band marquee while shift-dragging on background. */}
-            <RubberBandPreview bandRef={rubberBandRef} rev={rubberBandRev} />
+            {/* Rubber-band marquee while shift-dragging on background.
+                Live hit count displayed alongside the rect (W2.3). */}
+            <RubberBandPreview
+              bandRef={rubberBandRef}
+              rev={rubberBandRev}
+              nodes={displayNodes}
+              shapes={displayShapes}
+              frames={displayFrames}
+            />
             {/* Edges sit between lane bands and node cards. */}
             <EdgesOverlay
               nodes={displayNodes}
@@ -3033,8 +3104,14 @@ export default function CanvasViewerPage() {
             />
             {/* Smart alignment guides + size label (W1.4). Lives inside
                 the scaling transform so the line positions track canvas
-                coordinates; readers re-mount on dragRev. */}
-            <SnapGuidesLayer guidesRef={snapGuidesRef} rev={dragRev} zoom={viewport.zoom} />
+                coordinates; readers re-mount on dragRev. Grid-snap
+                highlight (W2.4) is fed from the same drag handler. */}
+            <SnapGuidesLayer
+              guidesRef={snapGuidesRef}
+              gridHighlightRef={gridSnapHighlightRef}
+              rev={dragRev}
+              zoom={viewport.zoom}
+            />
             {selectedEdgeId
               ? (() => {
                   const edge = edges.find((x) => x.id === selectedEdgeId);
@@ -3129,6 +3206,8 @@ export default function CanvasViewerPage() {
         canGroup={canGroup}
         canUngroup={canUngroup}
         persistKey={ws.slug}
+        stickyLocked={stickyToolLock}
+        onToggleStickyLock={() => setStickyToolLock((v) => !v)}
       />
       {openPicker && (
         <AddCardPicker
@@ -3370,9 +3449,15 @@ function ShapeDraftPreview({
 function RubberBandPreview({
   bandRef,
   rev: _rev,
+  nodes,
+  shapes,
+  frames,
 }: {
   bandRef: React.MutableRefObject<RubberBand | null>;
   rev: number;
+  nodes: HydratedNode[];
+  shapes: CanvasShapeRow[];
+  frames: CanvasFrameRow[];
 }) {
   const band = bandRef.current;
   if (!band) return null;
@@ -3381,11 +3466,35 @@ function RubberBandPreview({
   const width = Math.abs(band.endX - band.startX);
   const height = Math.abs(band.endY - band.startY);
   if (width < 1 && height < 1) return null;
+  // Live AABB hit count (W2.3). Mirrors the mouseup handler so the
+  // badge matches the eventual selection 1:1.
+  let count = 0;
+  const right = left + width;
+  const bottom = top + height;
+  const hits = (x: number, y: number, w: number, h: number) =>
+    !(x + w < left || x > right || y + h < top || y > bottom);
+  for (const n of nodes) if (hits(n.x, n.y, n.width, n.height)) count++;
+  for (const s of shapes) {
+    const sw = s.width ?? 0;
+    const sh = s.height ?? 0;
+    if (sw > 0 && sh > 0 && hits(s.x, s.y, sw, sh)) count++;
+  }
+  for (const f of frames) if (hits(f.x, f.y, f.width, f.height)) count++;
   return (
-    <div
-      className="pointer-events-none absolute rounded-sm border border-ember/60 bg-ember/10"
-      style={{ left, top, width, height }}
-    />
+    <>
+      <div
+        className="pointer-events-none absolute rounded-sm border border-ember/60 bg-ember/10"
+        style={{ left, top, width, height }}
+      />
+      {count > 0 && (
+        <div
+          className="pointer-events-none absolute rounded bg-ember px-1.5 py-0.5 font-mono text-[0.6875rem] text-ember-foreground shadow"
+          style={{ left: right + 6, top }}
+        >
+          {count}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -3399,6 +3508,7 @@ function RubberBandPreview({
 
 function SnapGuidesLayer({
   guidesRef,
+  gridHighlightRef,
   rev: _rev,
   zoom,
 }: {
@@ -3407,11 +3517,13 @@ function SnapGuidesLayer({
     labels: Array<{ x: number; y: number; value: number; axis: "x" | "y" }>;
     sizeLabel: { x: number; y: number; width: number; height: number } | null;
   }>;
+  gridHighlightRef?: React.MutableRefObject<{ x: number; y: number; w: number; h: number } | null>;
   rev: number;
   zoom: number;
 }) {
   const state = guidesRef.current;
-  if (state.guides.length === 0 && !state.sizeLabel) return null;
+  const gridHighlight = gridHighlightRef?.current ?? null;
+  if (state.guides.length === 0 && !state.sizeLabel && !gridHighlight) return null;
   const stroke = 1 / Math.max(0.01, zoom);
   const labelScale = 1 / Math.max(0.01, zoom);
   return (
@@ -3421,6 +3533,26 @@ function SnapGuidesLayer({
       width={1}
       height={1}
     >
+      {gridHighlight && (
+        <>
+          {/* Row highlight (horizontal band) */}
+          <rect
+            x={-100000}
+            y={gridHighlight.y}
+            width={200000}
+            height={Math.max(1, gridHighlight.h)}
+            fill="hsl(var(--ember) / 0.06)"
+          />
+          {/* Column highlight (vertical band) */}
+          <rect
+            x={gridHighlight.x}
+            y={-100000}
+            width={Math.max(1, gridHighlight.w)}
+            height={200000}
+            fill="hsl(var(--ember) / 0.06)"
+          />
+        </>
+      )}
       {state.guides.map((g, i) =>
         g.axis === "x" ? (
           <line

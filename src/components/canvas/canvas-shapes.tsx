@@ -1,7 +1,193 @@
 "use client";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { MessageCircle } from "lucide-react";
+import { Check, CornerDownLeft, MessageCircle, RotateCcw, Trash2 } from "lucide-react";
 import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
+import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
+
+/**
+ * Inline comment-thread for a canvas comment-pin (W2.2). Comments live
+ * on `shape.style.comments` as `[{ id, body, byUserId, byName,
+ * createdAt, resolved }]` so we don't need a polymorphic Comment table
+ * mid-wave. Resolve = soft flag; the pin styling reads the count of
+ * unresolved entries. shapePatch is the only mutation we need.
+ */
+type ShapeComment = {
+  id: string;
+  body: string;
+  byUserId: string | null;
+  byName: string;
+  createdAt: string;
+  resolved: boolean;
+};
+
+function parseShapeComments(style: unknown): ShapeComment[] {
+  if (!style || typeof style !== "object") return [];
+  const raw = (style as { comments?: unknown }).comments;
+  if (!Array.isArray(raw)) return [];
+  const out: ShapeComment[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object") continue;
+    const e = r as Record<string, unknown>;
+    if (typeof e.id !== "string" || typeof e.body !== "string") continue;
+    out.push({
+      id: e.id,
+      body: e.body,
+      byUserId: typeof e.byUserId === "string" ? e.byUserId : null,
+      byName: typeof e.byName === "string" ? e.byName : "you",
+      createdAt: typeof e.createdAt === "string" ? e.createdAt : new Date().toISOString(),
+      resolved: e.resolved === true,
+    });
+  }
+  return out;
+}
+
+function CommentPinPopover({
+  shape,
+  onClose,
+}: {
+  shape: CanvasShapeRow;
+  onClose: () => void;
+}) {
+  const comments = parseShapeComments(shape.style);
+  const [draft, setDraft] = useState("");
+  const meQ = trpc.user.me.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const me = meQ.data;
+  const utils = trpc.useUtils();
+  const patch = trpc.canvas.shapePatch.useMutation({
+    onSuccess: () => {
+      // Refresh the hydrate so other clients see the new comment list.
+      utils.canvas.hydrate.invalidate({ id: shape.canvasId });
+    },
+  });
+
+  const writeComments = (next: ShapeComment[]) => {
+    const cur = (shape.style ?? {}) as Record<string, unknown>;
+    patch.mutate({ id: shape.id, style: { ...cur, comments: next } });
+  };
+
+  const onAdd = () => {
+    const body = draft.trim();
+    if (body.length === 0) return;
+    const newComment: ShapeComment = {
+      id: `cmt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      body,
+      byUserId: me?.id ?? null,
+      byName: me?.name ?? me?.email ?? "you",
+      createdAt: new Date().toISOString(),
+      resolved: false,
+    };
+    writeComments([...comments, newComment]);
+    setDraft("");
+  };
+  const onToggleResolved = (id: string) => {
+    writeComments(
+      comments.map((c) => (c.id === id ? { ...c, resolved: !c.resolved } : c)),
+    );
+  };
+  const onDelete = (id: string) => {
+    writeComments(comments.filter((c) => c.id !== id));
+  };
+
+  return (
+    <div
+      className="absolute left-0 rounded-md border border-border bg-popover p-2 text-xs shadow-lg"
+      style={{ top: 30, width: 260, pointerEvents: "auto" }}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="font-medium text-foreground">
+          Comments
+          {comments.length > 0 && (
+            <span className="ml-1 font-mono text-[0.6875rem] text-muted-foreground">
+              {comments.filter((c) => !c.resolved).length}/{comments.length}
+            </span>
+          )}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="focus-ring h-5 w-5 rounded text-muted-foreground hover:bg-subtle hover:text-foreground"
+          title="Close (Esc)"
+        >
+          ×
+        </button>
+      </div>
+      {comments.length > 0 ? (
+        <ul className="mb-2 max-h-44 space-y-1.5 overflow-y-auto">
+          {comments.map((c) => (
+            <li
+              key={c.id}
+              className={cn(
+                "group rounded border border-border/60 bg-card/60 p-1.5",
+                c.resolved && "opacity-60",
+              )}
+            >
+              <div className="mb-0.5 flex items-center justify-between">
+                <span className="font-mono text-[0.625rem] text-muted-foreground">
+                  {c.byName}
+                </span>
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100">
+                  <button
+                    type="button"
+                    title={c.resolved ? "Reopen" : "Resolve"}
+                    onClick={() => onToggleResolved(c.id)}
+                    className="rounded p-0.5 text-muted-foreground hover:bg-subtle hover:text-foreground"
+                  >
+                    {c.resolved ? (
+                      <RotateCcw className="h-3 w-3" />
+                    ) : (
+                      <Check className="h-3 w-3" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    title="Delete"
+                    onClick={() => onDelete(c.id)}
+                    className="rounded p-0.5 text-muted-foreground hover:bg-subtle hover:text-danger"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+              <div className={cn("whitespace-pre-wrap", c.resolved && "line-through")}>
+                {c.body}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="mb-2 text-muted-foreground">No comments yet.</div>
+      )}
+      <div className="flex items-center gap-1">
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Reply…"
+          className="focus-ring h-7 flex-1 rounded border border-border bg-background px-1.5 text-xs"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onAdd();
+            }
+          }}
+        />
+        <button
+          type="button"
+          onClick={onAdd}
+          disabled={patch.isPending || draft.trim().length === 0}
+          className="focus-ring inline-flex h-7 items-center gap-1 rounded bg-ember px-2 text-[0.6875rem] text-ember-foreground hover:bg-ember/90 disabled:opacity-50"
+        >
+          <CornerDownLeft className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export type ShapeKind =
   | "box"
@@ -680,14 +866,15 @@ const ShapeNode = memo(function ShapeNode({
     const h = shape.height ?? 24;
     const x = shape.x - offsetX;
     const y = shape.y - offsetY;
-    const rawUnread = (shape.style as Record<string, unknown> | null | undefined)?.unread;
-    const unread = typeof rawUnread === "number" ? rawUnread : 0;
+    const allComments = parseShapeComments(shape.style);
+    const unresolved = allComments.filter((c) => !c.resolved).length;
+    const allResolved = allComments.length > 0 && unresolved === 0;
     // Popover footprint extends below the pin; expand the foreignObject
     // bbox so the popover doesn't clip against its parent SVG.
     const fX = x;
     const fY = y;
-    const fW = Math.max(w, 220);
-    const fH = commentPinOpen ? h + 130 : h;
+    const fW = Math.max(w, 260);
+    const fH = commentPinOpen ? h + 260 : h;
     content = (
       <foreignObject
         x={fX}
@@ -704,11 +891,18 @@ const ShapeNode = memo(function ShapeNode({
           <button
             type="button"
             aria-label="Open comment thread"
-            className="absolute left-0 top-0 flex items-center justify-center rounded-full text-ember-foreground shadow-md transition-transform hover:scale-105"
+            className={cn(
+              "absolute left-0 top-0 flex items-center justify-center rounded-full shadow-md transition-transform hover:scale-105",
+              allResolved
+                ? "text-foreground/70 opacity-60 ring-1 ring-success/40"
+                : "text-ember-foreground",
+            )}
             style={{
               width: w,
               height: h,
-              background: "hsl(var(--ember))",
+              background: allResolved
+                ? "hsl(var(--success) / 0.18)"
+                : "hsl(var(--ember))",
               pointerEvents: "auto",
             }}
             onMouseDown={(e) => {
@@ -722,41 +916,20 @@ const ShapeNode = memo(function ShapeNode({
             }}
           >
             <MessageCircle size={14} />
-            {unread > 0 ? (
+            {unresolved > 0 ? (
               <span
                 className="absolute -right-1 -top-1 flex h-3 min-w-3 items-center justify-center rounded-full px-1 text-[9px] font-medium text-ember-foreground"
                 style={{ background: "hsl(var(--danger))" }}
               >
-                {unread > 9 ? "9+" : unread}
+                {unresolved > 9 ? "9+" : unresolved}
               </span>
             ) : null}
           </button>
           {commentPinOpen ? (
-            <div
-              className="absolute left-0 rounded-md border border-border bg-popover p-3 text-xs shadow-lg"
-              style={{
-                top: h + 6,
-                width: 220,
-                pointerEvents: "auto",
-              }}
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="mb-1 font-medium text-foreground">Comments</div>
-              <div className="text-muted-foreground">
-                Threads land in Wave 2. The pin is anchored — comments
-                will hang off this shape id.
-              </div>
-              <div className="mt-2 flex justify-end">
-                <button
-                  type="button"
-                  className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-subtle hover:text-foreground"
-                  onClick={() => onCommentPinClose?.()}
-                >
-                  Close
-                </button>
-              </div>
-            </div>
+            <CommentPinPopover
+              shape={shape}
+              onClose={() => onCommentPinClose?.()}
+            />
           ) : null}
         </div>
       </foreignObject>
