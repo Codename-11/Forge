@@ -59,6 +59,27 @@ selection inspector, alignment guides, and sticky-note primitives.
   row + column ember band at the snap target so the operator sees
   where they're being pulled.
 
+## 2026-05-20 — Canvas Polish Wave 3
+
+- **W3.1**: client-side undo / redo. New `src/lib/canvas-undo.ts`
+  with a 100-entry stack. ⌘Z / ⌘⇧Z fire `undo` / `redo` and emit a
+  short toast (`Undone: moved 3 shapes`). v1 wires the most-common
+  op (shape move) — add/delete and frame/edge ops can extend by
+  following the same `pushCommand` shape.
+- **W3.2**: copy / paste. ⌘C serialises the shape selection to an
+  in-memory clipboard with relative positions; ⌘V pastes at +20px
+  offset. ⌘D continues to duplicate in place (pre-existing).
+  Chains of pastes cascade rather than stacking on the same spot.
+- **W3.3**: right-click context menu. New
+  `src/components/canvas/canvas-context-menu.tsx`. Context-aware:
+  shape (Duplicate / Delete), card (Remove from canvas),
+  background (Paste / New issue here / New note here / Reset view).
+- **W3.4**: focus / zoom modes. `F` zooms-to-fit the selected
+  frame(s) with 80px padding; `Shift+F` still picks the frame tool
+  even when frames are selected. `Shift+2` zooms-to-fit the current
+  selection regardless of kind. `0` (reset) and `1` (fit-all) stay
+  as-is.
+
 ## 2026-05-20 — Unified workspace flow — Wave 1
 
 ### Summary

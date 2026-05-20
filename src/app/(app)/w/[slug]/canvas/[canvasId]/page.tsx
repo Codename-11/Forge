@@ -59,10 +59,15 @@ import {
   type InspectorSelection,
 } from "@/components/canvas/canvas-selection-inspector";
 import { computeSnap } from "@/lib/canvas-snap-guides";
+import { useCanvasUndoStack } from "@/lib/canvas-undo";
 import {
   CanvasEntityCreator,
   type EntityCreatorAnchor,
 } from "@/components/canvas/canvas-entity-creator";
+import {
+  CanvasContextMenu,
+  type ContextMenuItem,
+} from "@/components/canvas/canvas-context-menu";
 import {
   COMPONENT_DRAG_MIME,
   type ComponentDragPayload,
@@ -325,6 +330,15 @@ export default function CanvasViewerPage() {
   // at the canvas-space anchor and return to Select.
   const [entityCreator, setEntityCreator] = useState<EntityCreatorAnchor | null>(null);
 
+  // W3.3: right-click context menu. State holds viewport-space x/y +
+  // the menu items the parent built for this hit target. Null = no
+  // menu open.
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    items: ContextMenuItem[];
+  } | null>(null);
+
   // W2.1: tool sticky-lock. When true, draw tools don't auto-return
   // to Select after a single commit. Toggled by Shift+click on the
   // toolbar button. Indicator: ember dot on the active tool.
@@ -338,6 +352,32 @@ export default function CanvasViewerPage() {
   // Pan; releasing restores the previous tool. Stored as a ref so the
   // global keyboard listener doesn't fight against React state churn.
   const spacePanPrevToolRef = useRef<ToolKind | null>(null);
+
+  // W3.1: client-side undo / redo stack. Records pushed at mutation
+  // commit sites (shape move, shape add, shape delete); ⌘Z / ⌘⇧Z
+  // pop and re-run.
+  const undoStack = useCanvasUndoStack(params.canvasId);
+
+  // W3.2: in-memory clipboard for copy/paste. Cleared on canvas
+  // change. Shapes only for v1; nodes/edges/frames can extend the
+  // same pattern.
+  const canvasClipboardRef = useRef<{
+    shapes: Array<{
+      kind: string;
+      width: number | null;
+      height: number | null;
+      path: unknown;
+      style: unknown;
+      text: string | null;
+      groupId: string | null;
+      relX: number;
+      relY: number;
+    }>;
+    /** Origin used to compute paste positions — the top-left of the
+     *  selection bbox at copy time. */
+    originX: number;
+    originY: number;
+  }>({ shapes: [], originX: 0, originY: 0 });
   const toolbarStyleRef = useRef<StyleState>(toolbarStyle);
   useEffect(() => {
     toolbarStyleRef.current = toolbarStyle;
@@ -1656,6 +1696,35 @@ export default function CanvasViewerPage() {
               shapePatchMut.mutate({ id, x: s.x + primary.dx, y: s.y + primary.dy });
             }
           }
+          // W3.1: record an undo entry. We capture the delta + the
+          // affected ids; undoIt reverses the patch by negating dxdy.
+          const { dx, dy } = primary;
+          const ids = [...drag.shapeIds];
+          undoStack.push({
+            describe: `moved ${ids.length === 1 ? "shape" : `${ids.length} shapes`}`,
+            doIt: () => {
+              if (ids.length > 1 && shapeBulkPatchMut) {
+                shapeBulkPatchMut.mutate({ ids, dxdy: { dx, dy } });
+              } else if (shapePatchMut) {
+                for (const id of ids) {
+                  const s = shapesRef.current.find((sh) => sh.id === id);
+                  if (!s) continue;
+                  shapePatchMut.mutate({ id, x: s.x + dx, y: s.y + dy });
+                }
+              }
+            },
+            undoIt: () => {
+              if (ids.length > 1 && shapeBulkPatchMut) {
+                shapeBulkPatchMut.mutate({ ids, dxdy: { dx: -dx, dy: -dy } });
+              } else if (shapePatchMut) {
+                for (const id of ids) {
+                  const s = shapesRef.current.find((sh) => sh.id === id);
+                  if (!s) continue;
+                  shapePatchMut.mutate({ id, x: s.x - dx, y: s.y - dy });
+                }
+              }
+            },
+          });
         }
         for (const id of drag.shapeIds) shapeOverrides.delete(id);
       } else if (drag.kind === "frame-move") {
@@ -2176,11 +2245,97 @@ export default function CanvasViewerPage() {
         if (selected.length > 0) setSelected([]);
         return;
       }
-      // F = frame tool. Doesn't fire when modifier keys are held so
-      // it stays out of the way of Cmd+F search etc.
+      // W3.1: Cmd+Z / Cmd+Shift+Z undo / redo. Skip if focus is in a
+      // text editor (Ctrl+Z is the editor's own undo).
+      if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) {
+        const t = e.target as HTMLElement | null;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) {
+          return;
+        }
+        e.preventDefault();
+        if (e.shiftKey) {
+          const cmd = undoStack.redo();
+          if (cmd) toast(`Redone: ${cmd.describe}`, { duration: 1500 });
+        } else {
+          const cmd = undoStack.undo();
+          if (cmd) toast(`Undone: ${cmd.describe}`, { duration: 1500 });
+        }
+        return;
+      }
+      // F = frame tool, OR zoom-to-fit-frame when a frame is selected
+      // (W3.4). If only frames are in the selection, F zooms; otherwise
+      // it activates the frame tool. Shift+F always picks the tool.
       if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "f" || e.key === "F")) {
         e.preventDefault();
+        const selFrameIds = selected.filter((s) => s.kind === "frame").map((s) => s.id);
+        if (selFrameIds.length > 0 && !e.shiftKey) {
+          const rect = surfaceRef.current?.getBoundingClientRect();
+          const viewW = rect?.width ?? 800;
+          const viewH = rect?.height ?? 600;
+          const targetFrames = displayFrames.filter((f) => selFrameIds.includes(f.id));
+          if (targetFrames.length === 0) return;
+          const minX = Math.min(...targetFrames.map((f) => f.x));
+          const minY = Math.min(...targetFrames.map((f) => f.y));
+          const maxX = Math.max(...targetFrames.map((f) => f.x + f.width));
+          const maxY = Math.max(...targetFrames.map((f) => f.y + f.height));
+          const pad = 80;
+          const zoom = Math.min(
+            (viewW - pad * 2) / (maxX - minX),
+            (viewH - pad * 2) / (maxY - minY),
+            MAX_ZOOM,
+          );
+          const safeZoom = Math.max(MIN_ZOOM, zoom);
+          const next = {
+            x: viewW / 2 - ((minX + maxX) / 2) * safeZoom,
+            y: viewH / 2 - ((minY + maxY) / 2) * safeZoom,
+            zoom: safeZoom,
+          };
+          setViewport(next);
+          setViewportMut.mutate({ id: params.canvasId, viewport: next });
+          return;
+        }
         setActiveTool("frame");
+        return;
+      }
+      // Shift+2 = zoom-to-fit-selection (any kind). Matches Figma's
+      // shortcut for "fit selection to view".
+      if (e.shiftKey && !e.metaKey && !e.ctrlKey && (e.key === "@" || e.key === "2")) {
+        e.preventDefault();
+        const items: Array<{ x: number; y: number; w: number; h: number }> = [];
+        for (const sel of selected) {
+          if (sel.kind === "shape") {
+            const s = displayShapes.find((sh) => sh.id === sel.id);
+            if (s && s.width && s.height) items.push({ x: s.x, y: s.y, w: s.width, h: s.height });
+          } else if (sel.kind === "frame") {
+            const f = displayFrames.find((ff) => ff.id === sel.id);
+            if (f) items.push({ x: f.x, y: f.y, w: f.width, h: f.height });
+          } else if (sel.kind === "node") {
+            const n = displayNodes.find((nn) => nn.id === sel.id);
+            if (n) items.push({ x: n.x, y: n.y, w: n.width, h: n.height });
+          }
+        }
+        if (items.length === 0) return;
+        const rect = surfaceRef.current?.getBoundingClientRect();
+        const viewW = rect?.width ?? 800;
+        const viewH = rect?.height ?? 600;
+        const minX = Math.min(...items.map((i) => i.x));
+        const minY = Math.min(...items.map((i) => i.y));
+        const maxX = Math.max(...items.map((i) => i.x + i.w));
+        const maxY = Math.max(...items.map((i) => i.y + i.h));
+        const pad = 80;
+        const z = Math.min(
+          (viewW - pad * 2) / Math.max(1, maxX - minX),
+          (viewH - pad * 2) / Math.max(1, maxY - minY),
+          MAX_ZOOM,
+        );
+        const safeZoom = Math.max(MIN_ZOOM, z);
+        const next = {
+          x: viewW / 2 - ((minX + maxX) / 2) * safeZoom,
+          y: viewH / 2 - ((minY + maxY) / 2) * safeZoom,
+          zoom: safeZoom,
+        };
+        setViewport(next);
+        setViewportMut.mutate({ id: params.canvasId, viewport: next });
         return;
       }
       // S = sticky, M = comment-pin, Y = stamp. Same modifier guard as
@@ -2290,6 +2445,74 @@ export default function CanvasViewerPage() {
         return;
       }
       const mod = e.metaKey || e.ctrlKey;
+      // W3.2: Cmd+C copies selected shapes to the in-memory clipboard;
+      // Cmd+V pastes at +20px offset. Cmd+D continues to duplicate
+      // in-place (existing).
+      if (mod && (e.key === "c" || e.key === "C")) {
+        const t = e.target as HTMLElement | null;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+        const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
+        if (shapeIds.length === 0) return;
+        const picked = shapes.filter((s) => shapeIds.includes(s.id));
+        if (picked.length === 0) return;
+        e.preventDefault();
+        const originX = Math.min(...picked.map((s) => s.x));
+        const originY = Math.min(...picked.map((s) => s.y));
+        canvasClipboardRef.current = {
+          shapes: picked.map((s) => ({
+            kind: s.kind,
+            width: s.width ?? null,
+            height: s.height ?? null,
+            path: s.path ?? null,
+            style: s.style ?? null,
+            text: s.text ?? null,
+            groupId: s.groupId ?? null,
+            relX: s.x - originX,
+            relY: s.y - originY,
+          })),
+          originX,
+          originY,
+        };
+        toast(`Copied ${picked.length} shape${picked.length === 1 ? "" : "s"}`, {
+          duration: 1200,
+        });
+        return;
+      }
+      if (mod && (e.key === "v" || e.key === "V")) {
+        const t = e.target as HTMLElement | null;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+        const clip = canvasClipboardRef.current;
+        if (clip.shapes.length === 0 || !shapeAddMut) return;
+        e.preventDefault();
+        const dx = 20;
+        const dy = 20;
+        for (const s of clip.shapes) {
+          const dup: ShapeAddInput = {
+            canvasId: params.canvasId,
+            kind: s.kind as ShapeAddInput["kind"],
+            x: clip.originX + s.relX + dx,
+            y: clip.originY + s.relY + dy,
+          };
+          if (s.width != null) dup.width = s.width;
+          if (s.height != null) dup.height = s.height;
+          if (s.path != null) dup.path = s.path;
+          if (s.style != null) dup.style = s.style as Record<string, unknown>;
+          if (s.text != null) dup.text = s.text;
+          if (s.groupId != null) dup.groupId = s.groupId;
+          shapeAddMut.mutate(dup);
+        }
+        // Shift the origin forward by the paste offset so a chain of
+        // pastes cascades neatly rather than stacking on the same spot.
+        canvasClipboardRef.current = {
+          ...clip,
+          originX: clip.originX + dx,
+          originY: clip.originY + dy,
+        };
+        toast(`Pasted ${clip.shapes.length} shape${clip.shapes.length === 1 ? "" : "s"}`, {
+          duration: 1200,
+        });
+        return;
+      }
       if (mod && (e.key === "d" || e.key === "D")) {
         const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
         if (shapeIds.length === 0) return;
@@ -2436,6 +2659,7 @@ export default function CanvasViewerPage() {
     selectedEdgeId,
     removeEdge,
     setViewportMut,
+    undoStack,
   ]);
 
   // Toolbar style change — when shapes are selected, apply via bulkPatch;
@@ -2992,6 +3216,132 @@ export default function CanvasViewerPage() {
           onDragOver={onSurfaceDragOver}
           onDragLeave={onSurfaceDragLeave}
           onDrop={onSurfaceDrop}
+          onContextMenu={(e) => {
+            // W3.3: right-click anywhere on the surface opens a
+            // context-aware menu. We branch on whether the click landed
+            // on a shape (data-canvas-shape) vs background.
+            const target = e.target as HTMLElement | null;
+            const shapeEl = target?.closest("[data-canvas-shape]") as HTMLElement | null;
+            const cardEl = target?.closest("[data-canvas-card]") as HTMLElement | null;
+            const rect = surfaceRef.current?.getBoundingClientRect();
+            const vx = e.clientX - (rect?.left ?? 0);
+            const vy = e.clientY - (rect?.top ?? 0);
+            const items: ContextMenuItem[] = [];
+            if (shapeEl) {
+              const shapeId = shapeEl.getAttribute("data-canvas-shape");
+              if (shapeId) {
+                items.push({
+                  kind: "action",
+                  label: "Duplicate",
+                  shortcut: "⌘D",
+                  onClick: () => {
+                    const s = shapesRef.current.find((sh) => sh.id === shapeId);
+                    if (!s || !shapeAddMut) return;
+                    const dup: ShapeAddInput = {
+                      canvasId: params.canvasId,
+                      kind: s.kind,
+                      x: s.x + 20,
+                      y: s.y + 20,
+                    };
+                    if (s.width != null) dup.width = s.width;
+                    if (s.height != null) dup.height = s.height;
+                    if (s.path != null) dup.path = s.path;
+                    if (s.style != null) dup.style = s.style as Record<string, unknown>;
+                    if (s.text != null) dup.text = s.text;
+                    if (s.groupId != null) dup.groupId = s.groupId;
+                    shapeAddMut.mutate(dup);
+                  },
+                });
+                items.push({ kind: "separator" });
+                items.push({
+                  kind: "action",
+                  label: "Delete",
+                  shortcut: "⌫",
+                  danger: true,
+                  onClick: () => {
+                    if (shapeRemoveMut) shapeRemoveMut.mutate({ id: shapeId });
+                  },
+                });
+              }
+            } else if (cardEl) {
+              const nodeId = cardEl.getAttribute("data-canvas-card");
+              if (nodeId) {
+                items.push({
+                  kind: "action",
+                  label: "Remove from canvas",
+                  danger: true,
+                  onClick: () => {
+                    handleRemoveCard(nodeId);
+                  },
+                });
+              }
+            } else {
+              // Background — drop in paste / new-issue / new-note / reset.
+              const { x, y } = surfaceToCanvasRef.current?.(e.clientX, e.clientY) ?? {
+                x: 0,
+                y: 0,
+              };
+              const clip = canvasClipboardRef.current;
+              items.push({
+                kind: "action",
+                label: `Paste${clip.shapes.length > 0 ? ` (${clip.shapes.length})` : ""}`,
+                shortcut: "⌘V",
+                disabled: clip.shapes.length === 0,
+                onClick: () => {
+                  // Re-use the keyboard paste path by simulating the
+                  // body — but here we paste *at the cursor* rather
+                  // than at the +20 offset.
+                  if (!shapeAddMut) return;
+                  for (const s of clip.shapes) {
+                    const dup: ShapeAddInput = {
+                      canvasId: params.canvasId,
+                      kind: s.kind as ShapeAddInput["kind"],
+                      x: x + s.relX,
+                      y: y + s.relY,
+                    };
+                    if (s.width != null) dup.width = s.width;
+                    if (s.height != null) dup.height = s.height;
+                    if (s.path != null) dup.path = s.path;
+                    if (s.style != null) dup.style = s.style as Record<string, unknown>;
+                    if (s.text != null) dup.text = s.text;
+                    if (s.groupId != null) dup.groupId = s.groupId;
+                    shapeAddMut.mutate(dup);
+                  }
+                },
+              });
+              items.push({ kind: "separator" });
+              items.push({
+                kind: "action",
+                label: "New issue here",
+                shortcut: "I",
+                onClick: () => {
+                  setEntityCreator({ viewportX: vx, viewportY: vy, canvasX: x, canvasY: y });
+                },
+              });
+              items.push({
+                kind: "action",
+                label: "New note here",
+                onClick: () => {
+                  setEntityCreator({ viewportX: vx, viewportY: vy, canvasX: x, canvasY: y });
+                },
+              });
+              items.push({ kind: "separator" });
+              items.push({
+                kind: "action",
+                label: "Reset view",
+                shortcut: "0",
+                onClick: () => {
+                  const r = surfaceRef.current?.getBoundingClientRect();
+                  const viewW = r?.width ?? 800;
+                  const viewH = r?.height ?? 600;
+                  setViewport({ x: viewW / 2, y: viewH / 2, zoom: 1 });
+                },
+              });
+            }
+            if (items.length === 0) return;
+            e.preventDefault();
+            setContextMenu({ x: vx, y: vy, items });
+          }}
         >
           <div
             className="absolute left-0 top-0 origin-top-left"
@@ -3158,6 +3508,15 @@ export default function CanvasViewerPage() {
               bbox={inspectorBbox}
               onPatch={onInspectorPatch}
               onDelete={onInspectorDelete}
+            />
+          )}
+          {/* Right-click context menu (W3.3). */}
+          {contextMenu && (
+            <CanvasContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              items={contextMenu.items}
+              onDismiss={() => setContextMenu(null)}
             />
           )}
           {/* Inline entity-create popover (W1.2). Mounts at the
