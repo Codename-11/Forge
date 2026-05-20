@@ -108,6 +108,10 @@ type CanvasToolbarProps = {
   canUngroup: boolean;
   /** Persistence scope — slug or canvas id; namespaces localStorage. */
   persistKey?: string;
+  /** W2.1: sticky-lock state. When true, draw tools don't auto-return
+   *  to Select after one commit. Shift-click any tool toggles. */
+  stickyLocked?: boolean;
+  onToggleStickyLock?: () => void;
 };
 
 /**
@@ -125,6 +129,8 @@ export function CanvasToolbar({
   canGroup,
   canUngroup,
   persistKey,
+  stickyLocked = false,
+  onToggleStickyLock,
 }: CanvasToolbarProps) {
   const storageKey = useMemo(
     () => (persistKey ? `${TOOLBAR_STORAGE_PREFIX}${persistKey}` : null),
@@ -206,18 +212,37 @@ export function CanvasToolbar({
             <button
               key={kind}
               type="button"
-              title={label}
+              title={
+                label +
+                (active && stickyLocked
+                  ? " · locked sticky (Shift+click to unlock)"
+                  : active
+                  ? " · Shift+click to lock"
+                  : "")
+              }
               aria-label={label}
               aria-pressed={active}
-              onClick={() => onSelectTool(kind)}
+              onClick={(e) => {
+                if (e.shiftKey && onToggleStickyLock) {
+                  onToggleStickyLock();
+                  return;
+                }
+                onSelectTool(kind);
+              }}
               className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors",
+                "relative flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors",
                 active
                   ? "bg-ember/15 text-ember ring-1 ring-ember/40"
                   : "hover:bg-subtle hover:text-foreground",
               )}
             >
               <Icon className="h-4 w-4" />
+              {active && stickyLocked && (
+                <span
+                  aria-hidden
+                  className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-ember"
+                />
+              )}
             </button>
           );
         })}

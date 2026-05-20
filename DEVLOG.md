@@ -35,6 +35,30 @@ selection inspector, alignment guides, and sticky-note primitives.
   through `shapePatch` / `framePatch` / `edgePatch`. Delete button
   reuses the existing keyboard-delete path.
 
+## 2026-05-20 — Canvas Polish Wave 2
+
+- **W2.1**: tool ergonomics. Auto-return-to-Select after one shape
+  commit (already existed); Shift-click on a tool button now locks
+  it sticky with an ember dot indicator (skips the auto-return).
+  Space-held temporarily flips any tool to Pan, releasing restores.
+  Eraser cursor is no longer `not-allowed`; clicks delete the shape
+  under cursor.
+- **W2.2**: comment-pin thread UI (v1). Replaced the W1.3
+  placeholder popover with a real thread inside the pin's
+  foreignObject. Comments stored on `shape.style.comments` JSON,
+  patched via `shapePatch` (no Comment-table migration needed yet).
+  Add / resolve / re-open / delete; unresolved count drives the
+  red badge; all-resolved pins switch from ember to translucent
+  success ring.
+- **W2.3**: hover + selection polish. SVG drop-shadow on any
+  `[data-canvas-shape]:hover` for a 1px outline glow that reads on
+  light + dark. Live marquee count badge floats to the right of
+  the rubber-band rect, hitting nodes/shapes/frames in real time.
+- **W2.4**: grid-snap visual feedback. During drag, when grid-snap
+  applies (and no smart-guide fired), `SnapGuidesLayer` renders a
+  row + column ember band at the snap target so the operator sees
+  where they're being pulled.
+
 ## 2026-05-20 — Unified workspace flow — Wave 1
 
 ### Summary
