@@ -4,6 +4,7 @@ import {
   MousePointer2,
   Hand,
   Square,
+  Frame as FrameIcon,
   Circle,
   ArrowRight,
   Minus,
@@ -20,6 +21,7 @@ export type ToolKind =
   | "select"
   | "pan"
   | "connect"
+  | "frame"
   | "box"
   | "ellipse"
   | "arrow"
@@ -50,6 +52,7 @@ const TOOLS: Array<{
   { kind: "select", label: "Select (V)", Icon: MousePointer2 },
   { kind: "pan", label: "Pan (H)", Icon: Hand },
   { kind: "connect", label: "Connect (C)", Icon: Spline },
+  { kind: "frame", label: "Frame (F)", Icon: FrameIcon },
   { kind: "box", label: "Box (R)", Icon: Square },
   { kind: "ellipse", label: "Ellipse (O)", Icon: Circle },
   { kind: "arrow", label: "Arrow (A)", Icon: ArrowRight },

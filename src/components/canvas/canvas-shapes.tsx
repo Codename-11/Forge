@@ -1,5 +1,5 @@
 "use client";
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
 
 export type ShapeKind = "box" | "ellipse" | "line" | "arrow" | "text" | "freehand";
@@ -128,6 +128,20 @@ type CanvasShapesProps = {
   shapes: CanvasShapeRow[];
   selectedIds: Set<string>;
   onSelectShape: (id: string, event: React.MouseEvent) => void;
+  /** When set, the matching text-shape renders an inline `<textarea>`
+   * instead of the read-only markdown view, with focus + autoselect on
+   * mount. Used immediately after creating a text shape, and on
+   * double-click of an existing one. */
+  editingShapeId?: string | null;
+  /** Called when the inline editor commits (blur / Enter). The parent
+   * persists via `canvas.shapePatch`. */
+  onTextShapeSave?: (id: string, text: string) => void;
+  /** Called when the inline editor closes without committing (Esc) or
+   * after a successful save — parent clears `editingShapeId`. */
+  onTextShapeEditEnd?: () => void;
+  /** Called when a text shape is double-clicked — parent sets
+   * `editingShapeId` to enter inline edit mode. */
+  onTextShapeEditStart?: (id: string) => void;
 };
 
 /**
@@ -140,6 +154,10 @@ export const CanvasShapes = memo(function CanvasShapes({
   shapes,
   selectedIds,
   onSelectShape,
+  editingShapeId,
+  onTextShapeSave,
+  onTextShapeEditEnd,
+  onTextShapeEditStart,
 }: CanvasShapesProps) {
   const bbox = useMemo(() => {
     if (shapes.length === 0) {
@@ -196,6 +214,10 @@ export const CanvasShapes = memo(function CanvasShapes({
           offsetX={left}
           offsetY={top}
           onSelectShape={onSelectShape}
+          editing={editingShapeId === shape.id}
+          onTextShapeSave={onTextShapeSave}
+          onTextShapeEditEnd={onTextShapeEditEnd}
+          onTextShapeEditStart={onTextShapeEditStart}
         />
       ))}
     </svg>
@@ -208,6 +230,10 @@ type ShapeNodeProps = {
   offsetX: number;
   offsetY: number;
   onSelectShape: (id: string, event: React.MouseEvent) => void;
+  editing?: boolean;
+  onTextShapeSave?: (id: string, text: string) => void;
+  onTextShapeEditEnd?: () => void;
+  onTextShapeEditStart?: (id: string) => void;
 };
 
 const ShapeNode = memo(function ShapeNode({
@@ -216,6 +242,10 @@ const ShapeNode = memo(function ShapeNode({
   offsetX,
   offsetY,
   onSelectShape,
+  editing = false,
+  onTextShapeSave,
+  onTextShapeEditEnd,
+  onTextShapeEditStart,
 }: ShapeNodeProps) {
   const style = readStyle(shape.style);
   const onMouseDown = (e: React.MouseEvent) => {
@@ -382,27 +412,51 @@ const ShapeNode = memo(function ShapeNode({
         width={w}
         height={h}
         pointerEvents="all"
-        onMouseDown={onMouseDown}
+        // Pointerdown selects only when NOT editing — otherwise the
+        // click inside the textarea is forwarded as a selection
+        // gesture and steals focus.
+        onMouseDown={editing ? undefined : onMouseDown}
+        onDoubleClick={(e) => {
+          if (editing) return;
+          e.stopPropagation();
+          onTextShapeEditStart?.(shape.id);
+        }}
         data-canvas-shape={shape.id}
-        className="cursor-pointer"
+        className={editing ? "" : "cursor-pointer"}
       >
-        <div
-          style={{
-            fontSize,
-            fontWeight,
-            color,
-            width: "100%",
-            height: "100%",
-            opacity: style.opacity ?? 1,
-            lineHeight: 1.35,
-            wordBreak: "break-word",
-            overflow: "hidden",
-          }}
-        >
-          {shape.text ? <ChatMarkdown body={shape.text} /> : (
-            <span className="text-muted-foreground">Empty text</span>
-          )}
-        </div>
+        {editing ? (
+          <TextShapeEditor
+            initial={shape.text ?? ""}
+            fontSize={fontSize}
+            fontWeight={fontWeight}
+            color={color}
+            onCommit={(next) => {
+              onTextShapeSave?.(shape.id, next);
+              onTextShapeEditEnd?.();
+            }}
+            onCancel={() => onTextShapeEditEnd?.()}
+          />
+        ) : (
+          <div
+            style={{
+              fontSize,
+              fontWeight,
+              color,
+              width: "100%",
+              height: "100%",
+              opacity: style.opacity ?? 1,
+              lineHeight: 1.35,
+              wordBreak: "break-word",
+              overflow: "hidden",
+            }}
+          >
+            {shape.text && shape.text !== "Text" ? (
+              <ChatMarkdown body={shape.text} />
+            ) : (
+              <span className="text-muted-foreground italic">Double-click to edit</span>
+            )}
+          </div>
+        )}
       </foreignObject>
     );
     if (selected) {
@@ -490,3 +544,71 @@ const ShapeNode = memo(function ShapeNode({
     </g>
   );
 });
+
+function TextShapeEditor({
+  initial,
+  fontSize,
+  fontWeight,
+  color,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  fontSize: number;
+  fontWeight: number;
+  color: string;
+  onCommit: (next: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial === "Text" ? "" : initial);
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    // Select-all on mount so the "Text" placeholder gets replaced on
+    // first keystroke without a manual ctrl+a.
+    if (initial && initial !== "Text") el.setSelectionRange(0, el.value.length);
+  }, [initial]);
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => onCommit(value)}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        // Enter commits (Shift+Enter inserts a newline like a normal
+        // multi-line editor). Esc cancels without persisting.
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          onCommit(value);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+      style={{
+        fontSize,
+        fontWeight,
+        color,
+        width: "100%",
+        height: "100%",
+        lineHeight: 1.35,
+        resize: "none",
+        border: "none",
+        outline: "none",
+        background: "transparent",
+        padding: 0,
+        fontFamily: "inherit",
+      }}
+      placeholder="Type…"
+    />
+  );
+}

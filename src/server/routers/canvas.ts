@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { ArtifactType, EventKind, ExecutionPlanStatus, Prisma, type PrismaClient } from "@prisma/client";
+import {
+  ArtifactType,
+  EventKind,
+  ExecutionPlanStatus,
+  Prisma,
+  type CanvasStyleKind,
+  type PrismaClient,
+} from "@prisma/client";
 import { nanoid } from "nanoid";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -8,6 +15,34 @@ import { forgeEntityTypeSchema } from "@/lib/entity-ref";
 import { hydrateEntityRefs, type HydratedEntityRef } from "@/server/services/entity-hydration";
 import { createArtifact } from "@/server/services/artifact-service";
 import { publish } from "@/server/realtime";
+import { computeAlignment, type AlignItem } from "@/server/services/canvas-alignment";
+import { refreshTodayZone } from "@/server/services/today-zone";
+
+// ---------------------------------------------------------------------------
+// Schemas shared between proc inputs (styles / components / layers)
+// ---------------------------------------------------------------------------
+
+const styleKindSchema = z.enum(["COLOR", "TEXT", "EFFECT"]);
+
+const componentDefinitionSchema = z
+  .object({
+    nodes: z.array(z.unknown()).default([]),
+    shapes: z.array(z.unknown()).default([]),
+    frames: z.array(z.unknown()).default([]),
+    edges: z.array(z.unknown()).default([]),
+    width: z.number().min(1).max(20_000),
+    height: z.number().min(1).max(20_000),
+  })
+  .passthrough();
+
+type ComponentDefinition = z.infer<typeof componentDefinitionSchema>;
+
+const layerKindAllSchema = z.enum(["node", "shape", "frame", "group", "instance"]);
+const layerKindNameableSchema = z.enum(["frame", "group", "component"]);
+const layerKindReorderItemSchema = z.object({
+  kind: layerKindAllSchema,
+  id: z.string().cuid(),
+});
 
 /**
  * Workspace canvas router — infinite spatial board for synthesis work.
@@ -131,6 +166,45 @@ export const canvasRouter = router({
     }),
 
   /**
+   * Return (auto-provisioning if needed) the caller's PERSONAL canvas
+   * for the active workspace. The unique key on
+   * (workspaceId, kind, ownerUserId) enforces one PERSONAL per user.
+   * Cheap to call on every dashboard / topbar mount; the create branch
+   * only fires once per user. Today-zone refresh runs lazily via
+   * `canvas.hydrate` so the open-canvas path stays current.
+   */
+  personalForViewer: workspaceProcedure.query(async ({ ctx }) => {
+    const existing = await ctx.db.workspaceCanvas.findFirst({
+      where: {
+        workspaceId: ctx.workspaceId,
+        kind: "PERSONAL",
+        ownerUserId: ctx.session?.user?.id ?? "",
+        archivedAt: null,
+      },
+      select: { id: true, name: true, kind: true, activePageId: true },
+    });
+    if (existing) return existing;
+    if (!ctx.session?.user?.id) {
+      throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in required." });
+    }
+    const me = await ctx.db.user.findUniqueOrThrow({
+      where: { id: ctx.session.user.id },
+      select: { name: true, email: true },
+    });
+    const label = me.name?.trim() || me.email.split("@")[0] || "Personal";
+    return ctx.db.workspaceCanvas.create({
+      data: {
+        workspaceId: ctx.workspaceId,
+        kind: "PERSONAL",
+        ownerUserId: ctx.session.user.id,
+        createdById: ctx.session.user.id,
+        name: `${label}'s workspace`,
+      },
+      select: { id: true, name: true, kind: true, activePageId: true },
+    });
+  }),
+
+  /**
    * Hydrate the nodes on a canvas to full HydratedEntityRef rows. Returns
    * `{ canvas, nodes }` where each node row carries both the position
    * data and the resolved entity display fields, including a
@@ -139,12 +213,41 @@ export const canvasRouter = router({
   hydrate: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
+      const head = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, kind: true, ownerUserId: true, archivedAt: true },
+      });
+      if (!head) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      // PERSONAL canvases run their Today-zone refresh before hydrate so
+      // the strip reflects the caller's current work every time they
+      // open the surface. Idempotent + cheap (single-digit writes).
+      if (
+        head.kind === "PERSONAL" &&
+        head.ownerUserId === ctx.session?.user?.id &&
+        !head.archivedAt
+      ) {
+        try {
+          await refreshTodayZone(
+            ctx.db as PrismaClient,
+            ctx.workspaceId,
+            ctx.session.user.id,
+            head.id,
+          );
+        } catch {
+          // Today zone is decorative — failure must not block hydrate.
+        }
+      }
       const canvas = await ctx.db.workspaceCanvas.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
         include: {
           nodes: { orderBy: { zIndex: "asc" } },
           edges: true,
           shapes: { orderBy: { zIndex: "asc" } },
+          frames: { orderBy: { z: "asc" } },
+          groups: { orderBy: { z: "asc" } },
+          componentInstances: { orderBy: { z: "asc" } },
         },
       });
       if (!canvas) {
@@ -167,7 +270,15 @@ export const canvasRouter = router({
         ...node,
         ref: hydrated[idx],
       }));
-      return { canvas, nodes, edges: canvas.edges, shapes: canvas.shapes };
+      return {
+        canvas,
+        nodes,
+        edges: canvas.edges,
+        shapes: canvas.shapes,
+        frames: canvas.frames,
+        groups: canvas.groups,
+        componentInstances: canvas.componentInstances,
+      };
     }),
 
   create: workspaceProcedure
@@ -357,6 +468,14 @@ export const canvasRouter = router({
         zIndex: z.number().int().optional(),
         collapsed: z.boolean().optional(),
         viewMode: z.string().max(20).nullable().optional(),
+        /**
+         * Style references — opaque map of
+         * `{ fill?: styleId, text?: styleId, effect?: styleId }`.
+         * Pass `null` to clear. Replaces the whole object on write —
+         * partial-update callers should read first and send a merged
+         * object.
+         */
+        styleRefs: z.record(z.unknown()).nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -367,17 +486,24 @@ export const canvasRouter = router({
       if (!node) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Canvas node not found." });
       }
+      const data: Prisma.WorkspaceCanvasNodeUpdateInput = {
+        x: input.x,
+        y: input.y,
+        width: input.width,
+        height: input.height,
+        zIndex: input.zIndex,
+        collapsed: input.collapsed,
+        viewMode: input.viewMode === undefined ? undefined : input.viewMode,
+      };
+      if (input.styleRefs !== undefined) {
+        data.styleRefs =
+          input.styleRefs === null
+            ? Prisma.JsonNull
+            : (input.styleRefs as Prisma.InputJsonValue);
+      }
       await ctx.db.workspaceCanvasNode.update({
         where: { id: input.id },
-        data: {
-          x: input.x,
-          y: input.y,
-          width: input.width,
-          height: input.height,
-          zIndex: input.zIndex,
-          collapsed: input.collapsed,
-          viewMode: input.viewMode === undefined ? undefined : input.viewMode,
-        },
+        data,
       });
       await ctx.db.workspaceCanvas.update({
         where: { id: node.canvasId },
@@ -547,6 +673,11 @@ export const canvasRouter = router({
         text: z.string().max(50_000).nullable().optional(),
         groupId: z.string().max(80).nullable().optional(),
         zIndex: z.number().int().optional(),
+        /**
+         * Style references — `{ fill?: styleId, text?: styleId,
+         * effect?: styleId }`. Pass `null` to clear.
+         */
+        styleRefs: z.record(z.unknown()).nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -577,6 +708,12 @@ export const canvasRouter = router({
       if (input.text !== undefined) data.text = input.text;
       if (input.groupId !== undefined) data.groupId = input.groupId;
       if (input.zIndex !== undefined) data.zIndex = input.zIndex;
+      if (input.styleRefs !== undefined) {
+        data.styleRefs =
+          input.styleRefs === null
+            ? Prisma.JsonNull
+            : (input.styleRefs as Prisma.InputJsonValue);
+      }
 
       await ctx.db.$transaction(async (tx) => {
         await tx.canvasShape.update({ where: { id: input.id }, data });
@@ -1611,7 +1748,1962 @@ export const canvasRouter = router({
 
       return result;
     }),
+
+  // -------------------------------------------------------------------------
+  // Styles (design tokens) — workspace-scoped, soft-deleted via archivedAt
+  // -------------------------------------------------------------------------
+
+  /**
+   * Create a workspace-scoped reusable style. `value` is opaque JSON; the
+   * client renders against it. Names are unique per `(workspaceId, kind)` —
+   * Prisma surfaces P2002 as a Zod-friendly error here.
+   */
+  styleCreate: workspaceProcedure
+    .input(
+      z.object({
+        kind: styleKindSchema,
+        name: z.string().min(1).max(120),
+        value: z.unknown(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const trimmed = input.name.trim();
+      if (!trimmed) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Style name cannot be blank." });
+      }
+      try {
+        const created = await ctx.db.$transaction(async (tx) => {
+          const row = await tx.canvasStyle.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              kind: input.kind as CanvasStyleKind,
+              name: trimmed,
+              value: (input.value ?? {}) as Prisma.InputJsonValue,
+              createdById: ctx.session?.user?.id ?? null,
+            },
+          });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session?.user?.id ?? null,
+            entity: "canvas-style",
+            entityId: row.id,
+            action: "created",
+            after: { kind: row.kind, name: row.name },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "canvas-style",
+            subjectId: row.id,
+          });
+          return row;
+        });
+        return { id: created.id, kind: created.kind, name: created.name };
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `A ${input.kind} style named "${trimmed}" already exists in this workspace.`,
+          });
+        }
+        throw err;
+      }
+    }),
+
+  styleList: workspaceProcedure
+    .input(
+      z
+        .object({
+          kind: styleKindSchema.optional(),
+          includeArchived: z.boolean().default(false),
+        })
+        .default({}),
+    )
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.canvasStyle.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          kind: input.kind ? (input.kind as CanvasStyleKind) : undefined,
+          archivedAt: input.includeArchived ? undefined : null,
+        },
+        orderBy: [{ kind: "asc" }, { name: "asc" }],
+      });
+      return { items: rows };
+    }),
+
+  styleUpdate: workspaceProcedure
+    .input(
+      z.object({
+        styleId: z.string().cuid(),
+        name: z.string().min(1).max(120).optional(),
+        value: z.unknown().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.canvasStyle.findFirst({
+        where: { id: input.styleId, workspaceId: ctx.workspaceId },
+        select: { id: true, kind: true, name: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas style not found." });
+      }
+      const data: Prisma.CanvasStyleUpdateInput = {};
+      if (input.name !== undefined) {
+        const trimmed = input.name.trim();
+        if (!trimmed) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Style name cannot be blank." });
+        }
+        data.name = trimmed;
+      }
+      if (input.value !== undefined) {
+        data.value = (input.value ?? {}) as Prisma.InputJsonValue;
+      }
+      try {
+        await ctx.db.$transaction(async (tx) => {
+          await tx.canvasStyle.update({ where: { id: input.styleId }, data });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session?.user?.id ?? null,
+            entity: "canvas-style",
+            entityId: input.styleId,
+            action: "updated",
+            after: { name: data.name ?? existing.name },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "canvas-style",
+            subjectId: input.styleId,
+          });
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `A ${existing.kind} style with that name already exists.`,
+          });
+        }
+        throw err;
+      }
+      return { ok: true as const };
+    }),
+
+  /**
+   * Soft-delete via `archivedAt`. Style stays in the row store so existing
+   * `styleRefs` references resolve to the archived value — clients should
+   * surface them as "deprecated" rather than dead refs.
+   */
+  styleDelete: workspaceProcedure
+    .input(z.object({ styleId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.canvasStyle.findFirst({
+        where: { id: input.styleId, workspaceId: ctx.workspaceId },
+        select: { id: true, archivedAt: true, name: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas style not found." });
+      }
+      if (existing.archivedAt) {
+        return { ok: true as const };
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.canvasStyle.update({
+          where: { id: input.styleId },
+          data: { archivedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "canvas-style",
+          entityId: input.styleId,
+          action: "archived",
+          before: { name: existing.name },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "canvas-style",
+          subjectId: input.styleId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  // -------------------------------------------------------------------------
+  // Components — workspace-scoped reusable definitions
+  // -------------------------------------------------------------------------
+
+  /**
+   * Create a workspace component from a snapshot definition. `name` is
+   * unique per workspace (P2002 surfaces as a clean conflict). The
+   * definition is the opaque tree the client renders; we type-validate the
+   * top-level shape but pass the contents through unchanged.
+   */
+  componentCreate: workspaceProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(200),
+        description: z.string().max(2_000).nullable().optional(),
+        thumbnail: z.string().max(200_000).nullable().optional(),
+        definition: componentDefinitionSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const trimmed = input.name.trim();
+      if (!trimmed) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Component name cannot be blank." });
+      }
+      try {
+        const created = await ctx.db.$transaction(async (tx) => {
+          const row = await tx.canvasComponent.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              name: trimmed,
+              description: input.description ?? null,
+              thumbnail: input.thumbnail ?? null,
+              definition: input.definition as unknown as Prisma.InputJsonValue,
+              createdById: ctx.session?.user?.id ?? null,
+            },
+          });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session?.user?.id ?? null,
+            entity: "canvas-component",
+            entityId: row.id,
+            action: "created",
+            after: { name: row.name },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "canvas-component",
+            subjectId: row.id,
+          });
+          return row;
+        });
+        return { id: created.id, name: created.name };
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `A component named "${trimmed}" already exists in this workspace.`,
+          });
+        }
+        throw err;
+      }
+    }),
+
+  componentList: workspaceProcedure
+    .input(
+      z
+        .object({
+          includeArchived: z.boolean().default(false),
+        })
+        .default({}),
+    )
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.canvasComponent.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          archivedAt: input.includeArchived ? undefined : null,
+        },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          thumbnail: true,
+          createdAt: true,
+          updatedAt: true,
+          archivedAt: true,
+          _count: { select: { instances: true } },
+        },
+      });
+      return { items: rows };
+    }),
+
+  componentGet: workspaceProcedure
+    .input(z.object({ componentId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const row = await ctx.db.canvasComponent.findFirst({
+        where: { id: input.componentId, workspaceId: ctx.workspaceId },
+      });
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Component not found." });
+      }
+      return row;
+    }),
+
+  /**
+   * Patch a component. Updating `definition` bumps `updatedAt` (Prisma's
+   * `@updatedAt` handles this implicitly on any write) so clients can
+   * refresh instance renders by comparing component `updatedAt` against
+   * their cached snapshot timestamp.
+   */
+  componentUpdate: workspaceProcedure
+    .input(
+      z.object({
+        componentId: z.string().cuid(),
+        name: z.string().min(1).max(200).optional(),
+        description: z.string().max(2_000).nullable().optional(),
+        thumbnail: z.string().max(200_000).nullable().optional(),
+        definition: componentDefinitionSchema.optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.canvasComponent.findFirst({
+        where: { id: input.componentId, workspaceId: ctx.workspaceId },
+        select: { id: true, name: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Component not found." });
+      }
+      const data: Prisma.CanvasComponentUpdateInput = {};
+      if (input.name !== undefined) {
+        const trimmed = input.name.trim();
+        if (!trimmed) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Component name cannot be blank." });
+        }
+        data.name = trimmed;
+      }
+      if (input.description !== undefined) data.description = input.description;
+      if (input.thumbnail !== undefined) data.thumbnail = input.thumbnail;
+      if (input.definition !== undefined) {
+        data.definition = input.definition as unknown as Prisma.InputJsonValue;
+      }
+      try {
+        await ctx.db.$transaction(async (tx) => {
+          await tx.canvasComponent.update({ where: { id: input.componentId }, data });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session?.user?.id ?? null,
+            entity: "canvas-component",
+            entityId: input.componentId,
+            action: "updated",
+            after: { name: data.name ?? existing.name, definitionUpdated: input.definition !== undefined },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "canvas-component",
+            subjectId: input.componentId,
+          });
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "A component with that name already exists.",
+          });
+        }
+        throw err;
+      }
+      return { ok: true as const };
+    }),
+
+  /**
+   * Soft-delete via `archivedAt`. Instances stay alive — they continue to
+   * render against the snapshot the component was at when archived (until
+   * detached or removed manually).
+   */
+  componentArchive: workspaceProcedure
+    .input(z.object({ componentId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.canvasComponent.findFirst({
+        where: { id: input.componentId, workspaceId: ctx.workspaceId },
+        select: { id: true, archivedAt: true, name: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Component not found." });
+      }
+      if (existing.archivedAt) {
+        return { ok: true as const };
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.canvasComponent.update({
+          where: { id: input.componentId },
+          data: { archivedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "canvas-component",
+          entityId: input.componentId,
+          action: "archived",
+          before: { name: existing.name },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "canvas-component",
+          subjectId: input.componentId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  // -------------------------------------------------------------------------
+  // Component instances
+  // -------------------------------------------------------------------------
+
+  /**
+   * Place a component on a canvas. `width` / `height` default to the
+   * component definition's intrinsic size if omitted. Rejects archived
+   * components — instances can only originate from active definitions.
+   */
+  instanceCreate: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        componentId: z.string().cuid(),
+        x: z.number(),
+        y: z.number(),
+        width: z.number().min(1).max(20_000).optional(),
+        height: z.number().min(1).max(20_000).optional(),
+        parentFrameId: z.string().cuid().nullable().optional(),
+        groupId: z.string().cuid().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [canvas, component] = await Promise.all([
+        ctx.db.workspaceCanvas.findFirst({
+          where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+          select: { id: true },
+        }),
+        ctx.db.canvasComponent.findFirst({
+          where: { id: input.componentId, workspaceId: ctx.workspaceId, archivedAt: null },
+          select: { id: true, definition: true },
+        }),
+      ]);
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      if (!component) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Component not found or archived." });
+      }
+      const def = component.definition as unknown as ComponentDefinition;
+      const fallbackW = typeof def?.width === "number" ? def.width : 320;
+      const fallbackH = typeof def?.height === "number" ? def.height : 200;
+      if (input.parentFrameId) {
+        const frame = await ctx.db.canvasFrame.findFirst({
+          where: {
+            id: input.parentFrameId,
+            workspaceId: ctx.workspaceId,
+            canvasId: input.canvasId,
+          },
+          select: { id: true },
+        });
+        if (!frame) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "parentFrameId not found on this canvas.",
+          });
+        }
+      }
+      if (input.groupId) {
+        const group = await ctx.db.canvasGroup.findFirst({
+          where: { id: input.groupId, workspaceId: ctx.workspaceId, canvasId: input.canvasId },
+          select: { id: true },
+        });
+        if (!group) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "groupId not found on this canvas.",
+          });
+        }
+      }
+      const created = await ctx.db.$transaction(async (tx) => {
+        const row = await tx.canvasComponentInstance.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            canvasId: input.canvasId,
+            componentId: input.componentId,
+            x: input.x,
+            y: input.y,
+            width: input.width ?? fallbackW,
+            height: input.height ?? fallbackH,
+            parentFrameId: input.parentFrameId ?? null,
+            groupId: input.groupId ?? null,
+            overrides: {} as Prisma.InputJsonValue,
+          },
+        });
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "instance_added",
+          after: { instanceId: row.id, componentId: input.componentId },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return row;
+      });
+      return { id: created.id };
+    }),
+
+  /**
+   * Patch an instance. `overrides` is REPLACED (not merged) when passed —
+   * callers that want a sparse update should read first and send the
+   * full merged map. Pass `null` to clear.
+   */
+  instancePatch: workspaceProcedure
+    .input(
+      z.object({
+        instanceId: z.string().cuid(),
+        x: z.number().optional(),
+        y: z.number().optional(),
+        width: z.number().min(1).max(20_000).optional(),
+        height: z.number().min(1).max(20_000).optional(),
+        overrides: z.record(z.unknown()).nullable().optional(),
+        lockedAt: z.union([z.date(), z.string().datetime(), z.null()]).optional(),
+        hiddenAt: z.union([z.date(), z.string().datetime(), z.null()]).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.canvasComponentInstance.findFirst({
+        where: { id: input.instanceId, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Component instance not found." });
+      }
+      const data: Prisma.CanvasComponentInstanceUpdateInput = {};
+      if (input.x !== undefined) data.x = input.x;
+      if (input.y !== undefined) data.y = input.y;
+      if (input.width !== undefined) data.width = input.width;
+      if (input.height !== undefined) data.height = input.height;
+      if (input.overrides !== undefined) {
+        data.overrides =
+          input.overrides === null
+            ? Prisma.JsonNull
+            : (input.overrides as Prisma.InputJsonValue);
+      }
+      if (input.lockedAt !== undefined) {
+        data.lockedAt = input.lockedAt === null ? null : new Date(input.lockedAt);
+      }
+      if (input.hiddenAt !== undefined) {
+        data.hiddenAt = input.hiddenAt === null ? null : new Date(input.hiddenAt);
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.canvasComponentInstance.update({
+          where: { id: input.instanceId },
+          data,
+        });
+        await tx.workspaceCanvas.update({
+          where: { id: existing.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: existing.canvasId,
+          action: "instance_updated",
+          after: { instanceId: input.instanceId },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: existing.canvasId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  /**
+   * Materialise an instance into raw nodes / shapes / frames under the
+   * instance's host frame, applying overrides as final per-row writes,
+   * then delete the instance row. Returns the ids of created entities so
+   * the client can re-select them.
+   *
+   * Override paths follow the convention `"<kind>.<index>.<field>"` —
+   * e.g. `"nodes.0.x"` or `"shapes.2.style.fill"`. Unknown paths are
+   * silently ignored (component schemas drift; tolerating drift is
+   * cheaper than refusing to detach).
+   */
+  instanceDetach: workspaceProcedure
+    .input(z.object({ instanceId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const instance = await ctx.db.canvasComponentInstance.findFirst({
+        where: { id: input.instanceId, workspaceId: ctx.workspaceId },
+        include: {
+          component: { select: { id: true, definition: true } },
+        },
+      });
+      if (!instance) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Component instance not found." });
+      }
+      const def = (instance.component.definition ?? {}) as ComponentDefinition;
+      const overrides = (instance.overrides ?? {}) as Record<string, unknown>;
+
+      // Apply overrides over a deep clone of the definition before we
+      // materialise rows. Path format: "<bucket>.<index>.<...rest>".
+      const cloned: ComponentDefinition = JSON.parse(JSON.stringify(def));
+      for (const [path, value] of Object.entries(overrides)) {
+        const parts = path.split(".");
+        if (parts.length < 2) continue;
+        const [bucket, idxStr, ...rest] = parts;
+        const idx = Number(idxStr);
+        if (!bucket || Number.isNaN(idx)) continue;
+        const list = (cloned as unknown as Record<string, unknown[]>)[bucket];
+        if (!Array.isArray(list) || idx < 0 || idx >= list.length) continue;
+        if (rest.length === 0) {
+          list[idx] = value;
+          continue;
+        }
+        let target = list[idx] as Record<string, unknown> | undefined;
+        for (let i = 0; i < rest.length - 1; i++) {
+          if (!target || typeof target !== "object") {
+            target = undefined;
+            break;
+          }
+          const next = target[rest[i]!] as Record<string, unknown> | undefined;
+          if (!next || typeof next !== "object") {
+            target[rest[i]!] = {};
+            target = target[rest[i]!] as Record<string, unknown>;
+          } else {
+            target = next;
+          }
+        }
+        if (target) {
+          target[rest[rest.length - 1]!] = value;
+        }
+      }
+
+      const created = await ctx.db.$transaction(async (tx) => {
+        const nodeIds: string[] = [];
+        const shapeIds: string[] = [];
+        const frameIds: string[] = [];
+
+        const dx = instance.x;
+        const dy = instance.y;
+        const parentFrameId = instance.parentFrameId;
+        const groupId = instance.groupId;
+
+        for (const raw of cloned.nodes ?? []) {
+          const n = raw as Record<string, unknown>;
+          if (typeof n?.targetType !== "string" || typeof n?.targetId !== "string") continue;
+          const row = await tx.workspaceCanvasNode.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: instance.canvasId,
+              targetType: n.targetType,
+              targetId: n.targetId,
+              x: dx + Number((n.x as number) ?? 0),
+              y: dy + Number((n.y as number) ?? 0),
+              width: Number((n.width as number) ?? 240),
+              height: Number((n.height as number) ?? 160),
+              zIndex: Number((n.zIndex as number) ?? 0),
+              viewMode: typeof n.viewMode === "string" ? n.viewMode : null,
+              meta: (n.meta as Prisma.InputJsonValue | undefined) ?? undefined,
+              styleRefs: (n.styleRefs as Prisma.InputJsonValue | undefined) ?? undefined,
+              parentFrameId: parentFrameId ?? null,
+              groupId: groupId ?? null,
+            },
+            select: { id: true },
+          });
+          nodeIds.push(row.id);
+        }
+
+        for (const raw of cloned.shapes ?? []) {
+          const s = raw as Record<string, unknown>;
+          if (typeof s?.kind !== "string") continue;
+          const row = await tx.canvasShape.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: instance.canvasId,
+              kind: s.kind,
+              x: dx + Number((s.x as number) ?? 0),
+              y: dy + Number((s.y as number) ?? 0),
+              width: s.width === undefined || s.width === null ? null : Number(s.width),
+              height: s.height === undefined || s.height === null ? null : Number(s.height),
+              path: (s.path as Prisma.InputJsonValue | undefined) ?? undefined,
+              style: (s.style as Prisma.InputJsonValue | undefined) ?? undefined,
+              text: typeof s.text === "string" ? s.text : null,
+              zIndex: Number((s.zIndex as number) ?? 0),
+              styleRefs: (s.styleRefs as Prisma.InputJsonValue | undefined) ?? undefined,
+              parentFrameId: parentFrameId ?? null,
+              canvasGroupId: groupId ?? null,
+              createdById: ctx.session?.user?.id ?? null,
+            },
+            select: { id: true },
+          });
+          shapeIds.push(row.id);
+        }
+
+        for (const raw of cloned.frames ?? []) {
+          const f = raw as Record<string, unknown>;
+          const row = await tx.canvasFrame.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              canvasId: instance.canvasId,
+              name: typeof f.name === "string" ? f.name : "Frame",
+              x: dx + Number((f.x as number) ?? 0),
+              y: dy + Number((f.y as number) ?? 0),
+              width: Number((f.width as number) ?? 200),
+              height: Number((f.height as number) ?? 200),
+              isPage: Boolean(f.isPage),
+              autoLayout: (f.autoLayout as Prisma.InputJsonValue | undefined) ?? undefined,
+              constraints: (f.constraints as Prisma.InputJsonValue | undefined) ?? undefined,
+              backgroundFill: (f.backgroundFill as Prisma.InputJsonValue | undefined) ?? undefined,
+              z: Number((f.z as number) ?? 0),
+              parentFrameId: parentFrameId ?? null,
+              createdById: ctx.session?.user?.id ?? null,
+            },
+            select: { id: true },
+          });
+          frameIds.push(row.id);
+        }
+
+        await tx.canvasComponentInstance.delete({ where: { id: instance.id } });
+        await tx.workspaceCanvas.update({
+          where: { id: instance.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: instance.canvasId,
+          action: "instance_detached",
+          before: { instanceId: instance.id },
+          after: {
+            nodeCount: nodeIds.length,
+            shapeCount: shapeIds.length,
+            frameCount: frameIds.length,
+          },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: instance.canvasId,
+        });
+        return { nodeIds, shapeIds, frameIds };
+      });
+      return created;
+    }),
+
+  // -------------------------------------------------------------------------
+  // Layer operations (hide / lock / rename / reorder)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Set the locked timestamp on a node / shape / frame / group / instance.
+   * Idempotent — toggling the same value is a no-op. `lockedAt` is honored
+   * by the canvas surface to disable drag/resize/edit.
+   */
+  layerSetLocked: workspaceProcedure
+    .input(
+      z.object({
+        kind: layerKindAllSchema,
+        id: z.string().cuid(),
+        locked: z.boolean(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await setLayerFlag(ctx, "lockedAt", input);
+      return { ok: true as const };
+    }),
+
+  layerSetHidden: workspaceProcedure
+    .input(
+      z.object({
+        kind: layerKindAllSchema,
+        id: z.string().cuid(),
+        hidden: z.boolean(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await setLayerFlag(ctx, "hiddenAt", {
+        kind: input.kind,
+        id: input.id,
+        locked: input.hidden, // shared helper interprets bool as "flag set"
+      });
+      return { ok: true as const };
+    }),
+
+  /**
+   * Rename a frame, group, or component. Other kinds have no name field.
+   */
+  layerRename: workspaceProcedure
+    .input(
+      z.object({
+        kind: layerKindNameableSchema,
+        id: z.string().cuid(),
+        name: z.string().min(1).max(200),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const trimmed = input.name.trim();
+      if (!trimmed) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Name cannot be blank." });
+      }
+      if (input.kind === "frame") {
+        const row = await ctx.db.canvasFrame.findFirst({
+          where: { id: input.id, workspaceId: ctx.workspaceId },
+          select: { id: true, canvasId: true },
+        });
+        if (!row) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Frame not found." });
+        }
+        await ctx.db.canvasFrame.update({ where: { id: input.id }, data: { name: trimmed } });
+        await ctx.db.workspaceCanvas.update({
+          where: { id: row.canvasId },
+          data: { updatedAt: new Date() },
+        });
+      } else if (input.kind === "group") {
+        const row = await ctx.db.canvasGroup.findFirst({
+          where: { id: input.id, workspaceId: ctx.workspaceId },
+          select: { id: true, canvasId: true },
+        });
+        if (!row) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Group not found." });
+        }
+        await ctx.db.canvasGroup.update({ where: { id: input.id }, data: { name: trimmed } });
+        await ctx.db.workspaceCanvas.update({
+          where: { id: row.canvasId },
+          data: { updatedAt: new Date() },
+        });
+      } else if (input.kind === "component") {
+        const row = await ctx.db.canvasComponent.findFirst({
+          where: { id: input.id, workspaceId: ctx.workspaceId },
+          select: { id: true },
+        });
+        if (!row) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Component not found." });
+        }
+        try {
+          await ctx.db.canvasComponent.update({
+            where: { id: input.id },
+            data: { name: trimmed },
+          });
+        } catch (err) {
+          if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "A component with that name already exists.",
+            });
+          }
+          throw err;
+        }
+      }
+      return { ok: true as const };
+    }),
+
+  /**
+   * Reorder layers within a canvas (optionally scoped to a parent frame).
+   * Assigns sequential `z` (or `zIndex` for `WorkspaceCanvasNode`) values
+   * in input order, starting at 0. Rows outside the input set are
+   * untouched. Mixed-kind input is fine; the proc dispatches per row.
+   */
+  layerReorder: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        parentFrameId: z.string().cuid().nullable().optional(),
+        ordered: z.array(layerKindReorderItemSchema).min(1).max(1000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        for (let i = 0; i < input.ordered.length; i++) {
+          const item = input.ordered[i]!;
+          if (item.kind === "node") {
+            await tx.workspaceCanvasNode.updateMany({
+              where: {
+                id: item.id,
+                workspaceId: ctx.workspaceId,
+                canvasId: input.canvasId,
+              },
+              data: { zIndex: i },
+            });
+          } else if (item.kind === "shape") {
+            await tx.canvasShape.updateMany({
+              where: {
+                id: item.id,
+                workspaceId: ctx.workspaceId,
+                canvasId: input.canvasId,
+              },
+              data: { zIndex: i },
+            });
+          } else if (item.kind === "frame") {
+            await tx.canvasFrame.updateMany({
+              where: {
+                id: item.id,
+                workspaceId: ctx.workspaceId,
+                canvasId: input.canvasId,
+              },
+              data: { z: i },
+            });
+          } else if (item.kind === "group") {
+            await tx.canvasGroup.updateMany({
+              where: {
+                id: item.id,
+                workspaceId: ctx.workspaceId,
+                canvasId: input.canvasId,
+              },
+              data: { z: i },
+            });
+          } else if (item.kind === "instance") {
+            await tx.canvasComponentInstance.updateMany({
+              where: {
+                id: item.id,
+                workspaceId: ctx.workspaceId,
+                canvasId: input.canvasId,
+              },
+              data: { z: i },
+            });
+          }
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "layers_reordered",
+          after: { count: input.ordered.length },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+      });
+      return { ok: true as const, count: input.ordered.length };
+    }),
+
+  // -----------------------------------------------------------------------
+  // Frames — bounded regions that own their children
+  // -----------------------------------------------------------------------
+
+  frameAdd: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        parentFrameId: z.string().cuid().nullable().optional(),
+        name: z.string().max(200).optional(),
+        x: z.number(),
+        y: z.number(),
+        width: z.number().min(10).max(20_000),
+        height: z.number().min(10).max(20_000),
+        isPage: z.boolean().optional(),
+        autoLayout: z.unknown().optional(),
+        constraints: z.unknown().optional(),
+        backgroundFill: z.unknown().optional(),
+        z: z.number().int().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      if (input.parentFrameId) {
+        const parent = await ctx.db.canvasFrame.findFirst({
+          where: {
+            id: input.parentFrameId,
+            canvasId: input.canvasId,
+            workspaceId: ctx.workspaceId,
+          },
+          select: { id: true },
+        });
+        if (!parent) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "parentFrameId is not a frame on this canvas.",
+          });
+        }
+      }
+      const frame = await ctx.db.$transaction(async (tx) => {
+        const created = await tx.canvasFrame.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            canvasId: input.canvasId,
+            parentFrameId: input.parentFrameId ?? null,
+            name: input.name?.trim() || "Frame",
+            x: input.x,
+            y: input.y,
+            width: input.width,
+            height: input.height,
+            isPage: input.isPage ?? false,
+            autoLayout:
+              input.autoLayout === undefined
+                ? undefined
+                : (input.autoLayout as Prisma.InputJsonValue),
+            constraints:
+              input.constraints === undefined
+                ? undefined
+                : (input.constraints as Prisma.InputJsonValue),
+            backgroundFill:
+              input.backgroundFill === undefined
+                ? undefined
+                : (input.backgroundFill as Prisma.InputJsonValue),
+            z: input.z ?? 0,
+            createdById: ctx.session?.user?.id ?? null,
+          },
+        });
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "frame_added",
+          after: { frameId: created.id, name: created.name, isPage: created.isPage },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return created;
+      });
+      return { id: frame.id };
+    }),
+
+  framePatch: workspaceProcedure
+    .input(
+      z.object({
+        frameId: z.string().cuid(),
+        name: z.string().max(200).optional(),
+        x: z.number().optional(),
+        y: z.number().optional(),
+        width: z.number().min(10).max(20_000).optional(),
+        height: z.number().min(10).max(20_000).optional(),
+        parentFrameId: z.string().cuid().nullable().optional(),
+        isPage: z.boolean().optional(),
+        autoLayout: z.unknown().optional(),
+        constraints: z.unknown().optional(),
+        backgroundFill: z.unknown().optional(),
+        z: z.number().int().optional(),
+        lockedAt: z.date().nullable().optional(),
+        hiddenAt: z.date().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const frame = await ctx.db.canvasFrame.findFirst({
+        where: { id: input.frameId, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true, x: true, y: true },
+      });
+      if (!frame) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Frame not found." });
+      }
+      if (input.parentFrameId) {
+        if (input.parentFrameId === input.frameId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "A frame cannot be its own parent.",
+          });
+        }
+        const parent = await ctx.db.canvasFrame.findFirst({
+          where: {
+            id: input.parentFrameId,
+            canvasId: frame.canvasId,
+            workspaceId: ctx.workspaceId,
+          },
+          select: { id: true },
+        });
+        if (!parent) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "parentFrameId is not a frame on this canvas.",
+          });
+        }
+      }
+      const data: Prisma.CanvasFrameUpdateInput = {};
+      if (input.name !== undefined) data.name = input.name.trim() || "Frame";
+      if (input.x !== undefined) data.x = input.x;
+      if (input.y !== undefined) data.y = input.y;
+      if (input.width !== undefined) data.width = input.width;
+      if (input.height !== undefined) data.height = input.height;
+      if (input.parentFrameId !== undefined) {
+        data.parentFrame =
+          input.parentFrameId === null
+            ? { disconnect: true }
+            : { connect: { id: input.parentFrameId } };
+      }
+      if (input.isPage !== undefined) data.isPage = input.isPage;
+      if (input.autoLayout !== undefined) {
+        data.autoLayout =
+          input.autoLayout === null ? Prisma.JsonNull : (input.autoLayout as Prisma.InputJsonValue);
+      }
+      if (input.constraints !== undefined) {
+        data.constraints =
+          input.constraints === null
+            ? Prisma.JsonNull
+            : (input.constraints as Prisma.InputJsonValue);
+      }
+      if (input.backgroundFill !== undefined) {
+        data.backgroundFill =
+          input.backgroundFill === null
+            ? Prisma.JsonNull
+            : (input.backgroundFill as Prisma.InputJsonValue);
+      }
+      if (input.z !== undefined) data.z = input.z;
+      if (input.lockedAt !== undefined) data.lockedAt = input.lockedAt;
+      if (input.hiddenAt !== undefined) data.hiddenAt = input.hiddenAt;
+
+      const dx = input.x !== undefined ? input.x - frame.x : 0;
+      const dy = input.y !== undefined ? input.y - frame.y : 0;
+
+      await ctx.db.$transaction(async (tx) => {
+        await tx.canvasFrame.update({ where: { id: input.frameId }, data });
+        if (dx !== 0 || dy !== 0) {
+          await tx.workspaceCanvasNode.updateMany({
+            where: { parentFrameId: input.frameId, workspaceId: ctx.workspaceId },
+            data: { x: { increment: dx }, y: { increment: dy } },
+          });
+          await tx.canvasShape.updateMany({
+            where: { parentFrameId: input.frameId, workspaceId: ctx.workspaceId },
+            data: { x: { increment: dx }, y: { increment: dy } },
+          });
+          await tx.canvasComponentInstance.updateMany({
+            where: { parentFrameId: input.frameId, workspaceId: ctx.workspaceId },
+            data: { x: { increment: dx }, y: { increment: dy } },
+          });
+          await tx.canvasFrame.updateMany({
+            where: { parentFrameId: input.frameId, workspaceId: ctx.workspaceId },
+            data: { x: { increment: dx }, y: { increment: dy } },
+          });
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: frame.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: frame.canvasId,
+          action: "frame_updated",
+          after: { frameId: input.frameId },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: frame.canvasId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  frameRemove: workspaceProcedure
+    .input(
+      z.object({
+        frameId: z.string().cuid(),
+        cascade: z.boolean().default(false),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const frame = await ctx.db.canvasFrame.findFirst({
+        where: { id: input.frameId, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true, isPage: true },
+      });
+      if (!frame) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Frame not found." });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        if (input.cascade) {
+          await tx.workspaceCanvasNode.deleteMany({
+            where: { parentFrameId: input.frameId, workspaceId: ctx.workspaceId },
+          });
+          await tx.canvasShape.deleteMany({
+            where: { parentFrameId: input.frameId, workspaceId: ctx.workspaceId },
+          });
+          await tx.canvasComponentInstance.deleteMany({
+            where: { parentFrameId: input.frameId, workspaceId: ctx.workspaceId },
+          });
+          await tx.canvasGroup.deleteMany({
+            where: { parentFrameId: input.frameId, workspaceId: ctx.workspaceId },
+          });
+          await tx.canvasFrame.deleteMany({
+            where: { parentFrameId: input.frameId, workspaceId: ctx.workspaceId },
+          });
+        }
+        await tx.canvasFrame.delete({ where: { id: input.frameId } });
+
+        if (frame.isPage) {
+          const canvas = await tx.workspaceCanvas.findUnique({
+            where: { id: frame.canvasId },
+            select: { activePageId: true },
+          });
+          if (canvas?.activePageId === input.frameId) {
+            const fallback = await tx.canvasFrame.findFirst({
+              where: {
+                canvasId: frame.canvasId,
+                workspaceId: ctx.workspaceId,
+                isPage: true,
+              },
+              orderBy: { z: "asc" },
+              select: { id: true },
+            });
+            await tx.workspaceCanvas.update({
+              where: { id: frame.canvasId },
+              data: { activePageId: fallback?.id ?? null, updatedAt: new Date() },
+            });
+          } else {
+            await tx.workspaceCanvas.update({
+              where: { id: frame.canvasId },
+              data: { updatedAt: new Date() },
+            });
+          }
+        } else {
+          await tx.workspaceCanvas.update({
+            where: { id: frame.canvasId },
+            data: { updatedAt: new Date() },
+          });
+        }
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: frame.canvasId,
+          action: "frame_removed",
+          before: { frameId: input.frameId, cascade: input.cascade },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: frame.canvasId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  // -----------------------------------------------------------------------
+  // Groups — non-visual transform containers
+  // -----------------------------------------------------------------------
+
+  groupCreate: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        parentFrameId: z.string().cuid().nullable().optional(),
+        name: z.string().max(200).optional(),
+        memberNodeIds: z.array(z.string().cuid()).optional(),
+        memberShapeIds: z.array(z.string().cuid()).optional(),
+        memberInstanceIds: z.array(z.string().cuid()).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      const nodeIds = input.memberNodeIds ?? [];
+      const shapeIds = input.memberShapeIds ?? [];
+      const instanceIds = input.memberInstanceIds ?? [];
+      if (nodeIds.length + shapeIds.length + instanceIds.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "groupCreate requires at least one member.",
+        });
+      }
+      const result = await ctx.db.$transaction(async (tx) => {
+        const group = await tx.canvasGroup.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            canvasId: input.canvasId,
+            parentFrameId: input.parentFrameId ?? null,
+            name: input.name?.trim() || "Group",
+            createdById: ctx.session?.user?.id ?? null,
+          },
+        });
+        if (nodeIds.length) {
+          await tx.workspaceCanvasNode.updateMany({
+            where: {
+              id: { in: nodeIds },
+              canvasId: input.canvasId,
+              workspaceId: ctx.workspaceId,
+            },
+            data: { groupId: group.id },
+          });
+        }
+        if (shapeIds.length) {
+          await tx.canvasShape.updateMany({
+            where: {
+              id: { in: shapeIds },
+              canvasId: input.canvasId,
+              workspaceId: ctx.workspaceId,
+            },
+            data: { canvasGroupId: group.id },
+          });
+        }
+        if (instanceIds.length) {
+          await tx.canvasComponentInstance.updateMany({
+            where: {
+              id: { in: instanceIds },
+              canvasId: input.canvasId,
+              workspaceId: ctx.workspaceId,
+            },
+            data: { groupId: group.id },
+          });
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "group_created",
+          after: {
+            groupId: group.id,
+            memberCounts: {
+              nodes: nodeIds.length,
+              shapes: shapeIds.length,
+              instances: instanceIds.length,
+            },
+          },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return group;
+      });
+      return { id: result.id };
+    }),
+
+  groupDissolve: workspaceProcedure
+    .input(z.object({ groupId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const group = await ctx.db.canvasGroup.findFirst({
+        where: { id: input.groupId, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true },
+      });
+      if (!group) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Group not found." });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.workspaceCanvasNode.updateMany({
+          where: { groupId: input.groupId, workspaceId: ctx.workspaceId },
+          data: { groupId: null },
+        });
+        await tx.canvasShape.updateMany({
+          where: { canvasGroupId: input.groupId, workspaceId: ctx.workspaceId },
+          data: { canvasGroupId: null },
+        });
+        await tx.canvasComponentInstance.updateMany({
+          where: { groupId: input.groupId, workspaceId: ctx.workspaceId },
+          data: { groupId: null },
+        });
+        await tx.canvasGroup.delete({ where: { id: input.groupId } });
+        await tx.workspaceCanvas.update({
+          where: { id: group.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: group.canvasId,
+          action: "group_dissolved",
+          before: { groupId: input.groupId },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: group.canvasId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  // -----------------------------------------------------------------------
+  // Pages (multi-page DESIGN canvases) — page = top-level frame with isPage
+  // -----------------------------------------------------------------------
+
+  pageAdd: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        name: z.string().min(1).max(200),
+        x: z.number().optional(),
+        y: z.number().optional(),
+        width: z.number().min(10).max(20_000).optional(),
+        height: z.number().min(10).max(20_000).optional(),
+        position: z.number().int().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true, activePageId: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      const existingCount = await ctx.db.canvasFrame.count({
+        where: {
+          canvasId: input.canvasId,
+          workspaceId: ctx.workspaceId,
+          isPage: true,
+        },
+      });
+      const result = await ctx.db.$transaction(async (tx) => {
+        const created = await tx.canvasFrame.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            canvasId: input.canvasId,
+            parentFrameId: null,
+            name: input.name.trim() || "Page",
+            x: input.x ?? 0,
+            y: input.y ?? 0,
+            width: input.width ?? 1920,
+            height: input.height ?? 1080,
+            isPage: true,
+            z: input.position ?? existingCount,
+            createdById: ctx.session?.user?.id ?? null,
+          },
+        });
+        const becomesActive = existingCount === 0 || !canvas.activePageId;
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: {
+            updatedAt: new Date(),
+            ...(becomesActive ? { activePageId: created.id } : {}),
+          },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "page_added",
+          after: { pageId: created.id, name: created.name, activated: becomesActive },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+        return { frameId: created.id, activated: becomesActive };
+      });
+      return result;
+    }),
+
+  pageRemove: workspaceProcedure
+    .input(
+      z.object({
+        frameId: z.string().cuid(),
+        reassignActivePage: z.string().cuid().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const frame = await ctx.db.canvasFrame.findFirst({
+        where: { id: input.frameId, workspaceId: ctx.workspaceId, isPage: true },
+        select: { id: true, canvasId: true },
+      });
+      if (!frame) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Page not found." });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.canvasFrame.delete({ where: { id: input.frameId } });
+        const canvas = await tx.workspaceCanvas.findUnique({
+          where: { id: frame.canvasId },
+          select: { activePageId: true },
+        });
+        let nextActive: string | null | undefined = undefined;
+        if (canvas?.activePageId === input.frameId) {
+          if (input.reassignActivePage) {
+            const target = await tx.canvasFrame.findFirst({
+              where: {
+                id: input.reassignActivePage,
+                canvasId: frame.canvasId,
+                workspaceId: ctx.workspaceId,
+                isPage: true,
+              },
+              select: { id: true },
+            });
+            nextActive = target?.id ?? null;
+          }
+          if (nextActive === undefined) {
+            const fallback = await tx.canvasFrame.findFirst({
+              where: {
+                canvasId: frame.canvasId,
+                workspaceId: ctx.workspaceId,
+                isPage: true,
+              },
+              orderBy: { z: "asc" },
+              select: { id: true },
+            });
+            nextActive = fallback?.id ?? null;
+          }
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: frame.canvasId },
+          data: {
+            updatedAt: new Date(),
+            ...(nextActive !== undefined ? { activePageId: nextActive } : {}),
+          },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: frame.canvasId,
+          action: "page_removed",
+          before: { pageId: input.frameId },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: frame.canvasId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  pageReorder: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        pageIds: z.array(z.string().cuid()).min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      const pages = await ctx.db.canvasFrame.findMany({
+        where: {
+          canvasId: input.canvasId,
+          workspaceId: ctx.workspaceId,
+          isPage: true,
+        },
+        select: { id: true },
+      });
+      const validIds = new Set(pages.map((p) => p.id));
+      const reordered = input.pageIds.filter((id) => validIds.has(id));
+      if (reordered.length !== input.pageIds.length) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "pageIds contains ids that are not pages on this canvas.",
+        });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        for (let i = 0; i < reordered.length; i++) {
+          await tx.canvasFrame.update({
+            where: { id: reordered[i]! },
+            data: { z: i },
+          });
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "pages_reordered",
+          after: { order: reordered },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+      });
+      return { ok: true as const, count: reordered.length };
+    }),
+
+  pageActivate: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        frameId: z.string().cuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const page = await ctx.db.canvasFrame.findFirst({
+        where: {
+          id: input.frameId,
+          canvasId: input.canvasId,
+          workspaceId: ctx.workspaceId,
+          isPage: true,
+        },
+        select: { id: true },
+      });
+      if (!page) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Page not found on canvas." });
+      }
+      await ctx.db.workspaceCanvas.update({
+        where: { id: input.canvasId },
+        data: { activePageId: input.frameId, updatedAt: new Date() },
+      });
+      return { ok: true as const };
+    }),
+
+  // -----------------------------------------------------------------------
+  // Align / distribute / tidy-up
+  // -----------------------------------------------------------------------
+
+  alignSelection: workspaceProcedure
+    .input(
+      z.object({
+        canvasId: z.string().cuid(),
+        ids: z.object({
+          nodeIds: z.array(z.string().cuid()).optional(),
+          shapeIds: z.array(z.string().cuid()).optional(),
+          frameIds: z.array(z.string().cuid()).optional(),
+          groupIds: z.array(z.string().cuid()).optional(),
+          instanceIds: z.array(z.string().cuid()).optional(),
+        }),
+        op: z.enum([
+          "alignLeft",
+          "alignCenter",
+          "alignRight",
+          "alignTop",
+          "alignMiddle",
+          "alignBottom",
+          "distributeH",
+          "distributeV",
+          "tidyUp",
+        ]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      const { nodeIds = [], shapeIds = [], frameIds = [], groupIds = [], instanceIds = [] } =
+        input.ids;
+
+      const [nodes, shapes, frames, instances, groupRows] = await Promise.all([
+        nodeIds.length
+          ? ctx.db.workspaceCanvasNode.findMany({
+              where: {
+                id: { in: nodeIds },
+                canvasId: input.canvasId,
+                workspaceId: ctx.workspaceId,
+              },
+              select: { id: true, x: true, y: true, width: true, height: true },
+            })
+          : Promise.resolve(
+              [] as Array<{ id: string; x: number; y: number; width: number; height: number }>,
+            ),
+        shapeIds.length
+          ? ctx.db.canvasShape.findMany({
+              where: {
+                id: { in: shapeIds },
+                canvasId: input.canvasId,
+                workspaceId: ctx.workspaceId,
+              },
+              select: { id: true, x: true, y: true, width: true, height: true },
+            })
+          : Promise.resolve(
+              [] as Array<{
+                id: string;
+                x: number;
+                y: number;
+                width: number | null;
+                height: number | null;
+              }>,
+            ),
+        frameIds.length
+          ? ctx.db.canvasFrame.findMany({
+              where: {
+                id: { in: frameIds },
+                canvasId: input.canvasId,
+                workspaceId: ctx.workspaceId,
+              },
+              select: { id: true, x: true, y: true, width: true, height: true },
+            })
+          : Promise.resolve(
+              [] as Array<{ id: string; x: number; y: number; width: number; height: number }>,
+            ),
+        instanceIds.length
+          ? ctx.db.canvasComponentInstance.findMany({
+              where: {
+                id: { in: instanceIds },
+                canvasId: input.canvasId,
+                workspaceId: ctx.workspaceId,
+              },
+              select: { id: true, x: true, y: true, width: true, height: true },
+            })
+          : Promise.resolve(
+              [] as Array<{ id: string; x: number; y: number; width: number; height: number }>,
+            ),
+        groupIds.length
+          ? ctx.db.canvasGroup.findMany({
+              where: {
+                id: { in: groupIds },
+                canvasId: input.canvasId,
+                workspaceId: ctx.workspaceId,
+              },
+              select: {
+                id: true,
+                nodes: { select: { id: true, x: true, y: true, width: true, height: true } },
+                shapes: { select: { id: true, x: true, y: true, width: true, height: true } },
+                instances: {
+                  select: { id: true, x: true, y: true, width: true, height: true },
+                },
+              },
+            })
+          : Promise.resolve(
+              [] as Array<{
+                id: string;
+                nodes: Array<{ id: string; x: number; y: number; width: number; height: number }>;
+                shapes: Array<{
+                  id: string;
+                  x: number;
+                  y: number;
+                  width: number | null;
+                  height: number | null;
+                }>;
+                instances: Array<{
+                  id: string;
+                  x: number;
+                  y: number;
+                  width: number;
+                  height: number;
+                }>;
+              }>,
+            ),
+      ]);
+
+      const items: AlignItem[] = [];
+      for (const n of nodes) {
+        items.push({
+          id: `node:${n.id}`,
+          kind: "node",
+          x: n.x,
+          y: n.y,
+          width: n.width,
+          height: n.height,
+        });
+      }
+      for (const s of shapes) {
+        if (s.width == null || s.height == null) continue;
+        items.push({
+          id: `shape:${s.id}`,
+          kind: "shape",
+          x: s.x,
+          y: s.y,
+          width: s.width,
+          height: s.height,
+        });
+      }
+      for (const f of frames) {
+        items.push({
+          id: `frame:${f.id}`,
+          kind: "frame",
+          x: f.x,
+          y: f.y,
+          width: f.width,
+          height: f.height,
+        });
+      }
+      for (const i of instances) {
+        items.push({
+          id: `instance:${i.id}`,
+          kind: "instance",
+          x: i.x,
+          y: i.y,
+          width: i.width,
+          height: i.height,
+        });
+      }
+
+      // Group bounding box: union of member bounds. Members translate by the
+      // same delta so the group moves as a unit.
+      const groupBounds = new Map<
+        string,
+        { x: number; y: number; width: number; height: number }
+      >();
+      for (const g of groupRows) {
+        const members: Array<{ x: number; y: number; w: number; h: number }> = [];
+        for (const n of g.nodes) members.push({ x: n.x, y: n.y, w: n.width, h: n.height });
+        for (const s of g.shapes) {
+          if (s.width == null || s.height == null) continue;
+          members.push({ x: s.x, y: s.y, w: s.width, h: s.height });
+        }
+        for (const i of g.instances) members.push({ x: i.x, y: i.y, w: i.width, h: i.height });
+        if (members.length === 0) continue;
+        const minX = Math.min(...members.map((m) => m.x));
+        const minY = Math.min(...members.map((m) => m.y));
+        const maxX = Math.max(...members.map((m) => m.x + m.w));
+        const maxY = Math.max(...members.map((m) => m.y + m.h));
+        const bounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+        groupBounds.set(g.id, bounds);
+        items.push({ id: `group:${g.id}`, kind: "group", ...bounds });
+      }
+
+      const positions = computeAlignment(items, input.op);
+      if (positions.size === 0) {
+        return { ok: true as const, count: 0 };
+      }
+
+      let updated = 0;
+      await ctx.db.$transaction(async (tx) => {
+        for (const [key, pos] of positions.entries()) {
+          const [kind, rawId] = key.split(":", 2) as [string, string];
+          if (kind === "node") {
+            await tx.workspaceCanvasNode.update({
+              where: { id: rawId },
+              data: { x: pos.x, y: pos.y },
+            });
+            updated += 1;
+          } else if (kind === "shape") {
+            await tx.canvasShape.update({
+              where: { id: rawId },
+              data: { x: pos.x, y: pos.y },
+            });
+            updated += 1;
+          } else if (kind === "frame") {
+            const frame = frames.find((f) => f.id === rawId);
+            if (!frame) continue;
+            const dx = pos.x - frame.x;
+            const dy = pos.y - frame.y;
+            await tx.canvasFrame.update({
+              where: { id: rawId },
+              data: { x: pos.x, y: pos.y },
+            });
+            if (dx !== 0 || dy !== 0) {
+              await tx.workspaceCanvasNode.updateMany({
+                where: { parentFrameId: rawId, workspaceId: ctx.workspaceId },
+                data: { x: { increment: dx }, y: { increment: dy } },
+              });
+              await tx.canvasShape.updateMany({
+                where: { parentFrameId: rawId, workspaceId: ctx.workspaceId },
+                data: { x: { increment: dx }, y: { increment: dy } },
+              });
+              await tx.canvasComponentInstance.updateMany({
+                where: { parentFrameId: rawId, workspaceId: ctx.workspaceId },
+                data: { x: { increment: dx }, y: { increment: dy } },
+              });
+              await tx.canvasFrame.updateMany({
+                where: { parentFrameId: rawId, workspaceId: ctx.workspaceId },
+                data: { x: { increment: dx }, y: { increment: dy } },
+              });
+            }
+            updated += 1;
+          } else if (kind === "instance") {
+            await tx.canvasComponentInstance.update({
+              where: { id: rawId },
+              data: { x: pos.x, y: pos.y },
+            });
+            updated += 1;
+          } else if (kind === "group") {
+            const b = groupBounds.get(rawId);
+            if (!b) continue;
+            const dx = pos.x - b.x;
+            const dy = pos.y - b.y;
+            if (dx === 0 && dy === 0) continue;
+            await tx.workspaceCanvasNode.updateMany({
+              where: { groupId: rawId, workspaceId: ctx.workspaceId },
+              data: { x: { increment: dx }, y: { increment: dy } },
+            });
+            await tx.canvasShape.updateMany({
+              where: { canvasGroupId: rawId, workspaceId: ctx.workspaceId },
+              data: { x: { increment: dx }, y: { increment: dy } },
+            });
+            await tx.canvasComponentInstance.updateMany({
+              where: { groupId: rawId, workspaceId: ctx.workspaceId },
+              data: { x: { increment: dx }, y: { increment: dy } },
+            });
+            updated += 1;
+          }
+        }
+        await tx.workspaceCanvas.update({
+          where: { id: input.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: input.canvasId,
+          action: "align_applied",
+          after: { op: input.op, count: updated },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: input.canvasId,
+        });
+      });
+      return { ok: true as const, count: updated };
+    }),
 });
+
+// ---------------------------------------------------------------------------
+// Layer hide / lock shared mutator
+//
+// Both timestamps live on the same five tables. Keeping the dispatch in one
+// helper avoids ten near-identical case-arms across `layerSetHidden` and
+// `layerSetLocked`. The `setBool` arg tells us whether to stamp the column
+// (true → `new Date()`) or clear it (false → null). Idempotency comes from
+// reading the row first and short-circuiting when the requested state is
+// already the current state.
+// ---------------------------------------------------------------------------
+
+type LayerFlagCol = "lockedAt" | "hiddenAt";
+type LayerKindAll = z.infer<typeof layerKindAllSchema>;
+
+async function setLayerFlag(
+  ctx: { db: PrismaClient; workspaceId: string; session?: { user?: { id?: string | null } | null } | null },
+  col: LayerFlagCol,
+  args: { kind: LayerKindAll; id: string; locked: boolean },
+): Promise<void> {
+  const setBool = args.locked;
+  const value = setBool ? new Date() : null;
+  const data: Record<string, Date | null> = { [col]: value };
+  let canvasId: string | null = null;
+
+  if (args.kind === "node") {
+    const row = await ctx.db.workspaceCanvasNode.findFirst({
+      where: { id: args.id, workspaceId: ctx.workspaceId },
+      select: { id: true, canvasId: true, lockedAt: true, hiddenAt: true },
+    });
+    if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Canvas node not found." });
+    canvasId = row.canvasId;
+    if ((row[col] !== null) === setBool) return;
+    await ctx.db.workspaceCanvasNode.update({ where: { id: args.id }, data });
+  } else if (args.kind === "shape") {
+    const row = await ctx.db.canvasShape.findFirst({
+      where: { id: args.id, workspaceId: ctx.workspaceId },
+      select: { id: true, canvasId: true, lockedAt: true, hiddenAt: true },
+    });
+    if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Canvas shape not found." });
+    canvasId = row.canvasId;
+    if ((row[col] !== null) === setBool) return;
+    await ctx.db.canvasShape.update({ where: { id: args.id }, data });
+  } else if (args.kind === "frame") {
+    const row = await ctx.db.canvasFrame.findFirst({
+      where: { id: args.id, workspaceId: ctx.workspaceId },
+      select: { id: true, canvasId: true, lockedAt: true, hiddenAt: true },
+    });
+    if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Canvas frame not found." });
+    canvasId = row.canvasId;
+    if ((row[col] !== null) === setBool) return;
+    await ctx.db.canvasFrame.update({ where: { id: args.id }, data });
+  } else if (args.kind === "group") {
+    const row = await ctx.db.canvasGroup.findFirst({
+      where: { id: args.id, workspaceId: ctx.workspaceId },
+      select: { id: true, canvasId: true, lockedAt: true, hiddenAt: true },
+    });
+    if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Canvas group not found." });
+    canvasId = row.canvasId;
+    if ((row[col] !== null) === setBool) return;
+    await ctx.db.canvasGroup.update({ where: { id: args.id }, data });
+  } else if (args.kind === "instance") {
+    const row = await ctx.db.canvasComponentInstance.findFirst({
+      where: { id: args.id, workspaceId: ctx.workspaceId },
+      select: { id: true, canvasId: true, lockedAt: true, hiddenAt: true },
+    });
+    if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Component instance not found." });
+    canvasId = row.canvasId;
+    if ((row[col] !== null) === setBool) return;
+    await ctx.db.canvasComponentInstance.update({ where: { id: args.id }, data });
+  }
+
+  if (canvasId) {
+    await ctx.db.workspaceCanvas.update({
+      where: { id: canvasId },
+      data: { updatedAt: new Date() },
+    });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Server-side canvas templates

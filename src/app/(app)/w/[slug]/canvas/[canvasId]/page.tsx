@@ -41,12 +41,30 @@ import {
   type ShapeKind,
 } from "@/components/canvas/canvas-shapes";
 import {
+  CanvasFrames,
+  type CanvasFrameRow,
+} from "@/components/canvas/canvas-frames";
+import { CanvasPageTabs } from "@/components/canvas/canvas-page-tabs";
+import {
   CanvasToolbar,
   DEFAULT_STYLE_STATE,
   type StyleState,
   type ToolKind,
 } from "@/components/canvas/canvas-toolbar";
+import { CanvasRightPanel } from "@/components/canvas/canvas-right-panel";
+import { CanvasComponentInstances } from "@/components/canvas/canvas-component-instances";
+import {
+  COMPONENT_DRAG_MIME,
+  type ComponentDragPayload,
+  type ComponentSelectionSnapshot,
+} from "@/components/canvas/canvas-components-panel";
+import type { LayerSelectionRef } from "@/components/canvas/canvas-layers-panel";
 import { routeEdge, type HandleSide, type Rect } from "@/lib/canvas-routing";
+import {
+  parseAutoLayout,
+  computeAutoLayout,
+  type AutoLayoutChild,
+} from "@/lib/canvas-auto-layout";
 
 const SIDEBAR_MIN_WIDTH = 180;
 const SIDEBAR_MAX_WIDTH = 480;
@@ -106,10 +124,29 @@ type DragPayload =
       shapeIds: string[];
       // canvas-space offset from pointer to each shape's (x, y).
       offsetsByShape: Record<string, { ox: number; oy: number }>;
+    }
+  | {
+      kind: "frame-move";
+      primaryFrameId: string;
+      /** All frames to translate — primary + cascaded child frames. */
+      frameIds: string[];
+      /** Initial pointer-to-frame offset for the primary, in canvas space. */
+      offsetX: number;
+      offsetY: number;
+      /** Initial (x, y) of every frame that moves; used to compute the delta. */
+      frameOrigins: Record<string, { x: number; y: number }>;
+      /** Children that follow the primary, by kind. Stored as relative
+       * offsets from each child's origin so the live drag matches the
+       * server-side cascade in framePatch. */
+      childNodeIds: string[];
+      childShapeIds: string[];
     };
 
 type ShapeDraft = {
-  kind: ShapeKind;
+  // Allows "frame" so the same draw-gesture infrastructure can author
+  // CanvasFrame rows; commit branches on `kind === "frame"` to call
+  // frameAdd instead of shapeAdd.
+  kind: ShapeKind | "frame";
   startX: number;
   startY: number;
   endX: number;
@@ -148,7 +185,10 @@ const EDGE_KIND_STYLES: Array<{ kind: string; label: string; dash?: string }> = 
   { kind: "curved", label: "Curved" },
 ];
 
-type SelectedRef = { kind: "node" | "shape"; id: string };
+type SelectedRef = {
+  kind: "node" | "shape" | "frame" | "group" | "instance";
+  id: string;
+};
 
 // Per-node visual overlay applied during a drag/resize. Ref-driven so the
 // pointer-move stream doesn't fire React state updates 60+ times/sec; a
@@ -170,6 +210,31 @@ function colorForId(id: string): string {
   let hash = 0;
   for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
   return PRESENCE_COLORS[hash % PRESENCE_COLORS.length];
+}
+
+function cursorForTool(tool: ToolKind, panning: boolean, draftingConnector: boolean): string {
+  if (panning) return "grabbing";
+  if (draftingConnector) return "crosshair";
+  switch (tool) {
+    case "select":
+      return "default";
+    case "pan":
+      return "grab";
+    case "connect":
+    case "frame":
+    case "box":
+    case "ellipse":
+    case "line":
+    case "arrow":
+    case "freehand":
+      return "crosshair";
+    case "text":
+      return "text";
+    case "eraser":
+      return "not-allowed";
+    default:
+      return "default";
+  }
 }
 
 /**
@@ -203,6 +268,9 @@ export default function CanvasViewerPage() {
   const [dropActive, setDropActive] = useState(false);
   const [editingLaneFor, setEditingLaneFor] = useState<string | null>(null);
   const [editingNoteFor, setEditingNoteFor] = useState<string | null>(null);
+  // Inline text-shape editor — set the moment a text shape is created
+  // OR when one is double-clicked, cleared on commit / Esc / blur.
+  const [editingShapeFor, setEditingShapeFor] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
 
   // -- Phase 2: drawing primitives + selection ------------------------
@@ -221,6 +289,14 @@ export default function CanvasViewerPage() {
     () => new Set(selected.filter((s) => s.kind === "shape").map((s) => s.id)),
     [selected],
   );
+  const selectedFrameIds = useMemo(
+    () => new Set(selected.filter((s) => s.kind === "frame").map((s) => s.id)),
+    [selected],
+  );
+  const selectedInstanceIds = useMemo(
+    () => new Set(selected.filter((s) => s.kind === "instance").map((s) => s.id)),
+    [selected],
+  );
   const activeToolRef = useRef<ToolKind>(activeTool);
   useEffect(() => {
     activeToolRef.current = activeTool;
@@ -233,6 +309,9 @@ export default function CanvasViewerPage() {
   // Live drag overrides for shapes — mirrors the node `dragOverridesRef`
   // pattern. Keyed by shape id; value is delta in canvas-space.
   const shapeDragOverridesRef = useRef<Map<string, { dx: number; dy: number }>>(new Map());
+  // Live drag overrides for frames — absolute (x, y) in canvas-space so the
+  // CanvasFrames renderer can read them without recomputing the origin.
+  const frameDragOverridesRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
   // Ghost shape preview during a draw gesture (ref-driven, paint-coalesced).
   const shapeDraftRef = useRef<ShapeDraft | null>(null);
@@ -378,6 +457,17 @@ export default function CanvasViewerPage() {
   const addNode = trpc.canvas.addNode.useMutation({
     onSuccess: () => {
       toast.success("Card added");
+      utils.canvas.hydrate.invalidate({ id: params.canvasId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Drop-from-components-panel → placement of a `CanvasComponentInstance`.
+  // The right panel emits an `application/x-forge-canvas-component` mime
+  // type; `onSurfaceDrop` reads it and calls into this mutation.
+  const createInstance = trpc.canvas.instanceCreate.useMutation({
+    onSuccess: () => {
+      toast.success("Component placed");
       utils.canvas.hydrate.invalidate({ id: params.canvasId });
     },
     onError: (e) => toast.error(e.message),
@@ -545,6 +635,49 @@ export default function CanvasViewerPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Frame mutations — backend exposes flat frameAdd / framePatch. Probe
+  // via the any-router so a stale server falls through gracefully.
+  type FrameAddInput = {
+    canvasId: string;
+    parentFrameId?: string | null;
+    name?: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    isPage?: boolean;
+  };
+  type FramePatchInput = {
+    frameId: string;
+    name?: string;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+  };
+  type FrameRemoveInput = { frameId: string; reparentChildren?: boolean };
+  const frameAddAny = canvasRouterAny?.frameAdd as
+    | ShapeMutationHook<FrameAddInput, { id: string }>
+    | undefined;
+  const framePatchAny = canvasRouterAny?.framePatch as
+    | ShapeMutationHook<FramePatchInput, { ok: true }>
+    | undefined;
+  const frameRemoveAny = canvasRouterAny?.frameRemove as
+    | ShapeMutationHook<FrameRemoveInput, { ok: true }>
+    | undefined;
+  const frameAddMut = frameAddAny?.useMutation({
+    onSuccess: () => invalidateHydrate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const framePatchMut = framePatchAny?.useMutation({
+    onSuccess: () => invalidateHydrate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const frameRemoveMut = frameRemoveAny?.useMutation({
+    onSuccess: () => invalidateHydrate(),
+    onError: (e) => toast.error(e.message),
+  });
+
   const nodes = useMemo(() => (data?.nodes ?? []) as HydratedNode[], [data?.nodes]);
   const edges = useMemo(() => {
     const raw = (data?.edges ?? []) as Array<{
@@ -582,39 +715,269 @@ export default function CanvasViewerPage() {
     shapesRef.current = shapes;
   }, [shapes]);
 
+  // Frames from extended hydrate. `?? []` guards backends that haven't
+  // run the unified-workspace migration yet.
+  const frames = useMemo<CanvasFrameRow[]>(() => {
+    const raw = (data as unknown as { frames?: unknown })?.frames;
+    if (!Array.isArray(raw)) return [];
+    return raw as CanvasFrameRow[];
+  }, [data]);
+  const framesRef = useRef<CanvasFrameRow[]>(frames);
+  useEffect(() => {
+    framesRef.current = frames;
+  }, [frames]);
+  const canvasKind = (data?.canvas as { kind?: string } | undefined)?.kind ?? null;
+  const activePageId =
+    (data?.canvas as { activePageId?: string | null } | undefined)?.activePageId ?? null;
+
+  // Component instances on this canvas. v1 renders each as a lightweight
+  // placeholder card; `instanceDetach` materialises them into raw rows.
+  const componentInstances = useMemo<
+    Array<{
+      id: string;
+      componentId: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      hiddenAt: Date | string | null;
+      lockedAt: Date | string | null;
+      parentFrameId: string | null;
+    }>
+  >(() => {
+    const raw = (data as unknown as { componentInstances?: unknown })
+      ?.componentInstances;
+    if (!Array.isArray(raw)) return [];
+    return raw as Array<{
+      id: string;
+      componentId: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      hiddenAt: Date | string | null;
+      lockedAt: Date | string | null;
+      parentFrameId: string | null;
+    }>;
+  }, [data]);
+
+  // Component name lookup for the placeholder render. List request is
+  // shared with the right panel via tRPC's query cache.
+  const componentListQ = trpc.canvas.componentList.useQuery(
+    { includeArchived: false },
+    { staleTime: 60_000 },
+  );
+  const componentNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of componentListQ.data?.items ?? []) m.set(c.id, c.name);
+    return m;
+  }, [componentListQ.data]);
+
+  // Build a snapshot of the current selection for `componentCreate` in
+  // the Components panel. Lazy — only called when the operator presses
+  // the "Create from selection" button.
+  const buildSelectionSnapshot = useCallback((): ComponentSelectionSnapshot | null => {
+    const selNodeIds = new Set(
+      selected.filter((s) => s.kind === "node").map((s) => s.id),
+    );
+    const selShapeIds = new Set(
+      selected.filter((s) => s.kind === "shape").map((s) => s.id),
+    );
+    const rawNodes = (data?.nodes ?? []) as HydratedNode[];
+    const rawShapes = ((data as unknown as { shapes?: CanvasShapeRow[] })?.shapes ?? []) as CanvasShapeRow[];
+    const pickedNodes = rawNodes
+      .filter((n) => selNodeIds.has(n.id))
+      .map((n) => ({
+        id: n.id,
+        targetType: n.targetType,
+        targetId: n.targetId,
+        x: n.x,
+        y: n.y,
+        width: n.width,
+        height: n.height,
+      }));
+    const pickedShapes = rawShapes
+      .filter((s) => selShapeIds.has(s.id))
+      .map((s) => ({ ...s }) as unknown as Record<string, unknown>);
+    if (pickedNodes.length === 0 && pickedShapes.length === 0) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const n of pickedNodes) {
+      if (n.x < minX) minX = n.x;
+      if (n.y < minY) minY = n.y;
+      if (n.x + n.width > maxX) maxX = n.x + n.width;
+      if (n.y + n.height > maxY) maxY = n.y + n.height;
+    }
+    for (const s of pickedShapes) {
+      const sx = typeof s.x === "number" ? (s.x as number) : 0;
+      const sy = typeof s.y === "number" ? (s.y as number) : 0;
+      const sw = typeof s.width === "number" ? (s.width as number) : 0;
+      const sh = typeof s.height === "number" ? (s.height as number) : 0;
+      if (sx < minX) minX = sx;
+      if (sy < minY) minY = sy;
+      if (sx + sw > maxX) maxX = sx + sw;
+      if (sy + sh > maxY) maxY = sy + sh;
+    }
+    if (!Number.isFinite(minX)) {
+      minX = 0;
+      minY = 0;
+      maxX = 1;
+      maxY = 1;
+    }
+    return {
+      nodes: pickedNodes,
+      shapes: pickedShapes,
+      bbox: {
+        x: minX,
+        y: minY,
+        width: Math.max(1, maxX - minX),
+        height: Math.max(1, maxY - minY),
+      },
+    };
+  }, [selected, data]);
+
+  // Set of frame ids that descend from the active page (DESIGN canvases).
+  // Children whose ancestor frame is anything else get filtered out so
+  // multi-page canvases show one page's contents at a time.
+  const activePageDescendantIds = useMemo(() => {
+    if (canvasKind !== "DESIGN" || !activePageId) return null;
+    const out = new Set<string>([activePageId]);
+    let added = true;
+    while (added) {
+      added = false;
+      for (const f of frames) {
+        if (out.has(f.id)) continue;
+        if (f.parentFrameId && out.has(f.parentFrameId)) {
+          out.add(f.id);
+          added = true;
+        }
+      }
+    }
+    return out;
+  }, [canvasKind, activePageId, frames]);
+
+  // Filter a parented row by the active page. Returns true if the row
+  // should render. Free-floating rows (`parentFrameId == null`) are
+  // hidden on DESIGN canvases — they belong on a page or nowhere.
+  const isOnActivePage = useCallback(
+    (parentFrameId: string | null): boolean => {
+      if (!activePageDescendantIds) return true;
+      if (parentFrameId == null) return false;
+      return activePageDescendantIds.has(parentFrameId);
+    },
+    [activePageDescendantIds],
+  );
+
+  // Positions computed by frame auto-layout. For each frame whose
+  // `autoLayout` JSON is set, we re-place its node/shape children so
+  // they stack / row out per the spec (vertical/horizontal, gap,
+  // padding, align, justify). Items override their stored (x, y) only
+  // for render — the underlying row is left alone until a real
+  // mutation (drag-to-reorder updates relative order via stored
+  // positions, which `computeAutoLayout` sorts on).
+  const autoLayoutPositions = useMemo(() => {
+    const out = new Map<string, { x: number; y: number }>();
+    if (frames.length === 0) return out;
+    type Child = AutoLayoutChild;
+    const childrenByFrame = new Map<string, Child[]>();
+    const collect = (
+      parentFrameId: string | null | undefined,
+      id: string,
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+    ) => {
+      if (!parentFrameId) return;
+      const arr = childrenByFrame.get(parentFrameId) ?? [];
+      arr.push({ id, x, y, width, height });
+      childrenByFrame.set(parentFrameId, arr);
+    };
+    for (const n of nodes) {
+      collect((n as { parentFrameId?: string | null }).parentFrameId, n.id, n.x, n.y, n.width, n.height);
+    }
+    for (const s of shapes) {
+      const w = s.width ?? 0;
+      const h = s.height ?? 0;
+      if (w <= 0 || h <= 0) continue; // path shapes have no bounding box
+      collect((s as { parentFrameId?: string | null }).parentFrameId, s.id, s.x, s.y, w, h);
+    }
+    for (const f of frames) {
+      const spec = parseAutoLayout((f as { autoLayout?: unknown }).autoLayout);
+      if (!spec) continue;
+      const kids = childrenByFrame.get(f.id);
+      if (!kids || kids.length === 0) continue;
+      const positions = computeAutoLayout({ x: f.x, y: f.y, width: f.width, height: f.height }, spec, kids);
+      for (const [id, pos] of positions) out.set(id, pos);
+    }
+    return out;
+  }, [frames, nodes, shapes]);
+
   // Apply any active drag overrides on top of the server-hydrated nodes.
   // While no drag is active the override map is empty and the returned
   // array shares identity with `nodes` — so memoized children skip work.
   const displayNodes = useMemo(() => {
     const overrides = dragOverridesRef.current;
-    if (overrides.size === 0) return nodes;
-    return nodes.map((n) => {
+    const filtered = activePageDescendantIds
+      ? nodes.filter((n) =>
+          isOnActivePage(
+            (n as { parentFrameId?: string | null }).parentFrameId ?? null,
+          ),
+        )
+      : nodes;
+    if (overrides.size === 0 && autoLayoutPositions.size === 0) return filtered;
+    return filtered.map((n) => {
       const ov = overrides.get(n.id);
-      if (!ov) return n;
+      const al = autoLayoutPositions.get(n.id);
+      if (!ov && !al) return n;
       return {
         ...n,
-        x: ov.x ?? n.x,
-        y: ov.y ?? n.y,
-        width: ov.width ?? n.width,
-        height: ov.height ?? n.height,
+        // Drag overrides win over auto-layout so a live drag still feels
+        // direct; on drop the auto-layout sort kicks back in.
+        x: ov?.x ?? al?.x ?? n.x,
+        y: ov?.y ?? al?.y ?? n.y,
+        width: ov?.width ?? n.width,
+        height: ov?.height ?? n.height,
       };
     });
     // dragRev forces recomputation each rAF tick during a drag.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, dragRev]);
+  }, [nodes, dragRev, activePageDescendantIds, isOnActivePage, autoLayoutPositions]);
 
   // Apply shape-drag overrides (delta from origin) on top of hydrated shapes.
   const displayShapes = useMemo(() => {
     const overrides = shapeDragOverridesRef.current;
-    if (overrides.size === 0) return shapes;
-    return shapes.map((s) => {
+    const filtered = activePageDescendantIds
+      ? shapes.filter((s) =>
+          isOnActivePage(
+            (s as { parentFrameId?: string | null }).parentFrameId ?? null,
+          ),
+        )
+      : shapes;
+    if (overrides.size === 0 && autoLayoutPositions.size === 0) return filtered;
+    return filtered.map((s) => {
       const ov = overrides.get(s.id);
-      if (!ov) return s;
-      return { ...s, x: s.x + ov.dx, y: s.y + ov.dy };
+      const al = autoLayoutPositions.get(s.id);
+      if (!ov && !al) return s;
+      if (ov) return { ...s, x: s.x + ov.dx, y: s.y + ov.dy };
+      if (al) return { ...s, x: al.x, y: al.y };
+      return s;
     });
     // dragRev forces recomputation each rAF tick during a drag.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shapes, dragRev]);
+  }, [shapes, dragRev, activePageDescendantIds, isOnActivePage, autoLayoutPositions]);
+
+  // Frames render through the CanvasFrames component which honors
+  // `overrides` directly; the displayFrames memo is here for symmetry
+  // with the node/shape pipeline and so a future filter has a home.
+  const displayFrames = useMemo(() => {
+    // dragRev keeps this re-running during a frame drag so the
+    // CanvasFrames child re-reads the overrides ref.
+    void dragRev;
+    return frames;
+  }, [frames, dragRev]);
 
   // -- Pan + zoom handlers --------------------------------------------
 
@@ -638,13 +1001,21 @@ export default function CanvasViewerPage() {
     if ((e.target as HTMLElement).closest("[data-canvas-shape]")) return;
     if (editingLaneFor || editingNoteFor) return;
     const tool = activeToolRef.current;
-    const drawKinds: ToolKind[] = ["box", "ellipse", "arrow", "line", "text", "freehand"];
+    const drawKinds: ToolKind[] = [
+      "box",
+      "ellipse",
+      "arrow",
+      "line",
+      "text",
+      "freehand",
+      "frame",
+    ];
     if (drawKinds.includes(tool)) {
       // Begin a draw gesture. Convert pointer to canvas-space; the
       // pointer-move handler updates the draft ref and rAF-paints.
       const { x, y } = surfaceToCanvasRef.current?.(e.clientX, e.clientY) ?? { x: 0, y: 0 };
       shapeDraftRef.current = {
-        kind: tool as ShapeKind,
+        kind: tool as ShapeKind | "frame",
         startX: x,
         startY: y,
         endX: x,
@@ -702,13 +1073,37 @@ export default function CanvasViewerPage() {
   }, [panning]);
 
   const onWheel = (e: React.WheelEvent) => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    e.preventDefault();
-    const delta = -Math.sign(e.deltaY) * ZOOM_STEP;
-    setViewport((v) => {
-      const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.zoom + delta));
-      return { ...v, zoom: nextZoom };
-    });
+    // Pinch-to-zoom on macOS trackpads arrives as a wheel event with
+    // `ctrlKey` synthetically set by the browser, so the same branch
+    // catches keyboard ⌘/Ctrl+wheel AND trackpad pinch. Plain wheel
+    // falls through to a 2-axis pan so trackpads feel natural.
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const rect = surfaceRef.current?.getBoundingClientRect();
+      const cx = rect ? e.clientX - rect.left : e.clientX;
+      const cy = rect ? e.clientY - rect.top : e.clientY;
+      // Smooth — deltaY for trackpad pinches is finer-grained than
+      // mouse-wheel notches, so we scale rather than just step.
+      const factor = Math.exp(-e.deltaY * 0.0015);
+      setViewport((v) => {
+        const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.zoom * factor));
+        if (nextZoom === v.zoom) return v;
+        // Anchor the zoom at the cursor — keep the canvas point under
+        // the pointer stationary while zoom changes.
+        const k = nextZoom / v.zoom;
+        return {
+          zoom: nextZoom,
+          x: cx - (cx - v.x) * k,
+          y: cy - (cy - v.y) * k,
+        };
+      });
+      return;
+    }
+    // Plain wheel pans the canvas (matches trackpad two-finger drag).
+    if (e.deltaX !== 0 || e.deltaY !== 0) {
+      e.preventDefault();
+      setViewport((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
+    }
   };
 
   // -- Card drag (move + resize) -------------------------------------
@@ -798,6 +1193,48 @@ export default function CanvasViewerPage() {
         for (const id of drag.shapeIds) {
           shapeOverrides.set(id, { dx, dy });
         }
+      } else if (drag.kind === "frame-move") {
+        // Compute pointer position in canvas-space, derive the new
+        // primary-frame origin from the captured offset, then apply
+        // the same delta to every frame in the cascade AND every
+        // direct child (node/shape) that lives inside one of those
+        // frames. Mirrors the server-side framePatch cascade so the
+        // optimistic move matches what the backend will produce.
+        const pointerX = (e.clientX - viewport.x) / viewport.zoom;
+        const pointerY = (e.clientY - viewport.y) / viewport.zoom;
+        let newX = pointerX - drag.offsetX;
+        let newY = pointerY - drag.offsetY;
+        if (snapToGridRef.current) {
+          newX = Math.round(newX / GRID_SIZE_PX) * GRID_SIZE_PX;
+          newY = Math.round(newY / GRID_SIZE_PX) * GRID_SIZE_PX;
+        }
+        const origin = drag.frameOrigins[drag.primaryFrameId];
+        if (!origin) return;
+        const dx = newX - origin.x;
+        const dy = newY - origin.y;
+        const frameOverrides = frameDragOverridesRef.current;
+        for (const fid of drag.frameIds) {
+          const o = drag.frameOrigins[fid];
+          if (!o) continue;
+          frameOverrides.set(fid, { x: o.x + dx, y: o.y + dy });
+        }
+        // Children ride along — translate each by the same (dx, dy)
+        // using the existing per-node/shape override maps so the live
+        // paint reuses CanvasCard / CanvasShapes' memoized renderers.
+        const nodeOverrides = dragOverridesRef.current;
+        for (const nid of drag.childNodeIds) {
+          const n = nodes.find((nn) => nn.id === nid);
+          if (!n) continue;
+          nodeOverrides.set(nid, {
+            ...nodeOverrides.get(nid),
+            x: n.x + dx,
+            y: n.y + dy,
+          });
+        }
+        const shapeOverrides = shapeDragOverridesRef.current;
+        for (const sid of drag.childShapeIds) {
+          shapeOverrides.set(sid, { dx, dy });
+        }
       }
       scheduleDragRender();
     };
@@ -822,6 +1259,37 @@ export default function CanvasViewerPage() {
           }
         }
         for (const id of drag.shapeIds) shapeOverrides.delete(id);
+      } else if (drag.kind === "frame-move") {
+        // Persist via framePatch — the server cascades the move to
+        // every child node/shape/instance/frame in the same
+        // transaction (see canvas.ts framePatch). So we only need
+        // to commit the primary frame's new position; nested frames
+        // also get patched individually because they have their own
+        // children attached at a different parent — patching only
+        // the primary would cascade once but leave nested frames
+        // un-translated. Patch each frame in the cascade so the
+        // server treats each frame's children correctly.
+        const frameOverrides = frameDragOverridesRef.current;
+        const primaryOv = frameOverrides.get(drag.primaryFrameId);
+        if (
+          primaryOv &&
+          framePatchMut &&
+          (primaryOv.x !== drag.frameOrigins[drag.primaryFrameId]?.x ||
+            primaryOv.y !== drag.frameOrigins[drag.primaryFrameId]?.y)
+        ) {
+          // Patch only the primary frame — the server cascades to
+          // all child rows (frames, nodes, shapes, instances) so
+          // nested frames AND grand-children move correctly in
+          // a single transaction.
+          framePatchMut.mutate({
+            frameId: drag.primaryFrameId,
+            x: primaryOv.x,
+            y: primaryOv.y,
+          });
+        }
+        for (const id of drag.frameIds) frameOverrides.delete(id);
+        for (const nid of drag.childNodeIds) dragOverridesRef.current.delete(nid);
+        for (const sid of drag.childShapeIds) shapeDragOverridesRef.current.delete(sid);
       } else {
         const overrides = dragOverridesRef.current;
         const ov = overrides.get(drag.nodeId);
@@ -913,6 +1381,82 @@ export default function CanvasViewerPage() {
     [selected, shapes, expandGroupedShapes, viewport.x, viewport.y, viewport.zoom],
   );
 
+  // -- Frame selection + title-bar drag ------------------------------
+
+  const onSelectFrame = useCallback(
+    (id: string, event: React.MouseEvent) => {
+      const additive = event.shiftKey;
+      setSelected((prev) => {
+        if (additive) {
+          if (prev.some((s) => s.kind === "frame" && s.id === id)) {
+            return prev.filter((s) => !(s.kind === "frame" && s.id === id));
+          }
+          return [...prev, { kind: "frame" as const, id }];
+        }
+        if (prev.some((s) => s.kind === "frame" && s.id === id)) return prev;
+        return [{ kind: "frame" as const, id }];
+      });
+    },
+    [],
+  );
+
+  // Begin a frame-move drag. Captures the primary frame's origin,
+  // every nested child frame's origin (cascade), and the direct child
+  // node / shape ids so the live drag translates everything in lock-
+  // step. The server's framePatch cascades the persisted move via SQL;
+  // we mirror it here for the optimistic preview.
+  const onFrameTitleMouseDown = useCallback(
+    (id: string, event: React.MouseEvent) => {
+      if (event.button !== 0) return;
+      const primary = framesRef.current.find((f) => f.id === id);
+      if (!primary) return;
+      if (primary.lockedAt) return;
+      const all = framesRef.current;
+      const cascade = new Set<string>([id]);
+      let added = true;
+      while (added) {
+        added = false;
+        for (const f of all) {
+          if (cascade.has(f.id)) continue;
+          if (f.parentFrameId && cascade.has(f.parentFrameId)) {
+            cascade.add(f.id);
+            added = true;
+          }
+        }
+      }
+      const frameOrigins: Record<string, { x: number; y: number }> = {};
+      for (const fid of cascade) {
+        const f = all.find((ff) => ff.id === fid);
+        if (!f) continue;
+        frameOrigins[fid] = { x: f.x, y: f.y };
+      }
+      const childNodeIds: string[] = [];
+      for (const n of nodes) {
+        const pid = (n as { parentFrameId?: string | null }).parentFrameId ?? null;
+        if (pid && cascade.has(pid)) childNodeIds.push(n.id);
+      }
+      const childShapeIds: string[] = [];
+      for (const s of shapes) {
+        const pid = (s as { parentFrameId?: string | null }).parentFrameId ?? null;
+        if (pid && cascade.has(pid)) childShapeIds.push(s.id);
+      }
+      const pointerX = (event.clientX - viewport.x) / viewport.zoom;
+      const pointerY = (event.clientY - viewport.y) / viewport.zoom;
+      dragNode.current = {
+        kind: "frame-move",
+        primaryFrameId: id,
+        frameIds: [...cascade],
+        offsetX: pointerX - primary.x,
+        offsetY: pointerY - primary.y,
+        frameOrigins,
+        childNodeIds,
+        childShapeIds,
+      };
+      draggingRef.current = true;
+    },
+    [nodes, shapes, viewport.x, viewport.y, viewport.zoom],
+  );
+
   // Pointer-move for an active draw draft / rubber-band. Lives in its own
   // effect so it can install only while a gesture is open.
   useEffect(() => {
@@ -941,11 +1485,35 @@ export default function CanvasViewerPage() {
     };
     const onUp = () => {
       const draft = shapeDraftRef.current;
-      if (draft && shapeAddMut) {
+      if (draft) {
         const minSize = 4;
         const w = Math.abs(draft.endX - draft.startX);
         const h = Math.abs(draft.endY - draft.startY);
         const tool = draft.kind;
+        if (tool === "frame") {
+          if (frameAddMut && w >= minSize && h >= minSize) {
+            const startX = Math.min(draft.startX, draft.endX);
+            const startY = Math.min(draft.startY, draft.endY);
+            frameAddMut.mutate({
+              canvasId: params.canvasId,
+              name: "Frame",
+              x: startX,
+              y: startY,
+              width: w,
+              height: h,
+            });
+          }
+          shapeDraftRef.current = null;
+          scheduleShapeDraftRender();
+          setActiveTool("select");
+          return;
+        }
+        if (!shapeAddMut) {
+          shapeDraftRef.current = null;
+          scheduleShapeDraftRender();
+          setActiveTool("select");
+          return;
+        }
         if (tool === "freehand") {
           if (draft.path.length >= 2) {
             shapeAddMut.mutate({
@@ -970,22 +1538,31 @@ export default function CanvasViewerPage() {
             });
           }
         } else if (tool === "text") {
-          // For text, the drag defines the box; default body asks the
-          // operator to fill it in later via a future inline editor.
+          // For text, the drag defines the box. We drop the placeholder
+          // body in via `mutateAsync` so we can flip the new shape into
+          // inline edit mode the instant it lands — the operator never
+          // sees a static "Text" placeholder.
           const boxW = Math.max(120, w);
           const boxH = Math.max(40, h);
           const startX = Math.min(draft.startX, draft.endX);
           const startY = Math.min(draft.startY, draft.endY);
-          shapeAddMut.mutate({
-            canvasId: params.canvasId,
-            kind: "text",
-            x: startX,
-            y: startY,
-            width: boxW,
-            height: boxH,
-            text: "Text",
-            style: { color: toolbarStyleRef.current.stroke, fontSize: 14 },
-          });
+          shapeAddMut
+            .mutateAsync({
+              canvasId: params.canvasId,
+              kind: "text",
+              x: startX,
+              y: startY,
+              width: boxW,
+              height: boxH,
+              text: "Text",
+              style: { color: toolbarStyleRef.current.stroke, fontSize: 14 },
+            })
+            .then((res: { id: string }) => {
+              setEditingShapeFor(res.id);
+            })
+            .catch(() => {
+              /* error already toasted by shapeAddMut.onError */
+            });
         } else if (tool === "box" || tool === "ellipse") {
           if (w >= minSize && h >= minSize) {
             const startX = Math.min(draft.startX, draft.endX);
@@ -1042,6 +1619,17 @@ export default function CanvasViewerPage() {
             hits.push({ kind: "shape", id: s.id });
           }
         }
+        for (const f of frames) {
+          if (f.hiddenAt) continue;
+          if (
+            f.x + f.width >= minX &&
+            f.x <= maxX &&
+            f.y + f.height >= minY &&
+            f.y <= maxY
+          ) {
+            hits.push({ kind: "frame", id: f.id });
+          }
+        }
         setSelected((prev) => {
           // Shift-drag is additive (intersect of existing + new).
           const seen = new Set(prev.map((r) => `${r.kind}:${r.id}`));
@@ -1065,7 +1653,7 @@ export default function CanvasViewerPage() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [nodes, shapes, params.canvasId, shapeAddMut, scheduleShapeDraftRender]);
+  }, [nodes, shapes, frames, params.canvasId, shapeAddMut, frameAddMut, scheduleShapeDraftRender]);
 
   // -- Phase 3: connector preview drag (handle-to-node) -----------------
 
@@ -1148,7 +1736,78 @@ export default function CanvasViewerPage() {
         setActiveTool("select");
         shapeDraftRef.current = null;
         scheduleShapeDraftRender();
+        if (connectorDraftRef.current) {
+          connectorDraftRef.current = null;
+          scheduleConnectorRender();
+        }
         if (selectedEdgeId) setSelectedEdgeId(null);
+        if (selected.length > 0) setSelected([]);
+        return;
+      }
+      // F = frame tool. Doesn't fire when modifier keys are held so
+      // it stays out of the way of Cmd+F search etc.
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        setActiveTool("frame");
+        return;
+      }
+      // +/- zoom in/out around viewport center. ⌘+ / ⌘- also work
+      // (most browsers reserve these for page zoom, but inside the
+      // canvas we want them to do canvas zoom).
+      if (e.key === "+" || e.key === "=" || e.key === "-") {
+        e.preventDefault();
+        const direction = e.key === "-" ? -1 : 1;
+        const rect = surfaceRef.current?.getBoundingClientRect();
+        const cx = (rect?.width ?? 800) / 2;
+        const cy = (rect?.height ?? 600) / 2;
+        const factor = direction === 1 ? 1 + ZOOM_STEP : 1 - ZOOM_STEP;
+        setViewport((v) => {
+          const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.zoom * factor));
+          if (nextZoom === v.zoom) return v;
+          const k = nextZoom / v.zoom;
+          return {
+            zoom: nextZoom,
+            x: cx - (cx - v.x) * k,
+            y: cy - (cy - v.y) * k,
+          };
+        });
+        return;
+      }
+      // Zoom shortcuts: 0 = reset to 100%, 1 = fit all content.
+      if (!e.metaKey && !e.ctrlKey && (e.key === "0" || e.key === "1")) {
+        const rect = surfaceRef.current?.getBoundingClientRect();
+        const viewW = rect?.width ?? 800;
+        const viewH = rect?.height ?? 600;
+        if (e.key === "0") {
+          e.preventDefault();
+          setViewport({ x: viewW / 2, y: viewH / 2, zoom: 1 });
+          setViewportMut.mutate({ id: params.canvasId, viewport: { x: viewW / 2, y: viewH / 2, zoom: 1 } });
+          return;
+        }
+        // Fit: compute bbox of all content (nodes + shapes), pad, scale.
+        const items: Array<{ x: number; y: number; w: number; h: number }> = [];
+        for (const n of nodes) items.push({ x: n.x, y: n.y, w: n.width, h: n.height });
+        for (const s of shapes) items.push({ x: s.x, y: s.y, w: s.width ?? 40, h: s.height ?? 40 });
+        if (items.length === 0) return;
+        const minX = Math.min(...items.map((i) => i.x));
+        const minY = Math.min(...items.map((i) => i.y));
+        const maxX = Math.max(...items.map((i) => i.x + i.w));
+        const maxY = Math.max(...items.map((i) => i.y + i.h));
+        const contentW = maxX - minX;
+        const contentH = maxY - minY;
+        const pad = 80;
+        const zoom = Math.min(
+          MAX_ZOOM,
+          Math.max(MIN_ZOOM, Math.min((viewW - pad * 2) / contentW, (viewH - pad * 2) / contentH)),
+        );
+        const next = {
+          x: viewW / 2 - (minX + contentW / 2) * zoom,
+          y: viewH / 2 - (minY + contentH / 2) * zoom,
+          zoom,
+        };
+        e.preventDefault();
+        setViewport(next);
+        setViewportMut.mutate({ id: params.canvasId, viewport: next });
         return;
       }
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -1156,6 +1815,15 @@ export default function CanvasViewerPage() {
           e.preventDefault();
           removeEdge.mutate({ id: selectedEdgeId });
           setSelectedEdgeId(null);
+          return;
+        }
+        const frameIds = selected.filter((s) => s.kind === "frame").map((s) => s.id);
+        if (frameIds.length > 0 && frameRemoveMut) {
+          e.preventDefault();
+          for (const fid of frameIds) {
+            frameRemoveMut.mutate({ frameId: fid, reparentChildren: true });
+          }
+          setSelected((prev) => prev.filter((s) => s.kind !== "frame"));
           return;
         }
         const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
@@ -1211,19 +1879,82 @@ export default function CanvasViewerPage() {
         shapeBulkPatchMut.mutate({ ids: shapeIds, groupId: newGroupId });
         return;
       }
+      // Cmd+A → select all visible on the active page (or active frame
+      // when one is focused via the selection). Repeated cmd+a inside
+      // an already-frame-scoped selection toggles to canvas-wide.
+      if (mod && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();
+        const focusedFrameId =
+          selected.length === 1 && selected[0].kind === "frame" ? selected[0].id : null;
+        const all: SelectedRef[] = [];
+        if (focusedFrameId) {
+          for (const n of nodes) {
+            if ((n as { parentFrameId?: string | null }).parentFrameId === focusedFrameId) {
+              all.push({ kind: "node", id: n.id });
+            }
+          }
+          for (const s of shapes) {
+            if ((s as { parentFrameId?: string | null }).parentFrameId === focusedFrameId) {
+              all.push({ kind: "shape", id: s.id });
+            }
+          }
+        } else {
+          for (const n of displayNodes) all.push({ kind: "node", id: n.id });
+          for (const s of displayShapes) all.push({ kind: "shape", id: s.id });
+          for (const f of displayFrames) all.push({ kind: "frame", id: f.id });
+        }
+        setSelected(all);
+        return;
+      }
+      // Arrow nudge — 1px (10px with shift). Skips when mod is held so
+      // it doesn't fight browser-level scroll shortcuts.
+      const isArrow =
+        e.key === "ArrowLeft" || e.key === "ArrowRight" ||
+        e.key === "ArrowUp"   || e.key === "ArrowDown";
+      if (isArrow && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (selected.length === 0) return;
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+        const dy = e.key === "ArrowUp"   ? -step : e.key === "ArrowDown"  ? step : 0;
+        for (const sel of selected) {
+          if (sel.kind === "node") {
+            const n = nodes.find((x) => x.id === sel.id);
+            if (n) patchNode.mutate({ id: n.id, x: n.x + dx, y: n.y + dy });
+          } else if (sel.kind === "shape" && shapePatchMut) {
+            const s = shapes.find((x) => x.id === sel.id);
+            if (s) shapePatchMut.mutate({ id: s.id, x: s.x + dx, y: s.y + dy });
+          } else if (sel.kind === "frame" && framePatchMut) {
+            const f = frames.find((x) => x.id === sel.id);
+            if (f) framePatchMut.mutate({ frameId: f.id, x: f.x + dx, y: f.y + dy });
+          }
+        }
+        return;
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
     selected,
+    nodes,
     shapes,
+    frames,
+    displayNodes,
+    displayShapes,
+    displayFrames,
     shapeRemoveMut,
     shapeAddMut,
     shapeBulkPatchMut,
+    shapePatchMut,
+    frameRemoveMut,
+    framePatchMut,
+    patchNode,
     params.canvasId,
     scheduleShapeDraftRender,
+    scheduleConnectorRender,
     selectedEdgeId,
     removeEdge,
+    setViewportMut,
   ]);
 
   // Toolbar style change — when shapes are selected, apply via bulkPatch;
@@ -1296,7 +2027,12 @@ export default function CanvasViewerPage() {
   }, [surfaceToCanvas]);
 
   const onSurfaceDragOver = (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes("application/x-forge-entity")) return;
+    const types = e.dataTransfer.types;
+    if (
+      !types.includes("application/x-forge-entity") &&
+      !types.includes(COMPONENT_DRAG_MIME)
+    )
+      return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
     if (!dropActive) setDropActive(true);
@@ -1307,6 +2043,27 @@ export default function CanvasViewerPage() {
   const onSurfaceDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDropActive(false);
+    // First check for a component-instance drop — these come from the
+    // right panel's Components tab via `COMPONENT_DRAG_MIME`.
+    const compRaw = e.dataTransfer.getData(COMPONENT_DRAG_MIME);
+    if (compRaw) {
+      try {
+        const payload = JSON.parse(compRaw) as Partial<ComponentDragPayload>;
+        if (!payload.componentId) return;
+        const { x, y } = surfaceToCanvas(e.clientX, e.clientY);
+        createInstance.mutate({
+          canvasId: params.canvasId,
+          componentId: payload.componentId,
+          x,
+          y,
+          width: payload.defaultWidth,
+          height: payload.defaultHeight,
+        });
+      } catch {
+        /* ignore malformed drop */
+      }
+      return;
+    }
     const raw = e.dataTransfer.getData("application/x-forge-entity");
     if (!raw) return;
     try {
@@ -1703,6 +2460,13 @@ export default function CanvasViewerPage() {
           </>
         }
       />
+      {canvasKind === "DESIGN" ? (
+        <CanvasPageTabs
+          canvasId={data.canvas.id}
+          frames={frames}
+          activePageId={activePageId}
+        />
+      ) : null}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {openSidebar ? (
           <div
@@ -1730,7 +2494,7 @@ export default function CanvasViewerPage() {
             (dropActive ? "ring-2 ring-ember/60 ring-inset" : "")
           }
           style={{
-            cursor: panning ? "grabbing" : "grab",
+            cursor: cursorForTool(activeTool, panning, connectorDraftRef.current != null),
             backgroundImage: viewPrefs.showGrid
               ? "radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px)"
               : undefined,
@@ -1754,6 +2518,16 @@ export default function CanvasViewerPage() {
               transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
             }}
           >
+            {/* Frames sit at the very back so children render over them. */}
+            <CanvasFrames
+              frames={displayFrames}
+              selectedFrameIds={selectedFrameIds}
+              onSelectFrame={onSelectFrame}
+              onFrameTitleMouseDown={onFrameTitleMouseDown}
+              overrides={frameDragOverridesRef.current}
+              activePageId={activePageId}
+              canvasKind={canvasKind}
+            />
             {/* Lane bands sit behind nodes. */}
             {lanes.map((lane) => (
               <LaneBand key={lane.name} lane={lane} />
@@ -1763,6 +2537,14 @@ export default function CanvasViewerPage() {
               shapes={displayShapes}
               selectedIds={selectedShapeIds}
               onSelectShape={onSelectShape}
+              editingShapeId={editingShapeFor}
+              onTextShapeEditStart={(id) => setEditingShapeFor(id)}
+              onTextShapeEditEnd={() => setEditingShapeFor(null)}
+              onTextShapeSave={(id, text) => {
+                if (shapePatchMut) {
+                  shapePatchMut.mutate({ id, text });
+                }
+              }}
             />
             {/* Draft shape preview while drawing. */}
             <ShapeDraftPreview
@@ -1813,6 +2595,25 @@ export default function CanvasViewerPage() {
                 onConnectorStart={handleConnectorStart}
               />
             ))}
+            <CanvasComponentInstances
+              instances={componentInstances}
+              componentNameById={componentNameById}
+              selectedIds={selectedInstanceIds}
+              onSelect={(id, e) => {
+                const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+                setSelected((prev) => {
+                  if (additive) {
+                    const has = prev.some(
+                      (s) => s.kind === "instance" && s.id === id,
+                    );
+                    return has
+                      ? prev.filter((s) => !(s.kind === "instance" && s.id === id))
+                      : [...prev, { kind: "instance", id }];
+                  }
+                  return [{ kind: "instance", id }];
+                });
+              }}
+            />
             {selectedEdgeId
               ? (() => {
                   const edge = edges.find((x) => x.id === selectedEdgeId);
@@ -1851,6 +2652,15 @@ export default function CanvasViewerPage() {
             />
           ) : null}
         </div>
+        <CanvasRightPanel
+          slug={ws.slug}
+          canvasId={data.canvas.id}
+          data={data}
+          selected={selected as LayerSelectionRef[]}
+          onSelect={(refs) => setSelected(refs as SelectedRef[])}
+          selectionCount={selected.length}
+          buildSelectionSnapshot={buildSelectionSnapshot}
+        />
       </div>
       <CanvasToolbar
         activeTool={activeTool}
@@ -1956,6 +2766,23 @@ function ShapeDraftPreview({
   const h = Math.abs(endY - startY);
   const strokeColor = style.stroke;
   const strokeWidth = style.strokeWidth;
+  if (kind === "frame") {
+    // Distinct from `box` — frame draft uses the foreground token so
+    // it reads as a structural region rather than a stroked shape.
+    return (
+      <div
+        className="pointer-events-none absolute"
+        style={{
+          left: minX,
+          top: minY,
+          width: w,
+          height: h,
+          border: "1px dashed hsl(var(--foreground) / 0.5)",
+          background: "hsl(var(--card) / 0.2)",
+        }}
+      />
+    );
+  }
   if (kind === "box") {
     return (
       <div
@@ -2503,28 +3330,29 @@ function ConnectorDraftLayer({
   if (!draft) return null;
   const fromNode = nodes.find((n) => n.id === draft.fromNodeId);
   if (!fromNode) return null;
-  const cursorRect: Rect = {
-    x: draft.toX - 1,
-    y: draft.toY - 1,
-    width: 2,
-    height: 2,
-  };
-  const toSide: HandleSide = closestSideForPoint(fromNode, draft.toX, draft.toY) === "left"
-    ? "right"
-    : "left";
-  // We route from the fixed handle on the source to a tiny target rect at
-  // the cursor. Pick the cursor "side" based on its position relative to
-  // the source so the routed line approaches naturally.
-  const routed = routeEdge({
-    from: { rect: nodeToRect(fromNode), handle: draft.fromHandle },
-    to: { rect: cursorRect, handle: toSide },
-    obstacles: nodes.filter((n) => n.id !== fromNode.id).map(nodeToRect),
-  });
-  // Use a small SVG covering the bbox of from + cursor with padding.
-  const minX = Math.min(fromNode.x, draft.toX) - 80;
-  const minY = Math.min(fromNode.y, draft.toY) - 80;
-  const maxX = Math.max(fromNode.x + fromNode.width, draft.toX) + 80;
-  const maxY = Math.max(fromNode.y + fromNode.height, draft.toY) + 80;
+  // Anchor on the source handle, render a cheap straight line to the
+  // cursor while the operator drags. Orthogonal A* routing happens only
+  // on drop — paying for obstacle avoidance every pointer-move is the
+  // main source of "drawing node flows is delayed".
+  const anchor = handleAnchorForRect(nodeToRect(fromNode), draft.fromHandle);
+  const ax = anchor.x;
+  const ay = anchor.y;
+  const bx = draft.toX;
+  const by = draft.toY;
+  const minX = Math.min(ax, bx) - 16;
+  const minY = Math.min(ay, by) - 16;
+  const maxX = Math.max(ax, bx) + 16;
+  const maxY = Math.max(ay, by) + 16;
+  // Subtle quadratic so the line eases away from the source handle —
+  // visual hint of direction without the cost of orthogonal routing.
+  const cpx =
+    draft.fromHandle === "left" ? ax - 40
+    : draft.fromHandle === "right" ? ax + 40
+    : ax;
+  const cpy =
+    draft.fromHandle === "top" ? ay - 40
+    : draft.fromHandle === "bottom" ? ay + 40
+    : ay;
   return (
     <svg
       className="pointer-events-none absolute"
@@ -2534,15 +3362,25 @@ function ConnectorDraftLayer({
       viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`}
     >
       <path
-        d={routed.d}
+        d={`M ${ax} ${ay} Q ${cpx} ${cpy} ${bx} ${by}`}
         fill="none"
         stroke="hsl(var(--ember))"
         strokeWidth={2}
         strokeDasharray="6 4"
         opacity={0.85}
       />
+      <circle cx={bx} cy={by} r={4} fill="hsl(var(--ember))" opacity={0.85} />
     </svg>
   );
+}
+
+function handleAnchorForRect(rect: Rect, side: HandleSide): { x: number; y: number } {
+  switch (side) {
+    case "left":   return { x: rect.x,                 y: rect.y + rect.height / 2 };
+    case "right":  return { x: rect.x + rect.width,    y: rect.y + rect.height / 2 };
+    case "top":    return { x: rect.x + rect.width / 2, y: rect.y };
+    case "bottom": return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
+  }
 }
 
 function closestSideForPoint(
@@ -3671,14 +4509,14 @@ function CanvasEntityRail({ canvasId: _canvasId }: { canvasId: string }) {
         <div className="text-meta uppercase tracking-wider text-muted-foreground">
           Drag to canvas
         </div>
-        <div className="mt-1.5 flex gap-1">
+        <div className="mt-1.5 grid grid-cols-2 gap-1">
           {(["issue", "artifact", "chat-thread", "agent"] as const).map((t) => (
             <button
               key={t}
               type="button"
               onClick={() => setTab(t)}
               className={
-                "flex-1 rounded border px-1 py-0.5 text-[10px] uppercase tracking-wide transition-all duration-200 " +
+                "min-w-0 truncate rounded border px-1 py-0.5 text-[10px] uppercase tracking-wide transition-all duration-200 " +
                 (tab === t
                   ? "border-ember bg-ember/15 text-ember"
                   : "border-border bg-card/40 text-muted-foreground hover:bg-subtle")
@@ -3734,3 +4572,4 @@ function RailDraggable({
     </button>
   );
 }
+

@@ -6,6 +6,7 @@ import {
   Command,
   FileText,
   FolderKanban,
+  Home,
   Inbox,
   LayoutDashboard,
   LineChart,
@@ -48,6 +49,7 @@ export const WORKSPACE_NAV_SECTIONS: readonly WorkspaceNavSection[] = [
     label: "Work",
     items: [
       { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
+      { path: "/personal", label: "Personal", icon: Home, chord: "e" },
       { path: "/command-center", label: "Command Center", icon: Command, chord: "j" },
       { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
       { path: "/chat", label: "Chat", icon: MessageSquare, chord: "m" },

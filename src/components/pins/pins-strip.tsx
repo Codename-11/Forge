@@ -1,5 +1,7 @@
 "use client";
 import Link from "next/link";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
   Pin as PinIcon,
   FolderKanban,
@@ -7,11 +9,13 @@ import {
   Filter,
   Repeat,
   Bot,
+  CircleDot,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId } from "@/lib/utils";
 import { workspaceColor } from "@/lib/workspace-color";
-import { useCrossTab } from "@/hooks/use-realtime";
+import { broadcastCrossTab, useCrossTab } from "@/hooks/use-realtime";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { MOTION } from "@/lib/motion";
 import type { HydratedPin, HydratedPinTarget } from "@/server/routers/pin";
 
@@ -56,21 +60,191 @@ export function PinsStrip() {
     <div className="hidden items-center gap-1 md:flex">
       {slots.map((pin, idx) => {
         if (!pin || !pin.target) {
-          return (
-            <div
-              key={`empty-${idx}`}
-              className="inline-flex h-7 min-w-[96px] items-center gap-1.5 rounded-md border border-dashed border-border/70 px-2 text-[0.6875rem] text-muted-foreground/60"
-              title="Pin items from anywhere — issues, projects, sprints, agents…"
-            >
-              <PinIcon className="h-3 w-3" />
-              <span>Pin…</span>
-            </div>
-          );
+          return <EmptyPinSlot key={`empty-${idx}`} alreadyPinnedIds={pinnedKeySet(pins)} />;
         }
         return <PinChip key={pin.id} target={pin.target} />;
       })}
     </div>
   );
+}
+
+function pinnedKeySet(pins: HydratedPin[]): Set<string> {
+  const s = new Set<string>();
+  for (const p of pins) s.add(`${p.targetType}:${p.targetId}`);
+  return s;
+}
+
+/**
+ * Clickable empty pin slot. Opens a small picker anchored beneath the
+ * trigger, populated with the operator's recent items in the current
+ * workspace. Selecting an item calls `pin.add` with
+ * `workspaceId: null` so it lands in the cross-workspace strip.
+ */
+function EmptyPinSlot({ alreadyPinnedIds }: { alreadyPinnedIds: Set<string> }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside-click / Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Pin an item — issues, projects, sprints, agents…"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className="focus-ring inline-flex h-7 min-w-[96px] items-center gap-1.5 rounded-md border border-dashed border-border/70 px-2 text-[0.6875rem] text-muted-foreground/60 transition-colors hover:border-foreground/40 hover:text-foreground hover:bg-subtle"
+      >
+        <PinIcon className="h-3 w-3" />
+        <span>Pin…</span>
+      </button>
+      {open && (
+        <PinPickerPopover
+          alreadyPinnedIds={alreadyPinnedIds}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function PinPickerPopover({
+  alreadyPinnedIds,
+  onClose,
+}: {
+  alreadyPinnedIds: Set<string>;
+  onClose: () => void;
+}) {
+  const ws = useMaybeWorkspace();
+  const utils = trpc.useUtils();
+  const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const recentsQ = trpc.recentItem.list.useQuery({ limit: 20 }, { enabled: !!ws });
+  const items = useMemo(() => {
+    const raw = (recentsQ.data ?? []) as HydratedPin[];
+    const q = query.trim().toLowerCase();
+    if (!q) return raw;
+    return raw.filter((r) => labelFor(r.target).toLowerCase().includes(q));
+  }, [recentsQ.data, query]);
+
+  const addMut = trpc.pin.add.useMutation({
+    onSuccess: () => {
+      void utils.pin.listAll.invalidate();
+      void utils.pin.list.invalidate();
+      broadcastCrossTab({ type: "pins:updated" });
+      toast.success("Pinned");
+      onClose();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Pin an item"
+      className="absolute left-0 top-[calc(100%+6px)] z-40 w-72 overflow-hidden rounded-md border border-border bg-card shadow-lg"
+    >
+      <div className="border-b border-border p-2">
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onClose();
+          }}
+          placeholder="Filter recents…"
+          className="w-full bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+      <ul className="max-h-72 overflow-y-auto py-1">
+        {recentsQ.isLoading && (
+          <li className="px-3 py-3 text-[0.6875rem] text-muted-foreground">Loading…</li>
+        )}
+        {!recentsQ.isLoading && items.length === 0 && (
+          <li className="px-3 py-3 text-[0.6875rem] text-muted-foreground">
+            {query ? "No matching recents." : "Nothing recent yet — open an item and come back."}
+          </li>
+        )}
+        {items.map((r) => {
+          const key = `${r.targetType}:${r.targetId}`;
+          const already = alreadyPinnedIds.has(key);
+          return (
+            <li key={r.id}>
+              <button
+                type="button"
+                disabled={already || addMut.isPending}
+                onClick={() => {
+                  addMut.mutate({
+                    workspaceId: null,
+                    targetType: r.targetType,
+                    targetId: r.targetId,
+                  });
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors",
+                  already
+                    ? "cursor-not-allowed text-muted-foreground/60"
+                    : "hover:bg-subtle",
+                )}
+                title={already ? "Already pinned" : "Pin to strip"}
+              >
+                <TargetIcon kind={r.targetType} />
+                <span className="truncate flex-1">{labelFor(r.target)}</span>
+                {already && <span className="text-[0.6875rem] text-muted-foreground">pinned</span>}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function labelFor(t: HydratedPinTarget | null): string {
+  if (!t) return "Unknown";
+  switch (t.targetType) {
+    case "ISSUE":
+      return `${formatIssueId(t.workspaceKey, t.number)} ${t.title}`;
+    case "PROJECT":
+    case "INITIATIVE":
+    case "CYCLE":
+    case "AGENT":
+      return t.name;
+    case "SAVED_VIEW":
+      return t.name;
+  }
+}
+
+function TargetIcon({ kind }: { kind: HydratedPinTarget["targetType"] }) {
+  switch (kind) {
+    case "ISSUE":      return <CircleDot className="h-3 w-3 shrink-0 text-muted-foreground" />;
+    case "PROJECT":    return <FolderKanban className="h-3 w-3 shrink-0 text-muted-foreground" />;
+    case "INITIATIVE": return <Diamond className="h-3 w-3 shrink-0 text-muted-foreground" />;
+    case "CYCLE":      return <Repeat className="h-3 w-3 shrink-0 text-muted-foreground" />;
+    case "SAVED_VIEW": return <Filter className="h-3 w-3 shrink-0 text-muted-foreground" />;
+    case "AGENT":      return <Bot className="h-3 w-3 shrink-0 text-muted-foreground" />;
+  }
 }
 
 /**

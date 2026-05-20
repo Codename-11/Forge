@@ -639,6 +639,143 @@ const WRITE_TOOLS: ChatToolDef[] = [
     },
   },
   {
+    name: "canvases.frameAdd",
+    mcpName: "canvases_frameAdd",
+    requiresConfirm: true,
+    description:
+      "Drop a named bounded region (frame) on a canvas. Children inside the frame move with it. Use as the container for storyboard layouts or as a Figma-style page when `isPage` is true.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        parentFrameId: { type: "string" },
+        name: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+        width: { type: "number" },
+        height: { type: "number" },
+        isPage: { type: "boolean" },
+      },
+      required: ["canvasId", "x", "y", "width", "height"],
+      additionalProperties: true,
+    },
+  },
+  {
+    name: "canvases.storyboardPlan",
+    mcpName: "canvases_storyboardPlan",
+    requiresConfirm: true,
+    description:
+      "Compound gesture: drop a labeled frame containing the plan card + a notes lane + a sources column + a next-steps lane. Reach for this when the operator asks you to lay out / storyboard / sketch a plan on the canvas.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        planId: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+      },
+      required: ["canvasId", "planId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "canvases.storyboardIssue",
+    mcpName: "canvases_storyboardIssue",
+    requiresConfirm: true,
+    description:
+      "Compound gesture: drop a labeled frame containing the issue card + a related-issues lane + a comments column + an attachments lane. Reach for this when the operator asks you to lay out / storyboard / sketch an issue on the canvas.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        issueId: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+      },
+      required: ["canvasId", "issueId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "canvases.storyboardResearch",
+    mcpName: "canvases_storyboardResearch",
+    requiresConfirm: true,
+    description:
+      "Compound gesture: drop a labeled frame containing a scratchpad + a sources column + a next-steps lane for an open-ended research topic.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        topic: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+      },
+      required: ["canvasId", "topic"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "canvases.storyboardCustom",
+    mcpName: "canvases_storyboardCustom",
+    requiresConfirm: true,
+    description:
+      "Escape hatch when the three preset storyboards don't fit — compose a custom labeled frame with up to 12 named text panels at caller-specified positions.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        name: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+        width: { type: "number" },
+        height: { type: "number" },
+        panels: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              label: { type: "string" },
+              body: { type: "string" },
+              x: { type: "number" },
+              y: { type: "number" },
+              width: { type: "number" },
+              height: { type: "number" },
+            },
+            required: ["label", "x", "y", "width", "height"],
+          },
+        },
+      },
+      required: ["canvasId", "name", "panels"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "canvases.alignSelection",
+    mcpName: "canvases_alignSelection",
+    requiresConfirm: true,
+    description:
+      "Align / distribute / tidy-up a multi-selection on a canvas. Pass arrays of node/shape/frame/group/instance ids under `ids`. Op is one of alignLeft|alignCenter|alignRight|alignTop|alignMiddle|alignBottom|distributeH|distributeV|tidyUp.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        canvasId: { type: "string" },
+        ids: {
+          type: "object",
+          properties: {
+            nodeIds: { type: "array", items: { type: "string" } },
+            shapeIds: { type: "array", items: { type: "string" } },
+            frameIds: { type: "array", items: { type: "string" } },
+            groupIds: { type: "array", items: { type: "string" } },
+            instanceIds: { type: "array", items: { type: "string" } },
+          },
+        },
+        op: { type: "string" },
+      },
+      required: ["canvasId", "ids", "op"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "notes.create",
     mcpName: "notes_create",
     requiresConfirm: true,
@@ -668,6 +805,41 @@ const WRITE_TOOLS: ChatToolDef[] = [
         pinned: { type: "boolean" },
       },
       required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "notes.setStatus",
+    mcpName: "notes_setStatus",
+    requiresConfirm: true,
+    description:
+      "Flip a note's lifecycle status: IDEA | SOMEDAY | ACTIVE | ARCHIVED. Useful when an idea is being parked, picked up, or retired.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        noteId: { type: "string" },
+        status: { type: "string", enum: ["IDEA", "SOMEDAY", "ACTIVE", "ARCHIVED"] },
+      },
+      required: ["noteId", "status"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "notes.promote",
+    mcpName: "notes_promote",
+    requiresConfirm: true,
+    description:
+      "Promote a note into an Issue, Project, or Initiative. Stores the back-link both directions and flips the note's status to ACTIVE.",
+    paramsSchema: {
+      type: "object",
+      properties: {
+        noteId: { type: "string" },
+        kind: { type: "string", enum: ["issue", "project", "initiative"] },
+        title: { type: "string" },
+        projectId: { type: "string" },
+        initiativeId: { type: "string" },
+      },
+      required: ["noteId", "kind"],
       additionalProperties: false,
     },
   },

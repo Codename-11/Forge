@@ -288,6 +288,42 @@ enum NoteKind {
   JOURNAL
 }
 
+/// Lifecycle status for a Note. IDEA is the default capture state for
+/// fresh thoughts; SOMEDAY parks them for later; ACTIVE means the note
+/// has been promoted into work (either explicitly via `notes.promote` or
+/// by the user moving it forward); ARCHIVED is the soft-delete tier
+/// (orthogonal to `archivedAt`; archive UI uses the timestamp, status
+/// drives chip + dashboard zone routing).
+enum NoteStatus {
+  IDEA
+  SOMEDAY
+  ACTIVE
+  ARCHIVED
+}
+
+/// Discriminator for a WorkspaceCanvas. PROJECT/INITIATIVE/CYCLE/ISSUE
+/// are anchored canvases (carry `scopeType` + `scopeId`). PERSONAL is
+/// the per-user "Personal" canvas auto-provisioned for the dashboard.
+/// DESIGN is the Figma-mode multi-page design surface (`activePageId`
+/// tracks which top-level frame is the current page).
+enum CanvasKind {
+  PROJECT
+  INITIATIVE
+  CYCLE
+  ISSUE
+  PERSONAL
+  DESIGN
+}
+
+/// Discriminator for a reusable CanvasStyle. COLOR captures fill /
+/// stroke / text colors; TEXT captures font family / size / weight /
+/// line-height presets; EFFECT captures shadow / blur / opacity.
+enum CanvasStyleKind {
+  COLOR
+  TEXT
+  EFFECT
+}
+
 /// Lifecycle of an AgentRun — opened on first activity from an agent
 /// against an issue, closed when the issue transitions to a terminal
 /// status, the agent reports completion, or the watchdog flags it
@@ -357,6 +393,9 @@ model User {
   /// When set, the overlay opens to this tab if no per-workspace
   /// state override exists yet.
   missionControlDefaultTab String?
+  /// Default dashboard view — "list" or "canvas". Null = "list" (current
+  /// Inbox behavior). Set when the user flips the dashboard view toggle.
+  dashboardView           String?
   /// Workspace id remembered across logins; UI loads this one by default.
   lastWorkspaceId        String?
   /// Server-persisted onboarding state. Null = not dismissed; the
@@ -419,7 +458,12 @@ model User {
   requestedActionRequests ActionRequest[]     @relation("ActionRequestRequester")
   assignedActionRequests  ActionRequest[]     @relation("ActionRequestAssignee")
   createdCanvases         WorkspaceCanvas[]   @relation("WorkspaceCanvasCreator")
+  ownedCanvases           WorkspaceCanvas[]   @relation("WorkspaceCanvasOwner")
   createdShapes           CanvasShape[]       @relation("CanvasShapeCreator")
+  createdCanvasFrames     CanvasFrame[]       @relation("CanvasFrameCreator")
+  createdCanvasGroups     CanvasGroup[]       @relation("CanvasGroupCreator")
+  createdCanvasComponents CanvasComponent[]   @relation("CanvasComponentCreator")
+  createdCanvasStyles     CanvasStyle[]       @relation("CanvasStyleCreator")
 
   @@index([handle])
 }
@@ -622,11 +666,16 @@ model Workspace {
   agentCrewMembers   AgentCrewMember[]
   reviewGates        ReviewGate[]
   actionRequests     ActionRequest[]
-  canvases           WorkspaceCanvas[]
-  canvasNodes        WorkspaceCanvasNode[]
-  canvasEdges        WorkspaceCanvasEdge[]
-  canvasShapes       CanvasShape[]
-  startedStatus      Status?               @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
+  canvases            WorkspaceCanvas[]
+  canvasNodes         WorkspaceCanvasNode[]
+  canvasEdges         WorkspaceCanvasEdge[]
+  canvasShapes        CanvasShape[]
+  canvasFrames        CanvasFrame[]
+  canvasGroups        CanvasGroup[]
+  canvasComponents    CanvasComponent[]
+  canvasInstances     CanvasComponentInstance[]
+  canvasStyles        CanvasStyle[]
+  startedStatus       Status?               @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
 }
@@ -668,6 +717,9 @@ model Project {
   /// Optional parent initiative that groups related projects.
   initiativeId String?
   createdById  String
+  /// Backlink for a project created via `notes.promote`. Mirrors
+  /// `Issue.sourceNoteId`.
+  sourceNoteId String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
@@ -788,6 +840,11 @@ model Issue {
   /// When true, the agent's completion submission must include at least
   /// one Artifact link (any kind). False (default) = optional.
   artifactRequired      Boolean         @default(false)
+  /// Backlink for an issue created via `notes.promote` — points at the
+  /// source Note row so the UI can render "promoted from note …"
+  /// provenance and the user can navigate back. SetNull on Note delete
+  /// preserves the issue.
+  sourceNoteId          String?
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
   deletedAt             DateTime?
@@ -1324,6 +1381,8 @@ model Initiative {
   status      InitiativeStatus @default(PLANNED)
   position    Int              @default(0)
   createdById String
+  /// Backlink for an initiative created via `notes.promote`.
+  sourceNoteId String?
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
@@ -1815,24 +1874,35 @@ model RecentItem {
 /// to a full Issue via `note.convertToIssue` — the source note is left
 /// in place so the user can archive it separately.
 model Note {
-  id          String    @id @default(cuid())
+  id          String     @id @default(cuid())
   workspaceId String
   userId      String
   title       String?
-  body        String    @db.Text
-  pinned      Boolean   @default(false)
+  body        String     @db.Text
+  pinned      Boolean    @default(false)
   /// Variant — NOTE (scratchpad) vs JOURNAL (daily summary). JOURNAL
   /// entries are pinned to `journalDate` and unique per user per day,
   /// so `notes.todayJournal` can upsert idempotently.
-  kind        NoteKind  @default(NOTE)
+  kind        NoteKind   @default(NOTE)
+  /// Lifecycle status. NOTE-kind rows default to IDEA (fresh capture);
+  /// JOURNAL-kind rows default to ACTIVE since they're durable records,
+  /// not pitches. Status drives dashboard zone routing and chip color.
+  status      NoteStatus @default(IDEA)
   /// Calendar date for JOURNAL entries (UTC midnight, normalized in the
   /// caller's timezone). Null for NOTE rows. Unique with (workspaceId,
   /// userId) — Postgres allows multiple NULLs through a unique
   /// constraint, so NOTE rows are unaffected.
   journalDate DateTime?
+  /// Forward link captured when `notes.promote` spins up a downstream
+  /// entity from this note. `promotedToType` is one of "issue" |
+  /// "project" | "initiative"; `promotedToId` references the row.
+  /// Null = note has not been promoted. The downstream entity also
+  /// carries `sourceNoteId` so the link is bidirectional.
+  promotedToType String?
+  promotedToId   String?
   archivedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1840,6 +1910,7 @@ model Note {
   @@unique([workspaceId, userId, journalDate])
   @@index([workspaceId, userId, archivedAt, pinned, updatedAt])
   @@index([workspaceId, userId, kind, journalDate])
+  @@index([workspaceId, userId, status, updatedAt])
 }
 
 /// Per-(issue, user OR agent) subscription row. A watcher receives
@@ -2294,25 +2365,46 @@ model ActionRequest {
 /// issue / project / initiative / user / workspace. Workspace-scope
 /// is the default (canvas with no anchor).
 model WorkspaceCanvas {
-  id          String    @id @default(cuid())
-  workspaceId String
-  name        String
-  scopeType   String?
-  scopeId     String?
-  viewport    Json?
-  createdById String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  archivedAt  DateTime?
+  id            String     @id @default(cuid())
+  workspaceId   String
+  name          String
+  /// Discriminator. Anchored canvases (PROJECT/INITIATIVE/CYCLE/ISSUE)
+  /// carry `scopeType` + `scopeId`. PERSONAL = the per-user dashboard
+  /// canvas (`ownerUserId` set). DESIGN = multi-page Figma-style canvas
+  /// (`activePageId` tracks the currently-active top-level frame).
+  /// Existing rows default to PROJECT to preserve current behavior;
+  /// the kind is set explicitly at create time going forward.
+  kind          CanvasKind @default(PROJECT)
+  scopeType     String?
+  scopeId       String?
+  /// Owner for PERSONAL canvases. Null for shared / anchored canvases.
+  /// Cascades on user delete (personal canvases vanish with the user).
+  ownerUserId   String?
+  /// Currently-active page id for DESIGN canvases — points at a
+  /// `CanvasFrame` row with `isPage = true`. Null for single-page
+  /// canvases.
+  activePageId  String?
+  viewport      Json?
+  createdById   String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  archivedAt    DateTime?
 
-  workspace Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy User?                 @relation("WorkspaceCanvasCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  nodes     WorkspaceCanvasNode[]
-  edges     WorkspaceCanvasEdge[]
-  shapes    CanvasShape[]
+  workspace          Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy          User?                     @relation("WorkspaceCanvasCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  owner              User?                     @relation("WorkspaceCanvasOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  nodes              WorkspaceCanvasNode[]
+  edges              WorkspaceCanvasEdge[]
+  shapes             CanvasShape[]
+  frames             CanvasFrame[]
+  groups             CanvasGroup[]
+  componentInstances CanvasComponentInstance[]
 
+  @@unique([workspaceId, kind, ownerUserId])
   @@index([workspaceId, scopeType, scopeId])
   @@index([workspaceId, updatedAt])
+  @@index([workspaceId, kind])
+  @@index([ownerUserId])
 }
 
 /// A card on the canvas. `targetType` + `targetId` references a
@@ -2336,14 +2428,35 @@ model WorkspaceCanvasNode {
   /// require enum migration.
   viewMode    String?
   meta        Json?
+  /// Optional parent CanvasFrame (a frame that owns this node — moves
+  /// + auto-layout cascade). SetNull on frame delete so the node
+  /// survives frame churn (becomes a free-floating node).
+  parentFrameId String?
+  /// Optional CanvasGroup the node belongs to. Groups are transform
+  /// containers (non-visual). SetNull on group dissolve.
+  groupId       String?
+  /// Style references — opaque map of `{ fill?: styleId, text?: styleId,
+  /// effect?: styleId }`. Applied on render; missing keys fall back to
+  /// the node's `meta` defaults.
+  styleRefs     Json?
+  /// Set when the node is locked from edits in the layers panel. The
+  /// canvas honors lockedAt by disabling drag/resize/edit gestures.
+  lockedAt      DateTime?
+  /// Set when the node is hidden in the layers panel. Hidden nodes are
+  /// not rendered on the canvas but persist in the data model.
+  hiddenAt      DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  canvas    WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  canvas      WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  parentFrame CanvasFrame?    @relation("CanvasFrameNodes", fields: [parentFrameId], references: [id], onDelete: SetNull)
+  group       CanvasGroup?    @relation("CanvasGroupNodes", fields: [groupId], references: [id], onDelete: SetNull)
 
   @@index([canvasId, zIndex])
   @@index([workspaceId, targetType, targetId])
+  @@index([parentFrameId])
+  @@index([groupId])
 }
 
 /// A directional edge between two canvas nodes — used to draw
@@ -2391,16 +2504,230 @@ model CanvasShape {
   /// Optional text content for text + arrow-label shapes.
   text        String?  @db.Text
   zIndex      Int      @default(0)
-  /// Optional grouping. Shapes with the same groupId move together.
-  groupId     String?
+  /// Optional grouping. Two layers:
+  ///   - Legacy `groupId` (free-form string) lets shapes share a
+  ///     transient transform group without a backing row.
+  ///   - `canvasGroupId` (added with the unified-workspace migration)
+  ///     points at a first-class `CanvasGroup` row that can hold
+  ///     mixed shape + node + frame children. New code prefers this.
+  groupId         String?
+  canvasGroupId   String?
+  /// Optional parent CanvasFrame (a frame that owns this shape — moves
+  /// + auto-layout cascade). SetNull on frame delete.
+  parentFrameId   String?
+  /// Style references — opaque map of `{ fill?: styleId, text?: styleId,
+  /// effect?: styleId }`. Applied on render.
+  styleRefs       Json?
+  /// Set when the shape is locked from edits in the layers panel.
+  lockedAt        DateTime?
+  /// Set when the shape is hidden in the layers panel.
+  hiddenAt        DateTime?
   createdById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  canvas    WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
-  createdBy User?           @relation("CanvasShapeCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  canvas      WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  createdBy   User?           @relation("CanvasShapeCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  parentFrame CanvasFrame?    @relation("CanvasFrameShapes", fields: [parentFrameId], references: [id], onDelete: SetNull)
+  canvasGroup CanvasGroup?    @relation("CanvasGroupShapes", fields: [canvasGroupId], references: [id], onDelete: SetNull)
 
   @@index([canvasId, zIndex])
   @@index([workspaceId])
+  @@index([parentFrameId])
+  @@index([canvasGroupId])
+}
+
+// ----------------------------------------------------------------------------
+// Canvas Figma primitives — frames, groups, components, styles
+// (added with the unified-workspace-flow plan, migration 0046)
+// ----------------------------------------------------------------------------
+
+/// A named bounded region on a canvas that owns its children (nodes /
+/// shapes / instances / nested frames). Frames are first-class — not a
+/// shape variant — so they can carry auto-layout config, act as pages
+/// for DESIGN canvases (`isPage = true`), and host constraints.
+///
+/// Children reference the frame via their `parentFrameId`. Dragging
+/// the frame moves all children; resizing the frame doesn't resize
+/// children unless `autoLayout` is set.
+model CanvasFrame {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  canvasId        String
+  /// Nested frame parent. Null = top-level. Frames can nest arbitrarily.
+  parentFrameId   String?
+  /// Display name shown in the title bar + layers panel.
+  name            String   @default("Frame")
+  x               Float
+  y               Float
+  width           Float
+  height          Float
+  /// When true, this frame is a top-level "page" for DESIGN canvases.
+  /// The active page id lives on `WorkspaceCanvas.activePageId`.
+  isPage          Boolean  @default(false)
+  /// Auto-layout config — `{ direction: "horizontal"|"vertical", gap,
+  /// paddingTop, paddingRight, paddingBottom, paddingLeft, align:
+  /// "start"|"center"|"end", justify: "start"|"center"|"end"|
+  /// "space-between" }`. Null = free positioning.
+  autoLayout      Json?
+  /// Per-frame constraints applied to children on resize: `{ horizontal:
+  /// "left"|"right"|"center"|"scale", vertical: "top"|"bottom"|"center"
+  /// |"scale" }`. Honored only when `autoLayout` is null.
+  constraints     Json?
+  /// Optional background fill: `{ color?, opacity?, styleId? }`.
+  backgroundFill  Json?
+  z               Int      @default(0)
+  lockedAt        DateTime?
+  hiddenAt        DateTime?
+  createdById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace   Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  canvas      WorkspaceCanvas       @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  parentFrame CanvasFrame?          @relation("CanvasFrameNesting", fields: [parentFrameId], references: [id], onDelete: SetNull)
+  childFrames CanvasFrame[]         @relation("CanvasFrameNesting")
+  nodes       WorkspaceCanvasNode[] @relation("CanvasFrameNodes")
+  shapes      CanvasShape[]         @relation("CanvasFrameShapes")
+  groups      CanvasGroup[]         @relation("CanvasFrameGroups")
+  instances   CanvasComponentInstance[] @relation("CanvasFrameInstances")
+  createdBy   User?                 @relation("CanvasFrameCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([canvasId, parentFrameId, z])
+  @@index([canvasId, isPage])
+  @@index([workspaceId])
+}
+
+/// A non-visual transform container — group multiple children so they
+/// move/resize/copy as a unit. Distinct from `CanvasFrame` which is a
+/// visual region with a title bar and optional auto-layout.
+///
+/// Members reference the group via `groupId` (nodes), `canvasGroupId`
+/// (shapes), or `groupId` on instances/nested groups. SetNull on group
+/// dissolve so members survive.
+model CanvasGroup {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  canvasId      String
+  parentFrameId String?
+  name          String    @default("Group")
+  z             Int       @default(0)
+  lockedAt      DateTime?
+  hiddenAt      DateTime?
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  workspace   Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  canvas      WorkspaceCanvas           @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  parentFrame CanvasFrame?              @relation("CanvasFrameGroups", fields: [parentFrameId], references: [id], onDelete: SetNull)
+  nodes       WorkspaceCanvasNode[]     @relation("CanvasGroupNodes")
+  shapes      CanvasShape[]             @relation("CanvasGroupShapes")
+  instances   CanvasComponentInstance[] @relation("CanvasGroupInstances")
+  createdBy   User?                     @relation("CanvasGroupCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([canvasId, parentFrameId, z])
+  @@index([workspaceId])
+}
+
+/// Workspace-scoped reusable component definition. Components are
+/// snapshots of a node/shape/frame subtree; placing one on a canvas
+/// creates a `CanvasComponentInstance` that renders the definition
+/// with optional per-instance overrides.
+///
+/// "Update component" pushes the current state of an instance back to
+/// `definition`, refreshing other instances (overrides preserved where
+/// paths still exist). "Detach instance" expands the definition into
+/// raw rows under the host frame.
+model CanvasComponent {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  /// Unique per workspace — duplicates are rejected at create time.
+  name          String
+  description   String?   @db.Text
+  /// Optional thumbnail data URL or asset key. Rendered in the
+  /// components panel for drag-onto-canvas.
+  thumbnail     String?   @db.Text
+  /// Snapshot tree: `{ nodes: [...], shapes: [...], frames: [...],
+  /// edges: [...], width, height }`. Opaque to the schema layer; the
+  /// client renders + diffs against this.
+  definition    Json
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  archivedAt    DateTime?
+
+  workspace Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User?                     @relation("CanvasComponentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  instances CanvasComponentInstance[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, archivedAt, updatedAt])
+}
+
+/// Placed instance of a `CanvasComponent` on a specific canvas.
+/// `overrides` is a sparse JSON diff (path → value) applied to the
+/// component definition at render time. Detaching the instance
+/// expands the definition into raw nodes/shapes/frames and deletes
+/// this row.
+model CanvasComponentInstance {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  canvasId      String
+  componentId   String
+  parentFrameId String?
+  groupId       String?
+  x             Float
+  y             Float
+  width         Float
+  height        Float
+  /// Sparse override map keyed by node path inside the definition.
+  /// e.g. `{ "nodes.0.text": "Hi", "shapes.2.style.fill": "#fff" }`.
+  /// Empty = pure instance.
+  overrides     Json?
+  z             Int      @default(0)
+  lockedAt      DateTime?
+  hiddenAt      DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  canvas      WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  component   CanvasComponent @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  parentFrame CanvasFrame?    @relation("CanvasFrameInstances", fields: [parentFrameId], references: [id], onDelete: SetNull)
+  group       CanvasGroup?    @relation("CanvasGroupInstances", fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@index([canvasId, z])
+  @@index([componentId])
+  @@index([parentFrameId])
+  @@index([groupId])
+  @@index([workspaceId])
+}
+
+/// Workspace-scoped reusable style — color, text, or effect preset.
+/// Nodes / shapes / frames reference a CanvasStyle via their
+/// `styleRefs` JSON so edits cascade to every consumer.
+model CanvasStyle {
+  id          String          @id @default(cuid())
+  workspaceId String
+  kind        CanvasStyleKind
+  name        String
+  /// Opaque value JSON:
+  ///   COLOR  -> `{ hex, opacity? }` or `{ tokens: ["bg-card", ...] }`
+  ///   TEXT   -> `{ family, size, weight, lineHeight?, letterSpacing?,
+  ///              color? }`
+  ///   EFFECT -> `{ shadow?: {...}, blur?: {...}, opacity? }`
+  value       Json
+  createdById String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  archivedAt  DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User?     @relation("CanvasStyleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, kind, name])
+  @@index([workspaceId, kind])
+  @@index([workspaceId, archivedAt])
 }
