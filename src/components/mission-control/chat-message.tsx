@@ -27,9 +27,18 @@ export interface ChatMessageRow {
   contextSnapshot?: unknown;
 }
 
+interface RehydratedToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  status: "pending" | "approved" | "declined" | "executed" | "error";
+  summary?: string;
+  result?: unknown;
+}
+
 interface StreamedSnapshot {
   thinking?: string;
-  tool_use?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
+  tool_calls?: RehydratedToolCall[];
   elapsedMs?: number;
 }
 
@@ -39,11 +48,36 @@ function readStreamedSnapshot(value: unknown): StreamedSnapshot | null {
   if (obj.streamed !== true) return null;
   const out: StreamedSnapshot = {};
   if (typeof obj.thinking === "string") out.thinking = obj.thinking;
-  if (Array.isArray(obj.tool_use)) {
-    out.tool_use = obj.tool_use.filter(
-      (b): b is { id: string; name: string; args: Record<string, unknown> } =>
+  // Canonical Phase 0 shape: contextSnapshot.tool_calls = [...].
+  // Older messages may carry `tool_use` instead; read both so rehydration
+  // doesn't regress for past chats.
+  const rawTools = Array.isArray(obj.tool_calls)
+    ? obj.tool_calls
+    : Array.isArray(obj.tool_use)
+      ? obj.tool_use
+      : null;
+  if (rawTools) {
+    out.tool_calls = rawTools
+      .filter((b): b is Record<string, unknown> =>
         Boolean(b && typeof b === "object" && "id" in b && "name" in b),
-    );
+      )
+      .map((b) => {
+        const status =
+          typeof b.status === "string" &&
+          ["pending", "approved", "declined", "executed", "error"].includes(
+            b.status,
+          )
+            ? (b.status as RehydratedToolCall["status"])
+            : "executed";
+        return {
+          id: String(b.id),
+          name: String(b.name),
+          args: (b.args ?? {}) as Record<string, unknown>,
+          status,
+          summary: typeof b.summary === "string" ? b.summary : undefined,
+          result: b.result,
+        };
+      });
   }
   if (typeof obj.elapsedMs === "number") out.elapsedMs = obj.elapsedMs;
   return out;
@@ -216,7 +250,7 @@ function StreamedRehydration({ snapshot }: { snapshot: StreamedSnapshot | null }
   const [thinkingOpen, setThinkingOpen] = useState(false);
   if (!snapshot) return null;
   const hasThinking = Boolean(snapshot.thinking);
-  const tools = snapshot.tool_use ?? [];
+  const tools = snapshot.tool_calls ?? [];
   if (!hasThinking && tools.length === 0) return null;
   const elapsed = snapshot.elapsedMs
     ? (snapshot.elapsedMs / 1000).toFixed(1)
@@ -247,27 +281,40 @@ function StreamedRehydration({ snapshot }: { snapshot: StreamedSnapshot | null }
         </>
       )}
       {tools.map((tb) => (
-        <ToolUseCard key={tb.id} name={tb.name} args={tb.args} />
+        <ToolCallCard key={tb.id} call={tb} />
       ))}
     </div>
   );
 }
 
-function ToolUseCard({
-  name,
-  args,
-}: {
-  name: string;
-  args: Record<string, unknown>;
-}) {
+function ToolCallCard({ call }: { call: RehydratedToolCall }) {
   const [open, setOpen] = useState(false);
   const json = useMemo(() => {
     try {
-      return JSON.stringify(args, null, 2);
+      return JSON.stringify(call.args, null, 2);
     } catch {
-      return String(args);
+      return String(call.args);
     }
-  }, [args]);
+  }, [call.args]);
+  let statusLabel: string;
+  switch (call.status) {
+    case "executed":
+      statusLabel = "done";
+      break;
+    case "declined":
+      statusLabel = "declined";
+      break;
+    case "error":
+      statusLabel = "error";
+      break;
+    case "approved":
+      statusLabel = "approved";
+      break;
+    case "pending":
+    default:
+      statusLabel = "pending";
+      break;
+  }
   return (
     <div className="rounded border border-border/60 bg-subtle/30 text-[0.6875rem]">
       <button
@@ -281,17 +328,38 @@ function ToolUseCard({
           <ChevronRight className="h-3 w-3" />
         )}
         <Wrench className="h-3 w-3 text-ember" />
-        <span className="font-mono text-foreground">{name}</span>
-        <span className="ml-auto text-[0.5625rem] uppercase tracking-wider text-muted-foreground/70">
-          tool intent
+        <span className="font-mono text-foreground">{call.name}</span>
+        <span
+          className={cn(
+            "ml-auto text-[0.5625rem] uppercase tracking-wider",
+            call.status === "error" || call.status === "declined"
+              ? "text-destructive"
+              : "text-muted-foreground/70",
+          )}
+        >
+          {statusLabel}
         </span>
       </button>
       {open && (
-        <div className="border-t border-border/40 px-2 py-1.5">
+        <div className="space-y-1 border-t border-border/40 px-2 py-1.5">
           <ChatMarkdown body={"```json\n" + json + "\n```"} />
-          <p className="mt-1 text-[0.5625rem] italic text-muted-foreground/60">
-            (display only — v2 will let you run it)
-          </p>
+          {call.summary && (
+            <p
+              className={cn(
+                "text-[0.625rem]",
+                call.status === "executed"
+                  ? "text-foreground"
+                  : call.status === "error" || call.status === "declined"
+                    ? "text-destructive"
+                    : "text-muted-foreground",
+              )}
+            >
+              <span className="mr-1 font-mono">
+                {call.status === "executed" ? "ok" : call.status}
+              </span>
+              {call.summary}
+            </p>
+          )}
         </div>
       )}
     </div>

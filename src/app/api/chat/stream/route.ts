@@ -5,9 +5,17 @@ import { auth } from "@/server/auth";
 import { db } from "@/server/db";
 import { recordChange } from "@/server/audit";
 import {
-  streamChatReply,
+  runChatLoop,
   type ChatStreamMessage,
+  type ChatToolCall,
+  type ChatToolExecResult,
 } from "@/server/services/chat-stream";
+import {
+  chatToolsAsOpenAITools,
+  findChatTool,
+} from "@/server/services/chat-tools-allowlist";
+import { executeChatTool } from "@/server/services/chat-tool-exec";
+import { pendingApprovals } from "@/server/services/chat-stream-state";
 import { logger } from "@/server/logger";
 
 /**
@@ -197,50 +205,151 @@ export async function POST(req: NextRequest) {
 
       const assembled: string[] = [];
       const thinkingChunks: string[] = [];
-      const toolBlocks: Array<{ id: string; name: string; args: Record<string, unknown> }> = [];
+      type ToolCallRecord = {
+        id: string;
+        name: string;
+        args: Record<string, unknown>;
+        status: "pending" | "approved" | "declined" | "executed" | "error";
+        summary?: string;
+        result?: unknown;
+      };
+      const toolCalls: ToolCallRecord[] = [];
       const startedAt = Date.now();
       let errored = false;
+      // Track approval ids we registered so we can clean them up on abort.
+      const registeredApprovalIds = new Set<string>();
 
-      // Bridge the upstream provider stream → SSE writer.
       const abortController = new AbortController();
-      req.signal.addEventListener("abort", () => abortController.abort());
-
-      try {
-        for await (const evt of streamChatReply({
-          provider: agent.provider,
-          messages,
-          signal: abortController.signal,
-        })) {
-          if (req.signal.aborted) break;
-          switch (evt.kind) {
-            case "content":
-              assembled.push(evt.delta);
-              enqueue(sse("content", { delta: evt.delta }));
-              break;
-            case "thinking":
-              thinkingChunks.push(evt.delta);
-              enqueue(sse("thinking", { delta: evt.delta }));
-              break;
-            case "tool_use":
-              toolBlocks.push({ id: evt.id, name: evt.name, args: evt.args });
-              enqueue(
-                sse("tool_use", { id: evt.id, name: evt.name, args: evt.args }),
-              );
-              break;
-            case "error":
-              errored = true;
-              enqueue(sse("error", { message: evt.message }));
-              break;
-            case "done":
-              // We finalise outside the loop so persistence happens once.
-              break;
+      const onAbort = () => {
+        abortController.abort();
+        for (const id of registeredApprovalIds) {
+          const resolver = pendingApprovals.get(id);
+          if (resolver) {
+            pendingApprovals.delete(id);
+            resolver({ approved: false });
           }
         }
+      };
+      req.signal.addEventListener("abort", onAbort);
+
+      const recordCall = (call: ChatToolCall): ToolCallRecord => {
+        const existing = toolCalls.find((c) => c.id === call.id);
+        if (existing) return existing;
+        const fresh: ToolCallRecord = {
+          id: call.id,
+          name: call.name,
+          args: call.args,
+          status: "pending",
+        };
+        toolCalls.push(fresh);
+        return fresh;
+      };
+
+      const waitForApproval = (callId: string) =>
+        new Promise<{ approved: boolean }>((resolve) => {
+          registeredApprovalIds.add(callId);
+          pendingApprovals.set(callId, (decision) => {
+            registeredApprovalIds.delete(callId);
+            resolve(decision);
+          });
+        });
+
+      const runOneTool = async (call: ChatToolCall): Promise<ChatToolExecResult> => {
+        const record = recordCall(call);
+        const def = findChatTool(call.name);
+        const displayName = def?.name ?? call.name;
+        const requiresConfirm = def?.requiresConfirm ?? true;
+
+        if (!def) {
+          const summary = `Tool ${call.name} is not on the chat allowlist.`;
+          record.status = "error";
+          record.summary = summary;
+          enqueue(
+            sse("tool_result", { id: call.id, ok: false, summary }),
+          );
+          return { ok: false, summary };
+        }
+
+        enqueue(
+          sse("tool_call_started", {
+            id: call.id,
+            name: displayName,
+            args: call.args,
+            requiresConfirm,
+          }),
+        );
+
+        if (requiresConfirm) {
+          enqueue(
+            sse("tool_confirm", {
+              id: call.id,
+              name: displayName,
+              args: call.args,
+            }),
+          );
+          const decision = await waitForApproval(call.id);
+          if (!decision.approved) {
+            const summary = "User declined this action.";
+            record.status = "declined";
+            record.summary = summary;
+            enqueue(
+              sse("tool_result", { id: call.id, ok: false, summary }),
+            );
+            return { ok: false, summary };
+          }
+          record.status = "approved";
+        }
+
+        const exec = await executeChatTool({
+          workspaceId,
+          userId,
+          name: displayName,
+          args: call.args,
+        });
+        record.status = exec.ok ? "executed" : "error";
+        record.summary = exec.summary;
+        record.result = exec.result;
+        enqueue(
+          sse("tool_result", {
+            id: call.id,
+            ok: exec.ok,
+            summary: exec.summary,
+            result: exec.result,
+          }),
+        );
+        return exec;
+      };
+
+      try {
+        await runChatLoop({
+          provider: agent.provider,
+          messages,
+          tools: chatToolsAsOpenAITools(),
+          signal: abortController.signal,
+          onContent: (delta) => {
+            assembled.push(delta);
+            enqueue(sse("content", { delta }));
+          },
+          onThinking: (delta) => {
+            thinkingChunks.push(delta);
+            enqueue(sse("thinking", { delta }));
+          },
+          onToolUseStart: (call) => {
+            recordCall(call);
+          },
+          onError: (message) => {
+            errored = true;
+            enqueue(sse("error", { message }));
+          },
+          executeToolCall: runOneTool,
+        });
       } catch (err) {
         errored = true;
         const message = err instanceof Error ? err.message : "Stream failed.";
         enqueue(sse("error", { message }));
         logger.warn({ err, threadId: thread.id }, "chat-stream: route bridge failed");
+      } finally {
+        req.signal.removeEventListener("abort", onAbort);
       }
 
       const finalBody = assembled.join("");
@@ -258,7 +367,7 @@ export async function POST(req: NextRequest) {
           : "");
 
       try {
-        if (!persistedBody && !thinkingFull && toolBlocks.length === 0) {
+        if (!persistedBody && !thinkingFull && toolCalls.length === 0) {
           // Nothing to keep — clean up the empty placeholder.
           await db.chatMessage.delete({ where: { id: agentMessageId } });
         } else {
@@ -270,7 +379,7 @@ export async function POST(req: NextRequest) {
                 streamed: true,
                 provider: agent.provider,
                 thinking: thinkingFull || undefined,
-                tool_use: toolBlocks.length > 0 ? toolBlocks : undefined,
+                tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
                 elapsedMs,
               } as never,
             },

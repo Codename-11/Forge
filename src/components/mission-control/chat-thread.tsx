@@ -175,11 +175,21 @@ type DraftBubble = {
 /** In-flight streaming bubble from /api/chat/stream (distinct from the
  * legacy MCP-driven draft bubble above, which is still used by the
  * dispatch path when Hermes streams via `chat.startDraft`). */
+export type StreamToolCall = {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  requiresConfirm: boolean;
+  status: "pending" | "approved" | "declined" | "executed" | "error";
+  summary?: string;
+  result?: unknown;
+};
+
 type StreamBubble = {
   messageId: string | null;
   body: string;
   thinking: string;
-  toolBlocks: Array<{ id: string; name: string; args: Record<string, unknown> }>;
+  toolCalls: StreamToolCall[];
   startedAt: number;
   finishedAt: number | null;
   error: string | null;
@@ -189,16 +199,21 @@ type StreamBubble = {
 
 /**
  * Streaming bubble UI. Shows a collapsible thinking section, the live
- * content, and one card per tool_use intent (display-only in v1).
+ * content, and one card per tool_use intent. Writes pause the loop with
+ * an Approve/Decline confirm card.
  */
 function AgentStreamBubble({
   bubble,
   agentName,
   onRetry,
+  onApprove,
+  onDecline,
 }: {
   bubble: StreamBubble;
   agentName?: string;
   onRetry?: () => void;
+  onApprove?: (callId: string) => void;
+  onDecline?: (callId: string) => void;
 }) {
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const elapsedSec = bubble.finishedAt
@@ -265,10 +280,15 @@ function AgentStreamBubble({
           </span>
         ) : null}
 
-        {bubble.toolBlocks.length > 0 && (
+        {bubble.toolCalls.length > 0 && (
           <div className="space-y-1">
-            {bubble.toolBlocks.map((tb) => (
-              <ToolUseCard key={tb.id} name={tb.name} args={tb.args} />
+            {bubble.toolCalls.map((tb) => (
+              <ToolCallCard
+                key={tb.id}
+                call={tb}
+                onApprove={onApprove}
+                onDecline={onDecline}
+              />
             ))}
           </div>
         )}
@@ -293,22 +313,51 @@ function AgentStreamBubble({
   );
 }
 
-/** Display-only tool-use card. v2 will let the operator confirm + run. */
-function ToolUseCard({
-  name,
-  args,
+/**
+ * Live tool-call card. Renders started → confirm → executed/error states,
+ * surfacing an Approve / Decline pair for write-class tools that need
+ * operator sign-off before the loop resumes.
+ */
+function ToolCallCard({
+  call,
+  onApprove,
+  onDecline,
 }: {
-  name: string;
-  args: Record<string, unknown>;
+  call: StreamToolCall;
+  onApprove?: (callId: string) => void;
+  onDecline?: (callId: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(call.status === "pending" && call.requiresConfirm);
   const json = useMemo(() => {
     try {
-      return JSON.stringify(args, null, 2);
+      return JSON.stringify(call.args, null, 2);
     } catch {
-      return String(args);
+      return String(call.args);
     }
-  }, [args]);
+  }, [call.args]);
+
+  const awaitingConfirm = call.status === "pending" && call.requiresConfirm;
+  const running = call.status === "pending" || call.status === "approved";
+
+  let statusLabel: string;
+  switch (call.status) {
+    case "pending":
+      statusLabel = awaitingConfirm ? "awaiting approval" : "running…";
+      break;
+    case "approved":
+      statusLabel = "running…";
+      break;
+    case "declined":
+      statusLabel = "declined";
+      break;
+    case "executed":
+      statusLabel = "done";
+      break;
+    case "error":
+      statusLabel = "error";
+      break;
+  }
+
   return (
     <div className="rounded border border-border/60 bg-subtle/30 text-[0.6875rem]">
       <button
@@ -322,17 +371,60 @@ function ToolUseCard({
           <ChevronRight className="h-3 w-3" />
         )}
         <Wrench className="h-3 w-3 text-ember" />
-        <span className="font-mono text-foreground">{name}</span>
-        <span className="ml-auto text-[0.5625rem] uppercase tracking-wider text-muted-foreground/70">
-          tool intent
+        <span className="font-mono text-foreground">{call.name}</span>
+        <span
+          className={cn(
+            "ml-auto text-[0.5625rem] uppercase tracking-wider",
+            call.status === "error" || call.status === "declined"
+              ? "text-destructive"
+              : "text-muted-foreground/70",
+          )}
+        >
+          {statusLabel}
         </span>
       </button>
       {open && (
-        <div className="border-t border-border/40 px-2 py-1.5">
+        <div className="space-y-1.5 border-t border-border/40 px-2 py-1.5">
           <ChatMarkdown body={"```json\n" + json + "\n```"} />
-          <p className="mt-1 text-[0.5625rem] italic text-muted-foreground/60">
-            (display only — v2 will let you run it)
-          </p>
+          {awaitingConfirm && (
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onApprove?.(call.id)}
+                className="rounded border border-ember/40 bg-ember/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-ember hover:bg-ember/25"
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                onClick={() => onDecline?.(call.id)}
+                className="rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground"
+              >
+                Decline
+              </button>
+            </div>
+          )}
+          {running && !awaitingConfirm && (
+            <p className="text-[0.5625rem] italic text-muted-foreground/60">
+              Running tool…
+            </p>
+          )}
+          {(call.status === "executed" || call.status === "error" || call.status === "declined") &&
+            call.summary && (
+              <p
+                className={cn(
+                  "text-[0.625rem]",
+                  call.status === "executed"
+                    ? "text-foreground"
+                    : "text-destructive",
+                )}
+              >
+                <span className="mr-1 font-mono">
+                  {call.status === "executed" ? "ok" : "fail"}
+                </span>
+                {call.summary}
+              </p>
+            )}
         </div>
       )}
     </div>
@@ -570,7 +662,7 @@ export function ChatThreadView({
         messageId: null,
         body: "",
         thinking: "",
-        toolBlocks: [],
+        toolCalls: [],
         startedAt: Date.now(),
         finishedAt: null,
         error: null,
@@ -636,6 +728,8 @@ export function ChatThreadView({
             );
           }
         } else if (event === "tool_use") {
+          // Legacy fallback — only fires when the loop never surfaced a
+          // tool through the started→[confirm]→result canonical path.
           const tb = parsed as {
             id?: string;
             name?: string;
@@ -646,13 +740,112 @@ export function ChatThreadView({
               b
                 ? {
                     ...b,
-                    toolBlocks: [
-                      ...b.toolBlocks,
-                      { id: tb.id!, name: tb.name!, args: tb.args ?? {} },
+                    toolCalls: [
+                      ...b.toolCalls,
+                      {
+                        id: tb.id!,
+                        name: tb.name!,
+                        args: tb.args ?? {},
+                        requiresConfirm: false,
+                        status: "executed",
+                        summary: "(intent only — not executed)",
+                      },
                     ],
                   }
                 : b,
             );
+          }
+        } else if (event === "tool_call_started") {
+          const tb = parsed as {
+            id?: string;
+            name?: string;
+            args?: Record<string, unknown>;
+            requiresConfirm?: boolean;
+          };
+          if (tb.id && tb.name) {
+            setStreamBubble((b) => {
+              if (!b) return b;
+              const existing = b.toolCalls.find((c) => c.id === tb.id);
+              if (existing) return b;
+              return {
+                ...b,
+                toolCalls: [
+                  ...b.toolCalls,
+                  {
+                    id: tb.id!,
+                    name: tb.name!,
+                    args: tb.args ?? {},
+                    requiresConfirm: Boolean(tb.requiresConfirm),
+                    status: "pending",
+                  },
+                ],
+              };
+            });
+          }
+        } else if (event === "tool_confirm") {
+          const tb = parsed as {
+            id?: string;
+            name?: string;
+            args?: Record<string, unknown>;
+          };
+          if (tb.id && tb.name) {
+            setStreamBubble((b) => {
+              if (!b) return b;
+              const existing = b.toolCalls.find((c) => c.id === tb.id);
+              if (existing) {
+                return {
+                  ...b,
+                  toolCalls: b.toolCalls.map((c) =>
+                    c.id === tb.id
+                      ? { ...c, requiresConfirm: true, status: "pending" }
+                      : c,
+                  ),
+                };
+              }
+              return {
+                ...b,
+                toolCalls: [
+                  ...b.toolCalls,
+                  {
+                    id: tb.id!,
+                    name: tb.name!,
+                    args: tb.args ?? {},
+                    requiresConfirm: true,
+                    status: "pending",
+                  },
+                ],
+              };
+            });
+          }
+        } else if (event === "tool_result") {
+          const tr = parsed as {
+            id?: string;
+            ok?: boolean;
+            summary?: string;
+            result?: unknown;
+          };
+          if (tr.id) {
+            setStreamBubble((b) => {
+              if (!b) return b;
+              return {
+                ...b,
+                toolCalls: b.toolCalls.map((c) =>
+                  c.id === tr.id
+                    ? {
+                        ...c,
+                        status:
+                          tr.ok === false
+                            ? c.status === "declined"
+                              ? "declined"
+                              : "error"
+                            : "executed",
+                        summary: tr.summary,
+                        result: tr.result,
+                      }
+                    : c,
+                ),
+              };
+            });
           }
         } else if (event === "error") {
           const { message } = parsed as { message?: string };
@@ -738,6 +931,37 @@ export function ChatThreadView({
       streamAbortRef.current?.abort();
     };
   }, []);
+
+  const respondToTool = useCallback(
+    async (callId: string, approved: boolean) => {
+      setStreamBubble((b) => {
+        if (!b) return b;
+        return {
+          ...b,
+          toolCalls: b.toolCalls.map((c) =>
+            c.id === callId
+              ? { ...c, status: approved ? "approved" : "declined" }
+              : c,
+          ),
+        };
+      });
+      try {
+        const res = await fetch("/api/chat/tool/approve", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ callId, approved }),
+        });
+        if (!res.ok) {
+          toast.error(`Approval response failed (${res.status})`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Approval failed";
+        toast.error(msg);
+      }
+    },
+    [],
+  );
 
   const handleSend = async (body: string, files: File[] = []) => {
     setPendingDraft({ body, files: files.map((f) => f.name || "attachment") });
@@ -1083,6 +1307,8 @@ export function ChatThreadView({
                   }
                 : undefined
             }
+            onApprove={(callId) => void respondToTool(callId, true)}
+            onDecline={(callId) => void respondToTool(callId, false)}
           />
         ) : draft ? (
           <AgentDraftBubble body={draft.body} agentName={agent?.name} />
