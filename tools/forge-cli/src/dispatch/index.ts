@@ -1,6 +1,7 @@
 import { callTool } from "../mcp.js";
 import type { AuthFile } from "../auth.js";
 import { runClaudeChat } from "./claude-code.js";
+import { runCodexChat } from "./codex.js";
 import type {
   ChatMessageHistoryRow,
   DispatchAgent,
@@ -12,9 +13,10 @@ export type { ChatDispatchContext, IssueDispatchContext } from "./types.js";
 
 /**
  * Provider switch — given an agent's `provider` enum value, fan out to
- * the matching adapter. Only CLAUDE is functional in v1; the rest stub
- * by finalizing a friendly placeholder so the chat thread doesn't sit
- * with an empty draft bubble forever.
+ * the matching adapter. CLAUDE and CODEX have real local-CLI adapters;
+ * HERMES is handled out-of-process by the Hermes daemon (this branch
+ * should never fire for a HERMES-linked agent), and CUSTOM falls back
+ * to a placeholder so the chat thread doesn't sit with an empty draft.
  */
 
 export type AgentProviderId = "CLAUDE" | "CODEX" | "HERMES" | "CUSTOM";
@@ -45,6 +47,16 @@ export async function dispatchChat(args: DispatchChatArgs): Promise<void> {
         attachments: args.attachments ?? [],
       });
     case "CODEX":
+      return runCodexChat({
+        auth: args.auth,
+        threadId: args.threadId,
+        agent: args.agent,
+        userMessage: args.userMessage,
+        workspaceSlug: args.workspaceSlug,
+        threadHistory: args.threadHistory ?? [],
+        issueContext: args.issueContext ?? null,
+        attachments: args.attachments ?? [],
+      });
     case "HERMES":
     case "CUSTOM":
     default:

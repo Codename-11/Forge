@@ -15,7 +15,6 @@ import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
 import { useWorkspace } from "@/hooks/use-workspace";
-import { PinToggleButton } from "@/components/pins/pin-toggle-button";
 import { PinButton } from "@/components/pins/pin-button";
 import { WatchButton } from "@/components/watch-button";
 import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
@@ -38,14 +37,22 @@ const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 /**
  * Issue detail page. Two-column layout above `md`:
  *
- *   [ main column (flex-1 max-w-3xl) | right rail (sticky, w-96) ]
- *     description + comments           tabs: Attachments / Relations / Activity
+ *   [ main column (flex-1, lg:max-w-4xl xl:max-w-5xl) | right rail ]
+ *     description + comments                           Properties + tabs
  *
- * Below `md` it stacks and the rail's tab strip lives above the main
- * column. The rail owns its own tab state in `?tab=…` so deep-links work.
- * A secondary header ("IssueDetailTopbar") below the shell <Topbar /> hosts
- * the inline editors (title, status, priority, assignees) — keeps the
- * description above the fold without a separate metadata column below it.
+ * The outer scrollable area is capped at `max-w-[1600px] mx-auto` so
+ * ultra-wide monitors don't leave gigantic gutters. The main column
+ * widens with the viewport (3xl → 4xl → 5xl) so descriptions and
+ * comments get more breathing room without becoming uncomfortable to
+ * scan. Padding scales `p-5 md:p-6 xl:p-8`.
+ *
+ * The right rail hosts everything that isn't the description / comments:
+ * a "Properties" header (project / labels / due / agent queue) plus the
+ * existing tabs (Attachments / Relations / Activity). Tab state lives in
+ * `?tab=…` so deep-links work. A secondary header ("IssueDetailTopbar")
+ * below the shell <Topbar /> hosts the inline editors (title, status,
+ * priority, assignees) — keeps the description above the fold without a
+ * separate metadata column below it.
  */
 export default function IssueDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -242,7 +249,6 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         subtitle={<span className="font-mono">{issue.status.name}</span>}
         actions={
           <>
-            <PinToggleButton issueId={issue.id} />
             <Button
               variant="outline"
               size="sm"
@@ -328,6 +334,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               targetType="ISSUE"
               targetId={issue.id}
               workspaceId={workspace.id}
+              shortcut="p"
             />
             <WatchButton issueId={issue.id} />
 
@@ -405,8 +412,8 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="flex min-h-full flex-col gap-6 p-5 md:flex-row md:gap-8 md:p-6">
-          <div className="min-w-0 flex-1 md:max-w-3xl">
+        <div className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-6 p-5 md:flex-row md:gap-8 md:p-6 xl:gap-10 xl:p-8">
+          <div className="min-w-0 flex-1 md:max-w-3xl lg:max-w-4xl xl:max-w-5xl">
             <div className="mb-5 flex items-center gap-2 text-xs text-muted-foreground">
               <Avatar name={issue.author.name} image={issue.author.image} size={16} />
               <span>{issue.author.name ?? "Unknown"}</span>
@@ -428,98 +435,130 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               comments={issue.comments}
               onDescriptionSave={(next) => update.mutate({ id: issue.id, description: next })}
             />
-
-            <div className="mt-10 space-y-4 border-t border-border/60 pt-6">
-              <SidebarField label="Project">
-                <select
-                  value={issue.projectId ?? ""}
-                  onChange={(e) =>
-                    update.mutate({
-                      id: issue.id,
-                      projectId: e.target.value || null,
-                    })
-                  }
-                  className="focus-ring w-full max-w-xs rounded-md border border-input bg-background px-2 py-1 text-xs"
-                >
-                  <option value="">— none —</option>
-                  {projects?.items.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </SidebarField>
-              <SidebarField label="Labels">
-                <LabelPicker
-                  current={issue.labels.map((l) => ({
-                    id: l.labelId,
-                    name: l.label.name,
-                    color: l.label.color,
-                  }))}
-                  all={allLabels ?? []}
-                  onChange={(labelIds) => setLabels.mutate({ issueId: issue.id, labelIds })}
-                />
-              </SidebarField>
-              <SidebarField label="Due">
-                <input
-                  type="date"
-                  value={issue.dueDate ? new Date(issue.dueDate).toISOString().slice(0, 10) : ""}
-                  onChange={(e) =>
-                    update.mutate({
-                      id: issue.id,
-                      dueDate: e.target.value ? new Date(e.target.value) : null,
-                    })
-                  }
-                  className="focus-ring w-full max-w-xs rounded-md border border-input bg-background px-2 py-1 font-mono text-xs"
-                />
-              </SidebarField>
-              <SidebarField label="Agent queue">
-                <label className="flex w-full max-w-xs items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[0.6875rem]">
-                  <input
-                    type="checkbox"
-                    checked={issue.queued}
-                    onChange={(e) => setQueued.mutate({ id: issue.id, queued: e.target.checked })}
-                    className="h-3.5 w-3.5"
-                  />
-                  <span className="text-muted-foreground">Queue for agent</span>
-                  <span className="ml-auto">
-                    <Badge className={issue.queued ? "bg-success/10 text-success" : undefined}>
-                      {issue.queued ? "Queued" : "Not queued"}
-                    </Badge>
-                  </span>
-                </label>
-                <div className="max-w-xs text-[0.6875rem] text-muted-foreground">
-                  Queued issues are available to{" "}
-                  <span className="font-mono text-foreground">issues.claim</span>; assigned issues
-                  can still sit unclaimed until an agent starts.
-                </div>
-                {issue.claimedAt && (
-                  <div className="mt-2 max-w-xs rounded-md border border-border bg-card/60 p-2 text-[0.6875rem]">
-                    <div className="text-muted-foreground">Claimed</div>
-                    <div className="mt-0.5">
-                      by <span className="font-mono">{issue.claimedById?.slice(0, 8)}</span>
-                      {issue.claimExpiresAt && <> · expires {relativeTime(issue.claimExpiresAt)}</>}
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="mt-1 w-full"
-                      onClick={() => setReleaseOpen(true)}
-                    >
-                      Release claim
-                    </Button>
-                  </div>
-                )}
-              </SidebarField>
-            </div>
           </div>
 
           <aside
             aria-label="Issue detail rail"
-            className="shrink-0 md:sticky md:top-4 md:w-96 md:self-start"
+            className="shrink-0 md:sticky md:top-4 md:w-[22rem] md:self-start xl:w-[26rem]"
           >
             <div className="rounded-lg border border-border bg-card/30 md:max-h-[calc(100svh-7rem)]">
-              <IssueRail issueId={issue.id} />
+              <IssueRail
+                issueId={issue.id}
+                header={
+                  <div className="space-y-3">
+                    <SidebarField label="Project">
+                      <select
+                        value={issue.projectId ?? ""}
+                        onChange={(e) =>
+                          update.mutate({
+                            id: issue.id,
+                            projectId: e.target.value || null,
+                          })
+                        }
+                        className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                      >
+                        <option value="">— none —</option>
+                        {projects?.items.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </SidebarField>
+                    <SidebarField label="Labels">
+                      <LabelPicker
+                        current={issue.labels.map((l) => ({
+                          id: l.labelId,
+                          name: l.label.name,
+                          color: l.label.color,
+                        }))}
+                        all={allLabels ?? []}
+                        onChange={(labelIds) =>
+                          setLabels.mutate({ issueId: issue.id, labelIds })
+                        }
+                      />
+                    </SidebarField>
+                    <SidebarField label="Due">
+                      <input
+                        type="date"
+                        value={
+                          issue.dueDate
+                            ? new Date(issue.dueDate).toISOString().slice(0, 10)
+                            : ""
+                        }
+                        onChange={(e) =>
+                          update.mutate({
+                            id: issue.id,
+                            dueDate: e.target.value
+                              ? new Date(e.target.value)
+                              : null,
+                          })
+                        }
+                        className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 font-mono text-xs"
+                      />
+                    </SidebarField>
+                    <SidebarField label="Agent queue">
+                      <label className="flex w-full items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[0.6875rem]">
+                        <input
+                          type="checkbox"
+                          checked={issue.queued}
+                          onChange={(e) =>
+                            setQueued.mutate({
+                              id: issue.id,
+                              queued: e.target.checked,
+                            })
+                          }
+                          className="h-3.5 w-3.5"
+                        />
+                        <span className="text-muted-foreground">
+                          Queue for agent
+                        </span>
+                        <span className="ml-auto">
+                          <Badge
+                            className={
+                              issue.queued
+                                ? "bg-success/10 text-success"
+                                : undefined
+                            }
+                          >
+                            {issue.queued ? "Queued" : "Not queued"}
+                          </Badge>
+                        </span>
+                      </label>
+                      <div className="text-[0.6875rem] text-muted-foreground">
+                        Queued issues are available to{" "}
+                        <span className="font-mono text-foreground">
+                          issues.claim
+                        </span>
+                        ; assigned issues can still sit unclaimed until an
+                        agent starts.
+                      </div>
+                      {issue.claimedAt && (
+                        <div className="mt-2 rounded-md border border-border bg-card/60 p-2 text-[0.6875rem]">
+                          <div className="text-muted-foreground">Claimed</div>
+                          <div className="mt-0.5">
+                            by{" "}
+                            <span className="font-mono">
+                              {issue.claimedById?.slice(0, 8)}
+                            </span>
+                            {issue.claimExpiresAt && (
+                              <> · expires {relativeTime(issue.claimExpiresAt)}</>
+                            )}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="mt-1 w-full"
+                            onClick={() => setReleaseOpen(true)}
+                          >
+                            Release claim
+                          </Button>
+                        </div>
+                      )}
+                    </SidebarField>
+                  </div>
+                }
+              />
             </div>
           </aside>
         </div>
@@ -701,7 +740,7 @@ function LabelPicker({
   }
 
   return (
-    <div className="relative w-full max-w-xs">
+    <div className="relative w-full">
       <button
         type="button"
         onClick={() => setOpen((x) => !x)}

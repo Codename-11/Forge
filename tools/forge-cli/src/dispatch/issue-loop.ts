@@ -2,8 +2,10 @@ import os from "node:os";
 import chalk from "chalk";
 import { callTool, type AgentMe } from "../mcp.js";
 import type { AuthFile } from "../auth.js";
-import { runClaudeIssue, type ClaudeUsage } from "./claude-code.js";
+import { runClaudeIssue } from "./claude-code.js";
+import { runCodexIssue } from "./codex.js";
 import { inlineAttachments, loadIssueBundle } from "./context.js";
+import type { ProviderUsage } from "./shared.js";
 import type { IssueBundle } from "./types.js";
 
 /**
@@ -82,13 +84,28 @@ export async function handleAgentAssigned(args: {
     );
   }
 
-  // Provider gating — only CLAUDE has a real loop. Anything else falls
-  // through to a placeholder comment that explains the situation.
-  if (agent.provider !== "CLAUDE") {
+  // Provider gating — CLAUDE and CODEX have real local-CLI adapters.
+  // HERMES is handled out-of-process by the Hermes daemon (this branch
+  // should never fire for a HERMES-linked agent), and CUSTOM falls back
+  // to a placeholder comment that explains the situation.
+  //
+  // Every comment we post leads with a `[forge-cli daemon on <host>]`
+  // provenance tag so the issue page's comment renderer can lift it
+  // into a small italic subtitle line above the body. Keep this exact
+  // bracketed shape — the renderer matches `[…]` at the start of the
+  // first non-empty line.
+  const provenance = `forge-cli daemon on ${os.hostname()}`;
+  if (agent.provider !== "CLAUDE" && agent.provider !== "CODEX") {
     try {
       await callTool(auth, "comments.create", {
         issueId,
-        body: `[forge-cli local daemon] Picked up assignment on ${os.hostname()}, but the \`${agent.provider}\` provider adapter isn't implemented yet. The full agent loop only runs for CLAUDE today.`,
+        body: [
+          `[${provenance}]`,
+          "",
+          `**Picked up assignment** — but the \`${agent.provider}\` provider adapter isn't implemented yet.`,
+          "",
+          "CLAUDE and CODEX are supported today; HERMES is handled by its own daemon.",
+        ].join("\n"),
       });
     } catch (err) {
       console.error(`[issue-loop] comments.create failed:`, err);
@@ -107,7 +124,13 @@ export async function handleAgentAssigned(args: {
     try {
       await callTool(auth, "comments.create", {
         issueId,
-        body: `[forge-cli daemon on ${os.hostname()}] Picked up assignment but \`agent.context.bundle\` failed; check API key scopes (READ_ISSUES required).`,
+        body: [
+          `[${provenance}]`,
+          "",
+          "**Picked up assignment** — but `agent.context.bundle` failed.",
+          "",
+          "Check the API key scopes — `READ_ISSUES` is required to assemble the bundle.",
+        ].join("\n"),
       });
     } catch (err) {
       console.error(`[issue-loop] failure-comment failed:`, err);
@@ -133,10 +156,20 @@ export async function handleAgentAssigned(args: {
   // Step 3 — starter comment so the operator sees the daemon picked it up
   // AND so the audit fan-out opens the AgentRun (giving us a runId).
   let runId: string | null = bundle.currentRun?.id ?? null;
+  const starterProviderLabel = agent.provider === "CODEX" ? "Codex" : "Claude Code";
+  const commentCount = bundle.comments?.length ?? 0;
+  const attachmentCount = bundle.attachments?.length ?? 0;
   try {
     await callTool(auth, "comments.create", {
       issueId,
-      body: `[forge-cli daemon on ${os.hostname()}] Picked up assignment for ${agent.profileKey}. Bundling context (${bundle.comments?.length ?? 0} comments, ${bundle.attachments?.length ?? 0} attachments, ${attachments.length} inlined) and spawning Claude Code now.`,
+      body: [
+        `[${provenance}]`,
+        "",
+        `**Picked up assignment** for \`@${agent.profileKey}\` — spawning ${starterProviderLabel}.`,
+        "",
+        `- Comments bundled: \`${commentCount}\``,
+        `- Attachments seen: \`${attachmentCount}\` (inlined: \`${attachments.length}\`)`,
+      ].join("\n"),
     });
   } catch (err) {
     console.error(`[issue-loop] starter comment failed:`, err);
@@ -156,46 +189,67 @@ export async function handleAgentAssigned(args: {
     console.log(chalk.gray(`    runId=${runId}`));
   }
 
-  // Step 4 — spawn claude with the bundle + attachments.
+  // Step 4 — spawn the provider's CLI with the bundle + attachments.
   const postedSet = new Set<string>(); // dedupe progress comments
   let progressCounter = 0;
+  let lastUsage: ProviderUsage = {};
+  const providerLabel = agent.provider === "CODEX" ? "Codex" : "Claude Code";
 
-  let lastUsage: ClaudeUsage = {};
+  // onProgress — at each assistant message boundary, post a comment.
+  // Cap at first ~12 progress messages per run so a chatty model doesn't
+  // spam the comment thread.
+  const onProgress = (text: string) => {
+    if (progressCounter >= 12) return;
+    const key = text.slice(0, 80);
+    if (postedSet.has(key)) return;
+    postedSet.add(key);
+    progressCounter += 1;
+    // Fire-and-forget; comment failures shouldn't block the loop.
+    void callTool(auth, "comments.create", {
+      issueId,
+      body: text,
+    }).catch((err) => {
+      console.error(`[issue-loop] progress comments.create failed:`, err);
+    });
+  };
 
   try {
-    const result = await runClaudeIssue(
-      {
-        auth,
-        agent: {
-          id: agent.id,
-          profileKey: agent.profileKey,
-          name: agent.name,
-          provider: agent.provider,
-        },
-        issueId,
-        bundle: bundle as IssueBundle,
-        attachments,
-        workspaceSlug: auth.workspaceSlug,
-        runId,
-      },
-      // onProgress — at each assistant message boundary, post a comment.
-      // Cap at first ~12 progress messages per run so a chatty model
-      // doesn't spam the comment thread.
-      (text) => {
-        if (progressCounter >= 12) return;
-        const key = text.slice(0, 80);
-        if (postedSet.has(key)) return;
-        postedSet.add(key);
-        progressCounter += 1;
-        // Fire-and-forget; comment failures shouldn't block the loop.
-        void callTool(auth, "comments.create", {
-          issueId,
-          body: text,
-        }).catch((err) => {
-          console.error(`[issue-loop] progress comments.create failed:`, err);
-        });
-      },
-    );
+    const result =
+      agent.provider === "CODEX"
+        ? await runCodexIssue(
+            {
+              auth,
+              agent: {
+                id: agent.id,
+                profileKey: agent.profileKey,
+                name: agent.name,
+                provider: agent.provider,
+              },
+              issueId,
+              bundle: bundle as IssueBundle,
+              attachments,
+              workspaceSlug: auth.workspaceSlug,
+              runId,
+            },
+            onProgress,
+          )
+        : await runClaudeIssue(
+            {
+              auth,
+              agent: {
+                id: agent.id,
+                profileKey: agent.profileKey,
+                name: agent.name,
+                provider: agent.provider,
+              },
+              issueId,
+              bundle: bundle as IssueBundle,
+              attachments,
+              workspaceSlug: auth.workspaceSlug,
+              runId,
+            },
+            onProgress,
+          );
     lastUsage = result.usage;
 
     // Step 5 — final summary comment if we have one and it wasn't posted
@@ -219,20 +273,35 @@ export async function handleAgentAssigned(args: {
     }
     if (result.exitCode !== 0) {
       try {
+        const tail = result.finalText
+          ? `\n\n**Last output:**\n\n\`\`\`\n${result.finalText.slice(0, 2_000)}\n\`\`\``
+          : "";
         await callTool(auth, "comments.create", {
           issueId,
-          body: `[forge-cli daemon] Claude Code exited with code ${result.exitCode}. The run is left open for human intervention.${result.finalText ? `\n\nLast output:\n${result.finalText.slice(0, 2_000)}` : ""}`,
+          body: [
+            `[${provenance}]`,
+            "",
+            `**${providerLabel} exited with code \`${result.exitCode}\`.** Run left open for human intervention.${tail}`,
+          ].join("\n"),
         });
       } catch (err) {
         console.error(`[issue-loop] error comments.create failed:`, err);
       }
     }
   } catch (err) {
-    console.error(`[issue-loop] runClaudeIssue threw:`, err);
+    console.error(`[issue-loop] run${providerLabel} threw:`, err);
     try {
       await callTool(auth, "comments.create", {
         issueId,
-        body: `[forge-cli daemon] Unexpected error while running Claude Code: ${err instanceof Error ? err.message : String(err)}. Run left open.`,
+        body: [
+          `[${provenance}]`,
+          "",
+          `**Unexpected error while running ${providerLabel}.** Run left open.`,
+          "",
+          "```",
+          err instanceof Error ? err.message : String(err),
+          "```",
+        ].join("\n"),
       });
     } catch (commentErr) {
       console.error(`[issue-loop] crash-comment failed:`, commentErr);

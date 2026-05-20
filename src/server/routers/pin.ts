@@ -35,6 +35,18 @@ import { router, protectedProcedure } from "@/server/trpc";
  */
 
 const MAX_LEGACY_PINS = 3;
+/**
+ * Cap for the modern polymorphic pin surface (per-(user, workspaceId)
+ * scope). Workspace-scoped pins and cross-workspace pins each get their
+ * own bucket of 5, so a user can have up to 5 pins in this workspace's
+ * sidebar AND up to 5 cross-workspace pins shown in the topbar strip /
+ * "All workspaces" sidebar slot.
+ *
+ * Enforced in `add` and the add-branch of `toggleEntity` only — unpin
+ * is always allowed regardless of count so a user can recover from
+ * legacy data that's already over cap.
+ */
+const MAX_PINS_PER_SCOPE = 5;
 
 // ---------------------------------------------------------------------------
 // Hydration helpers
@@ -716,6 +728,12 @@ export const pinRouter = router({
             where: { userId: ctx.session.user.id, workspaceId },
             select: { orderIndex: true },
           });
+          if (peers.length >= MAX_PINS_PER_SCOPE) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `You can pin up to ${MAX_PINS_PER_SCOPE} items per workspace. Unpin one to make room.`,
+            });
+          }
           const nextOrderIndex =
             peers.length === 0
               ? 0
@@ -816,6 +834,12 @@ export const pinRouter = router({
         where: { userId: ctx.session.user.id, workspaceId },
         select: { orderIndex: true },
       });
+      if (peers.length >= MAX_PINS_PER_SCOPE) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `You can pin up to ${MAX_PINS_PER_SCOPE} items per workspace. Unpin one to make room.`,
+        });
+      }
       const nextOrderIndex =
         peers.length === 0
           ? 0
