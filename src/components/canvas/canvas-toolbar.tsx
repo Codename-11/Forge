@@ -12,12 +12,14 @@ import {
   Eraser,
   Combine,
   Ungroup,
+  Spline,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type ToolKind =
   | "select"
   | "pan"
+  | "connect"
   | "box"
   | "ellipse"
   | "arrow"
@@ -47,6 +49,7 @@ const TOOLS: Array<{
 }> = [
   { kind: "select", label: "Select (V)", Icon: MousePointer2 },
   { kind: "pan", label: "Pan (H)", Icon: Hand },
+  { kind: "connect", label: "Connect (C)", Icon: Spline },
   { kind: "box", label: "Box (R)", Icon: Square },
   { kind: "ellipse", label: "Ellipse (O)", Icon: Circle },
   { kind: "arrow", label: "Arrow (A)", Icon: ArrowRight },
