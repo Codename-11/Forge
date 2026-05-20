@@ -181,26 +181,36 @@ export function MissionControl() {
     }
   });
 
-  // ---------- Default-tab pref ----------
-  // Apply once per (slug, pref) combo: if the persisted tab is still the
-  // built-in default ("live") and the user has set a pref to something
-  // else, hydrate it. We don't override after the user has manually
-  // switched tabs in this workspace.
+  // ---------- Default-tab pref (per-workspace override → user global) ----------
+  // Apply once per (slug, pref) combo: if the persisted tab is still
+  // the built-in default ("live") and the resolved pref points
+  // elsewhere, hydrate it. We don't override after the user has
+  // manually switched tabs in this workspace.
+  const workspaceId = workspace?.id ?? null;
+  const { data: tabResolved } = trpc.user.missionControlDefaultTabFor.useQuery(
+    { workspaceId: workspaceId ?? "" },
+    {
+      enabled: Boolean(workspaceId),
+      staleTime: 60_000,
+      refetchOnWindowFocus: false,
+    },
+  );
+  const resolvedDefaultTab =
+    tabResolved?.resolved ?? me?.missionControlDefaultTab ?? null;
   const appliedDefaultRef = useRef<string | null>(null);
   useEffect(() => {
     if (!slug) return;
-    const pref = me?.missionControlDefaultTab;
-    if (!pref || pref === "live") return;
-    const key = `${slug}:${pref}`;
+    if (!resolvedDefaultTab || resolvedDefaultTab === "live") return;
+    const key = `${slug}:${resolvedDefaultTab}`;
     if (appliedDefaultRef.current === key) return;
     if (state.tab !== "live") {
       appliedDefaultRef.current = key;
       return;
     }
     appliedDefaultRef.current = key;
-    if (pref === "control" && !isAdmin) return;
-    setTab(pref as MissionControlTab);
-  }, [slug, me?.missionControlDefaultTab, state.tab, setTab, isAdmin]);
+    if (resolvedDefaultTab === "control" && !isAdmin) return;
+    setTab(resolvedDefaultTab as MissionControlTab);
+  }, [slug, resolvedDefaultTab, state.tab, setTab, isAdmin]);
 
   // ---------- Unread chat tracking ----------
   // Per-thread "last seen" timestamp. Bumped whenever the user has the

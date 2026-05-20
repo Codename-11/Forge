@@ -30,10 +30,11 @@ export function ChatTab({
     }
   }, [threads, selectedAgentId]);
 
-  // Build the agent rail: existing threads first (with lastMessageAt), then
-  // agents that have no thread yet.
-  const threadAgentIds = new Set((threads ?? []).map((t) => t.agent.id));
-  const railAgents: Array<{
+  // Build the agent rail: one row per agent (NOT per thread — an agent
+  // with N threads should appear once, with its most-recent thread's
+  // timestamp). Existing-thread agents sort by lastMessageAt; agents
+  // with no thread fall in after, alphabetically.
+  type RailAgent = {
     id: string;
     name: string;
     profileKey: string;
@@ -41,22 +42,27 @@ export function ChatTab({
     status: string;
     role: string;
     lastMessageAt?: string | Date | null;
-  }> = [];
-
+  };
+  const byAgentId = new Map<string, RailAgent>();
   for (const t of threads ?? []) {
-    railAgents.push({
-      id: t.agent.id,
-      name: t.agent.name,
-      profileKey: t.agent.profileKey,
-      avatar: t.agent.avatar ?? null,
-      status: t.agent.status,
-      role: t.agent.role,
-      lastMessageAt: t.lastMessageAt,
-    });
+    const prior = byAgentId.get(t.agent.id);
+    const ts = t.lastMessageAt ? new Date(t.lastMessageAt).getTime() : 0;
+    const priorTs = prior?.lastMessageAt ? new Date(prior.lastMessageAt).getTime() : -1;
+    if (!prior || ts > priorTs) {
+      byAgentId.set(t.agent.id, {
+        id: t.agent.id,
+        name: t.agent.name,
+        profileKey: t.agent.profileKey,
+        avatar: t.agent.avatar ?? null,
+        status: t.agent.status,
+        role: t.agent.role,
+        lastMessageAt: t.lastMessageAt,
+      });
+    }
   }
   for (const a of agents ?? []) {
-    if (threadAgentIds.has(a.id)) continue;
-    railAgents.push({
+    if (byAgentId.has(a.id)) continue;
+    byAgentId.set(a.id, {
       id: a.id,
       name: a.name,
       profileKey: a.profileKey,
@@ -65,6 +71,12 @@ export function ChatTab({
       role: a.role,
     });
   }
+  const railAgents: RailAgent[] = Array.from(byAgentId.values()).sort((x, y) => {
+    const xTs = x.lastMessageAt ? new Date(x.lastMessageAt).getTime() : -Infinity;
+    const yTs = y.lastMessageAt ? new Date(y.lastMessageAt).getTime() : -Infinity;
+    if (xTs !== yTs) return yTs - xTs;
+    return x.name.localeCompare(y.name);
+  });
 
   return (
     <div className="flex h-full">
