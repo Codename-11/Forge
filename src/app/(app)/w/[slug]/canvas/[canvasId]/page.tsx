@@ -1882,6 +1882,7 @@ export default function CanvasViewerPage() {
         onSnapToGridChange={setSnapToGrid}
         onPresenceVisibleChange={setPresenceVisible}
         onArchived={() => router.push(`/w/${ws.slug}/canvas`)}
+        onDeleted={() => router.push(`/w/${ws.slug}/canvas`)}
       />
       <Confirm
         open={confirm?.kind === "remove-card"}

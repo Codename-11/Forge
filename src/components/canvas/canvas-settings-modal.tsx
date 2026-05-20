@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Archive } from "lucide-react";
+import { Archive, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { CenterModal, Confirm } from "@/components/ui/modal";
 import { Section } from "@/components/ui";
@@ -28,6 +28,7 @@ export function CanvasSettingsModal({
   onSnapToGridChange,
   onPresenceVisibleChange,
   onArchived,
+  onDeleted,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -41,10 +42,12 @@ export function CanvasSettingsModal({
   onSnapToGridChange: (v: boolean) => void;
   onPresenceVisibleChange: (v: boolean) => void;
   onArchived: () => void;
+  onDeleted?: () => void;
 }) {
   const utils = trpc.useUtils();
   const [draftName, setDraftName] = useState(name);
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const lastSavedNameRef = useRef(name);
 
   useEffect(() => {
@@ -66,6 +69,17 @@ export function CanvasSettingsModal({
       setConfirmArchive(false);
       onOpenChange(false);
       onArchived();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const deleteMut = trpc.canvas.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Canvas deleted");
+      setConfirmDelete(false);
+      onOpenChange(false);
+      utils.canvas.list.invalidate();
+      (onDeleted ?? onArchived)();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -141,6 +155,25 @@ export function CanvasSettingsModal({
                   <Archive className="h-3.5 w-3.5" /> Archive
                 </Button>
               </div>
+              <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-destructive">Delete canvas</div>
+                  <div className="text-xs text-muted-foreground">
+                    Permanently removes this canvas and all of its nodes, edges,
+                    and shapes. Cannot be undone.
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setConfirmDelete(true)}
+                  disabled={deleteMut.isPending}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Delete
+                </Button>
+              </div>
             </div>
           </Section>
 
@@ -186,6 +219,23 @@ export function CanvasSettingsModal({
         variant="destructive"
         loading={archiveMut.isPending}
         onConfirm={() => archiveMut.mutate({ id: canvasId })}
+      />
+
+      <Confirm
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete canvas?"
+        description={
+          <>
+            This permanently removes the canvas and all of its nodes, edges,
+            and shapes. Type the canvas&apos;s name to confirm.
+          </>
+        }
+        variant="destructive"
+        typeToConfirm={name}
+        primaryLabel="Delete canvas"
+        loading={deleteMut.isPending}
+        onConfirm={() => deleteMut.mutate({ id: canvasId, confirm: name })}
       />
     </>
   );

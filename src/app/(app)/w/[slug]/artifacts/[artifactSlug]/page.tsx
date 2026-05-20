@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Archive, Save, ChevronLeft } from "lucide-react";
+import { Archive, Save, ChevronLeft, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ArtifactStatus, ArtifactType } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
@@ -44,6 +44,7 @@ export default function ArtifactDetailPage() {
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [changelog, setChangelog] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const { data: artifact, isLoading } = trpc.artifact.getBySlug.useQuery({
     slug: params.artifactSlug,
@@ -79,6 +80,14 @@ export default function ArtifactDetailPage() {
   const archive = trpc.artifact.archive.useMutation({
     onSuccess: () => {
       toast.success("Archived");
+      router.push(`/w/${ws.slug}/artifacts`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const deleteM = trpc.artifact.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Artifact deleted");
       router.push(`/w/${ws.slug}/artifacts`);
     },
     onError: (e) => toast.error(e.message),
@@ -250,15 +259,26 @@ export default function ArtifactDetailPage() {
             </ul>
           </div>
 
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-warning"
-            onClick={() => setArchiveOpen(true)}
-            disabled={archive.isPending}
-          >
-            <Archive className="h-3.5 w-3.5" /> Archive artifact
-          </Button>
+          <div className="flex flex-col gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-warning"
+              onClick={() => setArchiveOpen(true)}
+              disabled={archive.isPending}
+            >
+              <Archive className="h-3.5 w-3.5" /> Archive artifact
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setDeleteOpen(true)}
+              disabled={deleteM.isPending}
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Delete artifact
+            </Button>
+          </div>
         </aside>
       </div>
 
@@ -274,6 +294,28 @@ export default function ArtifactDetailPage() {
           archive.mutate(
             { id: artifact.id },
             { onSettled: () => setArchiveOpen(false) },
+          )
+        }
+      />
+
+      <Confirm
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete artifact?"
+        description={
+          <>
+            This permanently removes the artifact and all of its versions.
+            Type the artifact&apos;s title to confirm.
+          </>
+        }
+        variant="destructive"
+        typeToConfirm={artifact.title}
+        primaryLabel="Delete artifact"
+        loading={deleteM.isPending}
+        onConfirm={() =>
+          deleteM.mutate(
+            { id: artifact.id, confirm: artifact.title },
+            { onSettled: () => setDeleteOpen(false) },
           )
         }
       />

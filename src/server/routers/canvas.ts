@@ -225,6 +225,55 @@ export const canvasRouter = router({
       return { ok: true };
     }),
 
+  delete: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        confirm: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (
+        ctx.membership.role !== "OWNER" &&
+        ctx.membership.role !== "ADMIN"
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Admin role required to hard-delete a canvas.",
+        });
+      }
+      const canvas = await ctx.db.workspaceCanvas.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true, name: true },
+      });
+      if (!canvas) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Canvas not found." });
+      }
+      if (input.confirm !== canvas.name) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Confirmation text does not match the canvas name.",
+        });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          entity: "workspace-canvas",
+          entityId: canvas.id,
+          action: "delete",
+          before: { name: canvas.name },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: canvas.id,
+        });
+        // Nodes, edges, shapes cascade-delete from WorkspaceCanvas via the
+        // schema's onDelete: Cascade — a single delete covers them all.
+        await tx.workspaceCanvas.delete({ where: { id: canvas.id } });
+      });
+      return { ok: true };
+    }),
+
   rename: workspaceProcedure
     .input(z.object({ id: z.string().cuid(), name: z.string().min(1).max(200) }))
     .mutation(async ({ ctx, input }) => {
