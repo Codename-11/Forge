@@ -1,6 +1,16 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { Bot, ChevronDown, ChevronRight, Layers, RefreshCw, Wrench } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  Layers,
+  RefreshCw,
+  Settings2,
+  Square,
+  Wrench,
+} from "lucide-react";
+import type { AgentProvider } from "@prisma/client";
 import { usePathname } from "next/navigation";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -173,6 +183,13 @@ type DraftBubble = {
   startedAt: number;
 };
 
+/**
+ * Sentinel used as `streamBubble.error` when the operator clicked Stop.
+ * Distinct from real stream errors so the bubble renders a quiet
+ * "(stopped)" indicator instead of the amber Retry rail.
+ */
+const STREAM_STOP_SENTINEL = "__forge_stream_stopped__";
+
 const ALWAYS_ALLOW_KEY = (threadId: string, toolName: string) =>
   `forge.chat.alwaysAllow.${threadId}.${toolName}`;
 
@@ -228,6 +245,7 @@ function AgentStreamBubble({
   bubble,
   agentName,
   onRetry,
+  onStop,
   onApprove,
   onDecline,
   threadId,
@@ -235,6 +253,7 @@ function AgentStreamBubble({
   bubble: StreamBubble;
   agentName?: string;
   onRetry?: () => void;
+  onStop?: () => void;
   onApprove?: (callId: string, alwaysAllow?: boolean) => void;
   onDecline?: (callId: string) => void;
   threadId?: string;
@@ -244,6 +263,7 @@ function AgentStreamBubble({
     ? ((bubble.finishedAt - bubble.startedAt) / 1000).toFixed(1)
     : null;
   const isLive = bubble.finishedAt === null && !bubble.error;
+  const wasStopped = bubble.error === STREAM_STOP_SENTINEL;
   return (
     <div className="flex items-start gap-2">
       <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ember/15 text-ember">
@@ -251,8 +271,25 @@ function AgentStreamBubble({
       </span>
       <div className="min-w-0 max-w-[85%] space-y-1.5 rounded-md border border-border bg-card/60 px-2 py-1.5 text-[0.75rem] text-foreground">
         {agentName && (
-          <div className="text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
-            {agentName}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+              {agentName}
+              {wasStopped && (
+                <span className="ml-1 normal-case tracking-normal text-muted-foreground/70">
+                  (stopped)
+                </span>
+              )}
+            </span>
+            {isLive && onStop && (
+              <button
+                type="button"
+                onClick={onStop}
+                title="Stop generating"
+                className="inline-flex h-4 w-4 items-center justify-center rounded border border-border bg-card/40 text-muted-foreground hover:text-foreground"
+              >
+                <Square className="h-2.5 w-2.5" fill="currentColor" />
+              </button>
+            )}
           </div>
         )}
 
@@ -318,7 +355,7 @@ function AgentStreamBubble({
           </div>
         )}
 
-        {bubble.error && (
+        {bubble.error && !wasStopped && (
           <div className="flex items-center justify-between gap-2 rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-1 text-[0.6875rem] text-amber-700 dark:text-amber-300">
             <span className="truncate">{bubble.error}</span>
             {onRetry && (
@@ -665,6 +702,132 @@ function buildSuggestedPrompts(
   return out;
 }
 
+/**
+ * Per-thread provider/model override popover. Anchored to a gear icon
+ * in the chat header. Two controls:
+ *   - Provider select — "use agent default" | HERMES | CLAUDE | CODEX | CUSTOM.
+ *   - Model text input — debounced commit (500ms).
+ *
+ * Both are optional; clearing either reverts to the agent / provider
+ * default at the next stream call. Active overrides surface as a small
+ * "via <provider>" pill next to the agent name (rendered by the header,
+ * not here).
+ */
+function ProviderOverridePopover({
+  threadId,
+  providerOverride,
+  modelOverride,
+  defaultProvider,
+}: {
+  threadId: string;
+  providerOverride: AgentProvider | null;
+  modelOverride: string | null;
+  defaultProvider: AgentProvider;
+}) {
+  const utils = trpc.useUtils();
+  const setOverrideM = trpc.chat.setOverride.useMutation({
+    onSuccess: () => {
+      void utils.chat.getThread.invalidate({ threadId });
+      void utils.chat.threads.invalidate();
+    },
+  });
+  const [open, setOpen] = useState(false);
+  const [modelDraft, setModelDraft] = useState(modelOverride ?? "");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setModelDraft(modelOverride ?? "");
+  }, [modelOverride]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest("[data-chat-override-popover]")) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const commitModel = useCallback(
+    (next: string) => {
+      const trimmed = next.trim();
+      const normalised = trimmed.length > 0 ? trimmed : null;
+      if (normalised === (modelOverride ?? null)) return;
+      setOverrideM.mutate({ threadId, model: normalised });
+    },
+    [modelOverride, threadId, setOverrideM],
+  );
+
+  const onModelChange = (next: string) => {
+    setModelDraft(next);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => commitModel(next), 500);
+  };
+
+  const onProviderChange = (next: string) => {
+    const value = next === "" ? null : (next as AgentProvider);
+    setOverrideM.mutate({ threadId, provider: value });
+  };
+
+  const overridesActive =
+    providerOverride !== null || (modelOverride !== null && modelOverride.length > 0);
+
+  return (
+    <div data-chat-override-popover className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Thread settings"
+        className={cn(
+          "inline-flex h-5 w-5 items-center justify-center rounded border border-border bg-card/40 text-muted-foreground hover:text-foreground",
+          overridesActive && "text-ember",
+        )}
+      >
+        <Settings2 className="h-3 w-3" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-6 z-20 w-64 space-y-2 rounded-md border border-border bg-card/95 p-2 text-[0.6875rem] shadow-lg backdrop-blur">
+          <div className="space-y-1">
+            <label className="block text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+              Provider override
+            </label>
+            <select
+              value={providerOverride ?? ""}
+              onChange={(e) => onProviderChange(e.target.value)}
+              className="w-full rounded border border-border bg-background/60 px-1.5 py-1 text-[0.6875rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ember/40"
+            >
+              <option value="">Use agent default ({defaultProvider})</option>
+              <option value="HERMES">HERMES</option>
+              <option value="CLAUDE">CLAUDE</option>
+              <option value="CODEX">CODEX</option>
+              <option value="CUSTOM">CUSTOM</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+              Model override
+            </label>
+            <input
+              type="text"
+              value={modelDraft}
+              onChange={(e) => onModelChange(e.target.value)}
+              onBlur={() => commitModel(modelDraft)}
+              placeholder="e.g. claude-opus-4-5"
+              className="w-full rounded border border-border bg-background/60 px-1.5 py-1 font-mono text-[0.6875rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ember/40"
+            />
+            <p className="text-[0.5625rem] italic text-muted-foreground/60">
+              Leave blank to use the provider default.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatThreadView({
   agentId,
   threadId: selectedThreadId,
@@ -692,6 +855,12 @@ export function ChatThreadView({
     ? { thread: selectedThreadQ.data, agent: selectedThreadQ.data.agent, messages: selectedThreadQ.data.messages }
     : threadM.data;
   const threadId = data?.thread.id;
+  const providerOverride =
+    (data?.thread as { providerOverride?: AgentProvider | null } | undefined)
+      ?.providerOverride ?? null;
+  const modelOverride =
+    (data?.thread as { modelOverride?: string | null } | undefined)?.modelOverride ??
+    null;
   const { data: diagnostics } = trpc.chat.threadDiagnostics.useQuery(
     { threadId: threadId ?? "" },
     { enabled: Boolean(threadId), staleTime: 10_000 },
@@ -859,7 +1028,11 @@ export function ChatThreadView({
    * for that case (see audit.ts branch (d)).
    */
   const runStreamingSend = useCallback(
-    async (targetThreadId: string, body: string) => {
+    async (
+      targetThreadId: string,
+      body: string,
+      opts?: { attachmentIds?: string[] },
+    ) => {
       // Cancel any in-flight stream before starting a new one.
       streamAbortRef.current?.abort();
       const ctrl = new AbortController();
@@ -887,11 +1060,26 @@ export function ChatThreadView({
             threadId: targetThreadId,
             body,
             canvasId: canvasIdRef.current ?? undefined,
+            attachments: opts?.attachmentIds,
           }),
           signal: ctrl.signal,
         });
       } catch (err) {
-        if (ctrl.signal.aborted) return;
+        if (ctrl.signal.aborted) {
+          // Stop click: mark the bubble as stopped (sentinel error) and
+          // freeze whatever partial content we've accumulated.
+          setStreamBubble((b) =>
+            b
+              ? {
+                  ...b,
+                  error: STREAM_STOP_SENTINEL,
+                  finishedAt: b.finishedAt ?? Date.now(),
+                }
+              : b,
+          );
+          setIsStreaming(false);
+          return;
+        }
         const msg = err instanceof Error ? err.message : "Network error";
         setStreamBubble((b) =>
           b ? { ...b, error: msg, finishedAt: Date.now() } : b,
@@ -1108,7 +1296,17 @@ export function ChatThreadView({
           }
         }
       } catch (err) {
-        if (!ctrl.signal.aborted) {
+        if (ctrl.signal.aborted) {
+          setStreamBubble((b) =>
+            b
+              ? {
+                  ...b,
+                  error: STREAM_STOP_SENTINEL,
+                  finishedAt: b.finishedAt ?? Date.now(),
+                }
+              : b,
+          );
+        } else {
           const msg = err instanceof Error ? err.message : "Stream interrupted";
           setStreamBubble((b) =>
             b
@@ -1190,18 +1388,40 @@ export function ChatThreadView({
   const handleSend = async (body: string, files: File[] = []) => {
     setPendingDraft({ body, files: files.map((f) => f.name || "attachment") });
     try {
-      // Streaming path: text-only, requires a resolved threadId.
-      if (files.length === 0 && threadId) {
-        // Persist the USER row visually right away — runStreamingSend will
-        // do the actual server write; the invalidate after `done` brings
-        // the canonical row back. setPendingDraft drives the placeholder
-        // bubble so the user sees their message instantly.
-        await runStreamingSend(threadId, body);
+      // Streaming path with optional attachments. Uploads target the
+      // *pending* message id we create first; the streaming route then
+      // re-targets those attachment rows at the real USER ChatMessage it
+      // persists (see `attachments.updateMany` in route.ts).
+      if (threadId) {
+        const attachmentIds: string[] = [];
+        if (files.length > 0) {
+          const pending = await createPendingM.mutateAsync({
+            agentId,
+            threadId: selectedThreadId ?? undefined,
+            body,
+            context: currentContext,
+          });
+          for (const file of files) {
+            const { attachmentId } = await uploadAttachmentFile({
+              file,
+              targetType: "chat-message",
+              targetId: pending.messageId,
+              initUpload: initUploadM.mutateAsync,
+              finalize: finalizeM.mutateAsync,
+            });
+            attachmentIds.push(attachmentId);
+          }
+          await utils.attachment.list.invalidate({
+            targetType: "chat-message",
+            targetId: pending.messageId,
+          });
+        }
+        await runStreamingSend(threadId, body, { attachmentIds });
         return;
       }
+
+      // No resolved threadId yet (initial mount race).
       if (files.length === 0) {
-        // No resolved threadId yet (initial mount race) — fall back to
-        // chat.send so the thread gets created server-side.
         await sendM.mutateAsync({
           agentId,
           threadId: selectedThreadId ?? undefined,
@@ -1210,7 +1430,8 @@ export function ChatThreadView({
         });
         return;
       }
-
+      // Attachments without a resolved threadId — fall back to the legacy
+      // pending-message + dispatch flow so the message survives.
       const pending = await createPendingM.mutateAsync({
         agentId,
         threadId: selectedThreadId ?? undefined,
@@ -1435,6 +1656,18 @@ export function ChatThreadView({
             {isEphemeral ? "session-only" : "persistent"}
           </span>
 
+          {/* Override pill — only when at least one override is set. */}
+          {(providerOverride || modelOverride) && (
+            <span className="rounded-full border border-ember/30 bg-ember/10 px-1.5 py-0 text-[0.5625rem] uppercase tracking-wider text-ember">
+              via {providerOverride ?? agentFull?.provider ?? "default"}
+              {modelOverride && (
+                <span className="ml-1 normal-case tracking-normal font-mono text-foreground/80">
+                  {modelOverride}
+                </span>
+              )}
+            </span>
+          )}
+
           {/* Presence indicator */}
           <span className="ml-auto flex items-center gap-1.5">
             {isEphemeral ? (
@@ -1453,6 +1686,14 @@ export function ChatThreadView({
                 offline
                 {lastHeartbeatAt ? ` · last seen ${relativeTime(lastHeartbeatAt)}` : ""}
               </span>
+            )}
+            {threadId && agentFull && (
+              <ProviderOverridePopover
+                threadId={threadId}
+                providerOverride={providerOverride}
+                modelOverride={modelOverride}
+                defaultProvider={agentFull.provider}
+              />
             )}
           </span>
         </div>
@@ -1524,7 +1765,9 @@ export function ChatThreadView({
             agentName={agent?.name}
             threadId={threadId ?? undefined}
             onRetry={
-              streamBubble.error && threadId
+              streamBubble.error &&
+              streamBubble.error !== STREAM_STOP_SENTINEL &&
+              threadId
                 ? () => {
                     const prompt = streamBubble.lastPrompt;
                     setStreamBubble(null);
@@ -1532,6 +1775,7 @@ export function ChatThreadView({
                   }
                 : undefined
             }
+            onStop={() => streamAbortRef.current?.abort()}
             onApprove={(callId, alwaysAllow) => void respondToTool(callId, true, alwaysAllow)}
             onDecline={(callId) => void respondToTool(callId, false)}
           />

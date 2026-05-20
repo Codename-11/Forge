@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { AgentRunStatus, ChatContextMode, ChatRole, EventKind } from "@prisma/client";
+import {
+  AgentProvider,
+  AgentRunStatus,
+  ChatContextMode,
+  ChatRole,
+  EventKind,
+} from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure } from "@/server/trpc";
@@ -617,6 +623,36 @@ export const chatRouter = router({
           ...(input.contextMode !== undefined ? { contextMode: input.contextMode } : {}),
         },
       });
+    }),
+
+  /**
+   * Set or clear per-thread provider/model overrides. Null on either
+   * field reverts to the agent default (provider) / the provider default
+   * model. Both fields are optional in the input — the mutation only
+   * touches columns the caller specifies.
+   */
+  setOverride: workspaceProcedure
+    .input(
+      z.object({
+        threadId: idString,
+        provider: z.nativeEnum(AgentProvider).nullable().optional(),
+        model: z.string().trim().max(120).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
+        select: { id: true },
+      });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Chat thread not found" });
+      const data: Prisma.ChatThreadUpdateInput = {};
+      if (input.provider !== undefined) data.providerOverride = input.provider;
+      if (input.model !== undefined) {
+        const trimmed = input.model?.trim() ?? null;
+        data.modelOverride = trimmed && trimmed.length > 0 ? trimmed : null;
+      }
+      await ctx.db.chatThread.update({ where: { id: thread.id }, data });
+      return { ok: true } as const;
     }),
 
   compactThread: workspaceProcedure

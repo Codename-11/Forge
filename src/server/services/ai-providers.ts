@@ -32,6 +32,10 @@ interface ProviderDef {
   description: string;
   /// Default model when the workspace doesn't override.
   defaultModel: string;
+  /// True when the provider's OpenAI-compatible surface accepts the
+  /// multimodal `image_url` content block. Drives chat-stream's
+  /// fallback behaviour for image attachments.
+  supportsImageInput: boolean;
   /// Resolve baseURL + apiKey at call time so env reloads pick up.
   resolve: () =>
     | { ok: true; baseURL: string; apiKey: string; defaultHeaders?: Record<string, string> }
@@ -45,6 +49,7 @@ const PROVIDERS: Record<ProviderId, ProviderDef> = {
     description:
       "Forge's default. Routes through the Hermes model-router plugin to whatever upstream provider the workspace's session is configured for.",
     defaultModel: "claude-haiku-4-5-20251001",
+    supportsImageInput: true,
     resolve: () => {
       const baseURL =
         process.env.HERMES_GATEWAY_URL ??
@@ -59,6 +64,7 @@ const PROVIDERS: Record<ProviderId, ProviderDef> = {
     description:
       "Direct OpenAI API. Set OPENAI_API_KEY (and optionally OPENAI_BASE_URL for OpenRouter / LM Studio etc.).",
     defaultModel: "gpt-4o-mini",
+    supportsImageInput: true,
     resolve: () => {
       const apiKey = process.env.OPENAI_API_KEY;
       if (!apiKey)
@@ -73,6 +79,7 @@ const PROVIDERS: Record<ProviderId, ProviderDef> = {
     description:
       "Anthropic's OpenAI-compatible endpoint. Set ANTHROPIC_API_KEY.",
     defaultModel: "claude-haiku-4-5-20251001",
+    supportsImageInput: true,
     resolve: () => {
       const apiKey = process.env.ANTHROPIC_API_KEY;
       if (!apiKey)
@@ -92,6 +99,10 @@ const PROVIDERS: Record<ProviderId, ProviderDef> = {
     description:
       "Any OpenAI-compatible /v1/chat/completions endpoint. Set FORGE_AI_BASE_URL and FORGE_AI_API_KEY.",
     defaultModel: "gpt-4o-mini",
+    // Conservative default — custom endpoints (LM Studio, vLLM with non-VLM
+    // models, etc.) may not accept image_url blocks. Operators can flip the
+    // env var when they know the upstream supports it.
+    supportsImageInput: process.env.FORGE_AI_SUPPORTS_IMAGES === "1",
     resolve: () => {
       const baseURL = process.env.FORGE_AI_BASE_URL;
       const apiKey = process.env.FORGE_AI_API_KEY;
@@ -143,7 +154,12 @@ export function isProviderAvailable(id: string | null | undefined): boolean {
  */
 export function getClient(
   providerId: string | null | undefined,
-): { client: OpenAI; defaultModel: string; providerId: ProviderId } | null {
+): {
+  client: OpenAI;
+  defaultModel: string;
+  providerId: ProviderId;
+  supportsImageInput: boolean;
+} | null {
   const provider = getProvider(providerId);
   const r = provider.resolve();
   if (!r.ok) {
@@ -161,5 +177,6 @@ export function getClient(
     }),
     defaultModel: provider.defaultModel,
     providerId: provider.id,
+    supportsImageInput: provider.supportsImageInput,
   };
 }
