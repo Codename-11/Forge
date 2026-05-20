@@ -14,6 +14,7 @@ import { type PinTargetType } from "@prisma/client";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { broadcastCrossTab } from "@/hooks/use-realtime";
+import { IssueHoverPreview } from "@/components/issue-hover-preview";
 import type { HydratedPin } from "@/server/routers/pin";
 
 /**
@@ -84,30 +85,51 @@ export function PinnedSidebarSection({
         const href = pinHref(p, workspaceSlug);
         const label = pinLabel(p);
         const mono = p.targetType === "ISSUE" || p.targetType === "PROJECT";
+        // Only wrap with hover-preview for ISSUE pins in the current
+        // workspace — `issue.summary` is workspace-scoped and would
+        // miss cross-workspace pins. Collapsed rail also skips hover
+        // since the label / chip itself is hidden.
+        const showIssuePreview =
+          !collapsed &&
+          p.target.targetType === "ISSUE" &&
+          p.workspaceId === workspaceId;
+        const rowLink = (
+          <Link
+            href={href}
+            className={cn(
+              "focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 hover:bg-subtle",
+            )}
+            title={label}
+          >
+            <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            {!collapsed && (
+              <span
+                className={cn(
+                  "min-w-0 truncate text-xs",
+                  mono && "font-mono",
+                )}
+              >
+                {label}
+              </span>
+            )}
+          </Link>
+        );
         return (
           <li
             key={p.id}
             className="group/pin relative flex items-center"
           >
-            <Link
-              href={href}
-              className={cn(
-                "focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 hover:bg-subtle",
-              )}
-              title={label}
-            >
-              <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              {!collapsed && (
-                <span
-                  className={cn(
-                    "min-w-0 truncate text-xs",
-                    mono && "font-mono",
-                  )}
-                >
-                  {label}
-                </span>
-              )}
-            </Link>
+            {showIssuePreview && p.target.targetType === "ISSUE" ? (
+              <IssueHoverPreview
+                issueKey={p.target.key}
+                workspaceSlug={workspaceSlug}
+                className="relative flex min-w-0 flex-1"
+              >
+                {rowLink}
+              </IssueHoverPreview>
+            ) : (
+              rowLink
+            )}
             {!collapsed && (
               <button
                 type="button"

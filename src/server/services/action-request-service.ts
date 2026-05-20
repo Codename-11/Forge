@@ -1,8 +1,87 @@
 import "server-only";
-import type { Prisma, PrismaClient } from "@prisma/client";
-import { ActionRequestStatus, EventKind, NotificationSeverity } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
+import {
+  ActionRequestKind,
+  ActionRequestStatus,
+  EventKind,
+  NotificationSeverity,
+  Prisma,
+  RelationKind,
+  Role,
+} from "@prisma/client";
 import { TRPCError } from "@trpc/server";
+import { z } from "zod";
 import { recordChange } from "@/server/audit";
+
+/**
+ * Per-kind payload schemas. The MCP + tRPC entry points strip any
+ * unrecognized keys (Zod's default) so callers can't sneak extra
+ * state through `payload`. Each shape's referenced ids are
+ * cross-tenant-validated inside `createActionRequest` before persist.
+ */
+const transitionPayload = z.object({
+  statusId: z.string().cuid(),
+});
+const setLabelsPayload = z.object({
+  add: z.array(z.string().cuid()).max(50).default([]),
+  remove: z.array(z.string().cuid()).max(50).default([]),
+});
+const assignPayload = z.object({
+  userIds: z.array(z.string().cuid()).max(50),
+});
+const assignAgentPayload = z.object({
+  agentId: z.string().cuid(),
+});
+const archivePayload = z.object({}).default({});
+const closeAsDuplicatePayload = z.object({
+  duplicateOfIssueId: z.string().cuid(),
+  /** Optional: status to flip the source issue to (typically CANCELED). */
+  statusId: z.string().cuid().optional(),
+});
+
+export const actionRequestPayloadSchemas = {
+  TRANSITION: transitionPayload,
+  SET_LABELS: setLabelsPayload,
+  ASSIGN: assignPayload,
+  ASSIGN_AGENT: assignAgentPayload,
+  ARCHIVE: archivePayload,
+  CLOSE_AS_DUPLICATE: closeAsDuplicatePayload,
+} as const;
+
+export type ActionRequestPayloadMap = {
+  TRANSITION: z.infer<typeof transitionPayload>;
+  SET_LABELS: z.infer<typeof setLabelsPayload>;
+  ASSIGN: z.infer<typeof assignPayload>;
+  ASSIGN_AGENT: z.infer<typeof assignAgentPayload>;
+  ARCHIVE: z.infer<typeof archivePayload>;
+  CLOSE_AS_DUPLICATE: z.infer<typeof closeAsDuplicatePayload>;
+};
+
+/**
+ * Parse a payload against the schema for a given kind. Throws a
+ * `BAD_REQUEST` TRPCError with the Zod failure path on mismatch so
+ * callers get a usable error message instead of a stack trace.
+ */
+export function parseActionRequestPayload<K extends ActionRequestKind>(
+  kind: K,
+  raw: unknown,
+): K extends "FREE_FORM" ? null : ActionRequestPayloadMap[Exclude<K, "FREE_FORM">] {
+  if (kind === ActionRequestKind.FREE_FORM) {
+    // Free-form requests never carry a payload — silently drop any
+    // accidental input so callers can pass through a single shape.
+    return null as never;
+  }
+  const schema =
+    actionRequestPayloadSchemas[kind as Exclude<K, "FREE_FORM">];
+  const parsed = schema.safeParse(raw ?? {});
+  if (!parsed.success) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Invalid payload for ActionRequest kind=${kind}: ${parsed.error.message}`,
+    });
+  }
+  return parsed.data as never;
+}
 
 export interface CreateActionRequestInput {
   workspaceId: string;
@@ -11,12 +90,136 @@ export interface CreateActionRequestInput {
   title: string;
   body?: string | null;
   severity?: NotificationSeverity;
+  kind?: ActionRequestKind;
+  payload?: unknown;
   assignedUserId?: string | null;
   assignedAgentId?: string | null;
   sourceType?: string | null;
   sourceId?: string | null;
   issueId?: string | null;
   dueAt?: Date | null;
+}
+
+/**
+ * Validate that every entity referenced by a kind-specific payload
+ * lives in the calling workspace. Runs *before* the create transaction
+ * so a bad payload errors cleanly without a half-written row.
+ */
+async function validatePayloadWorkspaceScope(
+  db: PrismaClient | Prisma.TransactionClient,
+  workspaceId: string,
+  kind: ActionRequestKind,
+  payload: unknown,
+  issueId: string | null,
+): Promise<void> {
+  if (kind === ActionRequestKind.FREE_FORM) return;
+  // All executable kinds target a specific issue, so the row must
+  // carry one. Reject the create rather than silently strand the
+  // request with no Accept target.
+  if (!issueId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `ActionRequest kind=${kind} requires issueId to be set.`,
+    });
+  }
+  if (kind === ActionRequestKind.ARCHIVE) return;
+
+  if (kind === ActionRequestKind.TRANSITION) {
+    const p = payload as ActionRequestPayloadMap["TRANSITION"];
+    const ok = await db.status.findFirst({
+      where: { id: p.statusId, workspaceId },
+      select: { id: true },
+    });
+    if (!ok) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "TRANSITION.statusId does not belong to this workspace.",
+      });
+    }
+    return;
+  }
+
+  if (kind === ActionRequestKind.SET_LABELS) {
+    const p = payload as ActionRequestPayloadMap["SET_LABELS"];
+    const ids = Array.from(new Set([...(p.add ?? []), ...(p.remove ?? [])]));
+    if (ids.length === 0) return;
+    const found = await db.label.findMany({
+      where: { id: { in: ids }, workspaceId },
+      select: { id: true },
+    });
+    if (found.length !== ids.length) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "SET_LABELS payload references labels outside this workspace.",
+      });
+    }
+    return;
+  }
+
+  if (kind === ActionRequestKind.ASSIGN) {
+    const p = payload as ActionRequestPayloadMap["ASSIGN"];
+    if (p.userIds.length === 0) return;
+    const memberships = await db.membership.findMany({
+      where: { workspaceId, userId: { in: p.userIds } },
+      select: { userId: true },
+    });
+    if (memberships.length !== p.userIds.length) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "ASSIGN payload references users outside this workspace's members.",
+      });
+    }
+    return;
+  }
+
+  if (kind === ActionRequestKind.ASSIGN_AGENT) {
+    const p = payload as ActionRequestPayloadMap["ASSIGN_AGENT"];
+    const ok = await db.agent.findFirst({
+      where: { id: p.agentId, workspaceId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!ok) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "ASSIGN_AGENT.agentId does not belong to this workspace.",
+      });
+    }
+    return;
+  }
+
+  if (kind === ActionRequestKind.CLOSE_AS_DUPLICATE) {
+    const p = payload as ActionRequestPayloadMap["CLOSE_AS_DUPLICATE"];
+    const dup = await db.issue.findFirst({
+      where: {
+        id: p.duplicateOfIssueId,
+        workspaceId,
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    if (!dup) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "CLOSE_AS_DUPLICATE.duplicateOfIssueId does not belong to this workspace.",
+      });
+    }
+    if (p.statusId) {
+      const status = await db.status.findFirst({
+        where: { id: p.statusId, workspaceId },
+        select: { id: true },
+      });
+      if (!status) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "CLOSE_AS_DUPLICATE.statusId does not belong to this workspace.",
+        });
+      }
+    }
+    return;
+  }
 }
 
 /**
@@ -37,6 +240,15 @@ export async function createActionRequest(
       throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found in this workspace." });
     }
   }
+  const kind = input.kind ?? ActionRequestKind.FREE_FORM;
+  const parsedPayload = parseActionRequestPayload(kind, input.payload);
+  await validatePayloadWorkspaceScope(
+    db,
+    input.workspaceId,
+    kind,
+    parsedPayload,
+    input.issueId ?? null,
+  );
   const { id } = await db.$transaction(async (tx) => {
     const row = await tx.actionRequest.create({
       data: {
@@ -44,6 +256,11 @@ export async function createActionRequest(
         title: input.title.trim(),
         body: input.body ?? null,
         severity: input.severity ?? NotificationSeverity.INFO,
+        kind,
+        payload:
+          parsedPayload === null
+            ? Prisma.JsonNull
+            : (parsedPayload as Prisma.InputJsonValue),
         requestedByUserId: input.actorAgentId ? null : input.actorId,
         requestedByAgentId: input.actorAgentId ?? null,
         assignedUserId: input.assignedUserId ?? null,
@@ -60,17 +277,19 @@ export async function createActionRequest(
       entity: "action-request",
       entityId: row.id,
       action: "created",
-      after: { title: row.title, severity: row.severity },
+      after: { title: row.title, severity: row.severity, kind: row.kind },
       eventKind: EventKind.ISSUE_UPDATED,
       subjectType: "action-request",
       subjectId: row.id,
       payload: {
         title: row.title,
         severity: row.severity,
+        kind: row.kind,
         assignedUserId: row.assignedUserId,
         assignedAgentId: row.assignedAgentId,
         sourceType: row.sourceType,
         sourceId: row.sourceId,
+        issueId: row.issueId,
       } as Prisma.InputJsonValue,
     });
     return { id: row.id };
@@ -102,6 +321,8 @@ export async function transitionActionRequest(
       data: {
         status: params.status,
         resolvedAt: params.status === ActionRequestStatus.OPEN ? null : new Date(),
+        resolvedByUserId:
+          params.status === ActionRequestStatus.OPEN ? null : params.actorId,
         resolution: params.resolution ?? undefined,
       },
     });
@@ -118,4 +339,504 @@ export async function transitionActionRequest(
       subjectId: row.id,
     });
   });
+}
+
+/**
+ * Permission gate for Accept/Decline. The operator may resolve if any
+ * of the following hold:
+ *   - they are the assigned user
+ *   - they are a watcher on the request's issue
+ *   - their workspace role is OWNER or ADMIN
+ * Returns silently on success; throws FORBIDDEN otherwise.
+ */
+export async function assertCanResolveActionRequest(
+  db: PrismaClient | Prisma.TransactionClient,
+  params: {
+    workspaceId: string;
+    userId: string;
+    request: {
+      id: string;
+      assignedUserId: string | null;
+      issueId: string | null;
+    };
+  },
+): Promise<void> {
+  const { workspaceId, userId, request } = params;
+  if (request.assignedUserId && request.assignedUserId === userId) return;
+  const membership = await db.membership.findUnique({
+    where: { userId_workspaceId: { userId, workspaceId } },
+    select: { role: true },
+  });
+  if (membership && (membership.role === Role.OWNER || membership.role === Role.ADMIN)) {
+    return;
+  }
+  if (request.issueId) {
+    const watcher = await db.issueWatcher.findFirst({
+      where: { issueId: request.issueId, userId },
+      select: { id: true },
+    });
+    if (watcher) return;
+  }
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message:
+      "You don't have permission to resolve this action request. Must be the assignee, a watcher on the issue, or a workspace admin.",
+  });
+}
+
+/**
+ * Dispatch the action attached to a kind=… request. Called by Accept
+ * after the permission gate passes. Each kind is a small Prisma +
+ * recordChange block inline (not a tRPC re-entry — keep all writes in
+ * the same transaction as the action-request flip).
+ */
+async function dispatchActionRequestKind(
+  tx: Prisma.TransactionClient,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    request: {
+      id: string;
+      kind: ActionRequestKind;
+      payload: Prisma.JsonValue | null;
+      issueId: string | null;
+    };
+  },
+): Promise<void> {
+  const { workspaceId, actorId, request } = params;
+  const kind = request.kind;
+  if (kind === ActionRequestKind.FREE_FORM) return;
+  const payload = (request.payload ?? {}) as Record<string, unknown>;
+  if (!request.issueId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `ActionRequest kind=${kind} cannot dispatch without an issueId.`,
+    });
+  }
+  const issueId = request.issueId;
+
+  // Re-verify the issue belongs to the workspace and isn't soft-deleted
+  // before we touch it. Cheap check, prevents acting on a row that
+  // moved tenants or was archived after the request was created.
+  const issue = await tx.issue.findFirst({
+    where: { id: issueId, workspaceId, deletedAt: null },
+    select: { id: true, statusId: true },
+  });
+  if (!issue) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Target issue is no longer available (deleted or moved).",
+    });
+  }
+
+  if (kind === ActionRequestKind.TRANSITION) {
+    const p = parseActionRequestPayload(ActionRequestKind.TRANSITION, payload);
+    const next = await tx.status.findFirst({
+      where: { id: p.statusId, workspaceId },
+    });
+    if (!next) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "TRANSITION target status no longer exists.",
+      });
+    }
+    const before = await tx.issue.findUniqueOrThrow({
+      where: { id: issueId },
+      include: { status: true },
+    });
+    const extra: {
+      startedAt?: Date;
+      completedAt?: Date | null;
+      canceledAt?: Date | null;
+    } = {};
+    if (next.category === "IN_PROGRESS" && !before.startedAt) extra.startedAt = new Date();
+    if (next.category === "DONE") extra.completedAt = new Date();
+    if (next.category === "CANCELED") extra.canceledAt = new Date();
+    if (next.category !== "DONE") extra.completedAt = null;
+    if (next.category !== "CANCELED") extra.canceledAt = null;
+    await tx.issue.update({
+      where: { id: issueId },
+      data: { statusId: p.statusId, ...extra },
+    });
+    const after = await tx.issue.findUniqueOrThrow({
+      where: { id: issueId },
+      include: { status: true },
+    });
+    await recordChange(tx, {
+      workspaceId,
+      actorId,
+      entity: "Issue",
+      entityId: issueId,
+      action: "update",
+      before,
+      after,
+      eventKind: EventKind.ISSUE_STATUS_CHANGED,
+      subjectType: "issue",
+      subjectId: issueId,
+      payload: {
+        statusId: p.statusId,
+        via: "action-request",
+        actionRequestId: request.id,
+      },
+    });
+    return;
+  }
+
+  if (kind === ActionRequestKind.SET_LABELS) {
+    const p = parseActionRequestPayload(ActionRequestKind.SET_LABELS, payload);
+    let added = 0;
+    let removed = 0;
+    if (p.remove.length > 0) {
+      const res = await tx.issueLabel.deleteMany({
+        where: { issueId, labelId: { in: p.remove } },
+      });
+      removed = res.count;
+    }
+    if (p.add.length > 0) {
+      const res = await tx.issueLabel.createMany({
+        data: p.add.map((labelId) => ({ issueId, labelId })),
+        skipDuplicates: true,
+      });
+      added = res.count;
+    }
+    if (added > 0 || removed > 0) {
+      await recordChange(tx, {
+        workspaceId,
+        actorId,
+        entity: "Issue",
+        entityId: issueId,
+        action: "set-labels",
+        after: { add: p.add, remove: p.remove },
+        eventKind: EventKind.ISSUE_UPDATED,
+        subjectType: "issue",
+        subjectId: issueId,
+        payload: {
+          add: p.add,
+          remove: p.remove,
+          via: "action-request",
+          actionRequestId: request.id,
+        },
+      });
+    }
+    return;
+  }
+
+  if (kind === ActionRequestKind.ASSIGN) {
+    const p = parseActionRequestPayload(ActionRequestKind.ASSIGN, payload);
+    await tx.issueAssignee.deleteMany({ where: { issueId } });
+    if (p.userIds.length > 0) {
+      await tx.issueAssignee.createMany({
+        data: p.userIds.map((userId) => ({ issueId, userId })),
+        skipDuplicates: true,
+      });
+    }
+    await recordChange(tx, {
+      workspaceId,
+      actorId,
+      entity: "Issue",
+      entityId: issueId,
+      action: "assign",
+      after: { assigneeIds: p.userIds },
+      eventKind: EventKind.ISSUE_ASSIGNED,
+      subjectType: "issue",
+      subjectId: issueId,
+      payload: {
+        assigneeIds: p.userIds,
+        via: "action-request",
+        actionRequestId: request.id,
+      },
+    });
+    return;
+  }
+
+  if (kind === ActionRequestKind.ASSIGN_AGENT) {
+    const p = parseActionRequestPayload(ActionRequestKind.ASSIGN_AGENT, payload);
+    await tx.issue.update({
+      where: { id: issueId },
+      data: { assignedAgentId: p.agentId },
+    });
+    await recordChange(tx, {
+      workspaceId,
+      actorId,
+      entity: "Issue",
+      entityId: issueId,
+      action: "assign-agent",
+      after: { assignedAgentId: p.agentId },
+      eventKind: EventKind.ISSUE_ASSIGNED,
+      subjectType: "issue",
+      subjectId: issueId,
+      payload: {
+        assignedAgentId: p.agentId,
+        via: "action-request",
+        actionRequestId: request.id,
+      },
+    });
+    return;
+  }
+
+  if (kind === ActionRequestKind.ARCHIVE) {
+    await tx.issue.update({
+      where: { id: issueId },
+      data: { deletedAt: new Date() },
+    });
+    await recordChange(tx, {
+      workspaceId,
+      actorId,
+      entity: "Issue",
+      entityId: issueId,
+      action: "archive",
+      after: { deletedAt: new Date().toISOString() },
+      eventKind: EventKind.ISSUE_DELETED,
+      subjectType: "issue",
+      subjectId: issueId,
+      payload: {
+        via: "action-request",
+        actionRequestId: request.id,
+      },
+    });
+    return;
+  }
+
+  if (kind === ActionRequestKind.CLOSE_AS_DUPLICATE) {
+    const p = parseActionRequestPayload(
+      ActionRequestKind.CLOSE_AS_DUPLICATE,
+      payload,
+    );
+    // 1. Persist the DUPLICATES relation (idempotent upsert).
+    await tx.issueRelation.upsert({
+      where: {
+        fromIssueId_toIssueId_kind: {
+          fromIssueId: issueId,
+          toIssueId: p.duplicateOfIssueId,
+          kind: RelationKind.DUPLICATES,
+        },
+      },
+      create: {
+        workspaceId,
+        fromIssueId: issueId,
+        toIssueId: p.duplicateOfIssueId,
+        kind: RelationKind.DUPLICATES,
+      },
+      update: {},
+    });
+    // 2. Optionally transition the source issue. Default behavior:
+    //    leave the status alone unless the caller supplied one — keeps
+    //    the action narrow and predictable.
+    if (p.statusId) {
+      const next = await tx.status.findFirst({
+        where: { id: p.statusId, workspaceId },
+      });
+      if (!next) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "CLOSE_AS_DUPLICATE.statusId no longer exists.",
+        });
+      }
+      const extra: {
+        canceledAt?: Date | null;
+        completedAt?: Date | null;
+      } = {};
+      if (next.category === "CANCELED") extra.canceledAt = new Date();
+      if (next.category === "DONE") extra.completedAt = new Date();
+      if (next.category !== "DONE") extra.completedAt = null;
+      if (next.category !== "CANCELED") extra.canceledAt = null;
+      await tx.issue.update({
+        where: { id: issueId },
+        data: { statusId: p.statusId, ...extra },
+      });
+    }
+    await recordChange(tx, {
+      workspaceId,
+      actorId,
+      entity: "Issue",
+      entityId: issueId,
+      action: "close-as-duplicate",
+      after: {
+        duplicateOfIssueId: p.duplicateOfIssueId,
+        statusId: p.statusId ?? null,
+      },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "issue",
+      subjectId: issueId,
+      payload: {
+        duplicateOfIssueId: p.duplicateOfIssueId,
+        statusId: p.statusId ?? null,
+        via: "action-request",
+        actionRequestId: request.id,
+      },
+    });
+    return;
+  }
+}
+
+/**
+ * Accept an action request — runs the bound dispatch (if any) and
+ * flips status=RESOLVED in the same transaction so the UI either sees
+ * both or neither. Permission-gated to assignee / watcher / OWNER /
+ * ADMIN.
+ */
+export async function acceptActionRequest(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string;
+    requestId: string;
+    resolution?: string | null;
+  },
+): Promise<{ id: string; dispatched: boolean }> {
+  const request = await db.actionRequest.findFirst({
+    where: { id: params.requestId, workspaceId: params.workspaceId },
+    select: {
+      id: true,
+      kind: true,
+      status: true,
+      payload: true,
+      assignedUserId: true,
+      issueId: true,
+      title: true,
+    },
+  });
+  if (!request) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Action request not found." });
+  }
+  if (request.status !== ActionRequestStatus.OPEN) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Action request is already ${request.status.toLowerCase()}.`,
+    });
+  }
+  await assertCanResolveActionRequest(db, {
+    workspaceId: params.workspaceId,
+    userId: params.actorId,
+    request,
+  });
+  const actor = await db.user.findUnique({
+    where: { id: params.actorId },
+    select: { handle: true, name: true },
+  });
+  const tag = actor?.handle ? `@${actor.handle}` : (actor?.name ?? "operator");
+  const baseResolution = `Accepted by ${tag}`;
+  const note = params.resolution?.trim()
+    ? `${baseResolution} — ${params.resolution.trim()}`
+    : baseResolution;
+
+  let dispatched = false;
+  await db.$transaction(async (tx) => {
+    await dispatchActionRequestKind(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      request,
+    });
+    dispatched = request.kind !== ActionRequestKind.FREE_FORM;
+    await tx.actionRequest.update({
+      where: { id: request.id },
+      data: {
+        status: ActionRequestStatus.RESOLVED,
+        resolvedAt: new Date(),
+        resolvedByUserId: params.actorId,
+        resolution: note,
+      },
+    });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      entity: "action-request",
+      entityId: request.id,
+      action: "accept",
+      before: { status: request.status },
+      after: {
+        status: ActionRequestStatus.RESOLVED,
+        kind: request.kind,
+        dispatched,
+      },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "action-request",
+      subjectId: request.id,
+      payload: {
+        kind: request.kind,
+        dispatched,
+        issueId: request.issueId,
+        resolution: note,
+      },
+    });
+  });
+  return { id: request.id, dispatched };
+}
+
+/**
+ * Decline an action request — flips status=REJECTED and records the
+ * (optional) reason. Never dispatches the bound action. Permission gate
+ * is identical to Accept.
+ */
+export async function declineActionRequest(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string;
+    requestId: string;
+    reason?: string | null;
+  },
+): Promise<{ id: string }> {
+  const request = await db.actionRequest.findFirst({
+    where: { id: params.requestId, workspaceId: params.workspaceId },
+    select: {
+      id: true,
+      kind: true,
+      status: true,
+      assignedUserId: true,
+      issueId: true,
+    },
+  });
+  if (!request) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Action request not found." });
+  }
+  if (request.status !== ActionRequestStatus.OPEN) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Action request is already ${request.status.toLowerCase()}.`,
+    });
+  }
+  await assertCanResolveActionRequest(db, {
+    workspaceId: params.workspaceId,
+    userId: params.actorId,
+    request,
+  });
+  const actor = await db.user.findUnique({
+    where: { id: params.actorId },
+    select: { handle: true, name: true },
+  });
+  const tag = actor?.handle ? `@${actor.handle}` : (actor?.name ?? "operator");
+  const reason = params.reason?.trim();
+  const note = reason
+    ? `Declined by ${tag}: ${reason}`
+    : `Declined by ${tag}`;
+  await db.$transaction(async (tx) => {
+    await tx.actionRequest.update({
+      where: { id: request.id },
+      data: {
+        status: ActionRequestStatus.REJECTED,
+        resolvedAt: new Date(),
+        resolvedByUserId: params.actorId,
+        resolution: note,
+      },
+    });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      entity: "action-request",
+      entityId: request.id,
+      action: "decline",
+      before: { status: request.status },
+      after: { status: ActionRequestStatus.REJECTED, kind: request.kind },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "action-request",
+      subjectId: request.id,
+      payload: {
+        kind: request.kind,
+        issueId: request.issueId,
+        resolution: note,
+      },
+    });
+  });
+  return { id: request.id };
 }

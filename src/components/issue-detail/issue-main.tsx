@@ -1,12 +1,13 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Activity, Bot } from "lucide-react";
+import { Activity, Bot, MessageCircleReply } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
+import { ActionRequestCard } from "@/components/action-requests/action-request-card";
 import { usePasteUpload } from "@/components/attachments/use-paste-upload";
 import { useDropUpload } from "@/components/attachments/use-drop-upload";
 import { DropOverlay } from "@/components/attachments/drop-overlay";
@@ -66,7 +67,34 @@ type Comment = {
     status: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED" | "WAITING";
     finishedAt: Date | string | null;
   } | null;
+  /**
+   * Optional short reply suggestions an agent attached when posting.
+   * Rendered as click-to-insert chips beneath the LATEST agent body
+   * comment only — older chips hide so the thread doesn't accumulate
+   * stale CTAs.
+   */
+  suggestedReplies?: string[];
 };
+
+/**
+ * Window event used to ferry a quick-reply chip click from inside a
+ * `<TimelineCommentCard>` up to the `<Comments>` composer. Listening
+ * is cheaper than threading a setter through every comment, and the
+ * payload is tiny.
+ */
+const QUICK_REPLY_EVENT = "forge:quick-reply-insert";
+interface QuickReplyEventDetail {
+  issueId: string;
+  text: string;
+}
+function dispatchQuickReply(issueId: string, text: string) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<QuickReplyEventDetail>(QUICK_REPLY_EVENT, {
+      detail: { issueId, text },
+    }),
+  );
+}
 
 function timestampMs(value: Date | string | null | undefined): number {
   if (!value) return 0;
@@ -138,11 +166,21 @@ export function IssueMain({
   description,
   comments,
   onDescriptionSave,
+  /**
+   * Caller-resolved signal used by `<ActionRequestCard>` to decide
+   * whether to render Accept / Decline buttons. The page hands in
+   * the union of "current user is on assignees" || "is a watcher" —
+   * the component itself layers on the OWNER/ADMIN check via
+   * `useWorkspace`. Default `false` so cards stay safely read-only
+   * if the page hasn't migrated.
+   */
+  canResolveActions = false,
 }: {
   issueId: string;
   description: string | null;
   comments: Comment[];
   onDescriptionSave: (next: string | null) => void;
+  canResolveActions?: boolean;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-8">
@@ -152,7 +190,11 @@ export function IssueMain({
         description={description}
         onSave={onDescriptionSave}
       />
-      <Comments issueId={issueId} comments={comments} />
+      <Comments
+        issueId={issueId}
+        comments={comments}
+        canResolveActions={canResolveActions}
+      />
     </div>
   );
 }
@@ -270,9 +312,11 @@ function DescriptionBlock({
 function Comments({
   issueId,
   comments,
+  canResolveActions,
 }: {
   issueId: string;
   comments: Comment[];
+  canResolveActions: boolean;
 }) {
   const utils = trpc.useUtils();
   // Draft persists per-issue under `forge.draft.comment:<issueId>` so a
@@ -315,6 +359,34 @@ function Comments({
     }, 500);
     return () => clearTimeout(t);
   }, [draft, draftHydrated, draftKey]);
+
+  // Quick-reply chips dispatched from anywhere in the tree route into
+  // the composer via a window event. Filter by issueId so a stray
+  // event from another issue page (rare, but possible during fast
+  // navigation) doesn't write into the wrong draft.
+  useEffect(() => {
+    function onInsert(event: Event) {
+      const detail = (event as CustomEvent<QuickReplyEventDetail>).detail;
+      if (!detail || detail.issueId !== issueId) return;
+      setDraft((prev) => {
+        // If the composer already has text, separate with a blank
+        // line so the chip doesn't trample mid-sentence. Otherwise
+        // just seed it.
+        if (prev.trim().length === 0) return detail.text;
+        return `${prev.replace(/\s+$/, "")}\n\n${detail.text}`;
+      });
+      // Focus + scroll the textarea into view so the user can edit
+      // before submitting. Defer to next tick so the state update
+      // commits before the focus call.
+      requestAnimationFrame(() => {
+        composerRef.current?.focus();
+        composerRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      });
+    }
+    window.addEventListener(QUICK_REPLY_EVENT, onInsert as EventListener);
+    return () =>
+      window.removeEventListener(QUICK_REPLY_EVENT, onInsert as EventListener);
+  }, [issueId]);
 
   // Autocomplete: fires on top-of-body slash lines, inserts stubs on
   // Enter / Tab / click. Same surface as QuickCreate; helps discover
@@ -405,6 +477,16 @@ function Comments({
   const timelineComments = comments
     .filter((c) => !isPinnedStatusComment(c))
     .sort((a, b) => commentTimelineMs(a) - commentTimelineMs(b));
+  // Identify the most recent agent-authored BODY comment — only its
+  // quick-reply chips render (older chips are stale CTAs). STATUS rows
+  // never carry chips, so the BODY filter is sufficient.
+  const latestAgentBodyId = useMemo(() => {
+    for (let i = timelineComments.length - 1; i >= 0; i -= 1) {
+      const c = timelineComments[i];
+      if (c.authoringAgent && (!c.kind || c.kind === "BODY")) return c.id;
+    }
+    return null;
+  }, [timelineComments]);
   return (
     <section>
       <SectionLabel>Comments {timelineComments.length > 0 && <Count>{timelineComments.length}</Count>}</SectionLabel>
@@ -416,7 +498,13 @@ function Comments({
           <p className="text-xs text-muted-foreground">No comments yet.</p>
         )}
         {timelineComments.map((c) => (
-          <TimelineCommentCard key={c.id} comment={c} />
+          <TimelineCommentCard
+            key={c.id}
+            comment={c}
+            issueId={issueId}
+            canResolveActions={canResolveActions}
+            showQuickReplies={c.id === latestAgentBodyId}
+          />
         ))}
       </div>
       <form
@@ -507,7 +595,17 @@ function Comments({
  *   - Historical STATUS rows    — soft ember card with "ran status" chip
  *                                  and an `updated Ns ago` timestamp.
  */
-function TimelineCommentCard({ comment }: { comment: Comment }) {
+function TimelineCommentCard({
+  comment,
+  issueId,
+  canResolveActions,
+  showQuickReplies,
+}: {
+  comment: Comment;
+  issueId: string;
+  canResolveActions: boolean;
+  showQuickReplies: boolean;
+}) {
   const isAgent = Boolean(comment.authoringAgent);
   const isStatus = comment.kind === "STATUS";
   const displayName = comment.authoringAgent?.name ?? comment.author?.name ?? "System";
@@ -515,6 +613,7 @@ function TimelineCommentCard({ comment }: { comment: Comment }) {
     () => (isAgent ? splitProvenance(comment.body) : { provenance: null, rest: comment.body }),
     [comment.body, isAgent],
   );
+  const quickReplies = isAgent && showQuickReplies ? comment.suggestedReplies ?? [] : [];
 
   // SYSTEM rows are server-authored ambient narration (assignment
   // notices, dispatch provenance). They have no avatar, no card —
@@ -543,56 +642,114 @@ function TimelineCommentCard({ comment }: { comment: Comment }) {
         image={isAgent ? null : (comment.author?.image ?? null)}
         isAgent={isAgent}
       />
-      <div
-        className={`min-w-0 flex-1 rounded-md border p-2.5 ${
-          isStatus
-            ? "border-ember/40 bg-ember/[0.04]"
-            : isAgent
-              ? "border-border bg-card/50"
-              : "border-border bg-card/40"
-        }`}
-      >
-        <div className="flex flex-wrap items-center gap-1.5 text-meta">
-          <span className="font-medium text-foreground">{displayName}</span>
-          {isAgent && comment.authoringAgent && (
-            <span className="font-mono text-[0.6875rem] text-muted-foreground">
-              @{comment.authoringAgent.profileKey}
-            </span>
-          )}
-          {isStatus ? (
-            <Badge
-              color="#d97706"
-              className="font-mono text-[0.6875rem] uppercase tracking-wider"
-            >
-              ran status
-            </Badge>
-          ) : (
-            isAgent && (
-              // Indigo `agent` chip mirrors the `linkedAgent` badge on
-              // the ApiKey row in settings/access so "this action was
-              // an agent" stays visually consistent across the app.
+      <div className="min-w-0 flex-1 space-y-2">
+        {/*
+         * ActionRequest card rendered ABOVE the comment body — that
+         * way the operator sees the recommendation first and the
+         * supporting prose underneath. The card only renders if
+         * `forComment(commentId)` resolves to a row, so cards never
+         * leak onto plain comments.
+         */}
+        {isAgent && (
+          <ActionRequestCard
+            commentId={comment.id}
+            issueId={issueId}
+            canResolve={canResolveActions}
+          />
+        )}
+        <div
+          className={`rounded-md border p-2.5 ${
+            isStatus
+              ? "border-ember/40 bg-ember/[0.04]"
+              : isAgent
+                ? "border-border bg-card/50"
+                : "border-border bg-card/40"
+          }`}
+        >
+          <div className="flex flex-wrap items-center gap-1.5 text-meta">
+            <span className="font-medium text-foreground">{displayName}</span>
+            {isAgent && comment.authoringAgent && (
+              <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                @{comment.authoringAgent.profileKey}
+              </span>
+            )}
+            {isStatus ? (
               <Badge
-                color="#6366f1"
+                color="#d97706"
                 className="font-mono text-[0.6875rem] uppercase tracking-wider"
               >
-                agent
+                ran status
               </Badge>
-            )
-          )}
-          <span className="text-muted-foreground">
-            {relativeTime(isStatus ? (comment.updatedAt ?? comment.createdAt) : comment.createdAt)}
-          </span>
-        </div>
-        {provenance && (
-          <div className="mt-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
-            {provenance}
+            ) : (
+              isAgent && (
+                // Indigo `agent` chip mirrors the `linkedAgent` badge on
+                // the ApiKey row in settings/access so "this action was
+                // an agent" stays visually consistent across the app.
+                <Badge
+                  color="#6366f1"
+                  className="font-mono text-[0.6875rem] uppercase tracking-wider"
+                >
+                  agent
+                </Badge>
+              )
+            )}
+            <span className="text-muted-foreground">
+              {relativeTime(isStatus ? (comment.updatedAt ?? comment.createdAt) : comment.createdAt)}
+            </span>
           </div>
-        )}
-        <MarkdownWithAttachments
-          body={rest}
-          className="mt-1.5 text-[0.8125rem] text-foreground/90"
-        />
+          {provenance && (
+            <div className="mt-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
+              {provenance}
+            </div>
+          )}
+          <MarkdownWithAttachments
+            body={rest}
+            className="mt-1.5 text-[0.8125rem] text-foreground/90"
+          />
+          {quickReplies.length > 0 && (
+            <QuickReplyChips
+              replies={quickReplies}
+              onPick={(text) => dispatchQuickReply(issueId, text)}
+            />
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Quick-reply chip row rendered beneath the latest agent comment.
+ * Each chip is a click target that inserts its text into the comment
+ * composer (via the `forge:quick-reply-insert` window event). Style
+ * follows the warm-earthy guidance — paper background, subtle ember
+ * hover so it reads as actionable without competing with the comment
+ * body for attention.
+ */
+function QuickReplyChips({
+  replies,
+  onPick,
+}: {
+  replies: string[];
+  onPick: (text: string) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Quick reply suggestions"
+      className="mt-2 flex flex-wrap gap-1.5"
+    >
+      {replies.map((text, i) => (
+        <button
+          key={`${i}-${text}`}
+          type="button"
+          onClick={() => onPick(text)}
+          className="focus-ring inline-flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-meta text-muted-foreground transition-colors hover:border-ember/40 hover:text-foreground"
+        >
+          <MessageCircleReply className="h-3 w-3" />
+          <span>{text}</span>
+        </button>
+      ))}
     </div>
   );
 }

@@ -16,6 +16,7 @@ import {
   type AttachmentLite,
 } from "@/components/attachments/attachment-lightbox";
 import { LinkFavicon } from "@/components/attachments/attachment-chip";
+import { IssueHoverPreview } from "@/components/issue-hover-preview";
 
 /**
  * Rich body renderer for descriptions, comments, artifacts, and notes.
@@ -995,13 +996,15 @@ function InlineIssueRef({ issueKey }: { issueKey: string }) {
     return <span className="font-mono text-[0.75rem]">{issueKey}</span>;
   }
   return (
-    <Link
-      href={`/w/${ws.slug}/i/${issueKey}`}
-      className="font-mono text-[0.75rem] text-ember underline-offset-2 hover:underline"
-      title={`Open ${issueKey}`}
-    >
-      {issueKey}
-    </Link>
+    <IssueHoverPreview issueKey={issueKey} workspaceSlug={ws.slug}>
+      <Link
+        href={`/w/${ws.slug}/i/${issueKey}`}
+        className="font-mono text-[0.75rem] text-ember underline-offset-2 hover:underline"
+        title={`Open ${issueKey}`}
+      >
+        {issueKey}
+      </Link>
+    </IssueHoverPreview>
   );
 }
 

@@ -85,6 +85,14 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     { issueId: id, limit: 50 },
     { staleTime: 30_000 },
   );
+  // Used to gate the ActionRequest Accept/Decline buttons rendered
+  // inline in agent comments. Stays in this page so the byId payload
+  // doesn't have to teach every nested consumer about the current user.
+  const { data: me } = trpc.user.me.useQuery();
+  const { data: watchers } = trpc.issue.watchers.useQuery(
+    { issueId: id },
+    { staleTime: 30_000 },
+  );
   // Phase 1B: surface project's linked initiative and the issue's cycle as
   // chips. Both queries are skipped when the underlying id is null so we
   // don't hit the server on issues that don't have either link.
@@ -447,6 +455,19 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               description={issue.description}
               comments={issue.comments}
               onDescriptionSave={(next) => update.mutate({ id: issue.id, description: next })}
+              canResolveActions={(() => {
+                if (!me?.id) return false;
+                // Issue assignees see Accept/Decline because they own
+                // execution. Watchers see them because they're already
+                // signed up for the thread. (OWNER/ADMIN is layered on
+                // inside ActionRequestCard via useWorkspace.)
+                const isAssignee = issue.assignees.some(
+                  (a) => a.user?.id === me.id || a.userId === me.id,
+                );
+                const isWatcher =
+                  watchers?.items.some((w) => w.userId === me.id) ?? false;
+                return isAssignee || isWatcher;
+              })()}
             />
           </div>
 
