@@ -110,4 +110,34 @@ describe("agent-run-stale — sweepStalledRuns", () => {
     });
     expect(events).toHaveLength(1);
   });
+
+  it("skips WAITING runs — patient agents aren't classified as dead", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARW" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { agentRunStaleMinutes: 30 },
+    });
+    const agent = await createAgent(fixture.workspace.id, "arw-a1");
+    const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "WAITING",
+        currentStep: "Waiting on credentials",
+      },
+    });
+    // Backdate well past the stale threshold — a stale-ACTIVE run with
+    // the same lastEventAt would absolutely be closed.
+    await backdateRun(run.id, new Date(Date.now() - 6 * 60 * 60_000));
+
+    const res = await sweepStalledRuns();
+
+    expect(res.stalled).not.toContain(run.id);
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.status).toBe("WAITING");
+  });
 });

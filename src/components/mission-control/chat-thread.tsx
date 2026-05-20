@@ -18,7 +18,11 @@ import { formatChatContextSummary, useChatContext } from "@/hooks/use-chat-conte
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
-import { ChatComposer, type MentionableAgent } from "./chat-composer";
+import {
+  ChatComposer,
+  type MentionableAgent,
+  type MentionablePerson,
+} from "./chat-composer";
 import { uploadAttachmentFile } from "@/components/attachments/attachment-upload-client";
 import { toast } from "sonner";
 import { ChatMarkdown } from "./chat-markdown";
@@ -990,9 +994,32 @@ export function ChatThreadView({
     { includeArchived: false },
     { enabled: Boolean(workspace), staleTime: 60_000 },
   );
+  const { data: workspaceMembers } = trpc.workspace.members.useQuery(undefined, {
+    enabled: Boolean(workspace),
+    staleTime: 60_000,
+  });
   const mentionableAgents = useMemo<MentionableAgent[]>(
-    () => (workspaceAgents ?? []).map((a) => ({ profileKey: a.profileKey, name: a.name })),
+    () =>
+      (workspaceAgents ?? []).map((a) => ({
+        profileKey: a.profileKey,
+        name: a.name,
+        status: a.status,
+        avatar: a.avatar ?? null,
+        lastHeartbeatAt: a.lastHeartbeatAt ?? null,
+      })),
     [workspaceAgents],
+  );
+  const mentionablePeople = useMemo<MentionablePerson[]>(
+    () =>
+      (workspaceMembers ?? [])
+        .filter((m) => m.user.handle)
+        .map((m) => ({
+          handle: (m.user.handle ?? "").toLowerCase(),
+          name: m.user.name ?? m.user.email ?? m.user.handle ?? "user",
+          image: m.user.image ?? null,
+          email: m.user.email ?? null,
+        })),
+    [workspaceMembers],
   );
 
   const currentContext = useMemo(
@@ -1817,6 +1844,7 @@ export function ChatThreadView({
         autoFocus={autoFocus}
         threadId={threadId}
         mentionableAgents={mentionableAgents}
+        mentionablePeople={mentionablePeople}
         fillRequest={fillRequest ?? undefined}
       />
     </div>

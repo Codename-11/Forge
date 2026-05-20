@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
+  Bot,
   ChevronDown,
   ChevronRight,
   FileText,
@@ -11,6 +12,8 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Avatar } from "@/components/ui/avatar";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { DropOverlay } from "@/components/attachments/drop-overlay";
 import {
   isSlashInput,
@@ -19,6 +22,7 @@ import {
   type SlashCommandContext,
   type SlashCommand,
 } from "@/lib/chat-slash-commands";
+import type { AgentStatus } from "@prisma/client";
 
 export interface ChatComposerAttachmentDraft {
   id: string;
@@ -31,6 +35,26 @@ export interface ChatComposerAttachmentDraft {
 export interface MentionableAgent {
   profileKey: string;
   name: string;
+  /** Optional presence — when supplied the popover shows the presence dot. */
+  status?: AgentStatus;
+  avatar?: string | null;
+  lastHeartbeatAt?: Date | string | null;
+}
+
+export interface MentionablePerson {
+  /** User handle (the canonical `@<handle>` token). */
+  handle: string;
+  name: string;
+  image?: string | null;
+  email?: string | null;
+}
+
+type MentionItem =
+  | { kind: "agent"; agent: MentionableAgent }
+  | { kind: "user"; person: MentionablePerson };
+
+function mentionInsertKey(item: MentionItem): string {
+  return item.kind === "agent" ? item.agent.profileKey : item.person.handle;
 }
 
 interface ChatComposerProps {
@@ -51,6 +75,8 @@ interface ChatComposerProps {
   threadId?: string;
   /** Agent profileKeys available for @-mention autocomplete. */
   mentionableAgents?: MentionableAgent[];
+  /** Workspace members available for @-mention autocomplete. */
+  mentionablePeople?: MentionablePerson[];
   /** When the parent wants to fill the composer (e.g. from a suggestion chip), it bumps `fillRequest`. */
   fillRequest?: { body: string; nonce: number };
 }
@@ -104,6 +130,7 @@ export function ChatComposer({
   autoFocus = false,
   threadId,
   mentionableAgents = [],
+  mentionablePeople = [],
   fillRequest,
 }: ChatComposerProps) {
   const [body, setBody] = useState("");
@@ -120,7 +147,7 @@ export function ChatComposer({
 
   // ---------- @-mention popover state ----------
   const [mentionOpen, setMentionOpen] = useState(false);
-  const [mentionMatches, setMentionMatches] = useState<MentionableAgent[]>([]);
+  const [mentionMatches, setMentionMatches] = useState<MentionItem[]>([]);
   const [mentionHighlight, setMentionHighlight] = useState(0);
   const mentionStartRef = useRef<number | null>(null);
 
@@ -240,7 +267,7 @@ export function ChatComposer({
   /** Recompute the @-mention popover based on the caret position. */
   const refreshMentionPopover = useCallback(
     (nextBody: string, caret: number) => {
-      if (mentionableAgents.length === 0) {
+      if (mentionableAgents.length === 0 && mentionablePeople.length === 0) {
         closeMention();
         return;
       }
@@ -250,21 +277,35 @@ export function ChatComposer({
         return;
       }
       const frag = detected.token.toLowerCase();
-      const matches = mentionableAgents.filter(
-        (a) =>
-          a.profileKey.toLowerCase().startsWith(frag) ||
-          a.name.toLowerCase().startsWith(frag),
-      );
+      const agentMatches: MentionItem[] = mentionableAgents
+        .filter(
+          (a) =>
+            !frag ||
+            a.profileKey.toLowerCase().startsWith(frag) ||
+            a.name.toLowerCase().startsWith(frag),
+        )
+        .slice(0, 5)
+        .map((agent) => ({ kind: "agent", agent }));
+      const personMatches: MentionItem[] = mentionablePeople
+        .filter(
+          (p) =>
+            !frag ||
+            p.handle.toLowerCase().startsWith(frag) ||
+            p.name.toLowerCase().startsWith(frag),
+        )
+        .slice(0, 5)
+        .map((person) => ({ kind: "user", person }));
+      const matches = [...agentMatches, ...personMatches];
       if (matches.length === 0) {
         closeMention();
         return;
       }
       mentionStartRef.current = detected.start;
-      setMentionMatches(matches.slice(0, 8));
+      setMentionMatches(matches);
       setMentionHighlight(0);
       setMentionOpen(true);
     },
-    [mentionableAgents, closeMention],
+    [mentionableAgents, mentionablePeople, closeMention],
   );
 
   /** Accept a command from the slash popover. */
@@ -292,7 +333,7 @@ export function ChatComposer({
 
   /** Accept an @-mention from the popover. */
   const acceptMention = useCallback(
-    (agent: MentionableAgent) => {
+    (item: MentionItem) => {
       const ta = taRef.current;
       const start = mentionStartRef.current;
       if (start == null || !ta) {
@@ -300,7 +341,7 @@ export function ChatComposer({
         return;
       }
       const caret = ta.selectionEnd ?? body.length;
-      const replacement = `@${agent.profileKey} `;
+      const replacement = `@${mentionInsertKey(item)} `;
       const next = body.slice(0, start) + replacement + body.slice(caret);
       setBody(next);
       closeMention();
@@ -368,8 +409,8 @@ export function ChatComposer({
         }
         if (e.key === "Enter" || e.key === "Tab") {
           e.preventDefault();
-          const a = mentionMatches[mentionHighlight];
-          if (a) acceptMention(a);
+          const item = mentionMatches[mentionHighlight];
+          if (item) acceptMention(item);
           return;
         }
         if (e.key === "Escape") {
@@ -496,31 +537,93 @@ export function ChatComposer({
       );
     }
     if (mentionOpen && mentionMatches.length > 0) {
+      // Locate the first user row so we can drop in an "Agents / People"
+      // group divider — keeps the popover scannable when both kinds are
+      // present (same shape as MentionInput's dropdown).
+      const firstUserIdx = mentionMatches.findIndex((m) => m.kind === "user");
+      const hasAgents = mentionMatches[0]?.kind === "agent";
       return (
         <div className="relative mx-2 mb-1" data-testid="chat-mention-popover">
-          <div className="absolute bottom-0 left-0 right-0 z-50 rounded-md border border-border bg-card/95 shadow-md backdrop-blur">
-            {mentionMatches.map((a, idx) => (
-              <button
-                key={a.profileKey}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  acceptMention(a);
-                }}
-                onMouseEnter={() => setMentionHighlight(idx)}
-                className={cn(
-                  "flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors",
-                  idx === mentionHighlight
-                    ? "bg-ember/10 text-foreground"
-                    : "text-muted-foreground hover:bg-subtle/40",
-                  idx === 0 && "rounded-t-md",
-                  idx === mentionMatches.length - 1 && "rounded-b-md",
-                )}
-              >
-                <span className="text-meta font-mono text-foreground">@{a.profileKey}</span>
-                <span className="text-meta ml-auto text-muted-foreground">{a.name}</span>
-              </button>
-            ))}
+          <div className="absolute bottom-0 left-0 right-0 z-50 overflow-hidden rounded-md border border-border bg-card/95 shadow-md backdrop-blur">
+            {hasAgents && (
+              <div className="px-2.5 pb-0.5 pt-1 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+                Agents
+              </div>
+            )}
+            {!hasAgents && firstUserIdx === 0 && (
+              <div className="px-2.5 pb-0.5 pt-1 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+                People
+              </div>
+            )}
+            {mentionMatches.map((m, idx) => {
+              const showPeopleHeader = hasAgents && firstUserIdx === idx;
+              const selected = idx === mentionHighlight;
+              const insertKey = mentionInsertKey(m);
+              return (
+                <div key={`${m.kind}-${insertKey}`}>
+                  {showPeopleHeader && (
+                    <div className="px-2.5 pb-0.5 pt-1 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+                      People
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      acceptMention(m);
+                    }}
+                    onMouseEnter={() => setMentionHighlight(idx)}
+                    className={cn(
+                      "flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors",
+                      selected
+                        ? "bg-ember/10 text-foreground"
+                        : "text-foreground/85 hover:bg-subtle/40",
+                    )}
+                  >
+                    {m.kind === "agent" ? (
+                      <span className="relative inline-flex shrink-0 items-center">
+                        <span className="flex h-5 w-5 items-center justify-center rounded-md border border-indigo-500/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300">
+                          <Bot className="h-3 w-3" />
+                        </span>
+                        {m.agent.status && (
+                          <span className="absolute -bottom-0.5 -right-0.5">
+                            <AgentPresenceDot
+                              status={m.agent.status}
+                              lastHeartbeatAt={m.agent.lastHeartbeatAt ?? null}
+                              size="sm"
+                            />
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <Avatar
+                        name={m.person.name}
+                        image={m.person.image ?? null}
+                        size={20}
+                        className="shrink-0"
+                      />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate text-xs font-medium">
+                          {m.kind === "agent" ? m.agent.name : m.person.name}
+                        </span>
+                        <span className="text-id text-muted-foreground">
+                          @{insertKey}
+                        </span>
+                      </span>
+                      {m.kind === "user" && m.person.email && (
+                        <span className="mt-0.5 block truncate text-meta text-muted-foreground">
+                          {m.person.email}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       );

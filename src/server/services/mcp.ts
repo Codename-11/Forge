@@ -4767,6 +4767,201 @@ export const mcpTools = {
   },
 
   /**
+   * Flip an ACTIVE run to WAITING — the patient-agent state. Use this
+   * when the agent is blocked on the operator (or another agent) and
+   * doesn't want the stale-run watchdog to mistake patience for death.
+   *
+   * Behavior:
+   *  - Validates the calling key is linked to the owning agent
+   *    (`ctx.apiKey.linkedAgentId === run.agentId`), mirroring the
+   *    `runs.recordUsage` pattern. Cross-agent writes are rejected.
+   *  - Only ACTIVE runs can transition into WAITING. Calling on a
+   *    terminal run (COMPLETED / ABANDONED / STALLED) throws; calling
+   *    on an already-WAITING run is idempotent (no-op on status, but
+   *    `reason` / `currentStep` still update).
+   *  - Sets `status = WAITING`, replaces `currentStep` with `reason`
+   *    (or "Waiting on operator" if none provided), and bumps
+   *    `lastEventAt = now`. The bump matters: when the run later
+   *    resumes via `runs.resumeWork`, the stale timer measures
+   *    against the resume moment, not the original block moment.
+   *  - If `blocking: true`, also emits `AGENT_RUN_BLOCKED` via the
+   *    standard `recordChange` flow. The audit fan-out branch in
+   *    `audit.ts` then notifies the agent's webhook so its runtime
+   *    sees the block confirmed. Set `blocking: false` (default) for
+   *    silent waits that don't need to wake anyone.
+   *
+   * Resuming work later: call `runs.resumeWork({ runId })`. Any
+   * subsequent activity routed through `openOrTouchRun` (a comment,
+   * a status upsert) will also auto-resume the run, so the explicit
+   * `resumeWork` call is only required for "I'm back" pings that
+   * don't otherwise touch the run.
+   */
+  "runs.setWaiting": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      runId: z.string().min(1).max(40).describe("AgentRun.id"),
+      reason: z
+        .string()
+        .max(500)
+        .optional()
+        .describe(
+          "Operator-facing label, e.g. \"awaiting credentials for prod DB\". Replaces currentStep.",
+        ),
+      blocking: z
+        .boolean()
+        .default(false)
+        .describe(
+          "When true, emit AGENT_RUN_BLOCKED so the agent's webhook is notified. Default false for silent waits.",
+        ),
+    }),
+    async run(
+      input: { runId: string; reason?: string; blocking: boolean },
+      ctx: McpContext,
+    ) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error(
+          "runs.setWaiting requires an API key with linkedAgentId set.",
+        );
+      }
+      const run = await db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        select: { id: true, agentId: true, issueId: true, status: true },
+      });
+      if (!run) throw new Error("AgentRun not found in this workspace.");
+      if (run.agentId !== linkedAgentId) {
+        throw new Error(
+          "AgentRun belongs to a different agent than the calling key.",
+        );
+      }
+      if (
+        run.status !== AgentRunStatus.ACTIVE &&
+        run.status !== AgentRunStatus.WAITING
+      ) {
+        throw new Error(
+          `Run is ${run.status}; only ACTIVE / WAITING runs can be marked waiting.`,
+        );
+      }
+
+      const reasonLabel = input.reason ?? "Waiting on operator";
+
+      const updated = await db.$transaction(async (tx) => {
+        const next = await tx.agentRun.update({
+          where: { id: run.id },
+          data: {
+            status: AgentRunStatus.WAITING,
+            currentStep: reasonLabel,
+            lastEventAt: new Date(),
+          },
+          select: {
+            id: true,
+            status: true,
+            currentStep: true,
+            lastEventAt: true,
+          },
+        });
+
+        // Always append a timeline event so the activity drawer reflects
+        // the block. The publish + AuditLog only happens for blocking
+        // calls — silent waits stay quiet on the wider event bus.
+        await tx.agentRunEvent.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            runId: run.id,
+            kind: "WAITING",
+            payload: { reason: reasonLabel, blocking: input.blocking },
+          },
+        });
+
+        if (input.blocking) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.userId,
+            entity: "AgentRun",
+            entityId: run.id,
+            action: "set-waiting",
+            after: { status: "WAITING", currentStep: reasonLabel },
+            eventKind: EventKind.AGENT_RUN_BLOCKED,
+            subjectType: "agent-run",
+            subjectId: run.id,
+            payload: {
+              runId: run.id,
+              issueId: run.issueId,
+              agentId: run.agentId,
+              reason: reasonLabel,
+            },
+          });
+        }
+        return next;
+      });
+
+      return updated;
+    },
+  },
+
+  /**
+   * Flip a WAITING run back to ACTIVE. Reverse of `runs.setWaiting`.
+   * Same agent-ownership check; no event is emitted (the next agent
+   * action will record its own audit row). Idempotent on ACTIVE runs.
+   */
+  "runs.resumeWork": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      runId: z.string().min(1).max(40).describe("AgentRun.id"),
+      currentStep: z
+        .string()
+        .max(120)
+        .optional()
+        .describe("Optional fresh step label, e.g. \"resuming after creds.\""),
+    }),
+    async run(
+      input: { runId: string; currentStep?: string },
+      ctx: McpContext,
+    ) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error(
+          "runs.resumeWork requires an API key with linkedAgentId set.",
+        );
+      }
+      const run = await db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        select: { id: true, agentId: true, status: true },
+      });
+      if (!run) throw new Error("AgentRun not found in this workspace.");
+      if (run.agentId !== linkedAgentId) {
+        throw new Error(
+          "AgentRun belongs to a different agent than the calling key.",
+        );
+      }
+      if (
+        run.status !== AgentRunStatus.WAITING &&
+        run.status !== AgentRunStatus.ACTIVE
+      ) {
+        throw new Error(
+          `Run is ${run.status}; only WAITING / ACTIVE runs can be resumed.`,
+        );
+      }
+      return db.agentRun.update({
+        where: { id: run.id },
+        data: {
+          status: AgentRunStatus.ACTIVE,
+          lastEventAt: new Date(),
+          ...(input.currentStep !== undefined
+            ? { currentStep: input.currentStep }
+            : {}),
+        },
+        select: {
+          id: true,
+          status: true,
+          currentStep: true,
+          lastEventAt: true,
+        },
+      });
+    },
+  },
+
+  /**
    * List AgentRun rows. Useful for agents that want to scan their own
    * recent history (e.g., "did I already touch this issue today"). Cursor-
    * paginated by `startedAt DESC` via `before`. Defaults exclude nothing
@@ -4777,7 +4972,9 @@ export const mcpTools = {
     input: z.object({
       agentId: z.string().min(1).max(40).optional(),
       issueId: z.string().min(1).max(40).optional(),
-      status: z.enum(["ACTIVE", "COMPLETED", "ABANDONED", "STALLED"]).optional(),
+      status: z
+        .enum(["ACTIVE", "COMPLETED", "ABANDONED", "STALLED", "WAITING"])
+        .optional(),
       limit: z.number().int().min(1).max(200).default(50),
       before: z.coerce
         .date()
@@ -4788,7 +4985,7 @@ export const mcpTools = {
       input: {
         agentId?: string;
         issueId?: string;
-        status?: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED";
+        status?: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED" | "WAITING";
         limit: number;
         before?: Date;
       },

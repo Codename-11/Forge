@@ -496,7 +496,7 @@ export default function InboxPage() {
                             </div>
                             <div className="mt-0.5 line-clamp-2 text-muted-foreground">
                               <span className="font-medium text-foreground">
-                                {m.author.name ?? "Someone"}
+                                {m.author?.name ?? "Someone"}
                               </span>
                               {" — "}
                               {m.body}

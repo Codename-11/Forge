@@ -164,12 +164,91 @@ async function upsertAgentDispatchWebhook(
         EventKind.COMMENT_CREATED,
         EventKind.ISSUE_PRIORITY_CHANGED,
         EventKind.CHAT_MESSAGE_POSTED,
+        EventKind.AGENT_RUN_BLOCKED,
       ],
       active: true,
     },
     select: { id: true },
   });
   return created.id;
+}
+
+/**
+ * Post a SYSTEM-kind `Comment` row to the issue thread for an
+ * AGENT_ASSIGNED event, so the conversation surface acknowledges the
+ * assignment inline rather than waiting for the agent's first reply.
+ *
+ * - Skips when `agentId` is null (unassignment) or matches the
+ *   previous assignee (no-op re-assignment).
+ * - Skips when the assigned agent row can't be loaded (race).
+ * - Writes directly via `tx.comment.create` — does NOT call
+ *   `recordChange`, so this comment doesn't trigger another
+ *   COMMENT_CREATED fan-out (which would re-page watchers + the
+ *   agent's own webhook). The activity stream still picks it up
+ *   through the AGENT_ASSIGNED ActivityEvent that's about to land
+ *   in the same transaction.
+ *
+ * Idempotent in practice: the issue.update path only emits
+ * AGENT_ASSIGNED when the assignee actually changes, so we don't
+ * paper over duplicate posts here.
+ */
+async function maybeWriteAssignmentSystemComment(
+  tx: PrismaClient | Prisma.TransactionClient,
+  params: {
+    workspaceId: string;
+    issueId: string;
+    payload: Prisma.InputJsonValue;
+    actorId: string | null;
+  },
+): Promise<void> {
+  const payload =
+    params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)
+      ? (params.payload as Record<string, unknown>)
+      : {};
+  const agentId =
+    typeof payload.agentId === "string" && payload.agentId.length > 0
+      ? payload.agentId
+      : null;
+  const previousAgentId =
+    typeof payload.previousAgentId === "string" && payload.previousAgentId.length > 0
+      ? payload.previousAgentId
+      : null;
+  if (!agentId) return; // unassignment — nothing to announce
+  if (agentId === previousAgentId) return; // no-op re-assignment
+
+  const agent = await tx.agent.findFirst({
+    where: { id: agentId, workspaceId: params.workspaceId },
+    select: {
+      profileKey: true,
+      runtime: { select: { kind: true } },
+    },
+  });
+  if (!agent) return; // defensive — agent disappeared mid-transaction
+
+  const actor = params.actorId
+    ? await tx.user.findUnique({
+        where: { id: params.actorId },
+        select: { name: true, handle: true },
+      })
+    : null;
+  const actorLabel = actor?.name ?? actor?.handle ?? "the system";
+
+  const runtimeLabel = agent.runtime?.kind ?? "unknown";
+
+  const body =
+    `**@${agent.profileKey}** was assigned by **@${actorLabel}**.\n\n` +
+    `_Runtime: ${runtimeLabel}._`;
+
+  await tx.comment.create({
+    data: {
+      workspaceId: params.workspaceId,
+      issueId: params.issueId,
+      authorId: null,
+      authoringAgentId: null,
+      body,
+      kind: "SYSTEM",
+    },
+  });
 }
 
 /**
@@ -255,6 +334,23 @@ export async function recordChange(
         ...(transitionedTo ? { autoTransitionedTo: transitionedTo } : {}),
       } as unknown as Prisma.InputJsonValue;
     }
+
+    // SYSTEM comment: a small in-thread note ("victor was assigned by
+    // Bailey. Runtime: LOCAL_DAEMON.") so the issue conversation surface
+    // doesn't look dead between assignment and the agent's first reply.
+    // Hermes-managed agents historically had no inline acknowledgement
+    // here — forge-cli daemons posted a starter comment, but everyone
+    // else didn't. Writing this directly via `tx.comment.create` (not
+    // through `comment.create`'s recordChange path) means we don't
+    // re-emit COMMENT_CREATED and don't re-fan-out to watchers /
+    // webhooks. Skip re-assignment to the same agent (no churn) and
+    // unassignment (`agentId == null`).
+    await maybeWriteAssignmentSystemComment(tx, {
+      workspaceId: params.workspaceId,
+      issueId: params.subjectId,
+      payload: payloadOut,
+      actorId: params.actorId,
+    });
   }
 
   const event = await tx.activityEvent.create({
@@ -426,6 +522,46 @@ export async function recordChange(
         where: {
           workspaceId: params.workspaceId,
           id: payload.agentId,
+          archivedAt: null,
+        },
+        select: { id: true, webhookUrl: true },
+      });
+      if (agent) {
+        resolvedAgentIds.push(agent.id);
+        if (agent.webhookUrl) {
+          const wid = await upsertAgentDispatchWebhook(
+            tx,
+            params.workspaceId,
+            agentDispatchUrlFor(agent.id),
+          );
+          agentWebhookIds.push(wid);
+        }
+      }
+    }
+  }
+
+  // (d2) AGENT_RUN_BLOCKED — the agent itself just flipped a run to
+  //      WAITING via `runs.setWaiting({ blocking: true })`. Route the
+  //      event back to the agent's own webhook so the runtime sees its
+  //      block confirmed (useful for receipts / acks). Subject is the
+  //      agent-run row; we resolve the owning agent from the payload's
+  //      `agentId`. Also surfaces the event in the standard agent
+  //      activity feed via the normal ActivityEvent write that already
+  //      happened above.
+  if (
+    params.eventKind === EventKind.AGENT_RUN_BLOCKED &&
+    params.subjectType === "agent-run"
+  ) {
+    const payload = params.payload as { agentId?: string } | undefined;
+    const blockedAgentId =
+      typeof payload?.agentId === "string" && payload.agentId.length > 0
+        ? payload.agentId
+        : null;
+    if (blockedAgentId) {
+      const agent = await tx.agent.findFirst({
+        where: {
+          workspaceId: params.workspaceId,
+          id: blockedAgentId,
           archivedAt: null,
         },
         select: { id: true, webhookUrl: true },

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Bot, Activity } from "lucide-react";
+import { Bot, Activity, Hourglass } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { relativeTime, cn } from "@/lib/utils";
@@ -55,24 +55,32 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
   const elapsedMs = now - new Date(run.startedAt).getTime();
   const elapsedLabel = formatElapsed(elapsedMs);
   const lastEventLabel = relativeTime(run.lastEventAt);
-  const state = deriveStripState({
-    acknowledgedAt: run.acknowledgedAt,
-    outputStartedAt: run.outputStartedAt,
-    lastWakeAt: run.lastWakeAt,
-    lastEventAt: new Date(run.lastEventAt),
-    now,
-  });
+  // WAITING short-circuits the wake/ack derivation entirely — when the
+  // agent has self-blocked, the operator's eye should land on "this is
+  // on you" rather than on the wake-state machine.
+  const state: StripState =
+    run.status === "WAITING"
+      ? "waiting"
+      : deriveStripState({
+          acknowledgedAt: run.acknowledgedAt,
+          outputStartedAt: run.outputStartedAt,
+          lastWakeAt: run.lastWakeAt,
+          lastEventAt: new Date(run.lastEventAt),
+          now,
+        });
   const step =
     run.currentStep ??
-    (state === "running"
-      ? "working…"
-      : state === "acknowledged"
-        ? "acknowledged · drafting…"
-        : state === "wake-sent"
-          ? `wake sent · waiting for ack${run.wakeAttempts > 1 ? ` (${run.wakeAttempts} attempts)` : ""}`
-          : state === "queued"
-            ? "queued · waking…"
-            : "no activity");
+    (state === "waiting"
+      ? "Waiting on you"
+      : state === "running"
+        ? "working…"
+        : state === "acknowledged"
+          ? "acknowledged · drafting…"
+          : state === "wake-sent"
+            ? `wake sent · waiting for ack${run.wakeAttempts > 1 ? ` (${run.wakeAttempts} attempts)` : ""}`
+            : state === "queued"
+              ? "queued · waking…"
+              : "no activity");
 
   return (
     <div
@@ -82,9 +90,11 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
           ? "border-ember/30 bg-ember/5"
           : state === "acknowledged"
             ? "border-ember/20 bg-ember/5"
-            : state === "stalled"
-              ? "border-amber-500/30 bg-amber-500/5"
-              : "border-border bg-card/40",
+            : state === "waiting"
+              ? "border-ember/40 bg-ember/10"
+              : state === "stalled"
+                ? "border-amber-500/30 bg-amber-500/5"
+                : "border-border bg-card/40",
       )}
     >
       <span className="relative flex h-2 w-2 shrink-0">
@@ -93,19 +103,33 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember opacity-60" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
           </>
+        ) : state === "waiting" ? (
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
         ) : state === "stalled" ? (
           <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
         ) : (
           <span className="relative inline-flex h-2 w-2 rounded-full bg-muted-foreground/60" />
         )}
       </span>
-      <Bot
-        className={cn(
-          "h-3.5 w-3.5",
-          state === "stalled" ? "text-amber-600 dark:text-amber-300" : "text-ember",
-        )}
-      />
+      {state === "waiting" ? (
+        <Hourglass className="h-3.5 w-3.5 text-ember" />
+      ) : (
+        <Bot
+          className={cn(
+            "h-3.5 w-3.5",
+            state === "stalled" ? "text-amber-600 dark:text-amber-300" : "text-ember",
+          )}
+        />
+      )}
       <span className="font-medium">{run.agent.name}</span>
+      {state === "waiting" && (
+        // Soft "Waiting on you" pill in the warm ember tone — distinct
+        // from the alarming amber STALLED pill so patient agents read
+        // as "your turn" not "broken."
+        <span className="rounded-sm border border-ember/40 bg-ember/10 px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wider text-ember">
+          Waiting on you
+        </span>
+      )}
       <span className="text-muted-foreground">·</span>
       <span className="truncate text-foreground/80">{step}</span>
       <span className="ml-auto flex items-center gap-2 text-meta text-muted-foreground">
@@ -122,7 +146,13 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
   );
 }
 
-type StripState = "queued" | "wake-sent" | "acknowledged" | "running" | "stalled";
+type StripState =
+  | "queued"
+  | "wake-sent"
+  | "acknowledged"
+  | "running"
+  | "stalled"
+  | "waiting";
 
 function deriveStripState(input: {
   acknowledgedAt: Date | string | null;
@@ -130,7 +160,7 @@ function deriveStripState(input: {
   lastWakeAt: Date | string | null;
   lastEventAt: Date;
   now: number;
-}): StripState {
+}): Exclude<StripState, "waiting"> {
   const STALE_MS = 5 * 60_000;
   if (input.outputStartedAt) {
     return input.now - input.lastEventAt.getTime() > STALE_MS ? "stalled" : "running";
