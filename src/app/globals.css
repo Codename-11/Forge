@@ -40,6 +40,15 @@
     --success: 120 45% 34%;
     --warning: 38 90% 45%;
     --danger: 0 60% 44%;
+
+    /* Sticky-note palette — warm-earthy variants. Picked so dark
+     * ink reads on every fill without theme-specific text color. */
+    --sticky-sand: 38 35% 78%;
+    --sticky-blush: 10 45% 80%;
+    --sticky-sage: 95 22% 72%;
+    --sticky-sky: 205 35% 78%;
+    --sticky-lavender: 265 28% 80%;
+    --sticky-peach: 25 55% 78%;
   }
 
   .dark {
@@ -62,6 +71,15 @@
     --success: 120 45% 48%;
     --warning: 38 90% 56%;
     --danger: 0 60% 60%;
+
+    /* Sticky-note palette (dark) — same hues, lower L and slightly
+     * lower S so they don't glow on graphite. */
+    --sticky-sand: 38 30% 64%;
+    --sticky-blush: 10 40% 66%;
+    --sticky-sage: 95 18% 58%;
+    --sticky-sky: 205 30% 64%;
+    --sticky-lavender: 265 23% 66%;
+    --sticky-peach: 25 50% 64%;
   }
 
   * {

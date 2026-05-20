@@ -1,8 +1,60 @@
 "use client";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { MessageCircle } from "lucide-react";
 import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
 
-export type ShapeKind = "box" | "ellipse" | "line" | "arrow" | "text" | "freehand";
+export type ShapeKind =
+  | "box"
+  | "ellipse"
+  | "line"
+  | "arrow"
+  | "text"
+  | "freehand"
+  | "sticky"
+  | "comment-pin"
+  | "stamp";
+
+/** Sticky-note palette — keys map to `--sticky-*` CSS vars in
+ * globals.css. Order matters: index 0 is the "default" swatch new
+ * stickies use when no palette key is supplied. */
+export const STICKY_PALETTE: ReadonlyArray<{ key: string; label: string; cssVar: string }> = [
+  { key: "sand", label: "Sand", cssVar: "--sticky-sand" },
+  { key: "blush", label: "Blush", cssVar: "--sticky-blush" },
+  { key: "sage", label: "Sage", cssVar: "--sticky-sage" },
+  { key: "sky", label: "Sky", cssVar: "--sticky-sky" },
+  { key: "lavender", label: "Lavender", cssVar: "--sticky-lavender" },
+  { key: "peach", label: "Peach", cssVar: "--sticky-peach" },
+];
+
+const STICKY_PALETTE_KEYS = new Set(STICKY_PALETTE.map((p) => p.key));
+
+/** Stamp emoji palette — fixed 8-glyph set so we can validate at the
+ * router boundary. */
+export const STAMP_PALETTE: ReadonlyArray<string> = [
+  "👍",
+  "👎",
+  "⭐",
+  "🔥",
+  "❤️",
+  "💡",
+  "⚠️",
+  "🎯",
+];
+
+const STAMP_PALETTE_SET = new Set(STAMP_PALETTE);
+
+export function isStickyPaletteKey(key: unknown): key is string {
+  return typeof key === "string" && STICKY_PALETTE_KEYS.has(key);
+}
+
+export function isStampEmoji(value: unknown): value is string {
+  return typeof value === "string" && STAMP_PALETTE_SET.has(value);
+}
+
+function stickyCssVarForKey(key: string | undefined): string {
+  const entry = STICKY_PALETTE.find((p) => p.key === key) ?? STICKY_PALETTE[0];
+  return entry.cssVar;
+}
 
 export type CanvasShapeRow = {
   id: string;
@@ -17,6 +69,12 @@ export type CanvasShapeRow = {
   text: string | null;
   zIndex: number;
   groupId: string | null;
+  /** Set when the shape is hidden via the layers panel. Filtered out
+   * by the renderer so it never paints. */
+  hiddenAt?: Date | string | null;
+  /** Set when the shape is locked from edits. The renderer still
+   * paints but blocks the inline editor + selection-drag gestures. */
+  lockedAt?: Date | string | null;
 };
 
 type ShapeStyle = {
@@ -83,6 +141,30 @@ function shapeBoundingBox(shape: CanvasShapeRow): {
       y: shape.y,
       width: shape.width ?? 1,
       height: shape.height ?? 1,
+    };
+  }
+  if (shape.kind === "sticky") {
+    return {
+      x: shape.x,
+      y: shape.y,
+      width: shape.width ?? 200,
+      height: shape.height ?? 120,
+    };
+  }
+  if (shape.kind === "comment-pin") {
+    return {
+      x: shape.x,
+      y: shape.y,
+      width: shape.width ?? 24,
+      height: shape.height ?? 24,
+    };
+  }
+  if (shape.kind === "stamp") {
+    return {
+      x: shape.x,
+      y: shape.y,
+      width: shape.width ?? 48,
+      height: shape.height ?? 48,
     };
   }
   if (shape.kind === "line" || shape.kind === "arrow") {
@@ -159,15 +241,21 @@ export const CanvasShapes = memo(function CanvasShapes({
   onTextShapeEditEnd,
   onTextShapeEditStart,
 }: CanvasShapesProps) {
+  // Hidden shapes never paint. Locked shapes still render but the
+  // per-kind branches disable inline edit / double-click gestures.
+  const visibleShapes = useMemo(
+    () => shapes.filter((s) => !s.hiddenAt),
+    [shapes],
+  );
   const bbox = useMemo(() => {
-    if (shapes.length === 0) {
+    if (visibleShapes.length === 0) {
       return { left: 0, top: 0, width: 1, height: 1 };
     }
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
-    for (const s of shapes) {
+    for (const s of visibleShapes) {
       const b = shapeBoundingBox(s);
       if (b.x < minX) minX = b.x;
       if (b.y < minY) minY = b.y;
@@ -181,9 +269,13 @@ export const CanvasShapes = memo(function CanvasShapes({
       width: Math.ceil(maxX - minX + margin * 2),
       height: Math.ceil(maxY - minY + margin * 2),
     };
-  }, [shapes]);
+  }, [visibleShapes]);
 
-  if (shapes.length === 0) return null;
+  // Local popover state for comment pins. Cleared when the user
+  // clicks any other pin or presses Esc on the popover.
+  const [openCommentPinId, setOpenCommentPinId] = useState<string | null>(null);
+
+  if (visibleShapes.length === 0) return null;
   const { left, top, width, height } = bbox;
 
   return (
@@ -206,7 +298,7 @@ export const CanvasShapes = memo(function CanvasShapes({
           <path d="M0,-4 L8,0 L0,4 Z" fill="currentColor" />
         </marker>
       </defs>
-      {shapes.map((shape) => (
+      {visibleShapes.map((shape) => (
         <ShapeNode
           key={shape.id}
           shape={shape}
@@ -218,6 +310,11 @@ export const CanvasShapes = memo(function CanvasShapes({
           onTextShapeSave={onTextShapeSave}
           onTextShapeEditEnd={onTextShapeEditEnd}
           onTextShapeEditStart={onTextShapeEditStart}
+          commentPinOpen={openCommentPinId === shape.id}
+          onCommentPinToggle={(id) =>
+            setOpenCommentPinId((cur) => (cur === id ? null : id))
+          }
+          onCommentPinClose={() => setOpenCommentPinId(null)}
         />
       ))}
     </svg>
@@ -234,6 +331,13 @@ type ShapeNodeProps = {
   onTextShapeSave?: (id: string, text: string) => void;
   onTextShapeEditEnd?: () => void;
   onTextShapeEditStart?: (id: string) => void;
+  /** True when this comment-pin's placeholder popover should render. */
+  commentPinOpen?: boolean;
+  /** Click-handler for comment pins; the parent owns which pin is open. */
+  onCommentPinToggle?: (id: string) => void;
+  /** Close the comment pin popover (called from the popover's
+   * Close button or backdrop). */
+  onCommentPinClose?: () => void;
 };
 
 const ShapeNode = memo(function ShapeNode({
@@ -246,6 +350,9 @@ const ShapeNode = memo(function ShapeNode({
   onTextShapeSave,
   onTextShapeEditEnd,
   onTextShapeEditStart,
+  commentPinOpen = false,
+  onCommentPinToggle,
+  onCommentPinClose,
 }: ShapeNodeProps) {
   const style = readStyle(shape.style);
   const onMouseDown = (e: React.MouseEvent) => {
@@ -472,6 +579,240 @@ const ShapeNode = memo(function ShapeNode({
           stroke="currentColor"
           strokeWidth={1.5}
           strokeDasharray="4 4"
+          pointerEvents="none"
+        />
+      );
+    }
+  } else if (shape.kind === "sticky") {
+    const w = shape.width ?? 200;
+    const h = shape.height ?? 120;
+    const x = shape.x - offsetX;
+    const y = shape.y - offsetY;
+    const paletteKey =
+      typeof (shape.style as Record<string, unknown> | null | undefined)?.fill === "string"
+        ? ((shape.style as Record<string, unknown>).fill as string)
+        : undefined;
+    const cssVar = stickyCssVarForKey(
+      isStickyPaletteKey(paletteKey) ? (paletteKey as string) : undefined,
+    );
+    const fontSize = style.fontSize ?? 14;
+    const locked = !!shape.lockedAt;
+    content = (
+      <foreignObject
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        pointerEvents="all"
+        onMouseDown={editing ? undefined : onMouseDown}
+        onDoubleClick={(e) => {
+          if (editing || locked) return;
+          e.stopPropagation();
+          onTextShapeEditStart?.(shape.id);
+        }}
+        data-canvas-shape={shape.id}
+        data-shape-kind="sticky"
+        className={editing ? "" : "cursor-pointer"}
+      >
+        <div
+          className="h-full w-full rounded-md shadow-md text-foreground"
+          style={{
+            background: `hsl(var(${cssVar}))`,
+            opacity: style.opacity ?? 1,
+            padding: 12,
+            overflow: "hidden",
+          }}
+        >
+          {editing && !locked ? (
+            <TextShapeEditor
+              initial={shape.text ?? ""}
+              fontSize={fontSize}
+              fontWeight={style.fontWeight ?? 400}
+              color="hsl(var(--foreground))"
+              onCommit={(next) => {
+                onTextShapeSave?.(shape.id, next);
+                onTextShapeEditEnd?.();
+              }}
+              onCancel={() => onTextShapeEditEnd?.()}
+            />
+          ) : (
+            <div
+              className="text-sm"
+              style={{
+                fontSize,
+                lineHeight: 1.35,
+                wordBreak: "break-word",
+                display: "-webkit-box",
+                WebkitLineClamp: 3,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {shape.text && shape.text !== "Sticky" ? (
+                shape.text
+              ) : (
+                <span className="italic opacity-60">Double-click to edit</span>
+              )}
+            </div>
+          )}
+        </div>
+      </foreignObject>
+    );
+    if (selected) {
+      ring = (
+        <rect
+          x={x - 2}
+          y={y - 2}
+          width={w + 4}
+          height={h + 4}
+          rx={8}
+          ry={8}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          pointerEvents="none"
+        />
+      );
+    }
+  } else if (shape.kind === "comment-pin") {
+    const w = shape.width ?? 24;
+    const h = shape.height ?? 24;
+    const x = shape.x - offsetX;
+    const y = shape.y - offsetY;
+    const rawUnread = (shape.style as Record<string, unknown> | null | undefined)?.unread;
+    const unread = typeof rawUnread === "number" ? rawUnread : 0;
+    // Popover footprint extends below the pin; expand the foreignObject
+    // bbox so the popover doesn't clip against its parent SVG.
+    const fX = x;
+    const fY = y;
+    const fW = Math.max(w, 220);
+    const fH = commentPinOpen ? h + 130 : h;
+    content = (
+      <foreignObject
+        x={fX}
+        y={fY}
+        width={fW}
+        height={fH}
+        // Default to none so the surrounding canvas can still receive
+        // empty-area clicks; the inner button + popover opt back in.
+        pointerEvents="none"
+        data-canvas-shape={shape.id}
+        data-shape-kind="comment-pin"
+      >
+        <div className="relative" style={{ width: fW, height: fH }}>
+          <button
+            type="button"
+            aria-label="Open comment thread"
+            className="absolute left-0 top-0 flex items-center justify-center rounded-full text-ember-foreground shadow-md transition-transform hover:scale-105"
+            style={{
+              width: w,
+              height: h,
+              background: "hsl(var(--ember))",
+              pointerEvents: "auto",
+            }}
+            onMouseDown={(e) => {
+              if (e.button !== 0) return;
+              e.stopPropagation();
+              onSelectShape(shape.id, e);
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onCommentPinToggle?.(shape.id);
+            }}
+          >
+            <MessageCircle size={14} />
+            {unread > 0 ? (
+              <span
+                className="absolute -right-1 -top-1 flex h-3 min-w-3 items-center justify-center rounded-full px-1 text-[9px] font-medium text-ember-foreground"
+                style={{ background: "hsl(var(--danger))" }}
+              >
+                {unread > 9 ? "9+" : unread}
+              </span>
+            ) : null}
+          </button>
+          {commentPinOpen ? (
+            <div
+              className="absolute left-0 rounded-md border border-border bg-popover p-3 text-xs shadow-lg"
+              style={{
+                top: h + 6,
+                width: 220,
+                pointerEvents: "auto",
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-1 font-medium text-foreground">Comments</div>
+              <div className="text-muted-foreground">
+                Threads land in Wave 2. The pin is anchored — comments
+                will hang off this shape id.
+              </div>
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-subtle hover:text-foreground"
+                  onClick={() => onCommentPinClose?.()}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </foreignObject>
+    );
+    if (selected) {
+      ring = (
+        <circle
+          cx={x + w / 2}
+          cy={y + h / 2}
+          r={w / 2 + 3}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          pointerEvents="none"
+        />
+      );
+    }
+  } else if (shape.kind === "stamp") {
+    const w = shape.width ?? 48;
+    const h = shape.height ?? 48;
+    const x = shape.x - offsetX;
+    const y = shape.y - offsetY;
+    const rawEmoji = (shape.style as Record<string, unknown> | null | undefined)?.emoji;
+    const emoji = isStampEmoji(rawEmoji) ? (rawEmoji as string) : STAMP_PALETTE[0];
+    content = (
+      <foreignObject
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        pointerEvents="all"
+        onMouseDown={onMouseDown}
+        data-canvas-shape={shape.id}
+        data-shape-kind="stamp"
+        className="cursor-pointer"
+      >
+        <div
+          className="flex h-full w-full items-center justify-center leading-none"
+          style={{ fontSize: 36, opacity: style.opacity ?? 1, userSelect: "none" }}
+        >
+          {emoji}
+        </div>
+      </foreignObject>
+    );
+    if (selected) {
+      ring = (
+        <rect
+          x={x - 3}
+          y={y - 3}
+          width={w + 6}
+          height={h + 6}
+          rx={8}
+          ry={8}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
           pointerEvents="none"
         />
       );
