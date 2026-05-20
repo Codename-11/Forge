@@ -1031,7 +1031,7 @@ export function ChatThreadView({
     async (
       targetThreadId: string,
       body: string,
-      opts?: { attachmentIds?: string[] },
+      opts?: { attachmentIds?: string[]; pendingMessageId?: string },
     ) => {
       // Cancel any in-flight stream before starting a new one.
       streamAbortRef.current?.abort();
@@ -1061,6 +1061,7 @@ export function ChatThreadView({
             body,
             canvasId: canvasIdRef.current ?? undefined,
             attachments: opts?.attachmentIds,
+            pendingMessageId: opts?.pendingMessageId,
           }),
           signal: ctrl.signal,
         });
@@ -1394,6 +1395,7 @@ export function ChatThreadView({
       // persists (see `attachments.updateMany` in route.ts).
       if (threadId) {
         const attachmentIds: string[] = [];
+        let pendingMessageId: string | undefined;
         if (files.length > 0) {
           const pending = await createPendingM.mutateAsync({
             agentId,
@@ -1401,6 +1403,7 @@ export function ChatThreadView({
             body,
             context: currentContext,
           });
+          pendingMessageId = pending.messageId;
           for (const file of files) {
             const { attachmentId } = await uploadAttachmentFile({
               file,
@@ -1416,7 +1419,7 @@ export function ChatThreadView({
             targetId: pending.messageId,
           });
         }
-        await runStreamingSend(threadId, body, { attachmentIds });
+        await runStreamingSend(threadId, body, { attachmentIds, pendingMessageId });
         return;
       }
 

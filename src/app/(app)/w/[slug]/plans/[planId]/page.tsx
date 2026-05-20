@@ -124,6 +124,14 @@ export default function PlanDetailPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const deleteM = trpc.executionPlan.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Plan deleted");
+      router.push(`/w/${ws.slug}/plans`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const addStep = trpc.executionPlan.addStep.useMutation({
     onSuccess: () => {
       utils.executionPlan.get.invalidate({ id: params.planId });
@@ -210,6 +218,7 @@ export default function PlanDetailPage() {
   type ConfirmState =
     | { kind: "remove-step"; stepId: string }
     | { kind: "archive" }
+    | { kind: "delete" }
     | null;
   const [confirmState, setConfirmState] = useState<ConfirmState>(null);
 
@@ -532,15 +541,26 @@ export default function PlanDetailPage() {
             </ul>
           </div>
 
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-warning"
-            onClick={() => setConfirmState({ kind: "archive" })}
-            disabled={archive.isPending}
-          >
-            <Archive className="h-3.5 w-3.5" /> Archive plan
-          </Button>
+          <div className="flex flex-col gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-warning"
+              onClick={() => setConfirmState({ kind: "archive" })}
+              disabled={archive.isPending}
+            >
+              <Archive className="h-3.5 w-3.5" /> Archive plan
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setConfirmState({ kind: "delete" })}
+              disabled={deleteM.isPending}
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Delete plan
+            </Button>
+          </div>
         </aside>
       </div>
 
@@ -577,6 +597,30 @@ export default function PlanDetailPage() {
         onConfirm={() =>
           archive.mutate(
             { id: plan.id },
+            { onSettled: () => setConfirmState(null) },
+          )
+        }
+      />
+
+      <Confirm
+        open={confirmState?.kind === "delete"}
+        onOpenChange={(o) => {
+          if (!o) setConfirmState(null);
+        }}
+        title="Delete plan?"
+        description={
+          <>
+            This permanently removes the plan and its steps. Type the
+            plan&apos;s title to confirm.
+          </>
+        }
+        variant="destructive"
+        typeToConfirm={plan.title}
+        primaryLabel="Delete plan"
+        loading={deleteM.isPending}
+        onConfirm={() =>
+          deleteM.mutate(
+            { id: plan.id, confirm: plan.title },
             { onSettled: () => setConfirmState(null) },
           )
         }

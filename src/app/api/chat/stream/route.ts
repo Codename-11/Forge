@@ -51,6 +51,10 @@ interface RequestBody {
    * Validated to belong to the same workspace as the thread before
    * being injected into the system prompt. */
   canvasId?: string;
+  /** Optional placeholder ChatMessage id the client created to host
+   * attachment uploads. Deleted server-side after we re-target the
+   * uploads at the real USER row this route persists. */
+  pendingMessageId?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -187,6 +191,23 @@ export async function POST(req: NextRequest) {
       await tx.attachment.updateMany({
         where: { id: { in: attachmentIds }, workspaceId },
         data: { targetType: "chat-message", targetId: message.id },
+      });
+    }
+    // Drop the operator-supplied placeholder if it's still hanging around.
+    // Guarded by `dispatchedAt: null` so we never delete a real row.
+    if (
+      typeof parsed.pendingMessageId === "string" &&
+      parsed.pendingMessageId.length > 0 &&
+      parsed.pendingMessageId !== message.id
+    ) {
+      await tx.chatMessage.deleteMany({
+        where: {
+          id: parsed.pendingMessageId,
+          workspaceId,
+          threadId: thread.id,
+          role: ChatRole.USER,
+          dispatchedAt: null,
+        },
       });
     }
     await recordChange(tx, {
