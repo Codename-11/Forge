@@ -195,3 +195,34 @@ agentCrews.removeMember({ memberId })
 agentCrews.update({ id, name, maxParallel })
 agentCrews.archive({ id })
 ```
+
+## Crews
+
+A **crew** is a reusable, standing team — distinct from a *plan run*,
+which is a single decompose-and-execute pass against one goal. The crew
+is the roster (who can plan / work / review); the plan run is the work.
+One crew runs many goals over its lifetime; each goal/plan points back at
+its crew via `Goal.crewId` / `ExecutionPlan.crewId`. `maxParallel` caps
+how many of the crew's steps run simultaneously.
+
+The loop resolves roles from crew membership: the PLANNER decomposes, a
+WORKER executes each READY step, a REVIEWER judges steps that enter
+REVIEW (when `autoJudge` is on). The same agent can hold multiple roles
+on one crew.
+
+UI surfaces (sidebar **Crews**, chord `g u`):
+
+- **`/w/<slug>/crews`** — the crew index: each crew with its avatar
+  stack, role breakdown (e.g. "1 planner · 3 workers · 1 reviewer"), and
+  parallel cap. Heavy create/archive CRUD still lives under
+  `/settings/crews`.
+- **`/w/<slug>/crews/<crewId>`** — the crew detail: roster with live
+  presence + "what each member is running right now" (active RUNNING /
+  REVIEW steps on this crew's plans), inline add / change-role / remove,
+  goal history (every goal the crew has run, linked to its goal page),
+  and aggregate stats (goals run, success rate = ACHIEVED / total, avg
+  cost per goal, avg steps per plan — all computed server-side via
+  `agentCrew.detail` / `stats` / `goalHistory`).
+
+A crew can be assigned to a goal at creation: the **New goal** form on
+`/w/<slug>/goals` includes a crew picker (`CrewSelector`).

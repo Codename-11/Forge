@@ -194,7 +194,31 @@ export async function getGoal(
         orderBy: { createdAt: "desc" },
         include: { _count: { select: { steps: true } } },
       },
-      crew: { select: { id: true, name: true } },
+      crew: {
+        select: {
+          id: true,
+          name: true,
+          maxParallel: true,
+          members: {
+            orderBy: { position: "asc" },
+            select: {
+              id: true,
+              role: true,
+              position: true,
+              agent: {
+                select: {
+                  id: true,
+                  name: true,
+                  profileKey: true,
+                  avatar: true,
+                  status: true,
+                  lastHeartbeatAt: true,
+                },
+              },
+            },
+          },
+        },
+      },
       issue: { select: { id: true, number: true, title: true } },
     },
   });

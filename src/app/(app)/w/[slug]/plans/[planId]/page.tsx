@@ -19,6 +19,7 @@ import {
   RotateCcw,
   Target,
   Trash2,
+  Workflow,
   XCircle,
 } from "lucide-react";
 import { ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
@@ -32,7 +33,15 @@ import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
 import { StepComments } from "@/components/plans/step-comments";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { Avatar } from "@/components/ui/avatar";
-import { BudgetMeter } from "@/components/orchestration-ui/budget-meter";
+import { BudgetMeter } from "@/components/orchestration/budget-meter";
+import { DagView } from "@/components/orchestration/dag-view";
+import type { DagAgent, DagStep } from "@/components/orchestration/types";
+import {
+  CrewRosterPanel,
+  type ActiveStepByAgent,
+  type CrewRosterData,
+} from "@/components/orchestration/crew-roster-panel";
+import { ActionRequestCard } from "@/components/action-requests/action-request-card";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -124,7 +133,7 @@ type AgentLite = {
   lastHeartbeatAt: string | Date | null;
 };
 
-type ViewMode = "list" | "timeline";
+type ViewMode = "list" | "timeline" | "graph";
 
 const SAVE_DEBOUNCE_MS = 600;
 
@@ -368,6 +377,65 @@ export default function PlanDetailPage() {
   const goalTitle = planX?.goal?.title ?? null;
   const hasBudget = maxTotalCostUsd != null || totalCostUsd > 0;
 
+  // Crew roster — embedded on `executionPlan.get`. Loosely read until
+  // the Prisma client regenerates the `crew` relation onto the type.
+  const crew = (plan as unknown as { crew?: CrewRosterData | null }).crew ?? null;
+
+  // Which crew member is live on which step — drives the roster
+  // highlight. Built from RUNNING steps' `assignedAgentId`.
+  const activeByAgent = useMemo<ActiveStepByAgent>(() => {
+    const m: ActiveStepByAgent = new Map();
+    for (const s of orderedSteps) {
+      if (s.status === ExecutionStepStatus.RUNNING && s.assignedAgentId) {
+        m.set(s.assignedAgentId, { id: s.id, title: s.title });
+      }
+    }
+    return m;
+  }, [orderedSteps]);
+
+  // DAG view inputs — the graph consumes the same step rows the page
+  // already has, plus a presence-light agent map keyed by id.
+  const dagSteps = useMemo<DagStep[]>(
+    () =>
+      orderedSteps.map((s) => ({
+        id: s.id,
+        title: s.title,
+        body: s.body,
+        position: s.position,
+        status: s.status,
+        assignedAgentId: s.assignedAgentId,
+        dependsOnStepIds: s.dependsOnStepIds,
+        expectedOutput: s.expectedOutput,
+        judgeVerdict: s.judgeVerdict
+          ? {
+              verdict: s.judgeVerdict.verdict,
+              feedback: s.judgeVerdict.feedback ?? "",
+              score: s.judgeVerdict.score ?? null,
+              judgedByAgentId: s.judgeVerdict.judgedByAgentId ?? null,
+              judgedAt: s.judgeVerdict.judgedAt ?? "",
+            }
+          : null,
+        retryCount: s.retryCount,
+        lastFeedback: s.lastFeedback,
+        childPlanId: s.childPlanId,
+      })),
+    [orderedSteps],
+  );
+  const dagAgentsById = useMemo<Record<string, DagAgent>>(() => {
+    const rec: Record<string, DagAgent> = {};
+    for (const [id, a] of agentsById) {
+      rec[id] = {
+        id: a.id,
+        name: a.name,
+        profileKey: a.profileKey,
+        status:
+          a.status === "ONLINE" || a.status === "BUSY" ? a.status : "OFFLINE",
+        avatar: a.image,
+      };
+    }
+    return rec;
+  }, [agentsById]);
+
   // Optional canvas integration (Agent D delivers `canvas.createFromPlan`).
   // If the procedure isn't on the trpc proxy at runtime, we degrade
   // gracefully to a disabled button with a tooltip.
@@ -466,7 +534,7 @@ export default function PlanDetailPage() {
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[1fr_280px]">
         <section className="flex min-w-0 flex-col gap-4">
           {plan.status === ExecutionPlanStatus.DRAFT ? (
-            <PlanApprovalBanner
+            <PlanApproval
               planId={plan.id}
               issueNumber={plan.issue?.number ?? null}
               workspaceSlug={ws.slug}
@@ -583,6 +651,19 @@ export default function PlanDetailPage() {
               >
                 <ListTree className="h-3 w-3" /> Timeline
               </button>
+              <button
+                type="button"
+                onClick={() => setView("graph")}
+                className={cn(
+                  "flex items-center gap-1 rounded px-2 py-1 transition-colors",
+                  view === "graph"
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                aria-pressed={view === "graph"}
+              >
+                <Workflow className="h-3 w-3" /> Graph
+              </button>
             </div>
             <span className="text-meta text-muted-foreground">
               {total} step{total === 1 ? "" : "s"}
@@ -601,7 +682,7 @@ export default function PlanDetailPage() {
               onPatchStep={(id, patch) => updateStep.mutate({ id, ...patch })}
               onRemoveStep={(id) => setConfirmState({ kind: "remove-step", stepId: id })}
             />
-          ) : (
+          ) : view === "timeline" ? (
             <TimelineView
               steps={orderedSteps}
               positionById={positionById}
@@ -611,6 +692,15 @@ export default function PlanDetailPage() {
               runningRef={runningRef}
               onTransitionStep={(id, status) => updateStep.mutate({ id, status })}
             />
+          ) : (
+            <div className="rounded-lg border border-border bg-card/40 p-2">
+              <DagView
+                steps={dagSteps}
+                agentsById={dagAgentsById}
+                planHref={`/w/${ws.slug}/plans/${plan.id}`}
+                className="max-h-[60vh]"
+              />
+            </div>
           )}
 
           <AddStepForm
@@ -650,6 +740,8 @@ export default function PlanDetailPage() {
               <BudgetMeter spent={totalCostUsd} cap={maxTotalCostUsd} />
             </div>
           ) : null}
+
+          <CrewRosterPanel crew={crew} activeByAgent={activeByAgent} />
 
           <div className="rounded-lg border border-border bg-card/40 p-3 text-meta">
             <div className="mb-2 uppercase tracking-wide text-muted-foreground">Links</div>
@@ -777,25 +869,74 @@ export default function PlanDetailPage() {
 }
 
 /**
- * "Pending your approval" banner for DRAFT plans. When a PLANNER agent
- * finishes decomposition the backend opens an ActionRequest
- * (`sourceType="execution-plan"`, titled "Approve N-step plan") that
- * renders as an `<ActionRequestCard>` on the source issue's comment
- * thread — Accepting it transitions the plan to RUNNING.
+ * Approval surface for DRAFT plans, with a clear precedence:
  *
- * There's no `actionRequest.forPlan` lookup yet (the existing card is
- * keyed by commentId), so this banner does two robust things:
- *   1. Deep-links to the source issue where the real Accept/Decline
- *      card lives (when the plan is issue-linked).
- *   2. Offers a direct "Approve" that flips the plan to APPROVED via the
- *      already-shipped `executionPlan.update` — a manual fast-path for
- *      operators who don't want to hunt for the card.
+ *   1. PROPER PATH — if the backend opened an approval ActionRequest
+ *      (`sourceType="execution-plan"`, `sourceId=planId`, created by
+ *      `plans.requestApproval`), render the inline `<ActionRequestCard
+ *      planId>`. Accepting it runs the real activation server-side:
+ *      DRAFT→RUNNING + goal→ACTIVE + crew kickoff. This is preferred
+ *      because the direct status flip below skips that dispatch.
  *
- * NOTE for merge: if the backend later ships `actionRequest.forPlan`
- * (or embeds the open approval request on `executionPlan.get`), swap
- * the direct-approve button for an inline `<ActionRequestCard>` so the
- * dispatch (RUNNING transition + crew kickoff) runs through the proper
- * accept path.
+ *   2. FALLBACK — if NO ActionRequest exists (e.g. a plan created before
+ *      this flow shipped, or a hand-authored draft), fall back to the
+ *      `<PlanApprovalBanner>` whose "Approve" button flips the plan to
+ *      APPROVED via `executionPlan.update`. Last resort only.
+ *
+ * The card self-fetches via `actionRequest.forPlan`; we fetch the same
+ * row here to decide which surface to show (the card renders `null`
+ * when none is bound, so without this gate the operator would see no
+ * approval affordance at all for legacy drafts).
+ */
+function PlanApproval({
+  planId,
+  issueNumber,
+  workspaceSlug,
+  workspaceKey,
+  onApproved,
+}: {
+  planId: string;
+  issueNumber: number | null;
+  workspaceSlug: string;
+  workspaceKey: string;
+  onApproved: () => void;
+}) {
+  const { data: request, isLoading } = trpc.actionRequest.forPlan.useQuery(
+    { planId },
+    { staleTime: 30_000 },
+  );
+
+  // Don't flash the fallback while the lookup is in flight.
+  if (isLoading) return null;
+
+  // Proper path: an open/bound ActionRequest drives activation.
+  if (request) {
+    return (
+      <ActionRequestCard
+        planId={planId}
+        onResolved={onApproved}
+      />
+    );
+  }
+
+  // Last-resort fallback: no ActionRequest — direct status flip.
+  return (
+    <PlanApprovalBanner
+      planId={planId}
+      issueNumber={issueNumber}
+      workspaceSlug={workspaceSlug}
+      workspaceKey={workspaceKey}
+      onApproved={onApproved}
+    />
+  );
+}
+
+/**
+ * Fallback "Pending your approval" banner for DRAFT plans with NO bound
+ * ActionRequest. Offers a direct "Approve" that flips the plan to
+ * APPROVED via `executionPlan.update` — a manual fast-path that skips
+ * the crew-kickoff dispatch the ActionRequest accept path performs.
+ * Only rendered by `<PlanApproval>` when no ActionRequest exists.
  */
 function PlanApprovalBanner({
   planId,

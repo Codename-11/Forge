@@ -37,9 +37,14 @@ import { useWorkspace } from "@/hooks/use-workspace";
  * only when role ∈ {OWNER, ADMIN} OR the user is on the issue's
  * assignees/watchers list (signal passed in via `canResolve`).
  */
-export interface ActionRequestCardProps {
+export type ActionRequestCardProps =
+  | ActionRequestCardCommentProps
+  | ActionRequestCardPlanProps;
+
+interface ActionRequestCardCommentProps {
   /** Comment row's id — the bound ActionRequest is fetched by this. */
   commentId: string;
+  planId?: never;
   /**
    * Caller-supplied permission signal. Lets the parent (issue page)
    * fold in assignee/watcher membership without this card hitting tRPC
@@ -54,7 +59,33 @@ export interface ActionRequestCardProps {
   issueId: string;
 }
 
-export function ActionRequestCard({ commentId, canResolve, issueId }: ActionRequestCardProps) {
+interface ActionRequestCardPlanProps {
+  /**
+   * Execution plan id — the bound approval ActionRequest is fetched via
+   * `actionRequest.forPlan`. Used by the plan cockpit so Accept fires
+   * the proper activation path (DRAFT→RUNNING + goal→ACTIVE + crew
+   * kickoff) instead of a direct status flip.
+   */
+  planId: string;
+  commentId?: never;
+  issueId?: never;
+  canResolve?: boolean;
+  /** Fired after a successful Accept/Decline so the page can refresh. */
+  onResolved?: () => void;
+}
+
+export function ActionRequestCard(props: ActionRequestCardProps) {
+  if ("planId" in props && props.planId) {
+    return <ActionRequestCardForPlan {...props} />;
+  }
+  return <ActionRequestCardForComment {...(props as ActionRequestCardCommentProps)} />;
+}
+
+function ActionRequestCardForComment({
+  commentId,
+  canResolve,
+  issueId,
+}: ActionRequestCardCommentProps) {
   const utils = trpc.useUtils();
   const ws = useWorkspace();
   const isAdmin = ws.role === ("OWNER" as Role) || ws.role === ("ADMIN" as Role);
@@ -124,6 +155,108 @@ export function ActionRequestCard({ commentId, canResolve, issueId }: ActionRequ
       utils.actionRequest.forComment.invalidate({ commentId });
       setShowDeclineReason(false);
       setDeclineReason("");
+    },
+  });
+
+  if (isLoading) return null;
+  if (!request) return null;
+
+  return (
+    <ActionRequestCardView
+      request={request}
+      visibleCanResolve={visibleCanResolve}
+      showDeclineReason={showDeclineReason}
+      declineReason={declineReason}
+      onDeclineReasonChange={setDeclineReason}
+      onAccept={() => accept.mutate({ id: request.id })}
+      onDecline={() => {
+        if (!showDeclineReason) {
+          setShowDeclineReason(true);
+          return;
+        }
+        decline.mutate({ id: request.id, reason: declineReason || null });
+      }}
+      onCancelDecline={() => {
+        setShowDeclineReason(false);
+        setDeclineReason("");
+      }}
+      pending={accept.isPending || decline.isPending}
+    />
+  );
+}
+
+/**
+ * Plan-cockpit variant. Fetches the bound approval ActionRequest via
+ * `actionRequest.forPlan` and reuses the same Accept/Decline path —
+ * Accepting runs the proper activation (DRAFT→RUNNING + goal→ACTIVE +
+ * crew kickoff) server-side. Returns `null` when no row is bound so the
+ * caller's direct-approve fallback can take over.
+ */
+function ActionRequestCardForPlan({
+  planId,
+  canResolve,
+  onResolved,
+}: ActionRequestCardPlanProps) {
+  const utils = trpc.useUtils();
+  const ws = useWorkspace();
+  const isAdmin = ws.role === ("OWNER" as Role) || ws.role === ("ADMIN" as Role);
+  const visibleCanResolve = canResolve || isAdmin;
+
+  const { data: request, isLoading } = trpc.actionRequest.forPlan.useQuery(
+    { planId },
+    { staleTime: 30_000 },
+  );
+
+  const [showDeclineReason, setShowDeclineReason] = useState(false);
+  const [declineReason, setDeclineReason] = useState("");
+
+  const accept = trpc.actionRequest.accept.useMutation({
+    onMutate: async () => {
+      await utils.actionRequest.forPlan.cancel({ planId });
+      const prev = utils.actionRequest.forPlan.getData({ planId });
+      if (prev) {
+        utils.actionRequest.forPlan.setData({ planId }, {
+          ...prev,
+          status: "RESOLVED" as ActionRequestStatus,
+          resolvedAt: new Date(),
+          resolution: "Accepted",
+        });
+      }
+      return { prev };
+    },
+    onError: (e, _vars, ctx) => {
+      if (ctx?.prev) utils.actionRequest.forPlan.setData({ planId }, ctx.prev);
+      toast.error(e.message);
+    },
+    onSuccess: () => {
+      utils.actionRequest.forPlan.invalidate({ planId });
+      onResolved?.();
+    },
+  });
+
+  const decline = trpc.actionRequest.decline.useMutation({
+    onMutate: async () => {
+      await utils.actionRequest.forPlan.cancel({ planId });
+      const prev = utils.actionRequest.forPlan.getData({ planId });
+      if (prev) {
+        utils.actionRequest.forPlan.setData({ planId }, {
+          ...prev,
+          status: "REJECTED" as ActionRequestStatus,
+          resolvedAt: new Date(),
+          resolution: declineReason ? `Declined: ${declineReason}` : "Declined",
+        });
+      }
+      return { prev };
+    },
+    onError: (e, _vars, ctx) => {
+      if (ctx?.prev) utils.actionRequest.forPlan.setData({ planId }, ctx.prev);
+      toast.error(e.message);
+    },
+    onSuccess: () => {
+      utils.actionRequest.forPlan.invalidate({ planId });
+      setShowDeclineReason(false);
+      setDeclineReason("");
+      onResolved?.();
     },
   });
 
