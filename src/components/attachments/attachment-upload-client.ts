@@ -6,7 +6,8 @@ export type AttachmentUploadTargetType =
   | "project"
   | "initiative"
   | "cycle"
-  | "chat-message";
+  | "chat-message"
+  | "canvas";
 
 export type InitAttachmentUpload = (input: {
   targetType: AttachmentUploadTargetType;

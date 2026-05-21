@@ -2,6 +2,51 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — Canvas: Excalidraw-grade motion, images, present mode, virtualization, sketch, undo
+
+Six-part pass to close the UX gap vs Excalidraw. No schema migration —
+images reuse the attachment system; everything else is client/render.
+
+- **Motion (`canvas-camera.ts`, new)**: pure easing/lerp/fit helpers
+  (`easeOutCubic`, `lerpViewport`, `computeFitViewport`,
+  `prefersReducedMotion`). Page now eases all camera jumps via
+  `animateViewportTo` (fit / fit-selection / reset / present), adds
+  inertial-pan momentum (velocity sampled on drag, friction decay), and
+  `RemoteCursorsLayer` lerps peer cursors toward their 10Hz targets so
+  they glide instead of stepping. `will-change: transform` on the
+  pan/zoom container. Honors `prefers-reduced-motion`. Unit tests in
+  `tests/unit/canvas-camera.test.ts` (10).
+- **Images**: new `canvas` attachment targetType (storage allowlist +
+  `assertTargetInWorkspace`). `image` shape kind; style holds
+  `attachmentId`, and `canvas.hydrate` resolves it to a fresh presigned
+  `src` (15-min TTL, refreshes on refetch). Paste / drag-drop / toolbar
+  picker all funnel through `uploadImageAt` → standard initUpload→PUT→
+  finalize.
+- **Present mode (`canvas-presentation.tsx`, new)**: frames become slides
+  (reading order), eased fit-to-frame per slide, laser pointer with
+  fading trail, slide HUD, arrow/space/Esc/Home/End nav. "Present"
+  button in the topbar (disabled with 0 frames).
+- **Reconciliation + virtualization**: remote-event hydrate invalidation
+  is now coalesced (≤1 refetch / 220ms) instead of one-per-event, so peer
+  edits / bulk agent adds don't flash. Shape render list culls to the
+  visible viewport (+1-screen margin) above 200 shapes; path shapes
+  (freehand/line/arrow) never culled; hit-test/fit/inspector keep the
+  full set. (True element-level diffing still needs richer event
+  payloads — left as follow-up.)
+- **Drawing polish (`canvas-rough.ts`, new — adds `roughjs` dep)**:
+  diamond shape; hand-drawn "sketch" rendering for box/ellipse/diamond;
+  5 arrowhead styles (none/triangle/line/circle/diamond, both ends, via
+  `context-stroke` markers); fill-color UI + adjustable corner radius.
+  Toolbar gains diamond tool, image button, fill swatches, sketch
+  toggle; the selection inspector gains fill / sketch / radius / ends.
+- **Undo/redo**: broadened from move-only to cover shape create + delete
+  across every entry point (draw tools, stamps, images, paste, duplicate,
+  eraser, keyboard/inspector/context-menu delete) via `createShape` /
+  `removeShapeUndoable` helpers (mutable id box re-mints rows across
+  redo/undo cycles).
+- Validation: `pnpm lint` + `pnpm typecheck` clean; canvas unit + router
+  tests 64/64.
+
 ## 2026-05-20 — Orchestration loop (Goal → decompose → judge → retry)
 
 Migration `0051_orchestration_loop` (authored manually + `migrate

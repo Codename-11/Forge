@@ -10,6 +10,7 @@ import {
   Maximize2,
   MessageCircle,
   Minimize2,
+  Play,
   Plus,
   Settings,
   StickyNote,
@@ -45,6 +46,7 @@ import {
   type CanvasFrameRow,
 } from "@/components/canvas/canvas-frames";
 import { CanvasPageTabs } from "@/components/canvas/canvas-page-tabs";
+import { CanvasPresentation } from "@/components/canvas/canvas-presentation";
 import {
   CanvasToolbar,
   DEFAULT_STYLE_STATE,
@@ -76,6 +78,14 @@ import {
 import type { LayerSelectionRef } from "@/components/canvas/canvas-layers-panel";
 import { routeEdge, type HandleSide, type Rect } from "@/lib/canvas-routing";
 import {
+  easeOutCubic,
+  lerpViewport,
+  viewportsClose,
+  computeFitViewport,
+  prefersReducedMotion,
+} from "@/lib/canvas-camera";
+import { uploadAttachmentFile } from "@/components/attachments/attachment-upload-client";
+import {
   parseAutoLayout,
   computeAutoLayout,
   type AutoLayoutChild,
@@ -93,6 +103,9 @@ const ZOOM_STEP = 0.1;
 
 const PRESENCE_PUBLISH_HZ = 10;
 const PRESENCE_STALE_MS = 5_000;
+
+// Above this many shapes, the render list is culled to the visible viewport.
+const VIRTUALIZE_THRESHOLD = 200;
 
 type HydratedNode = {
   id: string;
@@ -227,6 +240,33 @@ function colorForId(id: string): string {
   return PRESENCE_COLORS[hash % PRESENCE_COLORS.length];
 }
 
+// Image MIME types we accept as canvas image shapes (subset of the storage
+// allowlist that browsers can render inline).
+const CANVAS_IMAGE_MIME = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/svg+xml",
+]);
+
+/** Read an image file's natural pixel size (best-effort). */
+function readImageSize(file: File): Promise<{ w: number; h: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      resolve({ w: img.naturalWidth || 240, h: img.naturalHeight || 180 });
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not read image"));
+    };
+    img.src = url;
+  });
+}
+
 function cursorForTool(tool: ToolKind, panning: boolean, draftingConnector: boolean): string {
   if (panning) return "grabbing";
   if (draftingConnector) return "crosshair";
@@ -280,10 +320,23 @@ export default function CanvasViewerPage() {
   const { data, isLoading } = trpc.canvas.hydrate.useQuery({ id: params.canvasId });
 
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
+  // Always-fresh mirror of viewport for RAF loops (camera tween, inertial
+  // pan momentum) that can't depend on a captured-stale state closure.
+  const viewportRef = useRef(viewport);
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
   const [panning, setPanning] = useState(false);
   const panStart = useRef<{ vx: number; vy: number; mx: number; my: number } | null>(null);
+  // Inertial-pan + camera-tween RAF handles.
+  const cameraRafRef = useRef<number | null>(null);
+  const panMomentumRafRef = useRef<number | null>(null);
+  // Velocity sampled during a drag-pan so release can fling with momentum.
+  const panVelRef = useRef<{ x: number; y: number; t: number; vx: number; vy: number } | null>(null);
   const dragNode = useRef<DragPayload | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  // Hidden file input backing the toolbar "Insert image" button.
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const [openPicker, setOpenPicker] = useState(false);
   const [openSidebar, setOpenSidebar] = useState(true);
   const [openSettings, setOpenSettings] = useState(false);
@@ -541,10 +594,97 @@ export default function CanvasViewerPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  // -- Camera motion: eased tween + inertial pan ----------------------
+  // All "jump the camera somewhere" actions (fit, reset, fit-selection,
+  // present-mode slide moves) route through animateViewportTo so the move
+  // eases instead of snapping. Continuous gestures (wheel zoom/pan, drag)
+  // stay instant and call cancelCameraMotion first.
+  const cancelCameraMotion = useCallback(() => {
+    if (cameraRafRef.current != null) {
+      cancelAnimationFrame(cameraRafRef.current);
+      cameraRafRef.current = null;
+    }
+    if (panMomentumRafRef.current != null) {
+      cancelAnimationFrame(panMomentumRafRef.current);
+      panMomentumRafRef.current = null;
+    }
+  }, []);
+
+  const persistViewport = useCallback(
+    (v: Viewport) => setViewportMut.mutate({ id: params.canvasId, viewport: v }),
+    [params.canvasId, setViewportMut],
+  );
+
+  const animateViewportTo = useCallback(
+    (target: Viewport, durationMs = 340) => {
+      cancelCameraMotion();
+      const start = viewportRef.current;
+      if (prefersReducedMotion() || viewportsClose(start, target) || durationMs <= 0) {
+        setViewport(target);
+        persistViewport(target);
+        return;
+      }
+      const t0 = performance.now();
+      const step = (now: number) => {
+        const t = Math.min(1, (now - t0) / durationMs);
+        setViewport(lerpViewport(start, target, easeOutCubic(t)));
+        if (t < 1) {
+          cameraRafRef.current = requestAnimationFrame(step);
+        } else {
+          cameraRafRef.current = null;
+          setViewport(target);
+          persistViewport(target);
+        }
+      };
+      cameraRafRef.current = requestAnimationFrame(step);
+    },
+    [cancelCameraMotion, persistViewport],
+  );
+
+  // Fling the canvas after a drag-pan release. Velocity is in viewport-px
+  // per ms; friction decays it ~7%/frame (time-corrected) until it stalls.
+  const startPanMomentum = useCallback(
+    (vx0: number, vy0: number) => {
+      cancelCameraMotion();
+      if (prefersReducedMotion()) {
+        persistViewport(viewportRef.current);
+        return;
+      }
+      // Clamp absurd flings (fast trackpad whips) to keep it controllable.
+      const cap = 3.5;
+      let vx = Math.max(-cap, Math.min(cap, vx0));
+      let vy = Math.max(-cap, Math.min(cap, vy0));
+      let last = performance.now();
+      const step = (now: number) => {
+        const dt = Math.min(64, now - last);
+        last = now;
+        setViewport((v) => ({ ...v, x: v.x + vx * dt, y: v.y + vy * dt }));
+        const decay = Math.pow(0.93, dt / 16);
+        vx *= decay;
+        vy *= decay;
+        if (Math.hypot(vx, vy) > 0.02) {
+          panMomentumRafRef.current = requestAnimationFrame(step);
+        } else {
+          panMomentumRafRef.current = null;
+          persistViewport(viewportRef.current);
+        }
+      };
+      panMomentumRafRef.current = requestAnimationFrame(step);
+    },
+    [cancelCameraMotion, persistViewport],
+  );
+
+  useEffect(() => cancelCameraMotion, [cancelCameraMotion]);
+
   const removeNode = trpc.canvas.removeNode.useMutation({
     onSuccess: () => utils.canvas.hydrate.invalidate({ id: params.canvasId }),
     onError: (e) => toast.error(e.message),
   });
+
+  // Image-shape uploads ride the standard attachment flow (initUpload →
+  // PUT → finalize) with targetType "canvas".
+  const initUploadMut = trpc.attachment.initUpload.useMutation();
+  const finalizeAttachmentMut = trpc.attachment.finalize.useMutation();
 
   const addNode = trpc.canvas.addNode.useMutation({
     onSuccess: () => {
@@ -726,6 +866,86 @@ export default function CanvasViewerPage() {
     onSuccess: () => invalidateHydrate(),
     onError: (e) => toast.error(e.message),
   });
+
+  // -- Undoable shape create / delete (W3.1 expansion) ----------------
+  // `createShape` adds a shape and records an undo entry so Cmd+Z removes
+  // it; redo re-adds and re-captures the new row id. `removeShapeUndoable`
+  // snapshots a shape before deleting so undo re-creates it. Both keep a
+  // mutable id box because each redo/undo cycle mints a fresh server row.
+  const recordShapeAdd = useCallback(
+    (initialId: string, recreate: ShapeAddInput, describe: string) => {
+      const box = { id: initialId };
+      undoStack.push({
+        describe,
+        undoIt: () => {
+          if (shapeRemoveMut && box.id) shapeRemoveMut.mutate({ id: box.id });
+        },
+        doIt: () => {
+          if (!shapeAddMut) return;
+          shapeAddMut
+            .mutateAsync(recreate)
+            .then((r: { id: string }) => {
+              box.id = r.id;
+            })
+            .catch(() => {});
+        },
+      });
+    },
+    [undoStack, shapeAddMut, shapeRemoveMut],
+  );
+
+  const createShape = useCallback(
+    async (input: ShapeAddInput, describe?: string): Promise<{ id: string } | null> => {
+      if (!shapeAddMut) return null;
+      try {
+        const res = await shapeAddMut.mutateAsync(input);
+        recordShapeAdd(res.id, input, describe ?? `add ${input.kind}`);
+        return res;
+      } catch {
+        return null;
+      }
+    },
+    [shapeAddMut, recordShapeAdd],
+  );
+
+  const removeShapeUndoable = useCallback(
+    (shapeId: string) => {
+      if (!shapeRemoveMut) return;
+      const s = shapesRef.current.find((sh) => sh.id === shapeId);
+      shapeRemoveMut.mutate({ id: shapeId });
+      if (!s) return;
+      // Snapshot for re-create. Drop server-managed fields.
+      const recreate: ShapeAddInput = {
+        canvasId: params.canvasId,
+        kind: s.kind as ShapeAddInput["kind"],
+        x: s.x,
+        y: s.y,
+      };
+      if (s.width != null) recreate.width = s.width;
+      if (s.height != null) recreate.height = s.height;
+      if (s.path != null) recreate.path = s.path;
+      if (s.style != null) recreate.style = s.style as Record<string, unknown>;
+      if (s.text != null) recreate.text = s.text;
+      if (s.groupId != null) recreate.groupId = s.groupId;
+      const box = { id: shapeId };
+      undoStack.push({
+        describe: `delete ${s.kind}`,
+        doIt: () => {
+          if (shapeRemoveMut && box.id) shapeRemoveMut.mutate({ id: box.id });
+        },
+        undoIt: () => {
+          if (!shapeAddMut) return;
+          shapeAddMut
+            .mutateAsync(recreate)
+            .then((r: { id: string }) => {
+              box.id = r.id;
+            })
+            .catch(() => {});
+        },
+      });
+    },
+    [shapeRemoveMut, shapeAddMut, undoStack, params.canvasId],
+  );
 
   // Frame mutations — backend exposes flat frameAdd / framePatch. Probe
   // via the any-router so a stale server falls through gracefully.
@@ -1114,6 +1334,40 @@ export default function CanvasViewerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shapes, dragRev, activePageDescendantIds, isOnActivePage, autoLayoutPositions]);
 
+  // Viewport virtualization: above a threshold, only paint shapes whose
+  // bbox intersects the visible canvas rect (plus a 1-screen margin) so a
+  // 1000-shape board doesn't keep 1000 SVG nodes live. Recomputes only when
+  // the viewport moves into a new coarse bucket (`cullSignature`), so
+  // panning within the margin is free. Path-extent shapes (freehand / line
+  // / arrow) carry their geometry in `path`, not w/h, so we never cull
+  // those. Only the render list is culled — hit-testing, marquee, fit, and
+  // the inspector all keep using the full `displayShapes`.
+  const cullSignature = useMemo(() => {
+    const bucket = 240;
+    return `${Math.round(viewport.x / bucket)}:${Math.round(viewport.y / bucket)}:${viewport.zoom.toFixed(2)}`;
+  }, [viewport]);
+  const visibleShapes = useMemo(() => {
+    if (displayShapes.length <= VIRTUALIZE_THRESHOLD) return displayShapes;
+    const rect = surfaceRef.current?.getBoundingClientRect();
+    const vw = rect?.width ?? 1200;
+    const vh = rect?.height ?? 800;
+    const z = viewport.zoom;
+    const marginX = vw / z;
+    const marginY = vh / z;
+    const minX = -viewport.x / z - marginX;
+    const minY = -viewport.y / z - marginY;
+    const maxX = (vw - viewport.x) / z + marginX;
+    const maxY = (vh - viewport.y) / z + marginY;
+    return displayShapes.filter((s) => {
+      if (s.kind === "freehand" || s.kind === "line" || s.kind === "arrow") return true;
+      const w = s.width ?? 40;
+      const h = s.height ?? 40;
+      return s.x + w >= minX && s.x <= maxX && s.y + h >= minY && s.y <= maxY;
+    });
+    // Recompute on coarse viewport bucket changes only (reads live viewport).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayShapes, cullSignature]);
+
   // Frames render through the CanvasFrames component which honors
   // `overrides` directly; the displayFrames memo is here for symmetry
   // with the node/shape pipeline and so a future filter has a home.
@@ -1123,6 +1377,52 @@ export default function CanvasViewerPage() {
     void dragRev;
     return frames;
   }, [frames, dragRev]);
+
+  // -- Presentation mode (frames as slides) --------------------------
+  const [presenting, setPresenting] = useState(false);
+  const [slideIndex, setSlideIndex] = useState(0);
+  const presentingRef = useRef(false);
+  useEffect(() => {
+    presentingRef.current = presenting;
+  }, [presenting]);
+  // Slides = frames in reading order (top→bottom, then left→right).
+  const presentationSlides = useMemo(
+    () => [...displayFrames].sort((a, b) => a.y - b.y || a.x - b.x),
+    [displayFrames],
+  );
+  const fitToFrame = useCallback(
+    (f: CanvasFrameRow) => {
+      const rect = surfaceRef.current?.getBoundingClientRect();
+      const v = computeFitViewport(
+        [{ x: f.x, y: f.y, w: f.width, h: f.height }],
+        { w: rect?.width ?? 800, h: rect?.height ?? 600 },
+        { pad: 48, minZoom: MIN_ZOOM, maxZoom: MAX_ZOOM },
+      );
+      if (v) animateViewportTo(v, 460);
+    },
+    [animateViewportTo],
+  );
+  const gotoSlide = useCallback(
+    (i: number) => {
+      const n = presentationSlides.length;
+      if (n === 0) return;
+      const idx = Math.max(0, Math.min(n - 1, i));
+      setSlideIndex(idx);
+      fitToFrame(presentationSlides[idx]);
+    },
+    [presentationSlides, fitToFrame],
+  );
+  const enterPresentation = useCallback(() => {
+    if (presentationSlides.length === 0) {
+      toast.error("Add a frame to present — each frame becomes a slide.");
+      return;
+    }
+    setPresenting(true);
+    setSlideIndex(0);
+    // Defer the first fit a frame so the overlay (and any layout) settles.
+    requestAnimationFrame(() => fitToFrame(presentationSlides[0]));
+  }, [presentationSlides, fitToFrame]);
+  const exitPresentation = useCallback(() => setPresenting(false), []);
 
   // -- Floating selection inspector (W1.5) ---------------------------
 
@@ -1238,11 +1538,19 @@ export default function CanvasViewerPage() {
         if (p.patch.fill !== undefined) next.fill = p.patch.fill;
         if (p.patch.strokeWidth !== undefined) next.strokeWidth = p.patch.strokeWidth;
         if (p.patch.opacity !== undefined) next.opacity = p.patch.opacity;
+        if (p.patch.cornerRadius !== undefined) next.cornerRadius = p.patch.cornerRadius;
+        if (p.patch.sketch !== undefined) next.sketch = p.patch.sketch;
+        if (p.patch.arrowHead !== undefined) next.arrowHead = p.patch.arrowHead;
+        if (p.patch.arrowTail !== undefined) next.arrowTail = p.patch.arrowTail;
         const styleChanged =
           p.patch.stroke !== undefined ||
           p.patch.fill !== undefined ||
           p.patch.strokeWidth !== undefined ||
-          p.patch.opacity !== undefined;
+          p.patch.opacity !== undefined ||
+          p.patch.cornerRadius !== undefined ||
+          p.patch.sketch !== undefined ||
+          p.patch.arrowHead !== undefined ||
+          p.patch.arrowTail !== undefined;
         if (styleChanged) shapePatchMut.mutate({ id: p.id, style: next });
         // lockedAt isn't on shapePatch; route through the dedicated
         // layer proc when it exists (added by the unified-workspace
@@ -1302,7 +1610,7 @@ export default function CanvasViewerPage() {
     }
     const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
     if (shapeIds.length > 0 && shapeRemoveMut) {
-      for (const id of shapeIds) shapeRemoveMut.mutate({ id });
+      for (const id of shapeIds) removeShapeUndoable(id);
       setSelected((prev) => prev.filter((s) => s.kind !== "shape"));
     }
   }, [
@@ -1311,6 +1619,7 @@ export default function CanvasViewerPage() {
     removeEdge,
     frameRemoveMut,
     shapeRemoveMut,
+    removeShapeUndoable,
   ]);
 
   // -- Pan + zoom handlers --------------------------------------------
@@ -1354,7 +1663,7 @@ export default function CanvasViewerPage() {
       if (!shapeAddMut) return;
       const { x, y } = surfaceToCanvasRef.current?.(e.clientX, e.clientY) ?? { x: 0, y: 0 };
       if (tool === "comment-pin") {
-        shapeAddMut.mutate({
+        void createShape({
           canvasId: params.canvasId,
           kind: "comment-pin",
           x,
@@ -1364,7 +1673,7 @@ export default function CanvasViewerPage() {
         });
       } else {
         const emoji = toolbarStyleRef.current.stampEmoji ?? "👍";
-        shapeAddMut.mutate({
+        void createShape({
           canvasId: params.canvasId,
           kind: "stamp",
           x,
@@ -1380,6 +1689,7 @@ export default function CanvasViewerPage() {
     const drawKinds: ToolKind[] = [
       "box",
       "ellipse",
+      "diamond",
       "arrow",
       "line",
       "text",
@@ -1414,7 +1724,9 @@ export default function CanvasViewerPage() {
       if (selected.length > 0) setSelected([]);
       if (selectedEdgeId) setSelectedEdgeId(null);
     }
-    // Default: pan.
+    // Default: pan. Kill any in-flight tween/momentum so the grab is instant.
+    cancelCameraMotion();
+    panVelRef.current = null;
     setPanning(true);
     panStart.current = {
       vx: viewport.x,
@@ -1429,16 +1741,36 @@ export default function CanvasViewerPage() {
     const onMove = (e: MouseEvent) => {
       if (!panStart.current) return;
       const { vx, vy, mx, my } = panStart.current;
-      setViewport((v) => ({
-        ...v,
-        x: vx + (e.clientX - mx),
-        y: vy + (e.clientY - my),
-      }));
+      const nx = vx + (e.clientX - mx);
+      const ny = vy + (e.clientY - my);
+      // Sample velocity (viewport-px / ms) so release can fling with momentum.
+      const now = performance.now();
+      const prev = panVelRef.current;
+      if (prev) {
+        const dt = Math.max(1, now - prev.t);
+        panVelRef.current = {
+          x: nx,
+          y: ny,
+          t: now,
+          vx: (nx - prev.x) / dt,
+          vy: (ny - prev.y) / dt,
+        };
+      } else {
+        panVelRef.current = { x: nx, y: ny, t: now, vx: 0, vy: 0 };
+      }
+      setViewport((v) => ({ ...v, x: nx, y: ny }));
     };
     const onUp = () => {
       setPanning(false);
       panStart.current = null;
-      setViewportMut.mutate({ id: params.canvasId, viewport });
+      const vel = panVelRef.current;
+      panVelRef.current = null;
+      // Fling only on a recent, fast-enough release; else just persist.
+      if (vel && performance.now() - vel.t < 60 && Math.hypot(vel.vx, vel.vy) > 0.08) {
+        startPanMomentum(vel.vx, vel.vy);
+      } else {
+        persistViewport(viewportRef.current);
+      }
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -1450,6 +1782,8 @@ export default function CanvasViewerPage() {
   }, [panning]);
 
   const onWheel = (e: React.WheelEvent) => {
+    // A manual wheel gesture overrides any running tween/fling.
+    cancelCameraMotion();
     // Pinch-to-zoom on macOS trackpads arrives as a wheel event with
     // `ctrlKey` synthetically set by the browser, so the same branch
     // catches keyboard ⌘/Ctrl+wheel AND trackpad pinch. Plain wheel
@@ -1811,7 +2145,7 @@ export default function CanvasViewerPage() {
     (id: string, event: React.MouseEvent) => {
       if (activeToolRef.current === "eraser" && shapeRemoveMut) {
         event.stopPropagation();
-        shapeRemoveMut.mutate({ id });
+        removeShapeUndoable(id);
         return;
       }
       const shape = shapes.find((s) => s.id === id);
@@ -1857,7 +2191,7 @@ export default function CanvasViewerPage() {
       };
       draggingRef.current = true;
     },
-    [selected, shapes, expandGroupedShapes, shapeRemoveMut, viewport.x, viewport.y, viewport.zoom],
+    [selected, shapes, expandGroupedShapes, shapeRemoveMut, removeShapeUndoable, viewport.x, viewport.y, viewport.zoom],
   );
 
   // -- Frame selection + title-bar drag ------------------------------
@@ -1988,7 +2322,7 @@ export default function CanvasViewerPage() {
         }
         if (tool === "freehand") {
           if (draft.path.length >= 2) {
-            shapeAddMut.mutate({
+            void createShape({
               canvasId: params.canvasId,
               kind: "freehand",
               x: draft.startX,
@@ -1999,7 +2333,7 @@ export default function CanvasViewerPage() {
           }
         } else if (tool === "line" || tool === "arrow") {
           if (w + h >= minSize) {
-            shapeAddMut.mutate({
+            void createShape({
               canvasId: params.canvasId,
               kind: tool,
               x: draft.startX,
@@ -2011,35 +2345,29 @@ export default function CanvasViewerPage() {
           }
         } else if (tool === "text") {
           // For text, the drag defines the box. We drop the placeholder
-          // body in via `mutateAsync` so we can flip the new shape into
-          // inline edit mode the instant it lands — the operator never
-          // sees a static "Text" placeholder.
+          // body in and flip the new shape into inline edit mode the
+          // instant it lands — the operator never sees a static "Text".
           const boxW = Math.max(120, w);
           const boxH = Math.max(40, h);
           const startX = Math.min(draft.startX, draft.endX);
           const startY = Math.min(draft.startY, draft.endY);
-          shapeAddMut
-            .mutateAsync({
-              canvasId: params.canvasId,
-              kind: "text",
-              x: startX,
-              y: startY,
-              width: boxW,
-              height: boxH,
-              text: "Text",
-              style: { color: toolbarStyleRef.current.stroke, fontSize: 14 },
-            })
-            .then((res: { id: string }) => {
-              setEditingShapeFor(res.id);
-            })
-            .catch(() => {
-              /* error already toasted by shapeAddMut.onError */
-            });
-        } else if (tool === "box" || tool === "ellipse") {
+          createShape({
+            canvasId: params.canvasId,
+            kind: "text",
+            x: startX,
+            y: startY,
+            width: boxW,
+            height: boxH,
+            text: "Text",
+            style: { color: toolbarStyleRef.current.stroke, fontSize: 14 },
+          }).then((res) => {
+            if (res) setEditingShapeFor(res.id);
+          });
+        } else if (tool === "box" || tool === "ellipse" || tool === "diamond") {
           if (w >= minSize && h >= minSize) {
             const startX = Math.min(draft.startX, draft.endX);
             const startY = Math.min(draft.startY, draft.endY);
-            shapeAddMut.mutate({
+            void createShape({
               canvasId: params.canvasId,
               kind: tool,
               x: startX,
@@ -2050,6 +2378,7 @@ export default function CanvasViewerPage() {
                 stroke: toolbarStyleRef.current.stroke,
                 fill: toolbarStyleRef.current.fill,
                 strokeWidth: toolbarStyleRef.current.strokeWidth,
+                ...(toolbarStyleRef.current.sketch ? { sketch: true } : {}),
               },
             });
           }
@@ -2063,25 +2392,19 @@ export default function CanvasViewerPage() {
           const startX = dragged ? Math.min(draft.startX, draft.endX) : draft.startX;
           const startY = dragged ? Math.min(draft.startY, draft.endY) : draft.startY;
           const paletteKey = toolbarStyleRef.current.stickyPalette ?? "sand";
-          shapeAddMut
-            .mutateAsync({
-              canvasId: params.canvasId,
-              kind: "sticky",
-              x: startX,
-              y: startY,
-              width: stickyW,
-              height: stickyH,
-              text: "",
-              style: { fill: paletteKey, fontSize: 14 },
-            })
-            .then((res: { id: string }) => {
-              // Drop straight into inline edit — same UX as the text
-              // tool. Operator never sees a placeholder sticky.
-              setEditingShapeFor(res.id);
-            })
-            .catch(() => {
-              /* error already toasted by shapeAddMut.onError */
-            });
+          createShape({
+            canvasId: params.canvasId,
+            kind: "sticky",
+            x: startX,
+            y: startY,
+            width: stickyW,
+            height: stickyH,
+            text: "",
+            style: { fill: paletteKey, fontSize: 14 },
+          }).then((res) => {
+            // Drop straight into inline edit — same UX as the text tool.
+            if (res) setEditingShapeFor(res.id);
+          });
         }
         shapeDraftRef.current = null;
         scheduleShapeDraftRender();
@@ -2154,7 +2477,7 @@ export default function CanvasViewerPage() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [nodes, shapes, frames, params.canvasId, shapeAddMut, frameAddMut, scheduleShapeDraftRender]);
+  }, [nodes, shapes, frames, params.canvasId, shapeAddMut, frameAddMut, scheduleShapeDraftRender, createShape]);
 
   // -- Phase 3: connector preview drag (handle-to-node) -----------------
 
@@ -2228,6 +2551,8 @@ export default function CanvasViewerPage() {
   // -- Keyboard shortcuts (Phase 2) -----------------------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Presentation mode owns the keyboard (handled in its own overlay).
+      if (presentingRef.current) return;
       // Don't hijack typing.
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
@@ -2290,8 +2615,7 @@ export default function CanvasViewerPage() {
             y: viewH / 2 - ((minY + maxY) / 2) * safeZoom,
             zoom: safeZoom,
           };
-          setViewport(next);
-          setViewportMut.mutate({ id: params.canvasId, viewport: next });
+          animateViewportTo(next);
           return;
         }
         setActiveTool("frame");
@@ -2334,8 +2658,7 @@ export default function CanvasViewerPage() {
           y: viewH / 2 - ((minY + maxY) / 2) * safeZoom,
           zoom: safeZoom,
         };
-        setViewport(next);
-        setViewportMut.mutate({ id: params.canvasId, viewport: next });
+        animateViewportTo(next);
         return;
       }
       // S = sticky, M = comment-pin, Y = stamp. Same modifier guard as
@@ -2366,6 +2689,7 @@ export default function CanvasViewerPage() {
       // canvas we want them to do canvas zoom).
       if (e.key === "+" || e.key === "=" || e.key === "-") {
         e.preventDefault();
+        cancelCameraMotion();
         const direction = e.key === "-" ? -1 : 1;
         const rect = surfaceRef.current?.getBoundingClientRect();
         const cx = (rect?.width ?? 800) / 2;
@@ -2390,8 +2714,7 @@ export default function CanvasViewerPage() {
         const viewH = rect?.height ?? 600;
         if (e.key === "0") {
           e.preventDefault();
-          setViewport({ x: viewW / 2, y: viewH / 2, zoom: 1 });
-          setViewportMut.mutate({ id: params.canvasId, viewport: { x: viewW / 2, y: viewH / 2, zoom: 1 } });
+          animateViewportTo({ x: viewW / 2, y: viewH / 2, zoom: 1 });
           return;
         }
         // Fit: compute bbox of all content (nodes + shapes), pad, scale.
@@ -2416,8 +2739,7 @@ export default function CanvasViewerPage() {
           zoom,
         };
         e.preventDefault();
-        setViewport(next);
-        setViewportMut.mutate({ id: params.canvasId, viewport: next });
+        animateViewportTo(next);
         return;
       }
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -2440,7 +2762,7 @@ export default function CanvasViewerPage() {
         if (shapeIds.length === 0) return;
         if (!shapeRemoveMut) return;
         e.preventDefault();
-        for (const id of shapeIds) shapeRemoveMut.mutate({ id });
+        for (const id of shapeIds) removeShapeUndoable(id);
         setSelected((prev) => prev.filter((s) => s.kind !== "shape"));
         return;
       }
@@ -2499,7 +2821,7 @@ export default function CanvasViewerPage() {
           if (s.style != null) dup.style = s.style as Record<string, unknown>;
           if (s.text != null) dup.text = s.text;
           if (s.groupId != null) dup.groupId = s.groupId;
-          shapeAddMut.mutate(dup);
+          void createShape(dup, "paste");
         }
         // Shift the origin forward by the paste offset so a chain of
         // pastes cascades neatly rather than stacking on the same spot.
@@ -2533,7 +2855,7 @@ export default function CanvasViewerPage() {
           if (s.style != null) dup.style = s.style;
           if (s.text != null) dup.text = s.text;
           if (s.groupId != null) dup.groupId = s.groupId;
-          shapeAddMut.mutate(dup);
+          void createShape(dup, "duplicate");
         }
         return;
       }
@@ -2659,6 +2981,10 @@ export default function CanvasViewerPage() {
     selectedEdgeId,
     removeEdge,
     setViewportMut,
+    animateViewportTo,
+    cancelCameraMotion,
+    createShape,
+    removeShapeUndoable,
     undoStack,
   ]);
 
@@ -2673,6 +2999,7 @@ export default function CanvasViewerPage() {
         if (patch.stroke !== undefined) styleUpdate.stroke = patch.stroke;
         if (patch.fill !== undefined) styleUpdate.fill = patch.fill;
         if (patch.strokeWidth !== undefined) styleUpdate.strokeWidth = patch.strokeWidth;
+        if (patch.sketch !== undefined) styleUpdate.sketch = patch.sketch;
         if (Object.keys(styleUpdate).length > 0) {
           shapeBulkPatchMut.mutate({ ids: shapeIds, style: styleUpdate });
         }
@@ -2735,7 +3062,8 @@ export default function CanvasViewerPage() {
     const types = e.dataTransfer.types;
     if (
       !types.includes("application/x-forge-entity") &&
-      !types.includes(COMPONENT_DRAG_MIME)
+      !types.includes(COMPONENT_DRAG_MIME) &&
+      !types.includes("Files")
     )
       return;
     e.preventDefault();
@@ -2748,6 +3076,15 @@ export default function CanvasViewerPage() {
   const onSurfaceDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDropActive(false);
+    // Dropped image files → upload + place as image shapes (Excalidraw-style).
+    const files = Array.from(e.dataTransfer.files ?? []).filter((f) =>
+      CANVAS_IMAGE_MIME.has(f.type),
+    );
+    if (files.length > 0) {
+      const { x, y } = surfaceToCanvas(e.clientX, e.clientY);
+      files.forEach((f, i) => void uploadImageAt(f, x + i * 24, y + i * 24));
+      return;
+    }
     // First check for a component-instance drop — these come from the
     // right panel's Components tab via `COMPONENT_DRAG_MIME`.
     const compRaw = e.dataTransfer.getData(COMPONENT_DRAG_MIME);
@@ -2799,6 +3136,89 @@ export default function CanvasViewerPage() {
     }
   };
 
+  // Upload an image file and drop it as an `image` shape at the given
+  // canvas-space point. Shared by paste, file-drop, and the toolbar picker.
+  const uploadImageAt = useCallback(
+    async (file: File, canvasX: number, canvasY: number) => {
+      if (!shapeAddMut) return;
+      if (!CANVAS_IMAGE_MIME.has(file.type)) {
+        toast.error("Unsupported image type.");
+        return;
+      }
+      if (file.size > 25 * 1024 * 1024) {
+        toast.error("Image exceeds the 25 MB limit.");
+        return;
+      }
+      const dims = await readImageSize(file).catch(() => ({ w: 240, h: 180 }));
+      // Cap the initial placed size so huge photos don't dominate the canvas.
+      const maxDim = 480;
+      const scale = Math.min(1, maxDim / Math.max(dims.w, dims.h));
+      const width = Math.max(24, Math.round(dims.w * scale));
+      const height = Math.max(24, Math.round(dims.h * scale));
+      const toastId = toast.loading("Uploading image…");
+      try {
+        const { attachmentId } = await uploadAttachmentFile({
+          file,
+          targetType: "canvas",
+          targetId: params.canvasId,
+          initUpload: (i) => initUploadMut.mutateAsync(i),
+          finalize: (i) => finalizeAttachmentMut.mutateAsync(i),
+        });
+        await createShape(
+          {
+            canvasId: params.canvasId,
+            kind: "image",
+            x: canvasX - width / 2,
+            y: canvasY - height / 2,
+            width,
+            height,
+            style: { attachmentId },
+          },
+          "add image",
+        );
+        utils.canvas.hydrate.invalidate({ id: params.canvasId });
+        toast.success("Image added", { id: toastId });
+      } catch (err) {
+        toast.error((err as Error)?.message || "Image upload failed", { id: toastId });
+      }
+    },
+    [shapeAddMut, createShape, params.canvasId, initUploadMut, finalizeAttachmentMut, utils],
+  );
+
+  // Paste an image from the clipboard → drop it at the viewport center.
+  // Skips when focus is in a text field so it doesn't fight normal paste.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      )
+        return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const imageFiles: File[] = [];
+      for (const it of items) {
+        if (it.kind === "file" && it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) imageFiles.push(f);
+        }
+      }
+      if (imageFiles.length === 0) return;
+      e.preventDefault();
+      const rect = surfaceRef.current?.getBoundingClientRect();
+      const center = surfaceToCanvas(
+        (rect?.left ?? 0) + (rect?.width ?? 800) / 2,
+        (rect?.top ?? 0) + (rect?.height ?? 600) / 2,
+      );
+      imageFiles.forEach((f, i) => void uploadImageAt(f, center.x + i * 24, center.y + i * 24));
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [uploadImageAt, surfaceToCanvas]);
+
   // -- Presence -------------------------------------------------------
 
   useRealtime(
@@ -2837,10 +3257,35 @@ export default function CanvasViewerPage() {
   // Workspace entity events normally invalidate the hydrate query. While
   // the operator is mid-drag we suppress that — the trailing invalidate
   // on mouseup catches anything that landed during the gesture.
+  //
+  // Bursts of remote events (e.g. a peer dragging, or an agent dropping a
+  // dozen shapes via bulkAddShapes) used to fire one full refetch *each*,
+  // which flashes the whole canvas. We coalesce them into at most one
+  // refetch per window so collaborative edits land smoothly. (True
+  // element-level patching would need richer event payloads — tracked
+  // separately; memoized cards already keep unchanged rows from
+  // repainting on the refetch.)
+  const hydrateInvalidateTimer = useRef<number | null>(null);
+  const scheduleHydrateInvalidate = useCallback(() => {
+    if (hydrateInvalidateTimer.current != null) return;
+    hydrateInvalidateTimer.current = window.setTimeout(() => {
+      hydrateInvalidateTimer.current = null;
+      utils.canvas.hydrate.invalidate({ id: params.canvasId });
+    }, 220);
+  }, [utils, params.canvasId]);
+  useEffect(
+    () => () => {
+      if (hydrateInvalidateTimer.current != null) {
+        clearTimeout(hydrateInvalidateTimer.current);
+        hydrateInvalidateTimer.current = null;
+      }
+    },
+    [],
+  );
   useRealtime(
     () => {
       if (draggingRef.current) return;
-      utils.canvas.hydrate.invalidate({ id: params.canvasId });
+      scheduleHydrateInvalidate();
     },
     { subjectType: ["canvas", "issue", "artifact", "execution-step", "execution-plan"] },
   );
@@ -3084,6 +3529,19 @@ export default function CanvasViewerPage() {
             >
               <Layers className="h-3.5 w-3.5" /> {openSidebar ? "Hide rail" : "Show rail"}
             </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={enterPresentation}
+              title={
+                presentationSlides.length > 0
+                  ? `Present ${presentationSlides.length} frame${presentationSlides.length === 1 ? "" : "s"} as slides`
+                  : "Add a frame to present"
+              }
+              disabled={presentationSlides.length === 0}
+            >
+              <Play className="h-3.5 w-3.5" /> Present
+            </Button>
             {addNoteMut ? (
               <Button
                 size="sm"
@@ -3104,7 +3562,7 @@ export default function CanvasViewerPage() {
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => setViewport({ x: 0, y: 0, zoom: 1 })}
+              onClick={() => animateViewportTo({ x: 0, y: 0, zoom: 1 })}
               title="Reset view"
             >
               <Maximize2 className="h-3.5 w-3.5" /> Reset
@@ -3249,7 +3707,7 @@ export default function CanvasViewerPage() {
                     if (s.style != null) dup.style = s.style as Record<string, unknown>;
                     if (s.text != null) dup.text = s.text;
                     if (s.groupId != null) dup.groupId = s.groupId;
-                    shapeAddMut.mutate(dup);
+                    void createShape(dup, "duplicate");
                   },
                 });
                 items.push({ kind: "separator" });
@@ -3259,7 +3717,7 @@ export default function CanvasViewerPage() {
                   shortcut: "⌫",
                   danger: true,
                   onClick: () => {
-                    if (shapeRemoveMut) shapeRemoveMut.mutate({ id: shapeId });
+                    removeShapeUndoable(shapeId);
                   },
                 });
               }
@@ -3305,7 +3763,7 @@ export default function CanvasViewerPage() {
                     if (s.style != null) dup.style = s.style as Record<string, unknown>;
                     if (s.text != null) dup.text = s.text;
                     if (s.groupId != null) dup.groupId = s.groupId;
-                    shapeAddMut.mutate(dup);
+                    void createShape(dup, "paste");
                   }
                 },
               });
@@ -3334,7 +3792,7 @@ export default function CanvasViewerPage() {
                   const r = surfaceRef.current?.getBoundingClientRect();
                   const viewW = r?.width ?? 800;
                   const viewH = r?.height ?? 600;
-                  setViewport({ x: viewW / 2, y: viewH / 2, zoom: 1 });
+                  animateViewportTo({ x: viewW / 2, y: viewH / 2, zoom: 1 });
                 },
               });
             }
@@ -3347,6 +3805,7 @@ export default function CanvasViewerPage() {
             className="absolute left-0 top-0 origin-top-left"
             style={{
               transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
+              willChange: "transform",
             }}
           >
             {/* Frames sit at the very back so children render over them. */}
@@ -3363,9 +3822,11 @@ export default function CanvasViewerPage() {
             {lanes.map((lane) => (
               <LaneBand key={lane.name} lane={lane} />
             ))}
-            {/* Shapes (Phase 2) sit BELOW edges + nodes by default. */}
+            {/* Shapes (Phase 2) sit BELOW edges + nodes by default.
+                `visibleShapes` is `displayShapes` culled to the viewport
+                once the board crosses VIRTUALIZE_THRESHOLD. */}
             <CanvasShapes
-              shapes={displayShapes}
+              shapes={visibleShapes}
               selectedIds={selectedShapeIds}
               onSelectShape={onSelectShape}
               editingShapeId={editingShapeFor}
@@ -3567,6 +4028,35 @@ export default function CanvasViewerPage() {
         persistKey={ws.slug}
         stickyLocked={stickyToolLock}
         onToggleStickyLock={() => setStickyToolLock((v) => !v)}
+        onInsertImage={() => imageInputRef.current?.click()}
+      />
+      {presenting ? (
+        <CanvasPresentation
+          total={presentationSlides.length}
+          index={slideIndex}
+          slideName={presentationSlides[slideIndex]?.name ?? null}
+          onPrev={() => gotoSlide(slideIndex - 1)}
+          onNext={() => gotoSlide(slideIndex + 1)}
+          onGoto={gotoSlide}
+          onExit={exitPresentation}
+        />
+      ) : null}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          const rect = surfaceRef.current?.getBoundingClientRect();
+          const center = surfaceToCanvas(
+            (rect?.left ?? 0) + (rect?.width ?? 800) / 2,
+            (rect?.top ?? 0) + (rect?.height ?? 600) / 2,
+          );
+          files.forEach((f, i) => void uploadImageAt(f, center.x + i * 24, center.y + i * 24));
+          e.target.value = "";
+        }}
       />
       {openPicker && (
         <AddCardPicker
@@ -3705,6 +4195,22 @@ function ShapeDraftPreview({
           borderRadius: "9999px",
         }}
       />
+    );
+  }
+  if (kind === "diamond") {
+    return (
+      <svg
+        className="pointer-events-none absolute"
+        style={{ left: minX, top: minY, width: Math.max(1, w), height: Math.max(1, h), overflow: "visible" }}
+      >
+        <polygon
+          points={`${w / 2},0 ${w},${h / 2} ${w / 2},${h} 0,${h / 2}`}
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth={strokeWidth}
+          strokeDasharray="6 4"
+        />
+      </svg>
     );
   }
   if (kind === "line" || kind === "arrow") {
@@ -3984,35 +4490,82 @@ function SnapGuidesLayer({
 function RemoteCursorsLayer({
   cursorsRef,
   viewport,
-  rev: _rev,
+  rev,
 }: {
   cursorsRef: React.MutableRefObject<Map<string, RemoteCursor>>;
   viewport: Viewport;
   rev: number;
 }) {
+  // Remote cursors arrive at ~10Hz, which looks steppy if rendered raw.
+  // We keep a display position per peer and ease it toward the latest
+  // target every frame, so peer cursors glide instead of teleporting.
+  const displayRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const rafRef = useRef<number | null>(null);
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const loop = () => {
+      const targets = cursorsRef.current;
+      const disp = displayRef.current;
+      // Drop display entries for peers that went stale.
+      for (const id of [...disp.keys()]) if (!targets.has(id)) disp.delete(id);
+      let moving = false;
+      for (const [id, c] of targets) {
+        const d = disp.get(id) ?? { x: c.x, y: c.y };
+        const dx = c.x - d.x;
+        const dy = c.y - d.y;
+        if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) {
+          disp.set(id, { x: c.x, y: c.y });
+        } else {
+          disp.set(id, { x: d.x + dx * 0.28, y: d.y + dy * 0.28 });
+          moving = true;
+        }
+      }
+      setTick((t) => t + 1);
+      // Settle: stop the loop once everything has converged; it restarts
+      // when a fresh packet bumps `rev` (this effect re-runs).
+      if (moving) {
+        rafRef.current = requestAnimationFrame(loop);
+      } else {
+        rafRef.current = null;
+      }
+    };
+    if (rafRef.current == null) rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [cursorsRef, rev]);
+
   const cursors = [...cursorsRef.current.values()];
   return (
     <>
-      {cursors.map((c) => (
-        <div
-          key={c.id}
-          className="pointer-events-none absolute z-30"
-          style={{
-            transform: `translate(${c.x * viewport.zoom + viewport.x}px, ${c.y * viewport.zoom + viewport.y}px)`,
-          }}
-        >
+      {cursors.map((c) => {
+        const d = displayRef.current.get(c.id) ?? { x: c.x, y: c.y };
+        return (
           <div
-            className="h-2 w-2 rounded-full shadow"
-            style={{ backgroundColor: c.color }}
-          />
-          <div
-            className="mt-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium text-card shadow"
-            style={{ backgroundColor: c.color }}
+            key={c.id}
+            className="pointer-events-none absolute z-30"
+            style={{
+              transform: `translate(${d.x * viewport.zoom + viewport.x}px, ${d.y * viewport.zoom + viewport.y}px)`,
+              willChange: "transform",
+            }}
           >
-            {c.name}
+            <div
+              className="h-2 w-2 rounded-full shadow"
+              style={{ backgroundColor: c.color }}
+            />
+            <div
+              className="mt-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium text-card shadow"
+              style={{ backgroundColor: c.color }}
+            >
+              {c.name}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </>
   );
 }

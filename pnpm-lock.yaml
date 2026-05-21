@@ -95,6 +95,9 @@ importers:
       react-hook-form:
         specifier: ^7.54.1
         version: 7.72.1(react@19.2.5)
+      roughjs:
+        specifier: ^4.6.6
+        version: 4.6.6
       server-only:
         specifier: ^0.0.1
         version: 0.0.1

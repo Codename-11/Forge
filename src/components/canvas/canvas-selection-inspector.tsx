@@ -41,6 +41,10 @@ export type InspectorPatch =
         fill: string;
         strokeWidth: number;
         opacity: number;
+        cornerRadius: number;
+        sketch: boolean;
+        arrowHead: string;
+        arrowTail: string;
         lockedAt: Date | null;
       }>;
     }
@@ -75,6 +79,23 @@ const STROKE_SWATCHES: Array<{ key: string; value: string }> = [
 ];
 
 const STROKE_WIDTHS = [1, 2, 4] as const;
+
+const FILL_SWATCHES: Array<{ key: string; value: string }> = [
+  { key: "none", value: "transparent" },
+  { key: "ember", value: "hsl(var(--ember) / 0.18)" },
+  { key: "success", value: "hsl(var(--success) / 0.18)" },
+  { key: "warning", value: "hsl(var(--warning) / 0.18)" },
+  { key: "muted", value: "hsl(var(--muted-foreground) / 0.18)" },
+];
+
+const ARROW_HEADS = ["none", "triangle", "line", "circle", "diamond"] as const;
+const ARROW_HEAD_GLYPH: Record<string, string> = {
+  none: "—",
+  triangle: "▶",
+  line: "›",
+  circle: "●",
+  diamond: "◆",
+};
 
 const EDGE_KINDS = ["solid", "dashed", "dotted", "curved"] as const;
 
@@ -162,11 +183,24 @@ function ShapeInspector({
   onEnqueue: (p: InspectorPatch) => void;
   onFireNow: (p: InspectorPatch) => void;
 }) {
-  const style = (shape.style ?? {}) as { stroke?: string; strokeWidth?: number; opacity?: number };
+  const style = (shape.style ?? {}) as {
+    stroke?: string;
+    fill?: string;
+    strokeWidth?: number;
+    opacity?: number;
+    cornerRadius?: number;
+    sketch?: boolean;
+    arrowHead?: string;
+    arrowTail?: string;
+  };
   const currentStroke = style.stroke ?? "hsl(var(--foreground))";
+  const currentFill = style.fill ?? "transparent";
   const currentWidth = style.strokeWidth ?? 1.5;
   const currentOpacity = style.opacity ?? 1;
   const locked = !!shape.lockedAt;
+  const isBoxy = shape.kind === "box";
+  const isFillable = shape.kind === "box" || shape.kind === "ellipse" || shape.kind === "diamond";
+  const isLinear = shape.kind === "arrow" || shape.kind === "line";
 
   return (
     <>
@@ -234,6 +268,107 @@ function ShapeInspector({
           }
         />
       </Popover>
+
+      {isFillable && (
+        <Popover label="Fill" trigger={<Swatch color={currentFill === "transparent" ? "hsl(var(--card))" : currentFill} />}>
+          <div className="grid grid-cols-5 gap-1">
+            {FILL_SWATCHES.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                title={s.key}
+                className={cn(
+                  "h-6 w-6 rounded border border-border",
+                  currentFill === s.value && "ring-2 ring-ember/60",
+                  s.key === "none" && "bg-card",
+                )}
+                style={s.key === "none" ? undefined : { background: s.value }}
+                onClick={() => onFireNow({ kind: "shape", id: shape.id, patch: { fill: s.value } })}
+              >
+                {s.key === "none" ? <span className="text-[0.625rem] text-danger">∅</span> : null}
+              </button>
+            ))}
+          </div>
+        </Popover>
+      )}
+
+      {isFillable && (
+        <IconButton
+          title="Hand-drawn (sketch) style"
+          onClick={() => onFireNow({ kind: "shape", id: shape.id, patch: { sketch: !style.sketch } })}
+        >
+          <span className={cn("text-[0.6875rem]", style.sketch ? "text-ember" : "text-muted-foreground")}>✎</span>
+        </IconButton>
+      )}
+
+      {isBoxy && (
+        <Popover
+          label="Radius"
+          trigger={
+            <span className="font-mono text-[0.6875rem] text-muted-foreground">
+              {style.cornerRadius ?? 6}
+            </span>
+          }
+        >
+          <input
+            type="range"
+            min={0}
+            max={40}
+            value={style.cornerRadius ?? 6}
+            onChange={(e) =>
+              onEnqueue({ kind: "shape", id: shape.id, patch: { cornerRadius: Number(e.target.value) } })
+            }
+          />
+        </Popover>
+      )}
+
+      {isLinear && (
+        <Popover
+          label="Ends"
+          trigger={
+            <span className="font-mono text-[0.6875rem] text-muted-foreground">
+              {ARROW_HEAD_GLYPH[style.arrowTail ?? "none"]}–{ARROW_HEAD_GLYPH[style.arrowHead ?? (shape.kind === "arrow" ? "triangle" : "none")]}
+            </span>
+          }
+        >
+          <div className="space-y-1">
+            <div className="flex items-center gap-1">
+              <span className="w-8 text-[0.625rem] text-muted-foreground">Start</span>
+              {ARROW_HEADS.map((h) => (
+                <button
+                  key={`tail-${h}`}
+                  type="button"
+                  title={h}
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[0.75rem] hover:bg-subtle",
+                    (style.arrowTail ?? "none") === h && "bg-subtle text-foreground",
+                  )}
+                  onClick={() => onFireNow({ kind: "shape", id: shape.id, patch: { arrowTail: h } })}
+                >
+                  {ARROW_HEAD_GLYPH[h]}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="w-8 text-[0.625rem] text-muted-foreground">End</span>
+              {ARROW_HEADS.map((h) => (
+                <button
+                  key={`head-${h}`}
+                  type="button"
+                  title={h}
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[0.75rem] hover:bg-subtle",
+                    (style.arrowHead ?? (shape.kind === "arrow" ? "triangle" : "none")) === h && "bg-subtle text-foreground",
+                  )}
+                  onClick={() => onFireNow({ kind: "shape", id: shape.id, patch: { arrowHead: h } })}
+                >
+                  {ARROW_HEAD_GLYPH[h]}
+                </button>
+              ))}
+            </div>
+          </div>
+        </Popover>
+      )}
 
       <Divider />
       <IconButton

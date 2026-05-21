@@ -6,6 +6,7 @@ import {
   Square,
   Frame as FrameIcon,
   Circle,
+  Diamond,
   ArrowRight,
   Minus,
   Type,
@@ -18,6 +19,8 @@ import {
   MessageCircle,
   Smile,
   SquarePlus,
+  Image as ImageIcon,
+  PenLine,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { STAMP_PALETTE, STICKY_PALETTE } from "@/components/canvas/canvas-shapes";
@@ -29,6 +32,7 @@ export type ToolKind =
   | "frame"
   | "box"
   | "ellipse"
+  | "diamond"
   | "arrow"
   | "line"
   | "text"
@@ -43,6 +47,8 @@ export type StyleState = {
   stroke: string;
   fill: string;
   strokeWidth: number;
+  /** Hand-drawn (rough.js) rendering for new geometric shapes. */
+  sketch?: boolean;
   /** Active sticky palette key (one of STICKY_PALETTE[].key). Drives
    * both the toolbar swatch and the `style.fill` field on the next
    * sticky created via the sticky tool. */
@@ -56,9 +62,20 @@ export const DEFAULT_STYLE_STATE: StyleState = {
   stroke: "hsl(var(--foreground))",
   fill: "transparent",
   strokeWidth: 1.5,
+  sketch: false,
   stickyPalette: STICKY_PALETTE[0].key,
   stampEmoji: STAMP_PALETTE[0],
 };
+
+// Fill swatches mirror the stroke palette but lead with a "none" option
+// (transparent) which is the default for outline shapes.
+const FILL_SWATCHES: Array<{ key: string; value: string; label: string }> = [
+  { key: "none", value: "transparent", label: "No fill" },
+  { key: "ember", value: "hsl(var(--ember) / 0.18)", label: "Ember" },
+  { key: "success", value: "hsl(var(--success) / 0.18)", label: "Sage" },
+  { key: "warning", value: "hsl(var(--warning) / 0.18)", label: "Ochre" },
+  { key: "muted", value: "hsl(var(--muted-foreground) / 0.18)", label: "Muted" },
+];
 
 const TOOLBAR_STORAGE_PREFIX = "forge.canvas.toolbar.style.";
 
@@ -73,6 +90,7 @@ const TOOLS: Array<{
   { kind: "frame", label: "Frame (F)", Icon: FrameIcon },
   { kind: "box", label: "Box (R)", Icon: Square },
   { kind: "ellipse", label: "Ellipse (O)", Icon: Circle },
+  { kind: "diamond", label: "Diamond (D)", Icon: Diamond },
   { kind: "arrow", label: "Arrow (A)", Icon: ArrowRight },
   { kind: "line", label: "Line (L)", Icon: Minus },
   { kind: "text", label: "Text (T)", Icon: Type },
@@ -112,6 +130,8 @@ type CanvasToolbarProps = {
    *  to Select after one commit. Shift-click any tool toggles. */
   stickyLocked?: boolean;
   onToggleStickyLock?: () => void;
+  /** Open a file picker to insert an image shape. */
+  onInsertImage?: () => void;
 };
 
 /**
@@ -131,6 +151,7 @@ export function CanvasToolbar({
   persistKey,
   stickyLocked = false,
   onToggleStickyLock,
+  onInsertImage,
 }: CanvasToolbarProps) {
   const storageKey = useMemo(
     () => (persistKey ? `${TOOLBAR_STORAGE_PREFIX}${persistKey}` : null),
@@ -150,6 +171,7 @@ export function CanvasToolbar({
       if (typeof parsed.stroke === "string") next.stroke = parsed.stroke;
       if (typeof parsed.fill === "string") next.fill = parsed.fill;
       if (typeof parsed.strokeWidth === "number") next.strokeWidth = parsed.strokeWidth;
+      if (typeof parsed.sketch === "boolean") next.sketch = parsed.sketch;
       if (
         typeof parsed.stickyPalette === "string" &&
         STICKY_PALETTE.some((p) => p.key === parsed.stickyPalette)
@@ -247,6 +269,18 @@ export function CanvasToolbar({
           );
         })}
 
+        {onInsertImage ? (
+          <button
+            type="button"
+            title="Insert image (paste or drop also works)"
+            aria-label="Insert image"
+            onClick={onInsertImage}
+            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground"
+          >
+            <ImageIcon className="h-4 w-4" />
+          </button>
+        ) : null}
+
         <div className="mx-1 h-6 w-px bg-border" />
 
         <div className="flex items-center gap-1" role="group" aria-label="Stroke color">
@@ -295,6 +329,54 @@ export function CanvasToolbar({
             );
           })}
         </div>
+
+        <div className="mx-1 h-6 w-px bg-border" />
+
+        <div className="flex items-center gap-1" role="group" aria-label="Fill color">
+          {FILL_SWATCHES.map((sw) => {
+            const active = style.fill === sw.value;
+            return (
+              <button
+                key={sw.key}
+                type="button"
+                title={`Fill: ${sw.label}`}
+                aria-label={`Fill ${sw.label}`}
+                aria-pressed={active}
+                onClick={() => onChangeStyle({ fill: sw.value })}
+                className={cn(
+                  "h-5 w-5 rounded-md border transition-all",
+                  active ? "border-foreground ring-1 ring-ember scale-110" : "border-border hover:scale-110",
+                  sw.key === "none" ? "bg-card" : "",
+                )}
+                style={sw.key === "none" ? undefined : { backgroundColor: sw.value }}
+              >
+                {sw.key === "none" ? (
+                  <span className="block h-full w-full rotate-45">
+                    <span className="mx-auto block h-full w-px bg-danger" />
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mx-1 h-6 w-px bg-border" />
+
+        <button
+          type="button"
+          title="Hand-drawn (sketch) style"
+          aria-label="Toggle hand-drawn style"
+          aria-pressed={Boolean(style.sketch)}
+          onClick={() => onChangeStyle({ sketch: !style.sketch })}
+          className={cn(
+            "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+            style.sketch
+              ? "bg-ember/15 text-ember ring-1 ring-ember/40"
+              : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+          )}
+        >
+          <PenLine className="h-4 w-4" />
+        </button>
 
         <div className="mx-1 h-6 w-px bg-border" />
 

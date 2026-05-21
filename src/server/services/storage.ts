@@ -89,6 +89,10 @@ export const ALLOWED_TARGET_TYPES: ReadonlySet<string> = new Set<string>([
   // Wave 2: durable artifacts (specs, decisions, runbooks…) can carry
   // file/link attachments via the polymorphic refs.
   "artifact",
+  // Canvas: image shapes are backed by an attachment whose targetId is the
+  // canvasId. The shape's style JSON holds the attachmentId; hydrate
+  // resolves it to a presigned src.
+  "canvas",
 ]);
 
 // -- Client ------------------------------------------------------------------
