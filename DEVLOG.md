@@ -2,6 +2,47 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — Dashboard enhancements: customizable widgets, resume tile, unseen badge, context CTAs, canvas round-trip
+
+Five operator-requested dashboard ideas. Migration `0052_dashboard_prefs`
+(two nullable `User` columns) — applied via `migrate deploy` (status was
+clean, no drift); client regenerated.
+
+- **Migration**: `User.dashboardPrefs` (Json) + `User.changelogSeenAt`
+  (DateTime?). Added to `ME_SELECT`. New user-router mutations
+  `setDashboardPrefs` (zod `{ order, collapsed, hidden }`) and
+  `markChangelogSeen`.
+- **Customizable widgets** (`dashboard-stack.tsx`, new): the dashboard's
+  movable tiles (today, resume, agent-activity, ideas, quick-notes,
+  standup, whats-new) now render through `DashboardStack`. A "Customize"
+  topbar toggle reveals per-widget drag handles (HTML5 DnD, no dep) +
+  hide buttons and a hidden-widgets tray; Reset clears. Order/hidden
+  persist via `setDashboardPrefs`, seeded once from `user.me`. Widgets
+  own their card chrome, so edit mode adds a dashed control strip above
+  each; non-editing renders pristine and empty widgets collapse via
+  `empty:hidden` (no gaps). New widget ids append at the end of a saved
+  order, so future widgets need no prefs migration. **Scope note:**
+  collapse was dropped from v1 (the existing widgets render their own
+  chrome with no external header to collapse into) — delivered reorder +
+  hide instead. Fixed anchors (greeting, needs-you, onboarding, focus/
+  suggestions, the bottom 3-col grid) stay put; the movable region sits
+  between focus and the grid (this moved today/ideas/etc. below focus —
+  a deliberate hierarchy bump, and now user-reorderable anyway).
+- **Resume tile** (`resume-tile.tsx`, new): `recentItem.list` →
+  `RecentItemsRail`. Per-user recency (distinct from the workspace-wide
+  "Recent issues" column). Null when empty.
+- **Unseen What's New dot**: `WhatsNewTile` takes `seenAt`; shows an
+  ember dot when the newest dated changelog entry is newer than
+  `changelogSeenAt`. `/whats-new` stamps `markChangelogSeen` on mount +
+  invalidates `user.me` so the dot clears.
+- **Context-aware greeting**: "Browse templates" → "New project" once
+  projects exist; "Invite member" only for admins/owners.
+- **Canvas round-trip**: personal canvases (`kind === "PERSONAL"`) get a
+  "Dashboard" topbar button that persists view=list and navigates back.
+
+Validated: `pnpm typecheck` + `eslint` clean; `changelog-parser` +
+`sidebar-nav` unit tests pass.
+
 ## 2026-05-21 — Dashboard tie-together: templates link, Personal dedup, CHANGELOG refresh
 
 Three operator-flagged dashboard fixes. No schema changes.

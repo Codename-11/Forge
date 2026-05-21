@@ -29,12 +29,26 @@ const ME_SELECT = {
   textSize: true,
   missionControlDefaultTab: true,
   dashboardView: true,
+  dashboardPrefs: true,
+  changelogSeenAt: true,
   onboardingDismissedAt: true,
   onboardingSkippedSteps: true,
   pomodoroEnabled: true,
   pomodoroMinutes: true,
   pomodoroBreakMinutes: true,
 } as const;
+
+/**
+ * Per-user dashboard layout. `order` is the widget-id sequence for the
+ * customizable main stack; `collapsed` / `hidden` are widget-id sets.
+ * Unknown ids are tolerated (the client intersects against its live
+ * widget registry), so a removed widget id just lingers harmlessly.
+ */
+const DASHBOARD_PREFS = z.object({
+  order: z.array(z.string()).max(64).default([]),
+  collapsed: z.array(z.string()).max(64).default([]),
+  hidden: z.array(z.string()).max(64).default([]),
+});
 
 // Today only "member" is opt-out-able. Keep the enum tight so we don't
 // accept arbitrary step ids from the wire.
@@ -73,6 +87,26 @@ export const userRouter = router({
         select: ME_SELECT,
       });
     }),
+
+  /** Persist the user's dashboard layout (widget order + collapsed/hidden). */
+  setDashboardPrefs: protectedProcedure
+    .input(DASHBOARD_PREFS)
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.user.update({
+        where: { id: ctx.session.user.id },
+        data: { dashboardPrefs: input },
+        select: ME_SELECT,
+      });
+    }),
+
+  /** Stamp the changelog as seen now (clears the What's New "unseen" dot). */
+  markChangelogSeen: protectedProcedure.mutation(async ({ ctx }) => {
+    return ctx.db.user.update({
+      where: { id: ctx.session.user.id },
+      data: { changelogSeenAt: new Date() },
+      select: ME_SELECT,
+    });
+  }),
 
   /**
    * Per-user Mission Control preferences. Default-tab can be either

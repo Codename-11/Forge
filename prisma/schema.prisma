@@ -442,6 +442,15 @@ model User {
   /// copy; the timer itself isn't paused — pomodoro is a prompt, not
   /// a hard stop.
   pomodoroBreakMinutes   Int       @default(5)
+  /// Per-user dashboard layout customization. JSON shape:
+  /// `{ order: string[], collapsed: string[], hidden: string[] }` keyed
+  /// by widget id. Null = default layout (registry order, nothing
+  /// collapsed or hidden).
+  dashboardPrefs         Json?
+  /// Last time the user viewed the What's New / changelog surface.
+  /// Drives the "unseen entries" dot — when the latest changelog date
+  /// is newer than this, the dot shows. Null = never seen.
+  changelogSeenAt        DateTime?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
