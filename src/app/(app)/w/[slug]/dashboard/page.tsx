@@ -13,7 +13,6 @@ import { toast } from "sonner";
 import {
   ArrowRight,
   Check,
-  ChevronLeft,
   ChevronRight,
   CircleDashed,
   Clock3,
@@ -224,10 +223,10 @@ export default function DashboardPage() {
             <Link
               href={`/w/${slug}/inbox`}
               className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
-              title="Inbox is the daily driver — pulse, queue, mentions, stalled"
+              title="Your action queue — pulse, queue, mentions, stalled (g i)"
             >
-              <ChevronLeft className="h-3 w-3" />
-              Back to Inbox
+              Inbox
+              <ChevronRight className="h-3 w-3" />
             </Link>
           </div>
         }

@@ -20,6 +20,7 @@ import { WatchButton } from "@/components/watch-button";
 import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
+import { IssueAgentPanel } from "@/components/issue-detail/issue-agent-panel";
 import { RunActivityChip } from "@/components/issue-detail/run-activity-chip";
 import { AiTriageCard } from "@/components/ai-triage-card";
 import { Breadcrumb } from "@/components/breadcrumb";
@@ -480,6 +481,10 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 issueId={issue.id}
                 header={
                   <div className="space-y-3">
+                    <IssueAgentPanel
+                      issueId={issue.id}
+                      assignedAgent={issue.assignedAgent ?? null}
+                    />
                     <SidebarField label="Project">
                       <select
                         value={issue.projectId ?? ""}
