@@ -20,11 +20,18 @@ import {
  * Anchored under a single textarea (or single-line input) by sitting
  * inside a `relative` wrapper element supplied by the caller. The
  * dropdown is OPEN whenever the cursor's current line starts with `/`
- * AND the line lives in the top-of-body slash-command block — i.e.
- * line 0, or any line where every preceding non-blank line is also a
- * slash-prefixed line. (We approximate "recognised" cheaply: any line
- * starting with `/` counts. The parser still rejects unknown forms
- * server-side, so an over-eager open here is harmless.)
+ * (after optional leading whitespace) and isn't inside a fenced code
+ * block. It is NO LONGER gated to a top-of-body command block — a `/`
+ * at the start of ANY line opens the picker, so operators can chain a
+ * slash command after prose / an @mention in the same comment. (We
+ * approximate "recognised" cheaply: any line starting with `/` counts.
+ * The parser still rejects unknown forms, so an over-eager open here is
+ * harmless.)
+ *
+ * Mutual exclusion: the caller passes `suppressed` (true while the
+ * sibling @-mention dropdown owns the caret). When suppressed the slash
+ * picker stays closed and its `onKeyDown` is a no-op, so exactly one
+ * dropdown is ever active and only it owns Arrow/Enter/Tab/Esc.
  *
  * Keyboard:
  *   ↓ / ↑       — move active selection
@@ -131,6 +138,13 @@ export function useSlashAutocomplete<
    * follow-up mutation (e.g. opening an action-request for `/blocked`).
    */
   onTemplateSideEffect?: (sideEffect: SlashTemplateSideEffect) => void;
+  /**
+   * When true the slash picker is force-closed and its keyboard handler
+   * is a no-op. The caller sets this while a sibling dropdown (the
+   * @-mention list) is open so the two never coexist at the caret and
+   * only the active one owns Arrow/Enter/Tab/Esc.
+   */
+  suppressed?: boolean;
 }) {
   const {
     value,
@@ -138,6 +152,7 @@ export function useSlashAutocomplete<
     textareaRef,
     includeTemplates = false,
     onTemplateSideEffect,
+    suppressed = false,
   } = args;
   const [cursor, setCursor] = useState<number | null>(null);
   const [forceClosed, setForceClosed] = useState(false);
@@ -154,17 +169,17 @@ export function useSlashAutocomplete<
     return { line, lineStart, lineEnd };
   }, [value, cursor]);
 
-  // Top-of-body block: every preceding non-blank line must also start
-  // with `/`.
-  const inTopOfBodyBlock = useMemo(() => {
+  // Don't trigger inside a fenced code block — a `/` there is code, not
+  // a command. Count the ``` fences that open before the current line;
+  // an odd count means the caret line lives inside an open fence.
+  const inFencedBlock = useMemo(() => {
     if (!lineCtx) return false;
-    const lines = value.slice(0, lineCtx.lineStart).split("\n");
-    for (const l of lines) {
-      const t = l.trim();
-      if (t === "") continue;
-      if (!t.startsWith("/")) return false;
+    const linesBefore = value.slice(0, lineCtx.lineStart).split("\n");
+    let fences = 0;
+    for (const l of linesBefore) {
+      if (l.trim().startsWith("```")) fences += 1;
     }
-    return true;
+    return fences % 2 === 1;
   }, [value, lineCtx]);
 
   // Filter the help list against the typed text after `/`. Templates
@@ -192,9 +207,10 @@ export function useSlashAutocomplete<
   }, [matches.length]);
 
   const visible =
+    !suppressed &&
     !forceClosed &&
     !!lineCtx &&
-    inTopOfBodyBlock &&
+    !inFencedBlock &&
     lineCtx.line.trimStart().startsWith("/") &&
     matches.length > 0;
 

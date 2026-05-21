@@ -1,11 +1,26 @@
 /**
  * Slash command parser for issue / comment composers.
  *
- * Commands appear on their own line at the START of the body, top-level
- * only — anything inside a fenced code block (``` … ```) is preserved
- * verbatim. The parser strips matched commands from the leading lines
- * and returns both the cleaned body AND the structured commands so the
- * server can apply them in one shot.
+ * Commands appear on their OWN line, top-level only — anything inside a
+ * fenced code block (``` … ```) is preserved verbatim. As of the
+ * @-mention + / coexistence work (2026-05-21) commands no longer have to
+ * be a contiguous leading block: a recognised command line is extracted
+ * wherever it sits in the body (e.g. a `/assign @victor` line UNDER a
+ * paragraph of prose still applies). This lets operators write prose
+ * with an @mention and then issue a slash command in the same comment.
+ *
+ * Conservatism guarantees so prose `/` is never eaten:
+ *   - Only WHOLE lines are considered. A `/` in the middle of a line
+ *     ("and/or", "https://…") is never a command — the line must START
+ *     with `/` (after optional leading whitespace).
+ *   - The line's keyword must be a RECOGNISED command AND its argument
+ *     must parse. `/foo bar`, `/assign` (no handle), `/due wat` all stay
+ *     verbatim in the body.
+ *   - Anything inside a fenced code block is left untouched.
+ *
+ * The parser strips matched command lines from the body and returns both
+ * the cleaned body AND the structured commands so the server can apply
+ * them in one shot.
  *
  * Recognized commands (case-insensitive on keyword; arg semantics
  * documented per command):
@@ -21,9 +36,10 @@
  *   /watch                    — add caller as IssueWatcher
  *   /unwatch                  — remove caller
  *
- * Stops at the first non-command, non-blank line — commands are required
- * to be CONTIGUOUS at the top. This keeps the body "what would I have
- * typed without commands" predictable.
+ * Recognised command lines are pulled out wherever they sit (outside
+ * fenced code); every other line is preserved verbatim, in order. This
+ * keeps the body "what would I have typed without the command lines"
+ * predictable.
  */
 
 export type SlashCommand =
@@ -201,58 +217,62 @@ function parseLine(raw: string, now: Date): SlashCommand | null {
 }
 
 /**
- * Parse the body for top-level slash commands, preserving anything in
- * fenced code blocks. Lines that look like commands but don't match a
- * known form are LEFT IN PLACE (not silently consumed).
+ * Parse the body for slash commands, preserving anything in fenced code
+ * blocks. A recognised command line is extracted wherever it sits;
+ * lines that look like commands but don't match a known form, and any
+ * non-command prose, are LEFT IN PLACE (not silently consumed). Order is
+ * preserved on both sides.
  */
 export function parseSlashCommands(
   body: string,
   now: Date = new Date(),
 ): ParseResult {
   const commands: SlashCommand[] = [];
-  // Detect a leading fenced code block (``` … ```). If present, abort
-  // command parsing entirely — operators clearly meant the slash to be
-  // part of code.
-  const fencedAtTop = /^\s*```/.test(body);
-  if (fencedAtTop) {
-    return { strippedBody: body, commands };
-  }
-
   const lines = body.split(/\r?\n/);
-  let consumed = 0;
+  const keptLines: string[] = [];
+  // Track fenced code blocks (``` … ```). A `/` inside a fence is part
+  // of code and is never a command — keep the line verbatim and don't
+  // toggle on indented or language-tagged fences sloppily: any line
+  // whose trimmed text starts with ``` flips the state.
+  let inFence = false;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (const line of lines) {
     const trimmed = line.trim();
-    // Blank line before any command — skip it; doesn't end the block.
-    if (trimmed === "") {
-      if (commands.length === 0) {
-        // Leading blank lines before any command — keep walking.
-        consumed = i + 1;
-        continue;
-      }
-      // Blank between commands ALSO ok (operators may double-space).
-      consumed = i + 1;
+    if (trimmed.startsWith("```")) {
+      inFence = !inFence;
+      keptLines.push(line);
       continue;
     }
-    // Hit a fence — stop.
-    if (trimmed.startsWith("```")) break;
-    // Not a slash line — stop.
-    if (!trimmed.startsWith("/")) break;
-    const cmd = parseLine(trimmed, now);
-    if (!cmd) break; // looks like a command but unrecognised — leave in body
-    commands.push(cmd);
-    consumed = i + 1;
+    if (inFence) {
+      keptLines.push(line);
+      continue;
+    }
+    // A command line must START with `/` (after optional whitespace) AND
+    // parse to a recognised command. Everything else — prose, blank
+    // lines, unknown `/foo`, mid-line slashes — is kept verbatim.
+    if (trimmed.startsWith("/")) {
+      const cmd = parseLine(trimmed, now);
+      if (cmd) {
+        commands.push(cmd);
+        continue; // drop the command line from the body
+      }
+    }
+    keptLines.push(line);
   }
 
   if (commands.length === 0) {
     return { strippedBody: body, commands };
   }
 
-  const remaining = lines.slice(consumed).join("\n");
-  // Trim a single leading blank line on the cleaned body so the user's
-  // first line stays the first line.
-  const stripped = remaining.replace(/^\n+/, "");
+  // Reassemble the kept lines, then collapse the blank-line damage left
+  // behind by removed command lines: trim leading/trailing blank lines
+  // and squash any run of 3+ newlines (created when a command line sat
+  // between two paragraphs) down to a single blank line.
+  const stripped = keptLines
+    .join("\n")
+    .replace(/^\n+/, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\n+$/, "");
   return { strippedBody: stripped, commands };
 }
 
@@ -261,7 +281,7 @@ export function parseSlashCommands(
  * is "discoverability without scrolling," not a manual.
  */
 export const SLASH_COMMAND_HINT =
-  "/ commands at start of body — /assign @handle, /due tomorrow, /label bug, /priority high, /project KEY, /watch";
+  "/ commands on their own line — /assign @handle, /due tomorrow, /label bug, /priority high, /project KEY, /watch";
 
 /**
  * The seven recognised command keywords + a one-line example for each.

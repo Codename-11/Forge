@@ -299,3 +299,92 @@ describe("commentRouter.create — auto-watch + mention resolution", () => {
     expect(fixture.user.id).toBeTruthy();
   });
 });
+
+describe("commentRouter.update — edit-time mention dispatch (diff)", () => {
+  it("a NEWLY-added @agent on edit emits COMMENT_UPDATED with the agent in the diff and watches it", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const target = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: "victor-edit",
+      },
+    });
+
+    const caller = commentRouter.createCaller(ctx);
+    // Create with NO mention of the target.
+    const created = await caller.create({
+      issueId: issue.id,
+      body: "first pass, no mentions",
+    });
+    expect(
+      await prisma.issueWatcher.findFirst({
+        where: { issueId: issue.id, agentId: target.id },
+      }),
+    ).toBeNull();
+
+    // Edit to ADD the mention.
+    await caller.update({
+      id: created.id,
+      body: "first pass, cc @victor-edit",
+    });
+
+    // Watcher upserted for the newly-added agent.
+    expect(
+      await prisma.issueWatcher.findFirst({
+        where: { issueId: issue.id, agentId: target.id },
+      }),
+    ).not.toBeNull();
+
+    // COMMENT_UPDATED event carries the diff (the added agent) + edited flag.
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: { kind: "COMMENT_UPDATED", subjectId: issue.id },
+      orderBy: { createdAt: "desc" },
+    });
+    const payload = event.payload as {
+      edited?: boolean;
+      mentions?: { agentIds?: string[] };
+    };
+    expect(payload.edited).toBe(true);
+    expect(payload.mentions?.agentIds).toContain(target.id);
+  });
+
+  it("re-saving a body whose @mention was ALREADY present emits an empty diff (no re-trigger)", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Mizu",
+        profileKey: "mizu-edit",
+      },
+    });
+
+    const caller = commentRouter.createCaller(ctx);
+    const created = await caller.create({
+      issueId: issue.id,
+      body: "hey @mizu-edit take a look",
+    });
+
+    // Edit the prose but keep the SAME mention.
+    await caller.update({
+      id: created.id,
+      body: "hey @mizu-edit take a careful look",
+    });
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: { kind: "COMMENT_UPDATED", subjectId: issue.id },
+      orderBy: { createdAt: "desc" },
+    });
+    const payload = event.payload as {
+      edited?: boolean;
+      mentions?: { agentIds?: string[] };
+    };
+    // The agent was already mentioned at create time, so the edit diff
+    // is empty — no re-dispatch.
+    expect(payload.mentions?.agentIds ?? []).toEqual([]);
+  });
+});

@@ -475,10 +475,21 @@ export async function recordChange(
   //     webhooks — but the payload still propagates to ActivityEvent so
   //     downstream surfaces (notification materializer, inbox) can read
   //     it for involvement detection / watcher gating.
-  if (
-    params.eventKind === EventKind.COMMENT_CREATED &&
-    params.subjectType === "issue"
-  ) {
+  //     COMMENT_UPDATED is ALSO handled here, but ONLY when the payload
+  //     carries `edited: true` (a body edit via `comment.update`). In
+  //     that case `mentions.agentIds` is the DIFF — agents newly added
+  //     by the edit — so editing a comment to add `@victor` triggers him
+  //     once, while pre-existing mentions stay quiet. Rolling STATUS
+  //     comment updates also emit COMMENT_UPDATED but WITHOUT `edited`,
+  //     so they never reach this branch and never re-page on every
+  //     heartbeat.
+  const isCommentMentionEvent =
+    (params.eventKind === EventKind.COMMENT_CREATED ||
+      (params.eventKind === EventKind.COMMENT_UPDATED &&
+        (params.payload as { edited?: boolean } | undefined)?.edited ===
+          true)) &&
+    params.subjectType === "issue";
+  if (isCommentMentionEvent) {
     const payload = params.payload as
       | {
           mentions?:
@@ -621,7 +632,14 @@ export async function recordChange(
   //     loop, so they're explicitly excluded if added later. (Today
   //     no such EventKind values exist — watch/unwatch tRPC procs
   //     intentionally don't emit events.)
-  if (params.subjectType === "issue") {
+  // A body edit (COMMENT_UPDATED with `edited: true`) deliberately does
+  // NOT fan out to all watchers — that would re-page every stakeholder
+  // on a typo fix. Edits route ONLY through branch (c)'s mention DIFF,
+  // so just the agents newly @-mentioned by the edit are triggered.
+  const isCommentEdit =
+    params.eventKind === EventKind.COMMENT_UPDATED &&
+    (params.payload as { edited?: boolean } | undefined)?.edited === true;
+  if (params.subjectType === "issue" && !isCommentEdit) {
     const watchers = await tx.issueWatcher.findMany({
       where: {
         workspaceId: params.workspaceId,
