@@ -6,6 +6,8 @@ import {
   Filter,
   CalendarRange,
   Bot,
+  UsersRound,
+  ListChecks,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -70,6 +72,24 @@ export type EntitySearchResultData =
       id: string;
       profileKey: string;
       displayName: string;
+      status: string;
+    }
+  | {
+      kind: "goal";
+      id: string;
+      name: string;
+      status: string;
+    }
+  | {
+      kind: "crew";
+      id: string;
+      name: string;
+      memberCount: number;
+    }
+  | {
+      kind: "plan";
+      id: string;
+      name: string;
       status: string;
     };
 
@@ -175,6 +195,24 @@ function render(r: EntitySearchResultData): {
         Icon: Bot,
         primary: r.displayName,
         secondary: `@${r.profileKey} · ${r.status.toLowerCase()}`,
+      };
+    case "goal":
+      return {
+        Icon: Target,
+        primary: r.name,
+        secondary: r.status.toLowerCase(),
+      };
+    case "crew":
+      return {
+        Icon: UsersRound,
+        primary: r.name,
+        secondary: `${r.memberCount} member${r.memberCount === 1 ? "" : "s"}`,
+      };
+    case "plan":
+      return {
+        Icon: ListChecks,
+        primary: r.name,
+        secondary: r.status.toLowerCase(),
       };
   }
 }

@@ -6,8 +6,11 @@ import {
   UserCheck,
   Activity,
   AlertTriangle,
+  CheckCircle2,
   Clock,
   MessageCircle,
+  Target,
+  Wallet,
 } from "lucide-react";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
@@ -55,7 +58,16 @@ function iconForNotification(notification: EventNotificationMetadata) {
       return <Clock className="h-4 w-4" />;
     case "AGENT_NOACK":
     case "ISSUE_STALLED":
+    case "EXECUTION_STEP_JUDGED":
       return <AlertTriangle className="h-4 w-4" />;
+    case "PLAN_BUDGET_EXCEEDED":
+      return <Wallet className="h-4 w-4" />;
+    case "GOAL_STATUS_CHANGED":
+      return notification.severity === "SUCCESS" ? (
+        <CheckCircle2 className="h-4 w-4" />
+      ) : (
+        <Target className="h-4 w-4" />
+      );
   }
 }
 
@@ -105,6 +117,10 @@ export default function RealtimeToaster() {
           notification.severity === "CRITICAL"
         ) {
           toast.error(notification.toast.title, options);
+        } else if (notification.severity === "SUCCESS") {
+          toast.success(notification.toast.title, options);
+        } else if (notification.severity === "INFO") {
+          toast(notification.toast.title, options);
         } else {
           toast.warning(notification.toast.title, options);
         }
@@ -192,6 +208,9 @@ export default function RealtimeToaster() {
         "COMMENT_CREATED",
         "ISSUE_STALLED",
         "ISSUE_SLA_BREACH",
+        "GOAL_STATUS_CHANGED",
+        "PLAN_BUDGET_EXCEEDED",
+        "EXECUTION_STEP_JUDGED",
       ],
     },
   );

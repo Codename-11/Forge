@@ -24,6 +24,8 @@ type GoalRow = {
   description?: string | null;
   status: string;
   issueId?: string | null;
+  // Source issue embedded on `goal.get` — for the "From issue" backlink.
+  issue?: { id: string; number: number; title: string } | null;
   crewId?: string | null;
   maxTotalCostUsd?: number | null;
   maxWallTimeMinutes?: number | null;

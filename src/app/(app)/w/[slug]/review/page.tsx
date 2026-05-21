@@ -1,12 +1,28 @@
 "use client";
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { ReviewGateStatus } from "@prisma/client";
-import { Check, Shield, X } from "lucide-react";
+import { ArrowUpRight, Check, Shield, X } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
+import { useWorkspace } from "@/hooks/use-workspace";
+
+/** Deep-link a gate target where it can be acted on; null if not routable. */
+function gateTargetHref(slug: string, targetType: string, targetId: string): string | null {
+  switch (targetType) {
+    case "execution-plan":
+      return `/w/${slug}/plans/${targetId}`;
+    case "goal":
+      return `/w/${slug}/goals/${targetId}`;
+    case "issue":
+      return `/w/${slug}/issues/${targetId}`;
+    default:
+      return null;
+  }
+}
 
 const STATUS_TONE: Record<string, string> = {
   PENDING: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
@@ -30,6 +46,7 @@ const FILTER_OPTIONS: Array<{ key: string; label: string; status?: ReviewGateSta
  * route through the existing reviewGate.resolve mutation.
  */
 export default function ReviewPage() {
+  const ws = useWorkspace();
   const utils = trpc.useUtils();
   const [filter, setFilter] = useState<string>("open");
 
@@ -97,7 +114,17 @@ export default function ReviewPage() {
                     <div className="flex items-center gap-2 text-meta uppercase tracking-wide text-muted-foreground">
                       <Shield className="h-3 w-3" />
                       {gate.targetType.replace("-", " ")} ·{" "}
-                      <span className="font-mono text-id">{gate.targetId}</span>
+                      {gateTargetHref(ws.slug, gate.targetType, gate.targetId) ? (
+                        <Link
+                          href={gateTargetHref(ws.slug, gate.targetType, gate.targetId)!}
+                          className="inline-flex items-center gap-0.5 font-mono text-id text-ember hover:underline"
+                        >
+                          {gate.targetId.slice(0, 12)}…
+                          <ArrowUpRight className="h-3 w-3" />
+                        </Link>
+                      ) : (
+                        <span className="font-mono text-id">{gate.targetId}</span>
+                      )}
                     </div>
                     <p className="mt-1 whitespace-pre-wrap text-sm">{gate.prompt}</p>
                     {gate.resolution ? (

@@ -28,8 +28,11 @@ export type WorkspaceNavItem = {
   icon: typeof Inbox;
   /** Second key of the `g <x>` leader chord. */
   chord?: string;
-  /** Renders an unread-inbox badge when set to `"inbox"`. */
-  badge?: "inbox";
+  /**
+   * Renders a count badge: `"inbox"` = unread inbox items,
+   * `"decisions"` = open action requests + pending review gates.
+   */
+  badge?: "inbox" | "decisions";
   /** Only show when `Workspace.timeTrackingEnabled`. */
   onlyWhenTimeTracking?: true;
 };
@@ -52,7 +55,7 @@ export const WORKSPACE_NAV_SECTIONS: readonly WorkspaceNavSection[] = [
     items: [
       { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, chord: "d" },
       { path: "/personal", label: "Personal", icon: Home, chord: "e" },
-      { path: "/command-center", label: "Command Center", icon: Command, chord: "j" },
+      { path: "/command-center", label: "Command Center", icon: Command, chord: "j", badge: "decisions" },
       { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
       { path: "/chat", label: "Chat", icon: MessageSquare, chord: "m" },
       { path: "/issues", label: "Issues", icon: CircleDot, chord: "s" },

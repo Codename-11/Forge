@@ -253,12 +253,19 @@ export async function getGoal(
 
 export async function listGoals(
   db: PrismaClient,
-  params: { workspaceId: string; status?: GoalStatus; includeArchived?: boolean; limit?: number },
+  params: {
+    workspaceId: string;
+    status?: GoalStatus;
+    issueId?: string;
+    includeArchived?: boolean;
+    limit?: number;
+  },
 ) {
   return db.goal.findMany({
     where: {
       workspaceId: params.workspaceId,
       status: params.status,
+      issueId: params.issueId,
       archivedAt: params.includeArchived ? undefined : null,
     },
     orderBy: { updatedAt: "desc" },

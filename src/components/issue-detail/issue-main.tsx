@@ -1,8 +1,10 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Activity, Bot, MessageCircleReply } from "lucide-react";
+import { Activity, Bot, MessageCircleReply, Target } from "lucide-react";
+import { useWorkspace } from "@/hooks/use-workspace";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -226,6 +228,7 @@ export function IssueMain({
   return (
     <div className="flex min-w-0 flex-col gap-8">
       <AgentRunStrip issueId={issueId} />
+      <IssueGoalsStrip issueId={issueId} />
       <DescriptionBlock
         issueId={issueId}
         description={description}
@@ -237,6 +240,43 @@ export function IssueMain({
         canResolveActions={canResolveActions}
       />
     </div>
+  );
+}
+
+/**
+ * Backlink strip: goals spawned from this issue (via `/goal` or
+ * goal.create with this issueId). Renders nothing when the issue has no
+ * goals, so it's invisible on the common path. Closes the issue→goal
+ * dead-end (the goal detail already links back to its source issue).
+ */
+function IssueGoalsStrip({ issueId }: { issueId: string }) {
+  const ws = useWorkspace();
+  const { data } = trpc.goal.list.useQuery(
+    { issueId, includeArchived: false, limit: 10 },
+    { staleTime: 30_000 },
+  );
+  const goals = data?.items ?? [];
+  if (goals.length === 0) return null;
+  return (
+    <section className="flex flex-wrap items-center gap-1.5">
+      <span className="flex items-center gap-1 text-meta uppercase tracking-wide text-muted-foreground">
+        <Target className="h-3 w-3" />
+        {goals.length === 1 ? "Goal" : "Goals"}
+      </span>
+      {goals.map((g) => (
+        <Link
+          key={g.id}
+          href={`/w/${ws.slug}/goals/${g.id}`}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card/40 px-2 py-1 text-meta transition hover:border-ember/40 hover:text-ember"
+          title={g.title}
+        >
+          <span className="max-w-[18rem] truncate">{g.title}</span>
+          <span className="shrink-0 rounded bg-subtle px-1 py-0.5 text-[10px] uppercase text-muted-foreground">
+            {g.status.toLowerCase()}
+          </span>
+        </Link>
+      ))}
+    </section>
   );
 }
 

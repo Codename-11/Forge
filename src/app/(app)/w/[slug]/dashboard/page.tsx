@@ -31,6 +31,7 @@ import { TodayWidget } from "@/components/dashboard/today-widget";
 import { IdeasTile } from "@/components/dashboard/ideas-tile";
 import { WhatsNewTile } from "@/components/dashboard/whats-new-tile";
 import { AgentActivityTile } from "@/components/dashboard/agent-activity-tile";
+import { NeedsYouTile } from "@/components/dashboard/needs-you-tile";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
@@ -146,6 +147,8 @@ export default function DashboardPage() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-6 p-6">
           <GreetingBar greeting={greeting} name={firstName} slug={slug} />
+
+          <NeedsYouTile slug={slug} />
 
           <TodayWidget slug={slug} workspaceKey={workspaceKey} />
 

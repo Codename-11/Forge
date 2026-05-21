@@ -132,6 +132,75 @@ export const agentRouter = router({
     ),
 
   /**
+   * Crews this agent belongs to + what it's actively working on right
+   * now — powers the "Crews & live work" section on the agent detail
+   * page. Mirrors the per-member computation in `agentCrew.detail`, but
+   * scoped to a single agent (and not limited to one crew's plans):
+   *
+   *   - `crews`: every (non-archived) crew the agent is a member of,
+   *     with the membership role.
+   *   - `activeSteps`: execution steps assigned to this agent that are
+   *     RUNNING or REVIEW, newest first, each with its plan + goalId so
+   *     the client can deep-link to the goal (or plan as a fallback).
+   *
+   * Tenant-scoped on `workspaceId`. Agent ids may be non-cuid hex
+   * strings, so the input uses the shared `agentIdSchema`.
+   */
+  crewsAndWork: workspaceProcedure
+    .input(z.object({ id: agentId }))
+    .query(async ({ ctx, input }) => {
+      const agent = await ctx.db.agent.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const [memberships, activeSteps] = await Promise.all([
+        ctx.db.agentCrewMember.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            agentId: agent.id,
+            crew: { archivedAt: null },
+          },
+          orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+          select: {
+            id: true,
+            role: true,
+            crew: { select: { id: true, name: true } },
+          },
+        }),
+        ctx.db.executionStep.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            assignedAgentId: agent.id,
+            status: { in: ["RUNNING", "REVIEW"] },
+          },
+          orderBy: { updatedAt: "desc" },
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            plan: { select: { id: true, title: true, goalId: true } },
+          },
+        }),
+      ]);
+
+      return {
+        crews: memberships.map((m) => ({
+          crewId: m.crew.id,
+          crewName: m.crew.name,
+          role: m.role,
+        })),
+        activeSteps: activeSteps.map((s) => ({
+          stepId: s.id,
+          title: s.title,
+          status: s.status,
+          plan: s.plan,
+        })),
+      };
+    }),
+
+  /**
    * Narrow "card-shape" summary used by the `@profileKey` hover preview.
    *
    * Looks up an agent by either `id` or `profileKey` (the chip in

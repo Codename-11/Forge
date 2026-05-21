@@ -1,8 +1,10 @@
 "use client";
+import Link from "next/link";
 import type { AgentStatus } from "@prisma/client";
-import { Users } from "lucide-react";
+import { ArrowUpRight, Users } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 
 /**
@@ -61,8 +63,10 @@ export function CrewRosterPanel({
   activeByAgent?: ActiveStepByAgent;
   className?: string;
 }) {
+  const ws = useMaybeWorkspace();
   if (!crew) return null;
   const members = crew.members ?? [];
+  const crewHref = ws ? `/w/${ws.slug}/crews/${crew.id}` : null;
 
   return (
     <div
@@ -76,9 +80,19 @@ export function CrewRosterPanel({
           <Users className="h-3 w-3" />
           <span>Crew</span>
         </div>
-        <span className="truncate text-meta font-medium text-foreground">
-          {crew.name}
-        </span>
+        {crewHref ? (
+          <Link
+            href={crewHref}
+            className="group inline-flex items-center gap-0.5 truncate text-meta font-medium text-foreground hover:text-ember"
+          >
+            <span className="truncate">{crew.name}</span>
+            <ArrowUpRight className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+          </Link>
+        ) : (
+          <span className="truncate text-meta font-medium text-foreground">
+            {crew.name}
+          </span>
+        )}
       </div>
 
       {members.length === 0 ? (

@@ -15,6 +15,15 @@ const workspace: NotificationWorkspaceContext = {
   key: "AXI",
 };
 
+/** Assert the mapper produced metadata (alertable issue kinds always do). */
+function mustMap(
+  input: EventNotificationInput,
+): NonNullable<ReturnType<typeof mapAlertableActivityEventToNotification>> {
+  const out = mapAlertableActivityEventToNotification(input);
+  if (!out) throw new Error("expected notification metadata, got null");
+  return out;
+}
+
 const victor: NotificationAgentReference = {
   id: "ag_db_victor",
   name: "Victor",
@@ -31,7 +40,7 @@ const issue: NotificationIssueReference = {
 
 describe("event notification mapping", () => {
   it("maps AGENT_NOACK to issue and profileKey agent links", () => {
-    const out = mapAlertableActivityEventToNotification({
+    const out = mustMap({
       workspace,
       issue,
       agent: victor,
@@ -60,7 +69,7 @@ describe("event notification mapping", () => {
   });
 
   it("maps ISSUE_SLA_BREACH with overdue minutes", () => {
-    const out = mapAlertableActivityEventToNotification({
+    const out = mustMap({
       workspace,
       issue,
       event: {
@@ -87,7 +96,7 @@ describe("event notification mapping", () => {
   });
 
   it("maps ISSUE_STALLED with an assigned agent", () => {
-    const out = mapAlertableActivityEventToNotification({
+    const out = mustMap({
       workspace,
       issue,
       event: {
@@ -138,7 +147,7 @@ describe("event notification mapping", () => {
       agent: null,
     };
 
-    const out = mapAlertableActivityEventToNotification(input);
+    const out = mustMap(input);
 
     expect(out.summary).toBe("Missed wake for an issue");
     expect(out.reason).toBe("The assigned agent did not acknowledge an issue within 45s.");
@@ -147,7 +156,7 @@ describe("event notification mapping", () => {
   });
 
   it("returns one action link when detail points at the same destination", () => {
-    const out = mapAlertableActivityEventToNotification({
+    const out = mustMap({
       workspace,
       event: {
         id: "evt_workspace_fallback",
@@ -171,7 +180,7 @@ describe("event notification mapping", () => {
   });
 
   it("builds agent URLs from profileKey instead of database id", () => {
-    const out = mapAlertableActivityEventToNotification({
+    const out = mustMap({
       workspace,
       issue,
       agent: victor,
@@ -200,5 +209,72 @@ describe("event notification mapping", () => {
     });
 
     expect(out).toBeNull();
+  });
+
+  it("alerts on an achieved goal and links to the goal", () => {
+    const out = mustMap({
+      workspace,
+      event: {
+        kind: "GOAL_STATUS_CHANGED",
+        subjectType: "goal",
+        subjectId: "goal_1",
+        payload: { from: "ACTIVE", to: "ACHIEVED" },
+      },
+    });
+    expect(out.severity).toBe("SUCCESS");
+    expect(out.primaryHref).toBe("/w/axiom/goals/goal_1");
+  });
+
+  it("stays quiet on routine goal status churn", () => {
+    const out = mapAlertableActivityEventToNotification({
+      workspace,
+      event: {
+        kind: "GOAL_STATUS_CHANGED",
+        subjectType: "goal",
+        subjectId: "goal_1",
+        payload: { from: "OPEN", to: "PLANNING" },
+      },
+    });
+    expect(out).toBeNull();
+  });
+
+  it("alerts when a plan exceeds budget and links to the plan", () => {
+    const out = mustMap({
+      workspace,
+      event: {
+        kind: "PLAN_BUDGET_EXCEEDED",
+        subjectType: "execution-plan",
+        subjectId: "plan_9",
+        payload: { reason: "cost cap $5.00 exceeded" },
+      },
+    });
+    expect(out.severity).toBe("WARNING");
+    expect(out.primaryHref).toBe("/w/axiom/plans/plan_9");
+    expect(out.reason).toContain("cost cap");
+  });
+
+  it("alerts only on a BLOCKED step verdict, linking to its plan", () => {
+    const blocked = mustMap({
+      workspace,
+      event: {
+        kind: "EXECUTION_STEP_JUDGED",
+        subjectType: "execution-step",
+        subjectId: "step_3",
+        payload: { planId: "plan_9", outcome: "BLOCKED", feedback: "tests still failing" },
+      },
+    });
+    expect(blocked.severity).toBe("ERROR");
+    expect(blocked.primaryHref).toBe("/w/axiom/plans/plan_9");
+
+    const passed = mapAlertableActivityEventToNotification({
+      workspace,
+      event: {
+        kind: "EXECUTION_STEP_JUDGED",
+        subjectType: "execution-step",
+        subjectId: "step_3",
+        payload: { planId: "plan_9", outcome: "DONE" },
+      },
+    });
+    expect(passed).toBeNull();
   });
 });

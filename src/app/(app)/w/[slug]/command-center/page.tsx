@@ -9,6 +9,7 @@ import {
   FileText,
   Inbox,
   Shield,
+  Target,
   Workflow,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
@@ -82,22 +83,65 @@ export default function CommandCenterPage() {
             </Section>
 
             <Section
+              icon={<Target className="h-3.5 w-3.5" />}
+              title="Live goals"
+              empty="No goals running."
+              count={data.liveGoals.length}
+            >
+              {data.liveGoals.map((row) => (
+                <Link
+                  key={row.id}
+                  href={`/w/${ws.slug}/goals/${row.id}`}
+                  className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium">{row.title}</span>
+                    <span className="shrink-0 rounded bg-subtle px-1 py-0.5 text-[10px] uppercase text-muted-foreground">
+                      {row.status.toLowerCase()}
+                    </span>
+                  </div>
+                  <span className="text-meta text-muted-foreground">
+                    {row.crew ? `${row.crew.name} · ` : ""}
+                    {row._count.plans} plan{row._count.plans === 1 ? "" : "s"}
+                  </span>
+                </Link>
+              ))}
+            </Section>
+
+            <Section
               icon={<Shield className="h-3.5 w-3.5" />}
               title="Review gates"
               empty="No pending gates."
               count={data.reviewGates.length}
             >
-              {data.reviewGates.map((row) => (
-                <div
-                  key={row.id}
-                  className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2"
-                >
-                  <span className="text-sm font-medium">{row.prompt.slice(0, 80)}</span>
-                  <span className="text-meta text-muted-foreground">
-                    {row.targetType} · {row.targetId.slice(0, 12)}…
-                  </span>
-                </div>
-              ))}
+              {data.reviewGates.map((row) => {
+                const href = gateTargetHref(ws.slug, row.targetType, row.targetId);
+                const body = (
+                  <>
+                    <span className="text-sm font-medium">{row.prompt.slice(0, 80)}</span>
+                    <span className="text-meta text-muted-foreground">
+                      {row.targetType.replace(/-/g, " ")}
+                      {href ? "" : ` · ${row.targetId.slice(0, 12)}…`}
+                    </span>
+                  </>
+                );
+                return href ? (
+                  <Link
+                    key={row.id}
+                    href={href}
+                    className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
+                  >
+                    {body}
+                  </Link>
+                ) : (
+                  <div
+                    key={row.id}
+                    className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2"
+                  >
+                    {body}
+                  </div>
+                );
+              })}
             </Section>
 
             <Section
@@ -269,6 +313,29 @@ function Section({
       </div>
     </section>
   );
+}
+
+/**
+ * Resolve a review-gate target to a deep link where it can be acted on.
+ * Returns null for target types we can't route from id alone (e.g. a
+ * bare execution-step, which has no standalone page) — those render as
+ * plain text.
+ */
+function gateTargetHref(
+  slug: string,
+  targetType: string,
+  targetId: string,
+): string | null {
+  switch (targetType) {
+    case "execution-plan":
+      return `/w/${slug}/plans/${targetId}`;
+    case "goal":
+      return `/w/${slug}/goals/${targetId}`;
+    case "issue":
+      return `/w/${slug}/issues/${targetId}`;
+    default:
+      return null;
+  }
 }
 
 function SeverityChip({ severity }: { severity: string }) {
