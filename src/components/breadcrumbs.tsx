@@ -145,7 +145,6 @@ export function Breadcrumbs() {
 
 type SectionId =
   | "dashboard"
-  | "personal"
   | "inbox"
   | "command-center"
   | "chat"
@@ -171,7 +170,6 @@ type SectionId =
 
 const SECTION_LABEL: Record<SectionId, string> = {
   dashboard: "Dashboard",
-  personal: "Personal",
   inbox: "Inbox",
   "command-center": "Command Center",
   chat: "Chat",

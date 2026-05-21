@@ -2,6 +2,35 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — Dashboard tie-together: templates link, Personal dedup, CHANGELOG refresh
+
+Three operator-flagged dashboard fixes. No schema changes.
+
+- **"Browse templates" now opens the templates dialog.** The
+  GreetingBar button linked to `/projects` (bare list), where starter
+  templates only render in the zero-projects empty state — so with
+  projects present, the button led nowhere useful. Now links to
+  `/projects?templates=1`; the projects page grew a `?templates`
+  effect (mirroring the existing `?new` handler) that opens the
+  already-present `StarterTemplates` dialog regardless of project count.
+- **Removed the duplicate "Personal" sidebar item.** It redirected to
+  the user's personal canvas — the same destination as the Dashboard's
+  List/Canvas view toggle, which the operator prefers. Dropped the nav
+  entry (`sidebar-nav.ts`, freed chord `g e`, removed orphaned `Home`
+  icon import) and the breadcrumb `SectionId` / label entries. The
+  `/personal` route stays as a harmless working redirect (still
+  auto-provisions the canvas); the Dashboard toggle uses
+  `user.personalCanvas` and is untouched.
+- **Refreshed the stale What's New.** `CHANGELOG.md`'s latest entry was
+  2026-05-04 (17 days stale). Added dated entries for 05-18 (Chat
+  surface), 05-19 (chat streaming, confirm modals, canvas previews),
+  05-20 (orchestration loop, on-canvas authoring, crews), and 05-21
+  (canvas motion overhaul, issues-page polish). The What's New rail
+  reads this file (mtime-cached), so it picks up automatically.
+
+Validated: `pnpm typecheck` + `eslint` clean; `sidebar-nav` unit test
+7/7 (chord uniqueness intact after the removal).
+
 ## 2026-05-21 — Issues-page polish: agent profile icons, composer discoverability, hover previews, snooze chips, debounced search
 
 Tying together the recent UI/UX work. No schema changes; all client/render.

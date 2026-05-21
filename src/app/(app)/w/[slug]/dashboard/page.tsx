@@ -329,7 +329,7 @@ function GreetingBar({
           <Plus className="h-3.5 w-3.5" />
           New issue
         </Button>
-        <Link href={`/w/${slug}/projects`}>
+        <Link href={`/w/${slug}/projects?templates=1`}>
           <Button variant="outline" size="sm" className="gap-1.5">
             <Rocket className="h-3.5 w-3.5" />
             Browse templates

@@ -11,6 +11,81 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-05-21] — Canvas motion overhaul + issues-page polish
+
+### Added
+
+- **Canvas present mode** — turn frames into slides with eased
+  fit-to-frame, a laser pointer with trail, and arrow / space / Esc /
+  Home / End navigation.
+- **Images on canvas** — paste, drag-drop, or pick a file to drop an
+  image onto the board; backed by the attachment system.
+- **Canvas drawing polish** — diamond shape, hand-drawn "sketch"
+  rendering, five arrowhead styles (either end), fill color, and an
+  adjustable corner radius.
+- **Agent profile icons in comments** — agent replies now show the
+  agent's own avatar instead of a generic bot glyph.
+- **Issue hover previews** — hover an issue title in the list to peek
+  status, priority, project, and assignees.
+- **Snooze indicator** — snoozed issues now show a "Snoozed" chip in
+  the list.
+
+### Changed
+
+- **Smoother canvas camera** — fit / reset / present transitions ease
+  instead of snapping, pan carries inertial momentum, and remote
+  cursors glide to their positions.
+- **Composer discoverability** — the comment and chat composers now
+  advertise @-mentions and `/` commands (placeholder + a persistent
+  hint).
+- **Debounced issues search** — searches settle for 300ms (with an
+  in-input spinner) instead of firing on every keystroke.
+- **Broader canvas undo/redo** — now covers create + delete for every
+  element type, not just moves.
+
+### Removed
+
+- **Duplicate "Personal" sidebar item** — the personal canvas is now
+  reached from the Dashboard's List / Canvas view toggle.
+
+## [2026-05-20] — Orchestration loop, on-canvas authoring, crews
+
+### Added
+
+- **Goals → plans → execution** — define a Goal, auto-decompose it into
+  an execution plan, and have steps dispatched, judged, and retried
+  automatically within cost / time budgets.
+- **On-canvas authoring** — create issues and notes directly on a
+  canvas, with smart alignment guides, a floating selection inspector,
+  and sticky-note / comment-pin / stamp primitives.
+- **Agent crews** — group agents into crews with per-member roles.
+
+### Changed
+
+- **Faster nested-frame canvas drags** — the frame drag cascade is now
+  linear in descendants.
+
+## [2026-05-19] — Chat streaming + safer destructive actions
+
+### Added
+
+- **Streaming agent chat replies** — agent responses now stream
+  token-by-token in the chat surface.
+- **Canvas entity hover previews** — hover linked issues / notes on a
+  canvas for a quick summary.
+
+### Changed
+
+- **Confirm modals** guard destructive actions; canvas render
+  performance improvements.
+
+## [2026-05-18] — First-class Chat workspace
+
+### Added
+
+- **Chat surface** — a dedicated per-agent chat workspace with file
+  attachments and rich markdown rendering.
+
 ## [2026-05-04] — Pomodoro, email-ingest, today widget, what's new
 
 ### Added
