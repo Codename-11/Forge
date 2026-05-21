@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Bot } from "lucide-react";
+import { Bot, Plus } from "lucide-react";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { ChatThreadView } from "./chat-thread";
@@ -20,8 +21,18 @@ export function ChatTab({
   const { data: threads } = trpc.chat.threads.useQuery(undefined, { staleTime: 30_000 });
   const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false }, { staleTime: 60_000 });
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  // Null = show the agent's default thread; set = a specific conversation.
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   // Once the user clicks into an agent we stop auto-shuffling under them.
   const userPickedRef = useRef(false);
+  const utils = trpc.useUtils();
+  const createConversation = trpc.chat.createConversation.useMutation({
+    onSuccess: (res) => {
+      void utils.chat.threads.invalidate();
+      setSelectedThreadId(res.thread.id);
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   useEffect(() => {
     if (userPickedRef.current) return;
@@ -78,6 +89,21 @@ export function ChatTab({
     return x.name.localeCompare(y.name);
   });
 
+  // Threads for the selected agent — default first, then most-recent.
+  // Drives the thread strip + the "new chat" affordance. A brand-new
+  // agent has none until ChatThreadView creates its default on mount.
+  const agentThreads = (threads ?? [])
+    .filter((t) => t.agent.id === selectedAgentId)
+    .sort((a, b) => {
+      if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+      const at = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
+      const bt = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
+      return bt - at;
+    });
+  const defaultThreadId =
+    agentThreads.find((t) => t.isDefault)?.id ?? agentThreads[0]?.id ?? null;
+  const activeThreadId = selectedThreadId ?? defaultThreadId;
+
   return (
     <div className="flex h-full">
       {/* Agent rail */}
@@ -96,6 +122,8 @@ export function ChatTab({
               onClick={() => {
                 userPickedRef.current = true;
                 setSelectedAgentId(a.id);
+                // Reset to the agent's default thread when switching agents.
+                setSelectedThreadId(null);
               }}
               className={cn(
                 "group flex w-full items-center gap-1.5 border-b border-border/40 px-2 py-1.5 text-left text-[0.6875rem]",
@@ -131,7 +159,56 @@ export function ChatTab({
       {/* Thread pane */}
       <div className="min-w-0 flex-1">
         {selectedAgentId ? (
-          <ChatThreadView agentId={selectedAgentId} autoFocus={autoFocus} />
+          <div className="flex h-full flex-col">
+            {/* Thread strip: switch between this agent's conversations and
+                start a new one. Backend supports many threads per agent
+                (chat.createConversation) — this surfaces them. */}
+            <div className="flex items-center gap-1 overflow-x-auto border-b border-border/60 bg-card/20 px-2 py-1">
+              {agentThreads.map((t) => {
+                const active = activeThreadId === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      userPickedRef.current = true;
+                      setSelectedThreadId(t.id);
+                    }}
+                    className={cn(
+                      "max-w-[10rem] shrink-0 truncate rounded px-1.5 py-0.5 text-[0.625rem]",
+                      active
+                        ? "bg-ember/15 text-ember"
+                        : "text-muted-foreground hover:bg-subtle/60",
+                    )}
+                    title={t.title ?? (t.isDefault ? "Main thread" : "Conversation")}
+                  >
+                    {t.title || (t.isDefault ? "Main" : "Chat")}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedAgentId && !createConversation.isPending) {
+                    createConversation.mutate({ agentId: selectedAgentId });
+                  }
+                }}
+                disabled={createConversation.isPending}
+                className="ml-auto inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:border-ember/40 hover:text-ember disabled:opacity-50"
+                title="Start a new conversation with this agent"
+              >
+                <Plus className="h-3 w-3" /> New chat
+              </button>
+            </div>
+            <div className="min-h-0 flex-1">
+              <ChatThreadView
+                key={activeThreadId ?? selectedAgentId}
+                agentId={selectedAgentId}
+                threadId={selectedThreadId}
+                autoFocus={autoFocus}
+              />
+            </div>
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center px-4 text-center text-[0.75rem] text-muted-foreground">
             <div>
