@@ -67,14 +67,21 @@ export default function ProjectsPage() {
   }
 
   // Context-aware quick-create hands off to the shared dialog via `?new`.
+  // `?templates=1` (e.g. the dashboard "Browse templates" button) opens
+  // the starter-templates dialog directly, regardless of project count —
+  // templates aren't otherwise reachable once the workspace has projects.
   useEffect(() => {
-    if (searchParams?.has("new")) {
-      setCreateOpen(true);
-      const params = new URLSearchParams(searchParams.toString());
-      params.delete("new");
-      const q = params.toString();
-      router.replace(q ? `${pathname}?${q}` : pathname);
-    }
+    if (!searchParams) return;
+    const wantsNew = searchParams.has("new");
+    const wantsTemplates = searchParams.has("templates");
+    if (!wantsNew && !wantsTemplates) return;
+    if (wantsNew) setCreateOpen(true);
+    if (wantsTemplates) setStarterOpen(true);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("new");
+    params.delete("templates");
+    const q = params.toString();
+    router.replace(q ? `${pathname}?${q}` : pathname);
   }, [searchParams, pathname, router]);
 
   return (
