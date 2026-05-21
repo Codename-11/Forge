@@ -762,6 +762,8 @@ export async function acceptActionRequest(
       assignedUserId: true,
       issueId: true,
       title: true,
+      sourceType: true,
+      sourceId: true,
     },
   });
   if (!request) {
@@ -796,6 +798,25 @@ export async function acceptActionRequest(
       request,
     });
     dispatched = request.kind !== ActionRequestKind.FREE_FORM;
+    // Plan-approval hook: a FREE_FORM request sourced from an
+    // execution-plan activates that plan on Accept (DRAFT/APPROVED →
+    // RUNNING, goal → ACTIVE, root steps dispatched). Runs in the same
+    // transaction as the request flip so accept + activation are atomic.
+    if (
+      request.kind === ActionRequestKind.FREE_FORM &&
+      request.sourceType === "execution-plan" &&
+      request.sourceId
+    ) {
+      const { activatePlan } = await import(
+        "@/server/services/orchestration-service"
+      );
+      await activatePlan(tx, {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        planId: request.sourceId,
+      });
+      dispatched = true;
+    }
     await tx.actionRequest.update({
       where: { id: request.id },
       data: {

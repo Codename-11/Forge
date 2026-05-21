@@ -9,14 +9,20 @@ import {
 import { useParams, useRouter } from "next/navigation";
 import {
   Archive,
+  CheckCircle2,
   ChevronLeft,
+  CornerDownRight,
   LayoutList,
   ListTree,
   Network,
   Plus,
+  RotateCcw,
+  Target,
   Trash2,
+  XCircle,
 } from "lucide-react";
 import { ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
+import type { AgentStatus } from "@prisma/client";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -24,8 +30,12 @@ import { EmptyState, SkeletonList } from "@/components/ui";
 import { Confirm } from "@/components/ui/modal";
 import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
 import { StepComments } from "@/components/plans/step-comments";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { Avatar } from "@/components/ui/avatar";
+import { BudgetMeter } from "@/components/orchestration-ui/budget-meter";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRealtime } from "@/hooks/use-realtime";
 import { cn } from "@/lib/utils";
 
 const PLAN_STATUSES: ExecutionPlanStatus[] = [
@@ -77,6 +87,14 @@ const STEP_STATUS_BAR: Record<ExecutionStepStatus, string> = {
   CANCELED: "bg-muted/40",
 };
 
+type JudgeVerdict = {
+  verdict: "PASS" | "FAIL";
+  feedback?: string | null;
+  score?: number | null;
+  judgedByAgentId?: string | null;
+  judgedAt?: string | null;
+};
+
 type StepRow = {
   id: string;
   title: string;
@@ -87,6 +105,23 @@ type StepRow = {
   assignedAgentId: string | null;
   assignedUserId: string | null;
   dependsOnStepIds: string[];
+  // Orchestration-loop fields (backend agent ships these on the schema;
+  // optional here so the page compiles before the Prisma client
+  // regenerates).
+  retryCount: number;
+  judgeVerdict: JudgeVerdict | null;
+  childPlanId: string | null;
+  lastFeedback: string | null;
+};
+
+/** Lightweight agent presence map keyed by agent id. */
+type AgentLite = {
+  id: string;
+  name: string;
+  profileKey: string;
+  image: string | null;
+  status: AgentStatus;
+  lastHeartbeatAt: string | Date | null;
 };
 
 type ViewMode = "list" | "timeline";
@@ -107,6 +142,33 @@ export default function PlanDetailPage() {
   const utils = trpc.useUtils();
 
   const { data: plan, isLoading } = trpc.executionPlan.get.useQuery({ id: params.planId });
+
+  // Agents — for presence dots + glyphs on assigned steps. Cheap list,
+  // cached; we index by id below.
+  const { data: agentsList } = trpc.agent.list.useQuery(
+    { includeArchived: false },
+    { staleTime: 30_000 },
+  );
+  const agentsById = useMemo(() => {
+    const m = new Map<string, AgentLite>();
+    for (const a of (agentsList ?? []) as unknown as AgentLite[]) {
+      m.set(a.id, a);
+    }
+    return m;
+  }, [agentsList]);
+
+  // Reactivity: invalidate this plan on any orchestration event so the
+  // cockpit stays live — steps flip status, judge verdicts land, the
+  // budget ticks, all without a manual reload. Cheap synchronous
+  // invalidate in the SSE callback (per the hook's contract).
+  useRealtime(
+    () => {
+      utils.executionPlan.get.invalidate({ id: params.planId });
+    },
+    {
+      subjectType: ["execution-plan", "execution-step", "goal", "agent-run"],
+    },
+  );
 
   const update = trpc.executionPlan.update.useMutation({
     onSuccess: () => {
@@ -163,17 +225,31 @@ export default function PlanDetailPage() {
       (plan?.steps ?? [])
         .slice()
         .sort((a, b) => a.position - b.position)
-        .map((s) => ({
-          id: s.id,
-          title: s.title,
-          body: s.body,
-          position: s.position,
-          status: s.status,
-          expectedOutput: s.expectedOutput,
-          assignedAgentId: s.assignedAgentId,
-          assignedUserId: s.assignedUserId,
-          dependsOnStepIds: s.dependsOnStepIds ?? [],
-        })),
+        .map((s) => {
+          // Backend orchestration fields may not be on the typed row
+          // until the Prisma client regenerates — read them loosely.
+          const x = s as unknown as {
+            retryCount?: number;
+            judgeVerdict?: JudgeVerdict | null;
+            childPlanId?: string | null;
+            lastFeedback?: string | null;
+          };
+          return {
+            id: s.id,
+            title: s.title,
+            body: s.body,
+            position: s.position,
+            status: s.status,
+            expectedOutput: s.expectedOutput,
+            assignedAgentId: s.assignedAgentId,
+            assignedUserId: s.assignedUserId,
+            dependsOnStepIds: s.dependsOnStepIds ?? [],
+            retryCount: x.retryCount ?? 0,
+            judgeVerdict: x.judgeVerdict ?? null,
+            childPlanId: x.childPlanId ?? null,
+            lastFeedback: x.lastFeedback ?? null,
+          };
+        }),
     [plan?.steps],
   );
 
@@ -276,6 +352,22 @@ export default function PlanDetailPage() {
   }, [orderedSteps]);
   const total = orderedSteps.length;
 
+  // Orchestration contract reads (loose — these land on the schema via
+  // the backend agent; optional-chained until types regenerate).
+  const planX = plan as unknown as {
+    totalCostUsd?: number | null;
+    maxTotalCostUsd?: number | null;
+    goalId?: string | null;
+    goal?: { id: string; title: string; status: string } | null;
+    autoJudge?: boolean;
+    maxStepRetries?: number | null;
+  } | undefined;
+  const totalCostUsd = planX?.totalCostUsd ?? 0;
+  const maxTotalCostUsd = planX?.maxTotalCostUsd ?? null;
+  const goalId = planX?.goalId ?? planX?.goal?.id ?? null;
+  const goalTitle = planX?.goal?.title ?? null;
+  const hasBudget = maxTotalCostUsd != null || totalCostUsd > 0;
+
   // Optional canvas integration (Agent D delivers `canvas.createFromPlan`).
   // If the procedure isn't on the trpc proxy at runtime, we degrade
   // gracefully to a disabled button with a tooltip.
@@ -373,6 +465,32 @@ export default function PlanDetailPage() {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[1fr_280px]">
         <section className="flex min-w-0 flex-col gap-4">
+          {plan.status === ExecutionPlanStatus.DRAFT ? (
+            <PlanApprovalBanner
+              planId={plan.id}
+              issueNumber={plan.issue?.number ?? null}
+              workspaceSlug={ws.slug}
+              workspaceKey={ws.key}
+              onApproved={() => {
+                utils.executionPlan.get.invalidate({ id: plan.id });
+                utils.executionPlan.list.invalidate();
+              }}
+            />
+          ) : null}
+
+          {goalId ? (
+            <a
+              href={`/w/${ws.slug}/goals/${goalId}`}
+              className="group inline-flex items-center gap-1.5 self-start rounded-md border border-border bg-card/40 px-2.5 py-1 text-meta text-muted-foreground transition hover:border-ember/40 hover:text-foreground"
+            >
+              <Target className="h-3 w-3 text-ember" />
+              <span className="uppercase tracking-wide">Goal ·</span>
+              <span className="truncate group-hover:text-ember">
+                {goalTitle ?? "view goal"}
+              </span>
+            </a>
+          ) : null}
+
           <header className="rounded-lg border border-border bg-card/40 p-4">
             <input
               value={headTitle}
@@ -474,6 +592,9 @@ export default function PlanDetailPage() {
           {view === "list" ? (
             <StepsList
               steps={orderedSteps}
+              positionById={positionById}
+              agentsById={agentsById}
+              workspaceSlug={ws.slug}
               runningStepId={runningStep?.id ?? null}
               runningRef={runningRef}
               onTransitionStep={(id, status) => updateStep.mutate({ id, status })}
@@ -484,6 +605,8 @@ export default function PlanDetailPage() {
             <TimelineView
               steps={orderedSteps}
               positionById={positionById}
+              agentsById={agentsById}
+              workspaceSlug={ws.slug}
               runningStepId={runningStep?.id ?? null}
               runningRef={runningRef}
               onTransitionStep={(id, status) => updateStep.mutate({ id, status })}
@@ -521,6 +644,12 @@ export default function PlanDetailPage() {
               ))}
             </select>
           </div>
+
+          {hasBudget ? (
+            <div className="rounded-lg border border-border bg-card/40 p-3">
+              <BudgetMeter spent={totalCostUsd} cap={maxTotalCostUsd} />
+            </div>
+          ) : null}
 
           <div className="rounded-lg border border-border bg-card/40 p-3 text-meta">
             <div className="mb-2 uppercase tracking-wide text-muted-foreground">Links</div>
@@ -647,6 +776,88 @@ export default function PlanDetailPage() {
   );
 }
 
+/**
+ * "Pending your approval" banner for DRAFT plans. When a PLANNER agent
+ * finishes decomposition the backend opens an ActionRequest
+ * (`sourceType="execution-plan"`, titled "Approve N-step plan") that
+ * renders as an `<ActionRequestCard>` on the source issue's comment
+ * thread — Accepting it transitions the plan to RUNNING.
+ *
+ * There's no `actionRequest.forPlan` lookup yet (the existing card is
+ * keyed by commentId), so this banner does two robust things:
+ *   1. Deep-links to the source issue where the real Accept/Decline
+ *      card lives (when the plan is issue-linked).
+ *   2. Offers a direct "Approve" that flips the plan to APPROVED via the
+ *      already-shipped `executionPlan.update` — a manual fast-path for
+ *      operators who don't want to hunt for the card.
+ *
+ * NOTE for merge: if the backend later ships `actionRequest.forPlan`
+ * (or embeds the open approval request on `executionPlan.get`), swap
+ * the direct-approve button for an inline `<ActionRequestCard>` so the
+ * dispatch (RUNNING transition + crew kickoff) runs through the proper
+ * accept path.
+ */
+function PlanApprovalBanner({
+  planId,
+  issueNumber,
+  workspaceSlug,
+  workspaceKey,
+  onApproved,
+}: {
+  planId: string;
+  issueNumber: number | null;
+  workspaceSlug: string;
+  workspaceKey: string;
+  onApproved: () => void;
+}) {
+  const approve = trpc.executionPlan.update.useMutation({
+    onSuccess: () => {
+      toast.success("Plan approved");
+      onApproved();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  return (
+    <div
+      role="alert"
+      className="flex flex-col gap-2 rounded-lg border-l-2 border-y border-r border-l-ember border-y-border border-r-border bg-ember/[0.05] p-3 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2"
+    >
+      <div className="flex items-center gap-2">
+        <CheckCircle2 className="h-4 w-4 shrink-0 text-ember" />
+        <span className="text-sm font-medium">Pending your approval</span>
+      </div>
+      <p className="text-meta text-muted-foreground">
+        A planner finished decomposing this goal into steps. Approve to
+        let the crew start executing.
+        {issueNumber != null
+          ? " The full Accept / Decline recommendation lives on the source issue."
+          : ""}
+      </p>
+      <div className="flex flex-wrap gap-2 pt-0.5">
+        <Button
+          size="sm"
+          variant="ember"
+          disabled={approve.isPending}
+          onClick={() =>
+            approve.mutate({ id: planId, status: ExecutionPlanStatus.APPROVED })
+          }
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" /> Approve plan
+        </Button>
+        {issueNumber != null ? (
+          <a
+            href={`/w/${workspaceSlug}/i/${workspaceKey}-${issueNumber}`}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-meta text-muted-foreground transition hover:text-foreground"
+          >
+            Review on issue
+          </a>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function SaveIndicator({ pending }: { pending: boolean }) {
   return (
     <span
@@ -713,6 +924,9 @@ function ProgressBar({
 
 function StepsList({
   steps,
+  positionById,
+  agentsById,
+  workspaceSlug,
   runningStepId,
   runningRef,
   onTransitionStep,
@@ -720,6 +934,9 @@ function StepsList({
   onRemoveStep,
 }: {
   steps: StepRow[];
+  positionById: Map<string, number>;
+  agentsById: Map<string, AgentLite>;
+  workspaceSlug: string;
   runningStepId: string | null;
   runningRef: React.RefObject<HTMLDivElement | null>;
   onTransitionStep: (id: string, status: ExecutionStepStatus) => void;
@@ -743,6 +960,9 @@ function StepsList({
           <StepCard
             step={step}
             index={idx}
+            agent={step.assignedAgentId ? agentsById.get(step.assignedAgentId) ?? null : null}
+            depsLabel={dependencyLabel(step, positionById)}
+            workspaceSlug={workspaceSlug}
             running={step.id === runningStepId}
             attachRef={step.id === runningStepId ? runningRef : undefined}
             onTransition={(status) => onTransitionStep(step.id, status)}
@@ -758,6 +978,9 @@ function StepsList({
 function StepCard({
   step,
   index,
+  agent,
+  depsLabel,
+  workspaceSlug,
   running,
   attachRef,
   onTransition,
@@ -766,6 +989,9 @@ function StepCard({
 }: {
   step: StepRow;
   index: number;
+  agent: AgentLite | null;
+  depsLabel: string | null;
+  workspaceSlug: string;
   running: boolean;
   attachRef?: React.RefObject<HTMLDivElement | null>;
   onTransition: (status: ExecutionStepStatus) => void;
@@ -836,15 +1062,27 @@ function StepCard({
   return (
     <div
       ref={attachRef}
+      data-status={step.status}
       className={cn(
-        "flex flex-col gap-2 rounded-lg border bg-card/40 p-3 transition-all duration-300",
+        "flex flex-col gap-2 rounded-lg border bg-card/40 p-3 transition-all duration-300 motion-safe:animate-in motion-safe:fade-in",
         running
           ? "border-ember/40 ring-1 ring-ember/30 shadow-sm"
-          : "border-border",
+          : step.status === ExecutionStepStatus.BLOCKED
+            ? "border-warning/40"
+            : step.judgeVerdict?.verdict === "FAIL"
+              ? "border-danger/40"
+              : "border-border",
       )}
     >
       <div className="flex items-start gap-2">
-        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-subtle text-[10px] font-mono text-muted-foreground">
+        <span
+          className={cn(
+            "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-mono transition-colors",
+            running
+              ? "bg-ember/15 text-ember motion-safe:animate-pulse"
+              : "bg-subtle text-muted-foreground",
+          )}
+        >
           {index + 1}
         </span>
         <div className="min-w-0 flex-1">
@@ -859,6 +1097,18 @@ function StepCard({
             className="w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium leading-snug outline-none transition-colors hover:border-border focus:border-border focus:bg-card/40"
             aria-label={`Step ${index + 1} title`}
           />
+
+          <StepMetaStrip
+            agent={agent}
+            depsLabel={depsLabel}
+            retryCount={step.retryCount}
+            childPlanId={step.childPlanId}
+            workspaceSlug={workspaceSlug}
+          />
+
+          {step.judgeVerdict ? (
+            <JudgeVerdictBlock verdict={step.judgeVerdict} agentName={agent?.name ?? null} />
+          ) : null}
           {editingField === "body" ? (
             <textarea
               autoFocus
@@ -990,15 +1240,159 @@ function FieldSaveTick({ pending }: { pending: boolean }) {
   );
 }
 
+/**
+ * Compact meta strip under a step's title: assigned-agent glyph +
+ * presence dot, dependency chips, retry-count badge, and a sub-plan
+ * deep-link when the step spawned a child plan. Renders nothing when the
+ * step carries none of these — keeps quiet steps clean.
+ */
+function StepMetaStrip({
+  agent,
+  depsLabel,
+  retryCount,
+  childPlanId,
+  workspaceSlug,
+}: {
+  agent: AgentLite | null;
+  depsLabel: string | null;
+  retryCount: number;
+  childPlanId: string | null;
+  workspaceSlug: string;
+}) {
+  const hasAny = agent || depsLabel || retryCount > 0 || childPlanId;
+  if (!hasAny) return null;
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-meta text-muted-foreground">
+      {agent ? (
+        <span
+          className="inline-flex items-center gap-1"
+          title={`Assigned to @${agent.profileKey}`}
+        >
+          <span className="relative inline-flex items-center">
+            <Avatar name={agent.name} image={agent.image} size={16} />
+            <AgentPresenceDot
+              status={agent.status}
+              lastHeartbeatAt={agent.lastHeartbeatAt}
+              className="absolute -bottom-0.5 -right-0.5 ring-1 ring-card"
+            />
+          </span>
+          <span className="font-mono text-id">@{agent.profileKey}</span>
+        </span>
+      ) : null}
+      {depsLabel ? (
+        <span
+          className="inline-flex items-center gap-1 rounded bg-subtle px-1.5 py-0.5"
+          title={`Runs after step(s) ${depsLabel}`}
+        >
+          after {depsLabel}
+        </span>
+      ) : null}
+      {retryCount > 0 ? (
+        <span
+          className="inline-flex items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 text-warning"
+          title={`Retried ${retryCount} time${retryCount === 1 ? "" : "s"}`}
+        >
+          <RotateCcw className="h-2.5 w-2.5" />
+          {retryCount}
+        </span>
+      ) : null}
+      {childPlanId ? (
+        <a
+          href={`/w/${workspaceSlug}/plans/${childPlanId}`}
+          className="inline-flex items-center gap-1 rounded bg-ember/10 px-1.5 py-0.5 text-ember hover:bg-ember/20"
+          title="Open the sub-plan this step spawned"
+        >
+          <CornerDownRight className="h-2.5 w-2.5" />
+          sub-plan
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Inline judge verdict. PASS reads quiet (it's the expected happy path);
+ * FAIL is prominent — it's why a step is retrying — with the feedback
+ * expandable so the operator can read why the judge rejected the work.
+ */
+function JudgeVerdictBlock({
+  verdict,
+  agentName,
+}: {
+  verdict: JudgeVerdict;
+  agentName: string | null;
+}) {
+  const fail = verdict.verdict === "FAIL";
+  const [expanded, setExpanded] = useState(fail);
+  const feedback = verdict.feedback?.trim();
+
+  return (
+    <div
+      className={cn(
+        "mt-1.5 rounded-md border px-2 py-1.5 text-meta transition-colors motion-safe:animate-in motion-safe:fade-in",
+        fail
+          ? "border-danger/40 bg-danger/[0.05]"
+          : "border-emerald-600/30 bg-emerald-500/[0.05]",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => feedback && setExpanded((v) => !v)}
+        className="flex w-full items-center gap-1.5 text-left"
+        aria-expanded={feedback ? expanded : undefined}
+      >
+        {fail ? (
+          <XCircle className="h-3 w-3 shrink-0 text-danger" />
+        ) : (
+          <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        )}
+        <span
+          className={cn(
+            "font-medium uppercase tracking-wide",
+            fail ? "text-danger" : "text-emerald-700 dark:text-emerald-300",
+          )}
+        >
+          Judge · {verdict.verdict.toLowerCase()}
+        </span>
+        {typeof verdict.score === "number" ? (
+          <span className="font-mono text-muted-foreground">
+            {Math.round(verdict.score * 100) / 100}
+          </span>
+        ) : null}
+        {agentName ? (
+          <span className="text-muted-foreground">· {agentName}</span>
+        ) : null}
+        {feedback && !expanded ? (
+          <span className="ml-auto text-muted-foreground/70">show feedback</span>
+        ) : null}
+      </button>
+      {feedback && expanded ? (
+        <p
+          className={cn(
+            "mt-1 whitespace-pre-wrap break-words",
+            fail ? "text-foreground/90" : "text-muted-foreground",
+          )}
+        >
+          {feedback}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function TimelineView({
   steps,
   positionById,
+  agentsById,
+  workspaceSlug,
   runningStepId,
   runningRef,
   onTransitionStep,
 }: {
   steps: StepRow[];
   positionById: Map<string, number>;
+  agentsById: Map<string, AgentLite>;
+  workspaceSlug: string;
   runningStepId: string | null;
   runningRef: React.RefObject<HTMLDivElement | null>;
   onTransitionStep: (id: string, status: ExecutionStepStatus) => void;
@@ -1019,6 +1413,8 @@ function TimelineView({
           <TimelineRow
             key={step.id}
             step={step}
+            agent={step.assignedAgentId ? agentsById.get(step.assignedAgentId) ?? null : null}
+            workspaceSlug={workspaceSlug}
             isRunning={isRunning}
             isLast={!next}
             attachRef={isRunning ? runningRef : undefined}
@@ -1043,6 +1439,8 @@ function dependencyLabel(step: StepRow, positionById: Map<string, number>): stri
 
 function TimelineRow({
   step,
+  agent,
+  workspaceSlug,
   isRunning,
   isLast,
   attachRef,
@@ -1050,6 +1448,8 @@ function TimelineRow({
   onTransition,
 }: {
   step: StepRow;
+  agent: AgentLite | null;
+  workspaceSlug: string;
   isRunning: boolean;
   isLast: boolean;
   attachRef?: React.RefObject<HTMLDivElement | null>;
@@ -1090,19 +1490,23 @@ function TimelineRow({
         )}
       >
         <div className="flex items-start gap-2">
-          <button
-            type="button"
-            onClick={onToggle}
-            className="flex min-w-0 flex-1 flex-col items-start text-left"
-            aria-expanded={expanded}
-          >
-            <p className="break-words text-sm font-medium leading-snug">{step.title}</p>
-            {depsLabel ? (
-              <p className="mt-0.5 text-meta text-muted-foreground">
-                ↳ depends on {depsLabel}
-              </p>
-            ) : null}
-          </button>
+          <div className="flex min-w-0 flex-1 flex-col items-start">
+            <button
+              type="button"
+              onClick={onToggle}
+              className="w-full text-left"
+              aria-expanded={expanded}
+            >
+              <p className="break-words text-sm font-medium leading-snug">{step.title}</p>
+            </button>
+            <StepMetaStrip
+              agent={agent}
+              depsLabel={depsLabel}
+              retryCount={step.retryCount}
+              childPlanId={step.childPlanId}
+              workspaceSlug={workspaceSlug}
+            />
+          </div>
           <select
             value={step.status}
             onChange={(e) => onTransition(e.target.value as ExecutionStepStatus)}
@@ -1118,6 +1522,9 @@ function TimelineRow({
             ))}
           </select>
         </div>
+        {step.judgeVerdict ? (
+          <JudgeVerdictBlock verdict={step.judgeVerdict} agentName={agent?.name ?? null} />
+        ) : null}
         {expanded ? (
           <div className="mt-2 flex flex-col gap-2 border-t border-border/50 pt-2">
             {step.body?.trim() ? (

@@ -2,6 +2,45 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-20 — Orchestration loop (Goal → decompose → judge → retry)
+
+Migration `0051_orchestration_loop` (authored manually + `migrate
+resolve --applied` because `migrate dev` wanted a full reset over
+unrelated pre-existing drift in 0012/0050; the SQL itself applied
+cleanly via psql).
+
+- **Schema**: new `Goal` model + `GoalStatus` enum
+  (OPEN/PLANNING/ACTIVE/ACHIEVED/ABANDONED). `ExecutionPlan` gains
+  `goalId`, `maxStepRetries`(2), `maxTotalCostUsd`, `maxWallTimeMinutes`,
+  `totalCostUsd`, `isActiveAttempt`, `autoJudge`(true). `ExecutionStep`
+  gains `judgeVerdict` Json, `retryCount`, `lastFeedback`, `childPlanId`.
+  5 new `EventKind` values (GOAL_CREATED, GOAL_STATUS_CHANGED,
+  EXECUTION_STEP_READY, EXECUTION_STEP_JUDGED, PLAN_BUDGET_EXCEEDED).
+  No new `ExecutionStepStatus` values — reused the existing enum.
+- **`orchestration-service.ts`** (new): goal CRUD, `decomposeGoal`
+  (DRAFT plan + planner dispatch), `addStepsToPlan` (index-based deps),
+  `cascadeReadiness` (TODO→READY when deps DONE + worker dispatch),
+  `dispatchJudge` / `recordVerdict` (PASS→DONE+cascade / FAIL→retry or
+  BLOCKED+gate), `maybeAutoJudge`, `requestPlanApproval` / `activatePlan`,
+  `applyRunCostToPlan` + `checkAndBlockBudget` (budget watchdog).
+- Step dispatch reuses the per-agent `agent:dispatch:{id}` webhook shim
+  (worker resolves it for any subject type), so execution-step events
+  fan out without needing an issue.
+- **Wiring**: `updateExecutionStep` now cascades on DONE + auto-judges on
+  REVIEW; `acceptActionRequest` activates a plan when
+  `sourceType==="execution-plan"`; `runs.recordUsage` folds cost deltas
+  into plan/goal totals + trips the budget watchdog.
+- **MCP**: goals.{list,get,create,abandon}, plans.{decompose,addSteps,
+  requestApproval,activate,judge,recordVerdict}, agentCrews.{create,
+  update,addMember,removeMember,setMemberRole,archive}. tRPC `goal`
+  router mirrors goals + decompose + requestApproval.
+- **Tests**: `orchestration.test.ts` (10) + an MCP-registry orchestration
+  test. Full suite: 571 pass / 1 pre-existing unrelated fail
+  (`slash-templates` — a parallel UI agent's uncommitted `/goal`
+  template not yet reflected in its own test).
+- **Docs**: new `docs/concepts/orchestration.md`; `docs/reference/mcp.md`
+  + `events.md` updated.
+
 ## 2026-05-20 — Canvas Polish Wave 1
 
 Plan: `docs/plans/canvas-polish-wave.md`. Goal: stop the canvas feeling

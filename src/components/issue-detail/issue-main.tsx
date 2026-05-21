@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Activity, Bot, MessageCircleReply } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
@@ -41,6 +42,7 @@ import {
 import { MentionInput } from "@/components/inputs/mention-input";
 import { Kbd } from "@/components/ui/kbd";
 import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
 /**
  * Main column of the issue detail page — description (inline-editable)
@@ -456,6 +458,41 @@ function Comments({
     onError: (e) => toast.error(`Unblock request: ${e.message}`),
   });
 
+  // `/goal` template side-effect → `goal.create({ title, issueId })`.
+  // The `goal` router is shipped by the orchestration backend agent in
+  // parallel; until its types are regenerated it isn't on the typed
+  // tRPC proxy, so we reach it through a guarded `any` cast (same
+  // degrade-gracefully pattern the plan page uses for `canvas.*`). If
+  // the procedure isn't present at runtime we toast a hint instead of
+  // crashing the comment flow.
+  const router = useRouter();
+  const ws = useMaybeWorkspace();
+  const goalRouterAny = (trpc as unknown as Record<string, unknown>).goal as
+    | Record<string, unknown>
+    | undefined;
+  const goalCreateAny = goalRouterAny?.create as
+    | {
+        useMutation: (opts?: unknown) => {
+          mutate: (input: { title: string; issueId?: string }) => void;
+          isPending: boolean;
+        };
+      }
+    | undefined;
+  const createGoalMut = goalCreateAny?.useMutation({
+    onSuccess: (result: { id?: string } | undefined) => {
+      const goalId = result?.id;
+      if (goalId && ws) {
+        toast.success("Goal created — decompose it into a plan.");
+        router.push(`/w/${ws.slug}/goals/${goalId}`);
+      } else {
+        toast.success("Goal created.");
+      }
+    },
+    onError: (e: { message: string }) => toast.error(`Goal: ${e.message}`),
+  }) as
+    | { mutate: (input: { title: string; issueId?: string }) => void; isPending: boolean }
+    | undefined;
+
   const applyCommandsM = trpc.issue.applyCommands.useMutation({
     onSuccess: ({ results }) => {
       const skipped = results.filter((r) => r.status === "skipped");
@@ -496,6 +533,14 @@ function Comments({
               kind: "FREE_FORM",
               issueId,
             });
+          } else if (eff.kind === "goal") {
+            if (createGoalMut) {
+              createGoalMut.mutate({ title: eff.title, issueId });
+            } else {
+              toast.error(
+                "Goal orchestration isn't available yet in this workspace.",
+              );
+            }
           }
         }
         setPendingSideEffects([]);

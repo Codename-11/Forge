@@ -492,6 +492,84 @@ The killer flow: Victor posts "I see three ways — which one?" with
 `kind: FREE_FORM` + `options`; three watchers vote; Victor calls
 `closeVoting`; the winning option drives his next comment.
 
+### `orchestration` (goals / plans / crews)
+
+The multi-agent orchestrator-judge loop. See
+[concepts/orchestration.md](../concepts/orchestration.md) for the full
+sequence diagram. A **Goal** owns `ExecutionPlan` attempts; a PLANNER
+decomposes a goal into steps; an operator approves; WORKERs execute
+step-by-step; a REVIEWER judges with retries + budget caps.
+
+Scope: `READ_ISSUES` for reads, `WRITE_ISSUES` for the loop mutations,
+`ADMIN` for crew CRUD.
+
+#### Goals
+
+| Tool | Summary |
+|---|---|
+| `goals.list` | `{ status?, includeArchived?, limit? }` → goal rows with plan counts. |
+| `goals.get` | `{ id }` → goal + its plans + an `aggregate` block (`activePlanId`, `totalSteps`, `doneSteps`, `blockedSteps`). |
+| `goals.create` | `{ title, description?, issueId?, crewId?, maxTotalCostUsd?, maxWallTimeMinutes? }` → `{ id }`. Emits `GOAL_CREATED`. |
+| `goals.abandon` | `{ id, reason? }` → terminal `ABANDONED`; cancels any active plan attempt. |
+
+```json
+// goals.create
+{ "title": "Ship the importer", "crewId": "crew_…", "maxTotalCostUsd": 5 }
+// → { "id": "goal_…" }
+```
+
+#### Plans (loop)
+
+| Tool | Summary |
+|---|---|
+| `plans.decompose` | `{ goalId, plannerAgentId?, contextSetId? }` → `{ planId, status: "PLANNING", plannerAgentId }`. Creates a DRAFT plan (`isActiveAttempt=true`, prior attempts flipped false), flips goal → PLANNING, dispatches the PLANNER (override > crew PLANNER > caller's agent). |
+| `plans.addSteps` | `{ planId, steps: [{ title, body?, expectedOutput?, verification?, dependsOnStepIndexes?, assignedAgentId?, assignedRole? }] }` → `{ stepIds }`. Bulk-adds to a DRAFT plan; `dependsOnStepIndexes` are 0-based positions within the batch, resolved to real ids. |
+| `plans.requestApproval` | `{ planId, assignedUserId? }` → `{ actionRequestId }`. Raises a FREE_FORM ActionRequest (`sourceType="execution-plan"`). Accepting it activates the plan. |
+| `plans.activate` | `{ planId }` → `{ ok }`. DRAFT/APPROVED → RUNNING, goal → ACTIVE + `startedAt`, root steps cascade READY. Usually fired by accepting the approval ActionRequest. |
+| `plans.judge` | `{ stepId, judgeAgentId? }` → `{ judgeAgentId }`. Dispatches a REVIEWER (override > crew REVIEWER) to evaluate a step in REVIEW. |
+| `plans.recordVerdict` | `{ stepId, verdict: "PASS"\|"FAIL", feedback, score? }` → `{ outcome: "DONE"\|"RETRY"\|"BLOCKED", retryCount }`. PASS → DONE + cascade. FAIL → READY+retry (feedback stored) or BLOCKED + ReviewGate when retries exhausted. Emits `EXECUTION_STEP_JUDGED`. |
+
+```json
+// plans.addSteps  — index-based deps
+{ "planId": "plan_…", "steps": [
+  { "title": "Design schema", "expectedOutput": "schema.sql" },
+  { "title": "Write migration", "dependsOnStepIndexes": [0] }
+] }
+// → { "stepIds": ["step_a", "step_b"] }
+
+// plans.recordVerdict
+{ "stepId": "step_a", "verdict": "PASS", "feedback": "meets the contract", "score": 0.95 }
+// → { "outcome": "DONE", "retryCount": 0 }
+```
+
+`judgeVerdict` (stored on the step) shape:
+`{ verdict, feedback, score?, judgedByAgentId?, judgedAt }`.
+
+#### Plan substrate (existing)
+
+| Tool | Summary |
+|---|---|
+| `executionPlans.list` / `.get` / `.create` / `.transition` | Plan CRUD + status transitions. |
+| `executionPlans.transitionStep` | `{ stepId, status, sourceRunId? }`. Marking a step DONE cascades downstream readiness; marking REVIEW triggers auto-judge when the plan opts in. |
+
+#### Crews
+
+| Tool | Summary |
+|---|---|
+| `agentCrews.list` | Existing read. Crews + member/plan counts. |
+| `agentCrews.create` | `{ name, description?, maxParallel?, members?: [{ agentId, role }] }` → `{ id }`. Roles: `PLANNER`/`WORKER`/`REVIEWER`/`OBSERVER`/`OPERATOR_PROXY`. |
+| `agentCrews.update` | `{ id, name?, description?, maxParallel? }`. |
+| `agentCrews.addMember` | `{ crewId, agentId, role }` → `{ id }`. |
+| `agentCrews.removeMember` | `{ memberId }`. |
+| `agentCrews.setMemberRole` | `{ memberId, role }` → `{ id }`. |
+| `agentCrews.archive` | `{ id }`. Soft-archive. |
+
+#### Review gates
+
+| Tool | Summary |
+|---|---|
+| `reviewGates.list` / `.open` / `.resolve` | Approval checkpoints. The loop auto-opens gates on a step BLOCKED (retries exhausted) and on a plan budget breach. |
+
 ### `notification`
 
 Per-user notification preferences. No row exists by default — every

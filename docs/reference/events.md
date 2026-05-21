@@ -35,6 +35,11 @@ what `subjectType` / `subjectId` it carries, and what the payload contains.
 | `AGENT_NOACK`            | Required-ack window elapsed without ack                                |
 | `ISSUE_SLA_BREACH`       | Per-issue SLA window elapsed                                           |
 | `CHAT_MESSAGE_POSTED`    | Chat message sent (role: USER or AGENT)                                |
+| `GOAL_CREATED`           | Orchestration goal created (`subjectType: "goal"`)                     |
+| `GOAL_STATUS_CHANGED`    | Goal OPEN→PLANNING→ACTIVE→ACHIEVED / ABANDONED (`subjectType: "goal"`)  |
+| `EXECUTION_STEP_READY`   | A plan step became READY and its worker/judge was dispatched           |
+| `EXECUTION_STEP_JUDGED`  | A judge recorded a PASS/FAIL verdict on a step                         |
+| `PLAN_BUDGET_EXCEEDED`   | A RUNNING plan exceeded its cost / wall-time cap and was BLOCKED        |
 
 The `subjectType` / `subjectId` of each event identifies the primary
 entity:
@@ -50,6 +55,14 @@ entity:
 - `MEMBERSHIP_*` → `subjectType: "membership"`.
 - `SKILL_INVOKED` / `PLUGIN_ERROR` → `subjectType: "plugin"`.
 - `CHAT_MESSAGE_POSTED` → two sub-channels; see below.
+- `GOAL_CREATED` / `GOAL_STATUS_CHANGED` → `subjectType: "goal"`,
+  `subjectId: <goalId>`.
+- `EXECUTION_STEP_READY` / `EXECUTION_STEP_JUDGED` →
+  `subjectType: "execution-step"`, `subjectId: <stepId>`. The
+  READY event additionally drives a per-agent webhook dispatch (worker
+  for the normal phase, reviewer when `payload.phase === "judge"`).
+- `PLAN_BUDGET_EXCEEDED` → `subjectType: "execution-plan"`,
+  `subjectId: <planId>`.
 
 ## `CHAT_MESSAGE_POSTED`
 
@@ -253,6 +266,63 @@ early). Ties are broken by earliest first-vote timestamp.
 Emitted when a per-issue SLA elapses without resolution. Distinct from
 `ISSUE_STALLED` — SLA breach is about the *clock since the issue entered
 the queue / hit a status threshold*, not whether anyone is touching it.
+
+### `EXECUTION_STEP_READY.payload`
+
+```json
+{
+  "planId": "plan_…",
+  "stepId": "step_…",
+  "title": "Write the migration",
+  "body": "…",
+  "expectedOutput": "migration.sql applied cleanly",
+  "verification": [ { "label": "pnpm prisma migrate status clean", "done": false } ],
+  "contextSetId": "ctx_…",
+  "assignedAgentId": "agent_…",
+  "lastFeedback": "missing rollback section",
+  "retryCount": 1
+}
+```
+
+When `phase: "judge"` is present, the event is a judge dispatch (carries
+`judgeAgentId` + a judging `prompt`) rather than a worker dispatch.
+
+### `EXECUTION_STEP_JUDGED.payload`
+
+```json
+{
+  "planId": "plan_…",
+  "verdict": "PASS",
+  "feedback": "meets the contract",
+  "score": 0.95,
+  "outcome": "DONE"
+}
+```
+
+`outcome` is `DONE` (PASS), `RETRY` (FAIL, retries remain — step
+re-readied with `lastFeedback`), or `BLOCKED` (FAIL, retries exhausted —
+a ReviewGate is opened on the step).
+
+### `PLAN_BUDGET_EXCEEDED.payload`
+
+```json
+{
+  "totalCostUsd": 6.21,
+  "maxTotalCostUsd": 5.0,
+  "maxWallTimeMinutes": null,
+  "reason": "cost $6.2100 > cap $5.0000"
+}
+```
+
+Emitted when a RUNNING plan's accumulated cost or wall-time crosses its
+cap (via `runs.recordUsage` on a run tied to a plan step). The plan flips
+to `BLOCKED` and a ReviewGate ("approve continuation or abandon") opens.
+
+### `GOAL_STATUS_CHANGED.payload`
+
+```json
+{ "from": "PLANNING", "to": "ACTIVE", "planId": "plan_…" }
+```
 
 ## SSE stream
 

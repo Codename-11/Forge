@@ -33,6 +33,7 @@ import { dispatchRuleRouter } from "./dispatch-rule";
 import { embedRouter } from "./embed";
 import { eventRouter } from "./event";
 import { executionPlanRouter } from "./execution-plan";
+import { goalRouter } from "./goal";
 import { inboxRouter } from "./inbox";
 import { initiativeRouter } from "./initiative";
 import { noteRouter } from "./note";
@@ -69,6 +70,7 @@ export const appRouter = router({
   embed: embedRouter,
   event: eventRouter,
   executionPlan: executionPlanRouter,
+  goal: goalRouter,
   inbox: inboxRouter,
   initiative: initiativeRouter,
   integration: integrationRouter,

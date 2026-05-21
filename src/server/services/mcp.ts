@@ -4755,7 +4755,7 @@ export const mcpTools = {
       }
       const run = await db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
-        select: { id: true, agentId: true },
+        select: { id: true, agentId: true, costUsd: true },
       });
       if (!run) throw new Error("AgentRun not found in this workspace.");
       if (run.agentId !== linkedAgentId) {
@@ -4766,7 +4766,7 @@ export const mcpTools = {
       if (input.tokensOut !== undefined) data.tokensOut = input.tokensOut;
       if (input.tokensCached !== undefined) data.tokensCached = input.tokensCached;
       if (input.costUsd !== undefined) data.costUsd = input.costUsd;
-      return db.agentRun.update({
+      const updated = await db.agentRun.update({
         where: { id: run.id },
         data,
         select: {
@@ -4777,6 +4777,26 @@ export const mcpTools = {
           costUsd: true,
         },
       });
+      // Budget watchdog: when this run finished a plan step, fold the
+      // cost delta into the plan + goal totals and BLOCK + open a gate
+      // if a cap is now breached. recordUsage is replace-not-add for the
+      // AgentRun row, so apply the prev→new delta to plan totals.
+      if (input.costUsd !== undefined) {
+        const prev = run.costUsd ? Number(run.costUsd) : 0;
+        const next = Number(updated.costUsd ?? 0);
+        const delta = next - prev;
+        if (delta !== 0) {
+          const { applyRunCostToPlan } = await import(
+            "@/server/services/orchestration-service"
+          );
+          await applyRunCostToPlan(db, {
+            workspaceId: ctx.workspaceId,
+            runId: run.id,
+            costDelta: delta,
+          });
+        }
+      }
+      return updated;
     },
   },
 
@@ -10902,6 +10922,430 @@ export const mcpTools = {
         orderBy: { journalDate: "desc" },
         take: input.limit,
       });
+    },
+  },
+
+  // ----------------------------------------------------------- Orchestration
+  //
+  // Goal → decompose → approve → dispatch → judge → retry loop. See
+  // docs/concepts/orchestration.md for the full sequence. Goals own
+  // ExecutionPlan attempts; the PLANNER fills a DRAFT plan via
+  // plans.addSteps; an operator approves via the ActionRequest the
+  // planner raises; activation dispatches root steps; workers post output
+  // (step → REVIEW); a REVIEWER judges via plans.recordVerdict.
+
+  "goals.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      status: z.enum(["OPEN", "PLANNING", "ACTIVE", "ACHIEVED", "ABANDONED"]).optional(),
+      includeArchived: z.boolean().default(false),
+      limit: z.number().int().min(1).max(100).default(50),
+    }),
+    async run(
+      input: {
+        status?: "OPEN" | "PLANNING" | "ACTIVE" | "ACHIEVED" | "ABANDONED";
+        includeArchived: boolean;
+        limit: number;
+      },
+      ctx: McpContext,
+    ) {
+      const { listGoals } = await import("@/server/services/orchestration-service");
+      return listGoals(db, {
+        workspaceId: ctx.workspaceId,
+        status: input.status as never,
+        includeArchived: input.includeArchived,
+        limit: input.limit,
+      });
+    },
+  },
+
+  "goals.get": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      const { getGoal } = await import("@/server/services/orchestration-service");
+      return getGoal(db, { workspaceId: ctx.workspaceId, id: input.id });
+    },
+  },
+
+  "goals.create": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      title: z.string().min(1).max(300),
+      description: z.string().max(50_000).nullable().optional(),
+      issueId: z.string().cuid().nullable().optional(),
+      crewId: z.string().cuid().nullable().optional(),
+      maxTotalCostUsd: z.number().nonnegative().nullable().optional(),
+      maxWallTimeMinutes: z.number().int().positive().nullable().optional(),
+    }),
+    async run(
+      input: {
+        title: string;
+        description?: string | null;
+        issueId?: string | null;
+        crewId?: string | null;
+        maxTotalCostUsd?: number | null;
+        maxWallTimeMinutes?: number | null;
+      },
+      ctx: McpContext,
+    ) {
+      const { createGoal } = await import("@/server/services/orchestration-service");
+      return createGoal(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        title: input.title,
+        description: input.description ?? null,
+        issueId: input.issueId ?? null,
+        crewId: input.crewId ?? null,
+        maxTotalCostUsd: input.maxTotalCostUsd ?? null,
+        maxWallTimeMinutes: input.maxWallTimeMinutes ?? null,
+      });
+    },
+  },
+
+  "goals.abandon": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      reason: z.string().max(2_000).nullable().optional(),
+    }),
+    async run(input: { id: string; reason?: string | null }, ctx: McpContext) {
+      const { abandonGoal } = await import("@/server/services/orchestration-service");
+      await abandonGoal(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        id: input.id,
+        reason: input.reason ?? null,
+      });
+      return { ok: true };
+    },
+  },
+
+  "plans.decompose": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      goalId: z.string().cuid(),
+      plannerAgentId: z.string().cuid().nullable().optional(),
+      contextSetId: z.string().cuid().nullable().optional(),
+    }),
+    async run(
+      input: { goalId: string; plannerAgentId?: string | null; contextSetId?: string | null },
+      ctx: McpContext,
+    ) {
+      const { decomposeGoal } = await import("@/server/services/orchestration-service");
+      return decomposeGoal(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        goalId: input.goalId,
+        plannerAgentId: input.plannerAgentId ?? null,
+        contextSetId: input.contextSetId ?? null,
+      });
+    },
+  },
+
+  "plans.addSteps": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      planId: z.string().cuid(),
+      steps: z
+        .array(
+          z.object({
+            title: z.string().min(1).max(300),
+            body: z.string().max(50_000).nullable().optional(),
+            expectedOutput: z.string().max(50_000).nullable().optional(),
+            verification: z
+              .array(
+                z.object({
+                  id: z.string().min(1).optional(),
+                  label: z.string().min(1).max(500),
+                  kind: z.enum(["manual", "command", "artifact"]).optional(),
+                  value: z.string().max(2_000).optional(),
+                  done: z.boolean().optional(),
+                }),
+              )
+              .max(50)
+              .nullable()
+              .optional(),
+            dependsOnStepIndexes: z.array(z.number().int().min(0)).max(50).optional(),
+            assignedAgentId: z.string().cuid().nullable().optional(),
+            assignedRole: z.string().max(40).nullable().optional(),
+          }),
+        )
+        .min(1)
+        .max(100),
+    }),
+    async run(
+      input: {
+        planId: string;
+        steps: Array<{
+          title: string;
+          body?: string | null;
+          expectedOutput?: string | null;
+          verification?: unknown[] | null;
+          dependsOnStepIndexes?: number[];
+          assignedAgentId?: string | null;
+          assignedRole?: string | null;
+        }>;
+      },
+      ctx: McpContext,
+    ) {
+      const { addStepsToPlan } = await import("@/server/services/orchestration-service");
+      return addStepsToPlan(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        planId: input.planId,
+        steps: input.steps.map((s) => ({
+          title: s.title,
+          body: s.body ?? null,
+          expectedOutput: s.expectedOutput ?? null,
+          verification:
+            s.verification === undefined || s.verification === null
+              ? null
+              : (s.verification as Prisma.InputJsonValue),
+          dependsOnStepIndexes: s.dependsOnStepIndexes ?? [],
+          assignedAgentId: s.assignedAgentId ?? null,
+          assignedRole: s.assignedRole ?? null,
+        })),
+      });
+    },
+  },
+
+  "plans.requestApproval": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      planId: z.string().cuid(),
+      assignedUserId: z.string().cuid().nullable().optional(),
+    }),
+    async run(
+      input: { planId: string; assignedUserId?: string | null },
+      ctx: McpContext,
+    ) {
+      const { requestPlanApproval } = await import("@/server/services/orchestration-service");
+      return requestPlanApproval(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        planId: input.planId,
+        assignedUserId: input.assignedUserId ?? null,
+      });
+    },
+  },
+
+  "plans.activate": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({ planId: z.string().cuid() }),
+    async run(input: { planId: string }, ctx: McpContext) {
+      const { activatePlan } = await import("@/server/services/orchestration-service");
+      await db.$transaction((tx) =>
+        activatePlan(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          planId: input.planId,
+        }),
+      );
+      return { ok: true };
+    },
+  },
+
+  "plans.judge": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      stepId: z.string().cuid(),
+      judgeAgentId: z.string().cuid().nullable().optional(),
+    }),
+    async run(input: { stepId: string; judgeAgentId?: string | null }, ctx: McpContext) {
+      const { dispatchJudge } = await import("@/server/services/orchestration-service");
+      return dispatchJudge(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        stepId: input.stepId,
+        judgeAgentId: input.judgeAgentId ?? null,
+      });
+    },
+  },
+
+  "plans.recordVerdict": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      stepId: z.string().cuid(),
+      verdict: z.enum(["PASS", "FAIL"]),
+      feedback: z.string().min(1).max(50_000),
+      score: z.number().min(0).max(1).nullable().optional(),
+    }),
+    async run(
+      input: {
+        stepId: string;
+        verdict: "PASS" | "FAIL";
+        feedback: string;
+        score?: number | null;
+      },
+      ctx: McpContext,
+    ) {
+      const { recordVerdict } = await import("@/server/services/orchestration-service");
+      return recordVerdict(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        stepId: input.stepId,
+        verdict: input.verdict,
+        feedback: input.feedback,
+        score: input.score ?? null,
+      });
+    },
+  },
+
+  // ----------------------------------------------------- AgentCrew CRUD
+  //
+  // Workspace-scoped crew management. `list` already existed; these add
+  // create/update/member-management/archive so a PLANNER (or operator)
+  // can stand up a crew before decomposing a goal.
+
+  "agentCrews.create": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      name: z.string().min(1).max(200),
+      description: z.string().max(2_000).nullable().optional(),
+      maxParallel: z.number().int().min(0).max(20).optional(),
+      members: z
+        .array(
+          z.object({
+            agentId: z.string().cuid(),
+            role: z.enum(["PLANNER", "WORKER", "REVIEWER", "OBSERVER", "OPERATOR_PROXY"]),
+          }),
+        )
+        .max(20)
+        .optional(),
+    }),
+    async run(
+      input: {
+        name: string;
+        description?: string | null;
+        maxParallel?: number;
+        members?: Array<{
+          agentId: string;
+          role: "PLANNER" | "WORKER" | "REVIEWER" | "OBSERVER" | "OPERATOR_PROXY";
+        }>;
+      },
+      ctx: McpContext,
+    ) {
+      const { createAgentCrew } = await import("@/server/services/agent-crew-service");
+      return createAgentCrew(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        name: input.name,
+        description: input.description ?? null,
+        maxParallel: input.maxParallel,
+        members: input.members,
+      });
+    },
+  },
+
+  "agentCrews.update": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      name: z.string().min(1).max(200).optional(),
+      description: z.string().max(2_000).nullable().optional(),
+      maxParallel: z.number().int().min(0).max(20).optional(),
+    }),
+    async run(
+      input: {
+        id: string;
+        name?: string;
+        description?: string | null;
+        maxParallel?: number;
+      },
+      ctx: McpContext,
+    ) {
+      const { updateAgentCrew } = await import("@/server/services/agent-crew-service");
+      await updateAgentCrew(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        crewId: input.id,
+        name: input.name,
+        description: input.description === undefined ? undefined : input.description,
+        maxParallel: input.maxParallel,
+      });
+      return { ok: true };
+    },
+  },
+
+  "agentCrews.addMember": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      crewId: z.string().cuid(),
+      agentId: z.string().cuid(),
+      role: z.enum(["PLANNER", "WORKER", "REVIEWER", "OBSERVER", "OPERATOR_PROXY"]),
+    }),
+    async run(
+      input: {
+        crewId: string;
+        agentId: string;
+        role: "PLANNER" | "WORKER" | "REVIEWER" | "OBSERVER" | "OPERATOR_PROXY";
+      },
+      ctx: McpContext,
+    ) {
+      const { addCrewMember } = await import("@/server/services/agent-crew-service");
+      return addCrewMember(db, {
+        workspaceId: ctx.workspaceId,
+        crewId: input.crewId,
+        agentId: input.agentId,
+        role: input.role,
+        actorId: ctx.userId ?? null,
+      });
+    },
+  },
+
+  "agentCrews.removeMember": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({ memberId: z.string().cuid() }),
+    async run(input: { memberId: string }, ctx: McpContext) {
+      const { removeCrewMember } = await import("@/server/services/agent-crew-service");
+      await removeCrewMember(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        memberId: input.memberId,
+      });
+      return { ok: true };
+    },
+  },
+
+  "agentCrews.setMemberRole": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      memberId: z.string().cuid(),
+      role: z.enum(["PLANNER", "WORKER", "REVIEWER", "OBSERVER", "OPERATOR_PROXY"]),
+    }),
+    async run(
+      input: {
+        memberId: string;
+        role: "PLANNER" | "WORKER" | "REVIEWER" | "OBSERVER" | "OPERATOR_PROXY";
+      },
+      ctx: McpContext,
+    ) {
+      const { setCrewMemberRole } = await import("@/server/services/agent-crew-service");
+      return setCrewMemberRole(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        memberId: input.memberId,
+        role: input.role,
+      });
+    },
+  },
+
+  "agentCrews.archive": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      const { archiveAgentCrew } = await import("@/server/services/agent-crew-service");
+      await archiveAgentCrew(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        crewId: input.id,
+      });
+      return { ok: true };
     },
   },
 } as const;
