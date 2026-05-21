@@ -499,6 +499,8 @@ export function ChatComposer({
   );
 
   const busy = disabled || isPending;
+  const hasMentionables =
+    mentionableAgents.length > 0 || mentionablePeople.length > 0;
 
   const popoverNode = useMemo(() => {
     if (popoverOpen && popoverMatches.length > 0) {
@@ -818,7 +820,38 @@ export function ChatComposer({
           )}
         </button>
       </div>
-      {isPending && <div className="text-meta px-3 pb-1.5 text-muted-foreground">sending…</div>}
+      {isPending ? (
+        <div className="text-meta px-3 pb-1.5 text-muted-foreground">sending…</div>
+      ) : (
+        // Discoverability hint — mirrors the issue composer so @-mentions
+        // and / commands read as available everywhere. Shown only while
+        // the composer is empty so it never competes with typed content,
+        // and each segment is gated to what's actually wired up.
+        !body.trim() &&
+        attachments.length === 0 &&
+        (hasMentionables || !!slashContext) && (
+          <div className="text-meta flex flex-wrap items-center gap-1.5 px-3 pb-1.5 text-muted-foreground/80">
+            {hasMentionables && (
+              <>
+                <span className="font-mono">@</span>
+                <span>mention</span>
+              </>
+            )}
+            {hasMentionables && slashContext && (
+              <span className="text-muted-foreground/40">·</span>
+            )}
+            {slashContext && (
+              <>
+                <span className="font-mono">/</span>
+                <span>commands</span>
+              </>
+            )}
+            <span className="text-muted-foreground/40">·</span>
+            <span className="font-mono">↵</span>
+            <span>send</span>
+          </div>
+        )
+      )}
     </div>
   );
 }
