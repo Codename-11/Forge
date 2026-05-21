@@ -1,7 +1,7 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus, Target } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
@@ -36,6 +36,8 @@ type Filter = "all" | GoalStatus;
 export default function GoalsPage() {
   const ws = useWorkspace();
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const utils = trpc.useUtils();
   const [filter, setFilter] = useState<Filter>("all");
   const goalRouter = useGoalRouter();
@@ -58,6 +60,19 @@ export default function GoalsPage() {
   // the operator assign a crew at creation time via CrewSelector — the
   // crew the loop dispatches steps to.
   const [creating, setCreating] = useState(false);
+
+  // Auto-open the "New goal" modal when navigated with ?new (the
+  // command palette "Create goal" action lands here).
+  useEffect(() => {
+    if (searchParams?.has("new")) {
+      setCreating(true);
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("new");
+      const q = params.toString();
+      router.replace(q ? `${pathname}?${q}` : pathname);
+    }
+  }, [searchParams, pathname, router]);
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [crewId, setCrewId] = useState<string | null>(null);

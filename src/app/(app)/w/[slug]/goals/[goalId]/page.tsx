@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Ban, ChevronLeft, ExternalLink, ListChecks, Target } from "lucide-react";
 import { toast } from "sonner";
@@ -176,6 +177,16 @@ export default function GoalDetailPage() {
                 {goal.status.toLowerCase()}
               </span>
             </div>
+            {goal.issue ? (
+              <Link
+                href={`/w/${ws.slug}/issues/${goal.issue.id}`}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-card/40 px-2 py-1 text-meta text-muted-foreground transition hover:border-ember/40 hover:text-ember"
+              >
+                <ListChecks className="h-3 w-3" />
+                From issue {ws.key}-{goal.issue.number}
+                <span className="truncate">· {goal.issue.title}</span>
+              </Link>
+            ) : null}
             {goal.description ? (
               <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
                 {goal.description}

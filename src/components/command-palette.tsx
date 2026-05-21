@@ -11,6 +11,8 @@ import {
   CalendarRange,
   Bot,
   Settings,
+  UsersRound,
+  ListChecks,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog } from "@/components/ui/dialog";
@@ -175,6 +177,42 @@ export function CommandPalette() {
             run: () => router.push(wsPath("/initiatives")),
           },
           {
+            id: "act:new-goal",
+            label: "Create goal",
+            Icon: Target,
+            run: () => {
+              setOpen(false);
+              router.push(wsPath("/goals?new"));
+            },
+          },
+          {
+            id: "act:new-crew",
+            label: "Create crew",
+            Icon: UsersRound,
+            run: () => {
+              setOpen(false);
+              router.push(wsPath("/crews?new"));
+            },
+          },
+          {
+            id: "act:go-goals",
+            label: "Go to Goals",
+            Icon: Target,
+            run: () => router.push(wsPath("/goals")),
+          },
+          {
+            id: "act:go-crews",
+            label: "Go to Crews",
+            Icon: UsersRound,
+            run: () => router.push(wsPath("/crews")),
+          },
+          {
+            id: "act:go-plans",
+            label: "Go to Plans",
+            Icon: ListChecks,
+            run: () => router.push(wsPath("/plans")),
+          },
+          {
             id: "act:go-cycles",
             label: "Go to Sprints",
             Icon: CalendarRange,
@@ -235,6 +273,15 @@ export function CommandPalette() {
         return;
       case "agent":
         router.push(`/w/${workspaceSlug}/agents/${data.profileKey}`);
+        return;
+      case "goal":
+        router.push(`/w/${workspaceSlug}/goals/${data.id}`);
+        return;
+      case "crew":
+        router.push(`/w/${workspaceSlug}/crews/${data.id}`);
+        return;
+      case "plan":
+        router.push(`/w/${workspaceSlug}/plans/${data.id}`);
         return;
     }
   };
@@ -410,6 +457,67 @@ export function CommandPalette() {
             data,
             workspaceLabel: ws && a.workspaceId !== ws.id ? a.workspaceSlug : undefined,
             run: () => navigateToEntity(data, a.workspaceSlug),
+          };
+        }),
+      });
+    }
+
+    if (res.goals.length > 0) {
+      out.push({
+        title: "Goals",
+        rows: res.goals.map((g): FlatRow => {
+          const data: EntitySearchResultData = {
+            kind: "goal",
+            id: g.id,
+            name: g.title,
+            status: g.status,
+          };
+          return {
+            kind: "entity",
+            key: `goal:${g.id}`,
+            data,
+            workspaceLabel: ws && g.workspaceId !== ws.id ? g.workspaceSlug : undefined,
+            run: () => navigateToEntity(data, g.workspaceSlug),
+          };
+        }),
+      });
+    }
+    if (res.crews.length > 0) {
+      out.push({
+        title: "Crews",
+        rows: res.crews.map((c): FlatRow => {
+          const data: EntitySearchResultData = {
+            kind: "crew",
+            id: c.id,
+            name: c.name,
+            memberCount: c.memberCount,
+          };
+          return {
+            kind: "entity",
+            key: `crew:${c.id}`,
+            data,
+            workspaceLabel: ws && c.workspaceId !== ws.id ? c.workspaceSlug : undefined,
+            run: () => navigateToEntity(data, c.workspaceSlug),
+          };
+        }),
+      });
+    }
+    if (res.plans.length > 0) {
+      out.push({
+        title: "Plans",
+        rows: res.plans.map((p): FlatRow => {
+          const data: EntitySearchResultData = {
+            kind: "plan",
+            id: p.id,
+            name: p.title,
+            status: p.status,
+          };
+          return {
+            kind: "entity",
+            key: `plan:${p.id}`,
+            data,
+            workspaceLabel: ws && p.workspaceId !== ws.id ? p.workspaceSlug : undefined,
+            run: () => navigateToEntity(data, p.workspaceSlug),
           };
         }),
       });

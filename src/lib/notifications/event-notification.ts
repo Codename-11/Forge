@@ -2,6 +2,13 @@ export const ALERTABLE_ACTIVITY_EVENT_KINDS = [
   "AGENT_NOACK",
   "ISSUE_SLA_BREACH",
   "ISSUE_STALLED",
+  // Orchestration — transient "this happened" alerts. Persistent
+  // "needs your decision" state (plan approvals, open review gates) is
+  // counted directly off the ActionRequest / ReviewGate tables via the
+  // Decisions badge rather than materialized here.
+  "GOAL_STATUS_CHANGED",
+  "PLAN_BUDGET_EXCEEDED",
+  "EXECUTION_STEP_JUDGED",
 ] as const;
 
 export type AlertableActivityEventKind = (typeof ALERTABLE_ACTIVITY_EVENT_KINDS)[number];
@@ -85,7 +92,7 @@ export function mapActivityEventToNotification(
 
 export function mapAlertableActivityEventToNotification(
   input: EventNotificationInput<AlertableActivityEventKind>,
-): EventNotificationMetadata {
+): EventNotificationMetadata | null {
   const payload = asPayload(input.event.payload);
   const issueLabel = buildIssueLabel(input.workspace, input.issue, payload);
   const issueId =
@@ -189,6 +196,97 @@ export function mapAlertableActivityEventToNotification(
         },
       };
     }
+    case "GOAL_STATUS_CHANGED": {
+      // Only the terminal transitions are worth a nudge — routine
+      // OPEN→PLANNING→ACTIVE churn would be noise. Return null otherwise
+      // so the materializer drops it.
+      const to = readPayloadString(payload, "to");
+      const goalHref = buildGoalHref(input.workspace, input.event.subjectId);
+      if (to === "ACHIEVED") {
+        return {
+          kind: input.event.kind,
+          severity: "SUCCESS",
+          importance: 55,
+          persistent: false,
+          summary: "Goal achieved",
+          reason: "An orchestration goal reached its objective — every step passed review.",
+          recommendedAction: "Review the result and close out any follow-on work.",
+          primaryHref: goalHref,
+          primaryActionLabel: "View goal",
+          replacementKey: `goal:${input.event.subjectId}:status`,
+          toast: { title: "Goal achieved", actionLabel: "View goal" },
+        };
+      }
+      if (to === "ABANDONED") {
+        return {
+          kind: input.event.kind,
+          severity: "WARNING",
+          importance: 60,
+          persistent: true,
+          summary: "Goal abandoned",
+          reason: "An orchestration goal was abandoned before reaching its objective.",
+          recommendedAction: "Open the goal to see how far it got and decide whether to retry.",
+          primaryHref: goalHref,
+          primaryActionLabel: "View goal",
+          replacementKey: `goal:${input.event.subjectId}:status`,
+          toast: { title: "Goal abandoned", actionLabel: "View goal" },
+        };
+      }
+      return null;
+    }
+    case "PLAN_BUDGET_EXCEEDED": {
+      const reasonText = readPayloadString(payload, "reason");
+      const planHref = buildPlanHref(input.workspace, input.event.subjectId);
+      return {
+        kind: input.event.kind,
+        severity: "WARNING",
+        importance: 80,
+        persistent: true,
+        summary: "Plan paused — budget exceeded",
+        reason: reasonText
+          ? `A plan hit its cap (${reasonText}) and is blocked pending your decision.`
+          : "A plan exceeded its budget/time cap and is blocked pending your decision.",
+        recommendedAction: "Open the plan to approve continuation (raise the cap) or abandon it.",
+        primaryHref: planHref,
+        primaryActionLabel: "Open plan",
+        replacementKey: `plan:${input.event.subjectId}:budget`,
+        toast: {
+          title: "Plan paused — budget exceeded",
+          description: reasonText ?? undefined,
+          actionLabel: "Open plan",
+        },
+      };
+    }
+    case "EXECUTION_STEP_JUDGED": {
+      // Only a BLOCKED outcome (retries exhausted) needs a nudge; PASS
+      // and retryable FAIL are routine loop progress.
+      const outcome = readPayloadString(payload, "outcome");
+      if (outcome !== "BLOCKED") return null;
+      const planId = readPayloadString(payload, "planId");
+      const feedback = readPayloadString(payload, "feedback");
+      const planHref = planId
+        ? buildPlanHref(input.workspace, planId)
+        : buildWorkspaceHref(input.workspace);
+      return {
+        kind: input.event.kind,
+        severity: "ERROR",
+        importance: 82,
+        persistent: true,
+        summary: "Plan step blocked",
+        reason: feedback
+          ? `A step failed review and exhausted its retries: ${feedback}`
+          : "A step failed review and exhausted its retries — the plan is blocked.",
+        recommendedAction: "Open the plan, resolve the review gate, or revise and retry the step.",
+        primaryHref: planHref,
+        primaryActionLabel: "Open plan",
+        replacementKey: `step:${input.event.subjectId}:blocked`,
+        toast: {
+          title: "Plan step blocked",
+          description: feedback ?? undefined,
+          actionLabel: "Open plan",
+        },
+      };
+    }
     case "ISSUE_STALLED": {
       const slaMinutes = readPayloadNumber(payload, "slaMinutes");
       const agentLabel = agentProfileKey ? `@${agentProfileKey}` : null;
@@ -266,6 +364,20 @@ export function buildAgentHref(
   profileKey: string,
 ): string {
   return `${buildWorkspaceHref(workspace)}/agents/${encodeURIComponent(profileKey)}`;
+}
+
+export function buildGoalHref(
+  workspace: NotificationWorkspaceContext,
+  goalId: string,
+): string {
+  return `${buildWorkspaceHref(workspace)}/goals/${encodeURIComponent(goalId)}`;
+}
+
+export function buildPlanHref(
+  workspace: NotificationWorkspaceContext,
+  planId: string,
+): string {
+  return `${buildWorkspaceHref(workspace)}/plans/${encodeURIComponent(planId)}`;
 }
 
 function asPayload(payload: unknown): Record<string, unknown> {

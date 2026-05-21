@@ -84,6 +84,27 @@ export const commandPaletteRouter = router({
         workspaceId: string;
         workspaceSlug: string;
       }>,
+      goals: [] as Array<{
+        id: string;
+        title: string;
+        status: string;
+        workspaceId: string;
+        workspaceSlug: string;
+      }>,
+      crews: [] as Array<{
+        id: string;
+        name: string;
+        memberCount: number;
+        workspaceId: string;
+        workspaceSlug: string;
+      }>,
+      plans: [] as Array<{
+        id: string;
+        title: string;
+        status: string;
+        workspaceId: string;
+        workspaceSlug: string;
+      }>,
     };
 
     const q = input.query.trim();
@@ -105,7 +126,7 @@ export const commandPaletteRouter = router({
     // and expect to land on that issue, not a fuzzy title match.
     const keyMatch = /^([A-Z]{1,8})-(\d+)$/i.exec(q);
 
-    const [issues, projects, initiatives, savedViews, cycles, agents] =
+    const [issues, projects, initiatives, savedViews, cycles, agents, goals, crews, plans] =
       await Promise.all([
         // ---- Issues -----------------------------------------------------
         keyMatch
@@ -247,6 +268,63 @@ export const commandPaletteRouter = router({
             workspace: { select: { slug: true } },
           },
         }),
+        // ---- Goals ------------------------------------------------------
+        ctx.db.goal.findMany({
+          where: {
+            archivedAt: null,
+            workspace: workspaceGate,
+            title: { contains: q, mode: "insensitive" },
+          },
+          take: input.limit,
+          orderBy: { updatedAt: "desc" },
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            workspaceId: true,
+            workspace: { select: { slug: true } },
+          },
+        }),
+        // ---- Crews ------------------------------------------------------
+        ctx.db.agentCrew.findMany({
+          where: {
+            archivedAt: null,
+            workspace: workspaceGate,
+            OR: [
+              { name: { contains: q, mode: "insensitive" } },
+              { description: { contains: q, mode: "insensitive" } },
+            ],
+          },
+          take: input.limit,
+          orderBy: { updatedAt: "desc" },
+          select: {
+            id: true,
+            name: true,
+            workspaceId: true,
+            workspace: { select: { slug: true } },
+            _count: { select: { members: true } },
+          },
+        }),
+        // ---- Plans ------------------------------------------------------
+        ctx.db.executionPlan.findMany({
+          where: {
+            archivedAt: null,
+            workspace: workspaceGate,
+            OR: [
+              { title: { contains: q, mode: "insensitive" } },
+              { description: { contains: q, mode: "insensitive" } },
+            ],
+          },
+          take: input.limit,
+          orderBy: { updatedAt: "desc" },
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            workspaceId: true,
+            workspace: { select: { slug: true } },
+          },
+        }),
       ]);
 
     return {
@@ -299,6 +377,27 @@ export const commandPaletteRouter = router({
         status: a.status,
         workspaceId: a.workspaceId,
         workspaceSlug: a.workspace.slug,
+      })),
+      goals: goals.map((g) => ({
+        id: g.id,
+        title: g.title,
+        status: g.status,
+        workspaceId: g.workspaceId,
+        workspaceSlug: g.workspace.slug,
+      })),
+      crews: crews.map((c) => ({
+        id: c.id,
+        name: c.name,
+        memberCount: c._count.members,
+        workspaceId: c.workspaceId,
+        workspaceSlug: c.workspace.slug,
+      })),
+      plans: plans.map((p) => ({
+        id: p.id,
+        title: p.title,
+        status: p.status,
+        workspaceId: p.workspaceId,
+        workspaceSlug: p.workspace.slug,
       })),
     };
   }),

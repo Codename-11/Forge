@@ -147,6 +147,11 @@ export function Sidebar({
     staleTime: 60_000,
   });
 
+  const { data: decisions } = trpc.commandCenter.decisionsCount.useQuery(undefined, {
+    refetchOnWindowFocus: true,
+    staleTime: 60_000,
+  });
+
   // Count pins (this-workspace + cross-workspace) so the "Pinned" header
   // only renders when at least one row will appear under it. Each query
   // is shared with the PinnedSidebarSection — same input, same cache key,
@@ -251,6 +256,7 @@ export function Sidebar({
                 pathname={pathname}
                 collapsed={collapsed}
                 inboxCount={inboxBadge?.count ?? 0}
+                decisionsCount={decisions?.total ?? 0}
               />
             ))}
           </div>
@@ -303,6 +309,7 @@ export function Sidebar({
             pathname={pathname}
             collapsed={collapsed}
             inboxCount={0}
+            decisionsCount={0}
             inFooter
           />
         ))}
@@ -351,17 +358,20 @@ function NavRow({
   pathname,
   collapsed,
   inboxCount,
+  decisionsCount,
   inFooter,
 }: {
   item: WorkspaceNavItem & { href: string };
   pathname: string | null;
   collapsed: boolean;
   inboxCount: number;
+  decisionsCount: number;
   inFooter?: boolean;
 }) {
   const { href, path, label, icon: Icon, chord, badge } = item;
   const active = pathname === href || pathname?.startsWith(`${href}/`);
-  const badgeCount = badge === "inbox" ? inboxCount : 0;
+  const badgeCount =
+    badge === "inbox" ? inboxCount : badge === "decisions" ? decisionsCount : 0;
   const chordHint = chord ? `g then ${chord}` : label;
   return (
     <Link

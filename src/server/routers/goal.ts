@@ -22,6 +22,7 @@ export const goalRouter = router({
       z
         .object({
           status: z.nativeEnum(GoalStatus).optional(),
+          issueId: z.string().cuid().optional(),
           includeArchived: z.boolean().default(false),
           limit: z.number().int().positive().max(100).default(50),
         })
@@ -31,6 +32,7 @@ export const goalRouter = router({
       const items = await listGoals(ctx.db, {
         workspaceId: ctx.workspaceId,
         status: input.status,
+        issueId: input.issueId,
         includeArchived: input.includeArchived,
         limit: input.limit,
       });

@@ -1,7 +1,7 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Info, Plus, Settings2, UsersRound } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
@@ -23,11 +23,25 @@ import { useRealtime } from "@/hooks/use-realtime";
 export default function CrewsPage() {
   const ws = useWorkspace();
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.agentCrew.list.useQuery({});
   const crews = useMemo(() => data?.items ?? [], [data]);
 
   const [creating, setCreating] = useState(false);
+
+  // Auto-open the "New crew" modal when navigated with ?new (the
+  // command palette "Create crew" action lands here).
+  useEffect(() => {
+    if (searchParams?.has("new")) {
+      setCreating(true);
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("new");
+      const q = params.toString();
+      router.replace(q ? `${pathname}?${q}` : pathname);
+    }
+  }, [searchParams, pathname, router]);
 
   // Live presence + roster churn: re-pull the list on agent + crew events.
   useRealtime(

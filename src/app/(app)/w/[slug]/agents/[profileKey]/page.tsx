@@ -17,6 +17,7 @@ import {
   Server,
   Settings2,
   UserCheck,
+  Users,
   Workflow,
   Zap,
 } from "lucide-react";
@@ -27,6 +28,7 @@ import { Badge, Card, EmptyState, Section, SkeletonList } from "@/components/ui"
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import AgentTimeline from "@/components/agents/agent-timeline";
 import { AgentContextCard } from "@/components/agents/agent-context-card";
+import { RoleChip } from "@/components/crews/role-chip";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -66,6 +68,7 @@ export default function AgentDetailPage() {
       utils.agent.unifiedTimeline.invalidate();
       utils.agent.pipeline.invalidate();
       utils.agent.stalled.invalidate();
+      utils.agent.crewsAndWork.invalidate();
       utils.analytics.dispatch.summary.invalidate();
     },
     {
@@ -153,6 +156,7 @@ export default function AgentDetailPage() {
                 </div>
                 <div className="space-y-4">
                   <AgentContextCard agentId={agent.id} />
+                  <CrewsAndWorkSection agentId={agent.id} slug={ws.slug} />
                   <RuntimeCard agent={agent} />
                   <WebhookHealthCard agentId={agent.id} focus={healthFocus} />
                   <DispatchEligibilityCard agent={agent} focus={healthFocus} />
@@ -1007,6 +1011,109 @@ function DeliveryStatusDot({
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * "Crews & live work" — the cross-link out of the agent detail page into
+ * the orchestration side. Two stacked lists: the crews this agent sits on
+ * (chips → `/crews/<id>`, role via RoleChip) and the execution steps it's
+ * actively running right now (→ the step's goal, or its plan as a
+ * fallback). Quiet single-line empty state when there's nothing on
+ * either side.
+ */
+function CrewsAndWorkSection({
+  agentId,
+  slug,
+}: {
+  agentId: string;
+  slug: string;
+}) {
+  const { data } = trpc.agent.crewsAndWork.useQuery({ id: agentId });
+
+  if (!data) return <SectionShell title="Crews & live work" small />;
+
+  const { crews, activeSteps } = data;
+  const isEmpty = crews.length === 0 && activeSteps.length === 0;
+
+  return (
+    <Section
+      title={
+        <span className="flex items-center gap-2">
+          <Users className="h-3.5 w-3.5 text-muted-foreground" />
+          Crews &amp; live work
+        </span>
+      }
+    >
+      <Card className="space-y-3 p-3 text-[0.75rem]">
+        {isEmpty ? (
+          <div className="text-meta text-muted-foreground">
+            Not on any crew yet.
+          </div>
+        ) : (
+          <>
+            <div className="space-y-1.5">
+              <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+                Crews
+              </div>
+              {crews.length === 0 ? (
+                <div className="text-meta text-muted-foreground">
+                  Not on any crew.
+                </div>
+              ) : (
+                <ul className="flex flex-wrap gap-1.5">
+                  {crews.map((c) => (
+                    <li key={c.crewId}>
+                      <Link
+                        href={`/w/${slug}/crews/${c.crewId}`}
+                        className="focus-ring inline-flex items-center gap-1.5 rounded-md border border-border bg-card/40 px-2 py-1 hover:bg-subtle"
+                      >
+                        <span className="truncate font-medium text-foreground">
+                          {c.crewName}
+                        </span>
+                        <RoleChip role={c.role} />
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+                Working on now
+              </div>
+              {activeSteps.length === 0 ? (
+                <div className="text-meta text-muted-foreground">
+                  Nothing in flight.
+                </div>
+              ) : (
+                <ul className="space-y-1">
+                  {activeSteps.map((s) => (
+                    <li key={s.stepId}>
+                      <Link
+                        href={
+                          s.plan.goalId
+                            ? `/w/${slug}/goals/${s.plan.goalId}`
+                            : `/w/${slug}/plans/${s.plan.id}`
+                        }
+                        className="focus-ring flex items-center gap-2 rounded-md border border-border bg-card/40 px-2 py-1.5 hover:bg-subtle"
+                        title={s.plan.title}
+                      >
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-ember motion-safe:animate-pulse" />
+                        <span className="flex-1 truncate">{s.title}</span>
+                        <span className="text-meta uppercase tracking-wider text-muted-foreground">
+                          {s.status.toLowerCase()}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
+      </Card>
+    </Section>
+  );
+}
 
 function RuntimeCard({ agent }: { agent: AgentRow }) {
   const ws = useWorkspace();

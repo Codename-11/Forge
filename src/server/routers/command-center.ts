@@ -1,6 +1,28 @@
 import { z } from "zod";
-import { ActionRequestStatus, AgentRunStatus, ReviewGateStatus } from "@prisma/client";
+import {
+  ActionRequestStatus,
+  AgentRunStatus,
+  GoalStatus,
+  ReviewGateStatus,
+} from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
+
+/** Goal statuses that mean a goal is live and worth surfacing. */
+const LIVE_GOAL_STATUSES = [GoalStatus.PLANNING, GoalStatus.ACTIVE];
+
+/**
+ * OPEN action requests the operator should see: ones explicitly
+ * assigned to them, PLUS unassigned ones (plan-approval asks are
+ * created with a null assignee, so an `assignedUserId: userId` filter
+ * alone would hide the loop's most important decision).
+ */
+function decisionAskWhere(workspaceId: string, userId: string) {
+  return {
+    workspaceId,
+    status: ActionRequestStatus.OPEN,
+    OR: [{ assignedUserId: userId }, { assignedUserId: null }],
+  };
+}
 
 /**
  * Command Center router — daily-operator aggregator. Single query that
@@ -42,11 +64,7 @@ export const commandCenterRouter = router({
       ] = await Promise.all([
         userId
           ? ctx.db.actionRequest.findMany({
-              where: {
-                workspaceId: ctx.workspaceId,
-                assignedUserId: userId,
-                status: ActionRequestStatus.OPEN,
-              },
+              where: decisionAskWhere(ctx.workspaceId, userId),
               orderBy: [{ severity: "desc" }, { createdAt: "desc" }],
               take: input.limit,
               include: {
@@ -163,6 +181,22 @@ export const commandCenterRouter = router({
           : Promise.resolve(null),
       ]);
 
+      // Live goals — what the crews are actively driving right now.
+      const liveGoals = await ctx.db.goal.findMany({
+        where: { workspaceId: ctx.workspaceId, status: { in: LIVE_GOAL_STATUSES } },
+        orderBy: { updatedAt: "desc" },
+        take: input.limit,
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          totalCostUsd: true,
+          maxTotalCostUsd: true,
+          crew: { select: { id: true, name: true } },
+          _count: { select: { plans: true } },
+        },
+      });
+
       return {
         actionRequests,
         reviewGates,
@@ -171,6 +205,7 @@ export const commandCenterRouter = router({
         recentArtifacts,
         dueIssues,
         runningTimer,
+        liveGoals,
         counts: {
           actionRequests: actionRequests.length,
           reviewGates: reviewGates.length,
@@ -178,7 +213,27 @@ export const commandCenterRouter = router({
           stalledRuns: stalledRuns.length,
           recentArtifacts: recentArtifacts.length,
           dueIssues: dueIssues.length,
+          liveGoals: liveGoals.length,
         },
       };
     }),
+
+  /**
+   * Lightweight count of decisions waiting on the operator — open
+   * action requests (assigned to me or unassigned) plus pending review
+   * gates. Drives the sidebar "Decisions" badge and the dashboard
+   * "Needs you" tile without pulling the full summary payload.
+   */
+  decisionsCount: workspaceProcedure.query(async ({ ctx }) => {
+    const userId = ctx.session?.user?.id ?? null;
+    const [actionRequests, reviewGates] = await Promise.all([
+      userId
+        ? ctx.db.actionRequest.count({ where: decisionAskWhere(ctx.workspaceId, userId) })
+        : Promise.resolve(0),
+      ctx.db.reviewGate.count({
+        where: { workspaceId: ctx.workspaceId, status: ReviewGateStatus.PENDING },
+      }),
+    ]);
+    return { actionRequests, reviewGates, total: actionRequests + reviewGates };
+  }),
 });
