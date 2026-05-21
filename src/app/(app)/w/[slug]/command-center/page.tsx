@@ -1,35 +1,103 @@
 "use client";
+import { useState } from "react";
 import Link from "next/link";
+import { toast } from "sonner";
 import {
   AlertTriangle,
   ArrowRight,
   Bot,
   CalendarClock,
+  Check,
   Clock,
   FileText,
   Inbox,
+  Loader2,
   Shield,
+  Sparkles,
   Target,
   Workflow,
+  X,
 } from "lucide-react";
+import type { Role } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
+import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRealtime } from "@/hooks/use-realtime";
 
 /**
- * Command Center — single daily-operator surface. Aggregates the
- * things demanding attention right now: action requests targeting
- * me, pending review gates, active and stalled agent runs, recently
- * updated artifacts, and issues due soon. Each card links to its
- * canonical detail page so all writes happen there.
+ * Command Center — the operator's **decisions + live agent operations**
+ * surface. It is the canonical place to *act on decisions*: action
+ * requests (asks) and review gates are resolved inline here, not just
+ * deep-linked. Alongside those it shows the live operational picture —
+ * goals the crews are driving, active and stalled agent runs, issues
+ * due soon, recent artifacts, and the running timer.
+ *
+ * This is intentionally complementary to the **Inbox**, which is "your
+ * work" (assigned/unblocked issues, @-mentions, things you're watching,
+ * stalled work). The Inbox does not surface action requests or review
+ * gates as a decision affordance — those live here so there's exactly
+ * one place to make a call.
+ *
+ * Realtime: subscribes to the workspace SSE bus and invalidates the
+ * single `commandCenter.summary` query when a decision or run-lifecycle
+ * event arrives, so an ask resolved elsewhere (or a run that completes)
+ * refreshes without polling. Inline actions additionally do an
+ * optimistic remove for instant feedback.
  */
 export default function CommandCenterPage() {
   const ws = useWorkspace();
-  const { data, isLoading } = trpc.commandCenter.summary.useQuery({
-    dueWindowDays: 7,
-    limit: 20,
+  const utils = trpc.useUtils();
+  const summaryInput = { dueWindowDays: 7, limit: 20 } as const;
+  const { data, isLoading } = trpc.commandCenter.summary.useQuery(summaryInput);
+
+  // Realtime fan-out. The summary stitches together action requests,
+  // review gates, goals, and agent runs — invalidate on the events that
+  // reshape any of those. Action-request + review-gate resolutions and
+  // goal transitions all surface as ISSUE_UPDATED with a distinguishing
+  // `subjectType`, so we key off subjectType for those and off the
+  // AGENT_RUN_* kind family for run lifecycle. Broad but not a firehose:
+  // pure ISSUE_* edits that don't touch a CC surface are ignored unless
+  // they carry one of these subject types.
+  useRealtime((evt) => {
+    const k = evt.kind ?? "";
+    const subject = evt.subjectType ?? "";
+    const relevant =
+      subject === "action-request" ||
+      subject === "review-gate" ||
+      subject === "agent-run" ||
+      subject === "goal" ||
+      k.startsWith("AGENT_RUN_") ||
+      k === "GOAL_CREATED" ||
+      k === "GOAL_STATUS_CHANGED";
+    if (!relevant) return;
+    void utils.commandCenter.summary.invalidate();
+    void utils.commandCenter.decisionsCount.invalidate();
   });
+
+  // Optimistic helpers — drop an acted-on decision from the cached
+  // summary so the card disappears immediately, before the realtime
+  // invalidation lands. `invalidate()` in the mutation's onSettled
+  // reconciles with the server.
+  const dropActionRequest = (id: string) => {
+    const prev = utils.commandCenter.summary.getData(summaryInput);
+    if (!prev) return;
+    utils.commandCenter.summary.setData(summaryInput, {
+      ...prev,
+      actionRequests: prev.actionRequests.filter((r) => r.id !== id),
+      counts: { ...prev.counts, actionRequests: Math.max(0, prev.counts.actionRequests - 1) },
+    });
+  };
+  const dropReviewGate = (id: string) => {
+    const prev = utils.commandCenter.summary.getData(summaryInput);
+    if (!prev) return;
+    utils.commandCenter.summary.setData(summaryInput, {
+      ...prev,
+      reviewGates: prev.reviewGates.filter((r) => r.id !== id),
+      counts: { ...prev.counts, reviewGates: Math.max(0, prev.counts.reviewGates - 1) },
+    });
+  };
 
   return (
     <>
@@ -37,8 +105,8 @@ export default function CommandCenterPage() {
         title="Command Center"
         subtitle={
           data
-            ? `${data.counts.actionRequests} asks · ${data.counts.reviewGates} gates · ${data.counts.activeRuns} active runs`
-            : undefined
+            ? `Decisions & live agent ops · ${data.counts.actionRequests} asks · ${data.counts.reviewGates} gates · ${data.counts.activeRuns} active runs`
+            : "Decisions & live agent ops"
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -59,26 +127,12 @@ export default function CommandCenterPage() {
               count={data.actionRequests.length}
             >
               {data.actionRequests.map((row) => (
-                <Link
+                <ActionRequestDecisionCard
                   key={row.id}
-                  href={`/w/${ws.slug}/inbox?actionRequest=${row.id}`}
-                  className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-medium">{row.title}</span>
-                    <SeverityChip severity={row.severity} />
-                  </div>
-                  {row.body ? (
-                    <p className="line-clamp-2 text-meta text-muted-foreground">
-                      {row.body}
-                    </p>
-                  ) : null}
-                  {row.issue ? (
-                    <span className="text-meta text-muted-foreground">
-                      {row.issue.workspace.key}-{row.issue.number} · {row.issue.title}
-                    </span>
-                  ) : null}
-                </Link>
+                  request={row}
+                  slug={ws.slug}
+                  onResolved={() => dropActionRequest(row.id)}
+                />
               ))}
             </Section>
 
@@ -114,34 +168,14 @@ export default function CommandCenterPage() {
               empty="No pending gates."
               count={data.reviewGates.length}
             >
-              {data.reviewGates.map((row) => {
-                const href = gateTargetHref(ws.slug, row.targetType, row.targetId);
-                const body = (
-                  <>
-                    <span className="text-sm font-medium">{row.prompt.slice(0, 80)}</span>
-                    <span className="text-meta text-muted-foreground">
-                      {row.targetType.replace(/-/g, " ")}
-                      {href ? "" : ` · ${row.targetId.slice(0, 12)}…`}
-                    </span>
-                  </>
-                );
-                return href ? (
-                  <Link
-                    key={row.id}
-                    href={href}
-                    className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
-                  >
-                    {body}
-                  </Link>
-                ) : (
-                  <div
-                    key={row.id}
-                    className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2"
-                  >
-                    {body}
-                  </div>
-                );
-              })}
+              {data.reviewGates.map((row) => (
+                <ReviewGateDecisionCard
+                  key={row.id}
+                  gate={row}
+                  slug={ws.slug}
+                  onResolved={() => dropReviewGate(row.id)}
+                />
+              ))}
             </Section>
 
             <Section
@@ -265,6 +299,290 @@ export default function CommandCenterPage() {
         )}
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inline decision cards. Command Center is the canonical place to *act* on
+// decisions, so action-request asks and review gates resolve here rather
+// than only deep-linking. Both use the same mutations the canonical detail
+// surfaces use (`actionRequest.accept/.decline`, `reviewGate.resolve`) and
+// optimistically drop the acted item via `onResolved`; the realtime
+// invalidation reconciles with the server.
+// ---------------------------------------------------------------------------
+
+type CCActionRequest = {
+  id: string;
+  title: string;
+  body: string | null;
+  severity: string;
+  issue: {
+    number: number;
+    title: string;
+    workspace: { slug: string; key: string };
+  } | null;
+  requestedByAgent: { profileKey: string } | null;
+  requestedByUser: { name: string | null } | null;
+};
+
+function ActionRequestDecisionCard({
+  request,
+  slug,
+  onResolved,
+}: {
+  request: CCActionRequest;
+  slug: string;
+  onResolved: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const [showDecline, setShowDecline] = useState(false);
+  const [reason, setReason] = useState("");
+
+  const settle = () => {
+    void utils.commandCenter.summary.invalidate();
+    void utils.commandCenter.decisionsCount.invalidate();
+    if (request.issue) {
+      // Accept may dispatch a status/label/assign change on the issue.
+      void utils.inbox.get.invalidate();
+    }
+  };
+
+  const accept = trpc.actionRequest.accept.useMutation({
+    onMutate: () => onResolved(),
+    onError: (e) => {
+      toast.error(e.message);
+      void utils.commandCenter.summary.invalidate();
+    },
+    onSuccess: () => toast.success("Accepted."),
+    onSettled: settle,
+  });
+  const decline = trpc.actionRequest.decline.useMutation({
+    onMutate: () => onResolved(),
+    onError: (e) => {
+      toast.error(e.message);
+      void utils.commandCenter.summary.invalidate();
+    },
+    onSuccess: () => toast.success("Declined."),
+    onSettled: settle,
+  });
+
+  const pending = accept.isPending || decline.isPending;
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border bg-card/40 p-2">
+      <div className="flex items-start justify-between gap-2">
+        {request.issue ? (
+          <Link
+            href={`/w/${slug}/i/${request.issue.workspace.key}-${request.issue.number}`}
+            className="text-sm font-medium hover:underline"
+          >
+            {request.title}
+          </Link>
+        ) : (
+          <span className="text-sm font-medium">{request.title}</span>
+        )}
+        <SeverityChip severity={request.severity} />
+      </div>
+      {request.body ? (
+        <p className="line-clamp-2 text-meta text-muted-foreground">{request.body}</p>
+      ) : null}
+      {request.issue ? (
+        <span className="text-meta text-muted-foreground">
+          {request.issue.workspace.key}-{request.issue.number} · {request.issue.title}
+        </span>
+      ) : null}
+      {showDecline ? (
+        <div className="flex flex-col gap-1.5 pt-0.5">
+          <input
+            autoFocus
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason (optional)"
+            maxLength={2_000}
+            className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-meta"
+            aria-label="Decline reason"
+          />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              onClick={() => decline.mutate({ id: request.id, reason: reason || null })}
+            >
+              {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+              Decline
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => {
+                setShowDecline(false);
+                setReason("");
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex gap-2 pt-0.5">
+          <Button
+            size="sm"
+            variant="ember"
+            disabled={pending}
+            onClick={() => accept.mutate({ id: request.id })}
+            aria-label="Accept this ask"
+          >
+            {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+            Accept
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={() => setShowDecline(true)}
+            aria-label="Decline this ask"
+          >
+            Decline
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type CCReviewGate = {
+  id: string;
+  prompt: string;
+  targetType: string;
+  targetId: string;
+};
+
+function ReviewGateDecisionCard({
+  gate,
+  slug,
+  onResolved,
+}: {
+  gate: CCReviewGate;
+  slug: string;
+  onResolved: () => void;
+}) {
+  const ws = useWorkspace();
+  const utils = trpc.useUtils();
+  // reviewGate.resolve is an adminProcedure — only OWNER/ADMIN can act
+  // inline. Everyone else still gets the deep link to inspect the target.
+  const canResolve = ws.role === ("OWNER" as Role) || ws.role === ("ADMIN" as Role);
+  const href = gateTargetHref(slug, gate.targetType, gate.targetId);
+  const [showResolution, setShowResolution] = useState(false);
+  const [resolution, setResolution] = useState("");
+
+  const resolve = trpc.reviewGate.resolve.useMutation({
+    onMutate: () => onResolved(),
+    onError: (e) => {
+      toast.error(e.message);
+      void utils.commandCenter.summary.invalidate();
+    },
+    onSuccess: () => toast.success("Gate resolved."),
+    onSettled: () => {
+      void utils.commandCenter.summary.invalidate();
+      void utils.commandCenter.decisionsCount.invalidate();
+      void utils.reviewGate.list.invalidate();
+    },
+  });
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border bg-card/40 p-2">
+      <div className="flex flex-col gap-0.5">
+        {href ? (
+          <Link href={href} className="text-sm font-medium hover:underline">
+            {gate.prompt.slice(0, 80)}
+          </Link>
+        ) : (
+          <span className="text-sm font-medium">{gate.prompt.slice(0, 80)}</span>
+        )}
+        <span className="text-meta text-muted-foreground">
+          {gate.targetType.replace(/-/g, " ")}
+          {href ? "" : ` · ${gate.targetId.slice(0, 12)}…`}
+        </span>
+      </div>
+      {!canResolve ? (
+        <span className="text-meta italic text-muted-foreground">
+          Awaiting an authorized reviewer.
+        </span>
+      ) : showResolution ? (
+        <div className="flex flex-col gap-1.5 pt-0.5">
+          <input
+            autoFocus
+            value={resolution}
+            onChange={(e) => setResolution(e.target.value)}
+            placeholder="Resolution note (optional)"
+            maxLength={10_000}
+            className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-meta"
+            aria-label="Resolution note"
+          />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="ember"
+              disabled={resolve.isPending}
+              onClick={() =>
+                resolve.mutate({ id: gate.id, decision: "APPROVED", resolution: resolution || null })
+              }
+            >
+              {resolve.isPending ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Check className="h-3 w-3" />
+              )}
+              Approve
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-destructive"
+              disabled={resolve.isPending}
+              onClick={() =>
+                resolve.mutate({ id: gate.id, decision: "REJECTED", resolution: resolution || null })
+              }
+            >
+              <X className="h-3 w-3" />
+              Reject
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={resolve.isPending}
+              onClick={() => {
+                setShowResolution(false);
+                setResolution("");
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex gap-2 pt-0.5">
+          <Button
+            size="sm"
+            variant="ember"
+            disabled={resolve.isPending}
+            onClick={() => resolve.mutate({ id: gate.id, decision: "APPROVED", resolution: null })}
+          >
+            <Check className="h-3 w-3" /> Approve
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={resolve.isPending}
+            onClick={() => setShowResolution(true)}
+          >
+            Reject…
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
