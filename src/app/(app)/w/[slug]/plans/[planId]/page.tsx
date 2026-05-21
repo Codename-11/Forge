@@ -379,7 +379,8 @@ export default function PlanDetailPage() {
 
   // Crew roster — embedded on `executionPlan.get`. Loosely read until
   // the Prisma client regenerates the `crew` relation onto the type.
-  const crew = (plan as unknown as { crew?: CrewRosterData | null }).crew ?? null;
+  const crew =
+    (plan as unknown as { crew?: CrewRosterData | null } | undefined)?.crew ?? null;
 
   // Which crew member is live on which step — drives the roster
   // highlight. Built from RUNNING steps' `assignedAgentId`.
