@@ -267,6 +267,13 @@ export async function recordChange(
   params: {
     workspaceId: string;
     actorId: string | null;
+    /**
+     * When the action came through an agent-linked API key, the Agent is
+     * the recorded actor; `actorId` stays the human key-owner as secondary
+     * metadata. Null for human-driven / pure-system actions. Callers pass
+     * `ctx.apiKey?.linkedAgentId ?? null`.
+     */
+    actorAgentId?: string | null;
     entity: string;
     entityId: string;
     action: string;
@@ -284,6 +291,7 @@ export async function recordChange(
     data: {
       workspaceId: params.workspaceId,
       actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
       entity: params.entity,
       entityId: params.entityId,
       action: params.action,
@@ -358,6 +366,7 @@ export async function recordChange(
       workspaceId: params.workspaceId,
       kind: params.eventKind,
       actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
       subjectType: params.subjectType,
       subjectId: params.subjectId,
       payload: payloadOut,

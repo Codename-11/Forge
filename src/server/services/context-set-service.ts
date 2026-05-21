@@ -57,6 +57,7 @@ export async function createContextSet(
     await recordChange(tx, {
       workspaceId: input.workspaceId,
       actorId: input.actorId,
+      actorAgentId: input.actorAgentId ?? null,
       entity: "context-set",
       entityId: set.id,
       action: "created",

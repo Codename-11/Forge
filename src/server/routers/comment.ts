@@ -205,6 +205,7 @@ export const commentRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: authoringAgentId,
           entity: "Comment",
           entityId: comment.id,
           action: "create",
@@ -409,6 +410,7 @@ export const commentRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Comment",
           entityId: updated.id,
           action: "update",
@@ -656,6 +658,7 @@ export const commentRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: agentId,
           entity: "Comment",
           entityId: comment.id,
           action: existing ? "update-status" : "create-status",

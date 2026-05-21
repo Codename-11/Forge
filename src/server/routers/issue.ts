@@ -103,6 +103,7 @@ async function applySlashCommandsToIssue(opts: {
             await recordChange(tx, {
               workspaceId: opts.workspaceId,
               actorId: opts.actorId,
+              actorAgentId: opts.callerAgentId,
               entity: "Issue",
               entityId: opts.issueId,
               action: "assign-agent",
@@ -530,7 +531,12 @@ export const issueRouter = router({
         },
         orderBy: { createdAt: "desc" },
         take: input.limit,
-        include: { actor: { select: { id: true, name: true, image: true } } },
+        include: {
+          actor: { select: { id: true, name: true, image: true } },
+          actorAgent: {
+            select: { id: true, name: true, profileKey: true, avatar: true },
+          },
+        },
       });
       return rows;
     }),
@@ -722,6 +728,7 @@ export const issueRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: issue.id,
           action: "create",
@@ -749,6 +756,7 @@ export const issueRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: issue.id,
             action: "assign-agent",
@@ -941,6 +949,7 @@ export const issueRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: id,
           action: "update",
@@ -961,6 +970,7 @@ export const issueRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: id,
             action: "change-priority",
@@ -1008,6 +1018,7 @@ export const issueRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: id,
             action: "assign-agent",
@@ -1108,6 +1119,7 @@ export const issueRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: input.id,
           action: "assign",
@@ -1235,6 +1247,7 @@ export const issueRouter = router({
             await recordChange(tx, {
               workspaceId: ctx.workspaceId,
               actorId: ctx.session.user.id,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
               entity: "Issue",
               entityId: issueId,
               action: "bulk-set-labels",
@@ -1316,6 +1329,7 @@ export const issueRouter = router({
             await recordChange(tx, {
               workspaceId: ctx.workspaceId,
               actorId: ctx.session.user.id,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
               entity: "Issue",
               entityId: issueId,
               action: "bulk-assign",
@@ -1419,6 +1433,7 @@ export const issueRouter = router({
             await recordChange(tx, {
               workspaceId: ctx.workspaceId,
               actorId: ctx.session.user.id,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
               entity: "Issue",
               entityId: row.id,
               action: "assign-agent",
@@ -1466,6 +1481,7 @@ export const issueRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: issue.id,
             action: "queue",
@@ -1725,6 +1741,7 @@ export const issueRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: before.id,
           action: "snooze",
@@ -1765,6 +1782,7 @@ export const issueRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: before.id,
           action: "unsnooze",
@@ -1828,6 +1846,7 @@ export const issueRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: row.id,
             action: input.until ? "snooze" : "unsnooze",
@@ -1927,6 +1946,7 @@ export const issueRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Comment",
           entityId: comment.id,
           action: "create",
@@ -1947,6 +1967,7 @@ export const issueRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: issue.id,
           action: "nudge",
@@ -2055,6 +2076,7 @@ export const issueRouter = router({
             await recordChange(tx, {
               workspaceId: ctx.workspaceId,
               actorId: ctx.session.user.id,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
               entity: "Issue",
               entityId: row.id,
               action: "bulk-transition",
@@ -2128,6 +2150,7 @@ export const issueRouter = router({
             await recordChange(tx, {
               workspaceId: ctx.workspaceId,
               actorId: ctx.session.user.id,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
               entity: "Issue",
               entityId: issueId,
               action: "bulk-add-label",
@@ -2194,6 +2217,7 @@ export const issueRouter = router({
             await recordChange(tx, {
               workspaceId: ctx.workspaceId,
               actorId: ctx.session.user.id,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
               entity: "Issue",
               entityId: issueId,
               action: "bulk-remove-label",
@@ -2247,6 +2271,7 @@ export const issueRouter = router({
             await recordChange(tx, {
               workspaceId: ctx.workspaceId,
               actorId: ctx.session.user.id,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
               entity: "Issue",
               entityId: issueId,
               action: "bulk-archive",

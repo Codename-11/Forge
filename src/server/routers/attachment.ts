@@ -138,6 +138,7 @@ export const attachmentRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Attachment",
             entityId: finalized.id,
             action: "attach",
@@ -200,6 +201,7 @@ export const attachmentRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Attachment",
             entityId: row.id,
             action: "attach",
@@ -330,6 +332,7 @@ export const attachmentRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Attachment",
             entityId: row.id,
             action: "delete",

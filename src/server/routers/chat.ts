@@ -779,6 +779,7 @@ export const chatRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "ChatMessage",
           entityId: message.id,
           action: "create",
@@ -906,6 +907,7 @@ export const chatRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "ChatMessage",
           entityId: message.id,
           action: "create",
@@ -965,6 +967,7 @@ export const chatRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: null,
+          actorAgentId: linkedAgentId,
           entity: "ChatMessage",
           entityId: message.id,
           action: "create",
@@ -1022,6 +1025,7 @@ export const chatRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "ChatMessage",
           entityId: latest.id,
           action: "retry-dispatch",
@@ -1092,6 +1096,7 @@ export const chatRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "AgentRun",
           entityId: run.id,
           action: "kick",

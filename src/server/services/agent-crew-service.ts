@@ -336,6 +336,7 @@ export async function openReviewGateTx(
   await recordChange(tx, {
     workspaceId: params.workspaceId,
     actorId: params.actorId,
+    actorAgentId: params.actorAgentId ?? null,
     entity: "review-gate",
     entityId: gate.id,
     action: "opened",
@@ -418,6 +419,7 @@ export async function resolveReviewGate(
     await recordChange(tx, {
       workspaceId: params.workspaceId,
       actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
       entity: "review-gate",
       entityId: gate.id,
       action: "resolved",

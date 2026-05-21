@@ -117,6 +117,7 @@ export const relationRouter = router({
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         entity: "Issue",
         entityId: input.fromIssueId,
         action: "relation.add",
@@ -163,6 +164,7 @@ export const relationRouter = router({
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         entity: "Issue",
         entityId: relation.fromIssueId,
         action: "relation.remove",

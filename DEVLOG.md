@@ -2,6 +2,69 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — Mission Control chat: multiple conversations per agent
+
+The chat tab only ever opened each agent's *default* thread and had no
+way to start another — even though the backend already supports many
+threads per agent (`chat.createConversation`) and `ChatThreadView`
+already accepted a `threadId`. Added a thread strip above the
+conversation (Main + named conversations for the selected agent) and a
+"+ New chat" button that creates a fresh conversation and switches to
+it. Switching agents resets to that agent's default thread. UI-only
+(`chat-tab.tsx`); eslint clean, no type errors.
+
+Also (ops, no repo change): fixed Hermes agents replying "401 Invalid
+API key" — Forge's `HERMES_GATEWAY_TOKEN` (`~/docker/forge/.env`) didn't
+match the gateway's `API_SERVER_KEY` (the `:8642/v1` inbound auth in
+`~/.hermes/.env`). Set them equal, recreated `forge`+`forge-worker`,
+verified 200 on `/v1/models` + a `claude-haiku` completion. Documented
+in `~/SYSTEM.md`.
+
+## 2026-05-21 — Agent-as-actor attribution in audit + activity
+
+- **Problem.** Agent-performed actions (close/create/transition,
+  slash commands, comments) attributed to the human key-owner (Bailey)
+  because `AuditLog` / `ActivityEvent` only had `actorId` (User FK).
+- **Model (operator-confirmed): agent is the actor.** When an action
+  comes through an agent-linked API key, the Agent is the recorded
+  actor (avatar + name + indigo "agent" chip); the human key-owner stays
+  as secondary metadata (`actorId`) surfaced in a `via API key owned by
+  {name}` tooltip. No "on behalf of" primary text.
+- **Migration `0053_actor_agent`.** Added nullable `actorAgentId`
+  (Agent FK, `onDelete: SetNull`) to `AuditLog` AND `ActivityEvent`,
+  with back-relations on `Agent` (`actorAuditLogs`,
+  `actorActivityEvents`). Indexes: `AuditLog @@index([workspaceId,
+  actorAgentId])`, `ActivityEvent @@index([workspaceId, actorAgentId,
+  createdAt])`. Applied cleanly via `migrate deploy`; client regenerated.
+- **`recordChange`** (`src/server/audit.ts`) gained optional
+  `actorAgentId?: string | null` (default null), written to both
+  `auditLog.create` and `activityEvent.create`. No other behavior change.
+- **Call sites (grep-driven sweep).** Threaded `actorAgentId:
+  ctx.apiKey?.linkedAgentId ?? null` (or the already-computed agent var)
+  through every reachable `recordChange`: `issue.ts` (20), `comment.ts`
+  (create/update/upsertStatus), `mcp.ts` (49 remaining — primary agent
+  path), plus full sweep of agent-reachable routers (canvas 31,
+  execution-plan, artifact, context-set, attachment, agent-crew, chat
+  message-post paths, agent, project, workspace, initiative, cycle,
+  relation, timeEntry, note, ai, agent-run). Services that already
+  receive `actorAgentId` as a param (artifact-, action-request-,
+  execution-plan-, context-set-, agent-crew-service) now forward it to
+  their `recordChange`. Pure-system events (dispatcher, heartbeat,
+  sla-breach, recurring, stale-work, orchestration, ai-coach, etc.) and
+  service fns without an `actorAgentId` param stay null (the actor is
+  the system, not an agent).
+- **Activity query + UI.** `issue.activity` and `admin.audit` now
+  include `actorAgent { id, name, profileKey, avatar }`. The issue
+  Activity panel and the admin Audit tab render the agent as actor
+  (`AgentAvatar` + name + indigo `agent` chip + owner tooltip) when
+  `actorAgent` is set, else unchanged (user actor). Skipped: dashboard
+  "Recent activity" column and admin Events tab — both render only
+  kind + time, no actor, so nothing to attribute.
+- **Tests.** Extended `comment.test.ts`: agent-key comment records
+  `actorAgentId = agent.id` + `actorId = human` on both audit + activity
+  rows; human session leaves `actorAgentId` null. Full audit/issue/
+  comment/mcp/action-request/artifact/canvas/chat suites green.
+
 ## 2026-05-21 — Dashboard is the consistent home + sticky agent panel on issues
 
 - **Home page made consistent.** The workspace root already redirected

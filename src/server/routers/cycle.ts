@@ -174,6 +174,7 @@ export const cycleRouter = router({
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         entity: "Cycle",
         entityId: cycle.id,
         action: "create",
@@ -199,6 +200,7 @@ export const cycleRouter = router({
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         entity: "Cycle",
         entityId: id,
         action: "update",
@@ -227,6 +229,7 @@ export const cycleRouter = router({
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         entity: "Cycle",
         entityId: input.id,
         action: "archive",
@@ -276,6 +279,7 @@ export const cycleRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: issue.id,
           action: "cycle.plan",
@@ -352,6 +356,7 @@ export const cycleRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: issue.id,
             action: "cycle.rollover",

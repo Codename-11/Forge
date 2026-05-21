@@ -1609,6 +1609,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.userId,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: before.id,
             action: "assign-agent",
@@ -1728,6 +1729,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: issue.id,
           action: "assign-agent",
@@ -2471,6 +2473,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: authorId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Comment",
           entityId: comment.id,
           action: existing ? "update-status" : "create-status",
@@ -4339,6 +4342,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: null,
+          actorAgentId: linkedAgentId,
           entity: "ChatMessage",
           entityId: message.id,
           action: "create",
@@ -4547,6 +4551,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: null,
+          actorAgentId: linkedAgentId,
           entity: "ChatMessage",
           entityId: message.id,
           action: "create",
@@ -5018,6 +5023,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.userId,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "AgentRun",
             entityId: run.id,
             action: "set-waiting",
@@ -5230,6 +5236,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "AgentRun",
           entityId: run.id,
           action: "kick",
@@ -5352,6 +5359,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: null,
+          actorAgentId: agentId,
           entity: "ChatMessage",
           entityId: latest.id,
           action: "retry-dispatch",
@@ -6521,6 +6529,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: created.id,
           action: "created",
@@ -6593,6 +6602,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "node_added",
@@ -6657,6 +6667,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: node.canvasId,
           action: "node_updated",
@@ -6694,6 +6705,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: node.canvasId,
           action: "node_removed",
@@ -6769,6 +6781,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "edge_added",
@@ -6801,6 +6814,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: edge.canvasId,
           action: "edge_removed",
@@ -6854,6 +6868,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: edge.canvasId,
           action: "edge_updated",
@@ -6928,6 +6943,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "shape_added",
@@ -7005,6 +7021,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: shape.canvasId,
           action: "shape_updated",
@@ -7036,6 +7053,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: shape.canvasId,
           action: "shape_removed",
@@ -7124,6 +7142,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "shapes_bulk_added",
@@ -7243,6 +7262,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "template_applied",
@@ -7306,6 +7326,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "layout_applied",
@@ -7601,6 +7622,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "execution-plan",
           entityId: plan.id,
           action: "created",
@@ -7658,6 +7680,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.userId ?? null,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "canvas-style",
             entityId: row.id,
             action: "created",
@@ -7731,6 +7754,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.userId ?? null,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "canvas-style",
             entityId: input.styleId,
             action: "updated",
@@ -7768,6 +7792,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "canvas-style",
           entityId: input.styleId,
           action: "archived",
@@ -7830,6 +7855,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.userId ?? null,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "canvas-component",
             entityId: row.id,
             action: "created",
@@ -7938,6 +7964,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.userId ?? null,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "canvas-component",
             entityId: input.componentId,
             action: "updated",
@@ -7975,6 +8002,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "canvas-component",
           entityId: input.componentId,
           action: "archived",
@@ -8066,6 +8094,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "instance_added",
@@ -8136,6 +8165,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: existing.canvasId,
           action: "instance_updated",
@@ -8283,6 +8313,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: instance.canvasId,
           action: "instance_detached",
@@ -8441,6 +8472,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "layers_reordered",
@@ -8524,6 +8556,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "canvas-frame",
           entityId: created.id,
           action: "created",
@@ -8652,6 +8685,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: frame.canvasId,
           action: "frame_updated",
@@ -8730,6 +8764,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: frame.canvasId,
           action: "frame_removed",
@@ -8823,6 +8858,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "group_created",
@@ -8874,6 +8910,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: group.canvasId,
           action: "group_dissolved",
@@ -8950,6 +8987,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "page_added",
@@ -9022,6 +9060,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: frame.canvasId,
           action: "page_removed",
@@ -9074,6 +9113,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "pages_reordered",
@@ -9408,6 +9448,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "align_applied",
@@ -9532,6 +9573,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "canvas-frame",
           entityId: frame.id,
           action: "storyboard_plan",
@@ -9656,6 +9698,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "canvas-frame",
           entityId: frame.id,
           action: "storyboard_issue",
@@ -9760,6 +9803,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "canvas-frame",
           entityId: frame.id,
           action: "storyboard_research",
@@ -9866,6 +9910,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.userId ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "canvas-frame",
           entityId: frame.id,
           action: "storyboard_custom",
@@ -10462,6 +10507,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: userId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Note",
           entityId: before.id,
           action: "status.set",
@@ -10573,6 +10619,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: userId,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: issue.id,
             action: "create",
@@ -10630,6 +10677,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: userId,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Project",
             entityId: project.id,
             action: "create",
@@ -10691,6 +10739,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: userId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Initiative",
           entityId: initiative.id,
           action: "create",

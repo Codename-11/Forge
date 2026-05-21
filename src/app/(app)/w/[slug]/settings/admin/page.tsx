@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Activity, ScrollText, Webhook } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
+import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { Section } from "@/components/settings/section";
@@ -143,12 +144,33 @@ function AuditTab() {
     <Card>
       {items.map((a) => (
         <li key={a.id} className="flex items-start gap-3 px-4 py-3 text-xs">
-          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-subtle text-[0.6875rem] font-medium">
-            {initials(a.actor?.name ?? a.actor?.email ?? null)}
-          </div>
+          {a.actorAgent ? (
+            // Agent is the recorded actor; the human key-owner is secondary
+            // (surfaced in the line below + tooltip).
+            <AgentAvatar
+              agent={{
+                name: a.actorAgent.name,
+                profileKey: a.actorAgent.profileKey,
+                avatar: a.actorAgent.avatar,
+              }}
+              size="sm"
+            />
+          ) : (
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-subtle text-[0.6875rem] font-medium">
+              {initials(a.actor?.name ?? a.actor?.email ?? null)}
+            </div>
+          )}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <Badge>{a.action}</Badge>
+              {a.actorAgent && (
+                <Badge
+                  color="#6366f1"
+                  className="font-mono text-[0.6875rem] uppercase tracking-wider"
+                >
+                  agent
+                </Badge>
+              )}
               <span className="font-mono text-[0.6875rem] text-muted-foreground">
                 {a.entity}/{a.entityId.slice(0, 8)}
               </span>
@@ -156,9 +178,21 @@ function AuditTab() {
                 {relativeTime(a.createdAt)}
               </span>
             </div>
-            {(a.actor || a.ip) && (
-              <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">
-                {a.actor?.name ?? a.actor?.email ?? "system"}
+            {(a.actorAgent || a.actor || a.ip) && (
+              <div
+                className="mt-0.5 text-[0.6875rem] text-muted-foreground"
+                title={
+                  a.actorAgent && a.actor?.name
+                    ? `via API key owned by ${a.actor.name}`
+                    : undefined
+                }
+              >
+                {a.actorAgent
+                  ? a.actorAgent.name
+                  : (a.actor?.name ?? a.actor?.email ?? "system")}
+                {a.actorAgent && a.actor?.name && (
+                  <> · via {a.actor.name}</>
+                )}
                 {a.ip && <> · <span className="font-mono">{a.ip}</span></>}
               </div>
             )}

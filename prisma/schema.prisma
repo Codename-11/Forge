@@ -1194,6 +1194,10 @@ model AuditLog {
   id          String   @id @default(cuid())
   workspaceId String
   actorId     String?
+  /// When the action came through an agent-linked API key, the Agent
+  /// is the recorded actor; `actorId` remains the human key-owner as
+  /// secondary metadata. Null for human-driven actions.
+  actorAgentId String?
   entity      String
   entityId    String
   action      String
@@ -1203,11 +1207,13 @@ model AuditLog {
   userAgent   String?  @db.Text
   createdAt   DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor      User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorAgent Agent?    @relation("AuditLogActorAgent", fields: [actorAgentId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, entity, entityId])
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, actorAgentId])
 }
 
 /// Business-facing event stream. Plugins subscribe to these.
@@ -1217,6 +1223,10 @@ model ActivityEvent {
   workspaceId String
   kind        EventKind
   actorId     String?
+  /// When the action came through an agent-linked API key, the Agent
+  /// is the recorded actor; `actorId` remains the human key-owner as
+  /// secondary metadata. Null for human-driven / system actions.
+  actorAgentId String?
   /// Primary subject reference, e.g. issueId.
   subjectType String
   subjectId   String
@@ -1225,11 +1235,13 @@ model ActivityEvent {
 
   workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actor              User?               @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorAgent         Agent?              @relation("ActivityEventActorAgent", fields: [actorAgentId], references: [id], onDelete: SetNull)
   deliveries         WebhookDelivery[]
   notificationStates NotificationState[]
 
   @@index([workspaceId, kind, createdAt])
   @@index([workspaceId, subjectType, subjectId])
+  @@index([workspaceId, actorAgentId, createdAt])
 }
 
 /// Mutable per-user alert lifecycle layered on immutable ActivityEvent rows.
@@ -1627,6 +1639,8 @@ model Agent {
   resolvedReviewGates      ReviewGate[]      @relation("ReviewGateResolverAgent")
   requestedActionRequests  ActionRequest[]   @relation("ActionRequestRequesterAgent")
   assignedActionRequests   ActionRequest[]   @relation("ActionRequestAssigneeAgent")
+  actorAuditLogs           AuditLog[]        @relation("AuditLogActorAgent")
+  actorActivityEvents      ActivityEvent[]   @relation("ActivityEventActorAgent")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])

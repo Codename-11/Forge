@@ -157,6 +157,7 @@ export async function createArtifact(
     await recordChange(tx, {
       workspaceId: input.workspaceId,
       actorId: input.actorId,
+      actorAgentId: input.actorAgentId ?? null,
       entity: "artifact",
       entityId: artifact.id,
       action: "created",
@@ -268,6 +269,7 @@ export async function updateArtifact(
     await recordChange(tx, {
       workspaceId: input.workspaceId,
       actorId: input.actorId,
+      actorAgentId: input.actorAgentId ?? null,
       entity: "artifact",
       entityId: input.artifactId,
       action: "updated",
@@ -303,6 +305,7 @@ export async function archiveArtifact(
   params: {
     workspaceId: string;
     actorId: string | null;
+    actorAgentId?: string | null;
     artifactId: string;
   },
 ): Promise<void> {
@@ -325,6 +328,7 @@ export async function archiveArtifact(
     await recordChange(tx, {
       workspaceId: params.workspaceId,
       actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
       entity: "artifact",
       entityId: params.artifactId,
       action: "archived",

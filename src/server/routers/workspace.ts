@@ -531,6 +531,7 @@ export const workspaceRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Membership",
           entityId: membership.id,
           action: "create",
@@ -613,6 +614,7 @@ export const workspaceRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Membership",
           entityId: target.id,
           action: "role_change",
@@ -684,6 +686,7 @@ export const workspaceRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Membership",
           entityId: target.id,
           action: "delete",

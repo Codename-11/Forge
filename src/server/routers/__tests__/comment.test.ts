@@ -99,6 +99,64 @@ describe("commentRouter.create — agent authorship", () => {
       where: { id: created.id },
     });
     expect(row.authoringAgentId).toBe(agent.id);
+
+    // Attribution: the audit + activity rows record the AGENT as the actor
+    // (`actorAgentId`) while keeping the human key-owner as secondary
+    // metadata (`actorId`). This is the agent-is-actor display model.
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        entity: "Comment",
+        entityId: created.id,
+        action: "create",
+      },
+    });
+    expect(audit.actorAgentId).toBe(agent.id);
+    expect(audit.actorId).toBe(fixture.user.id);
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: "COMMENT_CREATED",
+        subjectType: "issue",
+        subjectId: issue.id,
+      },
+    });
+    expect(event.actorAgentId).toBe(agent.id);
+    expect(event.actorId).toBe(fixture.user.id);
+  });
+
+  it("human session leaves actorAgentId null on audit + activity rows", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+
+    const caller = commentRouter.createCaller(ctx);
+    const created = await caller.create({
+      issueId: issue.id,
+      body: "Human comment.",
+    });
+
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        entity: "Comment",
+        entityId: created.id,
+        action: "create",
+      },
+    });
+    expect(audit.actorAgentId).toBeNull();
+    expect(audit.actorId).toBe(fixture.user.id);
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: "COMMENT_CREATED",
+        subjectType: "issue",
+        subjectId: issue.id,
+      },
+    });
+    expect(event.actorAgentId).toBeNull();
   });
 });
 

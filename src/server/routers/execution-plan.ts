@@ -221,6 +221,7 @@ export const executionPlanRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "execution-plan",
           entityId: input.id,
           action: "restore",
@@ -308,6 +309,7 @@ export const executionPlanRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "execution-plan",
           entityId: plan.id,
           action: "duplicate",
@@ -366,6 +368,7 @@ export const executionPlanRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "execution-plan",
           entityId: plan.id,
           action: "delete",
@@ -560,6 +563,7 @@ export const executionPlanRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Comment",
           entityId: comment.id,
           action: "create",
