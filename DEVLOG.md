@@ -2,6 +2,49 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — Issues-page polish: agent profile icons, composer discoverability, hover previews, snooze chips, debounced search
+
+Tying together the recent UI/UX work. No schema changes; all client/render.
+
+- **Agent replies show their real profile icon.** `CommentAvatar`
+  (`issue-detail/issue-main.tsx`) was hardcoded to a generic `<Bot/>`
+  glyph and explicitly forced `image` to null for agents — throwing
+  away `authoringAgent.avatar`. It now renders the shared `AgentAvatar`
+  (emoji / image / profileKey monogram), matching Mission Control, the
+  agent picker, and crews. Applied to both the timeline card and the
+  live-status pin.
+- **Comment composer advertises @ and /.** The features already
+  existed (`MentionInput` + `useSlashAutocomplete`) but nothing told
+  users. New placeholder (`@ to mention · / for commands · paste or
+  drop to attach`) plus a persistent `@ mention · / commands · ⌘↵ send`
+  hint under the box — previously the hint only appeared *after* you'd
+  typed a `/`.
+- **Chat composer parity.** Did NOT swap `MentionInput` into the
+  Mission Control chat composer: its dropdown anchors below the caret
+  with no flip-up logic, which would render off-screen in the
+  bottom-docked chat (which renders popovers upward); chat also has
+  auto-resize, Enter-to-send, file-context toggles, and a chat-specific
+  slash set. Instead added the same adaptive `@ / ↵` hint (gated to
+  what's actually wired up, shown only while the composer is empty) so
+  the *experience* matches. True component-level dedup would need
+  placement-aware dropdown support in `MentionInput` — noted as
+  follow-up.
+- **Issue list: hover previews** — wired the existing
+  `IssueHoverPreview` (350ms-delay portal, `issue.summary` fetch) onto
+  each row's title.
+- **Issue list: snooze chips** — rows whose `snoozedUntil` is in the
+  future now show a `CalendarClock` "Snoozed" chip (with exact
+  until-date tooltip). Snoozed issues already appear in the default
+  list (`excludeSnoozed` defaults false), so the state was previously
+  invisible.
+- **Issues search debounced** — the list-view search now debounces
+  300ms before hitting `issue.list` (was firing per keystroke) and
+  shows a spinner in the input while a search is settling.
+
+Validated: `pnpm typecheck` + `eslint` clean on all touched files. No
+unit/integration tests cover these client components; e2e chat specs
+don't reference the touched selectors.
+
 ## 2026-05-21 — Canvas: Excalidraw-grade motion, images, present mode, virtualization, sketch, undo
 
 Six-part pass to close the UX gap vs Excalidraw. No schema migration —

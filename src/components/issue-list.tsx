@@ -16,6 +16,7 @@ import { EmptyState, Kbd, SkeletonList, useDensity } from "@/components/ui";
 import { Confirm, Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { AgentHoverPreview } from "@/components/agent-hover-preview";
+import { IssueHoverPreview } from "@/components/issue-hover-preview";
 import { BulkBar, type BulkBarAction } from "@/components/bulk-bar";
 import { SnoozeMenu } from "@/components/snooze-menu";
 import { trpc } from "@/lib/trpc";
@@ -393,6 +394,9 @@ export function IssueList({
         {filtered.map((issue) => {
           const on = selected.has(issue.id);
           const isUnread = unreadSet.has(issue.id);
+          const isSnoozed =
+            !!issue.snoozedUntil &&
+            new Date(issue.snoozedUntil).getTime() > Date.now();
           const rowCls = compact
             ? "row gap-2 px-5 py-1.5 hover:bg-subtle/60"
             : "row h-10 gap-3 px-5 hover:bg-subtle/60";
@@ -465,13 +469,28 @@ export function IssueList({
                   {formatIssueId(workspaceKey, issue.number)}
                 </span>
                 <Badge color={issue.status.color}>{issue.status.name}</Badge>
-                <span className={titleCls}>{issue.title}</span>
+                <IssueHoverPreview
+                  issueKey={formatIssueId(workspaceKey, issue.number)}
+                  workspaceSlug={ws?.slug}
+                  className={cn("block min-w-0", titleCls)}
+                >
+                  {issue.title}
+                </IssueHoverPreview>
                 {issue.project && (
                   <Badge className="ml-2 shrink-0" color={issue.project.color ?? undefined}>
                     {issue.project.key}
                   </Badge>
                 )}
                 <div className="ml-auto flex items-center gap-3">
+                  {isSnoozed && (
+                    <span
+                      className="inline-flex items-center gap-1 text-meta text-muted-foreground"
+                      title={`Snoozed until ${new Date(issue.snoozedUntil!).toLocaleString()}`}
+                    >
+                      <CalendarClock className="h-3 w-3" />
+                      <span>Snoozed</span>
+                    </span>
+                  )}
                   <span className="text-meta text-muted-foreground">
                     {relativeTime(issue.createdAt)}
                   </span>

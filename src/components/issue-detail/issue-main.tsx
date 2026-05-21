@@ -3,9 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Activity, Bot, MessageCircleReply, Target } from "lucide-react";
+import { Activity, MessageCircleReply, Target } from "lucide-react";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { Avatar } from "@/components/ui/avatar";
+import {
+  AgentAvatar,
+  type AgentAvatarIdentity,
+} from "@/components/agents/agent-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
@@ -721,15 +725,27 @@ function Comments({
             onClick={slash.bind.onClick}
             onSelect={slash.bind.onSelect}
             onFocus={slash.bind.onFocus}
-            placeholder="Leave a comment… (paste or drop files to attach)"
+            placeholder="Leave a comment…  @ to mention · / for commands · paste or drop to attach"
             className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[0.8125rem]"
             ariaLabel="Comment composer"
           />
           {slash.visible && <SlashAutocomplete {...slash.dropdownProps} />}
         </div>
-        {hasCommands && (
+        {hasCommands ? (
           <div className="text-meta text-muted-foreground">
             {SLASH_COMMAND_HINT}
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1.5 text-meta text-muted-foreground">
+            <Kbd>@</Kbd>
+            <span>mention</span>
+            <span className="text-muted-foreground/40">·</span>
+            <Kbd>/</Kbd>
+            <span>commands</span>
+            <span className="text-muted-foreground/40">·</span>
+            <Kbd>⌘</Kbd>
+            <Kbd>↵</Kbd>
+            <span>to send</span>
           </div>
         )}
         <div className="flex items-center justify-end gap-2">
@@ -754,8 +770,8 @@ function Comments({
 /**
  * Regular timeline comment card. Distinguishes:
  *   - Human authors             — paper-toned card, monogram avatar.
- *   - Agent authors             — Bot glyph avatar in ember tint, indigo
- *                                  "agent" chip, optional `@profileKey`
+ *   - Agent authors             — the agent's own profile icon (ember
+ *                                  tint), indigo "agent" chip, optional `@profileKey`
  *                                  byline. Provenance (e.g. forge-cli
  *                                  daemon hostname) lifts out into a
  *                                  small italic subtitle line so the
@@ -817,7 +833,7 @@ function TimelineCommentCard({
       <CommentAvatar
         name={displayName}
         image={isAgent ? null : (comment.author?.image ?? null)}
-        isAgent={isAgent}
+        agent={isAgent ? comment.authoringAgent ?? null : null}
       />
       <div className="min-w-0 flex-1 space-y-2">
         {/*
@@ -1009,28 +1025,31 @@ function QuickReplyChips({
 }
 
 /**
- * Avatar component for comment cards. Agent comments get a small bot
- * glyph in the warm ember tint; humans get the standard monogram
- * avatar. Keeps the byline consistent across both surfaces (timeline
- * comments and status pins).
+ * Avatar component for comment cards. Agent comments render the agent's
+ * own profile icon via `AgentAvatar` (the same emoji / image / monogram
+ * shown in Mission Control and the agent picker), so a reply reads as
+ * coming from *that* agent rather than a generic bot. Humans get the
+ * standard monogram avatar. Keeps the byline consistent across both
+ * surfaces (timeline comments and status pins).
  */
 function CommentAvatar({
   name,
   image,
-  isAgent,
+  agent,
 }: {
   name: string | null;
   image: string | null;
-  isAgent: boolean;
+  agent: AgentAvatarIdentity | null;
 }) {
-  if (isAgent) {
+  if (agent) {
     return (
-      <span
-        aria-label={name ?? "agent"}
-        className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-ember/15 text-ember"
-      >
-        <Bot className="h-3 w-3" />
-      </span>
+      <AgentAvatar
+        agent={agent}
+        size="xs"
+        shape="circle"
+        active
+        className="h-[22px] w-[22px]"
+      />
     );
   }
   return <Avatar name={name} image={image} size={22} />;
@@ -1059,7 +1078,7 @@ function StatusCommentPin({ comment }: { comment: Comment }) {
       <CommentAvatar
         name={displayName}
         image={isAgent ? null : (comment.author?.image ?? null)}
-        isAgent={isAgent}
+        agent={isAgent ? comment.authoringAgent ?? null : null}
       />
       <div className="min-w-0 flex-1 rounded-md border-l-2 border-l-ember border-y border-r border-border bg-ember/5 p-2.5">
         <div className="flex items-center gap-2 text-meta">

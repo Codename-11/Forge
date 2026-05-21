@@ -8,6 +8,7 @@ import { IssueList } from "@/components/issue-list";
 import { IssueBoard } from "@/components/issue-board";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import {
   DensityProvider,
   EmptyState,
@@ -61,6 +62,15 @@ export default function IssuesPage() {
   const searchParams = useSearchParams();
   const [view, setView] = useViewPref("issues");
   const [query, setQuery] = useState("");
+  // Debounced mirror of `query` — only this value reaches the list
+  // query, so typing doesn't fire a request per keystroke. `query`
+  // itself drives the input + the `hasFilters` chip immediately.
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(t);
+  }, [query]);
+  const searchPending = query.trim() !== debouncedQuery.trim();
   const [filters, setFilters] = useState<SavedViewFilters>({});
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [saveOpen, setSaveOpen] = useState(false);
@@ -158,6 +168,7 @@ export default function IssuesPage() {
   function clearAllFilters() {
     setFilters({});
     setQuery("");
+    setDebouncedQuery("");
     if (activeViewId) {
       setActiveViewId(null);
       const params = new URLSearchParams(searchParams?.toString() ?? "");
@@ -182,8 +193,8 @@ export default function IssuesPage() {
   // saved-view filter blob (it's not persisted with views by default to
   // avoid stale string searches in saved tabs).
   const issueQueryFilters: SavedViewFilters = useMemo(
-    () => ({ ...filters, query: query || undefined }),
-    [filters, query],
+    () => ({ ...filters, query: debouncedQuery || undefined }),
+    [filters, debouncedQuery],
   );
 
   const activeView =
@@ -198,12 +209,19 @@ export default function IssuesPage() {
           <div className="flex items-center gap-2">
             {view === "list" && !isWorkspaceEmpty && (
               <>
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search…"
-                  className="h-7 w-48 text-xs"
-                />
+                <div className="relative">
+                  <Input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search…"
+                    className="h-7 w-48 pr-7 text-xs"
+                  />
+                  {searchPending && (
+                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
+                      <Spinner size="sm" />
+                    </span>
+                  )}
+                </div>
                 <DensityToggle />
               </>
             )}
