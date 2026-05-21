@@ -8,8 +8,9 @@ import { db } from "@/server/db";
  * membership if `User.lastWorkspaceId` is unset or stale.
  *
  * Having the landing redirect live here means the browser address bar
- * converges on `/w/<slug>/inbox` (the unified "what's next" landing,
- * née Dashboard) within one hop, keeping the URL scheme honest.
+ * converges on `/w/<slug>/dashboard` (the workspace home — matches the
+ * workspace-root redirect) within one hop, keeping the URL scheme
+ * honest. Inbox is one chord away (`g i`) for the action queue.
  */
 export default async function RootPage() {
   const session = await auth();
@@ -25,7 +26,7 @@ export default async function RootPage() {
       where: { id: user.lastWorkspaceId },
       select: { slug: true, deletedAt: true },
     });
-    if (last && !last.deletedAt) redirect(`/w/${last.slug}/inbox`);
+    if (last && !last.deletedAt) redirect(`/w/${last.slug}/dashboard`);
   }
 
   const membership = await db.membership.findFirst({
@@ -33,7 +34,7 @@ export default async function RootPage() {
     include: { workspace: { select: { slug: true } } },
     orderBy: { createdAt: "asc" },
   });
-  if (membership) redirect(`/w/${membership.workspace.slug}/inbox`);
+  if (membership) redirect(`/w/${membership.workspace.slug}/dashboard`);
 
   // No active workspace — send to the account-level workspaces page so the
   // user can create one.
