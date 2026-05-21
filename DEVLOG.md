@@ -2,6 +2,31 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — Immediate agent feedback on issue comments + status near the composer
+
+Operator feedback: commenting to trigger an agent gave no immediate UI
+signal, the run banner kept showing "waiting on you" after a reply, and
+on long threads the top-of-page run strip scrolls out of view.
+
+- **Instant "waiting → working" on reply.** The server already
+  auto-resumes a WAITING run to ACTIVE in the same transaction as the
+  comment (`openOrTouchRun`), but the strip only refreshed via SSE/
+  refetch (~5–15s). `comment.create.onSuccess` now optimistically patches
+  the `agentRun.activeForIssue` cache (WAITING → ACTIVE, bump
+  `lastEventAt`) and invalidates it, so the banner flips the moment you
+  send and a freshly-dispatched run surfaces fast.
+- **Status where you type.** Render `<AgentRunStrip>` directly above the
+  comment composer (in addition to the top-of-page instance). Same query
+  key, so it's free and live; self-hides when no run. On a long thread
+  the top strip is scrolled away — the composer-adjacent one keeps
+  "working… / waiting on you" in view right where the operator replies.
+- Validated: `pnpm typecheck` + `eslint` clean.
+
+Follow-up considered, not built: a persistent agent-status panel in the
+(already sticky) right rail — researched (reuse `AgentAvatar` /
+`AgentPresenceDot` / run-status), deferred pending operator preference vs
+the near-composer strip.
+
 ## 2026-05-21 — @mention + / coexistence: chainable in one comment, edit-mode dispatch
 
 Operator bug: "after I @ an agent in a comment, I can't use a / command,"

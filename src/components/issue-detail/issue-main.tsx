@@ -625,6 +625,18 @@ function Comments({
     onSuccess: () => {
       utils.issue.byId.invalidate({ id: issueId });
       utils.issue.activity.invalidate({ issueId });
+      // Immediate agent feedback: the server auto-resumes a WAITING run
+      // to ACTIVE in the same transaction as the comment (openOrTouchRun),
+      // and dispatches any @-mentioned agent. Reflect that instantly —
+      // flip the cached run so the strip/cue stops saying "waiting on you"
+      // the moment the operator replies — then invalidate so a freshly
+      // spun-up run (or the real ACTIVE row) reconciles from the server.
+      utils.agentRun.activeForIssue.setData({ issueId }, (old) =>
+        old && old.status === "WAITING"
+          ? { ...old, status: "ACTIVE", lastEventAt: new Date() }
+          : old,
+      );
+      utils.agentRun.activeForIssue.invalidate({ issueId });
       if (pendingCommands.length > 0) {
         applyCommandsM.mutate({ issueId, commands: pendingCommands });
         setPendingCommands([]);
@@ -747,12 +759,20 @@ function Comments({
           />
         ))}
       </div>
+      {/* Live run status repeated directly above the composer so the
+          operator sees "working… / waiting on you" right where they type
+          — on a long thread the top-of-page strip has scrolled away. The
+          strip self-hides when there's no active run, so it only appears
+          when an agent is actually in the loop. */}
+      <div className="mt-4">
+        <AgentRunStrip issueId={issueId} />
+      </div>
       <form
         onSubmit={(e) => {
           e.preventDefault();
           submitDraft();
         }}
-        className="relative mt-4 space-y-2"
+        className="relative mt-2 space-y-2"
         onDragEnter={drop.onDragEnter}
         onDragOver={drop.onDragOver}
         onDragLeave={drop.onDragLeave}
