@@ -2,6 +2,73 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — Dashboard is the consistent home + sticky agent panel on issues
+
+- **Home page made consistent.** The workspace root already redirected
+  to `/dashboard`, but the global root (`src/app/page.tsx`, post-login /
+  last-workspace) sent users to `/inbox` — and the dashboard topbar
+  called Inbox "the daily driver." Flipped both `page.tsx` redirects to
+  `/dashboard`, fixed the "unified landing" comment, and reframed the
+  dashboard's "Back to Inbox / daily driver" link to a plain "Inbox →"
+  (the action queue, `g i`). Dashboard is now unambiguously home.
+- **Sticky agent-status panel on issues** (`issue-agent-panel.tsx`,
+  new). Lives at the top of the issue right rail (which is already
+  sticky), so the assigned agent's presence dot + live run state
+  (working / waiting on you) + current step stay visible while a long
+  comment thread scrolls — the top-of-page `AgentRunStrip` scrolls away.
+  Reads `agentRun.activeForIssue` + the issue's `assignedAgent`, refreshes
+  over SSE, self-hides when there's no agent/run. Read-only (kick/resume
+  are MCP-only, no tRPC mutation).
+
+## 2026-05-21 — Command Center: realtime + inline decisions + de-overlap from Inbox
+
+Command Center was a fetch-once, read-only summary that only deep-linked
+out, overlapping conceptually with the Inbox. Made it a live decision
+surface and gave both pages distinct identities.
+
+- **Realtime.** Wired `useRealtime()` into the command-center page (same
+  pattern as `agent-run-strip` / Mission Control — direct
+  `utils.invalidate()`, no debounce). Invalidates
+  `commandCenter.summary` + `commandCenter.decisionsCount` when an event
+  arrives whose `subjectType` is `action-request`, `review-gate`,
+  `agent-run`, or `goal`, or whose kind is in the `AGENT_RUN_*` family
+  or `GOAL_CREATED` / `GOAL_STATUS_CHANGED`. Action-request and
+  review-gate resolutions surface as `ISSUE_UPDATED` with a
+  distinguishing `subjectType`, so keying off `subjectType` is what
+  catches "ask resolved / gate resolved elsewhere." Broad but scoped —
+  unrelated `ISSUE_*` edits are ignored.
+- **Inline decisions.** Action-request "Asks for you" cards now
+  accept/decline inline via `actionRequest.accept` / `.decline` (the
+  same mutations the issue-timeline `ActionRequestCard` uses; reused the
+  mutation contract, not the comment-bound component, since CC has raw
+  `actionRequest` rows rather than a `commentId`). Review-gate cards
+  resolve inline (Approve / Reject + optional note) via
+  `reviewGate.resolve` — that's an `adminProcedure`, so the inline
+  affordance only shows for OWNER/ADMIN; everyone else still gets the
+  deep link to the target. Both do an optimistic drop of the acted item
+  from the cached summary for instant feedback; `onSettled` invalidates
+  to reconcile (and the realtime sub catches the server-side event too).
+  Other cards (goals, runs, due, artifacts, timer) keep deep-linking.
+- **De-overlap decision.** Investigated the overlap and it was already
+  minimal: the Inbox surfaces *your work* (assigned/unblocked, mentions,
+  waiting-on-me, human/agent-stalled, watching, sprint burn, agent
+  queue) and **never surfaced action requests or review gates** as a
+  decision affordance. The old CC "ask" card even deep-linked to
+  `inbox?actionRequest=<id>`, a param the Inbox does not consume — a
+  dead link. Decision: **Command Center is the canonical place to act on
+  decisions** (action requests + review gates); the Inbox stays "your
+  work" and keeps all its buckets untouched. Sharpened both subtitles to
+  read as complementary — CC: "Decisions & live agent ops"; Inbox: "Your
+  work — assignments, mentions, stalled, watching." Replaced the dead
+  inbox deep-link on the ask card's title with a link to the related
+  issue (a real destination) when one exists. No Inbox functionality
+  removed.
+- **No regressions.** `commandCenter` router untouched, so the sidebar /
+  dashboard `decisionsCount` badge is unchanged (and now refreshes in
+  realtime via the added invalidation). Mission Control untouched.
+  Validated: `pnpm typecheck`, eslint on both touched files, and the
+  action-request + inbox vitest suites (18 passing).
+
 ## 2026-05-21 — Immediate agent feedback on issue comments + status near the composer
 
 Operator feedback: commenting to trigger an agent gave no immediate UI

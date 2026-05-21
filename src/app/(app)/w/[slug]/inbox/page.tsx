@@ -291,7 +291,7 @@ export default function InboxPage() {
     <>
       <Topbar
         title="Inbox"
-        subtitle="Everything worth looking at, in one place."
+        subtitle="Your work — assignments, mentions, stalled, watching."
         actions={
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
