@@ -1,7 +1,14 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+} from "react";
 import { toast } from "sonner";
 import {
   ArrowRight,
@@ -17,6 +24,8 @@ import {
   Mail,
   Plus,
   Rocket,
+  RotateCcw,
+  SlidersHorizontal,
   Sparkles,
   UserPlus,
   X,
@@ -32,6 +41,12 @@ import { IdeasTile } from "@/components/dashboard/ideas-tile";
 import { WhatsNewTile } from "@/components/dashboard/whats-new-tile";
 import { AgentActivityTile } from "@/components/dashboard/agent-activity-tile";
 import { NeedsYouTile } from "@/components/dashboard/needs-you-tile";
+import { ResumeTile } from "@/components/dashboard/resume-tile";
+import {
+  DashboardStack,
+  type DashboardLayout,
+  type DashboardWidget,
+} from "@/components/dashboard/dashboard-stack";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
@@ -115,6 +130,54 @@ export default function DashboardPage() {
     [active.data],
   );
 
+  // ---- Customizable widget stack -------------------------------------
+  // Layout (order + hidden) persists on the user via `dashboardPrefs`.
+  // Seeded once `user.me` lands; thereafter local state is authoritative
+  // for the session and each change is pushed to the server.
+  const setPrefsMut = trpc.user.setDashboardPrefs.useMutation();
+  const [editing, setEditing] = useState(false);
+  const [layout, setLayout] = useState<DashboardLayout | null>(null);
+  const layoutSeeded = useRef(false);
+  useEffect(() => {
+    if (layoutSeeded.current || !account) return;
+    layoutSeeded.current = true;
+    const p = account.dashboardPrefs as
+      | { order?: string[]; hidden?: string[] }
+      | null;
+    setLayout({ order: p?.order ?? [], hidden: p?.hidden ?? [] });
+  }, [account]);
+  const effLayout: DashboardLayout = layout ?? { order: [], hidden: [] };
+  const persistLayout = useCallback(
+    (next: DashboardLayout) => {
+      setLayout(next);
+      setPrefsMut.mutate({ order: next.order, hidden: next.hidden, collapsed: [] });
+    },
+    [setPrefsMut],
+  );
+
+  const widgets: DashboardWidget[] = useMemo(
+    () => [
+      {
+        id: "today",
+        title: "Today",
+        node: <TodayWidget slug={slug} workspaceKey={workspaceKey} />,
+      },
+      { id: "resume", title: "Pick up where you left off", node: <ResumeTile slug={slug} /> },
+      { id: "agent-activity", title: "Agent activity", node: <AgentActivityTile slug={slug} /> },
+      { id: "ideas", title: "Ideas", node: <IdeasTile slug={slug} /> },
+      { id: "quick-notes", title: "Notes & journal", node: <QuickNotesWidget /> },
+      { id: "standup", title: "Standup", node: <StandupTile slug={slug} /> },
+      {
+        id: "whats-new",
+        title: "What's new",
+        node: (
+          <WhatsNewTile slug={slug} seenAt={account?.changelogSeenAt ?? null} />
+        ),
+      },
+    ],
+    [slug, workspaceKey, account?.changelogSeenAt],
+  );
+
   return (
     <>
       <Topbar
@@ -123,6 +186,31 @@ export default function DashboardPage() {
         actions={
           <div className="flex items-center gap-2">
             <DashboardViewToggle slug={slug} />
+            {editing && (
+              <button
+                type="button"
+                onClick={() => persistLayout({ order: [], hidden: [] })}
+                className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
+                title="Reset to the default layout"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Reset
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setEditing((v) => !v)}
+              className={cn(
+                "focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem]",
+                editing
+                  ? "bg-ember/15 text-ember"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              title="Reorder or hide dashboard widgets"
+            >
+              <SlidersHorizontal className="h-3 w-3" />
+              {editing ? "Done" : "Customize"}
+            </button>
             <ResumeSetupPill
               projectsCount={projects?.items.length ?? 0}
               issuesCount={anyIssue.data?.items.length ?? 0}
@@ -146,17 +234,15 @@ export default function DashboardPage() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-6 p-6">
-          <GreetingBar greeting={greeting} name={firstName} slug={slug} />
+          <GreetingBar
+            greeting={greeting}
+            name={firstName}
+            slug={slug}
+            isAdmin={!!isAdmin}
+            hasProjects={(projects?.items.length ?? 0) > 0}
+          />
 
           <NeedsYouTile slug={slug} />
-
-          <TodayWidget slug={slug} workspaceKey={workspaceKey} />
-
-          <AgentActivityTile slug={slug} />
-
-          <IdeasTile slug={slug} />
-
-          <QuickNotesWidget />
 
           <OnboardingCard
             projectsCount={projects?.items.length ?? 0}
@@ -203,9 +289,12 @@ export default function DashboardPage() {
             />
           )}
 
-          <StandupTile slug={slug} />
-
-          <WhatsNewTile slug={slug} />
+          <DashboardStack
+            widgets={widgets}
+            layout={effLayout}
+            editing={editing}
+            onChange={persistLayout}
+          />
 
           <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             {isAdmin && !events.isError ? (
@@ -309,10 +398,14 @@ function GreetingBar({
   greeting,
   name,
   slug,
+  isAdmin,
+  hasProjects,
 }: {
   greeting: string;
   name: string;
   slug: string;
+  isAdmin: boolean;
+  hasProjects: boolean;
 }) {
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-card/40 p-5 sm:flex-row sm:items-center">
@@ -329,18 +422,33 @@ function GreetingBar({
           <Plus className="h-3.5 w-3.5" />
           New issue
         </Button>
-        <Link href={`/w/${slug}/projects?templates=1`}>
-          <Button variant="outline" size="sm" className="gap-1.5">
-            <Rocket className="h-3.5 w-3.5" />
-            Browse templates
-          </Button>
-        </Link>
-        <Link href={`/w/${slug}/settings/members`}>
-          <Button variant="outline" size="sm" className="gap-1.5">
-            <UserPlus className="h-3.5 w-3.5" />
-            Invite member
-          </Button>
-        </Link>
+        {/* Templates matter when you're starting out; once the workspace
+            has projects, the more useful CTA is a fresh project. */}
+        {hasProjects ? (
+          <Link href={`/w/${slug}/projects?new`}>
+            <Button variant="outline" size="sm" className="gap-1.5">
+              <Plus className="h-3.5 w-3.5" />
+              New project
+            </Button>
+          </Link>
+        ) : (
+          <Link href={`/w/${slug}/projects?templates=1`}>
+            <Button variant="outline" size="sm" className="gap-1.5">
+              <Rocket className="h-3.5 w-3.5" />
+              Browse templates
+            </Button>
+          </Link>
+        )}
+        {/* Only admins/owners can actually invite — hide the dead button
+            for everyone else instead of showing it unconditionally. */}
+        {isAdmin && (
+          <Link href={`/w/${slug}/settings/members`}>
+            <Button variant="outline" size="sm" className="gap-1.5">
+              <UserPlus className="h-3.5 w-3.5" />
+              Invite member
+            </Button>
+          </Link>
+        )}
       </div>
     </section>
   );

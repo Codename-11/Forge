@@ -1,4 +1,5 @@
 "use client";
+import { useEffect } from "react";
 import { Sparkles } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { trpc } from "@/lib/trpc";
@@ -15,6 +16,18 @@ import { cn } from "@/lib/utils";
  */
 export default function WhatsNewPage() {
   const { data, isLoading } = trpc.system.changelogFull.useQuery();
+
+  // Opening this page is the "I've seen the changes" signal — stamp it
+  // once on mount so the dashboard tile's unseen dot clears. Invalidate
+  // user.me so the new timestamp propagates to the tile without a reload.
+  const utils = trpc.useUtils();
+  const markSeen = trpc.user.markChangelogSeen.useMutation({
+    onSuccess: () => utils.user.me.invalidate(),
+  });
+  useEffect(() => {
+    markSeen.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <>

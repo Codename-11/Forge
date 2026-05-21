@@ -15,8 +15,21 @@ import { cn } from "@/lib/utils";
  * link at the bottom routes to the full /whats-new page which
  * renders the changelog body verbatim.
  */
-export function WhatsNewTile({ slug }: { slug: string }) {
+export function WhatsNewTile({
+  slug,
+  seenAt = null,
+}: {
+  slug: string;
+  /** User's `changelogSeenAt`. When the latest dated entry is newer (or
+   *  this is null), an "unseen" dot shows until they open /whats-new. */
+  seenAt?: string | Date | null;
+}) {
   const { data, isLoading } = trpc.system.changelog.useQuery({ limit: 5 });
+
+  // Newest dated entry vs. last-seen timestamp → "unseen" indicator.
+  const latestDate = data?.entries.find((e) => e.date)?.date ?? null;
+  const hasUnseen =
+    !!latestDate && (!seenAt || new Date(latestDate) > new Date(seenAt));
 
   if (isLoading || !data) {
     return (
@@ -41,6 +54,13 @@ export function WhatsNewTile({ slug }: { slug: string }) {
         <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           What&apos;s new
         </span>
+        {hasUnseen && (
+          <span
+            className="h-1.5 w-1.5 rounded-full bg-ember"
+            title="New since you last looked"
+            aria-label="New changes since you last looked"
+          />
+        )}
         <span className="text-meta text-muted-foreground/70">
           recent changes
         </span>

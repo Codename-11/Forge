@@ -11,6 +11,27 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-05-21] — Customizable dashboard
+
+### Added
+
+- **Customize your dashboard** — a "Customize" toggle lets you drag to
+  reorder the dashboard's widgets and hide ones you don't use; the
+  layout is saved to your account. Reset returns to the default.
+- **"Pick up where you left off"** — a dashboard tile surfacing the
+  issues, projects, and other items you most recently opened.
+- **What's New "unseen" dot** — the What's New tile flags when there
+  are changes you haven't read yet, and clears once you open the full
+  page.
+
+### Changed
+
+- **Smarter dashboard greeting** — "Browse templates" becomes "New
+  project" once you have projects, and "Invite member" only shows for
+  admins.
+- **Dashboard ↔ canvas round-trip** — your personal canvas now has a
+  "Dashboard" button to get back, matching the dashboard's view toggle.
+
 ## [2026-05-21] — Canvas motion overhaul + issues-page polish
 
 ### Added

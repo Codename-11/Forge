@@ -7,6 +7,7 @@ import {
   GitBranch,
   Image as ImageIcon,
   Layers,
+  LayoutGrid,
   Maximize2,
   MessageCircle,
   Minimize2,
@@ -313,6 +314,9 @@ export default function CanvasViewerPage() {
   const params = useParams<{ slug: string; canvasId: string }>();
   const router = useRouter();
   const ws = useWorkspace();
+  // Persist the dashboard view so the List/Canvas toggle round-trips
+  // coherently when this is the user's personal canvas.
+  const setDashboardViewMut = trpc.user.setDashboardView.useMutation();
   const utils = trpc.useUtils();
   const meQ = trpc.user.me.useQuery(undefined, { staleTime: 5 * 60_000 });
   const myUserId = meQ.data?.id ?? null;
@@ -3521,6 +3525,19 @@ export default function CanvasViewerPage() {
             >
               <ChevronLeft className="h-3.5 w-3.5" /> Back
             </Button>
+            {canvasKind === "PERSONAL" && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setDashboardViewMut.mutate({ view: "list" });
+                  router.push(`/w/${ws.slug}/dashboard`);
+                }}
+                title="Back to the dashboard (List view)"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" /> Dashboard
+              </Button>
+            )}
             <Button
               size="sm"
               variant="ghost"
