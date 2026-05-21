@@ -17,6 +17,7 @@ import {
   type GoalStatus,
 } from "@/components/orchestration-ui/status";
 import { fmtUsd } from "@/components/orchestration-ui/budget-meter";
+import { GoalLoopExplainer } from "@/components/orchestration/goal-loop-explainer";
 import { trpc } from "@/lib/trpc";
 import { useGoalRouter, type GoalRow } from "@/components/orchestration-ui/use-goal-trpc";
 
@@ -123,19 +124,31 @@ export default function GoalsPage() {
         ) : isLoading ? (
           <SkeletonList rows={4} />
         ) : items.length === 0 ? (
-          <EmptyState
-            variant="page"
-            icon={<Target />}
-            title={filter === "all" ? "No goals yet" : `No ${filter.toLowerCase()} goals`}
-            description={
-              <span>
-                A goal is a high-level objective an agent crew decomposes
-                into an execution plan, then drives to completion. Type{" "}
-                <span className="font-mono">/goal &lt;objective&gt;</span>{" "}
-                in any issue&apos;s comment composer to create one.
-              </span>
-            }
-          />
+          <div className="mx-auto flex max-w-xl flex-col items-center gap-4 py-6">
+            <EmptyState
+              variant="page"
+              icon={<Target />}
+              title={filter === "all" ? "No goals yet" : `No ${filter.toLowerCase()} goals`}
+              description={
+                <span>
+                  A goal is a high-level objective an agent crew drives to
+                  completion on its own. Hit{" "}
+                  <span className="font-medium text-foreground">New goal</span>{" "}
+                  above, or type{" "}
+                  <span className="font-mono">/goal &lt;objective&gt;</span> in
+                  any issue&apos;s comment composer.
+                </span>
+              }
+              action={
+                canCreate ? (
+                  <Button size="sm" variant="ember" onClick={() => setCreating(true)}>
+                    <Plus className="h-3.5 w-3.5" /> New goal
+                  </Button>
+                ) : undefined
+              }
+            />
+            <GoalLoopExplainer className="w-full" />
+          </div>
         ) : (
           <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
             {items.map((goal) => (
@@ -153,27 +166,37 @@ export default function GoalsPage() {
           onClick={() => setCreating(false)}
         >
           <div
-            className="w-full max-w-md rounded-lg border border-border bg-card p-4 shadow-xl"
+            className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg border border-border bg-card p-4 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="mb-3 text-sm font-medium">New goal</h2>
+            <h2 className="text-sm font-medium">New goal</h2>
+            <p className="mb-3 mt-1 text-meta text-muted-foreground">
+              The crew&apos;s planner will decompose this into a plan you
+              approve, then run and review it to completion on its own.
+            </p>
+            <label className="block text-meta text-muted-foreground">
+              Objective
+            </label>
             <input
               autoFocus
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Objective (e.g. Migrate auth to NextAuth v5)"
-              className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+              placeholder="e.g. Migrate auth to NextAuth v5"
+              className="mt-1 w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
             />
+            <label className="mt-3 block text-meta text-muted-foreground">
+              Context for the planner (optional)
+            </label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
-              placeholder="Context for the planner (optional)"
-              className="mt-2 w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-meta"
+              placeholder="Constraints, links, acceptance criteria…"
+              className="mt-1 w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-meta"
             />
             <label className="mt-3 block text-meta text-muted-foreground">
-              Crew
+              Crew that runs it
             </label>
             <CrewSelector
               className="mt-1"

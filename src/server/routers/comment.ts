@@ -10,6 +10,7 @@ import {
 } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import { agentIdSchema } from "@/server/validators";
 import { extractMentions } from "@/server/services/mentions";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
 import {
@@ -73,7 +74,7 @@ export const inlineActionRequestSchema = z.object({
     .max(8)
     .optional(),
   assignedUserId: z.string().cuid().nullable().optional(),
-  assignedAgentId: z.string().cuid().nullable().optional(),
+  assignedAgentId: agentIdSchema.nullable().optional(),
   dueAt: z.coerce.date().nullable().optional(),
 });
 

@@ -17,6 +17,7 @@ import {
   type GoalStatus,
 } from "@/components/orchestration-ui/status";
 import { BudgetMeter } from "@/components/orchestration/budget-meter";
+import { GoalLoopExplainerCollapsible } from "@/components/orchestration/goal-loop-explainer";
 import {
   CrewRosterPanel,
   type CrewRosterData,
@@ -180,6 +181,7 @@ export default function GoalDetailPage() {
                 {goal.description}
               </p>
             ) : null}
+            <GoalLoopExplainerCollapsible className="mt-3" />
           </header>
 
           {/* Active attempt */}

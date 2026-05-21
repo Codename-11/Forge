@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { GoalStatus } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
+import { agentIdSchema } from "@/server/validators";
 import {
   abandonGoal,
   createGoal,
@@ -88,7 +89,7 @@ export const goalRouter = router({
     .input(
       z.object({
         goalId: z.string().cuid(),
-        plannerAgentId: z.string().cuid().nullable().optional(),
+        plannerAgentId: agentIdSchema.nullable().optional(),
         contextSetId: z.string().cuid().nullable().optional(),
       }),
     )

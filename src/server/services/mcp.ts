@@ -28,6 +28,7 @@ import { openOrTouchRun, appendRunEvent, finishRunsForIssue } from "@/server/ser
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { buildChatContextBundle } from "@/server/services/chat-context";
+import { agentIdSchema } from "@/server/validators";
 import {
   assertKeyScope,
   buildKeyScopeWhere,
@@ -2271,7 +2272,7 @@ export const mcpTools = {
             .max(8)
             .optional(),
           assignedUserId: z.string().cuid().nullable().optional(),
-          assignedAgentId: z.string().cuid().nullable().optional(),
+          assignedAgentId: agentIdSchema.nullable().optional(),
           dueAt: z.coerce.date().nullable().optional(),
         })
         .optional(),
@@ -6338,7 +6339,7 @@ export const mcpTools = {
           z.object({
             title: z.string().min(1).max(300),
             body: z.string().max(50_000).nullable().optional(),
-            assignedAgentId: z.string().cuid().nullable().optional(),
+            assignedAgentId: agentIdSchema.nullable().optional(),
             assignedUserId: z.string().cuid().nullable().optional(),
             expectedOutput: z.string().max(50_000).nullable().optional(),
             dependsOnStepIds: z.array(z.string()).max(50).optional(),
@@ -9889,7 +9890,7 @@ export const mcpTools = {
     scopes: ["READ_ISSUES"] as const,
     input: z.object({
       status: z.enum(["OPEN", "RESOLVED", "DISMISSED", "SNOOZED"]).optional(),
-      assignedAgentId: z.string().cuid().optional(),
+      assignedAgentId: agentIdSchema.optional(),
       assignedUserId: z.string().cuid().optional(),
       issueId: z.string().cuid().optional(),
       limit: z.number().int().min(1).max(100).default(50),
@@ -9972,7 +9973,7 @@ export const mcpTools = {
         .max(8)
         .optional(),
       assignedUserId: z.string().cuid().nullable().optional(),
-      assignedAgentId: z.string().cuid().nullable().optional(),
+      assignedAgentId: agentIdSchema.nullable().optional(),
       sourceType: z.string().max(40).nullable().optional(),
       sourceId: z.string().max(40).nullable().optional(),
       issueId: z.string().cuid().nullable().optional(),
@@ -11026,7 +11027,7 @@ export const mcpTools = {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({
       goalId: z.string().cuid(),
-      plannerAgentId: z.string().cuid().nullable().optional(),
+      plannerAgentId: agentIdSchema.nullable().optional(),
       contextSetId: z.string().cuid().nullable().optional(),
     }),
     async run(
@@ -11069,7 +11070,7 @@ export const mcpTools = {
               .nullable()
               .optional(),
             dependsOnStepIndexes: z.array(z.number().int().min(0)).max(50).optional(),
-            assignedAgentId: z.string().cuid().nullable().optional(),
+            assignedAgentId: agentIdSchema.nullable().optional(),
             assignedRole: z.string().max(40).nullable().optional(),
           }),
         )
@@ -11153,7 +11154,7 @@ export const mcpTools = {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({
       stepId: z.string().cuid(),
-      judgeAgentId: z.string().cuid().nullable().optional(),
+      judgeAgentId: agentIdSchema.nullable().optional(),
     }),
     async run(input: { stepId: string; judgeAgentId?: string | null }, ctx: McpContext) {
       const { dispatchJudge } = await import("@/server/services/orchestration-service");
@@ -11211,7 +11212,7 @@ export const mcpTools = {
       members: z
         .array(
           z.object({
-            agentId: z.string().cuid(),
+            agentId: agentIdSchema,
             role: z.enum(["PLANNER", "WORKER", "REVIEWER", "OBSERVER", "OPERATOR_PROXY"]),
           }),
         )
@@ -11276,7 +11277,7 @@ export const mcpTools = {
     scopes: ["ADMIN"] as const,
     input: z.object({
       crewId: z.string().cuid(),
-      agentId: z.string().cuid(),
+      agentId: agentIdSchema,
       role: z.enum(["PLANNER", "WORKER", "REVIEWER", "OBSERVER", "OPERATOR_PROXY"]),
     }),
     async run(
