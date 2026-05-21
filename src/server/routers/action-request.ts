@@ -4,9 +4,12 @@ import { ActionRequestKind, ActionRequestStatus, NotificationSeverity } from "@p
 import { router, workspaceProcedure } from "@/server/trpc";
 import {
   acceptActionRequest,
+  closeActionRequestVoting,
   createActionRequest,
   declineActionRequest,
+  getActionRequestResults,
   transitionActionRequest,
+  voteOnActionRequest,
 } from "@/server/services/action-request-service";
 
 /**
@@ -16,6 +19,18 @@ import {
  * shape — no need to discriminated-union it here.
  */
 const actionRequestKindSchema = z.nativeEnum(ActionRequestKind);
+
+/**
+ * Zod schema for poll options at the API boundary. Mirrors the
+ * service-side `actionRequestPollOptionsSchema` but stays loose at
+ * the edge — the service re-validates with the strict count + unique
+ * checks before persistence.
+ */
+const pollOptionSchema = z.object({
+  key: z.string().trim().min(1).max(80),
+  label: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(2_000).optional(),
+});
 
 export const actionRequestRouter = router({
   list: workspaceProcedure
@@ -123,6 +138,13 @@ export const actionRequestRouter = router({
         severity: z.nativeEnum(NotificationSeverity).optional(),
         kind: actionRequestKindSchema.optional(),
         payload: z.unknown().optional(),
+        /**
+         * Optional poll options. When provided, the renderer treats
+         * this request as a multi-vote poll — operators vote via
+         * `actionRequest.vote` and the requester closes voting via
+         * `actionRequest.closeVoting` to surface the winning option.
+         */
+        options: z.array(pollOptionSchema).min(2).max(8).optional(),
         assignedUserId: z.string().cuid().nullable().optional(),
         assignedAgentId: z.string().cuid().nullable().optional(),
         sourceType: z.string().max(40).nullable().optional(),
@@ -141,6 +163,7 @@ export const actionRequestRouter = router({
         severity: input.severity,
         kind: input.kind,
         payload: input.payload,
+        options: input.options ?? null,
         assignedUserId: input.assignedUserId ?? null,
         assignedAgentId: input.assignedAgentId ?? null,
         sourceType: input.sourceType ?? null,
@@ -149,6 +172,72 @@ export const actionRequestRouter = router({
         dueAt: input.dueAt ?? null,
       });
       return result;
+    }),
+
+  /**
+   * Cast or update the caller's vote on a poll-style ActionRequest.
+   * Each user gets one vote per request; calling this with a
+   * different `optionKey` overwrites the previous pick until the
+   * requester closes voting.
+   */
+  vote: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        optionKey: z.string().trim().min(1).max(80),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session?.user?.id;
+      if (!userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
+      }
+      return voteOnActionRequest(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: userId,
+        requestId: input.id,
+        optionKey: input.optionKey,
+      });
+    }),
+
+  /**
+   * Return live vote tallies for a poll-style ActionRequest. Includes
+   * the caller's current pick (if any) so the UI can highlight it.
+   * `winningOptionKey` is populated only after voting closes.
+   */
+  results: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.session?.user?.id;
+      if (!userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
+      }
+      return getActionRequestResults(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: userId,
+        requestId: input.id,
+      });
+    }),
+
+  /**
+   * Close voting on a poll. Only the original requester (the user
+   * who created the request, or the agent that authored it for an
+   * agent-requested poll) can call this. Returns the winning option
+   * key — ties are broken by earliest first-vote.
+   */
+  closeVoting: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session?.user?.id;
+      if (!userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
+      }
+      return closeActionRequestVoting(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: userId,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        requestId: input.id,
+      });
     }),
 
   /**

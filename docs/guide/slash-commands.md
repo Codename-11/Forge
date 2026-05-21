@@ -130,6 +130,24 @@ Explicit `applyCommands` is more reliable than text-parsing — there's
 no surprise from a label name with weird whitespace or a `/` in a
 filename.
 
+## Comment templates
+
+The issue-detail comment composer also surfaces four **quick-comment
+templates** in the autocomplete dropdown, on top of the seven commands
+above. Templates expand to a templated comment body in-place (and, in
+two cases, fire a follow-up mutation):
+
+| Template | Expands to | Side-effect |
+|---|---|---|
+| `/status [<next-step>]` | `**Status:** Working on <next-step>` | — |
+| `/blocked <reason>` | `**Blocked:** <reason>` | Opens an action request titled "Unblock needed" |
+| `/approve` | `**Approved** ✓` | — |
+| `/handoff @<agent> [<context>]` | Prepends `/assign @<agent>`, then `**Handing off to @<agent>:** <context>` | Reassigns to the named agent (via the existing `/assign` path) |
+
+Templates are composer-only; QuickCreate sticks to the seven field-setting
+commands. See [Issues → Quick-comment slash templates](/guide/issues.html#quick-comment-slash-templates)
+for the full UX walk-through.
+
 ## Where to next
 
 - [Issues](/guide/issues.html) — the primary write surface.

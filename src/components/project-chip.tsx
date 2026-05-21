@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Folder } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { EntityHoverPreview } from "@/components/entity-hover-preview";
 
 /**
  * Compact pill linking to a project's detail page. Renders the project's
@@ -79,15 +80,19 @@ export function ProjectChip({
 
   if (!href) {
     return (
-      <span className={chipClass} title={`${project.key} · ${project.name}`}>
-        {body}
-      </span>
+      <EntityHoverPreview kind="project" id={project.id}>
+        <span className={chipClass} title={`${project.key} · ${project.name}`}>
+          {body}
+        </span>
+      </EntityHoverPreview>
     );
   }
 
   return (
-    <Link href={href} className={chipClass} title={`${project.name} (open in project)`}>
-      {body}
-    </Link>
+    <EntityHoverPreview kind="project" id={project.id}>
+      <Link href={href} className={chipClass} title={`${project.name} (open in project)`}>
+        {body}
+      </Link>
+    </EntityHoverPreview>
   );
 }

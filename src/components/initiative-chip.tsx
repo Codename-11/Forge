@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Diamond } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { EntityHoverPreview } from "@/components/entity-hover-preview";
 
 /**
  * Compact pill linking to an initiative detail page. Visually distinct
@@ -66,15 +67,19 @@ export function InitiativeChip({
 
   if (!href) {
     return (
-      <span className={chipClass} title={titleText}>
-        {body}
-      </span>
+      <EntityHoverPreview kind="initiative" id={initiative.id}>
+        <span className={chipClass} title={titleText}>
+          {body}
+        </span>
+      </EntityHoverPreview>
     );
   }
 
   return (
-    <Link href={href} className={chipClass} title={titleText}>
-      {body}
-    </Link>
+    <EntityHoverPreview kind="initiative" id={initiative.id}>
+      <Link href={href} className={chipClass} title={titleText}>
+        {body}
+      </Link>
+    </EntityHoverPreview>
   );
 }

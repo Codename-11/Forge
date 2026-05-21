@@ -114,9 +114,27 @@ or `ABANDONED` (so `ACTIVE` and `STALLED` qualify).
 
 | Tool             | Summary                                                                |
 |------------------|------------------------------------------------------------------------|
-| `create`         | Post a comment on an issue.                                            |
+| `create`         | Post a comment on an issue. Optional `confidence: "LOW" \| "MEDIUM" \| "HIGH"` annotates how much to scrutinize the claim (only rendered for agent-authored rows). Optional `actionRequest` bundles a recommendation card in the same call; pass `actionRequest.options[]` to make that card a multi-vote poll. |
 | `upsertStatus`   | Idempotent rolling STATUS comment for the calling agent's run.         |
 | `list`           | Paginated history. `{ issueId, before?, limit? = 50 (max 200) }` — newest first, hides soft-deleted, includes `author` + `authoringAgent`. Scope: `READ_ISSUES`. |
+
+**`confidence`** is persisted regardless of caller, but the UI only
+renders the chip for agent-authored comments. Use it from agents to
+flag "tentative" findings the operator should double-check vs
+"verified" claims you actually executed:
+
+```json
+{
+  "issueId": "iss_...",
+  "body": "I think this is a CSP bug, but I haven't reproduced it locally.",
+  "confidence": "LOW"
+}
+```
+
+Comment edits via `comment.update` (tRPC; no MCP equivalent today)
+push the old body onto `Comment.revisions` (`[{ body, editedAt }]`,
+capped at 20 entries — oldest dropped first). Read history via
+`comment.history` (tRPC).
 
 ### `projects`
 
@@ -398,6 +416,106 @@ Scope: `READ_ISSUES`.
 | Tool | Summary |
 |---|---|
 | `list` | `{ category? }`. Returns `{ id, name, category, color, position, isDefault }[]` ordered by `position`. Optional `category` filter (`BACKLOG | TODO | IN_PROGRESS | IN_REVIEW | DONE | CANCELED`). Used by agents to discover the right `statusId` for an `issues.transition` call without inventing ids — e.g., the local `forge` daemon calls `statuses.list({ category: "IN_PROGRESS" })` on `AGENT_ASSIGNED` to flip the issue into work-in-progress before spawning Claude. |
+
+### `actionRequests`
+
+Precise, resolvable asks. An agent surfaces a blocker ("I need a
+decision before continuing") or a recommendation ("I think we should
+transition this to In Progress — Accept?"); the operator clicks
+Accept / Decline. Created by `comments.create` (inline via the
+`actionRequest` bundle) or standalone via `actionRequests.create`.
+
+Scope: `WRITE_ISSUES` for mutations, `READ_ISSUES` for queries.
+
+| Tool | Summary |
+|---|---|
+| `list` | `{ status?, assignedAgentId?, assignedUserId?, issueId?, limit? = 50 }`. Newest first. |
+| `create` | Create a request. See "Polls" below for multi-vote variant. |
+| `transition` | Flip status (RESOLVED / DISMISSED / SNOOZED / REJECTED). |
+| `accept` | Run the bound dispatch (transition / setLabels / etc.) and resolve. Permission-gated to assignee / watcher / OWNER / ADMIN. |
+| `decline` | Reject without dispatching. Same permission gate as Accept. |
+| `vote` | Cast or update the caller's vote on a poll-style request. `{ id, optionKey }`. |
+| `results` | Live vote tallies for a poll. `{ id }` → `{ options[], total, myVote, winningOptionKey, votingClosedAt }`. |
+| `closeVoting` | Close voting on a poll. Only the requester can call this. `{ id }` → `{ id, winningOptionKey }`. |
+
+**`create`** accepts the usual fields (`title, body, severity, kind,
+payload, assignedUserId, assignedAgentId, issueId, dueAt, sourceType,
+sourceId`) plus an optional `options[]` for poll-style requests:
+
+```json
+{
+  "title": "I see three ways to fix this — pick one",
+  "body": "We can retry, isolate, or rewrite. Each has tradeoffs.",
+  "kind": "FREE_FORM",
+  "issueId": "iss_...",
+  "options": [
+    { "key": "retry",    "label": "Add retry-on-failure", "description": "Cheapest, masks the underlying race." },
+    { "key": "isolate",  "label": "Isolate the test in its own worker" },
+    { "key": "rewrite",  "label": "Rewrite against a deterministic fixture" }
+  ]
+}
+```
+
+**Polls — voting flow.** When `options[]` is set, the renderer treats
+the request as a multi-vote poll. Operators (and other agents with
+session-bound keys) cast votes; the requester closes voting to pick
+the winner. Each user gets one vote per request — re-calling `vote`
+overwrites the previous pick until `closeVoting` is called.
+
+```json
+// actionRequests.vote
+{ "id": "ar_...", "optionKey": "isolate" }
+// → { "id": "ar_...", "optionKey": "isolate", "changed": false }
+
+// actionRequests.results
+{ "id": "ar_..." }
+// → {
+//   "options": [{ "optionKey": "retry", "label": "...", "count": 0, "firstVoteAt": null }, ...],
+//   "total": 3,
+//   "myVote": "isolate",
+//   "votingClosedAt": null,
+//   "winningOptionKey": null
+// }
+
+// actionRequests.closeVoting  (only the requester may call this)
+{ "id": "ar_..." }
+// → { "id": "ar_...", "winningOptionKey": "isolate" }
+```
+
+Ties are broken by earliest first-vote timestamp; on equal counts AND
+no votes at all, the option that appears first in `options[]` wins.
+After `closeVoting`, additional `vote` calls return `400`. Closing
+voting does NOT resolve the request — the requester typically posts a
+follow-up comment ("going with X") then calls `accept` or `resolve`.
+
+The killer flow: Victor posts "I see three ways — which one?" with
+`kind: FREE_FORM` + `options`; three watchers vote; Victor calls
+`closeVoting`; the winning option drives his next comment.
+
+### `notification`
+
+Per-user notification preferences. No row exists by default — every
+alertable EventKind is enabled. Use this to let a user say "stop
+paging me about ISSUE_STALLED in this workspace" without disabling
+the whole notification feed.
+
+Scope: `READ_USERS` for the query, `WRITE_USERS` for the mutation.
+
+| Tool | Summary |
+|---|---|
+| `setPreference` | Upsert a preference row. `{ eventKind, enabled, delivery?, scope? = "workspace" }`. Pass `scope: "global"` to set the cross-workspace default. |
+
+```json
+// notification.setPreference  — disable stalled alerts for this workspace
+{ "eventKind": "ISSUE_STALLED", "enabled": false, "scope": "workspace" }
+// → { "id": "...", "userId": "...", "workspaceId": "...", "eventKind": "ISSUE_STALLED", "enabled": false, "delivery": "INBOX_ONLY" }
+```
+
+A workspace-scoped row wins over a global row for the same kind. Set
+`delivery: "INBOX_AND_DIGEST"` to flag a kind for the future email /
+Discord digest path (today, both delivery modes behave identically —
+the field exists so we don't need a second migration when digest
+ships).
 
 ### `agent` (composite context)
 

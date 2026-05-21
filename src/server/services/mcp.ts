@@ -2221,6 +2221,13 @@ export const mcpTools = {
         .max(4)
         .optional(),
       /**
+       * Optional confidence flag (LOW / MEDIUM / HIGH). Only rendered
+       * as a chip on agent-authored comments — humans can pass it
+       * but the UI suppresses the chip. Let operators decide how
+       * much to scrutinize an agent's claim before acting on it.
+       */
+      confidence: z.enum(["LOW", "MEDIUM", "HIGH"]).nullable().optional(),
+      /**
        * Optional ActionRequest bundle. When present, a matching row
        * is created in the same flow with `sourceType="comment"` +
        * `sourceId=<commentId>` so `actionRequest.forComment` resolves
@@ -2246,6 +2253,23 @@ export const mcpTools = {
             ])
             .default("FREE_FORM"),
           payload: z.unknown().optional(),
+          /**
+           * Inline poll options. Same shape as the top-level
+           * `actionRequests.create` tool. Most useful when an agent
+           * posts a comment AND an attached poll in one round-trip
+           * ("here are three approaches — which one?").
+           */
+          options: z
+            .array(
+              z.object({
+                key: z.string().trim().min(1).max(80),
+                label: z.string().trim().min(1).max(200),
+                description: z.string().trim().max(2_000).optional(),
+              }),
+            )
+            .min(2)
+            .max(8)
+            .optional(),
           assignedUserId: z.string().cuid().nullable().optional(),
           assignedAgentId: z.string().cuid().nullable().optional(),
           dueAt: z.coerce.date().nullable().optional(),
@@ -2257,6 +2281,7 @@ export const mcpTools = {
         issueId: string;
         body: string;
         suggestedReplies?: string[];
+        confidence?: "LOW" | "MEDIUM" | "HIGH" | null;
         actionRequest?: {
           title: string;
           body?: string | null;
@@ -2270,6 +2295,7 @@ export const mcpTools = {
             | "ARCHIVE"
             | "CLOSE_AS_DUPLICATE";
           payload?: unknown;
+          options?: Array<{ key: string; label: string; description?: string }>;
           assignedUserId?: string | null;
           assignedAgentId?: string | null;
           dueAt?: Date | null;
@@ -2291,6 +2317,7 @@ export const mcpTools = {
           body: input.body,
           authoringAgentId,
           suggestedReplies: input.suggestedReplies ?? [],
+          confidence: input.confidence ?? null,
         },
       });
       // Touch the agent run on every agent-authored comment so the live
@@ -2332,6 +2359,7 @@ export const mcpTools = {
           severity: input.actionRequest.severity as never,
           kind: input.actionRequest.kind as never,
           payload: input.actionRequest.payload,
+          options: input.actionRequest.options ?? null,
           assignedUserId: input.actionRequest.assignedUserId ?? null,
           assignedAgentId: input.actionRequest.assignedAgentId ?? null,
           sourceType: "comment",
@@ -9905,6 +9933,24 @@ export const mcpTools = {
        *   CLOSE_AS_DUPLICATE → { duplicateOfIssueId; statusId? }
        */
       payload: z.unknown().optional(),
+      /**
+       * Optional poll options — when provided, the request renders
+       * as a multi-vote poll. Each option carries `key` (stable id),
+       * `label`, and an optional `description`. Cap of 8 options.
+       * Operators vote via `actionRequests.vote`; the requester
+       * closes voting via `actionRequests.closeVoting`.
+       */
+      options: z
+        .array(
+          z.object({
+            key: z.string().trim().min(1).max(80),
+            label: z.string().trim().min(1).max(200),
+            description: z.string().trim().max(2_000).optional(),
+          }),
+        )
+        .min(2)
+        .max(8)
+        .optional(),
       assignedUserId: z.string().cuid().nullable().optional(),
       assignedAgentId: z.string().cuid().nullable().optional(),
       sourceType: z.string().max(40).nullable().optional(),
@@ -9926,6 +9972,7 @@ export const mcpTools = {
           | "ARCHIVE"
           | "CLOSE_AS_DUPLICATE";
         payload?: unknown;
+        options?: Array<{ key: string; label: string; description?: string }>;
         assignedUserId?: string | null;
         assignedAgentId?: string | null;
         sourceType?: string | null;
@@ -9947,6 +9994,7 @@ export const mcpTools = {
         severity: input.severity as never,
         kind: input.kind as never,
         payload: input.payload,
+        options: input.options ?? null,
         assignedUserId: input.assignedUserId ?? null,
         assignedAgentId: input.assignedAgentId ?? null,
         sourceType: input.sourceType ?? null,
@@ -10048,6 +10096,155 @@ export const mcpTools = {
         actorId: ctx.userId,
         requestId: input.id,
         reason: input.reason ?? null,
+      });
+    },
+  },
+
+  /**
+   * Cast or update a vote on a poll-style ActionRequest. The calling
+   * user (resolved via the API key's linked user) gets one vote per
+   * request — re-calling with a different `optionKey` overwrites the
+   * previous pick until the requester closes voting. Useful for agent
+   * crews where Reviewer agents weigh in alongside humans.
+   */
+  "actionRequests.vote": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      optionKey: z.string().trim().min(1).max(80),
+    }),
+    async run(input: { id: string; optionKey: string }, ctx: McpContext) {
+      if (!ctx.userId) {
+        throw new Error(
+          "actionRequests.vote requires a user context (anonymous votes not supported).",
+        );
+      }
+      const { voteOnActionRequest } = await import(
+        "@/server/services/action-request-service"
+      );
+      return voteOnActionRequest(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId,
+        requestId: input.id,
+        optionKey: input.optionKey,
+      });
+    },
+  },
+
+  /**
+   * Return live vote tallies for a poll-style ActionRequest. Read-only;
+   * safe to call any time. Includes the caller's current pick and
+   * `winningOptionKey` once voting has been closed.
+   */
+  "actionRequests.results": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      if (!ctx.userId) {
+        throw new Error(
+          "actionRequests.results requires a user context.",
+        );
+      }
+      const { getActionRequestResults } = await import(
+        "@/server/services/action-request-service"
+      );
+      return getActionRequestResults(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId,
+        requestId: input.id,
+      });
+    },
+  },
+
+  /**
+   * Close voting on a poll. Only the original requester (human user
+   * or the agent linked to the calling key) may call this. Returns
+   * the winning `optionKey` so the agent can use it to write its
+   * follow-up comment ("going with option X").
+   */
+  "actionRequests.closeVoting": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      if (!ctx.userId) {
+        throw new Error(
+          "actionRequests.closeVoting requires a user context.",
+        );
+      }
+      const { closeActionRequestVoting } = await import(
+        "@/server/services/action-request-service"
+      );
+      return closeActionRequestVoting(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        requestId: input.id,
+      });
+    },
+  },
+
+  // --------------------------------------------------------- Notifications
+  //
+  // Per-user, per-EventKind opt-out. No row = enabled (default), so
+  // agents acting on behalf of a user can disable an alert kind they
+  // don't want to hear about without affecting other workspace
+  // members' inboxes.
+
+  /**
+   * Upsert a notification preference for the calling user.
+   * `scope: "workspace"` (default) applies to the current workspace
+   * only; `scope: "global"` sets the user's cross-workspace default.
+   * When both rows exist for the same kind, the workspace-scoped row
+   * wins in the materializer.
+   */
+  "notification.setPreference": {
+    scopes: ["READ_USERS"] as const,
+    input: z.object({
+      eventKind: z.string().min(1).max(80),
+      enabled: z.boolean(),
+      delivery: z.enum(["INBOX_ONLY", "INBOX_AND_DIGEST"]).optional(),
+      scope: z.enum(["workspace", "global"]).default("workspace"),
+    }),
+    async run(
+      input: {
+        eventKind: string;
+        enabled: boolean;
+        delivery?: "INBOX_ONLY" | "INBOX_AND_DIGEST";
+        scope: "workspace" | "global";
+      },
+      ctx: McpContext,
+    ) {
+      if (!ctx.userId) {
+        throw new Error(
+          "notification.setPreference requires a user context.",
+        );
+      }
+      const workspaceId = input.scope === "global" ? null : ctx.workspaceId;
+      const existing = await db.notificationPreference.findFirst({
+        where: {
+          userId: ctx.userId,
+          workspaceId,
+          eventKind: input.eventKind,
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        return db.notificationPreference.update({
+          where: { id: existing.id },
+          data: {
+            enabled: input.enabled,
+            delivery: input.delivery ?? "INBOX_ONLY",
+          },
+        });
+      }
+      return db.notificationPreference.create({
+        data: {
+          userId: ctx.userId,
+          workspaceId,
+          eventKind: input.eventKind,
+          enabled: input.enabled,
+          delivery: input.delivery ?? "INBOX_ONLY",
+        },
       });
     },
   },

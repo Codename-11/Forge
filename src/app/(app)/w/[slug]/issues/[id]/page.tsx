@@ -1046,8 +1046,31 @@ function AgentPickerModal({
             <span className="truncate">{it.name}</span>
             <span className="font-mono text-[0.6875rem] text-muted-foreground">@{it.profileKey}</span>
             {it.capabilities.length > 0 && (
-              <span className="ml-2 hidden min-w-0 truncate text-[0.6875rem] text-muted-foreground/80 sm:inline">
-                {it.capabilities.slice(0, 3).join(" · ")}
+              // Capability pills — warm ember tone, with the full
+              // capability label exposed via the title attribute so
+              // operators can hover to disambiguate cryptic tags
+              // (`triage-urgent`, `code-review`, etc.).
+              <span
+                className="ml-2 hidden min-w-0 flex-wrap items-center gap-1 sm:inline-flex"
+                aria-label="Capabilities"
+              >
+                {it.capabilities.slice(0, 3).map((cap) => (
+                  <span
+                    key={cap}
+                    title={`Capability: ${cap}`}
+                    className="inline-flex items-center rounded border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-ember"
+                  >
+                    {cap}
+                  </span>
+                ))}
+                {it.capabilities.length > 3 && (
+                  <span
+                    title={`More capabilities: ${it.capabilities.slice(3).join(", ")}`}
+                    className="inline-flex items-center rounded bg-subtle/60 px-1.5 py-0.5 font-mono text-[0.625rem] text-muted-foreground"
+                  >
+                    +{it.capabilities.length - 3}
+                  </span>
+                )}
               </span>
             )}
             {active && (

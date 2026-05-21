@@ -8,6 +8,11 @@ import {
 } from "react";
 import { cn } from "@/lib/utils";
 import { SLASH_COMMAND_HELP } from "@/lib/slash-commands";
+import {
+  findTemplate,
+  SLASH_TEMPLATE_HELP,
+  type SlashTemplateSideEffect,
+} from "@/lib/slash-templates";
 
 /**
  * Slash-command autocomplete dropdown for issue / comment composers.
@@ -111,8 +116,29 @@ export function useSlashAutocomplete<
   value: string;
   onChange: (next: string) => void;
   textareaRef: RefObject<T | null>;
+  /**
+   * When true, the autocomplete also surfaces TEMPLATES from
+   * `slash-templates.ts` (`/status`, `/blocked`, `/approve`,
+   * `/handoff`). Picking a template REPLACES the line with the
+   * expanded body and (optionally) fires `onTemplateSideEffect`.
+   * Defaults to `false` — QuickCreate (where the body becomes the
+   * issue title) is unaffected.
+   */
+  includeTemplates?: boolean;
+  /**
+   * Fired when the operator picks a template that carries a non-`none`
+   * side-effect. The composer is responsible for dispatching the
+   * follow-up mutation (e.g. opening an action-request for `/blocked`).
+   */
+  onTemplateSideEffect?: (sideEffect: SlashTemplateSideEffect) => void;
 }) {
-  const { value, onChange, textareaRef } = args;
+  const {
+    value,
+    onChange,
+    textareaRef,
+    includeTemplates = false,
+    onTemplateSideEffect,
+  } = args;
   const [cursor, setCursor] = useState<number | null>(null);
   const [forceClosed, setForceClosed] = useState(false);
   const [active, setActive] = useState(0);
@@ -141,18 +167,24 @@ export function useSlashAutocomplete<
     return true;
   }, [value, lineCtx]);
 
-  // Filter the help list against the typed text after `/`.
+  // Filter the help list against the typed text after `/`. Templates
+  // are appended after the structured commands so the seven
+  // "set a field" commands stay first; templates layer on as quick
+  // comment expanders when the caller opts in.
   const matches = useMemo(() => {
     if (!lineCtx) return [];
     const trimmed = lineCtx.line.trimStart();
     if (!trimmed.startsWith("/")) return [];
     const keywordOnly = trimmed.split(/\s+/, 1)[0]; // includes leading "/"
     const q = keywordOnly.slice(1).toLowerCase();
-    if (q.length === 0) return [...SLASH_COMMAND_HELP];
-    return SLASH_COMMAND_HELP.filter((c) =>
+    const pool = includeTemplates
+      ? [...SLASH_COMMAND_HELP, ...SLASH_TEMPLATE_HELP]
+      : [...SLASH_COMMAND_HELP];
+    if (q.length === 0) return pool;
+    return pool.filter((c) =>
       c.keyword.slice(1).toLowerCase().startsWith(q),
     );
-  }, [lineCtx]);
+  }, [lineCtx, includeTemplates]);
 
   // Reset the active selection when the candidate list shifts.
   useEffect(() => {
@@ -174,10 +206,43 @@ export function useSlashAutocomplete<
     setForceClosed(false);
   }, [textareaRef]);
 
-  // Insert the stub by replacing the current line.
+  // Insert the stub OR expand a template by replacing the current
+  // line. Commands (`/assign`, `/due`, …) get the cheap stub treatment
+  // — `${keyword} ` spliced in for the operator to type the arg.
+  // Templates (`/status`, `/blocked`, `/approve`, `/handoff`) expand
+  // to their full body when their args are satisfied; otherwise fall
+  // through to the stub so the operator can keep typing in-place.
   const insert = useCallback(
     (keyword: string) => {
       if (!lineCtx) return;
+      const template = includeTemplates ? findTemplate(keyword) : null;
+      if (template) {
+        const typedArgs = lineCtx.line.trimStart().slice(keyword.length).trim();
+        const expansion = template.expand(typedArgs);
+        // `/handoff` without an `@handle` returns null — fall through
+        // to the stub so the autocomplete stays open while the user
+        // types the agent.
+        if (expansion && !(template.args === "agent" && typedArgs.length === 0)) {
+          const next =
+            value.slice(0, lineCtx.lineStart) +
+            expansion.body +
+            value.slice(lineCtx.lineEnd);
+          onChange(next);
+          const newCursor = lineCtx.lineStart + expansion.caretOffset;
+          if (expansion.sideEffect.kind !== "none") {
+            onTemplateSideEffect?.(expansion.sideEffect);
+          }
+          setTimeout(() => {
+            const el = textareaRef.current;
+            if (!el) return;
+            el.focus();
+            el.setSelectionRange(newCursor, newCursor);
+            setCursor(newCursor);
+          }, 0);
+          return;
+        }
+      }
+
       const stub = `${keyword} `;
       const next =
         value.slice(0, lineCtx.lineStart) + stub + value.slice(lineCtx.lineEnd);
@@ -192,7 +257,14 @@ export function useSlashAutocomplete<
         setCursor(newCursor);
       }, 0);
     },
-    [lineCtx, value, onChange, textareaRef],
+    [
+      lineCtx,
+      value,
+      onChange,
+      textareaRef,
+      includeTemplates,
+      onTemplateSideEffect,
+    ],
   );
 
   // The keyboard dispatcher caller invokes from their own onKeyDown.

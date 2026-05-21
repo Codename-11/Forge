@@ -474,6 +474,8 @@ model User {
   requestedActionRequests ActionRequest[]     @relation("ActionRequestRequester")
   assignedActionRequests  ActionRequest[]     @relation("ActionRequestAssignee")
   resolvedActionRequests  ActionRequest[]     @relation("ActionRequestResolver")
+  actionRequestVotes      ActionRequestVote[]
+  notificationPreferences NotificationPreference[]
   createdCanvases         WorkspaceCanvas[]   @relation("WorkspaceCanvasCreator")
   ownedCanvases           WorkspaceCanvas[]   @relation("WorkspaceCanvasOwner")
   createdShapes           CanvasShape[]       @relation("CanvasShapeCreator")
@@ -683,6 +685,7 @@ model Workspace {
   agentCrewMembers   AgentCrewMember[]
   reviewGates        ReviewGate[]
   actionRequests     ActionRequest[]
+  notificationPreferences NotificationPreference[]
   canvases            WorkspaceCanvas[]
   canvasNodes         WorkspaceCanvasNode[]
   canvasEdges         WorkspaceCanvasEdge[]
@@ -1073,10 +1076,16 @@ model Comment {
   /// Compact step label rendered next to the live pulse (e.g. "running
   /// tests"). Null for BODY comments.
   currentStep      String?
-  /// Append-only revision history for STATUS comments — each upsert
-  /// pushes the previous body + timestamp so the agent's earlier turns
-  /// aren't lost. Stored as `[{ body, currentStep, ts }]` JSON.
-  revisions        Json?
+  /// Append-only revision history. Two flavors share this column,
+  /// discriminated by `kind`:
+  ///   STATUS comments (agent rolling status) → `[{ body, currentStep, ts }]`
+  ///   BODY comments (regular thread comments edited via
+  ///     `comment.update`) → `[{ body, editedAt }]`
+  /// Server-side caps the array length to keep growth bounded
+  /// (STATUS = 50 entries, BODY = 20 entries — oldest dropped first).
+  /// Defaults to `[]` so consumers can read length without null
+  /// guards. Migration 0050 backfilled existing NULL rows to `[]`.
+  revisions        Json        @default("[]")
   /// Optional bag of short quick-reply chips an agent attached to the
   /// comment (added 2026-05-20, migration 0048). The thread renders
   /// these as clickable pills below the comment body when the comment
@@ -1085,6 +1094,17 @@ model Comment {
   /// ≤80 chars by the create handler. Defaults to an empty array so
   /// existing rows don't need a backfill.
   suggestedReplies String[]    @default([])
+  /// Optional agent confidence flag (added 2026-05-20, migration 0050).
+  /// Only meaningful for agent-authored comments; the UI hides the
+  /// chip on human-authored rows. LOW = tentative, HIGH = verified.
+  /// Null = no signal attached (default).
+  confidence       ConfidenceLevel?
+  /// Mirror of Comment.updatedAt at the time of the most recent body
+  /// edit, set by `comment.update` (added 2026-05-20, migration 0050).
+  /// Distinct from `updatedAt` (which Prisma bumps on every column
+  /// change, including suggestedReplies / confidence). Null = body
+  /// has never been edited.
+  editedAt         DateTime?
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
   deletedAt        DateTime?
@@ -2357,6 +2377,28 @@ enum ActionRequestKind {
   CLOSE_AS_DUPLICATE
 }
 
+/// Agent-set confidence flag on a Comment (added 2026-05-20,
+/// migration 0050). Only meaningful for agent-authored comments —
+/// the UI hides the chip for human-authored rows. LOW = "I think but
+/// I am not sure", MEDIUM = "reasonably confident", HIGH = "verified /
+/// I ran this". Lets operators decide how much to scrutinize an
+/// agent's claim before acting on it.
+enum ConfidenceLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+/// Notification preference delivery mode (added 2026-05-20,
+/// migration 0050). INBOX_ONLY = standard NotificationState row in
+/// the inbox. INBOX_AND_DIGEST = the row also batches into the
+/// (future) email/Discord digest. Digest itself is deferred; the
+/// field exists so we don't migrate twice.
+enum NotificationDelivery {
+  INBOX_ONLY
+  INBOX_AND_DIGEST
+}
+
 /// A precise, resolvable ask. Replaces vague notifications: instead of
 /// "the agent commented", ActionRequest models "the agent needs your
 /// decision before continuing." Inbox's waiting-on-me query unions
@@ -2382,6 +2424,17 @@ model ActionRequest {
   /// Validated at create time by the action-request service; rejected
   /// if any referenced id lives outside the workspace.
   payload            Json?
+  /// Optional poll options (added 2026-05-20, migration 0050). When
+  /// non-null, the renderer treats this request as a poll — operators
+  /// vote via ActionRequestVote and the requester closes voting to
+  /// surface the winning option. Shape:
+  ///   `[{ key: string, label: string, description?: string }]`
+  /// `key` is the stable identifier carried by every vote row.
+  options            Json?
+  /// Set when the original requester closes voting (added 2026-05-20,
+  /// migration 0050). Once set, ActionRequestVote upserts are rejected.
+  /// Null means voting is still open.
+  votingClosedAt     DateTime?
   requestedByUserId  String?
   requestedByAgentId String?
   assignedUserId     String?
@@ -2407,12 +2460,63 @@ model ActionRequest {
   assignedAgent    Agent?    @relation("ActionRequestAssigneeAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
   resolvedByUser   User?     @relation("ActionRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
   issue            Issue?    @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  votes            ActionRequestVote[]
 
   @@index([workspaceId, status, createdAt])
   @@index([assignedUserId, status])
   @@index([assignedAgentId, status])
   @@index([issueId])
   @@index([sourceType, sourceId])
+}
+
+/// Per-user vote on a poll-style ActionRequest (added 2026-05-20,
+/// migration 0050). Unique on `(actionRequestId, userId)` so each
+/// user votes once per request; changing your pick is an upsert.
+/// `optionKey` references one of the strings in `ActionRequest.options[].key`.
+model ActionRequestVote {
+  id              String   @id @default(cuid())
+  actionRequestId String
+  userId          String
+  optionKey       String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  actionRequest ActionRequest @relation(fields: [actionRequestId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([actionRequestId, userId])
+  @@index([actionRequestId, optionKey])
+  @@index([userId])
+}
+
+/// Per-user opt-out for an EventKind (added 2026-05-20, migration
+/// 0050). When no row exists, the kind is treated as enabled — so
+/// existing users see no behavior change until they explicitly opt
+/// out. `workspaceId` is nullable: a null row applies across every
+/// workspace the user belongs to (a global "never page me about
+/// this"). A workspace-scoped row overrides the global default for
+/// that workspace.
+model NotificationPreference {
+  id          String               @id @default(cuid())
+  userId      String
+  workspaceId String?
+  eventKind   String
+  enabled     Boolean              @default(true)
+  delivery    NotificationDelivery @default(INBOX_ONLY)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// CASCADE rather than SET NULL: workspace-scoped prefs are
+  /// meaningless once the workspace is gone, and SET NULL would
+  /// collide with the partial unique index when the user already has
+  /// a global pref for the same (user, eventKind). Cascading lets
+  /// the global row survive untouched.
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId, eventKind])
+  @@index([workspaceId, eventKind])
+  @@index([userId, eventKind])
 }
 
 // ----------------------------------------------------------------------------

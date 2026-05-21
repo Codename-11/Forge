@@ -15,6 +15,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { EmptyState, Kbd, SkeletonList, useDensity } from "@/components/ui";
 import { Confirm, Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { AgentHoverPreview } from "@/components/agent-hover-preview";
 import { BulkBar, type BulkBarAction } from "@/components/bulk-bar";
 import { SnoozeMenu } from "@/components/snooze-menu";
 import { trpc } from "@/lib/trpc";
@@ -90,6 +91,17 @@ export function IssueList({
     ...(extraFilters ?? {}),
   });
   const { data: statuses } = trpc.status.list.useQuery();
+  // Unread set: issues the user is watching that have had activity
+  // since their last view. Cached for 30s — we don't need real-time
+  // accuracy; the dot is a quiet hint and a stale clear-after-view
+  // is preferable to a chatty refetch storm.
+  const { data: unread } = trpc.issue.unreadIds.useQuery(undefined, {
+    staleTime: 30_000,
+  });
+  const unreadSet = useMemo(
+    () => new Set(unread?.ids ?? []),
+    [unread?.ids],
+  );
   const utils = trpc.useUtils();
   const ws = useMaybeWorkspace();
   const base = ws ? `/w/${ws.slug}` : "";
@@ -380,15 +392,19 @@ export function IssueList({
       <div className="divide-y divide-border">
         {filtered.map((issue) => {
           const on = selected.has(issue.id);
+          const isUnread = unreadSet.has(issue.id);
           const rowCls = compact
             ? "row gap-2 px-5 py-1.5 hover:bg-subtle/60"
             : "row h-10 gap-3 px-5 hover:bg-subtle/60";
           const keyCls = compact
             ? "w-20 shrink-0 text-id text-muted-foreground"
             : "w-20 shrink-0 text-id text-muted-foreground";
-          const titleCls = compact
-            ? "truncate text-[0.75rem]"
-            : "truncate text-sm";
+          const titleCls = cn(
+            compact ? "truncate text-[0.75rem]" : "truncate text-sm",
+            // Subtle bolden for unread rows — just enough weight to
+            // register at a glance, no badge / color shift.
+            isUnread && "font-semibold",
+          );
           return (
             <div
               key={issue.id}
@@ -424,6 +440,24 @@ export function IssueList({
                   compact ? "py-0" : "h-10",
                 )}
               >
+                {/* Unread dot — quiet hint that a watched issue has
+                    activity since the user last viewed it. The 1.5-wide
+                    slot is reserved on every row so adjacent columns
+                    don't shift when the dot toggles. */}
+                <span
+                  aria-label={isUnread ? "Unread activity" : undefined}
+                  title={
+                    isUnread ? "New activity since you last viewed" : undefined
+                  }
+                  className="flex w-1.5 shrink-0 items-center justify-center"
+                >
+                  {isUnread && (
+                    <span
+                      aria-hidden
+                      className="block h-1.5 w-1.5 rounded-full bg-ember"
+                    />
+                  )}
+                </span>
                 <span className="w-4 text-center font-mono text-[0.6875rem] text-muted-foreground">
                   {priorityGlyph[issue.priority]}
                 </span>
@@ -442,18 +476,20 @@ export function IssueList({
                     {relativeTime(issue.createdAt)}
                   </span>
                   {issue.assignedAgent && (
-                    <span
-                      className="flex items-center gap-1 text-meta text-muted-foreground"
-                      title={`Agent: ${issue.assignedAgent.name}`}
-                    >
-                      <AgentPresenceDot
-                        status={issue.assignedAgent.status}
-                        size="sm"
-                      />
-                      <span className="text-id">
-                        @{issue.assignedAgent.profileKey}
+                    <AgentHoverPreview agentId={issue.assignedAgent.id}>
+                      <span
+                        className="flex items-center gap-1 text-meta text-muted-foreground"
+                        title={`Agent: ${issue.assignedAgent.name}`}
+                      >
+                        <AgentPresenceDot
+                          status={issue.assignedAgent.status}
+                          size="sm"
+                        />
+                        <span className="text-id">
+                          @{issue.assignedAgent.profileKey}
+                        </span>
                       </span>
-                    </span>
+                    </AgentHoverPreview>
                   )}
                   <div className="flex -space-x-1.5">
                     {issue.assignees.slice(0, 3).map((a) => (

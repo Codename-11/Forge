@@ -237,6 +237,48 @@ history.
 API: `relations.add`, `relations.remove`, `relations.listForIssue`. From
 the UI, the Related panel on the issue detail handles all three.
 
+## Unread indicator
+
+Issues you're watching grow a small **ember dot** on the issues list when
+something has happened since you last viewed them. The title also picks up
+a slight bold weight — quiet, not a notification badge.
+
+"Last viewed" is the timestamp `recentItem.track` writes when the issue
+detail page mounts (the same row that feeds the command palette's Recents
+rail). "Activity" is the issue's `updatedAt` — comments, status changes,
+assignments, label edits all bump it. An issue you watch but have never
+visited is treated as unread.
+
+Clearing is automatic: opening the issue refreshes the `RecentItem` row,
+and the next `issue.unreadIds` query (cached 30s) drops the dot.
+
+Watch / unwatch flips the dot's eligibility — see
+[Watching](/guide/watching.html).
+
+## Quick-comment slash templates
+
+The comment composer accepts four **template** keywords on top of the
+seven structured slash commands. Templates expand to a templated body
+in-place (and, in two cases, fire a follow-up mutation). They show up in
+the same autocomplete dropdown as the commands, listed after them.
+
+| Template | Expands to | Side-effect |
+|---|---|---|
+| `/status [<next-step>]` | `**Status:** Working on <next-step>` | — |
+| `/blocked <reason>` | `**Blocked:** <reason>` | Opens a `FREE_FORM` action request titled "Unblock needed" on this issue |
+| `/approve` | `**Approved** ✓` | — |
+| `/handoff @<agent> [<context>]` | Injects `/assign @<agent>` at the top, then `**Handing off to @<agent>:** <context>` | Reassigns the issue to the named agent via the existing `/assign` command path |
+
+Picking a template from the dropdown replaces the line and parks your
+cursor in the right spot to keep typing. Hitting <kbd>⌘⏎</kbd> submits the
+comment; queued side-effects fire after the comment lands so a transient
+failure doesn't leave a stale unblock request without a comment to
+anchor it.
+
+Templates are scoped to the comment composer only — QuickCreate's
+slash commands set issue fields and templates would conflict with the
+"body becomes the title" contract.
+
 ## Where to next
 
 - [Projects & Initiatives](/guide/projects-and-initiatives.html) — grouping

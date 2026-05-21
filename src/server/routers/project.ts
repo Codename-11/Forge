@@ -40,6 +40,68 @@ export const projectRouter = router({
   }),
 
   /**
+   * Narrow "card-shape" summary used by the project chip hover preview.
+   *
+   * Single round-trip: project row + member count (distinct assignees on
+   * the project's issues) + active issue count (status category not in
+   * DONE / CANCELED) + the project's creator as the "owner" surrogate.
+   * Workspace-scoped; soft-deleted projects return NOT_FOUND.
+   *
+   * Numbers are eagerly counted so the popover can render without a
+   * follow-up fetch. Caller sets `staleTime` ≥ 60s.
+   */
+  summary: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const project = await ctx.db.project.findFirst({
+        where: {
+          id: input.id,
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+        },
+        select: {
+          id: true,
+          key: true,
+          name: true,
+          color: true,
+          icon: true,
+          archived: true,
+          targetDate: true,
+          createdBy: { select: { id: true, name: true, image: true } },
+        },
+      });
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const [activeIssueCount, distinctAssignees] = await Promise.all([
+        ctx.db.issue.count({
+          where: {
+            workspaceId: ctx.workspaceId,
+            projectId: project.id,
+            deletedAt: null,
+            status: { category: { notIn: ["DONE", "CANCELED"] } },
+          },
+        }),
+        ctx.db.issueAssignee.findMany({
+          where: {
+            issue: {
+              workspaceId: ctx.workspaceId,
+              projectId: project.id,
+              deletedAt: null,
+            },
+          },
+          select: { userId: true },
+          distinct: ["userId"],
+        }),
+      ]);
+
+      return {
+        ...project,
+        activeIssueCount,
+        memberCount: distinctAssignees.length,
+      };
+    }),
+
+  /**
    * Single-procedure rollup for the project detail page. Bundles the
    * project, status counts, the slice of issues in the workspace's
    * current cycle, the linked initiative (if any), recent activity

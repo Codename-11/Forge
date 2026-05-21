@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Repeat } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { EntityHoverPreview } from "@/components/entity-hover-preview";
 
 /**
  * Compact pill linking to a cycle (Sprint) detail page.
@@ -64,15 +65,19 @@ export function CycleChip({
 
   if (!href) {
     return (
-      <span className={chipClass} title={titleText}>
-        {body}
-      </span>
+      <EntityHoverPreview kind="cycle" id={cycle.id}>
+        <span className={chipClass} title={titleText}>
+          {body}
+        </span>
+      </EntityHoverPreview>
     );
   }
 
   return (
-    <Link href={href} className={chipClass} title={titleText}>
-      {body}
-    </Link>
+    <EntityHoverPreview kind="cycle" id={cycle.id}>
+      <Link href={href} className={chipClass} title={titleText}>
+        {body}
+      </Link>
+    </EntityHoverPreview>
   );
 }

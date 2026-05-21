@@ -57,6 +57,15 @@ The **Watching** section on the inbox shows the issues you watch with
 their current status, priority, and last-update time. Issues drop off
 the section automatically when you unwatch.
 
+## Unread dot on the issue list
+
+Issues you watch grow a small ember dot on the issues list when the
+issue's `updatedAt` is newer than your last visit. The title also picks
+up a slight bold weight. Opening the issue clears the dot on the next
+list refresh (the unread set is cached 30s on the client). The
+`issue.unreadIds` query reads `RecentItem.visitedAt` as "last viewed"
+— the same timestamp the command palette's Recents rail uses.
+
 ## MCP surface
 
 Agents have four read/write tools for managing watch state:

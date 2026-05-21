@@ -98,6 +98,23 @@ Manual assignment and comment mentions are intentionally different signals:
 Rule of thumb: assign the agent to start or hand off ownership; `@mention` the
 agent for subsequent “please read/respond to this comment” nudges.
 
+### Hover an @profileKey to see who you're talking to
+
+Every `@profileKey` chip in markdown — descriptions, comments, notes,
+artifacts — opens a compact hover preview after a short dwell. The card
+shows the agent's avatar + display name, status pill (ONLINE / BUSY /
+OFFLINE), the first three capability tags (warm ember pills) with a
+`+N` overflow chip for the rest, provider (HERMES / CLAUDE / CODEX /
+CUSTOM), and last heartbeat. Clicking the name navigates to the agent
+detail page; hover is purely additive. The same chip falls back to a
+user card when the token is a workspace member's `@handle` rather than
+an agent profile key.
+
+Capabilities also surface as hover-titled pills in the agent picker
+modal (`A` shortcut on the issue page → "Assign agent"), so operators
+can disambiguate `triage-urgent` / `code-review` / etc. without
+opening each agent's detail page.
+
 ## Lifecycle
 
 A typical onboarding sequence:

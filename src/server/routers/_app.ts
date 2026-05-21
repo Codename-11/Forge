@@ -30,6 +30,7 @@ import { systemRouter } from "./system";
 import { cycleRouter } from "./cycle";
 import { dashboardRouter } from "./dashboard";
 import { dispatchRuleRouter } from "./dispatch-rule";
+import { embedRouter } from "./embed";
 import { eventRouter } from "./event";
 import { executionPlanRouter } from "./execution-plan";
 import { inboxRouter } from "./inbox";
@@ -65,6 +66,7 @@ export const appRouter = router({
   cycle: cycleRouter,
   dashboard: dashboardRouter,
   dispatchRule: dispatchRuleRouter,
+  embed: embedRouter,
   event: eventRouter,
   executionPlan: executionPlanRouter,
   inbox: inboxRouter,

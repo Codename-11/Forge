@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
+  EventKind,
+  NotificationDelivery,
   NotificationSeverity,
   NotificationStatus,
   type Prisma,
@@ -9,7 +11,9 @@ import {
 import { router, workspaceProcedure } from "@/server/trpc";
 import {
   ACTIVE_NOTIFICATION_STATUSES,
+  ALERTABLE_EVENT_KINDS,
   buildNotificationListItems,
+  loadEffectivePreferenceMap,
   materializeRecentNotifications,
   notificationStateInclude,
 } from "@/server/services/notifications";
@@ -183,6 +187,109 @@ export const notificationRouter = router({
     });
     return { notification: item };
   }),
+
+  /**
+   * Return the calling user's notification preferences merged with
+   * defaults. The result includes one row per *alertable* EventKind
+   * the materializer cares about — kinds without an explicit row
+   * default to `{ enabled: true, delivery: "INBOX_ONLY" }`, matching
+   * the "no row = no opt-out" rule.
+   *
+   * Workspace-scoped preference rows take precedence over global
+   * rows for the same kind. Pass `workspaceId` (defaulted to the
+   * caller's current workspace) to see effective values for that
+   * workspace; pass an explicit `null` via the `scope` argument to
+   * list only global preferences.
+   */
+  preferences: workspaceProcedure
+    .input(
+      z
+        .object({
+          /**
+           * Optional scope filter. Defaults to the caller's current
+           * workspace, mirroring the workspaceProcedure context.
+           * Pass `"global"` to list only the user's global rows.
+           */
+          scope: z.enum(["workspace", "global"]).default("workspace"),
+        })
+        .default({ scope: "workspace" }),
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      const scopeWorkspaceId =
+        input.scope === "global" ? null : ctx.workspaceId;
+      const effective = await loadEffectivePreferenceMap(ctx.db, {
+        userId,
+        workspaceId: scopeWorkspaceId,
+      });
+      // Render the merged view as one row per alertable EventKind so
+      // the settings UI can checkbox-toggle each one without having
+      // to know which rows actually exist in the DB.
+      const items = ALERTABLE_EVENT_KINDS.map((kind) => {
+        const row = effective.get(kind);
+        return {
+          eventKind: kind,
+          enabled: row?.enabled ?? true,
+          delivery: row?.delivery ?? NotificationDelivery.INBOX_ONLY,
+          /** Which scope produced the effective value (null = default). */
+          source:
+            row?.source ?? ("default" as "workspace" | "global" | "default"),
+        };
+      });
+      return { items, scopeWorkspaceId };
+    }),
+
+  /**
+   * Upsert a notification preference for the calling user. Pass
+   * `scope: "global"` to set the cross-workspace default. Otherwise
+   * the row applies only to the caller's current workspace.
+   */
+  setPreference: workspaceProcedure
+    .input(
+      z.object({
+        eventKind: z.nativeEnum(EventKind),
+        enabled: z.boolean(),
+        delivery: z.nativeEnum(NotificationDelivery).optional(),
+        scope: z.enum(["workspace", "global"]).default("workspace"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      const workspaceId = input.scope === "global" ? null : ctx.workspaceId;
+      // Postgres treats NULL as distinct in multi-column unique
+      // indexes — we add a partial unique index in the migration to
+      // close that loophole, but Prisma's @@unique with a nullable
+      // column won't model it. Run upsert via findFirst + create-or-
+      // update so we don't fight the type system here.
+      const existing = await ctx.db.notificationPreference.findFirst({
+        where: {
+          userId,
+          workspaceId,
+          eventKind: input.eventKind,
+        },
+        select: { id: true },
+      });
+      const data: Prisma.NotificationPreferenceUncheckedUpdateInput = {
+        enabled: input.enabled,
+        delivery: input.delivery ?? NotificationDelivery.INBOX_ONLY,
+      };
+      const row = existing
+        ? await ctx.db.notificationPreference.update({
+            where: { id: existing.id },
+            data,
+          })
+        : await ctx.db.notificationPreference.create({
+            data: {
+              userId,
+              workspaceId,
+              eventKind: input.eventKind,
+              enabled: input.enabled,
+              delivery:
+                input.delivery ?? NotificationDelivery.INBOX_ONLY,
+            },
+          });
+      return row;
+    }),
 });
 
 async function updateNotificationState(

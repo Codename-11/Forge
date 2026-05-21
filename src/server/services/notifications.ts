@@ -3,6 +3,7 @@ import "server-only";
 import {
   NotificationStatus,
   type EventKind,
+  type NotificationDelivery,
   type NotificationSeverity as PrismaNotificationSeverity,
   type Prisma,
   type PrismaClient,
@@ -15,7 +16,14 @@ import {
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
-const ALERTABLE_EVENT_KINDS = [...ALERTABLE_ACTIVITY_EVENT_KINDS] as EventKind[];
+/**
+ * EventKinds the notification materializer cares about. Exported so the
+ * notification router can render a checkbox row per kind on the prefs
+ * page without re-encoding the list.
+ */
+export const ALERTABLE_EVENT_KINDS = [
+  ...ALERTABLE_ACTIVITY_EVENT_KINDS,
+] as EventKind[];
 
 export const ACTIVE_NOTIFICATION_STATUSES = [
   NotificationStatus.UNREAD,
@@ -116,10 +124,23 @@ export async function materializeRecentNotifications(
   const events = await findAlertableEvents(db, params);
   if (events.length === 0) return 0;
 
+  // Load the user's effective preferences once before the per-event
+  // loop so we don't issue N queries against NotificationPreference.
+  // No row for a kind => enabled (default). Workspace-scoped rows
+  // win over global rows for the same (user, kind).
+  const prefs = await loadEffectivePreferenceMap(db, {
+    userId: params.userId,
+    workspaceId: params.workspaceId,
+  });
+
   const hydrated = await hydrateNotificationEvents(db, params.workspaceId, events);
   let count = 0;
   for (const item of hydrated) {
     if (!item.metadata) continue;
+    // Per-user, per-kind opt-out. The map's value is undefined when
+    // the user hasn't expressed a preference — treat that as enabled.
+    const pref = prefs.get(item.event.kind);
+    if (pref && pref.enabled === false) continue;
     await upsertNotificationState(db, {
       workspaceId: params.workspaceId,
       userId: params.userId,
@@ -129,6 +150,76 @@ export async function materializeRecentNotifications(
     count += 1;
   }
   return count;
+}
+
+/**
+ * Load the calling user's effective notification preferences as a
+ * `Map<EventKind, { enabled, delivery, source }>`. A workspace-scoped
+ * row wins over a global row for the same kind. Kinds with no row
+ * are absent from the map — callers treat absence as "enabled".
+ *
+ * Pass `workspaceId: null` to ignore workspace-scoped rows entirely
+ * (e.g. when rendering the global-prefs panel of the settings page).
+ */
+export async function loadEffectivePreferenceMap(
+  db: DbClient,
+  params: {
+    userId: string;
+    workspaceId: string | null;
+  },
+): Promise<
+  Map<
+    EventKind,
+    {
+      enabled: boolean;
+      delivery: NotificationDelivery;
+      source: "workspace" | "global";
+    }
+  >
+> {
+  const rows = await db.notificationPreference.findMany({
+    where: {
+      userId: params.userId,
+      OR: [
+        { workspaceId: null },
+        ...(params.workspaceId ? [{ workspaceId: params.workspaceId }] : []),
+      ],
+    },
+    select: {
+      workspaceId: true,
+      eventKind: true,
+      enabled: true,
+      delivery: true,
+    },
+  });
+  const map = new Map<
+    EventKind,
+    {
+      enabled: boolean;
+      delivery: NotificationDelivery;
+      source: "workspace" | "global";
+    }
+  >();
+  // First pass: global rows. Second pass: workspace-scoped rows
+  // overwrite. This guarantees workspace wins regardless of insert
+  // order.
+  for (const row of rows) {
+    if (row.workspaceId !== null) continue;
+    map.set(row.eventKind as EventKind, {
+      enabled: row.enabled,
+      delivery: row.delivery,
+      source: "global",
+    });
+  }
+  for (const row of rows) {
+    if (row.workspaceId === null) continue;
+    map.set(row.eventKind as EventKind, {
+      enabled: row.enabled,
+      delivery: row.delivery,
+      source: "workspace",
+    });
+  }
+  return map;
 }
 
 export async function buildNotificationListItems(
