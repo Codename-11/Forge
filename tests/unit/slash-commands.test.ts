@@ -33,12 +33,38 @@ describe("parseSlashCommands", () => {
     expect(r.strippedBody).toBe(body);
   });
 
-  it("stops at the first non-command line", () => {
+  it("extracts recognised command lines anywhere, keeping prose between them", () => {
+    // New coexistence model (2026-05-21): commands are no longer required
+    // to be a contiguous leading block. A `/assign` line UNDER prose still
+    // applies, so operators can chain prose + commands in one comment.
     const r = parseSlashCommands(
       "/priority high\nPlease fix\n/assign @bob",
     );
-    expect(r.commands).toEqual([{ kind: "priority", level: "high" }]);
-    expect(r.strippedBody).toBe("Please fix\n/assign @bob");
+    expect(r.commands).toEqual([
+      { kind: "priority", level: "high" },
+      { kind: "assign", handle: "bob" },
+    ]);
+    expect(r.strippedBody).toBe("Please fix");
+  });
+
+  it("chains an @mention in prose with a /command on a later line", () => {
+    const r = parseSlashCommands(
+      "Hey @victor can you look at this?\n/priority urgent",
+    );
+    expect(r.commands).toEqual([{ kind: "priority", level: "urgent" }]);
+    // The @mention prose is preserved verbatim so the create path still
+    // extracts + dispatches @victor; only the command line is stripped.
+    expect(r.strippedBody).toBe("Hey @victor can you look at this?");
+  });
+
+  it("does not treat a mid-line slash as a command (and/or, URLs)", () => {
+    const r = parseSlashCommands(
+      "ship it and/or revert — see https://x.test/p/1",
+    );
+    expect(r.commands).toEqual([]);
+    expect(r.strippedBody).toBe(
+      "ship it and/or revert — see https://x.test/p/1",
+    );
   });
 
   it("ignores unrecognised slash forms (leaves them in body)", () => {

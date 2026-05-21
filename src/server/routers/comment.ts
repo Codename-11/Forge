@@ -285,6 +285,8 @@ export const commentRouter = router({
         select: {
           id: true,
           body: true,
+          issueId: true,
+          kind: true,
           updatedAt: true,
           revisions: true,
         },
@@ -312,14 +314,132 @@ export const commentRouter = router({
         },
       ].slice(-BODY_REVISION_CAP);
       const now = new Date();
-      return ctx.db.comment.update({
-        where: { id: input.id },
-        data: {
-          body: input.body,
-          revisions: nextRevisions,
-          editedAt: now,
-          updatedAt: now,
-        },
+
+      // Mention diff: only @-tokens that are NEW in this edit get
+      // resolved + dispatched. Tokens already present in the old body
+      // were dispatched at create time (or a prior edit), so we don't
+      // re-trigger them — keeps the agent-trigger path idempotent so an
+      // operator can fix a typo without re-paging everyone. Tokens are
+      // lower-cased by `extractMentions`, matching profileKey / handle.
+      const oldTokens = new Set(extractMentions(existing.body));
+      const newTokens = extractMentions(input.body);
+      const addedTokens = newTokens.filter((t) => !oldTokens.has(t));
+
+      // Execution-step comments (issueId null) have no issue thread to
+      // fan out on — just persist the body. The mention-dispatch path
+      // below is issue-scoped only.
+      const issueId = existing.issueId;
+      if (!issueId) {
+        return ctx.db.comment.update({
+          where: { id: input.id },
+          data: {
+            body: input.body,
+            revisions: nextRevisions,
+            editedAt: now,
+            updatedAt: now,
+          },
+        });
+      }
+
+      return ctx.db.$transaction(async (tx) => {
+        const updated = await tx.comment.update({
+          where: { id: input.id },
+          data: {
+            body: input.body,
+            revisions: nextRevisions,
+            editedAt: now,
+            updatedAt: now,
+          },
+          include: {
+            author: { select: { id: true, name: true, image: true } },
+            authoringAgent: {
+              select: { id: true, name: true, profileKey: true, avatar: true },
+            },
+          },
+        });
+
+        // Resolve only the ADDED tokens against agents + workspace users,
+        // exactly like `comment.create` does. Subscribe them as watchers
+        // and stash the resolved agent ids so the audit fan-out can fire
+        // a one-shot dispatch for the newly-added agent mentions.
+        const newlyMentionedAgents: Array<{ agentId: string; profileKey: string }> = [];
+        const newlyMentionedUsers: Array<{ userId: string; handle: string }> = [];
+        if (addedTokens.length) {
+          const [agentMatches, userMatches] = await Promise.all([
+            tx.agent.findMany({
+              where: {
+                workspaceId: ctx.workspaceId,
+                profileKey: { in: addedTokens },
+                archivedAt: null,
+              },
+              select: { id: true, profileKey: true },
+            }),
+            tx.user.findMany({
+              where: {
+                handle: { in: addedTokens },
+                memberships: { some: { workspaceId: ctx.workspaceId } },
+              },
+              select: { id: true, handle: true },
+            }),
+          ]);
+          for (const a of agentMatches) {
+            newlyMentionedAgents.push({ agentId: a.id, profileKey: a.profileKey });
+          }
+          for (const u of userMatches) {
+            if (u.handle) {
+              newlyMentionedUsers.push({ userId: u.id, handle: u.handle });
+            }
+          }
+          for (const m of newlyMentionedAgents) {
+            await autoWatchAgent(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId,
+              agentId: m.agentId,
+            });
+          }
+          for (const m of newlyMentionedUsers) {
+            await autoWatchUser(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId,
+              userId: m.userId,
+            });
+          }
+        }
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          entity: "Comment",
+          entityId: updated.id,
+          action: "update",
+          before: { body: existing.body },
+          after: updated,
+          eventKind: EventKind.COMMENT_UPDATED,
+          subjectType: "issue",
+          subjectId: issueId,
+          payload: {
+            commentId: updated.id,
+            issueId,
+            edited: true,
+            preview: input.body.slice(0, 120),
+            // `mentions.agentIds` here is the DIFF (newly-added only) —
+            // NOT every mention in the body. Audit branch (c) dispatches
+            // a webhook for each, so an edit that adds `@victor` triggers
+            // him exactly like a fresh comment would, while pre-existing
+            // mentions stay quiet. STATUS-comment updates never come
+            // through this path (they use `comments.upsertStatus`), so
+            // rolling status heartbeats won't re-page anyone.
+            mentions: {
+              agentIds: newlyMentionedAgents.map((m) => m.agentId),
+              userIds: newlyMentionedUsers.map((m) => m.userId),
+              agents: newlyMentionedAgents,
+            },
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        return updated;
       });
     }),
 

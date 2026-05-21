@@ -64,6 +64,13 @@ export interface MentionInputProps {
   /** Fired on Cmd/Ctrl+Enter. Lets the parent submit without intercepting Enter directly. */
   onSubmit?: () => void;
   /**
+   * Fired whenever the @-mention dropdown opens or closes. Lets a
+   * parent that ALSO renders a sibling autocomplete (e.g. the issue
+   * comment composer's slash picker) keep the two mutually exclusive —
+   * suppress the slash picker while the mention list owns the caret.
+   */
+  onMentionOpenChange?: (open: boolean) => void;
+  /**
    * Pass-throughs for parent-owned event handlers. Typed against
    * `HTMLTextAreaElement` (the common case) since paste-upload helpers,
    * slash autocomplete `bind` handlers, etc. all target textareas in
@@ -109,6 +116,7 @@ export const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
       multiline = true,
       rows = 4,
       onSubmit,
+      onMentionOpenChange,
       onPaste,
       onKeyDown,
       onKeyUp,
@@ -224,6 +232,13 @@ export const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
     useEffect(() => {
       setActive(0);
     }, [trigger?.start, flatItems.length]);
+
+    // Notify the parent when the mention dropdown opens / closes so it
+    // can suppress a sibling autocomplete (slash picker) — keeps exactly
+    // one dropdown active at the caret.
+    useEffect(() => {
+      onMentionOpenChange?.(visible);
+    }, [visible, onMentionOpenChange]);
 
     // ---- Caret positioning ------------------------------------------------
     useLayoutEffect(() => {

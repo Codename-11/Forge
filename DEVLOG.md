@@ -2,6 +2,76 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — @mention + / coexistence: chainable in one comment, edit-mode dispatch
+
+Operator bug: "after I @ an agent in a comment, I can't use a / command,"
+plus "when editing, allow agent triggering properly."
+
+**Root cause.** The slash picker (`slash-autocomplete.tsx`) only opened
+when the caret line lived in a *top-of-body command block* — every
+preceding non-blank line had to start with `/`. Typing an @mention as
+prose on line 0 made any later `/` line "not top-of-body", so the picker
+never opened. The same gate lived in `parseSlashCommands`
+(`lib/slash-commands.ts`): it stopped extracting at the first
+non-command line, so a `/assign @victor` line under prose was never
+applied. The two were never mutually exclusive either — both could open
+at the caret.
+
+**Interaction model chosen.** Slash commands are recognised when `/`
+begins ANY line (after optional whitespace) outside a fenced code block;
+@mentions work anywhere inline. The two dropdowns are mutually exclusive
+at the caret: `MentionInput` now emits `onMentionOpenChange`, and the
+slash hook takes a `suppressed` flag so only one dropdown is ever open
+and owns Arrow/Enter/Tab/Esc. Picking a slash command after an @mention
+on a new line now opens the picker as expected.
+
+**Parser.** `parseSlashCommands` rewritten to scan all top-level lines
+and pull out RECOGNISED command lines wherever they sit, keeping prose
+(and unknown `/foo`) verbatim and squashing the blank-line damage left
+by removed lines. Conservative: only whole lines starting with `/` whose
+keyword+arg parse are taken, so "and/or" and "https://…" are never
+eaten. Fenced code blocks are tracked and preserved. Updated the
+"stops at first non-command line" unit test (that encoded the OLD,
+now-fixed behaviour) and added chained-@+/ and mid-line-slash cases.
+
+**Edit mode (new UI).** There was no comment-edit UI at all. Added an
+inline `CommentEditor` (BODY comments only) reusing `MentionInput` +
+the slash picker with the same suppression guard. On save it applies
+slash-command lines via `issue.applyCommands` and persists the prose via
+`comment.update`. The issue DESCRIPTION editor got the same slash
+support + apply-on-save.
+
+**Edit-time agent dispatch.** `comment.update` previously emitted NO
+event, so editing in an @agent triggered nothing. It now diffs old→new
+mention tokens (`extractMentions`), resolves only the ADDED agents/users,
+auto-watches them, and emits `COMMENT_UPDATED` with `edited: true` and a
+`mentions.agentIds` carrying ONLY the diff. `audit.ts` branch (c) now
+also fires on `COMMENT_UPDATED` *when `edited === true`*, so newly-added
+mentions dispatch exactly like a fresh comment while pre-existing
+mentions stay quiet (idempotent typo-fix). Rolling STATUS upserts also
+emit COMMENT_UPDATED but without `edited`, so they never re-page. Branch
+(e) watcher fan-out is skipped for `edited` events so a typo fix doesn't
+re-page every stakeholder. Execution-step comments (`issueId` null) take
+a plain update with no fan-out.
+
+**Files.** `src/components/slash-autocomplete.tsx` (any-line trigger +
+`suppressed` + fenced-block guard); `src/lib/slash-commands.ts` (parser
++ hint copy); `src/components/inputs/mention-input.tsx`
+(`onMentionOpenChange`); `src/components/issue-detail/issue-main.tsx`
+(comment composer suppression, `CommentEditor`, description slash
+support, parser-driven hint); `src/server/routers/comment.ts`
+(update mention diff + event); `src/server/audit.ts` (branch c on edited
+COMMENT_UPDATED, branch e skip for edits); tests in
+`tests/unit/slash-commands.test.ts` and
+`src/server/routers/__tests__/comment.test.ts`.
+
+**Validation.** `pnpm typecheck` clean; `pnpm lint` clean;
+`vitest run` unit suite 178/178 + slash/templates 35; comment router
+integration 10/10 (incl. 2 new edit-dispatch tests) + comment-history
+7 + quick-reply 6, all green against dev Postgres+Redis. QuickCreate and
+the Mission Control chat composer (home-grown, doesn't use MentionInput)
+untouched.
+
 ## 2026-05-21 — Dashboard enhancements: customizable widgets, resume tile, unseen badge, context CTAs, canvas round-trip
 
 Five operator-requested dashboard ideas. Migration `0052_dashboard_prefs`

@@ -293,14 +293,58 @@ function DescriptionBlock({
   description: string | null;
   onSave: (next: string | null) => void;
 }) {
+  const utils = trpc.useUtils();
   const [draft, setDraft] = useState(description ?? "");
   const [editing, setEditing] = useState(false);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Keep draft in sync when the server sends a fresh description and we're
   // not currently editing it. Avoids trampling in-flight edits.
   useEffect(() => {
     if (!editing) setDraft(description ?? "");
   }, [description, editing]);
+
+  // Slash autocomplete on the description editor too — same coexistence
+  // model as the comment composer (suppressed while the @-mention list
+  // owns the caret). Templates are off: a description isn't a comment, so
+  // `/status` etc. don't apply.
+  const slash = useSlashAutocomplete({
+    value: draft,
+    onChange: setDraft,
+    textareaRef: editorRef,
+    suppressed: mentionOpen,
+  });
+
+  const applyCommandsM = trpc.issue.applyCommands.useMutation({
+    onSuccess: ({ results }) => {
+      const skipped = results.filter((r) => r.status === "skipped");
+      if (skipped.length > 0) {
+        toast.warning(
+          `${skipped.length} command${skipped.length === 1 ? "" : "s"} skipped: ${skipped
+            .map((s) => `/${s.kind}${s.reason ? ` (${s.reason})` : ""}`)
+            .join(", ")}`,
+        );
+      }
+      utils.issue.byId.invalidate({ id: issueId });
+      utils.issue.activity.invalidate({ issueId });
+      utils.issue.watchers.invalidate({ issueId });
+    },
+    onError: (e) => toast.error(`Slash commands: ${e.message}`),
+  });
+
+  // Save: pull recognised slash-command lines out of the draft, apply
+  // them via `issue.applyCommands`, and persist the remaining prose as
+  // the description. Mirrors the comment composer so a `/assign @victor`
+  // typed in the description also assigns.
+  const commitDescription = useCallback(() => {
+    const { strippedBody, commands } = parseSlashCommands(draft);
+    if (commands.length > 0) {
+      applyCommandsM.mutate({ issueId, commands });
+    }
+    onSave(strippedBody.trim() || null);
+    setEditing(false);
+  }, [draft, issueId, applyCommandsM, onSave]);
 
   const paste = usePasteUpload({
     targetType: "issue",
@@ -327,39 +371,53 @@ function DescriptionBlock({
           onDrop={drop.onDrop}
         >
           <DropOverlay active={drop.isOver} label="Drop to attach to description" />
-          <MentionInput
-            autoFocus
-            multiline
-            rows={8}
-            value={draft}
-            onChange={setDraft}
-            onPaste={paste.onPaste}
-            onSubmit={() => {
-              onSave(draft.trim() || null);
-              setEditing(false);
-            }}
-            onKeyDown={(e) => {
-              // Esc reverts the in-progress edit and drops back to read
-              // mode. Matches the title editor's cancel pattern at the
-              // top of the issue page.
-              if (e.key === "Escape") {
-                e.preventDefault();
-                setDraft(description ?? "");
-                setEditing(false);
-              }
-            }}
-            placeholder="Description (Markdown-flavored). Paste or drop files to attach."
-            className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
-            ariaLabel="Issue description"
-          />
+          <div className="relative">
+            <MentionInput
+              ref={(handle) => {
+                editorRef.current =
+                  (handle?.textarea as HTMLTextAreaElement | null) ?? null;
+              }}
+              autoFocus
+              multiline
+              rows={8}
+              value={draft}
+              onChange={setDraft}
+              onMentionOpenChange={setMentionOpen}
+              onPaste={paste.onPaste}
+              onSubmit={() => {
+                // Cmd/Ctrl+Enter saves when the slash dropdown is closed;
+                // when open, the slash hook consumes the key for command
+                // insertion.
+                if (!slash.visible) commitDescription();
+              }}
+              onKeyDown={(e) => {
+                // Slash autocomplete owns nav / Enter / Tab / Escape when
+                // its dropdown is open.
+                if (slash.onKeyDown(e as React.KeyboardEvent)) return;
+                // Esc reverts the in-progress edit and drops back to read
+                // mode. Matches the title editor's cancel pattern at the
+                // top of the issue page.
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setDraft(description ?? "");
+                  setEditing(false);
+                }
+              }}
+              onKeyUp={slash.bind.onKeyUp}
+              onClick={slash.bind.onClick}
+              onSelect={slash.bind.onSelect}
+              onFocus={slash.bind.onFocus}
+              placeholder="Description (Markdown-flavored). @ to mention · / for commands · paste or drop files to attach."
+              className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
+              ariaLabel="Issue description"
+            />
+            {slash.visible && <SlashAutocomplete {...slash.dropdownProps} />}
+          </div>
           <div className="flex gap-2">
             <Button
               variant="ember"
               size="sm"
-              onClick={() => {
-                onSave(draft.trim() || null);
-                setEditing(false);
-              }}
+              onClick={commitDescription}
             >
               Save
             </Button>
@@ -428,6 +486,10 @@ function Comments({
   const [pendingSideEffects, setPendingSideEffects] = useState<
     SlashTemplateSideEffect[]
   >([]);
+  // True while MentionInput's @-dropdown is open. Used to suppress the
+  // slash picker so the two autocompletes never coexist at the caret —
+  // whichever is open owns Arrow/Enter/Tab/Esc.
+  const [mentionOpen, setMentionOpen] = useState(false);
 
   // Hydrate the draft from localStorage on mount (and when the issue
   // changes — guards against the page re-keying without remounting).
@@ -490,6 +552,7 @@ function Comments({
     onChange: (next) => setDraft(next),
     textareaRef: composerRef,
     includeTemplates: true,
+    suppressed: mentionOpen,
     onTemplateSideEffect: (eff) => {
       setPendingSideEffects((prev) => [...prev, eff]);
     },
@@ -623,9 +686,14 @@ function Comments({
     createComment.mutate({ issueId, body });
   }, [draft, createComment, applyCommandsM, issueId, draftKey]);
 
-  // Live preview: do we have any leading slash commands? Drives the
-  // hint chip below the textarea.
-  const hasCommands = draft.trim().startsWith("/");
+  // Live preview: do we have any slash commands (on any line)? Drives
+  // the hint chip below the textarea. We reuse the real parser so the
+  // hint only shows for RECOGNISED commands — prose with a stray `/`
+  // (URLs, "and/or") doesn't trip it.
+  const hasCommands = useMemo(
+    () => parseSlashCommands(draft).commands.length > 0,
+    [draft],
+  );
 
   const paste = usePasteUpload({
     targetType: "issue",
@@ -705,6 +773,7 @@ function Comments({
             rows={2}
             value={draft}
             onChange={setDraft}
+            onMentionOpenChange={setMentionOpen}
             onPaste={paste.onPaste}
             onSubmit={() => {
               // Cmd/Ctrl+Enter submits when the slash dropdown is closed.
@@ -792,6 +861,10 @@ function TimelineCommentCard({
 }) {
   const isAgent = Boolean(comment.authoringAgent);
   const isStatus = comment.kind === "STATUS";
+  // BODY comments are editable inline (STATUS rows are agent-owned
+  // rolling status, SYSTEM rows are server narration — neither edits).
+  const isEditable = !isStatus && comment.kind !== "SYSTEM";
+  const [editing, setEditing] = useState(false);
   const displayName = comment.authoringAgent?.name ?? comment.author?.name ?? "System";
   const { provenance, rest } = useMemo(
     () => (isAgent ? splitProvenance(comment.body) : { provenance: null, rest: comment.body }),
@@ -901,23 +974,176 @@ function TimelineCommentCard({
                 reason={comment.confidenceReason ?? null}
               />
             )}
+            {isEditable && !editing && (
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                className="focus-ring ml-auto rounded px-1 text-meta text-muted-foreground/70 transition-colors hover:text-foreground"
+              >
+                Edit
+              </button>
+            )}
           </div>
           {provenance && (
             <div className="mt-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
               {provenance}
             </div>
           )}
-          <CommentBodyWithTools
-            segments={bodySegments}
-            className="mt-1.5 text-[0.8125rem] text-foreground/90"
-          />
-          {quickReplies.length > 0 && (
+          {editing ? (
+            <CommentEditor
+              commentId={comment.id}
+              issueId={issueId}
+              initialBody={comment.body}
+              onClose={() => setEditing(false)}
+            />
+          ) : (
+            <CommentBodyWithTools
+              segments={bodySegments}
+              className="mt-1.5 text-[0.8125rem] text-foreground/90"
+            />
+          )}
+          {quickReplies.length > 0 && !editing && (
             <QuickReplyChips
               replies={quickReplies}
               onPick={(text) => dispatchQuickReply(issueId, text)}
             />
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Inline editor for an existing BODY comment. Mirrors the comment
+ * composer's mechanics so editing has feature parity with creating:
+ * shared `MentionInput` (so @mentions work), the slash autocomplete
+ * picker (so `/` commands work), and the same mutual-exclusion guard so
+ * the two dropdowns never coexist at the caret.
+ *
+ * On save:
+ *   1. Slash command LINES are parsed out of the body via
+ *      `parseSlashCommands` and applied through `issue.applyCommands`
+ *      (so `/assign @victor` typed while editing actually assigns).
+ *   2. The remaining prose is persisted via `comment.update`, which
+ *      diffs old→new @-mentions server-side and dispatches the newly
+ *      added agent mentions — the agent-triggering the operator asked
+ *      for. Re-saving without new mentions triggers nobody.
+ *
+ * Templates are intentionally NOT expanded here (no `includeTemplates`):
+ * an edit shouldn't silently rewrite a comment into a `/status` block.
+ * Structured field commands are enough for the edit surface.
+ */
+function CommentEditor({
+  commentId,
+  issueId,
+  initialBody,
+  onClose,
+}: {
+  commentId: string;
+  issueId: string;
+  initialBody: string;
+  onClose: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const [body, setBody] = useState(initialBody);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const slash = useSlashAutocomplete({
+    value: body,
+    onChange: setBody,
+    textareaRef: editorRef,
+    suppressed: mentionOpen,
+  });
+
+  const applyCommandsM = trpc.issue.applyCommands.useMutation({
+    onSuccess: ({ results }) => {
+      const skipped = results.filter((r) => r.status === "skipped");
+      if (skipped.length > 0) {
+        toast.warning(
+          `${skipped.length} command${skipped.length === 1 ? "" : "s"} skipped: ${skipped
+            .map((s) => `/${s.kind}${s.reason ? ` (${s.reason})` : ""}`)
+            .join(", ")}`,
+        );
+      }
+      utils.issue.byId.invalidate({ id: issueId });
+      utils.issue.activity.invalidate({ issueId });
+      utils.issue.watchers.invalidate({ issueId });
+    },
+    onError: (e) => toast.error(`Slash commands: ${e.message}`),
+  });
+
+  const updateM = trpc.comment.update.useMutation({
+    onSuccess: () => {
+      utils.issue.byId.invalidate({ id: issueId });
+      utils.issue.activity.invalidate({ issueId });
+      onClose();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const pending = updateM.isPending || applyCommandsM.isPending;
+
+  const save = useCallback(() => {
+    if (pending) return;
+    const { strippedBody, commands } = parseSlashCommands(body);
+    const next = strippedBody.trim();
+    if (commands.length > 0) {
+      applyCommandsM.mutate({ issueId, commands });
+    }
+    if (!next) {
+      // Editing a comment down to nothing-but-commands: apply the
+      // commands (above) and leave the body untouched rather than
+      // persisting an empty comment (the router rejects empty bodies).
+      if (commands.length > 0) onClose();
+      else toast.error("Comment can't be empty.");
+      return;
+    }
+    updateM.mutate({ id: commentId, body: next });
+  }, [pending, body, issueId, commentId, applyCommandsM, updateM, onClose]);
+
+  return (
+    <div className="relative mt-1.5 space-y-2">
+      <div className="relative">
+        <MentionInput
+          ref={(handle) => {
+            editorRef.current =
+              (handle?.textarea as HTMLTextAreaElement | null) ?? null;
+          }}
+          autoFocus
+          multiline
+          rows={3}
+          value={body}
+          onChange={setBody}
+          onMentionOpenChange={setMentionOpen}
+          onSubmit={() => {
+            if (!slash.visible) save();
+          }}
+          onKeyDown={(e) => {
+            if (slash.onKeyDown(e as React.KeyboardEvent)) return;
+            if (e.key === "Escape") {
+              e.preventDefault();
+              onClose();
+            }
+          }}
+          onKeyUp={slash.bind.onKeyUp}
+          onClick={slash.bind.onClick}
+          onSelect={slash.bind.onSelect}
+          onFocus={slash.bind.onFocus}
+          placeholder="Edit comment…  @ to mention · / for commands"
+          className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[0.8125rem]"
+          ariaLabel="Edit comment"
+        />
+        {slash.visible && <SlashAutocomplete {...slash.dropdownProps} />}
+      </div>
+      <div className="flex items-center gap-2">
+        <Button variant="ember" size="sm" onClick={save} disabled={pending}>
+          Save
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onClose} disabled={pending}>
+          Cancel
+        </Button>
       </div>
     </div>
   );
