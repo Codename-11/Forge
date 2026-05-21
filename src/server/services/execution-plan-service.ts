@@ -282,6 +282,41 @@ export async function updateExecutionStep(
         subjectId: params.stepId,
         payload: { planId: step.planId, from: step.status, to: params.status },
       });
+      // Orchestration loop: when a step is marked DONE (manually or by an
+      // agent), re-evaluate downstream readiness so dependents that are
+      // now unblocked flip TODO → READY and dispatch. Done inside the
+      // same transaction so the cascade is atomic with the status flip.
+      if (params.status === "DONE") {
+        const { cascadeReadiness } = await import(
+          "@/server/services/orchestration-service"
+        );
+        await cascadeReadiness(tx, {
+          workspaceId: params.workspaceId,
+          planId: step.planId,
+          actorId: params.actorId,
+        });
+      }
     }
   });
+
+  // Auto-judge hook: when a step lands in REVIEW (worker posted output),
+  // dispatch a REVIEWER if the plan opted into autoJudge. Run AFTER the
+  // transaction commits — the judge dispatch opens its own transaction and
+  // we don't want it to wedge the status write if dispatch resolution is
+  // slow. Best-effort; failures here don't roll back the REVIEW transition.
+  if (params.status === "REVIEW" && params.status !== step.status) {
+    try {
+      const { maybeAutoJudge } = await import(
+        "@/server/services/orchestration-service"
+      );
+      await maybeAutoJudge(db as PrismaClient, {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        stepId: params.stepId,
+      });
+    } catch {
+      // Swallow — auto-judge is opportunistic; an operator can call
+      // plans.judge manually if dispatch failed.
+    }
+  }
 }

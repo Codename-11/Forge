@@ -41,7 +41,14 @@
  */
 export type SlashTemplateSideEffect =
   | { kind: "none" }
-  | { kind: "actionRequest"; title: string };
+  | { kind: "actionRequest"; title: string }
+  /**
+   * `goal`: spin up an orchestration Goal off the current issue. The
+   * composer fires `goal.create({ title, issueId })` after the comment
+   * lands, then navigates the operator to the new goal page where they
+   * trigger plan decomposition. `title` is the operator's objective.
+   */
+  | { kind: "goal"; title: string };
 
 /**
  * The result of applying a template to the line the user typed.
@@ -157,6 +164,22 @@ export const SLASH_TEMPLATES: ReadonlyArray<SlashTemplate> = [
         `**Blocked:** ${tail}`,
         { kind: "actionRequest", title: "Unblock needed" },
       );
+    },
+  },
+  {
+    keyword: "/goal",
+    description: "Spin up an orchestration goal",
+    example: "/goal <objective>",
+    args: "free",
+    expand: (argText) => {
+      const objective = argText.trim();
+      // Without an objective there's nothing to name the Goal — keep the
+      // dropdown open (return null) until the operator types one.
+      if (!objective) return null;
+      return withCaret(`**Goal:** ${objective}${CARET_MARKER}`, {
+        kind: "goal",
+        title: objective,
+      });
     },
   },
   {

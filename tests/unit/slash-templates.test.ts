@@ -9,9 +9,15 @@ import {
 
 describe("slash-templates", () => {
   describe("catalogue", () => {
-    it("exposes the four documented templates", () => {
+    it("exposes the documented templates", () => {
       const keywords = SLASH_TEMPLATES.map((t) => t.keyword);
-      expect(keywords).toEqual(["/status", "/blocked", "/approve", "/handoff"]);
+      expect(keywords).toEqual([
+        "/status",
+        "/blocked",
+        "/goal",
+        "/approve",
+        "/handoff",
+      ]);
     });
 
     it("SLASH_TEMPLATE_HELP mirrors keyword + example shape", () => {
@@ -49,6 +55,20 @@ describe("slash-templates", () => {
       expect(result!.expansion.sideEffect).toEqual({
         kind: "actionRequest",
         title: "Unblock needed",
+      });
+    });
+  });
+
+  describe("/goal", () => {
+    it("returns null until an objective is typed", () => {
+      expect(expandTemplateLine("/goal")).toBeNull();
+    });
+
+    it("emits a goal side-effect carrying the objective as the title", () => {
+      const result = expandTemplateLine("/goal ship OAuth flow");
+      expect(result!.expansion.sideEffect).toEqual({
+        kind: "goal",
+        title: "ship OAuth flow",
       });
     });
   });

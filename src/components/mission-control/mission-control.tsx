@@ -35,6 +35,7 @@ import { SettingsPopover } from "./settings-popover";
 import { PillSparkline } from "./pill-sparkline";
 import { ChatTab } from "./chat-tab";
 import { ControlTab } from "./control-tab";
+import { PlansTab } from "./plans-tab";
 
 /**
  * Mission Control — the global agent ops widget.
@@ -71,6 +72,7 @@ const BASE_TABS: { id: MissionControlTab; label: string; chord: string; adminOnl
   { id: "history", label: "History", chord: "4" },
   { id: "chat", label: "Chat", chord: "5" },
   { id: "control", label: "Control", chord: "6", adminOnly: true },
+  { id: "plans", label: "Plans", chord: "7" },
 ];
 
 export function MissionControl() {
@@ -388,6 +390,17 @@ export function MissionControl() {
       setTab("control");
     },
     [expanded, isAdmin, setTab],
+  );
+  useHotkey(
+    "7",
+    (e) => {
+      if (!expanded) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.matches("input, textarea, [contenteditable=true]")) return;
+      e.preventDefault();
+      setTab("plans");
+    },
+    [expanded, setTab],
   );
 
   // Esc collapses panel to pill (unless caller is in a field).
@@ -785,6 +798,7 @@ export function MissionControl() {
         {state.tab === "history" && <HistoryTab slug={slug} />}
         {state.tab === "chat" && <ChatTab slug={slug} autoFocus />}
         {state.tab === "control" && isAdmin && <ControlTab slug={slug} />}
+        {state.tab === "plans" && <PlansTab slug={slug} />}
       </div>
     </div>
   );

@@ -3406,3 +3406,67 @@ describe("mcp — agent.inbox.list / agent.inbox.ack / agent.inbox.outputStarted
   });
 });
 
+describe("mcp — orchestration loop tools", () => {
+  it("goals.create/get/list + agentCrews CRUD + decompose + addSteps via the registry", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCO" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+
+    const planner = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `planner-${Date.now()}`,
+        name: "Planner",
+      },
+    });
+
+    // agentCrews.create + addMember + setMemberRole
+    const crew = (await call(
+      "agentCrews.create",
+      { name: "Loop Crew", members: [{ agentId: planner.id, role: "PLANNER" }] },
+      ctx,
+    )) as { id: string };
+
+    // goals.create
+    const goal = (await call(
+      "goals.create",
+      { title: "Orchestrate something", crewId: crew.id, maxTotalCostUsd: 10 },
+      ctx,
+    )) as { id: string };
+
+    const list = (await call("goals.list", {}, ctx)) as Array<{ id: string }>;
+    expect(list.some((g) => g.id === goal.id)).toBe(true);
+
+    // plans.decompose → DRAFT plan + PLANNING goal
+    const decomp = (await call(
+      "plans.decompose",
+      { goalId: goal.id },
+      ctx,
+    )) as { planId: string; status: string; plannerAgentId: string | null };
+    expect(decomp.status).toBe("PLANNING");
+    expect(decomp.plannerAgentId).toBe(planner.id);
+
+    // plans.addSteps with index deps
+    const added = (await call(
+      "plans.addSteps",
+      {
+        planId: decomp.planId,
+        steps: [
+          { title: "first" },
+          { title: "second", dependsOnStepIndexes: [0] },
+        ],
+      },
+      ctx,
+    )) as { stepIds: string[] };
+    expect(added.stepIds).toHaveLength(2);
+
+    const got = (await call("goals.get", { id: goal.id }, ctx)) as {
+      status: string;
+      plans: Array<{ id: string }>;
+    };
+    expect(got.status).toBe("PLANNING");
+    expect(got.plans.some((p) => p.id === decomp.planId)).toBe(true);
+  });
+});
+

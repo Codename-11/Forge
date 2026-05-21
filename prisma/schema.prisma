@@ -114,6 +114,11 @@ enum EventKind {
   ISSUE_NUDGED
   AGENT_RUN_CONTROL_REQUESTED
   AGENT_RUN_KICKED
+  GOAL_CREATED
+  GOAL_STATUS_CHANGED
+  EXECUTION_STEP_READY
+  EXECUTION_STEP_JUDGED
+  PLAN_BUDGET_EXCEEDED
 }
 
 /// Operator-requested control on an in-flight AgentRun. NONE is the
@@ -468,6 +473,7 @@ model User {
   artifactVersions        ArtifactVersion[]   @relation("ArtifactVersionCreator")
   ownedContextSets        ContextSet[]        @relation("ContextSetOwnerUser")
   createdExecutionPlans   ExecutionPlan[]     @relation("ExecutionPlanCreator")
+  createdGoals            Goal[]              @relation("GoalCreator")
   executionSteps          ExecutionStep[]     @relation("ExecutionStepUser")
   requestedReviewGates    ReviewGate[]        @relation("ReviewGateRequester")
   resolvedReviewGates     ReviewGate[]        @relation("ReviewGateResolver")
@@ -680,6 +686,7 @@ model Workspace {
   contextSets        ContextSet[]
   contextSetItems    ContextSetItem[]
   executionPlans     ExecutionPlan[]
+  goals              Goal[]
   executionSteps     ExecutionStep[]
   agentCrews         AgentCrew[]
   agentCrewMembers   AgentCrewMember[]
@@ -889,6 +896,7 @@ model Issue {
   watchers       IssueWatcher[]
   artifacts      Artifact[]
   executionPlans ExecutionPlan[]
+  goals          Goal[]
   actionRequests ActionRequest[]
 
   @@unique([workspaceId, number])
@@ -1603,6 +1611,7 @@ model Agent {
   authoredArtifactVersions ArtifactVersion[] @relation("ArtifactVersionCreatorAgent")
   ownedContextSets         ContextSet[]      @relation("ContextSetOwnerAgent")
   createdExecutionPlans    ExecutionPlan[]   @relation("ExecutionPlanCreatorAgent")
+  createdGoals             Goal[]            @relation("GoalCreatorAgent")
   executionSteps           ExecutionStep[]   @relation("ExecutionStepAgent")
   crewMemberships          AgentCrewMember[] @relation("AgentCrewMember")
   requestedReviewGates     ReviewGate[]      @relation("ReviewGateRequesterAgent")
@@ -2151,6 +2160,53 @@ model ContextSetItem {
 // Agentic work OS — ExecutionPlan / ExecutionStep (added 2026-05-19, migration 0035)
 // ----------------------------------------------------------------------------
 
+/// Lifecycle for a Goal — the top-level objective the orchestrator
+/// pursues. OPEN is the freshly-created state; PLANNING means a
+/// PLANNER agent is decomposing it into an ExecutionPlan; ACTIVE means
+/// an approved plan is running; ACHIEVED is the terminal success;
+/// ABANDONED is the terminal give-up.
+enum GoalStatus {
+  OPEN
+  PLANNING
+  ACTIVE
+  ACHIEVED
+  ABANDONED
+}
+
+/// A top-level objective the multi-agent orchestrator pursues. A Goal
+/// owns one or more ExecutionPlan attempts (only one `isActiveAttempt`
+/// at a time). The decompose → approve → dispatch → judge → retry loop
+/// is anchored here: budgets (`maxTotalCostUsd` / `maxWallTimeMinutes`)
+/// and accumulated spend (`totalCostUsd`) gate continuation.
+model Goal {
+  id                 String     @id @default(cuid())
+  workspaceId        String
+  title              String
+  description        String?    @db.Text
+  status             GoalStatus @default(OPEN)
+  issueId            String?
+  createdById        String?
+  createdByAgentId   String?
+  crewId             String?
+  maxTotalCostUsd    Float?
+  maxWallTimeMinutes Int?
+  totalCostUsd       Float      @default(0)
+  startedAt          DateTime?
+  achievedAt         DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  archivedAt         DateTime?
+
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue          Issue?          @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  createdBy      User?           @relation("GoalCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByAgent Agent?          @relation("GoalCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
+  crew           AgentCrew?      @relation("GoalCrew", fields: [crewId], references: [id], onDelete: SetNull)
+  plans          ExecutionPlan[]
+
+  @@index([workspaceId, status])
+}
+
 /// Lifecycle for a multi-step execution plan.
 enum ExecutionPlanStatus {
   DRAFT
@@ -2191,6 +2247,26 @@ model ExecutionPlan {
   /// Optional pointer at an AgentCrew (added in Wave 7) that owns
   /// execution. SetNull on crew delete.
   crewId           String?
+  /// Orchestration loop (migration 0051). When the plan is a decompose
+  /// attempt for a Goal, `goalId` points at it. Multiple attempts per
+  /// goal are allowed; only one carries `isActiveAttempt = true`.
+  goalId           String?
+  /// Per-step retry budget — how many times a FAILed judge verdict can
+  /// re-dispatch a worker before the step is BLOCKED. Default 2.
+  maxStepRetries   Int                 @default(2)
+  /// Budget caps mirrored from the goal (or set per-plan). When
+  /// `totalCostUsd` exceeds `maxTotalCostUsd`, or wall-time exceeds
+  /// `maxWallTimeMinutes`, the watchdog BLOCKs the plan + opens a gate.
+  maxTotalCostUsd  Float?
+  maxWallTimeMinutes Int?
+  totalCostUsd     Float               @default(0)
+  /// Marks the live decompose attempt for a goal. Prior attempts are
+  /// flipped false when a new decompose runs.
+  isActiveAttempt  Boolean             @default(true)
+  /// When true (default), a step entering REVIEW auto-dispatches a
+  /// REVIEWER crew member to judge it. Opt out per-plan to require a
+  /// manual `plans.judge` call.
+  autoJudge        Boolean             @default(true)
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
   archivedAt       DateTime?
@@ -2202,6 +2278,7 @@ model ExecutionPlan {
   createdByAgent Agent?          @relation("ExecutionPlanCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
   contextSet     ContextSet?     @relation("ExecutionPlanContext", fields: [contextSetId], references: [id], onDelete: SetNull)
   crew           AgentCrew?      @relation("ExecutionPlanCrew", fields: [crewId], references: [id], onDelete: SetNull)
+  goal           Goal?           @relation(fields: [goalId], references: [id], onDelete: SetNull)
   steps          ExecutionStep[]
 
   @@index([workspaceId, status, updatedAt])
@@ -2209,6 +2286,7 @@ model ExecutionPlan {
   @@index([projectId])
   @@index([contextSetId])
   @@index([crewId])
+  @@index([goalId])
 }
 
 /// One step inside an ExecutionPlan. Steps form an ordered list; the
@@ -2235,6 +2313,18 @@ model ExecutionStep {
   /// Step ids this step depends on (must be DONE before READY). Empty
   /// array = no prerequisites.
   dependsOnStepIds String[]            @default([])
+  /// Orchestration loop (migration 0051). The judge's verdict on this
+  /// step. Shape: { verdict: "PASS"|"FAIL", feedback: string,
+  /// score?: number, judgedByAgentId?: string, judgedAt: string }.
+  judgeVerdict     Json?
+  /// How many times this step has been re-dispatched after a FAIL.
+  retryCount       Int                 @default(0)
+  /// The most recent judge feedback — handed to the worker on retry so
+  /// it knows what to fix. Cleared on PASS.
+  lastFeedback     String?             @db.Text
+  /// When this step was decomposed into a nested child ExecutionPlan,
+  /// points at that child plan's id.
+  childPlanId      String?
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
@@ -2273,6 +2363,7 @@ model AgentCrew {
   workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   members        AgentCrewMember[]
   executionPlans ExecutionPlan[]   @relation("ExecutionPlanCrew")
+  goals          Goal[]            @relation("GoalCrew")
   reviewGates    ReviewGate[]      @relation("ReviewGateCrew")
 
   @@unique([workspaceId, name])

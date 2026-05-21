@@ -145,6 +145,213 @@ export async function addCrewMember(
   return { id: row.id };
 }
 
+/** Update crew head metadata. */
+export async function updateAgentCrew(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    crewId: string;
+    name?: string;
+    description?: string | null;
+    maxParallel?: number;
+  },
+): Promise<void> {
+  const crew = await db.agentCrew.findFirst({
+    where: { id: params.crewId, workspaceId: params.workspaceId },
+    select: { id: true, name: true },
+  });
+  if (!crew) throw new TRPCError({ code: "NOT_FOUND", message: "Agent crew not found." });
+  await db.$transaction(async (tx) => {
+    await tx.agentCrew.update({
+      where: { id: params.crewId },
+      data: {
+        name: params.name?.trim() ?? undefined,
+        description: params.description === undefined ? undefined : params.description,
+        maxParallel: params.maxParallel ?? undefined,
+      },
+    });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      entity: "agent-crew",
+      entityId: params.crewId,
+      action: "updated",
+      before: { name: crew.name },
+      after: { name: params.name ?? crew.name },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "agent-crew",
+      subjectId: params.crewId,
+    });
+  });
+}
+
+/** Remove a member from a crew by member-row id. */
+export async function removeCrewMember(
+  db: PrismaClient,
+  params: { workspaceId: string; actorId: string | null; memberId: string },
+): Promise<void> {
+  const member = await db.agentCrewMember.findFirst({
+    where: { id: params.memberId, workspaceId: params.workspaceId },
+    select: { id: true, crewId: true, agentId: true, role: true },
+  });
+  if (!member) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Crew member not found." });
+  }
+  await db.$transaction(async (tx) => {
+    await tx.agentCrewMember.delete({ where: { id: params.memberId } });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      entity: "agent-crew",
+      entityId: member.crewId,
+      action: "member_removed",
+      before: { agentId: member.agentId, role: member.role },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "agent-crew",
+      subjectId: member.crewId,
+    });
+  });
+}
+
+/**
+ * Change a member's role. Implemented as delete-old + upsert-new because
+ * the unique key includes the role (an agent can hold multiple roles); a
+ * plain update on `role` could collide with an existing (crew, agent,
+ * newRole) row. Returns the resulting member id.
+ */
+export async function setCrewMemberRole(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    memberId: string;
+    role: AgentCrewRole;
+  },
+): Promise<{ id: string }> {
+  const member = await db.agentCrewMember.findFirst({
+    where: { id: params.memberId, workspaceId: params.workspaceId },
+    select: { id: true, crewId: true, agentId: true, role: true, position: true },
+  });
+  if (!member) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Crew member not found." });
+  }
+  if (member.role === params.role) return { id: member.id };
+  const row = await db.$transaction(async (tx) => {
+    await tx.agentCrewMember.delete({ where: { id: member.id } });
+    const created = await tx.agentCrewMember.upsert({
+      where: {
+        crewId_agentId_role: {
+          crewId: member.crewId,
+          agentId: member.agentId,
+          role: params.role,
+        },
+      },
+      create: {
+        workspaceId: params.workspaceId,
+        crewId: member.crewId,
+        agentId: member.agentId,
+        role: params.role,
+        position: member.position,
+      },
+      update: {},
+      select: { id: true },
+    });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      entity: "agent-crew",
+      entityId: member.crewId,
+      action: "member_role_changed",
+      before: { agentId: member.agentId, role: member.role },
+      after: { agentId: member.agentId, role: params.role },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "agent-crew",
+      subjectId: member.crewId,
+    });
+    return created;
+  });
+  return { id: row.id };
+}
+
+/** Soft-archive a crew. */
+export async function archiveAgentCrew(
+  db: PrismaClient,
+  params: { workspaceId: string; actorId: string | null; crewId: string },
+): Promise<void> {
+  const crew = await db.agentCrew.findFirst({
+    where: { id: params.crewId, workspaceId: params.workspaceId },
+    select: { id: true },
+  });
+  if (!crew) throw new TRPCError({ code: "NOT_FOUND", message: "Agent crew not found." });
+  await db.$transaction(async (tx) => {
+    await tx.agentCrew.update({
+      where: { id: params.crewId },
+      data: { archivedAt: new Date() },
+    });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      entity: "agent-crew",
+      entityId: params.crewId,
+      action: "archived",
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "agent-crew",
+      subjectId: params.crewId,
+    });
+  });
+}
+
+/**
+ * Open a ReviewGate inside an existing transaction. Use this when the
+ * gate must be atomic with surrounding writes (e.g. the orchestration
+ * loop blocking a step + opening its gate in one transaction). Skips the
+ * crew-scope pre-check's separate query — pass a validated crewId or null.
+ */
+export async function openReviewGateTx(
+  tx: Prisma.TransactionClient | PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    actorAgentId?: string | null;
+    targetType: string;
+    targetId: string;
+    prompt: string;
+    requiredRole?: string | null;
+    crewId?: string | null;
+  },
+): Promise<{ id: string }> {
+  const gate = await tx.reviewGate.create({
+    data: {
+      workspaceId: params.workspaceId,
+      targetType: params.targetType,
+      targetId: params.targetId,
+      prompt: params.prompt,
+      requiredRole: params.requiredRole ?? null,
+      requestedById: params.actorAgentId ? null : params.actorId,
+      requestedByAgentId: params.actorAgentId ?? null,
+      crewId: params.crewId ?? null,
+    },
+  });
+  await recordChange(tx, {
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    entity: "review-gate",
+    entityId: gate.id,
+    action: "opened",
+    after: { targetType: gate.targetType, targetId: gate.targetId, prompt: gate.prompt },
+    eventKind: EventKind.ISSUE_UPDATED,
+    subjectType: "review-gate",
+    subjectId: gate.id,
+    payload: {
+      gateTargetType: gate.targetType,
+      gateTargetId: gate.targetId,
+      action: "opened",
+    } as Prisma.InputJsonValue,
+  });
+  return { id: gate.id };
+}
+
 /** Open a ReviewGate against any reviewable target. */
 export async function openReviewGate(
   db: PrismaClient,
@@ -168,37 +375,7 @@ export async function openReviewGate(
       throw new TRPCError({ code: "NOT_FOUND", message: "Agent crew not found." });
     }
   }
-  const { id } = await db.$transaction(async (tx) => {
-    const gate = await tx.reviewGate.create({
-      data: {
-        workspaceId: params.workspaceId,
-        targetType: params.targetType,
-        targetId: params.targetId,
-        prompt: params.prompt,
-        requiredRole: params.requiredRole ?? null,
-        requestedById: params.actorAgentId ? null : params.actorId,
-        requestedByAgentId: params.actorAgentId ?? null,
-        crewId: params.crewId ?? null,
-      },
-    });
-    await recordChange(tx, {
-      workspaceId: params.workspaceId,
-      actorId: params.actorId,
-      entity: "review-gate",
-      entityId: gate.id,
-      action: "opened",
-      after: { targetType: gate.targetType, targetId: gate.targetId, prompt: gate.prompt },
-      eventKind: EventKind.ISSUE_UPDATED,
-      subjectType: "review-gate",
-      subjectId: gate.id,
-      payload: {
-        gateTargetType: gate.targetType,
-        gateTargetId: gate.targetId,
-        action: "opened",
-      } as Prisma.InputJsonValue,
-    });
-    return { id: gate.id };
-  });
+  const { id } = await db.$transaction((tx) => openReviewGateTx(tx, params));
   return { id };
 }
 

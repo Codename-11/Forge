@@ -15,7 +15,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * edge if they want.
  */
 
-export type MissionControlTab = "live" | "queue" | "agents" | "history" | "chat" | "control";
+export type MissionControlTab =
+  | "live"
+  | "queue"
+  | "agents"
+  | "history"
+  | "chat"
+  | "control"
+  | "plans";
 /**
  * Three visual modes:
  *   - pill: ambient indicator only (active count + presence dots).

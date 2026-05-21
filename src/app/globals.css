@@ -169,6 +169,28 @@
       animation: shimmer 1.8s linear infinite;
     }
   }
+
+  /* ------------------------------------------------------------------ */
+  /* Orchestration DAG edges (src/components/orchestration/*)
+   * Active edges (flowing into / out of a RUNNING step) get a marching
+   * dash so the eye follows the live path of execution. Static (no
+   * motion) when the user opts out of motion. The dash pattern itself
+   * stays visible reduced-motion — only the marching stops.
+   * ------------------------------------------------------------------ */
+  .dag-edge-flow {
+    stroke-dasharray: 5 4;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .dag-edge-flow {
+      animation: dag-dash-flow 0.7s linear infinite;
+    }
+  }
+}
+
+@keyframes dag-dash-flow {
+  to {
+    stroke-dashoffset: -18;
+  }
 }
 
 @layer utilities {
