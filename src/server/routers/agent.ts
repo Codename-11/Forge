@@ -14,6 +14,7 @@ import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import type { db as PrismaDb } from "@/server/db";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
+import { agentIdSchema } from "@/server/validators";
 
 /**
  * Agent registry. Agents are MCP-first actors — LLM profiles that hold
@@ -32,11 +33,11 @@ const profileKey = z
 
 /**
  * Agent ids are *not* always cuids — some agents were seeded with
- * non-cuid handles (hex strings) and have to keep them. Use this
- * permissive schema instead of `z.string().cuid()` anywhere an agent
- * id arrives over the wire. Exported for cross-router use.
+ * non-cuid handles (hex strings) and have to keep them. Re-exported from
+ * the leaf `validators` module so services can share it without pulling
+ * in this whole router.
  */
-export const agentId = z.string().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/);
+export const agentId = agentIdSchema;
 
 const upsertInput = z.object({
   name: z.string().min(1).max(120),

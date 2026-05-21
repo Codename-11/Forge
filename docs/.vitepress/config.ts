@@ -134,6 +134,14 @@ export default defineConfig({
             { text: "Design Language", link: "/concepts/design-language.html" },
           ],
         },
+        {
+          text: "Orchestration",
+          items: [
+            { text: "Goals & the Loop", link: "/concepts/orchestration.html" },
+            { text: "Action Requests", link: "/concepts/action-requests.html" },
+            { text: "Comments", link: "/concepts/comments.html" },
+          ],
+        },
       ],
       "/agents/": [
         {

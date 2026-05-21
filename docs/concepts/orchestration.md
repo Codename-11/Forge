@@ -26,6 +26,37 @@ DAG, AgentCrew, ContextSet, ReviewGate, ActionRequest). It adds the
   `REVIEWER` (+ `OBSERVER` / `OPERATOR_PROXY`). The loop resolves "who
   plans / works / judges" from crew membership (lowest `position` wins).
 
+## How a goal runs
+
+A **goal** is an automated loop that runs to completion — not a static
+checklist you tick off by hand. You state the objective, approve the plan,
+and the crew drives it through to "achieved" on its own, within the budget
+and time caps you set.
+
+1. **Objective** — You state a high-level goal and (optionally) assign a
+   crew to run it.
+2. **Plan** — The crew's planner decomposes the goal into a
+   dependency-ordered set of steps.
+3. **Approve** — You review the proposed plan and approve it. Nothing runs
+   until you do.
+4. **Execute** — Workers pick up steps as their dependencies clear and run
+   them in parallel.
+5. **Review** — A reviewer judges each finished step. A pass advances the
+   plan; a fail sends it back with feedback to retry.
+6. **Achieved** — When every step passes, the goal completes. Budget and
+   time caps stop runaway loops automatically.
+
+### Use cases
+
+- A **multi-step migration** run by a crew: design schema → write
+  migration → wire the API → add tests, each step gated on the last.
+- A **research-then-write** goal: gather sources, synthesize findings, then
+  draft the writeup — the draft step waits on the research steps.
+- A **refactor where a reviewer enforces a quality bar**: failing steps
+  bounce back with feedback and retry automatically until they pass.
+- A **one-off goal kicked off from an issue** via `/goal <objective>` in
+  the issue, when you don't need a standing crew.
+
 ## The loop
 
 ```
@@ -210,12 +241,30 @@ WORKER executes each READY step, a REVIEWER judges steps that enter
 REVIEW (when `autoJudge` is on). The same agent can hold multiple roles
 on one crew.
 
+### Roles
+
+Every crew member holds one or more roles. These are the one-line
+summaries shown in the product's role picker:
+
+- **Planner** — Breaks the goal into an ordered plan of steps. (The brain
+  of the crew; you approve its plan before any work begins.)
+- **Worker** — Executes the plan's steps and reports results. (The hands;
+  runs steps in parallel up to the crew's parallel cap.)
+- **Reviewer** — Judges each finished step — pass to advance, fail to
+  retry. (The quality gate; a fail sends the step back with feedback.)
+- **Observer** — Watches the run without acting. (Read-only; never
+  assigned steps.)
+- **Operator proxy** — Stands in for you — can approve gates while you're
+  away. (A human stand-in so the loop keeps moving.)
+
 UI surfaces (sidebar **Crews**, chord `g u`):
 
 - **`/w/<slug>/crews`** — the crew index: each crew with its avatar
   stack, role breakdown (e.g. "1 planner · 3 workers · 1 reviewer"), and
-  parallel cap. Heavy create/archive CRUD still lives under
-  `/settings/crews`.
+  parallel cap. **Create a crew right here** with the **New crew** button,
+  which opens a modal with a role-explaining picker. `/settings/crews`
+  still exists for heavier management, but it's the secondary path — not
+  where you go to create.
 - **`/w/<slug>/crews/<crewId>`** — the crew detail: roster with live
   presence + "what each member is running right now" (active RUNNING /
   REVIEW steps on this crew's plans), inline add / change-role / remove,

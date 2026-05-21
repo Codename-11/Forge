@@ -20,8 +20,10 @@ import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import {
   CREW_ROLES,
+  ROLE_META,
   roleBreakdown,
   roleLabel,
+  roleSummary,
   type CrewRole,
 } from "@/components/crews/role-chip";
 import {
@@ -319,7 +321,7 @@ export default function CrewDetailPage() {
                         }
                         disabled={setMemberRole.isPending}
                         className="rounded-md border border-border bg-card/40 px-1.5 py-1 text-[10px] uppercase tracking-wide"
-                        title="Change role"
+                        title={`${roleSummary(m.role)} — change role`}
                       >
                         {CREW_ROLES.map((r) => (
                           <option key={r} value={r}>
@@ -528,42 +530,48 @@ function AddMemberRow({
   const [agentId, setAgentId] = useState<string>("");
   const [role, setRole] = useState<CrewRole>("WORKER");
   return (
-    <div className="mt-1 grid grid-cols-[1fr_130px_auto] gap-1.5">
-      <select
-        value={agentId}
-        onChange={(e) => setAgentId(e.target.value)}
-        className="rounded-md border border-border bg-card/40 px-2 py-1.5 text-sm"
-      >
-        <option value="">+ Add member…</option>
-        {agents.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.name || a.profileKey}
-          </option>
-        ))}
-      </select>
-      <select
-        value={role}
-        onChange={(e) => setRole(e.target.value as CrewRole)}
-        className="rounded-md border border-border bg-card/40 px-2 py-1.5 text-sm"
-      >
-        {CREW_ROLES.map((r) => (
-          <option key={r} value={r}>
-            {roleLabel(r)}
-          </option>
-        ))}
-      </select>
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={busy || !agentId}
-        onClick={() => {
-          if (!agentId) return;
-          onAdd(agentId, role);
-          setAgentId("");
-        }}
-      >
-        <Plus className="h-3.5 w-3.5" />
-      </Button>
+    <div className="mt-1 flex flex-col gap-1">
+      <div className="grid grid-cols-[1fr_130px_auto] gap-1.5">
+        <select
+          value={agentId}
+          onChange={(e) => setAgentId(e.target.value)}
+          className="rounded-md border border-border bg-card/40 px-2 py-1.5 text-sm"
+        >
+          <option value="">+ Add member…</option>
+          {agents.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name || a.profileKey}
+            </option>
+          ))}
+        </select>
+        <select
+          value={role}
+          onChange={(e) => setRole(e.target.value as CrewRole)}
+          title={ROLE_META[role].summary}
+          className="rounded-md border border-border bg-card/40 px-2 py-1.5 text-sm"
+        >
+          {CREW_ROLES.map((r) => (
+            <option key={r} value={r}>
+              {roleLabel(r)}
+            </option>
+          ))}
+        </select>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy || !agentId}
+          onClick={() => {
+            if (!agentId) return;
+            onAdd(agentId, role);
+            setAgentId("");
+          }}
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+      {agentId ? (
+        <p className="pl-1 text-meta text-muted-foreground">{roleSummary(role)}</p>
+      ) : null}
     </div>
   );
 }

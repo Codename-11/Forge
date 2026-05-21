@@ -8,6 +8,7 @@ import {
 } from "@prisma/client";
 import { router, adminProcedure, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import { agentIdSchema } from "@/server/validators";
 import {
   AGENT_CREW_ROLES,
   addCrewMember,
@@ -251,7 +252,7 @@ export const agentCrewRouter = router({
         members: z
           .array(
             z.object({
-              agentId: z.string().cuid(),
+              agentId: agentIdSchema,
               role: roleSchema,
             }),
           )
@@ -337,7 +338,7 @@ export const agentCrewRouter = router({
     .input(
       z.object({
         crewId: z.string().cuid(),
-        agentId: z.string().cuid(),
+        agentId: agentIdSchema,
         role: roleSchema,
       }),
     )

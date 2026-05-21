@@ -40,6 +40,53 @@ export function roleTone(role: string): string {
   return ROLE_TONE[role as CrewRole] ?? ROLE_TONE.OBSERVER;
 }
 
+/**
+ * What each role *does* in an orchestration run — the single source of
+ * truth for role copy across the crew picker, roster, and docs. Keep the
+ * `summary` to one tight sentence (shown in pickers) and `detail` to the
+ * "why you'd assign it" (shown on hover / in expanded help).
+ */
+export const ROLE_META: Record<
+  CrewRole,
+  { label: string; summary: string; detail: string }
+> = {
+  PLANNER: {
+    label: "Planner",
+    summary: "Breaks the goal into an ordered plan of steps.",
+    detail:
+      "The brain of the crew. When a goal starts, the planner decomposes it into a dependency-ordered execution plan. You approve that plan before any work begins.",
+  },
+  WORKER: {
+    label: "Worker",
+    summary: "Executes the plan's steps and reports results.",
+    detail:
+      "The hands of the crew. Workers pick up steps the moment their dependencies clear and run them in parallel up to the crew's parallel cap.",
+  },
+  REVIEWER: {
+    label: "Reviewer",
+    summary: "Judges each finished step — pass to advance, fail to retry.",
+    detail:
+      "The quality gate. After a worker finishes a step, a reviewer verdicts it. A pass advances the plan; a fail sends the step back with feedback for another attempt.",
+  },
+  OBSERVER: {
+    label: "Observer",
+    summary: "Watches the run without acting.",
+    detail:
+      "Read-only presence — for audit, logging, or keeping a stakeholder agent in the loop. Observers never get assigned steps.",
+  },
+  OPERATOR_PROXY: {
+    label: "Operator proxy",
+    summary: "Stands in for you — can approve gates while you're away.",
+    detail:
+      "A human stand-in. When the loop hits an approval gate or a blocking question and you're not around, the operator proxy can respond so the run keeps moving.",
+  },
+};
+
+/** One-line role summary for pickers and tooltips. */
+export function roleSummary(role: string): string {
+  return ROLE_META[role as CrewRole]?.summary ?? "";
+}
+
 /** Lowercased, space-separated label (e.g. "operator proxy"). */
 export function roleLabel(role: string): string {
   return role.toLowerCase().replace(/_/g, " ");

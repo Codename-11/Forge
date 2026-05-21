@@ -58,6 +58,14 @@ export function Breadcrumbs() {
     { id: parsed?.entityKind === "plan" ? parsed.entityId : "" },
     { enabled: parsed?.entityKind === "plan", staleTime: 60_000 },
   );
+  const crewQ = trpc.agentCrew.get.useQuery(
+    { id: parsed?.entityKind === "crew" ? parsed.entityId : "" },
+    { enabled: parsed?.entityKind === "crew", staleTime: 60_000 },
+  );
+  const goalQ = trpc.goal.get.useQuery(
+    { id: parsed?.entityKind === "goal" ? parsed.entityId : "" },
+    { enabled: parsed?.entityKind === "goal", staleTime: 60_000 },
+  );
   const artifactQ = trpc.artifact.getBySlug.useQuery(
     { slug: parsed?.entityKind === "artifact" ? parsed.entitySlug : "" },
     { enabled: parsed?.entityKind === "artifact", staleTime: 60_000 },
@@ -85,6 +93,10 @@ export function Breadcrumbs() {
         return canvasQ.data?.name ?? "…";
       case "plan":
         return planQ.data?.title ?? "…";
+      case "crew":
+        return crewQ.data?.name ?? "…";
+      case "goal":
+        return goalQ.data?.title ?? "…";
       case "artifact":
         return artifactQ.data?.title ?? "…";
     }
@@ -146,6 +158,8 @@ type SectionId =
   | "roadmap"
   | "artifacts"
   | "plans"
+  | "goals"
+  | "crews"
   | "canvas"
   | "analytics"
   | "agents"
@@ -170,6 +184,8 @@ const SECTION_LABEL: Record<SectionId, string> = {
   roadmap: "Roadmap",
   artifacts: "Artifacts",
   plans: "Plans",
+  goals: "Goals",
+  crews: "Crews",
   canvas: "Canvas",
   analytics: "Analytics",
   agents: "Agents",
@@ -193,6 +209,8 @@ type ParsedRoute = {
     | "cycle"
     | "canvas"
     | "plan"
+    | "crew"
+    | "goal"
     | "artifact";
   entityId: string;
   entityKey: string;
@@ -250,6 +268,8 @@ function parsePath(pathname: string, slug: string | null): ParsedRoute | null {
       case "cycles":      return "cycle";
       case "canvas":      return "canvas";
       case "plans":       return "plan";
+      case "crews":       return "crew";
+      case "goals":       return "goal";
       case "artifacts":   return "artifact";
       default:            return "none";
     }

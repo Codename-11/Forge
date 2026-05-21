@@ -12,6 +12,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { recordChange } from "@/server/audit";
+import { agentIdSchema } from "@/server/validators";
 
 /**
  * Per-kind payload schemas. The MCP + tRPC entry points strip any
@@ -30,7 +31,7 @@ const assignPayload = z.object({
   userIds: z.array(z.string().cuid()).max(50),
 });
 const assignAgentPayload = z.object({
-  agentId: z.string().cuid(),
+  agentId: agentIdSchema,
 });
 const archivePayload = z.object({}).default({});
 const closeAsDuplicatePayload = z.object({

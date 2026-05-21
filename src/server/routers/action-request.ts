@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { ActionRequestKind, ActionRequestStatus, NotificationSeverity } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
+import { agentIdSchema } from "@/server/validators";
 import {
   acceptActionRequest,
   closeActionRequestVoting,
@@ -39,7 +40,7 @@ export const actionRequestRouter = router({
         .object({
           status: z.nativeEnum(ActionRequestStatus).optional(),
           assignedUserId: z.string().cuid().optional(),
-          assignedAgentId: z.string().cuid().optional(),
+          assignedAgentId: agentIdSchema.optional(),
           issueId: z.string().cuid().optional(),
           limit: z.number().int().positive().max(100).default(50),
         })
@@ -175,7 +176,7 @@ export const actionRequestRouter = router({
          */
         options: z.array(pollOptionSchema).min(2).max(8).optional(),
         assignedUserId: z.string().cuid().nullable().optional(),
-        assignedAgentId: z.string().cuid().nullable().optional(),
+        assignedAgentId: agentIdSchema.nullable().optional(),
         sourceType: z.string().max(40).nullable().optional(),
         sourceId: z.string().max(40).nullable().optional(),
         issueId: z.string().cuid().nullable().optional(),

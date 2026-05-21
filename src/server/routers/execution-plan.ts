@@ -8,6 +8,7 @@ import {
 } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import { agentIdSchema } from "@/server/validators";
 import { extractMentions } from "@/server/services/mentions";
 import {
   addExecutionStep,
@@ -31,7 +32,7 @@ const verificationSchema = z
 const stepInputSchema = z.object({
   title: z.string().min(1).max(300),
   body: z.string().max(50_000).nullable().optional(),
-  assignedAgentId: z.string().cuid().nullable().optional(),
+  assignedAgentId: agentIdSchema.nullable().optional(),
   assignedUserId: z.string().cuid().nullable().optional(),
   expectedOutput: z.string().max(50_000).nullable().optional(),
   verification: verificationSchema.nullable().optional(),
@@ -385,7 +386,7 @@ export const executionPlanRouter = router({
         planId: z.string().cuid(),
         title: z.string().min(1).max(300),
         body: z.string().max(50_000).nullable().optional(),
-        assignedAgentId: z.string().cuid().nullable().optional(),
+        assignedAgentId: agentIdSchema.nullable().optional(),
         assignedUserId: z.string().cuid().nullable().optional(),
         expectedOutput: z.string().max(50_000).nullable().optional(),
         verification: verificationSchema.nullable().optional(),
@@ -415,7 +416,7 @@ export const executionPlanRouter = router({
         title: z.string().min(1).max(300).optional(),
         body: z.string().max(50_000).nullable().optional(),
         status: z.nativeEnum(ExecutionStepStatus).optional(),
-        assignedAgentId: z.string().cuid().nullable().optional(),
+        assignedAgentId: agentIdSchema.nullable().optional(),
         assignedUserId: z.string().cuid().nullable().optional(),
         expectedOutput: z.string().max(50_000).nullable().optional(),
         verification: verificationSchema.nullable().optional(),
