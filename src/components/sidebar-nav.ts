@@ -18,6 +18,7 @@ import {
   Shield,
   Sparkles,
   BookOpen,
+  UsersRound,
   Workflow,
 } from "lucide-react";
 
@@ -70,6 +71,7 @@ export const WORKSPACE_NAV_SECTIONS: readonly WorkspaceNavSection[] = [
       { path: "/artifacts", label: "Artifacts", icon: FileText, chord: "f" },
       { path: "/goals", label: "Goals", icon: Target, chord: "g" },
       { path: "/plans", label: "Plans", icon: ListChecks, chord: "l" },
+      { path: "/crews", label: "Crews", icon: UsersRound, chord: "u" },
       { path: "/canvas", label: "Canvas", icon: Sparkles, chord: "k" },
     ],
   },

@@ -16,7 +16,11 @@ import {
   isGoalLive,
   type GoalStatus,
 } from "@/components/orchestration-ui/status";
-import { BudgetMeter } from "@/components/orchestration-ui/budget-meter";
+import { BudgetMeter } from "@/components/orchestration/budget-meter";
+import {
+  CrewRosterPanel,
+  type CrewRosterData,
+} from "@/components/orchestration/crew-roster-panel";
 import {
   useGoalRouter,
   type GoalPlanRow,
@@ -214,6 +218,10 @@ export default function GoalDetailPage() {
               elapsedMinutes={elapsedMinutes}
             />
           </div>
+
+          <CrewRosterPanel
+            crew={(goal.crew ?? null) as CrewRosterData | null}
+          />
 
           <div className="rounded-lg border border-border bg-card/40 p-3 text-meta">
             <div className="mb-2 uppercase tracking-wide text-muted-foreground">

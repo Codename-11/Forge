@@ -34,7 +34,28 @@ type GoalRow = {
   // The backend may embed plan/step rollups on get; kept loose.
   plans?: GoalPlanRow[];
   activePlan?: GoalPlanRow | null;
+  // Crew roster embedded on `goal.get` (read-only display).
+  crew?: GoalCrewRow | null;
   _count?: { plans?: number } | null;
+};
+
+type GoalCrewRow = {
+  id: string;
+  name: string;
+  maxParallel?: number | null;
+  members: {
+    id: string;
+    role: string;
+    position?: number;
+    agent: {
+      id: string;
+      name: string;
+      profileKey: string;
+      avatar?: string | null;
+      status?: string | null;
+      lastHeartbeatAt?: string | Date | null;
+    };
+  }[];
 };
 
 type GoalPlanRow = {
@@ -86,4 +107,4 @@ export function useGoalRouter(): GoalRouter | undefined {
     | undefined;
 }
 
-export type { GoalRow, GoalPlanRow };
+export type { GoalRow, GoalPlanRow, GoalCrewRow };

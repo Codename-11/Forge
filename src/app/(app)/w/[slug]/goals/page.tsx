@@ -1,9 +1,13 @@
 "use client";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Target } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Plus, Target } from "lucide-react";
+import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
+import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { CrewSelector } from "@/components/crews/crew-selector";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 import {
@@ -13,6 +17,7 @@ import {
   type GoalStatus,
 } from "@/components/orchestration-ui/status";
 import { fmtUsd } from "@/components/orchestration-ui/budget-meter";
+import { trpc } from "@/lib/trpc";
 import { useGoalRouter, type GoalRow } from "@/components/orchestration-ui/use-goal-trpc";
 
 type Filter = "all" | GoalStatus;
@@ -29,6 +34,8 @@ type Filter = "all" | GoalStatus;
  */
 export default function GoalsPage() {
   const ws = useWorkspace();
+  const router = useRouter();
+  const utils = trpc.useUtils();
   const [filter, setFilter] = useState<Filter>("all");
   const goalRouter = useGoalRouter();
 
@@ -45,11 +52,41 @@ export default function GoalsPage() {
     return Array.isArray(data) ? data : (data.items ?? []);
   }, [data]);
 
+  // Goal creation: the `goal.create` procedure is shipped by the
+  // orchestration backend (reached via the guarded shim). The form lets
+  // the operator assign a crew at creation time via CrewSelector — the
+  // crew the loop dispatches steps to.
+  const [creating, setCreating] = useState(false);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [crewId, setCrewId] = useState<string | null>(null);
+  const createGoal = goalRouter?.create?.useMutation({
+    onSuccess: (result) => {
+      toast.success("Goal created");
+      setCreating(false);
+      setTitle("");
+      setDescription("");
+      setCrewId(null);
+      const goalUtils = (utils as unknown as { goal?: { list?: { invalidate?: () => void } } }).goal;
+      goalUtils?.list?.invalidate?.();
+      if (result?.id) router.push(`/w/${ws.slug}/goals/${result.id}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const canCreate = Boolean(goalRouter?.create);
+
   return (
     <>
       <Topbar
         title="Goals"
         subtitle={available && data ? `${items.length} goals` : undefined}
+        actions={
+          canCreate ? (
+            <Button size="sm" variant="ember" onClick={() => setCreating(true)}>
+              <Plus className="h-3.5 w-3.5" /> New goal
+            </Button>
+          ) : undefined
+        }
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -109,6 +146,63 @@ export default function GoalsPage() {
           </ul>
         )}
       </div>
+
+      {creating && createGoal ? (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4"
+          onClick={() => setCreating(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-lg border border-border bg-card p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-3 text-sm font-medium">New goal</h2>
+            <input
+              autoFocus
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Objective (e.g. Migrate auth to NextAuth v5)"
+              className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+            />
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              placeholder="Context for the planner (optional)"
+              className="mt-2 w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-meta"
+            />
+            <label className="mt-3 block text-meta text-muted-foreground">
+              Crew
+            </label>
+            <CrewSelector
+              className="mt-1"
+              value={crewId}
+              onChange={setCrewId}
+              noneLabel="No crew (assign later)"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="ember"
+                size="sm"
+                disabled={createGoal.isPending || !title.trim()}
+                onClick={() =>
+                  createGoal.mutate({
+                    title: title.trim(),
+                    description: description.trim() || null,
+                    crewId: crewId ?? undefined,
+                  })
+                }
+              >
+                {createGoal.isPending ? "Creating…" : "Create goal"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

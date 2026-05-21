@@ -87,6 +87,35 @@ export const executionPlanRouter = router({
           project: { select: { id: true, key: true, name: true } },
           createdBy: { select: { id: true, name: true, image: true } },
           createdByAgent: { select: { id: true, profileKey: true, name: true } },
+          // Crew roster — surfaced read-only on the cockpit so the
+          // operator sees who's executing alongside the work. Members
+          // ordered by their authored position; each carries the agent's
+          // presence fields for the live dot.
+          crew: {
+            select: {
+              id: true,
+              name: true,
+              maxParallel: true,
+              members: {
+                orderBy: { position: "asc" },
+                select: {
+                  id: true,
+                  role: true,
+                  position: true,
+                  agent: {
+                    select: {
+                      id: true,
+                      name: true,
+                      profileKey: true,
+                      avatar: true,
+                      status: true,
+                      lastHeartbeatAt: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       });
       if (!plan) {

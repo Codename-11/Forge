@@ -130,6 +130,35 @@ export const actionRequestRouter = router({
       return row;
     }),
 
+  /**
+   * Look up the ActionRequest attached to an execution plan (if any).
+   * The backend's `plans.requestApproval` opens an ActionRequest with
+   * `sourceType="execution-plan"` + `sourceId=planId`; the plan cockpit
+   * renders the bound row inline so Accept fires the proper activation
+   * path (DRAFT→RUNNING + goal→ACTIVE + crew kickoff) rather than a
+   * direct status flip. Returns `null` when no row is bound (e.g. a plan
+   * created before this flow), so the caller can fall back gracefully.
+   */
+  forPlan: workspaceProcedure
+    .input(z.object({ planId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const row = await ctx.db.actionRequest.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          sourceType: "execution-plan",
+          sourceId: input.planId,
+        },
+        // Newest first so an open request wins over a stale resolved one.
+        orderBy: { createdAt: "desc" },
+        include: {
+          requestedByUser: { select: { id: true, name: true, image: true, handle: true } },
+          requestedByAgent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+          resolvedByUser: { select: { id: true, name: true, image: true, handle: true } },
+        },
+      });
+      return row;
+    }),
+
   create: workspaceProcedure
     .input(
       z.object({

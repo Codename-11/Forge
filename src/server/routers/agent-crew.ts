@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, ReviewGateStatus } from "@prisma/client";
+import {
+  EventKind,
+  ExecutionStepStatus,
+  GoalStatus,
+  ReviewGateStatus,
+} from "@prisma/client";
 import { router, adminProcedure, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import {
@@ -9,8 +14,16 @@ import {
   createAgentCrew,
   openReviewGate,
   resolveReviewGate,
+  setCrewMemberRole,
+  updateAgentCrew,
   type AgentCrewRole,
 } from "@/server/services/agent-crew-service";
+
+/** Step statuses that mean a crew member is actively working right now. */
+const ACTIVE_STEP_STATUSES: ExecutionStepStatus[] = [
+  ExecutionStepStatus.RUNNING,
+  ExecutionStepStatus.REVIEW,
+];
 
 const roleSchema = z.enum(AGENT_CREW_ROLES);
 
@@ -60,6 +73,175 @@ export const agentCrewRouter = router({
       return row;
     }),
 
+  /**
+   * Full crew detail for the crew page: head metadata, every member with
+   * agent identity + presence, and — for each member — the execution
+   * steps they're actively running right now (RUNNING / REVIEW) so the
+   * roster can show "who's busy with what".
+   */
+  detail: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const crew = await ctx.db.agentCrew.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        include: {
+          _count: { select: { members: true, executionPlans: true, goals: true } },
+          members: {
+            orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+            include: {
+              agent: {
+                select: {
+                  id: true,
+                  name: true,
+                  profileKey: true,
+                  avatar: true,
+                  status: true,
+                  lastHeartbeatAt: true,
+                },
+              },
+            },
+          },
+        },
+      });
+      if (!crew) throw new TRPCError({ code: "NOT_FOUND", message: "Crew not found." });
+
+      // Active step assignments for every distinct agent on the roster, in
+      // one query — avoids an N+1 across members. We only pull plans that
+      // belong to this crew (the loop dispatches a crew's steps from its
+      // own plans), so "current activity" is scoped to this crew's work.
+      const agentIds = Array.from(
+        new Set(crew.members.map((m) => m.agentId)),
+      );
+      const activeSteps = agentIds.length
+        ? await ctx.db.executionStep.findMany({
+            where: {
+              workspaceId: ctx.workspaceId,
+              assignedAgentId: { in: agentIds },
+              status: { in: ACTIVE_STEP_STATUSES },
+              plan: { crewId: crew.id },
+            },
+            orderBy: { updatedAt: "desc" },
+            select: {
+              id: true,
+              title: true,
+              status: true,
+              assignedAgentId: true,
+              updatedAt: true,
+              plan: {
+                select: { id: true, title: true, goalId: true },
+              },
+            },
+          })
+        : [];
+
+      const activeByAgent = new Map<string, typeof activeSteps>();
+      for (const step of activeSteps) {
+        if (!step.assignedAgentId) continue;
+        const list = activeByAgent.get(step.assignedAgentId) ?? [];
+        list.push(step);
+        activeByAgent.set(step.assignedAgentId, list);
+      }
+
+      return {
+        ...crew,
+        members: crew.members.map((m) => ({
+          ...m,
+          activeSteps: activeByAgent.get(m.agentId) ?? [],
+        })),
+      };
+    }),
+
+  /**
+   * Aggregate crew stats for the detail header. Computed server-side from
+   * the goals + plans this crew owns. Cheap: a couple of grouped counts
+   * and aggregates, no per-row N+1.
+   */
+  stats: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const crew = await ctx.db.agentCrew.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!crew) throw new TRPCError({ code: "NOT_FOUND", message: "Crew not found." });
+
+      // Goals owned directly by the crew OR via one of its plans.
+      const goals = await ctx.db.goal.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          OR: [{ crewId: crew.id }, { plans: { some: { crewId: crew.id } } }],
+        },
+        select: { id: true, status: true, totalCostUsd: true },
+      });
+      const totalGoals = goals.length;
+      const achieved = goals.filter((g) => g.status === GoalStatus.ACHIEVED).length;
+      const totalCost = goals.reduce((sum, g) => sum + (g.totalCostUsd ?? 0), 0);
+
+      // Avg steps per plan across this crew's plans.
+      const planAgg = await ctx.db.executionPlan.aggregate({
+        where: { workspaceId: ctx.workspaceId, crewId: crew.id },
+        _count: { _all: true },
+      });
+      const planCount = planAgg._count._all;
+      const stepCount = planCount
+        ? await ctx.db.executionStep.count({
+            where: { workspaceId: ctx.workspaceId, plan: { crewId: crew.id } },
+          })
+        : 0;
+
+      return {
+        totalGoals,
+        achievedGoals: achieved,
+        successRate: totalGoals > 0 ? achieved / totalGoals : null,
+        avgCostPerGoal: totalGoals > 0 ? totalCost / totalGoals : null,
+        totalCostUsd: totalCost,
+        planCount,
+        avgStepsPerPlan: planCount > 0 ? stepCount / planCount : null,
+      };
+    }),
+
+  /**
+   * Goals this crew has run (or is running), newest first. A goal counts
+   * if it points at the crew directly (`Goal.crewId`) or via one of its
+   * execution plans (`ExecutionPlan.crewId`).
+   */
+  goalHistory: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        limit: z.number().int().positive().max(100).default(30),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const crew = await ctx.db.agentCrew.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!crew) throw new TRPCError({ code: "NOT_FOUND", message: "Crew not found." });
+
+      const items = await ctx.db.goal.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          OR: [{ crewId: crew.id }, { plans: { some: { crewId: crew.id } } }],
+        },
+        orderBy: { updatedAt: "desc" },
+        take: input.limit,
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          totalCostUsd: true,
+          maxTotalCostUsd: true,
+          startedAt: true,
+          achievedAt: true,
+          createdAt: true,
+          updatedAt: true,
+          _count: { select: { plans: true } },
+        },
+      });
+      return { items };
+    }),
+
   create: adminProcedure
     .input(
       z.object({
@@ -90,6 +272,38 @@ export const agentCrewRouter = router({
         })),
       });
       return result;
+    }),
+
+  update: adminProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        name: z.string().min(1).max(200).optional(),
+        description: z.string().max(2_000).nullable().optional(),
+        maxParallel: z.number().int().min(0).max(20).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await updateAgentCrew(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session?.user?.id ?? null,
+        crewId: input.id,
+        name: input.name,
+        description: input.description,
+        maxParallel: input.maxParallel,
+      });
+      return { ok: true };
+    }),
+
+  setMemberRole: adminProcedure
+    .input(z.object({ memberId: z.string().cuid(), role: roleSchema }))
+    .mutation(async ({ ctx, input }) => {
+      return setCrewMemberRole(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session?.user?.id ?? null,
+        memberId: input.memberId,
+        role: input.role as AgentCrewRole,
+      });
     }),
 
   archive: adminProcedure
