@@ -130,6 +130,56 @@ export const agentRouter = router({
       }),
     ),
 
+  /**
+   * Narrow "card-shape" summary used by the `@profileKey` hover preview.
+   *
+   * Looks up an agent by either `id` or `profileKey` (the chip in
+   * markdown carries only the lowercase profileKey; the chip in the
+   * agent picker / strip carries the id). At most one of the two is
+   * required. Workspace-scoped — cross-tenant resolves return
+   * NOT_FOUND so the client renders the "Agent not found" softfail.
+   *
+   * The select shape is intentionally tight: name, profileKey, avatar,
+   * status, last heartbeat, provider, capabilities (full array — the
+   * card shows the first three and `+N` overflow). Cacheable per agent;
+   * the client sets `staleTime` 60s.
+   */
+  summary: workspaceProcedure
+    .input(
+      z
+        .object({
+          id: agentId.optional(),
+          profileKey: profileKey.optional(),
+        })
+        .refine((v) => v.id || v.profileKey, {
+          message: "Provide id or profileKey.",
+        }),
+    )
+    .query(async ({ ctx, input }) => {
+      const agent = await ctx.db.agent.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          archivedAt: null,
+          ...(input.id ? { id: input.id } : {}),
+          ...(input.profileKey ? { profileKey: input.profileKey } : {}),
+        },
+        select: {
+          id: true,
+          name: true,
+          profileKey: true,
+          avatar: true,
+          description: true,
+          status: true,
+          provider: true,
+          capabilities: true,
+          lastHeartbeatAt: true,
+          maxConcurrent: true,
+        },
+      });
+      if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
+      return agent;
+    }),
+
   create: adminProcedure.input(upsertInput).mutation(async ({ ctx, input }) => {
     const existing = await ctx.db.agent.findUnique({
       where: {

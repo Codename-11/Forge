@@ -8,6 +8,18 @@ import { Button } from "@/components/ui/button";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
 import { ActionRequestCard } from "@/components/action-requests/action-request-card";
+import {
+  CommentToolCallCard,
+  splitToolDirectives,
+} from "@/components/issue-detail/comment-tool-call-card";
+import {
+  CommentHistoryPopover,
+  EditedFallbackLink,
+} from "@/components/issue-detail/comment-history-popover";
+import {
+  ConfidenceChip,
+  type ConfidenceLevel,
+} from "@/components/issue-detail/confidence-chip";
 import { usePasteUpload } from "@/components/attachments/use-paste-upload";
 import { useDropUpload } from "@/components/attachments/use-drop-upload";
 import { DropOverlay } from "@/components/attachments/drop-overlay";
@@ -18,6 +30,10 @@ import {
   SLASH_COMMAND_HINT,
   type SlashCommand,
 } from "@/lib/slash-commands";
+import {
+  expandTemplatesInBody,
+  type SlashTemplateSideEffect,
+} from "@/lib/slash-templates";
 import {
   SlashAutocomplete,
   useSlashAutocomplete,
@@ -74,6 +90,29 @@ type Comment = {
    * stale CTAs.
    */
   suggestedReplies?: string[];
+  /**
+   * Server-side `editedAt` timestamp — set when an operator (or the
+   * authoring agent) edits a BODY comment after it was first posted.
+   * Drives the "edited" link next to the timestamp; null/undefined
+   * means the comment hasn't been changed since creation. Shipped by
+   * the server-primitives slice alongside the `comment.history` query
+   * that powers the popover.
+   */
+  editedAt?: Date | string | null;
+  /**
+   * Agent self-reported confidence on AGENT-authored comments. LOW
+   * draws the operator's eye; HIGH reassures. Null on human comments
+   * — even if a row carries the field, the chip is suppressed unless
+   * `authoringAgent` is set, matching the rule documented in
+   * `docs/concepts/comments.md`.
+   */
+  confidence?: ConfidenceLevel | null;
+  /**
+   * Optional one-line reason an agent attaches when self-reporting
+   * confidence — surfaced inside the chip's tooltip so the operator
+   * can scrub the rationale without expanding any extra UI.
+   */
+  confidenceReason?: string | null;
 };
 
 /**
@@ -336,6 +375,13 @@ function Comments({
   // comment is persisted. `useState` keeps it in scope across renders
   // without re-fetching the form's draft.
   const [pendingCommands, setPendingCommands] = useState<SlashCommand[]>([]);
+  // Pending template side-effects (e.g. `/blocked` → open an
+  // action-request). Mirrors `pendingCommands` — fired in the
+  // `createComment.onSuccess` callback so we don't open an unblock
+  // request for a comment that never landed.
+  const [pendingSideEffects, setPendingSideEffects] = useState<
+    SlashTemplateSideEffect[]
+  >([]);
 
   // Hydrate the draft from localStorage on mount (and when the issue
   // changes — guards against the page re-keying without remounting).
@@ -389,12 +435,25 @@ function Comments({
   }, [issueId]);
 
   // Autocomplete: fires on top-of-body slash lines, inserts stubs on
-  // Enter / Tab / click. Same surface as QuickCreate; helps discover
-  // the seven command keywords without remembering them.
+  // Enter / Tab / click. Includes templates (`/status`, `/blocked`,
+  // `/approve`, `/handoff`) — quick-comment expanders. Picking a
+  // template with a side-effect (e.g. `/blocked`) queues the
+  // mutation; it fires when the comment lands.
   const slash = useSlashAutocomplete({
     value: draft,
     onChange: (next) => setDraft(next),
     textareaRef: composerRef,
+    includeTemplates: true,
+    onTemplateSideEffect: (eff) => {
+      setPendingSideEffects((prev) => [...prev, eff]);
+    },
+  });
+
+  // Action-request mutation for `/blocked` template side-effects.
+  // Stays best-effort — if it fails, the comment is already
+  // persisted, and we toast the error without rolling back.
+  const createActionRequestM = trpc.actionRequest.create.useMutation({
+    onError: (e) => toast.error(`Unblock request: ${e.message}`),
   });
 
   const applyCommandsM = trpc.issue.applyCommands.useMutation({
@@ -426,6 +485,21 @@ function Comments({
         applyCommandsM.mutate({ issueId, commands: pendingCommands });
         setPendingCommands([]);
       }
+      // Fire any queued template side-effects after the comment lands.
+      // Today the only side-effect is `actionRequest` (`/blocked`); the
+      // shape supports extension without touching the comment flow.
+      if (pendingSideEffects.length > 0) {
+        for (const eff of pendingSideEffects) {
+          if (eff.kind === "actionRequest") {
+            createActionRequestM.mutate({
+              title: eff.title,
+              kind: "FREE_FORM",
+              issueId,
+            });
+          }
+        }
+        setPendingSideEffects([]);
+      }
       setDraft("");
       clearDraft(draftKey);
     },
@@ -435,19 +509,28 @@ function Comments({
   // Submit handler shared by the form's onSubmit and MentionInput's
   // Cmd/Ctrl+Enter handler. Returns void; treats empty/command-only
   // bodies the same as the form's existing submit logic does.
+  //
+  // Order: templates first (expanding `/blocked …` / `/handoff @x …`
+  // into prose plus any injected `/assign` line), then the structured
+  // slash-command parse over the expanded body. Side-effects detected
+  // here merge with anything the autocomplete already queued.
   const submitDraft = useCallback(() => {
     if (!draft.trim()) return;
     if (createComment.isPending || applyCommandsM.isPending) return;
-    const { strippedBody, commands } = parseSlashCommands(draft);
+    const { expandedBody, sideEffects } = expandTemplatesInBody(draft);
+    const { strippedBody, commands } = parseSlashCommands(expandedBody);
     const body = strippedBody.trim();
-    if (!body && commands.length === 0) return;
-    if (!body && commands.length > 0) {
+    if (!body && commands.length === 0 && sideEffects.length === 0) return;
+    if (!body && commands.length > 0 && sideEffects.length === 0) {
       applyCommandsM.mutate({ issueId, commands });
       setDraft("");
       clearDraft(draftKey);
       return;
     }
     setPendingCommands(commands);
+    if (sideEffects.length > 0) {
+      setPendingSideEffects((prev) => [...prev, ...sideEffects]);
+    }
     createComment.mutate({ issueId, body });
   }, [draft, createComment, applyCommandsM, issueId, draftKey]);
 
@@ -613,7 +696,16 @@ function TimelineCommentCard({
     () => (isAgent ? splitProvenance(comment.body) : { provenance: null, rest: comment.body }),
     [comment.body, isAgent],
   );
+  // Lift any `:::tool` directives out of the body so each tool-call
+  // summary renders as a collapsible card (visual parity with the
+  // Mission Control chat surface) instead of an opaque code fence.
+  // Plain markdown bodies fall through with a single `md` segment.
+  const bodySegments = useMemo(() => splitToolDirectives(rest), [rest]);
   const quickReplies = isAgent && showQuickReplies ? comment.suggestedReplies ?? [] : [];
+  // Confidence chip: AGENT-authored only, even if a stray human row
+  // ever carries the field. Falsy levels short-circuit the render.
+  const confidenceLevel: ConfidenceLevel | null =
+    isAgent && comment.confidence ? comment.confidence : null;
 
   // SYSTEM rows are server-authored ambient narration (assignment
   // notices, dispatch provenance). They have no avatar, no card —
@@ -696,14 +788,26 @@ function TimelineCommentCard({
             <span className="text-muted-foreground">
               {relativeTime(isStatus ? (comment.updatedAt ?? comment.createdAt) : comment.createdAt)}
             </span>
+            {!isStatus && comment.editedAt && (
+              <CommentEditedMarker
+                commentId={comment.id}
+                editedAt={comment.editedAt}
+              />
+            )}
+            {confidenceLevel && (
+              <ConfidenceChip
+                level={confidenceLevel}
+                reason={comment.confidenceReason ?? null}
+              />
+            )}
           </div>
           {provenance && (
             <div className="mt-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
               {provenance}
             </div>
           )}
-          <MarkdownWithAttachments
-            body={rest}
+          <CommentBodyWithTools
+            segments={bodySegments}
             className="mt-1.5 text-[0.8125rem] text-foreground/90"
           />
           {quickReplies.length > 0 && (
@@ -716,6 +820,71 @@ function TimelineCommentCard({
       </div>
     </div>
   );
+}
+
+/**
+ * Renders a comment body as an ordered run of markdown segments and
+ * inline tool-call cards. The split happens upstream
+ * (`splitToolDirectives`) so this component is intentionally dumb —
+ * just walks the segments and picks the right renderer per kind.
+ * Empty markdown segments (a tool directive flanked by blank lines)
+ * are skipped so the spacing between cards stays tight.
+ */
+function CommentBodyWithTools({
+  segments,
+  className,
+}: {
+  segments: ReturnType<typeof splitToolDirectives>;
+  className?: string;
+}) {
+  // Fast path for the common case — a body with no tool directives —
+  // avoids wrapping a single MarkdownWithAttachments in an extra div.
+  if (segments.length === 1 && segments[0].kind === "md") {
+    return (
+      <MarkdownWithAttachments
+        body={segments[0].text}
+        className={className}
+      />
+    );
+  }
+  return (
+    <div className={className}>
+      {segments.map((seg, i) => {
+        if (seg.kind === "tool") {
+          return <CommentToolCallCard key={`tool-${i}`} call={seg.call} />;
+        }
+        if (!seg.text.trim()) return null;
+        return <MarkdownWithAttachments key={`md-${i}`} body={seg.text} />;
+      })}
+    </div>
+  );
+}
+
+/**
+ * Thin wrapper that swaps between the popover-equipped trigger (when
+ * the server-primitives slice has shipped `comment.history`) and the
+ * read-only fallback. We don't try to probe the tRPC proxy here — the
+ * popover does its own feature-detect and renders a graceful error if
+ * the route hasn't shipped yet. This wrapper exists mostly to keep the
+ * `TimelineCommentCard` body skinny.
+ */
+function CommentEditedMarker({
+  commentId,
+  editedAt,
+}: {
+  commentId: string;
+  editedAt: Date | string;
+}) {
+  // Defaults to the interactive popover. The fallback is plugged in
+  // automatically when the tRPC `comment.history` query surfaces an
+  // error inside the popover panel (e.g. route not yet shipped).
+  // Toggle this constant if a workspace flag ever needs to gate the
+  // popover entirely.
+  const FORCE_FALLBACK = false;
+  if (FORCE_FALLBACK) {
+    return <EditedFallbackLink editedAt={editedAt} />;
+  }
+  return <CommentHistoryPopover commentId={commentId} editedAt={editedAt} />;
 }
 
 /**
@@ -797,6 +966,9 @@ function StatusCommentPin({ comment }: { comment: Comment }) {
     () => (isAgent ? splitProvenance(comment.body) : { provenance: null, rest: comment.body }),
     [comment.body, isAgent],
   );
+  const bodySegments = useMemo(() => splitToolDirectives(rest), [rest]);
+  const confidenceLevel: ConfidenceLevel | null =
+    isAgent && comment.confidence ? comment.confidence : null;
   return (
     <div className="flex gap-2.5">
       <CommentAvatar
@@ -821,6 +993,12 @@ function StatusCommentPin({ comment }: { comment: Comment }) {
               · {comment.currentStep}
             </span>
           )}
+          {confidenceLevel && (
+            <ConfidenceChip
+              level={confidenceLevel}
+              reason={comment.confidenceReason ?? null}
+            />
+          )}
           <span className="ml-auto text-muted-foreground">
             updated {relativeTime(updated)}
           </span>
@@ -830,8 +1008,8 @@ function StatusCommentPin({ comment }: { comment: Comment }) {
             {provenance}
           </div>
         )}
-        <MarkdownWithAttachments
-          body={rest}
+        <CommentBodyWithTools
+          segments={bodySegments}
           className="mt-1.5 text-[0.8125rem] text-foreground/90"
         />
       </div>

@@ -169,6 +169,80 @@ export const initiativeRouter = router({
     return initiative;
   }),
 
+  /**
+   * Narrow "card-shape" summary used by the initiative chip hover
+   * preview. Looks up an initiative by either `id` or `slug` (chips
+   * carry slug for the click-through). Workspace-scoped.
+   *
+   * Counts: linked (non-deleted) projects + open issues across all
+   * linked projects (status category not in DONE / CANCELED). Both
+   * are tallied in a single roundtrip each so the popover renders
+   * without follow-up fetches.
+   */
+  summary: workspaceProcedure
+    .input(
+      z
+        .object({
+          id: z.string().cuid().optional(),
+          slug: slugSchema.optional(),
+        })
+        .refine((v) => v.id || v.slug, {
+          message: "Provide id or slug.",
+        }),
+    )
+    .query(async ({ ctx, input }) => {
+      const initiative = await ctx.db.initiative.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          ...(input.id ? { id: input.id } : {}),
+          ...(input.slug ? { slug: input.slug } : {}),
+        },
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          color: true,
+          status: true,
+          targetDate: true,
+          createdById: true,
+        },
+      });
+      if (!initiative) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Initiative has no Prisma relation back to User (only the FK
+      // column), so resolve the creator separately. Cheap one-shot.
+      const [createdBy, projectCount, activeIssueCount] = await Promise.all([
+        initiative.createdById
+          ? ctx.db.user.findUnique({
+              where: { id: initiative.createdById },
+              select: { id: true, name: true, image: true },
+            })
+          : Promise.resolve(null),
+        ctx.db.project.count({
+          where: {
+            workspaceId: ctx.workspaceId,
+            initiativeId: initiative.id,
+            deletedAt: null,
+          },
+        }),
+        ctx.db.issue.count({
+          where: {
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+            project: { initiativeId: initiative.id, deletedAt: null },
+            status: { category: { notIn: ["DONE", "CANCELED"] } },
+          },
+        }),
+      ]);
+
+      return {
+        ...initiative,
+        createdBy,
+        projectCount,
+        activeIssueCount,
+      };
+    }),
+
   create: workspaceProcedure.input(createInput).mutation(async ({ ctx, input }) => {
     const slug = input.slug ?? slugify(input.name);
     return ctx.db.$transaction(async (tx) => {

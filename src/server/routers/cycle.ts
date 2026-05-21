@@ -92,6 +92,57 @@ export const cycleRouter = router({
     });
   }),
 
+  /**
+   * Narrow "card-shape" summary used by the cycle chip hover preview.
+   * Workspace-scoped lookup by id. Returns the cycle plus three issue
+   * counts (planned = backlog/todo, inFlight = in-progress/in-review,
+   * done = done/canceled) so the popover can render a progress bar
+   * without a follow-up fetch.
+   *
+   * UI nomenclature: cycles are surfaced as "Sprint" in display strings;
+   * data model + procedure name stays `cycle`.
+   */
+  summary: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const cycle = await ctx.db.cycle.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          startsAt: true,
+          endsAt: true,
+          lengthDays: true,
+        },
+      });
+      if (!cycle) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Bucket the cycle's issues by status category in one round-trip.
+      const rows = await ctx.db.issue.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          cycleId: cycle.id,
+          deletedAt: null,
+        },
+        select: { status: { select: { category: true } } },
+      });
+      const counts = { planned: 0, inFlight: 0, done: 0 };
+      for (const r of rows) {
+        const cat = r.status.category;
+        if (cat === "BACKLOG" || cat === "TODO") counts.planned += 1;
+        else if (cat === "IN_PROGRESS" || cat === "IN_REVIEW") {
+          counts.inFlight += 1;
+        } else if (cat === "DONE" || cat === "CANCELED") counts.done += 1;
+      }
+
+      return {
+        ...cycle,
+        total: rows.length,
+        counts,
+      };
+    }),
+
   create: workspaceProcedure.input(createInput).mutation(async ({ ctx, input }) => {
     const workspace = await ctx.db.workspace.findUniqueOrThrow({
       where: { id: ctx.workspaceId },

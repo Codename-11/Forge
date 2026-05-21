@@ -2435,6 +2435,80 @@ export const issueRouter = router({
       );
       return { items };
     }),
+
+  /**
+   * "Unread" issue ids — issues the caller is watching that have had
+   * activity since the caller last viewed them.
+   *
+   * "Last viewed" is the `RecentItem.visitedAt` row written by
+   * `recentItem.track`, which the issue-detail page upserts on mount.
+   * An issue with no RecentItem row is treated as never-viewed and
+   * therefore unread (any update — including the original creation —
+   * surfaces a dot).
+   *
+   * Activity definition is intentionally cheap: `Issue.updatedAt`
+   * advances on title / description / status / assignee / label
+   * changes, and `recordChange()` bumps it via the audit transaction
+   * for comments and watcher events too — so a single timestamp
+   * compare suffices for v1. If a user authors the change themselves
+   * we filter that out client-side by toasting nothing; the dot is
+   * harmless because the user is about to view the issue anyway when
+   * they click into it (which clears the unread state).
+   *
+   * Returns an unwrapped `string[]` of issue ids for cheap `Set`
+   * construction on the client. Empty array when the user watches
+   * nothing.
+   */
+  unreadIds: workspaceProcedure
+    .input(z.object({}).optional())
+    .query(async ({ ctx }) => {
+      const watches = await ctx.db.issueWatcher.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.session.user.id,
+        },
+        select: {
+          issueId: true,
+          issue: { select: { id: true, updatedAt: true, deletedAt: true } },
+        },
+      });
+      if (watches.length === 0) return { ids: [] as string[] };
+
+      const watchedIds = watches
+        .filter((w) => w.issue && w.issue.deletedAt === null)
+        .map((w) => w.issueId);
+      if (watchedIds.length === 0) return { ids: [] as string[] };
+
+      // Pull the user's `RecentItem.visitedAt` for each watched issue
+      // in one query. Missing rows = never-viewed = always unread.
+      const recents = await ctx.db.recentItem.findMany({
+        where: {
+          userId: ctx.session.user.id,
+          workspaceId: ctx.workspaceId,
+          targetType: "ISSUE",
+          targetId: { in: watchedIds },
+        },
+        select: { targetId: true, visitedAt: true },
+      });
+      const visitedAtByIssue = new Map<string, Date>();
+      for (const r of recents) {
+        visitedAtByIssue.set(r.targetId, r.visitedAt);
+      }
+
+      const ids: string[] = [];
+      for (const w of watches) {
+        if (!w.issue || w.issue.deletedAt !== null) continue;
+        const visitedAt = visitedAtByIssue.get(w.issueId);
+        if (!visitedAt) {
+          ids.push(w.issueId);
+          continue;
+        }
+        if (w.issue.updatedAt.getTime() > visitedAt.getTime()) {
+          ids.push(w.issueId);
+        }
+      }
+      return { ids };
+    }),
 });
 
 // -- Helpers ----------------------------------------------------------------

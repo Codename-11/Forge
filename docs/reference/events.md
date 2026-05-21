@@ -200,6 +200,45 @@ window elapses without a qualifying ack (a comment from the assigned
 agent, or a status move on the issue). `requiredAckSeconds` reflects the
 workspace's configured window at fire time.
 
+### `ISSUE_UPDATED.payload` (ActionRequest vote / close)
+
+Poll-related ActionRequest activity rides on `ISSUE_UPDATED` with
+`subjectType: "action-request"` (NOT `"issue"` — the request id is
+the subject). Subscribers can discriminate on `subjectType` to
+filter for vote / close-voting events without inventing new
+EventKind values. Two shapes:
+
+```json
+// actionRequest.vote — emitted on every vote / re-vote
+{
+  "kind": "ISSUE_UPDATED",
+  "subjectType": "action-request",
+  "subjectId": "ar_...",
+  "payload": {
+    "optionKey": "isolate",
+    "previousOptionKey": "retry",
+    "changed": true,
+    "issueId": "iss_..."
+  }
+}
+
+// actionRequest.closeVoting — emitted when the requester closes voting
+{
+  "kind": "ISSUE_UPDATED",
+  "subjectType": "action-request",
+  "subjectId": "ar_...",
+  "payload": {
+    "winningOptionKey": "isolate",
+    "total": 5,
+    "issueId": "iss_..."
+  }
+}
+```
+
+`winningOptionKey` may be null if voting was closed before any vote
+was cast (rare but legal — the requester might cancel a poll
+early). Ties are broken by earliest first-vote timestamp.
+
 ### `ISSUE_SLA_BREACH.payload`
 
 ```json

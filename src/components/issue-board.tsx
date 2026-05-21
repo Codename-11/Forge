@@ -5,6 +5,7 @@ import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { AgentHoverPreview } from "@/components/agent-hover-preview";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import type { SavedViewFilters } from "@/lib/saved-view-filters";
 
@@ -105,18 +106,20 @@ export function IssueBoard({
                       ))}
                     </div>
                     {i.assignedAgent && (
-                      <span
-                        className="inline-flex items-center gap-1 text-meta text-muted-foreground"
-                        title={`Agent: ${i.assignedAgent.name}`}
-                      >
-                        <AgentPresenceDot
-                          status={i.assignedAgent.status}
-                          size="sm"
-                        />
-                        <span className="text-id">
-                          @{i.assignedAgent.profileKey}
+                      <AgentHoverPreview agentId={i.assignedAgent.id}>
+                        <span
+                          className="inline-flex items-center gap-1 text-meta text-muted-foreground"
+                          title={`Agent: ${i.assignedAgent.name}`}
+                        >
+                          <AgentPresenceDot
+                            status={i.assignedAgent.status}
+                            size="sm"
+                          />
+                          <span className="text-id">
+                            @{i.assignedAgent.profileKey}
+                          </span>
                         </span>
-                      </span>
+                      </AgentHoverPreview>
                     )}
                   </div>
                 </Link>

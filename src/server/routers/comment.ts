@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import {
   ActionRequestKind,
   CommentKind,
+  ConfidenceLevel,
   EventKind,
   NotificationSeverity,
 } from "@prisma/client";
@@ -19,6 +20,13 @@ import {
 import { createActionRequest } from "@/server/services/action-request-service";
 
 const STATUS_REVISION_CAP = 50;
+/**
+ * Cap on BODY-comment revision rows. STATUS comments keep 50 entries
+ * (chatty agents); BODY comments are human-edited and expected to
+ * change less often, so 20 is plenty. Oldest is dropped first when
+ * the array exceeds the cap.
+ */
+export const BODY_REVISION_CAP = 20;
 
 /**
  * Cap on attached quick-reply chips. The composer renders these in a
@@ -47,6 +55,23 @@ export const inlineActionRequestSchema = z.object({
   severity: z.nativeEnum(NotificationSeverity).optional(),
   kind: z.nativeEnum(ActionRequestKind).default(ActionRequestKind.FREE_FORM),
   payload: z.unknown().optional(),
+  /**
+   * Optional poll options. When provided alongside an inline
+   * ActionRequest, the bound request renders as a multi-vote poll
+   * — agents use this to post "here are three approaches, pick
+   * one" cards in a single round-trip with the explanatory comment.
+   */
+  options: z
+    .array(
+      z.object({
+        key: z.string().trim().min(1).max(80),
+        label: z.string().trim().min(1).max(200),
+        description: z.string().trim().max(2_000).optional(),
+      }),
+    )
+    .min(2)
+    .max(8)
+    .optional(),
   assignedUserId: z.string().cuid().nullable().optional(),
   assignedAgentId: z.string().cuid().nullable().optional(),
   dueAt: z.coerce.date().nullable().optional(),
@@ -65,6 +90,14 @@ export const commentRouter = router({
          * authoring side is a human).
          */
         suggestedReplies: suggestedRepliesSchema,
+        /**
+         * Optional agent confidence flag (LOW / MEDIUM / HIGH).
+         * Only rendered as a chip on agent-authored comments; humans
+         * can pass it through (the column accepts it) but the UI
+         * suppresses the chip for human authors. Defaults to null —
+         * unflagged comments render without a chip.
+         */
+        confidence: z.nativeEnum(ConfidenceLevel).nullable().optional(),
         /**
          * Optional ActionRequest bundle. When set, a matching row is
          * persisted inside the same transaction and bound to the new
@@ -90,6 +123,7 @@ export const commentRouter = router({
             body: input.body,
             authoringAgentId,
             suggestedReplies: input.suggestedReplies ?? [],
+            confidence: input.confidence ?? null,
           },
           include: {
             author: { select: { id: true, name: true, image: true } },
@@ -219,6 +253,7 @@ export const commentRouter = router({
           severity: input.actionRequest.severity,
           kind: input.actionRequest.kind,
           payload: input.actionRequest.payload,
+          options: input.actionRequest.options ?? null,
           assignedUserId: input.actionRequest.assignedUserId ?? null,
           assignedAgentId: input.actionRequest.assignedAgentId ?? null,
           sourceType: "comment",
@@ -230,14 +265,100 @@ export const commentRouter = router({
       return result.comment;
     }),
 
+  /**
+   * Edit a comment body. Pushes the OLD body + the row's previous
+   * `updatedAt` onto `revisions` before applying the patch so the
+   * history is preserved. Capped at `BODY_REVISION_CAP` entries —
+   * oldest dropped first to keep the column bounded.
+   *
+   * `editedAt` is bumped to `new Date()` so the timeline can show
+   * "edited 3 minutes ago" without conflating with `updatedAt`
+   * (Prisma touches that on every column change, including chip
+   * tweaks and confidence flips).
+   */
   update: workspaceProcedure
     .input(z.object({ id: z.string().cuid(), body: z.string().min(1).max(50_000) }))
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.comment.update({
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.comment.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          body: true,
+          updatedAt: true,
+          revisions: true,
+        },
+      });
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Comment not found in this workspace.",
+        });
+      }
+      // No-op when the body hasn't actually changed. Keeps the
+      // history clean — the UI's edit-and-immediately-save path
+      // shouldn't accumulate identical rows.
+      if (existing.body === input.body) {
+        return ctx.db.comment.findUniqueOrThrow({ where: { id: input.id } });
+      }
+      const priorRevisions = Array.isArray(existing.revisions)
+        ? (existing.revisions as Prisma.JsonArray)
+        : [];
+      const nextRevisions: Prisma.JsonArray = [
+        ...priorRevisions,
+        {
+          body: existing.body,
+          editedAt: existing.updatedAt.toISOString(),
+        },
+      ].slice(-BODY_REVISION_CAP);
+      const now = new Date();
+      return ctx.db.comment.update({
         where: { id: input.id },
-        data: { body: input.body, updatedAt: new Date() },
-      }),
-    ),
+        data: {
+          body: input.body,
+          revisions: nextRevisions,
+          editedAt: now,
+          updatedAt: now,
+        },
+      });
+    }),
+
+  /**
+   * Read the revision history for a comment. Returns the `revisions`
+   * array (oldest first) plus the current `body` so the caller can
+   * render the full timeline in one shot.
+   */
+  history: workspaceProcedure
+    .input(z.object({ commentId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const row = await ctx.db.comment.findFirst({
+        where: { id: input.commentId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          body: true,
+          editedAt: true,
+          updatedAt: true,
+          revisions: true,
+          kind: true,
+        },
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Comment not found in this workspace.",
+        });
+      }
+      const revisions = Array.isArray(row.revisions)
+        ? (row.revisions as Prisma.JsonArray)
+        : [];
+      return {
+        id: row.id,
+        currentBody: row.body,
+        editedAt: row.editedAt,
+        updatedAt: row.updatedAt,
+        kind: row.kind,
+        revisions,
+      };
+    }),
 
   softDelete: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))

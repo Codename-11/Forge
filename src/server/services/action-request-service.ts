@@ -92,12 +92,60 @@ export interface CreateActionRequestInput {
   severity?: NotificationSeverity;
   kind?: ActionRequestKind;
   payload?: unknown;
+  /**
+   * Optional poll options. When provided, the renderer treats this
+   * request as a poll — operators vote via ActionRequestVote and the
+   * requester closes voting to surface the winning option. Each entry
+   * carries `key` (stable id used by every vote row), `label`
+   * (rendered to humans), and optional `description`.
+   */
+  options?: ActionRequestPollOption[] | null;
   assignedUserId?: string | null;
   assignedAgentId?: string | null;
   sourceType?: string | null;
   sourceId?: string | null;
   issueId?: string | null;
   dueAt?: Date | null;
+}
+
+export interface ActionRequestPollOption {
+  key: string;
+  label: string;
+  description?: string;
+}
+
+/**
+ * Per-row validation of the `options` array — keeps the JSON shape
+ * sane (no duplicate keys, capped count) so downstream readers can
+ * trust what's in the column.
+ */
+export const actionRequestPollOptionsSchema = z
+  .array(
+    z.object({
+      key: z.string().trim().min(1).max(80),
+      label: z.string().trim().min(1).max(200),
+      description: z.string().trim().max(2_000).optional(),
+    }),
+  )
+  .min(2)
+  .max(8)
+  .refine(
+    (rows) => new Set(rows.map((r) => r.key)).size === rows.length,
+    { message: "ActionRequest.options keys must be unique." },
+  );
+
+/**
+ * Read the `options` JSON off an ActionRequest row and return a
+ * typed array, or null if voting is not enabled. Defensive — the
+ * row may have been created before this migration, in which case
+ * `options` is null.
+ */
+export function readPollOptions(
+  raw: Prisma.JsonValue | null,
+): ActionRequestPollOption[] | null {
+  if (raw === null || raw === undefined) return null;
+  const parsed = actionRequestPollOptionsSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -249,6 +297,22 @@ export async function createActionRequest(
     parsedPayload,
     input.issueId ?? null,
   );
+  // Validate poll options (when provided) before opening the transaction.
+  // A poll only makes sense on FREE_FORM today — the executable kinds
+  // already carry a single dispatch target, so multi-vote semantics
+  // don't apply. We accept polls regardless of kind to keep the column
+  // forward-compatible, but reject malformed shapes early.
+  let parsedOptions: ActionRequestPollOption[] | null = null;
+  if (input.options && input.options.length > 0) {
+    const parsed = actionRequestPollOptionsSchema.safeParse(input.options);
+    if (!parsed.success) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Invalid ActionRequest.options: ${parsed.error.message}`,
+      });
+    }
+    parsedOptions = parsed.data;
+  }
   const { id } = await db.$transaction(async (tx) => {
     const row = await tx.actionRequest.create({
       data: {
@@ -261,6 +325,10 @@ export async function createActionRequest(
           parsedPayload === null
             ? Prisma.JsonNull
             : (parsedPayload as Prisma.InputJsonValue),
+        options:
+          parsedOptions === null
+            ? Prisma.JsonNull
+            : (parsedOptions as unknown as Prisma.InputJsonValue),
         requestedByUserId: input.actorAgentId ? null : input.actorId,
         requestedByAgentId: input.actorAgentId ?? null,
         assignedUserId: input.assignedUserId ?? null,
@@ -839,4 +907,343 @@ export async function declineActionRequest(
     });
   });
   return { id: request.id };
+}
+
+// ---------------------------------------------------------------------------
+// Polls — multi-vote variant of ActionRequest.
+// ---------------------------------------------------------------------------
+
+export interface PollResultsRow {
+  optionKey: string;
+  label: string;
+  description: string | null;
+  count: number;
+  /** Earliest vote timestamp for this option (used for tie-breaking). */
+  firstVoteAt: Date | null;
+}
+
+export interface PollResults {
+  options: PollResultsRow[];
+  total: number;
+  votingClosedAt: Date | null;
+  /** The caller's current pick, if they've voted. */
+  myVote: string | null;
+  /** Winning option key — populated when `votingClosedAt` is set. */
+  winningOptionKey: string | null;
+}
+
+/**
+ * Load a request row + assert it lives in the caller's workspace and
+ * carries a non-null `options` array. Throws with the conventional
+ * tRPC codes so callers can pass the error straight through.
+ */
+async function loadPollRequest(
+  db: PrismaClient | Prisma.TransactionClient,
+  workspaceId: string,
+  requestId: string,
+): Promise<{
+  id: string;
+  status: ActionRequestStatus;
+  options: ActionRequestPollOption[];
+  votingClosedAt: Date | null;
+  requestedByUserId: string | null;
+  requestedByAgentId: string | null;
+  issueId: string | null;
+  title: string;
+}> {
+  const row = await db.actionRequest.findFirst({
+    where: { id: requestId, workspaceId },
+    select: {
+      id: true,
+      status: true,
+      options: true,
+      votingClosedAt: true,
+      requestedByUserId: true,
+      requestedByAgentId: true,
+      issueId: true,
+      title: true,
+    },
+  });
+  if (!row) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Action request not found." });
+  }
+  const options = readPollOptions(row.options);
+  if (!options) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "This action request is not a poll (no `options` set).",
+    });
+  }
+  return { ...row, options };
+}
+
+/**
+ * Upsert the caller's vote on a poll. Changing the pick is supported
+ * until `votingClosedAt` is set. Audit + event recorded so the
+ * activity feed shows "@bailey voted for option-X".
+ */
+export async function voteOnActionRequest(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string;
+    requestId: string;
+    optionKey: string;
+  },
+): Promise<{ id: string; optionKey: string; changed: boolean }> {
+  const request = await loadPollRequest(db, params.workspaceId, params.requestId);
+  if (request.votingClosedAt) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Voting on this poll has been closed.",
+    });
+  }
+  if (!request.options.some((o) => o.key === params.optionKey)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Unknown option key '${params.optionKey}'.`,
+    });
+  }
+
+  // Look up existing vote (if any) so we can record `changed` cleanly
+  // in the audit/event payload.
+  const existing = await db.actionRequestVote.findUnique({
+    where: {
+      actionRequestId_userId: {
+        actionRequestId: request.id,
+        userId: params.actorId,
+      },
+    },
+    select: { id: true, optionKey: true },
+  });
+  const changed = !!existing && existing.optionKey !== params.optionKey;
+
+  await db.$transaction(async (tx) => {
+    await tx.actionRequestVote.upsert({
+      where: {
+        actionRequestId_userId: {
+          actionRequestId: request.id,
+          userId: params.actorId,
+        },
+      },
+      create: {
+        actionRequestId: request.id,
+        userId: params.actorId,
+        optionKey: params.optionKey,
+      },
+      update: {
+        optionKey: params.optionKey,
+      },
+    });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      entity: "action-request-vote",
+      entityId: request.id,
+      action: existing ? (changed ? "vote-change" : "vote-restate") : "vote",
+      before: existing ? { optionKey: existing.optionKey } : undefined,
+      after: { optionKey: params.optionKey },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "action-request",
+      subjectId: request.id,
+      payload: {
+        optionKey: params.optionKey,
+        previousOptionKey: existing?.optionKey ?? null,
+        changed,
+        issueId: request.issueId,
+      },
+    });
+  });
+  return { id: request.id, optionKey: params.optionKey, changed };
+}
+
+/**
+ * Aggregate vote counts per option. The renderer can show live counts
+ * as votes come in (Linear-style). `myVote` returns the caller's
+ * current pick so the UI can highlight it; `winningOptionKey` is only
+ * populated after voting is closed.
+ */
+export async function getActionRequestResults(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string;
+    requestId: string;
+  },
+): Promise<PollResults> {
+  const request = await loadPollRequest(db, params.workspaceId, params.requestId);
+  const votes = await db.actionRequestVote.findMany({
+    where: { actionRequestId: request.id },
+    select: { optionKey: true, userId: true, createdAt: true },
+    orderBy: { createdAt: "asc" },
+  });
+
+  const countsByKey = new Map<string, { count: number; firstVoteAt: Date | null }>();
+  for (const opt of request.options) {
+    countsByKey.set(opt.key, { count: 0, firstVoteAt: null });
+  }
+  let myVote: string | null = null;
+  for (const v of votes) {
+    if (v.userId === params.actorId) {
+      myVote = v.optionKey;
+    }
+    const bucket = countsByKey.get(v.optionKey);
+    // Skip unknown options (e.g., options trimmed after votes
+    // already landed). Defensive — should be unreachable when the
+    // create-time validator is doing its job.
+    if (!bucket) continue;
+    bucket.count += 1;
+    if (!bucket.firstVoteAt) bucket.firstVoteAt = v.createdAt;
+  }
+
+  const rows: PollResultsRow[] = request.options.map((opt) => {
+    const bucket = countsByKey.get(opt.key) ?? { count: 0, firstVoteAt: null };
+    return {
+      optionKey: opt.key,
+      label: opt.label,
+      description: opt.description ?? null,
+      count: bucket.count,
+      firstVoteAt: bucket.firstVoteAt,
+    };
+  });
+
+  return {
+    options: rows,
+    total: votes.length,
+    votingClosedAt: request.votingClosedAt,
+    myVote,
+    winningOptionKey: request.votingClosedAt ? pickWinner(rows) : null,
+  };
+}
+
+/**
+ * Tie-break rule: highest count wins. On equal counts, the option
+ * whose first vote was cast earliest wins (proxy for "people picked
+ * this first"). On equal counts AND no votes at all, the option that
+ * appears first in the `options[]` array wins. Returns null only on
+ * an empty options array (which the schema rejects at create-time).
+ */
+function pickWinner(rows: PollResultsRow[]): string | null {
+  if (rows.length === 0) return null;
+  let best: PollResultsRow | null = null;
+  for (const row of rows) {
+    if (!best) {
+      best = row;
+      continue;
+    }
+    if (row.count > best.count) {
+      best = row;
+      continue;
+    }
+    if (row.count === best.count) {
+      // Earlier first-vote wins; null sorts after a real date.
+      const a = row.firstVoteAt?.getTime() ?? Number.POSITIVE_INFINITY;
+      const b = best.firstVoteAt?.getTime() ?? Number.POSITIVE_INFINITY;
+      if (a < b) best = row;
+    }
+  }
+  return best?.optionKey ?? null;
+}
+
+/**
+ * Close voting on a poll. Only the original requester (the user who
+ * created the request) can call this — agent-requested polls fall
+ * back to the requesting agent's owner key. Returns the winning
+ * option key (or null if no votes were cast).
+ *
+ * Closing voting does NOT resolve the ActionRequest itself — the
+ * requester typically posts a follow-up comment "going with option
+ * X" and then calls `accept` / `resolve` to clear the request.
+ */
+export async function closeActionRequestVoting(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string;
+    actorAgentId: string | null;
+    requestId: string;
+  },
+): Promise<{ id: string; winningOptionKey: string | null }> {
+  const request = await loadPollRequest(db, params.workspaceId, params.requestId);
+  if (request.votingClosedAt) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Voting on this poll is already closed.",
+    });
+  }
+  // Permission check: the requester is the only one who can close
+  // voting. For a human-requested poll, that's the userId; for an
+  // agent-requested poll, the actor must be the agent that owns
+  // the request (matched via the calling key's linkedAgentId).
+  const isHumanOwner =
+    request.requestedByUserId !== null &&
+    request.requestedByUserId === params.actorId;
+  const isAgentOwner =
+    request.requestedByAgentId !== null &&
+    request.requestedByAgentId === params.actorAgentId;
+  if (!isHumanOwner && !isAgentOwner) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only the original requester can close voting on this poll.",
+    });
+  }
+
+  // Re-tally inside the transaction so the winner reflects the votes
+  // that exist at close time (no read-then-write race).
+  const closedAt = new Date();
+  let winningOptionKey: string | null = null;
+  await db.$transaction(async (tx) => {
+    const votes = await tx.actionRequestVote.findMany({
+      where: { actionRequestId: request.id },
+      select: { optionKey: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+    });
+    const countsByKey = new Map<string, { count: number; firstVoteAt: Date | null }>();
+    for (const opt of request.options) {
+      countsByKey.set(opt.key, { count: 0, firstVoteAt: null });
+    }
+    for (const v of votes) {
+      const bucket = countsByKey.get(v.optionKey);
+      if (!bucket) continue;
+      bucket.count += 1;
+      if (!bucket.firstVoteAt) bucket.firstVoteAt = v.createdAt;
+    }
+    const rows: PollResultsRow[] = request.options.map((opt) => {
+      const bucket = countsByKey.get(opt.key) ?? { count: 0, firstVoteAt: null };
+      return {
+        optionKey: opt.key,
+        label: opt.label,
+        description: opt.description ?? null,
+        count: bucket.count,
+        firstVoteAt: bucket.firstVoteAt,
+      };
+    });
+    winningOptionKey = pickWinner(rows);
+
+    await tx.actionRequest.update({
+      where: { id: request.id },
+      data: { votingClosedAt: closedAt },
+    });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      entity: "action-request",
+      entityId: request.id,
+      action: "close-voting",
+      after: {
+        votingClosedAt: closedAt.toISOString(),
+        winningOptionKey,
+        total: votes.length,
+      },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "action-request",
+      subjectId: request.id,
+      payload: {
+        winningOptionKey,
+        total: votes.length,
+        issueId: request.issueId,
+      },
+    });
+  });
+  return { id: request.id, winningOptionKey };
 }

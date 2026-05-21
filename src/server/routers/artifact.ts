@@ -131,6 +131,75 @@ export const artifactRouter = router({
       return row;
     }),
 
+  /**
+   * Compact render payload for inline artifact embeds in the markdown
+   * renderer (`:::artifact <id>` directive). Returns just enough for
+   * the embed to decide how to render itself: kind ("markdown" | "image"
+   * | "code" | "file"), title, type, status, body, and optional language
+   * hint inferred from the first code fence.
+   *
+   * Lightweight on purpose — does not include version history or the
+   * actor relations the artifact detail page needs.
+   */
+  getForRender: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const row = await ctx.db.artifact.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          slug: true,
+          title: true,
+          type: true,
+          status: true,
+          body: true,
+          summary: true,
+          updatedAt: true,
+        },
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Artifact not found.",
+        });
+      }
+      const body = row.body ?? "";
+      // Heuristic render-kind: an image-only body (single inline image
+      // token) renders as a poster; a body that's *entirely* a single
+      // fenced code block renders as code with the fence's language;
+      // everything else falls back to markdown.
+      const trimmed = body.trim();
+      const imageOnly = /^!\[[^\]]*\]\((?:forge-attachment:[a-z0-9]{20,}|https?:\/\/[^\s)]+)\)$/i.test(
+        trimmed,
+      );
+      const codeFenceMatch = trimmed.match(
+        /^```([a-z0-9+#-]*)\s*\n([\s\S]*?)\n```$/i,
+      );
+      let renderKind: "image" | "code" | "markdown" = "markdown";
+      let codeLang: string | null = null;
+      let codeBody: string | null = null;
+      if (imageOnly) {
+        renderKind = "image";
+      } else if (codeFenceMatch) {
+        renderKind = "code";
+        codeLang = (codeFenceMatch[1] || "").toLowerCase() || null;
+        codeBody = codeFenceMatch[2] ?? "";
+      }
+      return {
+        id: row.id,
+        slug: row.slug,
+        title: row.title,
+        type: row.type,
+        status: row.status,
+        summary: row.summary,
+        body,
+        updatedAt: row.updatedAt,
+        renderKind,
+        codeLang,
+        codeBody,
+      };
+    }),
+
   /** Fetch by workspace + slug — useful for URLs. */
   getBySlug: workspaceProcedure
     .input(z.object({ slug: slugSchema }))

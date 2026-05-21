@@ -17,6 +17,20 @@ import {
 } from "@/components/attachments/attachment-lightbox";
 import { LinkFavicon } from "@/components/attachments/attachment-chip";
 import { IssueHoverPreview } from "@/components/issue-hover-preview";
+import { AgentHoverPreview } from "@/components/agent-hover-preview";
+import {
+  tryParseDataBlock,
+  type DataBlock,
+} from "@/components/data-blocks/data-block-parser";
+import { DataBlockTable } from "@/components/data-blocks/data-block-table";
+import { DataBlockList } from "@/components/data-blocks/data-block-list";
+import { DataBlockKV } from "@/components/data-blocks/data-block-kv";
+import { matchEmbedUrl, type EmbedMatch } from "@/components/embeds/embed-detector";
+import { ArtifactEmbed } from "@/components/embeds/artifact-embed";
+import { YouTubeEmbed } from "@/components/embeds/youtube-embed";
+import { GithubEmbed } from "@/components/embeds/github-embed";
+import { LoomEmbed } from "@/components/embeds/loom-embed";
+import { FigmaEmbed } from "@/components/embeds/figma-embed";
 
 /**
  * Rich body renderer for descriptions, comments, artifacts, and notes.
@@ -314,7 +328,11 @@ type Block =
       items: { text: string; checked: boolean | null }[];
     }
   | { type: "table"; header: string[]; rows: string[][]; align: Align[] }
-  | { type: "paragraph"; text: string };
+  | { type: "paragraph"; text: string }
+  | { type: "dataBlock"; block: DataBlock }
+  | { type: "dataBlockInvalid"; raw: string; reason: string }
+  | { type: "artifactEmbed"; artifactId: string }
+  | { type: "urlEmbed"; match: EmbedMatch };
 
 type Align = "left" | "center" | "right" | null;
 
@@ -368,7 +386,8 @@ function parseBlocks(body: string): Block[] {
         isHr(ln) ||
         /^\s*[-*+]\s/.test(ln) ||
         /^\s*\d+[.)]\s/.test(ln) ||
-        /^\s*>\s?/.test(ln)
+        /^\s*>\s?/.test(ln) ||
+        /^:::(data|artifact)\b/i.test(ln)
       )
         break;
       buf.push(ln);
@@ -388,6 +407,50 @@ function parseBlocks(body: string): Block[] {
     if (ln.trim() === "") {
       i++;
       continue;
+    }
+
+    // `:::data <kind>` directive — agents emit structured payloads
+    // (table/list/kv) wrapped in a fenced data block. Parser bails
+    // gracefully on bad JSON / unknown kinds by emitting a
+    // `dataBlockInvalid` block that renders as a warning + code fallback.
+    if (/^:::data\s+/i.test(ln)) {
+      const r = tryParseDataBlock(lines, i);
+      if (r) {
+        if (r.ok) out.push({ type: "dataBlock", block: r.block });
+        else out.push({ type: "dataBlockInvalid", raw: r.raw, reason: r.reason });
+        i += Math.max(r.consumed, 1);
+        continue;
+      }
+    }
+
+    // `:::artifact <id>` directive — inline-render a linked artifact.
+    // We require a CUID-shaped id to avoid swallowing accidental
+    // `:::artifact` text. The block ends on `:::` (single-line form is
+    // legal too if the closer is on the next line).
+    const artifactDirective = ln.match(/^:::artifact\s+([a-z0-9]{20,})\s*$/i);
+    if (artifactDirective) {
+      let j = i + 1;
+      // Optional `:::` closer on the next line.
+      if (j < lines.length && /^:::\s*$/.test(lines[j])) j++;
+      out.push({ type: "artifactEmbed", artifactId: artifactDirective[1] });
+      i = j;
+      continue;
+    }
+
+    // Lone URL on a line that we know how to embed — promote to a
+    // block-level embed card. Only triggers when the line is *just*
+    // the URL (after trimming), so URLs mid-prose still render
+    // inline as links.
+    {
+      const t = ln.trim();
+      if (/^https?:\/\//i.test(t) && !/\s/.test(t)) {
+        const m = matchEmbedUrl(t);
+        if (m) {
+          out.push({ type: "urlEmbed", match: m });
+          i++;
+          continue;
+        }
+      }
     }
 
     // Code fence (``` or ~~~)
@@ -814,6 +877,56 @@ function renderBlock(
       </ul>
     );
   }
+  if (block.type === "dataBlock") {
+    const db = block.block;
+    if (db.kind === "table")
+      return <DataBlockTable key={k} payload={db.payload} />;
+    if (db.kind === "list")
+      return <DataBlockList key={k} payload={db.payload} />;
+    return <DataBlockKV key={k} payload={db.payload} />;
+  }
+  if (block.type === "dataBlockInvalid") {
+    return (
+      <div key={k} className="my-2 overflow-hidden rounded-md border border-border bg-card/40">
+        <div className="flex items-center gap-2 border-b border-border/60 bg-card/60 px-3 py-1">
+          <AlertTriangle className="h-3 w-3 shrink-0 text-warning" />
+          <span className="font-mono text-[0.625rem] uppercase tracking-wider text-warning">
+            invalid :::data block
+          </span>
+          <span className="truncate font-mono text-[0.6875rem] text-muted-foreground">
+            {block.reason}
+          </span>
+        </div>
+        <pre className="overflow-x-auto px-3 py-2 font-mono text-[0.75rem] leading-relaxed text-foreground">
+          <code>{block.raw}</code>
+        </pre>
+      </div>
+    );
+  }
+  if (block.type === "artifactEmbed") {
+    return <ArtifactEmbed key={k} artifactId={block.artifactId} />;
+  }
+  if (block.type === "urlEmbed") {
+    const m = block.match;
+    if (m.kind === "youtube")
+      return <YouTubeEmbed key={k} videoId={m.payload.videoId} url={m.payload.url} />;
+    if (m.kind === "github")
+      return (
+        <GithubEmbed
+          key={k}
+          owner={m.payload.owner}
+          repo={m.payload.repo}
+          number={m.payload.number}
+          type={m.payload.type}
+          url={m.payload.url}
+        />
+      );
+    if (m.kind === "loom")
+      return <LoomEmbed key={k} videoId={m.payload.videoId} url={m.payload.url} />;
+    if (m.kind === "figma")
+      return <FigmaEmbed key={k} embedUrl={m.payload.embedUrl} url={m.payload.url} />;
+    return null;
+  }
   if (block.type === "table") {
     return (
       <div
@@ -1009,13 +1122,20 @@ function InlineIssueRef({ issueKey }: { issueKey: string }) {
 }
 
 function InlineAgentMention({ profileKey }: { profileKey: string }) {
+  // The token namespace is shared with `@handle` user mentions; the
+  // hover preview tries agent first, falls back to user. Chip styling
+  // stays agent-themed (indigo + Bot glyph) because the common case
+  // is an agent ping; if the token resolves as a user, the popover
+  // surface reflects that.
   return (
-    <span
-      className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1 py-0.5 font-mono text-[0.6875rem] text-indigo-700 dark:text-indigo-300"
-      title={`@${profileKey}`}
-    >
-      <Bot className="h-3 w-3" />@{profileKey}
-    </span>
+    <AgentHoverPreview token={profileKey}>
+      <span
+        className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1 py-0.5 font-mono text-[0.6875rem] text-indigo-700 dark:text-indigo-300"
+        title={`@${profileKey}`}
+      >
+        <Bot className="h-3 w-3" />@{profileKey}
+      </span>
+    </AgentHoverPreview>
   );
 }
 

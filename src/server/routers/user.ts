@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure, workspaceProcedure } from "@/server/trpc";
 import { refreshTodayZone } from "@/server/services/today-zone";
 
@@ -236,6 +237,73 @@ export const userRouter = router({
         data: input,
         select: ME_SELECT,
       });
+    }),
+
+  /**
+   * Narrow "card-shape" summary used by the `@handle` hover preview.
+   *
+   * Looks up a workspace member by either `id` or `handle`. The mention
+   * regex captures both `@agentProfileKey` and `@userHandle` — the
+   * client tries `agent.summary` first, then falls back here when the
+   * agent lookup 404s. Cross-tenant resolves return NOT_FOUND.
+   *
+   * Activity count = `ActivityEvent` rows authored by this user in the
+   * current workspace over the last 7 days. Cheap (indexed `actorId +
+   * createdAt`) but capped via `count` so a heavy user doesn't drag
+   * the popover. Workspace role comes from the matching Membership.
+   */
+  summary: workspaceProcedure
+    .input(
+      z
+        .object({
+          id: z.string().cuid().optional(),
+          handle: z
+            .string()
+            .min(1)
+            .max(40)
+            .regex(/^[a-z0-9][a-z0-9_-]*$/i)
+            .optional(),
+        })
+        .refine((v) => v.id || v.handle, {
+          message: "Provide id or handle.",
+        }),
+    )
+    .query(async ({ ctx, input }) => {
+      const user = await ctx.db.user.findFirst({
+        where: {
+          ...(input.id ? { id: input.id } : {}),
+          ...(input.handle ? { handle: input.handle.toLowerCase() } : {}),
+          memberships: { some: { workspaceId: ctx.workspaceId } },
+        },
+        select: {
+          id: true,
+          name: true,
+          handle: true,
+          image: true,
+          memberships: {
+            where: { workspaceId: ctx.workspaceId },
+            select: { role: true },
+            take: 1,
+          },
+        },
+      });
+      if (!user) throw new TRPCError({ code: "NOT_FOUND" });
+      const since = new Date(Date.now() - 7 * 86_400_000);
+      const recentActivity = await ctx.db.activityEvent.count({
+        where: {
+          workspaceId: ctx.workspaceId,
+          actorId: user.id,
+          createdAt: { gte: since },
+        },
+      });
+      return {
+        id: user.id,
+        name: user.name,
+        handle: user.handle,
+        image: user.image,
+        role: user.memberships[0]?.role ?? null,
+        recentActivity,
+      };
     }),
 
   /**
