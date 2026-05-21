@@ -396,6 +396,7 @@ export const projectRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Project",
           entityId: project.id,
           action: "create",
@@ -437,6 +438,7 @@ export const projectRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Project",
           entityId: id,
           action: "update",

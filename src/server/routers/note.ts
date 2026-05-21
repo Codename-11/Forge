@@ -388,6 +388,7 @@ export const noteRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: created.id,
           action: "create",
@@ -452,6 +453,7 @@ export const noteRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Note",
           entityId: before.id,
           action: "status.set",
@@ -541,6 +543,7 @@ export const noteRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: issue.id,
             action: "create",
@@ -597,6 +600,7 @@ export const noteRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Project",
             entityId: project.id,
             action: "create",
@@ -662,6 +666,7 @@ export const noteRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Initiative",
           entityId: initiative.id,
           action: "create",

@@ -98,6 +98,7 @@ export async function createExecutionPlan(
     await recordChange(tx, {
       workspaceId: input.workspaceId,
       actorId: input.actorId,
+      actorAgentId: input.actorAgentId ?? null,
       entity: "execution-plan",
       entityId: plan.id,
       action: "created",

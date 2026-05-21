@@ -343,6 +343,7 @@ export async function createActionRequest(
     await recordChange(tx, {
       workspaceId: input.workspaceId,
       actorId: input.actorId,
+      actorAgentId: input.actorAgentId ?? null,
       entity: "action-request",
       entityId: row.id,
       action: "created",
@@ -1249,6 +1250,7 @@ export async function closeActionRequestVoting(
     await recordChange(tx, {
       workspaceId: params.workspaceId,
       actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
       entity: "action-request",
       entityId: request.id,
       action: "close-voting",

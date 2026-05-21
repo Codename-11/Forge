@@ -349,6 +349,7 @@ export const artifactRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "artifact",
           entityId: input.id,
           action: "restore",
@@ -449,6 +450,7 @@ export const artifactRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "artifact",
           entityId: existing.id,
           action: "delete",

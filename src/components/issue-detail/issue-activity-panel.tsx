@@ -1,6 +1,8 @@
 "use client";
 import { Activity as ActivityIcon } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 
@@ -86,18 +88,56 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
           {rows.map((e) => {
             const dispatch =
               e.kind === "AGENT_ASSIGNED" ? readDispatch(e.payload) : null;
+            // When the action came through an agent-linked API key, the
+            // Agent is the recorded actor; the human key-owner (`e.actor`)
+            // is kept as secondary metadata, surfaced in a tooltip.
+            const agent = e.actorAgent;
             return (
               <li key={e.id} className="flex items-start gap-2 px-3 py-2">
-                <Avatar
-                  name={e.actor?.name ?? null}
-                  image={e.actor?.image ?? null}
-                  size={18}
-                />
+                {agent ? (
+                  <AgentAvatar
+                    agent={{
+                      name: agent.name,
+                      profileKey: agent.profileKey,
+                      avatar: agent.avatar,
+                    }}
+                    size="xs"
+                  />
+                ) : (
+                  <Avatar
+                    name={e.actor?.name ?? null}
+                    image={e.actor?.image ?? null}
+                    size={18}
+                  />
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-1.5 text-[0.6875rem]">
-                    <span className="truncate font-medium">
-                      {e.actor?.name ?? "System"}
-                    </span>
+                    {agent ? (
+                      <span
+                        className="truncate font-medium"
+                        title={
+                          e.actor?.name
+                            ? `via API key owned by ${e.actor.name}`
+                            : undefined
+                        }
+                      >
+                        {agent.name}
+                      </span>
+                    ) : (
+                      <span className="truncate font-medium">
+                        {e.actor?.name ?? "System"}
+                      </span>
+                    )}
+                    {agent && (
+                      // Indigo `agent` chip mirrors the comment-card badge in
+                      // issue-main so "an agent did this" reads consistently.
+                      <Badge
+                        color="#6366f1"
+                        className="font-mono text-[0.6875rem] uppercase tracking-wider"
+                      >
+                        agent
+                      </Badge>
+                    )}
                     <span className="truncate text-muted-foreground">
                       {KIND_LABEL[e.kind] ?? e.kind.replace(/_/g, " ").toLowerCase()}
                     </span>

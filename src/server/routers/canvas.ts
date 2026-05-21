@@ -324,6 +324,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: canvas.id,
           action: "created",
@@ -388,6 +389,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: canvas.id,
           action: "delete",
@@ -671,6 +673,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "shape_added",
@@ -754,6 +757,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: shape.canvasId,
           action: "shape_updated",
@@ -785,6 +789,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: shape.canvasId,
           action: "shape_removed",
@@ -853,6 +858,7 @@ export const canvasRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session?.user?.id ?? null,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "workspace-canvas",
             entityId: canvasId,
             action: "shapes_bulk_updated",
@@ -965,6 +971,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: edge.canvasId,
           action: "edge_updated",
@@ -1305,6 +1312,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "execution-plan",
           entityId: plan.id,
           action: "created",
@@ -1406,6 +1414,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "shapes_bulk_added",
@@ -1528,6 +1537,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: userId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "template_applied",
@@ -1604,6 +1614,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "layout_applied",
@@ -1770,6 +1781,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: canvas.id,
           action: "created",
@@ -1825,6 +1837,7 @@ export const canvasRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session?.user?.id ?? null,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "canvas-style",
             entityId: row.id,
             action: "created",
@@ -1901,6 +1914,7 @@ export const canvasRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session?.user?.id ?? null,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "canvas-style",
             entityId: input.styleId,
             action: "updated",
@@ -1948,6 +1962,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "canvas-style",
           entityId: input.styleId,
           action: "archived",
@@ -1999,6 +2014,7 @@ export const canvasRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session?.user?.id ?? null,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "canvas-component",
             entityId: row.id,
             action: "created",
@@ -2105,6 +2121,7 @@ export const canvasRouter = router({
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session?.user?.id ?? null,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "canvas-component",
             entityId: input.componentId,
             action: "updated",
@@ -2152,6 +2169,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "canvas-component",
           entityId: input.componentId,
           action: "archived",
@@ -2256,6 +2274,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "instance_added",
@@ -2324,6 +2343,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: existing.canvasId,
           action: "instance_updated",
@@ -2489,6 +2509,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: instance.canvasId,
           action: "instance_detached",
@@ -2693,6 +2714,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "layers_reordered",
@@ -2785,6 +2807,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "frame_added",
@@ -2910,6 +2933,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: frame.canvasId,
           action: "frame_updated",
@@ -2992,6 +3016,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: frame.canvasId,
           action: "frame_removed",
@@ -3083,6 +3108,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "group_created",
@@ -3134,6 +3160,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: group.canvasId,
           action: "group_dissolved",
@@ -3204,6 +3231,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "page_added",
@@ -3275,6 +3303,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: frame.canvasId,
           action: "page_removed",
@@ -3332,6 +3361,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "pages_reordered",
@@ -3653,6 +3683,7 @@ export const canvasRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "workspace-canvas",
           entityId: input.canvasId,
           action: "align_applied",

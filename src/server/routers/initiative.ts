@@ -278,6 +278,7 @@ export const initiativeRouter = router({
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         entity: "Initiative",
         entityId: initiative.id,
         action: "create",
@@ -303,6 +304,7 @@ export const initiativeRouter = router({
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         entity: "Initiative",
         entityId: id,
         action: "update",
@@ -354,6 +356,7 @@ export const initiativeRouter = router({
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         entity: "Initiative",
         entityId: input.id,
         action: "archive",
@@ -386,6 +389,7 @@ export const initiativeRouter = router({
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         entity: "Project",
         entityId: input.projectId,
         action: "initiative.link",
@@ -440,6 +444,7 @@ export const initiativeRouter = router({
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         entity: "Project",
         entityId: input.projectId,
         action: "initiative.unlink",

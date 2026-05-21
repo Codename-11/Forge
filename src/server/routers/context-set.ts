@@ -117,6 +117,7 @@ export const contextSetRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "context-set",
           entityId: input.id,
           action: "updated",
@@ -150,6 +151,7 @@ export const contextSetRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "context-set",
           entityId: input.id,
           action: "archived",

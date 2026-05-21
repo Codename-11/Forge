@@ -133,6 +133,7 @@ export const timeEntryRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "TimeEntry",
           entityId: entry.id,
           action: "start",
@@ -173,6 +174,7 @@ export const timeEntryRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "TimeEntry",
           entityId: stopped.id,
           action: "stop",

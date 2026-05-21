@@ -590,6 +590,7 @@ export const agentRunRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: run.issueId,
           action: "assign-agent",
@@ -610,6 +611,7 @@ export const agentRunRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "AgentRun",
           entityId: run.id,
           action: "control-request",
@@ -689,6 +691,7 @@ export const agentRunRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Comment",
           entityId: comment.id,
           action: "create",
@@ -762,6 +765,7 @@ export const agentRunRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "AgentRun",
           entityId: run.id,
           action: "kick",
@@ -831,6 +835,7 @@ async function requestRunControl(
     db: PrismaClient;
     workspaceId: string;
     session: { user: { id: string } };
+    apiKey: { linkedAgentId: string | null } | null;
   },
   args: {
     runId: string;
@@ -878,6 +883,7 @@ async function requestRunControl(
     await recordChange(tx, {
       workspaceId: ctx.workspaceId,
       actorId: ctx.session.user.id,
+      actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
       entity: "AgentRun",
       entityId: run.id,
       action: "control-request",

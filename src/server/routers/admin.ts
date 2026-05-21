@@ -137,7 +137,10 @@ export const adminRouter = router({
         orderBy: { createdAt: "desc" },
         take: input.limit + 1,
         cursor: input.cursor ? { id: input.cursor } : undefined,
-        include: { actor: { select: { id: true, name: true, email: true, image: true } } },
+        include: {
+          actor: { select: { id: true, name: true, email: true, image: true } },
+          actorAgent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+        },
       });
       let nextCursor: string | undefined;
       if (rows.length > input.limit) nextCursor = rows.pop()!.id;

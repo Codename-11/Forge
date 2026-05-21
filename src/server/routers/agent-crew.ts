@@ -323,6 +323,7 @@ export const agentCrewRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "agent-crew",
           entityId: input.id,
           action: "archived",
@@ -368,6 +369,7 @@ export const agentCrewRouter = router({
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "agent-crew",
           entityId: member.crewId,
           action: "member_removed",
