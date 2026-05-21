@@ -7,9 +7,12 @@
 // invalidates the stack (we re-sync with server state rather than try
 // to reconcile a divergent history).
 //
-// v1 scope: shape move and shape delete. Adds/groups/edges can be
-// wired by following the same `pushCommand` shape from their commit
-// sites.
+// Coverage: shape move, and shape create/delete across every entry point
+// (draw tools, stamps, images, paste, duplicate, eraser, keyboard/inspector/
+// context-menu delete) via the `createShape` / `removeShapeUndoable` helpers
+// in the canvas page. Each redo/undo cycle re-mints the server row, so the
+// command keeps a mutable id box. Node/edge/frame/group ops can be wired by
+// following the same `push({ describe, doIt, undoIt })` shape.
 
 import { useCallback, useRef, useState } from "react";
 

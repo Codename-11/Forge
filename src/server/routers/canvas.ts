@@ -17,6 +17,7 @@ import { createArtifact } from "@/server/services/artifact-service";
 import { publish } from "@/server/realtime";
 import { computeAlignment, type AlignItem } from "@/server/services/canvas-alignment";
 import { refreshTodayZone } from "@/server/services/today-zone";
+import { presignDownloadUrl } from "@/server/services/storage";
 
 // ---------------------------------------------------------------------------
 // Schemas shared between proc inputs (styles / components / layers)
@@ -270,11 +271,28 @@ export const canvasRouter = router({
         ...node,
         ref: hydrated[idx],
       }));
+      // Image shapes store an attachmentId in their style JSON; resolve it to
+      // a fresh presigned GET so the client can render <image href>. The URL
+      // is short-lived (15 min) and refreshes on the next hydrate.
+      const shapes = await Promise.all(
+        canvas.shapes.map(async (shape) => {
+          if (shape.kind !== "image") return shape;
+          const style = (shape.style ?? {}) as Record<string, unknown>;
+          const attachmentId = style.attachmentId;
+          if (typeof attachmentId !== "string") return shape;
+          try {
+            const { url } = await presignDownloadUrl(attachmentId);
+            return { ...shape, style: { ...style, src: url } };
+          } catch {
+            return shape;
+          }
+        }),
+      );
       return {
         canvas,
         nodes,
         edges: canvas.edges,
-        shapes: canvas.shapes,
+        shapes,
         frames: canvas.frames,
         groups: canvas.groups,
         componentInstances: canvas.componentInstances,
@@ -599,6 +617,7 @@ export const canvasRouter = router({
         kind: z.enum([
           "box",
           "ellipse",
+          "diamond",
           "line",
           "arrow",
           "text",
@@ -606,6 +625,7 @@ export const canvasRouter = router({
           "sticky",
           "comment-pin",
           "stamp",
+          "image",
         ]),
         x: z.number(),
         y: z.number(),

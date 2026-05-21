@@ -423,6 +423,11 @@ async function assertTargetInWorkspace(
           where: { id: targetId, workspaceId, archivedAt: null },
           select: { id: true },
         });
+      case "canvas":
+        return db.workspaceCanvas.findFirst({
+          where: { id: targetId, workspaceId, archivedAt: null },
+          select: { id: true },
+        });
       default:
         return null;
     }

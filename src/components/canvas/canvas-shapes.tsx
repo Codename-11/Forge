@@ -4,6 +4,13 @@ import { Check, CornerDownLeft, MessageCircle, RotateCcw, Trash2 } from "lucide-
 import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import {
+  seedFromId,
+  roughRect,
+  roughEllipse,
+  roughPolygon,
+  type RoughPath,
+} from "@/lib/canvas-rough";
 
 /**
  * Inline comment-thread for a canvas comment-pin (W2.2). Comments live
@@ -192,13 +199,18 @@ function CommentPinPopover({
 export type ShapeKind =
   | "box"
   | "ellipse"
+  | "diamond"
   | "line"
   | "arrow"
   | "text"
   | "freehand"
   | "sticky"
   | "comment-pin"
-  | "stamp";
+  | "stamp"
+  | "image";
+
+/** Arrow-end marker styles (Excalidraw parity). */
+export type ArrowHead = "none" | "triangle" | "line" | "circle" | "diamond";
 
 /** Sticky-note palette — keys map to `--sticky-*` CSS vars in
  * globals.css. Order matters: index 0 is the "default" swatch new
@@ -272,6 +284,16 @@ type ShapeStyle = {
   fontWeight?: number;
   color?: string;
   opacity?: number;
+  /** Box corner radius (px). Undefined → default 6. */
+  cornerRadius?: number;
+  /** Hand-drawn (rough.js) rendering for geometric shapes. */
+  sketch?: boolean;
+  /** Arrow end/start markers. */
+  arrowHead?: ArrowHead;
+  arrowTail?: ArrowHead;
+  /** Image src (resolved presigned URL injected by hydrate) + attachment id. */
+  src?: string;
+  attachmentId?: string;
 };
 
 function readStyle(raw: Record<string, unknown> | null | undefined): ShapeStyle {
@@ -285,7 +307,69 @@ function readStyle(raw: Record<string, unknown> | null | undefined): ShapeStyle 
     fontWeight: typeof s.fontWeight === "number" ? (s.fontWeight as number) : undefined,
     color: typeof s.color === "string" ? (s.color as string) : undefined,
     opacity: typeof s.opacity === "number" ? (s.opacity as number) : undefined,
+    cornerRadius: typeof s.cornerRadius === "number" ? (s.cornerRadius as number) : undefined,
+    sketch: s.sketch === true,
+    arrowHead: typeof s.arrowHead === "string" ? (s.arrowHead as ArrowHead) : undefined,
+    arrowTail: typeof s.arrowTail === "string" ? (s.arrowTail as ArrowHead) : undefined,
+    src: typeof s.src === "string" ? (s.src as string) : undefined,
+    attachmentId: typeof s.attachmentId === "string" ? (s.attachmentId as string) : undefined,
   };
+}
+
+// Diamond polygon points for a w×h box at (x,y).
+function diamondPoints(x: number, y: number, w: number, h: number): Array<[number, number]> {
+  return [
+    [x + w / 2, y],
+    [x + w, y + h / 2],
+    [x + w / 2, y + h],
+    [x, y + h / 2],
+  ];
+}
+
+/** Render a set of rough.js paths as SVG <path> elements. */
+function RoughPaths({
+  paths,
+  opacity,
+  onMouseDown,
+  shapeId,
+}: {
+  paths: RoughPath[];
+  opacity: number;
+  onMouseDown: (e: React.MouseEvent) => void;
+  shapeId: string;
+}) {
+  return (
+    <g opacity={opacity} className="cursor-pointer" pointerEvents="all" onMouseDown={onMouseDown} data-canvas-shape={shapeId}>
+      {paths.map((p, i) => (
+        <path
+          key={i}
+          d={p.d}
+          stroke={p.stroke}
+          fill={p.fill}
+          strokeWidth={p.strokeWidth}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ))}
+    </g>
+  );
+}
+
+/** Map an ArrowHead style to its marker url(). */
+function markerUrl(head: ArrowHead | undefined, fallbackTriangle: boolean): string | undefined {
+  const h = head ?? (fallbackTriangle ? "triangle" : "none");
+  switch (h) {
+    case "triangle":
+      return "url(#canvas-arrow-triangle)";
+    case "line":
+      return "url(#canvas-arrow-line)";
+    case "circle":
+      return "url(#canvas-arrow-circle)";
+    case "diamond":
+      return "url(#canvas-arrow-diamond)";
+    default:
+      return undefined;
+  }
 }
 
 // Catmull-Rom -> Bezier so freehand stays smooth without re-sampling.
@@ -321,7 +405,13 @@ function shapeBoundingBox(shape: CanvasShapeRow): {
   width: number;
   height: number;
 } {
-  if (shape.kind === "box" || shape.kind === "ellipse" || shape.kind === "text") {
+  if (
+    shape.kind === "box" ||
+    shape.kind === "ellipse" ||
+    shape.kind === "diamond" ||
+    shape.kind === "image" ||
+    shape.kind === "text"
+  ) {
     return {
       x: shape.x,
       y: shape.y,
@@ -472,6 +562,8 @@ export const CanvasShapes = memo(function CanvasShapes({
       height={height}
     >
       <defs>
+        {/* Legacy single arrowhead (kept for back-compat with existing
+            arrows + the draft preview). */}
         <marker
           id="canvas-shape-arrow"
           viewBox="0 -5 10 10"
@@ -482,6 +574,21 @@ export const CanvasShapes = memo(function CanvasShapes({
           orient="auto"
         >
           <path d="M0,-4 L8,0 L0,4 Z" fill="currentColor" />
+        </marker>
+        {/* Styled arrowheads. `context-stroke` makes the marker inherit the
+            line's stroke color; `auto-start-reverse` lets one marker serve
+            both ends. */}
+        <marker id="canvas-arrow-triangle" viewBox="0 -5 10 10" refX="8" refY="0" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,-4 L8,0 L0,4 Z" fill="context-stroke" />
+        </marker>
+        <marker id="canvas-arrow-line" viewBox="0 -5 10 10" refX="7" refY="0" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,-4 L7,0 L0,4" fill="none" stroke="context-stroke" strokeWidth="1.4" />
+        </marker>
+        <marker id="canvas-arrow-circle" viewBox="-5 -5 10 10" refX="0" refY="0" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <circle r="3.4" fill="context-stroke" />
+        </marker>
+        <marker id="canvas-arrow-diamond" viewBox="-6 -6 12 12" refX="0" refY="0" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M-5,0 L0,-4 L5,0 L0,4 Z" fill="context-stroke" />
         </marker>
       </defs>
       {visibleShapes.map((shape) => (
@@ -556,25 +663,37 @@ const ShapeNode = memo(function ShapeNode({
     const h = shape.height ?? 80;
     const x = shape.x - offsetX;
     const y = shape.y - offsetY;
-    content = (
-      <rect
-        x={x}
-        y={y}
-        width={w}
-        height={h}
-        rx={6}
-        ry={6}
-        fill={style.fill}
-        stroke={style.stroke}
-        strokeWidth={style.strokeWidth}
-        strokeDasharray={style.dasharray}
-        opacity={style.opacity ?? 1}
-        className="cursor-pointer"
-        pointerEvents="all"
-        onMouseDown={onMouseDown}
-        data-canvas-shape={shape.id}
-      />
-    );
+    const radius = style.cornerRadius ?? 6;
+    if (style.sketch) {
+      const paths = roughRect(seedFromId(shape.id), x, y, w, h, {
+        stroke: style.stroke,
+        fill: style.fill,
+        strokeWidth: style.strokeWidth,
+      });
+      content = (
+        <RoughPaths paths={paths} opacity={style.opacity ?? 1} onMouseDown={onMouseDown} shapeId={shape.id} />
+      );
+    } else {
+      content = (
+        <rect
+          x={x}
+          y={y}
+          width={w}
+          height={h}
+          rx={radius}
+          ry={radius}
+          fill={style.fill}
+          stroke={style.stroke}
+          strokeWidth={style.strokeWidth}
+          strokeDasharray={style.dasharray}
+          opacity={style.opacity ?? 1}
+          className="cursor-pointer"
+          pointerEvents="all"
+          onMouseDown={onMouseDown}
+          data-canvas-shape={shape.id}
+        />
+      );
+    }
     if (selected) {
       ring = (
         <rect
@@ -597,23 +716,34 @@ const ShapeNode = memo(function ShapeNode({
     const h = shape.height ?? 80;
     const cx = shape.x - offsetX + w / 2;
     const cy = shape.y - offsetY + h / 2;
-    content = (
-      <ellipse
-        cx={cx}
-        cy={cy}
-        rx={Math.max(1, w / 2)}
-        ry={Math.max(1, h / 2)}
-        fill={style.fill}
-        stroke={style.stroke}
-        strokeWidth={style.strokeWidth}
-        strokeDasharray={style.dasharray}
-        opacity={style.opacity ?? 1}
-        className="cursor-pointer"
-        pointerEvents="all"
-        onMouseDown={onMouseDown}
-        data-canvas-shape={shape.id}
-      />
-    );
+    if (style.sketch) {
+      const paths = roughEllipse(seedFromId(shape.id), cx, cy, w, h, {
+        stroke: style.stroke,
+        fill: style.fill,
+        strokeWidth: style.strokeWidth,
+      });
+      content = (
+        <RoughPaths paths={paths} opacity={style.opacity ?? 1} onMouseDown={onMouseDown} shapeId={shape.id} />
+      );
+    } else {
+      content = (
+        <ellipse
+          cx={cx}
+          cy={cy}
+          rx={Math.max(1, w / 2)}
+          ry={Math.max(1, h / 2)}
+          fill={style.fill}
+          stroke={style.stroke}
+          strokeWidth={style.strokeWidth}
+          strokeDasharray={style.dasharray}
+          opacity={style.opacity ?? 1}
+          className="cursor-pointer"
+          pointerEvents="all"
+          onMouseDown={onMouseDown}
+          data-canvas-shape={shape.id}
+        />
+      );
+    }
     if (selected) {
       ring = (
         <ellipse
@@ -621,6 +751,98 @@ const ShapeNode = memo(function ShapeNode({
           cy={cy}
           rx={Math.max(1, w / 2) + 3}
           ry={Math.max(1, h / 2) + 3}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          strokeDasharray="4 4"
+          pointerEvents="none"
+        />
+      );
+    }
+  } else if (shape.kind === "diamond") {
+    const w = shape.width ?? 80;
+    const h = shape.height ?? 80;
+    const x = shape.x - offsetX;
+    const y = shape.y - offsetY;
+    const pts = diamondPoints(x, y, w, h);
+    if (style.sketch) {
+      const paths = roughPolygon(seedFromId(shape.id), pts, {
+        stroke: style.stroke,
+        fill: style.fill,
+        strokeWidth: style.strokeWidth,
+      });
+      content = (
+        <RoughPaths paths={paths} opacity={style.opacity ?? 1} onMouseDown={onMouseDown} shapeId={shape.id} />
+      );
+    } else {
+      content = (
+        <polygon
+          points={pts.map((p) => p.join(",")).join(" ")}
+          fill={style.fill}
+          stroke={style.stroke}
+          strokeWidth={style.strokeWidth}
+          strokeDasharray={style.dasharray}
+          strokeLinejoin="round"
+          opacity={style.opacity ?? 1}
+          className="cursor-pointer"
+          pointerEvents="all"
+          onMouseDown={onMouseDown}
+          data-canvas-shape={shape.id}
+        />
+      );
+    }
+    if (selected) {
+      ring = (
+        <rect
+          x={x - 3}
+          y={y - 3}
+          width={w + 6}
+          height={h + 6}
+          rx={6}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          strokeDasharray="4 4"
+          pointerEvents="none"
+        />
+      );
+    }
+  } else if (shape.kind === "image") {
+    const w = shape.width ?? 160;
+    const h = shape.height ?? 120;
+    const x = shape.x - offsetX;
+    const y = shape.y - offsetY;
+    content = style.src ? (
+      <image
+        href={style.src}
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        opacity={style.opacity ?? 1}
+        preserveAspectRatio="xMidYMid meet"
+        className="cursor-pointer"
+        pointerEvents="all"
+        onMouseDown={onMouseDown}
+        data-canvas-shape={shape.id}
+      />
+    ) : (
+      // Placeholder while the presigned src resolves (or storage is off).
+      <g onMouseDown={onMouseDown} data-canvas-shape={shape.id} className="cursor-pointer" pointerEvents="all">
+        <rect x={x} y={y} width={w} height={h} rx={6} fill="rgba(255,255,255,0.04)" stroke="currentColor" strokeWidth={1} strokeDasharray="4 4" />
+        <text x={x + w / 2} y={y + h / 2} textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="currentColor" opacity={0.5}>
+          image
+        </text>
+      </g>
+    );
+    if (selected) {
+      ring = (
+        <rect
+          x={x - 3}
+          y={y - 3}
+          width={w + 6}
+          height={h + 6}
+          rx={8}
           fill="none"
           stroke="currentColor"
           strokeWidth={1.5}
@@ -664,7 +886,8 @@ const ShapeNode = memo(function ShapeNode({
           strokeWidth={style.strokeWidth}
           strokeDasharray={style.dasharray}
           opacity={style.opacity ?? 1}
-          markerEnd={shape.kind === "arrow" ? "url(#canvas-shape-arrow)" : undefined}
+          markerEnd={shape.kind === "arrow" ? markerUrl(style.arrowHead, true) : markerUrl(style.arrowHead, false)}
+          markerStart={markerUrl(style.arrowTail, false)}
           pointerEvents="none"
         />
       </g>
