@@ -7,6 +7,7 @@ import {
   AgentStatus,
   EventKind,
   RelationKind,
+  RunEngine,
   type Prisma,
 } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
@@ -312,6 +313,8 @@ export const agentRouter = router({
         avatar: z.string().max(200).nullable().optional(),
         provider: z.nativeEnum(AgentProvider).optional(),
         runtimeMode: z.nativeEnum(AgentRuntimeMode).optional(),
+        /// Chat engine override. Null clears (revert to integration default).
+        runEngine: z.nativeEnum(RunEngine).nullable().optional(),
         webhookUrl: z.string().url().max(500).nullable().optional(),
         webhookSecret: z.string().max(500).nullable().optional(),
         capabilities: z.array(z.string().min(1).max(40)).max(32).optional(),

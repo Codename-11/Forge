@@ -17,6 +17,7 @@ import {
 } from "@/server/services/chat-tools-allowlist";
 import { executeChatTool } from "@/server/services/chat-tool-exec";
 import { pendingApprovals } from "@/server/services/chat-stream-state";
+import { resolveRunEngine, getRunsConnector } from "@/server/services/dispatch/registry";
 import { loadCanvasContextSummary } from "@/server/services/chat-context-canvas";
 import { presignDownloadUrl } from "@/server/services/storage";
 import { logger } from "@/server/logger";
@@ -97,6 +98,7 @@ export async function POST(req: NextRequest) {
           name: true,
           profileKey: true,
           provider: true,
+          runEngine: true,
           templateMarkdown: true,
           capabilities: true,
         },
@@ -111,6 +113,15 @@ export async function POST(req: NextRequest) {
   // Per-thread overrides win over the agent's default provider/model.
   const effectiveProvider = thread.providerOverride ?? agent.provider;
   const effectiveModel = thread.modelOverride ?? undefined;
+  // Resolve the chat engine. RUNS delegates to the provider's structured
+  // agent-run API (Hermes /v1/runs) instead of Forge's own completions
+  // loop; falls back to completions when the provider has no runs connector.
+  const runEngine = resolveRunEngine({
+    runEngine: agent.runEngine,
+    provider: effectiveProvider,
+  });
+  const runsConnector = getRunsConnector(effectiveProvider);
+  const useRuns = runEngine === "RUNS" && runsConnector != null;
 
   // Resolve + verify attachments before opening the stream so we don't
   // leave a half-written user message if one points outside the workspace.
@@ -370,8 +381,14 @@ export async function POST(req: NextRequest) {
       const registeredApprovalIds = new Set<string>();
 
       const abortController = new AbortController();
+      // Provider-side run id when streaming via the RUNS engine — lets the
+      // Stop button interrupt the live Hermes run, not just the local read.
+      let runExternalId: string | null = null;
       const onAbort = () => {
         abortController.abort();
+        if (runExternalId && runsConnector?.stop) {
+          void runsConnector.stop(runExternalId);
+        }
         for (const id of registeredApprovalIds) {
           const resolver = pendingApprovals.get(id);
           if (resolver) {
@@ -470,33 +487,153 @@ export async function POST(req: NextRequest) {
         return exec;
       };
 
+      // RUNS engine: delegate the whole turn to the provider's structured
+      // agent-run API and map its normalized events onto the SAME SSE
+      // vocabulary the client already speaks (content/thinking/tool_*/
+      // error) — so the client needs no changes and chat still streams
+      // token-by-token (via `message.delta`). Tools + approvals run on the
+      // provider side; an `approval_required` event surfaces as a
+      // tool_confirm card and our reply is POSTed back to the run.
+      const streamViaRuns = async () => {
+        const priorTurns = history.slice(0, -1).map((m) => ({
+          role:
+            m.role === ChatRole.USER
+              ? ("user" as const)
+              : m.role === ChatRole.SYSTEM
+                ? ("system" as const)
+                : ("assistant" as const),
+          content: m.body,
+        }));
+        try {
+          const started = await runsConnector!.startRun({
+            message: body,
+            history: priorTurns,
+            instructions: systemPrompt,
+          });
+          runExternalId = started.externalRunId;
+        } catch (err) {
+          errored = true;
+          enqueue(
+            sse("error", {
+              message: err instanceof Error ? err.message : "Failed to start run.",
+            }),
+          );
+          return;
+        }
+        const externalRunId = runExternalId;
+        const toolIdByName = new Map<string, string>();
+        let toolSeq = 0;
+        let approvalSeq = 0;
+        await runsConnector!.subscribe(
+          externalRunId,
+          (e) => {
+            switch (e.type) {
+              case "content_delta":
+                assembled.push(e.delta);
+                enqueue(sse("content", { delta: e.delta }));
+                break;
+              case "thinking":
+                thinkingChunks.push(e.text);
+                enqueue(sse("thinking", { delta: e.text }));
+                break;
+              case "tool_started": {
+                const id = `run_tool_${++toolSeq}`;
+                toolIdByName.set(e.tool, id);
+                toolCalls.push({ id, name: e.tool, args: {}, status: "pending" });
+                enqueue(
+                  sse("tool_call_started", {
+                    id,
+                    name: e.tool,
+                    args: e.preview ? { preview: e.preview } : {},
+                    requiresConfirm: false,
+                  }),
+                );
+                break;
+              }
+              case "tool_completed": {
+                const id = toolIdByName.get(e.tool);
+                const rec = toolCalls.find((c) => c.id === id);
+                if (rec) rec.status = e.isError ? "error" : "executed";
+                if (id) {
+                  enqueue(
+                    sse("tool_result", {
+                      id,
+                      ok: !e.isError,
+                      summary: e.isError ? "failed" : "done",
+                    }),
+                  );
+                }
+                break;
+              }
+              case "approval_required": {
+                const id = `run_approval_${++approvalSeq}`;
+                enqueue(
+                  sse("tool_call_started", {
+                    id,
+                    name: e.tool ?? "approval",
+                    args: e.raw,
+                    requiresConfirm: true,
+                  }),
+                );
+                enqueue(sse("tool_confirm", { id, name: e.tool ?? "approval", args: e.raw }));
+                // Resolve out-of-band — Hermes holds the run open until we
+                // POST the approval choice back.
+                void waitForApproval(id).then((d) => {
+                  enqueue(
+                    sse("tool_result", {
+                      id,
+                      ok: d.approved,
+                      summary: d.approved ? "approved" : "declined",
+                    }),
+                  );
+                  return runsConnector!.approve?.(externalRunId, d.approved ? "once" : "deny");
+                });
+                break;
+              }
+              case "error":
+                errored = true;
+                enqueue(sse("error", { message: e.message }));
+                break;
+              case "usage":
+              case "completed":
+                break;
+            }
+          },
+          abortController.signal,
+        );
+      };
+
       try {
-        await runChatLoop({
-          provider: effectiveProvider,
-          model: effectiveModel,
-          messages,
-          tools: chatToolsAsOpenAITools(),
-          signal: abortController.signal,
-          rebuildSystemPrompt: boundCanvasId
-            ? async () => buildSystemPrompt()
-            : undefined,
-          onContent: (delta) => {
-            assembled.push(delta);
-            enqueue(sse("content", { delta }));
-          },
-          onThinking: (delta) => {
-            thinkingChunks.push(delta);
-            enqueue(sse("thinking", { delta }));
-          },
-          onToolUseStart: (call) => {
-            recordCall(call);
-          },
-          onError: (message) => {
-            errored = true;
-            enqueue(sse("error", { message }));
-          },
-          executeToolCall: runOneTool,
-        });
+        if (useRuns && runsConnector) {
+          await streamViaRuns();
+        } else {
+          await runChatLoop({
+            provider: effectiveProvider,
+            model: effectiveModel,
+            messages,
+            tools: chatToolsAsOpenAITools(),
+            signal: abortController.signal,
+            rebuildSystemPrompt: boundCanvasId
+              ? async () => buildSystemPrompt()
+              : undefined,
+            onContent: (delta) => {
+              assembled.push(delta);
+              enqueue(sse("content", { delta }));
+            },
+            onThinking: (delta) => {
+              thinkingChunks.push(delta);
+              enqueue(sse("thinking", { delta }));
+            },
+            onToolUseStart: (call) => {
+              recordCall(call);
+            },
+            onError: (message) => {
+              errored = true;
+              enqueue(sse("error", { message }));
+            },
+            executeToolCall: runOneTool,
+          });
+        }
       } catch (err) {
         errored = true;
         const message = err instanceof Error ? err.message : "Stream failed.";

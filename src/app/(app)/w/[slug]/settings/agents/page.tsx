@@ -75,6 +75,8 @@ type EditingState = {
   webhookSecret: string;
   capabilitiesRaw: string;
   maxConcurrent: number;
+  /** Chat engine: DEFAULT = integration default, else explicit override. */
+  runEngine: "DEFAULT" | "COMPLETIONS" | "RUNS";
   templateMarkdown: string;
   createApiKey: boolean;
   keyPreset: KeyPreset;
@@ -143,6 +145,7 @@ const EMPTY_EDITING: EditingState = {
   webhookSecret: "",
   capabilitiesRaw: "",
   maxConcurrent: 1,
+  runEngine: "DEFAULT",
   templateMarkdown: "",
   createApiKey: true,
   keyPreset: "agent",
@@ -367,6 +370,7 @@ export default function AgentsPage() {
           avatar: avatar ?? null,
           provider: editing.provider,
           runtimeMode: editing.runtimeMode,
+          runEngine: editing.runEngine === "DEFAULT" ? null : editing.runEngine,
           webhookUrl: webhookUrl || null,
           webhookSecret: webhookSecret || null,
           capabilities,
@@ -601,6 +605,7 @@ export default function AgentsPage() {
                           webhookSecret: a.webhookSecret ?? "",
                           capabilitiesRaw: a.capabilities.join(", "),
                           maxConcurrent: a.maxConcurrent,
+                          runEngine: (a.runEngine ?? "DEFAULT") as EditingState["runEngine"],
                           templateMarkdown: a.templateMarkdown ?? "",
                           createApiKey: false,
                           keyPreset: "agent",
@@ -975,6 +980,25 @@ export default function AgentsPage() {
                       }
                       className="w-28"
                     />
+                  </Field>
+                  <Field
+                    label="Chat engine"
+                    hint="How interactive chat replies are produced. Completions = Forge owns the loop (stateless, fast tokens). Hermes runs = the agent runs as itself with memory + its own tools (streams + structured events). Dispatch/assigned work always uses runs when supported."
+                  >
+                    <select
+                      value={editing.runEngine}
+                      onChange={(e) =>
+                        setEditing({
+                          ...editing,
+                          runEngine: e.target.value as EditingState["runEngine"],
+                        })
+                      }
+                      className="focus-ring w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm"
+                    >
+                      <option value="DEFAULT">Integration default</option>
+                      <option value="COMPLETIONS">Completions (Forge loop)</option>
+                      <option value="RUNS">Hermes runs (agent-native)</option>
+                    </select>
                   </Field>
                   <Field
                     label="Issue template"
