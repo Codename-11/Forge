@@ -963,7 +963,15 @@ export function ChatThreadView({
   const compactM = trpc.chat.compactThread.useMutation({
     onSuccess: () => void utils.chat.threads.invalidate(),
   });
-  const [pendingDraft, setPendingDraft] = useState<{ body: string; files: string[] } | null>(null);
+  // Optimistic USER bubble shown the instant the operator submits. `sent`
+  // flips true on the stream's `meta` event (server has persisted the row),
+  // which un-mutes the bubble from "Sending…" to "Sent" without waiting for
+  // the whole agent reply.
+  const [pendingDraft, setPendingDraft] = useState<{
+    body: string;
+    files: string[];
+    sent: boolean;
+  } | null>(null);
   const [fillRequest, setFillRequest] = useState<{ body: string; nonce: number } | null>(null);
 
   const ctx = useChatContext();
@@ -1142,6 +1150,10 @@ export function ChatThreadView({
           if (messageId) {
             setStreamBubble((b) => (b ? { ...b, messageId } : b));
           }
+          // The route persists the USER row (with dispatchedAt) before it
+          // emits `meta`, so this is the "fully sent" moment — flip the
+          // optimistic bubble's receipt from "Sending…" to "Sent".
+          setPendingDraft((d) => (d ? { ...d, sent: true } : d));
         } else if (event === "content") {
           const { delta } = parsed as { delta?: string };
           if (typeof delta === "string") {
@@ -1414,7 +1426,7 @@ export function ChatThreadView({
   respondToToolRef.current = respondToTool;
 
   const handleSend = async (body: string, files: File[] = []) => {
-    setPendingDraft({ body, files: files.map((f) => f.name || "attachment") });
+    setPendingDraft({ body, files: files.map((f) => f.name || "attachment"), sent: false });
     try {
       // Streaming path with optional attachments. Uploads target the
       // *pending* message id we create first; the streaming route then
@@ -1535,6 +1547,12 @@ export function ChatThreadView({
         role: m.role as ChatMessageRow["role"],
         body: m.body,
         createdAt: m.createdAt,
+        // Delivery-receipt timestamps (USER messages only render them).
+        dispatchedAt: (m as { dispatchedAt?: Date | string | null }).dispatchedAt ?? null,
+        acknowledgedAt:
+          (m as { acknowledgedAt?: Date | string | null }).acknowledgedAt ?? null,
+        outputStartedAt:
+          (m as { outputStartedAt?: Date | string | null }).outputStartedAt ?? null,
         // Streaming path stashes thinking/tool_use blocks in
         // `contextSnapshot`. Forward whatever the router returns —
         // `chat-message.tsx` guards against missing/unrelated shapes.
@@ -1781,7 +1799,9 @@ export function ChatThreadView({
                   ? pendingDraft.files.map((name) => `📎 ${name}`).join("\n")
                   : ""),
               createdAt: new Date(),
-              isDraft: true,
+              // Muted until the server confirms the send; un-mutes on `meta`.
+              isDraft: !pendingDraft.sent,
+              optimisticSent: pendingDraft.sent,
             }}
           />
         )}
