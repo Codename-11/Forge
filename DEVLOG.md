@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — Canvas: navigation, lock, collapse + component-instance delete
+
+Round of canvas usability fixes (operator feedback "hard to move around").
+
+- **Middle-mouse pan** anywhere (over cards/shapes too) — `onBackgroundMouseDown`
+  handles `button === 1` with `preventDefault` to kill the autoscroll puck;
+  shared `startPan()` helper.
+- **Inline scroll beats global scroll** — `onWheel` walks ancestors from the
+  wheel target to the surface; if a scroll container can still scroll in that
+  direction it returns early (native scroll) instead of panning/zooming.
+- **Lock canvas** (topbar toggle, persisted per canvas in localStorage). When
+  locked: middle/left-drag pans, but move/resize/draw/delete/paste/drop and
+  the inspector delete are all gated via `lockedRef`. Pan/zoom/select stay live.
+- **Collapsible toolbar** — `canvas-toolbar.tsx` gained a collapse chevron +
+  a compact "show toolbar" pill; collapsed state persists per workspace.
+- **Left entity rail hidden by default**, open state persisted per workspace.
+- **Right panel shows a vertical "Layers · Components" title when collapsed**
+  (was a bare chevron — easy to forget it's there).
+- **Component-instance delete bug fixed.** Placed instances were selectable but
+  Delete/Backspace + context menu only handled shapes/frames/edges, so they
+  couldn't be removed. Added router `canvas.instanceRemove` (deletes the
+  `CanvasComponentInstance` row; definition untouched) and wired it into the
+  Delete key, the selection-inspector delete, and a right-click menu
+  ("Detach into shapes" via existing `instanceDetach`, or "Remove from
+  canvas"). typecheck + eslint clean; canvas router tests (24) green.
+
 ## 2026-05-21 — Mission Control chat: multiple conversations per agent
 
 The chat tab only ever opened each agent's *default* thread and had no

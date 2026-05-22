@@ -2357,6 +2357,44 @@ export const canvasRouter = router({
     }),
 
   /**
+   * Remove a placed component instance from a canvas. Unlike
+   * `instanceDetach` (which materialises the instance into editable
+   * shapes), this simply deletes the instance row — the component
+   * definition is untouched and can be placed again.
+   */
+  instanceRemove: workspaceProcedure
+    .input(z.object({ instanceId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.canvasComponentInstance.findFirst({
+        where: { id: input.instanceId, workspaceId: ctx.workspaceId },
+        select: { id: true, canvasId: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Component instance not found." });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.canvasComponentInstance.delete({ where: { id: input.instanceId } });
+        await tx.workspaceCanvas.update({
+          where: { id: existing.canvasId },
+          data: { updatedAt: new Date() },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "workspace-canvas",
+          entityId: existing.canvasId,
+          action: "instance_removed",
+          before: { instanceId: input.instanceId },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "workspace-canvas",
+          subjectId: existing.canvasId,
+        });
+      });
+      return { ok: true as const };
+    }),
+
+  /**
    * Materialise an instance into raw nodes / shapes / frames under the
    * instance's host frame, applying overrides as final per-row writes,
    * then delete the instance row. Returns the ids of created entities so

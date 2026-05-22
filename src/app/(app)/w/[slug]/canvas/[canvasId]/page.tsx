@@ -8,6 +8,8 @@ import {
   Image as ImageIcon,
   Layers,
   LayoutGrid,
+  Lock,
+  LockOpen,
   Maximize2,
   MessageCircle,
   Minimize2,
@@ -342,7 +344,36 @@ export default function CanvasViewerPage() {
   // Hidden file input backing the toolbar "Insert image" button.
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const [openPicker, setOpenPicker] = useState(false);
-  const [openSidebar, setOpenSidebar] = useState(true);
+  // Left entity rail is hidden by default; its open state persists per
+  // workspace so reopening it sticks across canvases.
+  const leftRailKey = `forge.canvas.left-rail.open.${ws.slug}`;
+  const [openSidebar, setOpenSidebar] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(`forge.canvas.left-rail.open.${ws.slug}`) === "1";
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(leftRailKey, openSidebar ? "1" : "0");
+    } catch {
+      /* ignore quota */
+    }
+  }, [openSidebar, leftRailKey]);
+  // Canvas lock — prevents accidental edits (move/resize/draw/delete/drop).
+  // Pan, zoom and selection stay enabled. Persisted per canvas.
+  const lockKey = `forge.canvas.locked.${params.canvasId}`;
+  const [locked, setLocked] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(`forge.canvas.locked.${params.canvasId}`) === "1";
+  });
+  const lockedRef = useRef(locked);
+  useEffect(() => {
+    lockedRef.current = locked;
+    try {
+      window.localStorage.setItem(lockKey, locked ? "1" : "0");
+    } catch {
+      /* ignore quota */
+    }
+  }, [locked, lockKey]);
   const [openSettings, setOpenSettings] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [editingLaneFor, setEditingLaneFor] = useState<string | null>(null);
@@ -704,6 +735,19 @@ export default function CanvasViewerPage() {
   const createInstance = trpc.canvas.instanceCreate.useMutation({
     onSuccess: () => {
       toast.success("Component placed");
+      utils.canvas.hydrate.invalidate({ id: params.canvasId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  // Remove a placed instance (delete the row — component definition stays).
+  const removeInstance = trpc.canvas.instanceRemove.useMutation({
+    onSuccess: () => utils.canvas.hydrate.invalidate({ id: params.canvasId }),
+    onError: (e) => toast.error(e.message),
+  });
+  // Detach a placed instance into editable shapes.
+  const detachInstance = trpc.canvas.instanceDetach.useMutation({
+    onSuccess: () => {
+      toast.success("Component detached into editable shapes");
       utils.canvas.hydrate.invalidate({ id: params.canvasId });
     },
     onError: (e) => toast.error(e.message),
@@ -1601,6 +1645,7 @@ export default function CanvasViewerPage() {
   );
 
   const onInspectorDelete = useCallback(() => {
+    if (lockedRef.current) return;
     if (selectedEdgeId) {
       removeEdge.mutate({ id: selectedEdgeId });
       setSelectedEdgeId(null);
@@ -1610,6 +1655,12 @@ export default function CanvasViewerPage() {
     if (frameIds.length > 0 && frameRemoveMut) {
       for (const fid of frameIds) frameRemoveMut.mutate({ frameId: fid, reparentChildren: true });
       setSelected((prev) => prev.filter((s) => s.kind !== "frame"));
+      return;
+    }
+    const instanceIds = selected.filter((s) => s.kind === "instance").map((s) => s.id);
+    if (instanceIds.length > 0) {
+      for (const id of instanceIds) removeInstance.mutate({ instanceId: id });
+      setSelected((prev) => prev.filter((s) => s.kind !== "instance"));
       return;
     }
     const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
@@ -1624,6 +1675,7 @@ export default function CanvasViewerPage() {
     frameRemoveMut,
     shapeRemoveMut,
     removeShapeUndoable,
+    removeInstance,
   ]);
 
   // -- Pan + zoom handlers --------------------------------------------
@@ -1642,8 +1694,32 @@ export default function CanvasViewerPage() {
     [shapes],
   );
 
+  const startPan = (e: React.MouseEvent) => {
+    cancelCameraMotion();
+    panVelRef.current = null;
+    setPanning(true);
+    panStart.current = {
+      vx: viewport.x,
+      vy: viewport.y,
+      mx: e.clientX,
+      my: e.clientY,
+    };
+  };
+
   const onBackgroundMouseDown = (e: React.MouseEvent) => {
+    // Middle-mouse drag pans from anywhere (over cards/shapes too), matching
+    // Figma/tldraw. preventDefault stops the browser's autoscroll puck.
+    if (e.button === 1) {
+      e.preventDefault();
+      startPan(e);
+      return;
+    }
     if (e.button !== 0) return;
+    // Locked: ignore every edit tool; a left-drag just pans.
+    if (lockedRef.current) {
+      startPan(e);
+      return;
+    }
     if ((e.target as HTMLElement).closest("[data-canvas-card]")) return;
     if ((e.target as HTMLElement).closest("[data-canvas-shape]")) return;
     if (editingLaneFor || editingNoteFor) return;
@@ -1785,7 +1861,32 @@ export default function CanvasViewerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panning]);
 
+  // Walk from the wheel target up to the surface; if any ancestor is a
+  // scroll container that can still scroll in the wheel's direction, the
+  // canvas should NOT pan/zoom — let that element consume the wheel.
+  const wheelTargetScrolls = (start: HTMLElement | null, deltaY: number): boolean => {
+    const surface = surfaceRef.current;
+    let el: HTMLElement | null = start;
+    while (el && el !== surface) {
+      const style = window.getComputedStyle(el);
+      const oy = style.overflowY;
+      if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 1) {
+        const atTop = el.scrollTop <= 0;
+        const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+        // Only capture if it can actually move further in this direction.
+        if (!((deltaY < 0 && atTop) || (deltaY > 0 && atBottom))) return true;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  };
+
   const onWheel = (e: React.WheelEvent) => {
+    // Hovering an inner scroll area (card body, popover, panel) disables
+    // global canvas scroll so the wheel scrolls that element instead.
+    if (!e.ctrlKey && !e.metaKey && wheelTargetScrolls(e.target as HTMLElement | null, e.deltaY)) {
+      return;
+    }
     // A manual wheel gesture overrides any running tween/fling.
     cancelCameraMotion();
     // Pinch-to-zoom on macOS trackpads arrives as a wheel event with
@@ -1826,6 +1927,8 @@ export default function CanvasViewerPage() {
   const onCardMouseDown = useCallback(
     (e: React.MouseEvent, node: HydratedNode) => {
       if (e.button !== 0) return;
+      // Locked canvas: don't start a move drag (click-select still works).
+      if (lockedRef.current) return;
       e.stopPropagation();
       dragNode.current = {
         kind: "node",
@@ -1841,6 +1944,7 @@ export default function CanvasViewerPage() {
   const onResizeMouseDown = useCallback(
     (e: React.MouseEvent, node: HydratedNode) => {
       if (e.button !== 0) return;
+      if (lockedRef.current) return;
       e.stopPropagation();
       e.preventDefault();
       dragNode.current = {
@@ -2747,6 +2851,7 @@ export default function CanvasViewerPage() {
         return;
       }
       if (e.key === "Delete" || e.key === "Backspace") {
+        if (lockedRef.current) return;
         if (selectedEdgeId) {
           e.preventDefault();
           removeEdge.mutate({ id: selectedEdgeId });
@@ -2760,6 +2865,13 @@ export default function CanvasViewerPage() {
             frameRemoveMut.mutate({ frameId: fid, reparentChildren: true });
           }
           setSelected((prev) => prev.filter((s) => s.kind !== "frame"));
+          return;
+        }
+        const instanceIds = selected.filter((s) => s.kind === "instance").map((s) => s.id);
+        if (instanceIds.length > 0) {
+          e.preventDefault();
+          for (const id of instanceIds) removeInstance.mutate({ instanceId: id });
+          setSelected((prev) => prev.filter((s) => s.kind !== "instance"));
           return;
         }
         const shapeIds = selected.filter((s) => s.kind === "shape").map((s) => s.id);
@@ -2807,6 +2919,7 @@ export default function CanvasViewerPage() {
       if (mod && (e.key === "v" || e.key === "V")) {
         const t = e.target as HTMLElement | null;
         if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+        if (lockedRef.current) return;
         const clip = canvasClipboardRef.current;
         if (clip.shapes.length === 0 || !shapeAddMut) return;
         e.preventDefault();
@@ -2989,6 +3102,7 @@ export default function CanvasViewerPage() {
     cancelCameraMotion,
     createShape,
     removeShapeUndoable,
+    removeInstance,
     undoStack,
   ]);
 
@@ -3080,6 +3194,7 @@ export default function CanvasViewerPage() {
   const onSurfaceDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDropActive(false);
+    if (lockedRef.current) return;
     // Dropped image files → upload + place as image shapes (Excalidraw-style).
     const files = Array.from(e.dataTransfer.files ?? []).filter((f) =>
       CANVAS_IMAGE_MIME.has(f.type),
@@ -3201,6 +3316,7 @@ export default function CanvasViewerPage() {
           target.isContentEditable)
       )
         return;
+      if (lockedRef.current) return;
       const items = e.clipboardData?.items;
       if (!items) return;
       const imageFiles: File[] = [];
@@ -3548,6 +3664,23 @@ export default function CanvasViewerPage() {
             </Button>
             <Button
               size="sm"
+              variant={locked ? "ember" : "ghost"}
+              onClick={() => setLocked((v) => !v)}
+              title={
+                locked
+                  ? "Canvas locked — editing disabled. Click to unlock."
+                  : "Lock canvas to prevent accidental edits (pan/zoom still work)"
+              }
+            >
+              {locked ? (
+                <Lock className="h-3.5 w-3.5" />
+              ) : (
+                <LockOpen className="h-3.5 w-3.5" />
+              )}{" "}
+              {locked ? "Locked" : "Lock"}
+            </Button>
+            <Button
+              size="sm"
               variant="ghost"
               onClick={enterPresentation}
               title={
@@ -3698,6 +3831,7 @@ export default function CanvasViewerPage() {
             const target = e.target as HTMLElement | null;
             const shapeEl = target?.closest("[data-canvas-shape]") as HTMLElement | null;
             const cardEl = target?.closest("[data-canvas-card]") as HTMLElement | null;
+            const instanceEl = target?.closest("[data-canvas-instance]") as HTMLElement | null;
             const rect = surfaceRef.current?.getBoundingClientRect();
             const vx = e.clientX - (rect?.left ?? 0);
             const vy = e.clientY - (rect?.top ?? 0);
@@ -3747,6 +3881,26 @@ export default function CanvasViewerPage() {
                   danger: true,
                   onClick: () => {
                     handleRemoveCard(nodeId);
+                  },
+                });
+              }
+            } else if (instanceEl) {
+              const instanceId = instanceEl.getAttribute("data-instance-id");
+              if (instanceId) {
+                items.push({
+                  kind: "action",
+                  label: "Detach into shapes",
+                  onClick: () => detachInstance.mutate({ instanceId }),
+                });
+                items.push({ kind: "separator" });
+                items.push({
+                  kind: "action",
+                  label: "Remove from canvas",
+                  shortcut: "⌫",
+                  danger: true,
+                  onClick: () => {
+                    removeInstance.mutate({ instanceId });
+                    setSelected((prev) => prev.filter((s) => s.id !== instanceId));
                   },
                 });
               }
