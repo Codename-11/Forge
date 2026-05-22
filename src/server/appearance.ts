@@ -5,14 +5,17 @@ export const APPEARANCE_COOKIE = "forge.appearance";
 
 export type AppearanceDensity = "compact" | "comfortable";
 export type AppearanceTextSize = "default" | "larger";
+export type AppearanceMotion = "full" | "reduced";
 export interface AppearancePrefs {
   density: AppearanceDensity;
   textSize: AppearanceTextSize;
+  motion: AppearanceMotion;
 }
 
 export const DEFAULT_APPEARANCE: AppearancePrefs = {
   density: "compact",
   textSize: "default",
+  motion: "full",
 };
 
 /**
@@ -33,6 +36,7 @@ export async function readAppearance(): Promise<AppearancePrefs> {
     return {
       density: parsed.density === "comfortable" ? "comfortable" : "compact",
       textSize: parsed.textSize === "larger" ? "larger" : "default",
+      motion: parsed.motion === "reduced" ? "reduced" : "full",
     };
   } catch {
     return DEFAULT_APPEARANCE;

@@ -2,6 +2,44 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — Design-system follow-ups: motion toggle, docs, themed tooltips
+
+Built on the M1–M10 motion work below.
+
+- **Motion preference (Appearance → Motion).** New persisted user pref
+  `motion` (`full` | `reduced`), mirroring `density`/`textSize`. Prisma
+  column + migration `0054_user_motion_pref`, `ME_SELECT` + `updateAppearance`
+  input, `appearance.ts` + `appearance-cookie.ts` (`AppearanceMotion`,
+  default `full`), root layout stamps `data-motion` from the pref at SSR,
+  `AppearanceProvider` keeps it in sync, and a new **Motion** section on the
+  Appearance page (Full | Reduced choice cards with a live breathing-dot
+  preview). `reduced` → `data-motion="off"` freezes the whole `forge-*`
+  layer to static (independent of OS reduced-motion, which still also gates
+  it). **Apply the migration** (`pnpm prisma migrate deploy`) in each env.
+- **`docs/design-system/`.** README + `tokens.md` (every var, light/dark),
+  `components.md` (the `ui/*` primitives), `principles.md` (10 rules +
+  allowed/refused), `motion.md` (M1–M10 table + watch-items). Code stays
+  canonical; docs describe it.
+- **Themed tooltips app-wide — no browser tooltips.** Repo had no Tooltip
+  primitive and no Radix, with **705 `title=` occurrences across 154 files**
+  — too many to hand-edit. Built a global `NativeTooltips` delegate (mounted
+  in the root layout) that intercepts every `title` on hover/focus: stashes
+  + removes the attribute (suppressing the native popup), renders a
+  token-styled tooltip, and restores `title` at rest for a11y. Net effect:
+  every existing `title` is themed with zero call-site changes, and no
+  native tooltips remain. Added a thin `<Tooltip content>` wrapper
+  (`ui/tooltip.tsx`) for explicit use (sets `title`, routed through the same
+  delegate). Fade-in is `motion-safe`; the tooltip itself always works.
+
+Integration audit: each forge-* class/hook verified at its intended surface
+(M1 dashboard, M4 issue-list, M5 chat, M6 dashboard counts, M7 step-node,
+M8 sidebar, M9 section divider, M10 presence dot); M2/M3 remain classes-only
+(deferred — don't stack ambient backgrounds). `pnpm typecheck` + `pnpm lint`
+clean; `vitest run tests/unit` 161 passed (same 3 pre-existing `server-only`
+failures, unrelated). Not yet applied: M4 on the Mission Control swimlane
+(scoped to the issue list — staggering kanban cards reads worse); broaden if
+wanted.
+
 ## 2026-05-21 — Apply the Claude Design spec: ambient motion M1–M10
 
 Implemented the Claude Design handoff (`Forge Primitives Canvas`) as a
