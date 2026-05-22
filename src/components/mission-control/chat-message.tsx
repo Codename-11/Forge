@@ -1,6 +1,15 @@
 "use client";
 import { useMemo, useState } from "react";
-import { Bot, ChevronDown, ChevronRight, User as UserIcon, Wrench } from "lucide-react";
+import {
+  Bot,
+  Check,
+  CheckCheck,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  User as UserIcon,
+  Wrench,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { ChatMarkdown } from "./chat-markdown";
@@ -19,6 +28,23 @@ export interface ChatMessageRow {
   createdAt: Date | string;
   /** Set on streaming drafts that haven't committed yet. */
   isDraft?: boolean;
+  /**
+   * Discord-style delivery receipt timestamps for USER messages. Returned
+   * verbatim by the chat router (no `select`, so they're always present on
+   * persisted rows). `dispatchedAt` = handed to the server / fan-out;
+   * `acknowledgedAt` / `outputStartedAt` = the agent picked it up and
+   * began drafting (our "Read" signal).
+   */
+  dispatchedAt?: Date | string | null;
+  acknowledgedAt?: Date | string | null;
+  outputStartedAt?: Date | string | null;
+  /**
+   * Optimistic-only flag: an in-flight USER bubble (`id` starts with `_`)
+   * flips this to true once the stream's `meta` event confirms the server
+   * persisted the row, so it un-mutes from "Sending…" to "Sent" without
+   * waiting for the whole agent reply.
+   */
+  optimisticSent?: boolean;
   /**
    * Rehydration blob for messages produced by /api/chat/stream — the
    * server stashes `thinking` and `tool_use` here on `contextSnapshot`
@@ -103,6 +129,62 @@ function relativeTime(input: Date | string): string {
   return `${Math.floor(ms / 3_600_000)}h ago`;
 }
 
+/**
+ * Discord-style delivery receipt for the operator's own (USER) messages.
+ *
+ *   Sending…  — optimistic, not yet confirmed by the server (spinner)
+ *   Sent      — persisted + dispatched, agent hasn't picked it up (✓)
+ *   Read      — agent acknowledged / began drafting (✓✓, ember)
+ *
+ * Agent + system messages don't get a receipt (only a timestamp).
+ */
+function MessageReceipt({ msg }: { msg: ChatMessageRow }) {
+  const isOptimistic = msg.id.startsWith("_");
+  if (isOptimistic) {
+    if (!msg.optimisticSent) {
+      return (
+        <span className="flex items-center gap-1 text-muted-foreground/60">
+          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          Sending…
+        </span>
+      );
+    }
+    return (
+      <span className="flex items-center gap-0.5 text-muted-foreground/70">
+        <Check className="h-3 w-3" />
+        Sent
+      </span>
+    );
+  }
+  const acked = msg.acknowledgedAt ?? msg.outputStartedAt;
+  if (acked) {
+    return (
+      <span
+        className="flex items-center gap-0.5 text-ember/80"
+        title={`Read ${relativeTime(acked)}`}
+      >
+        <CheckCheck className="h-3 w-3" />
+        Read
+      </span>
+    );
+  }
+  if (msg.dispatchedAt) {
+    return (
+      <span className="flex items-center gap-0.5 text-muted-foreground/70" title="Delivered">
+        <Check className="h-3 w-3" />
+        Sent
+      </span>
+    );
+  }
+  // Persisted but no dispatch marker yet (rare race) — treat as in-flight.
+  return (
+    <span className="flex items-center gap-1 text-muted-foreground/60">
+      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+      Sending…
+    </span>
+  );
+}
+
 export function ChatMessageBubble({
   msg,
   agentName,
@@ -166,7 +248,9 @@ export function ChatMessageBubble({
         )}
         {!msg.isDraft && <ChatMessageAttachments messageId={msg.id} />}
         <div className="mt-0.5 flex items-center justify-between gap-2 text-[0.5625rem] text-muted-foreground/60">
-          {!isUser && !msg.isDraft && !msg.id.startsWith("_") ? (
+          {isUser ? (
+            <MessageReceipt msg={msg} />
+          ) : !msg.isDraft && !msg.id.startsWith("_") ? (
             <PromoteToArtifactButton
               sourceType="chat-message"
               sourceId={msg.id}
