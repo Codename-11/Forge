@@ -122,17 +122,22 @@ export function CanvasRightPanel({
 
   if (!open) {
     return (
-      <div className="relative flex w-7 shrink-0 items-start border-l border-border bg-card/40">
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          aria-label="Open layers + components panel"
-          title="Open layers + components"
-          className="m-1 flex h-6 w-5 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground"
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label="Open layers + components panel"
+        title="Open Layers + Components"
+        className="group relative flex w-7 shrink-0 cursor-pointer flex-col items-center gap-2 border-l border-border bg-card/40 py-2 text-muted-foreground hover:bg-subtle hover:text-foreground"
+      >
+        <ChevronLeft className="h-3 w-3" />
+        {/* Vertical title so the collapsed panel is discoverable. */}
+        <span
+          className="select-none text-[0.625rem] font-medium uppercase tracking-wider"
+          style={{ writingMode: "vertical-rl" }}
         >
-          <ChevronLeft className="h-3 w-3" />
-        </button>
-      </div>
+          Layers · Components
+        </span>
+      </button>
     );
   }
 

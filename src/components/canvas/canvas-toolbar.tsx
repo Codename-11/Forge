@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   MousePointer2,
   Hand,
@@ -21,6 +21,8 @@ import {
   SquarePlus,
   Image as ImageIcon,
   PenLine,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { STAMP_PALETTE, STICKY_PALETTE } from "@/components/canvas/canvas-shapes";
@@ -157,6 +159,22 @@ export function CanvasToolbar({
     () => (persistKey ? `${TOOLBAR_STORAGE_PREFIX}${persistKey}` : null),
     [persistKey],
   );
+  const collapseKey = useMemo(
+    () => (persistKey ? `forge.canvas.toolbar.collapsed.${persistKey}` : null),
+    [persistKey],
+  );
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined" || !persistKey) return false;
+    return window.localStorage.getItem(`forge.canvas.toolbar.collapsed.${persistKey}`) === "1";
+  });
+  useEffect(() => {
+    if (!collapseKey) return;
+    try {
+      window.localStorage.setItem(collapseKey, collapsed ? "1" : "0");
+    } catch {
+      /* ignore quota */
+    }
+  }, [collapsed, collapseKey]);
 
   // Restore once on mount — pushing style upward avoids a double-write loop.
   const hydratedRef = useRef(false);
@@ -199,6 +217,27 @@ export function CanvasToolbar({
       /* ignore quota */
     }
   }, [storageKey, style]);
+
+  if (collapsed) {
+    return (
+      <div
+        className="pointer-events-auto fixed bottom-6 left-1/2 z-30 -translate-x-1/2"
+        onMouseDown={(e) => e.stopPropagation()}
+        data-canvas-toolbar
+      >
+        <button
+          type="button"
+          onClick={() => setCollapsed(false)}
+          title="Show toolbar"
+          aria-label="Show toolbar"
+          className="flex items-center gap-1.5 rounded-full border border-border bg-card/80 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur-md transition-colors hover:text-foreground"
+        >
+          <PenLine className="h-4 w-4" />
+          <ChevronUp className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -409,6 +448,17 @@ export function CanvasToolbar({
           )}
         >
           <Ungroup className="h-4 w-4" />
+        </button>
+
+        <div className="mx-1 h-6 w-px bg-border" />
+        <button
+          type="button"
+          title="Collapse toolbar"
+          aria-label="Collapse toolbar"
+          onClick={() => setCollapsed(true)}
+          className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground"
+        >
+          <ChevronDown className="h-4 w-4" />
         </button>
       </div>
     </div>
