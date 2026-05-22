@@ -112,6 +112,16 @@ export function IssueList({
   const density = useDensity();
   const compact = density === "compact";
 
+  // M4 (design spec): stagger the row fade-in-up, but only on the first
+  // render that has rows — not on every refetch / filter change (which
+  // would re-stagger an already-settled list). The ref flips after the
+  // first populated render via the effect below.
+  const staggeredOnceRef = useRef(false);
+  const staggerRows = !staggeredOnceRef.current && filtered.length > 0;
+  useEffect(() => {
+    if (filtered.length > 0) staggeredOnceRef.current = true;
+  }, [filtered.length]);
+
   // ---- Selection state --------------------------------------------------
   // Mirrors the inbox's pattern: a single Set<string> with a sister
   // ordered-id ref so Shift+Click ranges are stable, plus a hover/focus
@@ -391,7 +401,7 @@ export function IssueList({
         </div>
       )}
       <div className="divide-y divide-border">
-        {filtered.map((issue) => {
+        {filtered.map((issue, i) => {
           const on = selected.has(issue.id);
           const isUnread = unreadSet.has(issue.id);
           const isSnoozed =
@@ -412,7 +422,12 @@ export function IssueList({
           return (
             <div
               key={issue.id}
-              className={cn(rowCls, on && "bg-ember/5")}
+              className={cn(rowCls, on && "bg-ember/5", staggerRows && "forge-row-rise")}
+              style={
+                staggerRows
+                  ? ({ "--row-i": Math.min(i, 8) } as React.CSSProperties)
+                  : undefined
+              }
               onMouseEnter={() => (hoveredRowRef.current = issue.id)}
               onMouseLeave={() => {
                 if (hoveredRowRef.current === issue.id)

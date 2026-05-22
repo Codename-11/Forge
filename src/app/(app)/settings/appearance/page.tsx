@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Section } from "@/components/settings/section";
+import { SectionDivider } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { writeAppearanceCookie } from "@/lib/appearance-cookie";
 
@@ -125,6 +126,8 @@ export default function AppearancePage() {
             </div>
           </section>
 
+          <SectionDivider />
+
           {/* Density -------------------------------------------------- */}
           <Section
             title="Density"
@@ -147,6 +150,8 @@ export default function AppearancePage() {
               />
             </div>
           </Section>
+
+          <SectionDivider />
 
           {/* Text size ------------------------------------------------ */}
           <Section

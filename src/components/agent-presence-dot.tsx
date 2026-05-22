@@ -51,23 +51,26 @@ export function AgentPresenceDot({
   const title = lastHeartbeatAt
     ? `${label} · heartbeat ${relativeTime(lastHeartbeatAt)}`
     : label;
-  const showPulse = pulse && status === "ONLINE";
+  // M10 (design spec): ONLINE presence "breathes" — a slow success halo
+  // via box-shadow. Only ONLINE breathes; BUSY/OFFLINE stay flat.
+  // Reduced-motion / motion-off renders a static dot.
+  const showBreath = pulse && status === "ONLINE";
 
   return (
     <span
       aria-hidden
       title={title}
-      className={cn("relative inline-flex shrink-0", dim, className)}
-    >
-      {showPulse && (
-        <span
-          className={cn(
-            "absolute inset-0 rounded-full opacity-60 motion-safe:animate-ping",
-            color,
-          )}
-        />
+      className={cn(
+        "relative inline-flex shrink-0 items-center justify-center",
+        dim,
+        className,
       )}
-      <span className={cn("relative inline-block rounded-full", dim, color)} />
+    >
+      {showBreath ? (
+        <span className="forge-breath" />
+      ) : (
+        <span className={cn("inline-block rounded-full", dim, color)} />
+      )}
     </span>
   );
 }

@@ -2,6 +2,53 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-21 — Apply the Claude Design spec: ambient motion M1–M10
+
+Implemented the Claude Design handoff (`Forge Primitives Canvas`) as a
+**design spec applied to the app** — not a new route/canvas tool. Plan:
+`docs/plans/primitives-canvas-design-system.md`.
+
+- **Token audit (no-op).** `forge-tokens.css` matches `globals.css`
+  verbatim except `--font-sans` ordering (app keeps `ui-sans-serif`
+  first — intentional) and two class-scoped `--grid-*` vars (not tokens).
+  `globals.css` stays canonical; no token edits.
+- **Primitive conformance (no changes).** Button (6 variants × sm/default/
+  lg/icon) and EmptyState (page/section/card) already match the spec. The
+  real `Badge` uses a dynamic `color` prop (DB label colors) instead of the
+  spec's named tones — deliberate, left as-is.
+- **Motion foundation.** Added a `/* Motion — forge-* */` block to
+  `globals.css` with M1–M10 classes + keyframes, double-gated on
+  `prefers-reduced-motion: no-preference` **and** `[data-motion="on"]`,
+  each with a static fallback. Registered matching keyframes in
+  `tailwind.config.ts` (so `animate-forge-*` utilities exist too). New
+  `useCountUp` hook in `src/lib/` (IntersectionObserver + rAF, reduced-
+  motion aware, once-per-mount). `data-motion="on"` stamped on `<html>` in
+  the root layout (SSR, no flash). Vitest guard
+  (`tests/unit/globals-keyframe-prefix.test.ts`) enforces `forge-`/`ui-`/
+  `dag-` prefixes on new keyframes (no stylelint in the repo).
+- **Wired into real surfaces:** M1 grid drift behind the dashboard (40%
+  opacity); M4 staggered row-rise on `IssueList` (initial mount only, via
+  a ref — won't re-stagger on refetch); M5 streaming ember sweep on agent
+  draft bubbles in `chat-message.tsx` (dropped on finalize so text stays
+  selectable); M6 count-up on the dashboard "By status" counts; M7
+  active-node ember glow baked into orchestration `StepNode` (running
+  node only, replacing the generic `animate-pulse` ring); M8 ember caret
+  on the sidebar "Search or jump" omnibar trigger; M9 `SectionDivider`
+  hairline-sweep primitive applied between Appearance settings sections;
+  M10 ONLINE-only "breath" on `AgentPresenceDot` (replaces `animate-ping`).
+  **M2 (aurora) / M3 (dot drift) shipped as classes only** — deferred in
+  product per the handoff (don't stack ambient backgrounds).
+- **Tweaked the spec's M4 fallback:** the spec's `.forge-row-rise{opacity:0}`
+  base would leave rows invisible under reduced-motion; reworked so rows
+  are visible by default and only start hidden when the animation will run.
+
+Verification: `pnpm typecheck` + `pnpm lint` clean; `vitest run tests/unit`
+161 passed incl. the keyframe guard. (3 pre-existing failures in
+`rate-limit`/auth unit tests are a vitest `server-only` resolution gap,
+unrelated to this diff.) Optional follow-ups left out of scope: a
+"Motion: Full/Reduced" toggle in `/settings/appearance` that flips
+`data-motion`, and the separate `docs/design-system/` docs site.
+
 ## 2026-05-21 — Mission Control chat: multiple conversations per agent
 
 The chat tab only ever opened each agent's *default* thread and had no

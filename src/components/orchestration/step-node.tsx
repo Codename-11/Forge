@@ -56,17 +56,14 @@ export const StepNode = forwardRef<
         "group relative flex flex-col gap-1 rounded-md border bg-card/70 px-2 py-1.5 text-left",
         "transition-colors duration-150 ease-out hover:border-ember/50 hover:bg-card",
         style.ring,
+        // M7 (design spec): the single RUNNING node gets the ember
+        // active-path glow — inset ring + breathing outer halo. Pairs with
+        // the marching `.dag-edge-flow` on the live edges. Reduced-motion /
+        // motion-off renders the static inset ring (no pulse).
+        running && "forge-active-node",
         active && "ring-1 ring-ember/30",
       )}
     >
-      {/* RUNNING pulse ring — sits under the content, motion-safe only */}
-      {running && (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute -inset-px rounded-md border border-ember/60 motion-safe:animate-pulse"
-        />
-      )}
-
       {/* status flip highlight — keyed remount on status change in parent
           gives a brief fade-in flash on the node */}
       <span
