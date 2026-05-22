@@ -193,6 +193,270 @@
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Motion — forge-* (Claude Design handoff, design spec M1–M10)
+ *
+ * Ambient, restrained motion. Every animation is double-gated:
+ *   - `@media (prefers-reduced-motion: no-preference)` — OS opt-out
+ *   - `[data-motion="on"]` on <html> — app-level switch (stamped in the
+ *     root layout; a future Appearance toggle can flip it)
+ * Each class resolves to its resting state when motion is off, so
+ * reduced-motion / motion-off renders statically. No new color tokens —
+ * ember / success / border only. Names are `forge-` prefixed to match
+ * the existing `.ui-*` / `.dag-*` conventions.
+ * ------------------------------------------------------------------ */
+
+/* M1: Animated grid background — two-axis paper grid, slow drift.
+ * Extends the static `.grid-striped` utility below. */
+.forge-grid-bg {
+  --grid-line: hsl(var(--border) / 0.6);
+  --grid-size: 40px;
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: var(--grid-size) var(--grid-size);
+  background-position: 0 0, 0 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-grid-bg {
+    animation: forge-grid-drift 48s linear infinite;
+  }
+}
+@keyframes forge-grid-drift {
+  to {
+    background-position:
+      var(--grid-size) var(--grid-size),
+      var(--grid-size) var(--grid-size);
+  }
+}
+
+/* M2: Ember aurora glow (deferred in product; class shipped for parity). */
+.forge-aurora {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.forge-aurora::before {
+  content: "";
+  position: absolute;
+  inset: -25%;
+  z-index: -1;
+  background:
+    radial-gradient(40% 50% at 30% 40%, hsl(var(--ember) / 0.18), transparent 70%),
+    radial-gradient(35% 45% at 70% 60%, hsl(var(--ember) / 0.1), transparent 75%);
+  filter: blur(20px);
+  opacity: 0.9;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-aurora::before {
+    animation: forge-aurora-drift 28s ease-in-out infinite alternate;
+  }
+}
+@keyframes forge-aurora-drift {
+  0% {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: translate3d(2%, 1%, 0) scale(1.05);
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(1%, -2%, 0) scale(1.02);
+    opacity: 0.9;
+  }
+}
+
+/* M3: Token dot drift (deferred in product; class shipped for parity). */
+.forge-dots {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    circle,
+    hsl(var(--foreground) / 0.1) 1px,
+    transparent 1.5px
+  );
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(60% 70% at 50% 30%, black 60%, transparent 100%);
+  mask-image: radial-gradient(60% 70% at 50% 30%, black 60%, transparent 100%);
+  opacity: 0.7;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-dots {
+    animation: forge-dots-drift 60s linear infinite;
+  }
+}
+@keyframes forge-dots-drift {
+  to {
+    background-position: 28px 56px;
+  }
+}
+
+/* M4: Staggered fade-in-up on list-row mount. translateY is rem so the
+ * rise scales with the density × text-size cascade. The caller sets
+ * `--row-i` per row (cap ~8 so late rows don't lag). Resting state is
+ * fully visible — rows only start hidden when the animation will
+ * actually run, so reduced-motion / motion-off never leaves them blank. */
+@keyframes forge-row-rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.forge-row-rise {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-row-rise {
+    opacity: 0;
+    animation: forge-row-rise 220ms ease-out forwards;
+    animation-delay: calc(var(--row-i, 0) * 35ms);
+  }
+}
+
+/* M5: Streaming text shimmer — ember sweep over the text fill while a
+ * draft streams. Drop this class on finalize so the persisted text is
+ * real `--foreground` and stays selectable. */
+.forge-streaming {
+  position: relative;
+  background-image: linear-gradient(
+    90deg,
+    hsl(var(--foreground)) 0%,
+    hsl(var(--foreground)) 40%,
+    hsl(var(--ember)) 50%,
+    hsl(var(--foreground)) 60%,
+    hsl(var(--foreground)) 100%
+  );
+  background-size: 250% 100%;
+  background-position: 0% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-streaming {
+    animation: forge-stream-sweep 2.8s linear infinite;
+  }
+}
+[data-motion="off"] .forge-streaming {
+  background: none;
+  -webkit-text-fill-color: hsl(var(--foreground));
+  color: hsl(var(--foreground));
+}
+@keyframes forge-stream-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* M7: Active-path glow on the single RUNNING node. Pairs with the
+ * existing `.dag-edge-flow` marching dash. */
+.forge-active-node {
+  box-shadow:
+    0 0 0 1px hsl(var(--ember) / 0.55) inset,
+    0 0 0 0 hsl(var(--ember) / 0);
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-active-node {
+    animation: forge-pulse 2.4s ease-in-out infinite;
+  }
+}
+@keyframes forge-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px hsl(var(--ember) / 0.55) inset,
+      0 0 0 0 hsl(var(--ember) / 0);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px hsl(var(--ember) / 0.8) inset,
+      0 0 0 6px hsl(var(--ember) / 0.1);
+  }
+}
+
+/* M8: Ember caret blink — focus mark for the omnibar / Quick Open. */
+.forge-caret::after {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 1.05em;
+  margin-left: 1px;
+  background: hsl(var(--ember));
+  vertical-align: -0.15em;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-caret::after {
+    animation: forge-caret-blink 1.05s steps(2, start) infinite;
+  }
+}
+@keyframes forge-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* M9: Hairline divider sweep — a slow ember band across one divider. */
+.forge-hairline {
+  position: relative;
+  height: 1px;
+  background: hsl(var(--border));
+  overflow: hidden;
+}
+.forge-hairline::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, hsl(var(--ember) / 0.55), transparent);
+  transform: translateX(-100%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-hairline::after {
+    animation: forge-hairline-sweep 6s ease-in-out infinite;
+  }
+}
+@keyframes forge-hairline-sweep {
+  0%,
+  70%,
+  100% {
+    transform: translateX(-100%);
+  }
+  85% {
+    transform: translateX(100%);
+  }
+}
+
+/* M10: Idle status-dot breath — ONLINE agents only. */
+.forge-breath {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: hsl(var(--success));
+  box-shadow: 0 0 0 0 hsl(var(--success) / 0.5);
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-breath {
+    animation: forge-breath 3.2s ease-in-out infinite;
+  }
+}
+@keyframes forge-breath {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 hsl(var(--success) / 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 5px hsl(var(--success) / 0);
+  }
+}
+
 @layer utilities {
   .scrollbar-none {
     scrollbar-width: none;

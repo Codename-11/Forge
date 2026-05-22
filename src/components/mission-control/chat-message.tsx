@@ -300,6 +300,15 @@ export function ChatMessageBubble({
             {msg.body}
             {msg.isDraft && <span className="ml-1 inline-block animate-pulse">▍</span>}
           </div>
+        ) : msg.isDraft ? (
+          // M5 (design spec): while the agent draft streams, render the
+          // partial text with the ember sweep + blinking caret. On
+          // finalize the bubble re-renders down the branch below with
+          // ChatMarkdown, so the persisted text is real `--foreground`
+          // and stays selectable (the `.forge-streaming` clip is gone).
+          <div className="forge-streaming forge-streaming-cursor whitespace-pre-wrap break-words">
+            {msg.body}
+          </div>
         ) : (
           <>
             <StreamedRehydration snapshot={readStreamedSnapshot(msg.contextSnapshot)} />

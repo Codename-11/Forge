@@ -15,7 +15,7 @@ export { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle, 
 export { DensityProvider, useDensity, useSetDensity, type Density } from "@/components/ui/density";
 export { EmptyState, type EmptyStateProps } from "@/components/ui/empty-state";
 export { Chord, Kbd } from "@/components/ui/kbd";
-export { Section, SectionHeader } from "@/components/ui/section";
+export { Section, SectionDivider, SectionHeader } from "@/components/ui/section";
 export {
   Skeleton,
   SkeletonCard,
@@ -24,6 +24,7 @@ export {
   SkeletonText,
 } from "@/components/ui/skeleton";
 export { Spinner } from "@/components/ui/spinner";
+export { Tooltip } from "@/components/ui/tooltip";
 export {
   ToastProvider,
   dismissToast,

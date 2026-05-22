@@ -211,7 +211,13 @@ export function Sidebar({
             collapsed ? "hidden" : "max-md:hidden",
           )}
         >
-          <span className="truncate">Search or jump</span>
+          {/* M8 (design spec): ember caret blink on the omnibar trigger —
+              bridges the search affordance to the streaming-text language.
+              Reduced-motion / motion-off renders a static caret. */}
+          <span className="truncate">
+            Search or jump
+            <span className="forge-caret" />
+          </span>
           <span className="ml-auto kbd">{mod}+K</span>
         </span>
       </button>

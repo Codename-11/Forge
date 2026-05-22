@@ -409,6 +409,10 @@ model User {
   density                String?
   /// "default" | "larger". Null = "default".
   textSize               String?
+  /// "full" | "reduced". Null = "full" (ambient motion on). "reduced"
+  /// stamps `data-motion="off"` on <html>, freezing the forge-* motion
+  /// layer to its static fallbacks (independent of OS reduced-motion).
+  motion                 String?
   /// Default Mission Control tab. One of MissionControlTab values
   /// ("live" | "queue" | "agents" | "history" | "chat"). Null = "live".
   /// When set, the overlay opens to this tab if no per-workspace

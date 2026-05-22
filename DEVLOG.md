@@ -28,6 +28,91 @@ Round of canvas usability fixes (operator feedback "hard to move around").
   ("Detach into shapes" via existing `instanceDetach`, or "Remove from
   canvas"). typecheck + eslint clean; canvas router tests (24) green.
 
+## 2026-05-21 — Design-system follow-ups: motion toggle, docs, themed tooltips
+
+Built on the M1–M10 motion work below.
+
+- **Motion preference (Appearance → Motion).** New persisted user pref
+  `motion` (`full` | `reduced`), mirroring `density`/`textSize`. Prisma
+  column + migration `0054_user_motion_pref`, `ME_SELECT` + `updateAppearance`
+  input, `appearance.ts` + `appearance-cookie.ts` (`AppearanceMotion`,
+  default `full`), root layout stamps `data-motion` from the pref at SSR,
+  `AppearanceProvider` keeps it in sync, and a new **Motion** section on the
+  Appearance page (Full | Reduced choice cards with a live breathing-dot
+  preview). `reduced` → `data-motion="off"` freezes the whole `forge-*`
+  layer to static (independent of OS reduced-motion, which still also gates
+  it). **Apply the migration** (`pnpm prisma migrate deploy`) in each env.
+- **`docs/design-system/`.** README + `tokens.md` (every var, light/dark),
+  `components.md` (the `ui/*` primitives), `principles.md` (10 rules +
+  allowed/refused), `motion.md` (M1–M10 table + watch-items). Code stays
+  canonical; docs describe it.
+- **Themed tooltips app-wide — no browser tooltips.** Repo had no Tooltip
+  primitive and no Radix, with **705 `title=` occurrences across 154 files**
+  — too many to hand-edit. Built a global `NativeTooltips` delegate (mounted
+  in the root layout) that intercepts every `title` on hover/focus: stashes
+  + removes the attribute (suppressing the native popup), renders a
+  token-styled tooltip, and restores `title` at rest for a11y. Net effect:
+  every existing `title` is themed with zero call-site changes, and no
+  native tooltips remain. Added a thin `<Tooltip content>` wrapper
+  (`ui/tooltip.tsx`) for explicit use (sets `title`, routed through the same
+  delegate). Fade-in is `motion-safe`; the tooltip itself always works.
+
+Integration audit: each forge-* class/hook verified at its intended surface
+(M1 dashboard, M4 issue-list, M5 chat, M6 dashboard counts, M7 step-node,
+M8 sidebar, M9 section divider, M10 presence dot); M2/M3 remain classes-only
+(deferred — don't stack ambient backgrounds). `pnpm typecheck` + `pnpm lint`
+clean; `vitest run tests/unit` 161 passed (same 3 pre-existing `server-only`
+failures, unrelated). Not yet applied: M4 on the Mission Control swimlane
+(scoped to the issue list — staggering kanban cards reads worse); broaden if
+wanted.
+
+## 2026-05-21 — Apply the Claude Design spec: ambient motion M1–M10
+
+Implemented the Claude Design handoff (`Forge Primitives Canvas`) as a
+**design spec applied to the app** — not a new route/canvas tool. Plan:
+`docs/plans/primitives-canvas-design-system.md`.
+
+- **Token audit (no-op).** `forge-tokens.css` matches `globals.css`
+  verbatim except `--font-sans` ordering (app keeps `ui-sans-serif`
+  first — intentional) and two class-scoped `--grid-*` vars (not tokens).
+  `globals.css` stays canonical; no token edits.
+- **Primitive conformance (no changes).** Button (6 variants × sm/default/
+  lg/icon) and EmptyState (page/section/card) already match the spec. The
+  real `Badge` uses a dynamic `color` prop (DB label colors) instead of the
+  spec's named tones — deliberate, left as-is.
+- **Motion foundation.** Added a `/* Motion — forge-* */` block to
+  `globals.css` with M1–M10 classes + keyframes, double-gated on
+  `prefers-reduced-motion: no-preference` **and** `[data-motion="on"]`,
+  each with a static fallback. Registered matching keyframes in
+  `tailwind.config.ts` (so `animate-forge-*` utilities exist too). New
+  `useCountUp` hook in `src/lib/` (IntersectionObserver + rAF, reduced-
+  motion aware, once-per-mount). `data-motion="on"` stamped on `<html>` in
+  the root layout (SSR, no flash). Vitest guard
+  (`tests/unit/globals-keyframe-prefix.test.ts`) enforces `forge-`/`ui-`/
+  `dag-` prefixes on new keyframes (no stylelint in the repo).
+- **Wired into real surfaces:** M1 grid drift behind the dashboard (40%
+  opacity); M4 staggered row-rise on `IssueList` (initial mount only, via
+  a ref — won't re-stagger on refetch); M5 streaming ember sweep on agent
+  draft bubbles in `chat-message.tsx` (dropped on finalize so text stays
+  selectable); M6 count-up on the dashboard "By status" counts; M7
+  active-node ember glow baked into orchestration `StepNode` (running
+  node only, replacing the generic `animate-pulse` ring); M8 ember caret
+  on the sidebar "Search or jump" omnibar trigger; M9 `SectionDivider`
+  hairline-sweep primitive applied between Appearance settings sections;
+  M10 ONLINE-only "breath" on `AgentPresenceDot` (replaces `animate-ping`).
+  **M2 (aurora) / M3 (dot drift) shipped as classes only** — deferred in
+  product per the handoff (don't stack ambient backgrounds).
+- **Tweaked the spec's M4 fallback:** the spec's `.forge-row-rise{opacity:0}`
+  base would leave rows invisible under reduced-motion; reworked so rows
+  are visible by default and only start hidden when the animation will run.
+
+Verification: `pnpm typecheck` + `pnpm lint` clean; `vitest run tests/unit`
+161 passed incl. the keyframe guard. (3 pre-existing failures in
+`rate-limit`/auth unit tests are a vitest `server-only` resolution gap,
+unrelated to this diff.) Optional follow-ups left out of scope: a
+"Motion: Full/Reduced" toggle in `/settings/appearance` that flips
+`data-motion`, and the separate `docs/design-system/` docs site.
+
 ## 2026-05-21 — Mission Control chat: multiple conversations per agent
 
 The chat tab only ever opened each agent's *default* thread and had no

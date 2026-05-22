@@ -27,6 +27,7 @@ const ME_SELECT = {
   timeFormat: true,
   density: true,
   textSize: true,
+  motion: true,
   missionControlDefaultTab: true,
   dashboardView: true,
   dashboardPrefs: true,
@@ -67,6 +68,7 @@ export const userRouter = router({
       z.object({
         density: z.enum(["compact", "comfortable"]).nullable().optional(),
         textSize: z.enum(["default", "larger"]).nullable().optional(),
+        motion: z.enum(["full", "reduced"]).nullable().optional(),
         theme: z.enum(["light", "dark", "system"]).nullable().optional(),
       }),
     )
