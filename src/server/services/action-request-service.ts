@@ -763,6 +763,7 @@ export async function acceptActionRequest(
       payload: true,
       assignedUserId: true,
       issueId: true,
+      requestedByAgentId: true,
       title: true,
       sourceType: true,
       sourceId: true,
@@ -850,6 +851,52 @@ export async function acceptActionRequest(
         resolution: note,
       },
     });
+
+    // Deliver the answer back to the requesting agent. A FREE_FORM ask is
+    // the agent asking *us* for information — resolving it isn't enough,
+    // the answer has to reach the agent. Post it as a comment @mentioning
+    // the agent on the issue, which routes through the normal mention
+    // dispatch (and records an inbox row even for runs-engine agents that
+    // poll). Only when there's a real answer to deliver.
+    const answer = params.resolution?.trim();
+    if (
+      request.kind === ActionRequestKind.FREE_FORM &&
+      request.requestedByAgentId &&
+      request.issueId &&
+      answer
+    ) {
+      const agent = await tx.agent.findUnique({
+        where: { id: request.requestedByAgentId },
+        select: { id: true, profileKey: true },
+      });
+      if (agent) {
+        const comment = await tx.comment.create({
+          data: {
+            workspaceId: params.workspaceId,
+            issueId: request.issueId,
+            authorId: params.actorId,
+            body: `@${agent.profileKey} ${answer}`,
+          },
+        });
+        await recordChange(tx, {
+          workspaceId: params.workspaceId,
+          actorId: params.actorId,
+          entity: "Comment",
+          entityId: comment.id,
+          action: "create",
+          after: comment,
+          eventKind: EventKind.COMMENT_CREATED,
+          subjectType: "issue",
+          subjectId: request.issueId,
+          payload: {
+            commentId: comment.id,
+            issueId: request.issueId,
+            mentions: { agentIds: [agent.id], userIds: [] },
+            answeredActionRequestId: request.id,
+          },
+        });
+      }
+    }
   });
   return { id: request.id, dispatched };
 }

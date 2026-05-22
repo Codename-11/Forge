@@ -5,10 +5,12 @@ engine decides *who owns the agent loop* — Forge, or the agent's own
 runtime (e.g. Hermes).
 
 You pick the engine per agent in **Settings → Agents → (edit) → Chat
-engine**. The default comes from the integration (Hermes ships with
-**Completions**), and any agent can override it.
+engine**. The default comes from the integration — **Hermes defaults to
+Runs** (you're talking to *your* agent, with its own memory and tools) —
+and any agent can override it. Flip an agent to **Completions** for a
+stateless, Forge-owned loop.
 
-| | **Completions** (default) | **Runs** |
+| | **Completions** | **Runs** (Hermes default) |
 |---|---|---|
 | Underlying API | OpenAI-compat `/v1/chat/completions` | Provider agent-run API (Hermes `/v1/runs`) |
 | Who owns the loop | **Forge** | **The agent's runtime** |
@@ -21,17 +23,18 @@ engine**. The default comes from the integration (Hermes ships with
 
 ## When to use which
 
-**Use Completions (the default) for general chat.** It's fast,
-predictable, and Forge stays in control of the tools the agent can use,
-the approval prompts you see, and the page context the agent receives. It
-works with any OpenAI-compatible model, so it's the right default for a
-consumer chat surface.
+**Hermes agents default to Runs** — when you chat with Victor or Mizu you
+want *that agent*, with its own long-term memory, persona and native
+tools, not a stateless model. Chat still streams token-by-token; you also
+get structured tool/approval/lifecycle events and a native stop/approval
+control plane. Assigned work uses Runs too, so chat and dispatch behave
+consistently.
 
-**Use Runs when you want the agent to be _itself_** — its own long-term
-memory, persona, and native toolset — and you're on a provider that
-supports it (Hermes today). Chat still streams token-by-token; you
-additionally get structured tool/approval/lifecycle events and a native
-stop/approval control plane.
+**Switch an agent to Completions for a general, stateless chat surface.**
+It's fast and predictable, and Forge stays in control of the tools the
+agent can use, the approval prompts you see, and the page context it
+receives — and it works with any OpenAI-compatible model. Good for a
+utility assistant where agent memory/identity doesn't matter.
 
 ### Pros & cons at a glance
 

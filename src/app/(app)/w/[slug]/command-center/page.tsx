@@ -316,6 +316,8 @@ type CCActionRequest = {
   title: string;
   body: string | null;
   severity: string;
+  /** ActionRequestKind — FREE_FORM asks need an answer, not just Accept. */
+  kind: string;
   issue: {
     number: number;
     title: string;
@@ -337,6 +339,11 @@ function ActionRequestDecisionCard({
   const utils = trpc.useUtils();
   const [showDecline, setShowDecline] = useState(false);
   const [reason, setReason] = useState("");
+  // FREE_FORM asks are the agent asking *us* for info — the primary
+  // action is to answer, not a bare Accept (which delivers nothing).
+  const needsAnswer = request.kind === "FREE_FORM";
+  const [showRespond, setShowRespond] = useState(false);
+  const [answer, setAnswer] = useState("");
 
   const settle = () => {
     void utils.commandCenter.summary.invalidate();
@@ -425,18 +432,66 @@ function ActionRequestDecisionCard({
             </Button>
           </div>
         </div>
+      ) : showRespond ? (
+        <div className="flex flex-col gap-1.5 pt-0.5">
+          <textarea
+            autoFocus
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            placeholder={`Answer ${request.requestedByAgent?.profileKey ? `@${request.requestedByAgent.profileKey}` : "the agent"}…`}
+            maxLength={10_000}
+            rows={3}
+            className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-meta"
+            aria-label="Answer"
+          />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="ember"
+              disabled={pending || !answer.trim()}
+              onClick={() => accept.mutate({ id: request.id, resolution: answer.trim() })}
+            >
+              {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              Send answer
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => {
+                setShowRespond(false);
+                setAnswer("");
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
       ) : (
         <div className="flex gap-2 pt-0.5">
-          <Button
-            size="sm"
-            variant="ember"
-            disabled={pending}
-            onClick={() => accept.mutate({ id: request.id })}
-            aria-label="Accept this ask"
-          >
-            {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-            Accept
-          </Button>
+          {needsAnswer ? (
+            <Button
+              size="sm"
+              variant="ember"
+              disabled={pending}
+              onClick={() => setShowRespond(true)}
+              aria-label="Respond to this ask"
+            >
+              <Sparkles className="h-3 w-3" />
+              Respond
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="ember"
+              disabled={pending}
+              onClick={() => accept.mutate({ id: request.id })}
+              aria-label="Accept this ask"
+            >
+              {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              Accept
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
