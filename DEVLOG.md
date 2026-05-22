@@ -2,6 +2,43 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-22 — Pluggable agent engine + Hermes /v1/runs (Phase 1: chat)
+
+Groundwork for routing agents through Hermes' structured agent-run API
+(`/v1/runs`) instead of only OpenAI-compat `/v1/chat/completions`, behind a
+provider-agnostic abstraction.
+
+- **Schema (migration 0055):** `RunEngine` enum (COMPLETIONS|RUNS),
+  nullable `Agent.runEngine` (null = integration default), `AgentRun.externalRunId`.
+- **Pluggable `DispatchConnector`** (`src/server/services/dispatch/`): normalised
+  `RunEvent` union (content_delta/thinking/tool_started/tool_completed/
+  approval_required/usage/completed/error) + `startRun`/`subscribe`/`approve`/
+  `stop`. `HermesRunsConnector` implements it against POST `/v1/runs`,
+  GET `/v1/runs/{id}/events` (SSE), `/approval`, `/stop`. `registry.ts`
+  resolves the per-agent engine (`agent.runEngine ?? adapter.defaultRunEngine`)
+  and returns the connector by provider. Other providers slot in without
+  touching call sites.
+- **Chat route** (`/api/chat/stream`): per-agent toggle. RUNS path delegates the
+  turn to the connector and maps its events onto the SAME SSE vocab the client
+  already speaks — so chat still streams token-by-token (via `message.delta`),
+  tools render as cards, and `approval_required` surfaces as a tool_confirm
+  whose response is POSTed back to the run. Stop aborts the live run.
+  COMPLETIONS path unchanged (Forge owns the loop). Default stays COMPLETIONS
+  (zero behaviour change until an agent is flipped).
+- **UI:** integration `defaultRunEngine` (adapters.ts) + per-agent "Chat engine"
+  selector in the agent wizard (Integration default / Completions / Hermes runs);
+  `agent.update` accepts `runEngine`.
+
+**Who owns what:** Forge always owns the ChatThread record + UI. COMPLETIONS →
+Forge owns the loop + tools + approvals (stateless model). RUNS → Hermes owns
+the loop + agent memory/persona/its own tools; Forge ingests events.
+
+**Phase 2 (not yet built):** dispatch/assigned-work via `/v1/runs` — reuse the
+same connector but ingest events into `AgentRun` + Mission Control from the
+background **worker** (long-lived subscription + reconnect), webhook fallback
+for completions/legacy agents. Deferred so the worker + dispatcher tests get a
+deliberate pass rather than a rushed one.
+
 ## 2026-05-21 — Canvas: navigation, lock, collapse + component-instance delete
 
 Round of canvas usability fixes (operator feedback "hard to move around").

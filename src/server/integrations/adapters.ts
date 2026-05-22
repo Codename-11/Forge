@@ -1,5 +1,5 @@
 import "server-only";
-import type { AgentProvider, AgentRuntimeMode } from "@prisma/client";
+import type { AgentProvider, AgentRuntimeMode, RunEngine } from "@prisma/client";
 
 export interface IntegrationAdapter {
   /** Stable id matching the existing AgentProvider enum. */
@@ -10,6 +10,12 @@ export interface IntegrationAdapter {
   tagline: string;
   /** Default runtime mode for agents created via this adapter. */
   defaultRuntimeMode: AgentRuntimeMode;
+  /**
+   * Default chat engine for agents on this integration when the agent
+   * doesn't set its own `runEngine`. COMPLETIONS = Forge owns the loop;
+   * RUNS = delegate to the provider's structured agent-run API.
+   */
+  defaultRunEngine: RunEngine;
   /** Lucide icon name (string — UI maps it). */
   iconKey: string;
   /** Markdown describing setup. Rendered on the install page. */
@@ -30,6 +36,7 @@ export const INTEGRATION_ADAPTERS: IntegrationAdapter[] = [
     title: "Hermes",
     tagline: "Persistent multi-profile agent runtime. Best for always-on agents.",
     defaultRuntimeMode: "PERSISTENT",
+    defaultRunEngine: "COMPLETIONS",
     iconKey: "Server",
     presence: "daemon",
     defaultKeyKind: "AGENT",
@@ -74,6 +81,7 @@ Without this skill the agent will be reachable for dispatched work (because succ
     title: "Claude Code (session)",
     tagline: "Local Claude Code session — read-only project context.",
     defaultRuntimeMode: "EPHEMERAL",
+    defaultRunEngine: "COMPLETIONS",
     iconKey: "Terminal",
     presence: "session",
     defaultKeyKind: "SESSION",
@@ -97,6 +105,7 @@ The key expires in 24h by default. Generate a new one when this session ends.`,
     title: "Claude Desktop",
     tagline: "Persistent Claude Desktop with MCP — semi-persistent, key stays valid.",
     defaultRuntimeMode: "PERSISTENT",
+    defaultRunEngine: "COMPLETIONS",
     iconKey: "MonitorPlay",
     presence: "session",
     defaultKeyKind: "PERSONAL",
@@ -127,6 +136,7 @@ Restart Claude Desktop after editing the config.`,
     title: "Codex CLI",
     tagline: "OpenAI Codex CLI — session-scoped key recommended.",
     defaultRuntimeMode: "EPHEMERAL",
+    defaultRunEngine: "COMPLETIONS",
     iconKey: "Code2",
     presence: "session",
     defaultKeyKind: "SESSION",
@@ -144,6 +154,7 @@ codex --mcp forge=\${FORGE_URL}/api/mcp
     title: "Custom (webhook-driven)",
     tagline: "Bring your own runtime — register an agent + webhook URL.",
     defaultRuntimeMode: "PERSISTENT",
+    defaultRunEngine: "COMPLETIONS",
     iconKey: "Webhook",
     presence: "remote-webhook",
     defaultKeyKind: "AGENT",
@@ -157,6 +168,11 @@ For any runtime that can:
 Register the Agent manually with its public webhook URL, then generate an AGENT key.`,
   },
 ];
+
+/** Primary adapter for a provider kind (first match). */
+export function getIntegrationAdapter(kind: AgentProvider): IntegrationAdapter | null {
+  return INTEGRATION_ADAPTERS.find((a) => a.kind === kind) ?? null;
+}
 
 export function findAdapter(
   kind: AgentProvider,

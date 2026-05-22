@@ -230,6 +230,14 @@ enum AgentProvider {
   CUSTOM
 }
 
+/// Execution engine for an agent's interactive chat. See `Agent.runEngine`.
+enum RunEngine {
+  /// Forge owns the agent loop via OpenAI-compat chat completions.
+  COMPLETIONS
+  /// Delegate to the provider's structured agent-run API (Hermes /v1/runs).
+  RUNS
+}
+
 enum AgentRuntimeMode {
   PERSISTENT
   EPHEMERAL
@@ -1587,6 +1595,16 @@ model Agent {
   avatar           String?
   provider         AgentProvider    @default(HERMES)
   runtimeMode      AgentRuntimeMode @default(PERSISTENT)
+  /// Which execution engine drives this agent. Null = use the
+  /// integration's default (see `adapters.ts` `defaultRunEngine`).
+  /// COMPLETIONS = Forge owns the loop via OpenAI-compat
+  /// `/v1/chat/completions` (stateless, fast token streaming);
+  /// RUNS = delegate to the provider's structured agent-run API
+  /// (Hermes `/v1/runs` — agent runs as itself with memory/tools,
+  /// streams `message.delta` + lifecycle events, native approval/stop).
+  /// Dispatch (assigned work) always uses RUNS when the connector
+  /// supports it; this column governs the interactive chat surface.
+  runEngine        RunEngine?
   /// Outbound webhook for push dispatch (issue.assigned etc).
   /// Legacy: kept in lockstep with `runtime.endpoint` for REMOTE_HTTP
   /// runtimes during the Runtime-as-primitive transition. A future
@@ -1723,6 +1741,11 @@ model AgentRun {
   /// Optional list of follow-up items the agent flagged for next steps.
   /// Shape: array of `{ title: string, body?: string, kind?: string }`.
   followUps            Json?
+  /// Provider-side run id when this AgentRun is backed by a structured
+  /// agent-run connector (e.g. Hermes `/v1/runs`). Lets Forge poll /
+  /// approve / stop the live run and correlate streamed `/events`.
+  /// Null for webhook/completions-driven runs.
+  externalRunId        String?
   /// Optional pointer at the AGENT_ASSIGNED ActivityEvent that triggered
   /// this run. Useful for ack-window reasoning later.
   assignmentEventId    String?
