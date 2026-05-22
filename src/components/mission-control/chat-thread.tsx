@@ -1104,15 +1104,18 @@ export function ChatThreadView({
       });
       setIsStreaming(true);
 
-      // Whether the server confirmed the USER row was persisted (the `meta`
-      // event). Decides where a failure surfaces: before meta the *send*
-      // failed (Failed+Retry on the user bubble); after meta the message
-      // was sent and only the agent *reply* failed (Retry on the agent
-      // bubble — existing behaviour).
-      let sawMeta = false;
+      // Whether the server accepted the send (HTTP response received OK).
+      // The route persists the USER row in a transaction *before* it returns
+      // the stream, so a 2xx response is a reliable "delivered" signal —
+      // independent of when (or whether) the `meta` SSE event reaches us.
+      // Decides where a failure surfaces: before acceptance the *send*
+      // failed (Failed+Retry on the user bubble); after acceptance the
+      // message was sent and only the agent *reply* failed (Retry on the
+      // agent bubble).
+      let serverAccepted = false;
       let aborted = false;
       const failSend = (message: string) => {
-        if (sawMeta) {
+        if (serverAccepted) {
           setStreamBubble((b) =>
             b ? { ...b, error: message, finishedAt: b.finishedAt ?? Date.now() } : b,
           );
@@ -1161,6 +1164,12 @@ export function ChatThreadView({
         return;
       }
 
+      // Response accepted → the USER row is persisted. Flip the receipt to
+      // "Sent" now, without waiting for the `meta` SSE event (which can be
+      // delayed by a slow/hanging agent or proxy buffering).
+      serverAccepted = true;
+      if (outboxId) markOutbox(outboxId, "sent");
+
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let pending = "";
@@ -1177,11 +1186,8 @@ export function ChatThreadView({
           if (messageId) {
             setStreamBubble((b) => (b ? { ...b, messageId } : b));
           }
-          // The route persists the USER row (with dispatchedAt) before it
-          // emits `meta`, so this is the "fully sent" moment — flip the
-          // optimistic bubble's receipt from "Sending…" to "Sent".
-          sawMeta = true;
-          if (outboxId) markOutbox(outboxId, "sent");
+          // Receipt already flipped to "Sent" on response acceptance; meta
+          // just carries the agent message id for the streaming bubble.
         } else if (event === "content") {
           const { delta } = parsed as { delta?: string };
           if (typeof delta === "string") {
@@ -1376,16 +1382,15 @@ export function ChatThreadView({
         if (streamAbortRef.current === ctrl) streamAbortRef.current = null;
       }
 
-      // Resolve the optimistic outbox bubble. If the message was persisted
-      // (saw `meta`), drop it — the refetched row with its real receipt
+      // Resolve the optimistic outbox bubble. If the server accepted the
+      // send, drop it — the refetched persisted row (with its real receipt)
       // takes over. If it was canceled before reaching the server, drop it
-      // too. A pre-meta *failure* is left as "failed" (failSend kept it) so
-      // the operator can Retry.
+      // too. A pre-acceptance *failure* is left as "failed" (failSend kept
+      // it) so the operator can Retry.
       if (outboxId) {
-        if (sawMeta) removeOutbox(outboxId);
-        else if (aborted) {
+        if (serverAccepted || aborted) {
           removeOutbox(outboxId);
-          setStreamBubble(null);
+          if (aborted && !serverAccepted) setStreamBubble(null);
         }
       }
 
