@@ -2,6 +2,40 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-22 — Hermes /v1/runs Phase 2: dispatch ingestion + docs/UX
+
+Dispatch (assigned work) now runs through the `/v1/runs` connector for
+RUNS-engine agents, ingested by the worker.
+
+- **Connector.getStatus** added (`RunStatus`) + `HermesRunsConnector.getStatus`
+  (GET `/v1/runs/{id}`, maps status/last_event/output/usage; 404 → completed).
+- **`run-dispatcher.ts`** (poll-based, restart-safe):
+  `startNewRuns` opens an `AgentRun` for fresh RUNS-engine AGENT_ASSIGNED
+  events (deduped by `assignmentEventId`) and `startRun`s the provider run;
+  `pollActiveRuns` polls `getStatus` for ACTIVE runs with an `externalRunId`
+  and mirrors progress (currentStep from last_event, BLOCKED on
+  waiting_for_approval) / terminal `finishRun` (+ token usage) onto the run.
+  Chose polling over a live SSE subscription so it fits the worker's
+  short-job model and survives restarts with no in-memory state.
+- **Worker:** `runs-dispatch-sweep` maintenance job every 5s → `ingestRunsDispatch()`.
+- **audit.ts branch (a):** suppress the dispatch webhook for RUNS-engine
+  assignees (so work isn't dispatched twice — they're driven by runs). A RUNS
+  agent should not also carry a `webhookUrl`.
+- **Docs:** new `docs/agents/engines.md` (Completions vs Runs — table, when to
+  use which, pros/cons, ownership, dispatch behaviour), linked from the agents
+  sidebar + a tip in `agents/chat.md`. CLAUDE.md gained an "Agent execution
+  engine" section.
+- **UX:** chat header shows a small ember **"runs"** pill when the agent is on
+  the RUNS engine (the non-default "runs as itself" mode); completions stays
+  unbadged to avoid clutter.
+
+typecheck + eslint clean; dispatcher/inbox/chat/orchestration/analytics-dispatch/
+run-stale tests (51) green; vitepress build clean.
+
+Recommendation captured in docs: **standard consumer chat = Completions**
+(fast, predictable, Forge-controlled); **Runs = opt-in** for agent memory +
+native tools. Dispatch defaults to Runs.
+
 ## 2026-05-22 — Pluggable agent engine + Hermes /v1/runs (Phase 1: chat)
 
 Groundwork for routing agents through Hermes' structured agent-run API

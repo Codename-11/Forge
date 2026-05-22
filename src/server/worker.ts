@@ -26,6 +26,7 @@ import { sweepSlaBreaches } from "@/server/services/sla-breach";
 import { sweepStalledRuns } from "@/server/services/agent-run-stale";
 import { recordWakeAttempt } from "@/server/services/agent-dispatch-inbox";
 import { sweepChatCompaction } from "@/server/services/chat-compaction";
+import { ingestRunsDispatch } from "@/server/services/dispatch/run-dispatcher";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -43,6 +44,9 @@ const SLA_BREACH_SWEEP_JOB_ID = "sla-breach-sweep";
 const AGENT_RUN_STALE_SWEEP_INTERVAL_MS = 60_000;
 const AGENT_RUN_STALE_SWEEP_JOB_ID = "agent-run-stale-sweep";
 const CHAT_COMPACTION_SWEEP_INTERVAL_MS = 5 * 60_000;
+
+const RUNS_DISPATCH_SWEEP_INTERVAL_MS = 5_000;
+const RUNS_DISPATCH_SWEEP_JOB_ID = "runs-dispatch-sweep";
 const CHAT_COMPACTION_SWEEP_JOB_ID = "chat-compaction-sweep";
 
 export { webhookQueue, maintenanceQueue };
@@ -270,6 +274,10 @@ export const maintenanceWorker = new Worker(
         const res = await sweepChatCompaction(db);
         return res;
       }
+      case "runs-dispatch-sweep": {
+        const res = await ingestRunsDispatch();
+        return res;
+      }
       case "required-ack-check": {
         const eventId = job.data?.agentAssignedEventId as string | undefined;
         if (!eventId) return null;
@@ -424,6 +432,25 @@ export async function registerChatCompactionSweepJob(): Promise<void> {
   );
 }
 
+/**
+ * Drive dispatch-via-runs: start provider runs for fresh RUNS-engine
+ * assignments and poll live ones onto their AgentRun. Polls every 5s —
+ * frequent enough for a live Mission Control pulse, cheap (bounded
+ * batches), and restart-safe (no in-memory subscription state).
+ */
+export async function registerRunsDispatchSweepJob(): Promise<void> {
+  await maintenanceQueue.add(
+    "runs-dispatch-sweep",
+    {},
+    {
+      jobId: RUNS_DISPATCH_SWEEP_JOB_ID,
+      repeat: { every: RUNS_DISPATCH_SWEEP_INTERVAL_MS },
+      removeOnComplete: { age: 3600, count: 100 },
+      removeOnFail: { age: 86_400, count: 50 },
+    },
+  );
+}
+
 // Auto-register recurring jobs when this module loads (i.e. when
 // `pnpm worker` boots). Fire-and-forget — a Redis outage at boot should
 // not crash the worker; BullMQ will retry internally on the next op.
@@ -444,6 +471,9 @@ void registerAgentRunStaleSweepJob().catch((err) => {
 });
 void registerChatCompactionSweepJob().catch((err) => {
   logger.warn({ err }, "failed to register chat-compaction-sweep job");
+});
+void registerRunsDispatchSweepJob().catch((err) => {
+  logger.warn({ err }, "failed to register runs-dispatch-sweep job");
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -4,6 +4,7 @@ import { EventKind } from "@prisma/client";
 import { publish } from "@/server/realtime";
 import { nanoid } from "nanoid";
 import { ensureCanonicalFromEvent } from "@/server/services/agent-dispatch-inbox";
+import { resolveRunEngine, getRunsConnector } from "@/server/services/dispatch/registry";
 
 /**
  * Synthetic slug + url used to route agent-bound dispatches through the
@@ -425,7 +426,9 @@ export async function recordChange(
       where: { id: params.subjectId },
       select: {
         assignedAgentId: true,
-        assignedAgent: { select: { id: true, webhookUrl: true } },
+        assignedAgent: {
+          select: { id: true, webhookUrl: true, provider: true, runEngine: true },
+        },
       },
     });
     if (issue?.assignedAgentId) {
@@ -433,7 +436,15 @@ export async function recordChange(
       // no webhookUrl, the inbox row should exist so the agent can poll
       // and pick up the work (the v1 "missed wake recovery" path).
       resolvedAgentIds.push(issue.assignedAgentId);
-      if (issue.assignedAgent?.webhookUrl) {
+      const a = issue.assignedAgent;
+      // RUNS-engine agents are driven directly via the provider's
+      // agent-run API by the worker (`runs-dispatch-sweep`); skip the
+      // webhook so they aren't dispatched twice.
+      const runsDriven =
+        !!a &&
+        resolveRunEngine({ runEngine: a.runEngine, provider: a.provider }) === "RUNS" &&
+        getRunsConnector(a.provider) != null;
+      if (a?.webhookUrl && !runsDriven) {
         const wid = await upsertAgentDispatchWebhook(
           tx,
           params.workspaceId,

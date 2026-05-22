@@ -59,6 +59,22 @@ export interface StartedRun {
   externalRunId: string;
 }
 
+/** Pollable run status — used by the worker's dispatch ingestion. */
+export interface RunStatus {
+  state:
+    | "running"
+    | "waiting_for_approval"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "unknown";
+  /** Last lifecycle event name, e.g. "tool.completed" — drives currentStep. */
+  lastEvent?: string;
+  /** Final assistant text when terminal. */
+  output?: string;
+  usage?: { tokensIn?: number; tokensOut?: number; costUsd?: number };
+}
+
 /**
  * A dispatch connector for one provider family. `subscribe` resolves when
  * the run reaches a terminal state (or `signal` aborts); it must always
@@ -73,6 +89,8 @@ export interface DispatchConnector {
     onEvent: (e: RunEvent) => void,
     signal?: AbortSignal,
   ): Promise<void>;
+  /** Poll current run status (used by worker dispatch ingestion). */
+  getStatus?(externalRunId: string): Promise<RunStatus>;
   /** Resolve a pending approval (Hermes choices: once|session|always|deny). */
   approve?(externalRunId: string, choice: string): Promise<void>;
   /** Interrupt a running agent. */
