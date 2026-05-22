@@ -2,6 +2,40 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-22 — Hermes default→runs, approval semantics, FREE_FORM answers
+
+Follow-on to the engine work, after researching the Hermes gateway approval
+model (approvals gate dangerous *shell commands*: payload `{command,
+description, choices: once|session|always|deny}`, per-session FIFO; a bare
+**deny leaves the run blocked → must `/stop`**; `reasoning.available` carries
+real thinking; tool args/results aren't streamed).
+
+- **Hermes integration now defaults to RUNS** (`adapters.ts`). Chatting with
+  Victor/Mizu talks to *that agent* (own memory + tools), and dispatch uses
+  runs too. Per-agent override unchanged; flip to Completions for a stateless
+  Forge-owned loop. engines.md updated to reflect the new default.
+- **Chat permission blocks fixed** (`/api/chat/stream` RUNS path): the
+  approval card is titled with the actual command (+ risk description in the
+  args); **Approve → allow once; Decline → `/stop`** (a bare deny would hang
+  the run per gateway semantics).
+- **FREE_FORM asks deliver the answer.** A FREE_FORM ActionRequest is the
+  agent asking *us* for info — bare "Accept" resolved it but delivered
+  nothing. Command Center now shows **Respond** (textarea) for FREE_FORM asks;
+  on accept-with-answer, `acceptActionRequest` posts a comment `@agent
+  <answer>` on the issue, routing through the normal mention dispatch (+ inbox
+  row for runs agents). Bound kinds (TRANSITION/ASSIGN/…) keep "Accept".
+
+Streaming/thinking/tool rendering confirmed intact on the runs chat path
+(message.delta → content, reasoning.available → thinking, tool.started/
+completed → tool cards).
+
+Deferred: a Mission Control approve/reject UI for *autonomous dispatch* runs
+that hit an approval (currently shown as a "waiting for approval" step). Not
+urgent — the operator's agents run `approvals.mode: off`, and the interactive
+chat path already handles human-in-the-loop approvals.
+
+typecheck + eslint clean; orchestration/chat tests (26) green; docs build clean.
+
 ## 2026-05-22 — Hermes /v1/runs Phase 2: dispatch ingestion + docs/UX
 
 Dispatch (assigned work) now runs through the `/v1/runs` connector for

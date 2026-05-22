@@ -36,7 +36,10 @@ export const INTEGRATION_ADAPTERS: IntegrationAdapter[] = [
     title: "Hermes",
     tagline: "Persistent multi-profile agent runtime. Best for always-on agents.",
     defaultRuntimeMode: "PERSISTENT",
-    defaultRunEngine: "COMPLETIONS",
+    // Hermes agents talk as themselves (own memory + tools) by default —
+    // chat and dispatch both run through /v1/runs. Per-agent override
+    // available; flip to COMPLETIONS for a stateless, Forge-owned loop.
+    defaultRunEngine: "RUNS",
     iconKey: "Server",
     presence: "daemon",
     defaultKeyKind: "AGENT",

@@ -567,26 +567,36 @@ export async function POST(req: NextRequest) {
               }
               case "approval_required": {
                 const id = `run_approval_${++approvalSeq}`;
+                // Hermes approvals gate dangerous shell commands — the
+                // payload carries `command` + a risk `description`, not a
+                // tool name. Title the card with the command.
+                const cmd =
+                  typeof e.raw.command === "string" ? e.raw.command : (e.tool ?? "approval");
+                const label = cmd.length > 64 ? `${cmd.slice(0, 61)}…` : cmd;
                 enqueue(
                   sse("tool_call_started", {
                     id,
-                    name: e.tool ?? "approval",
+                    name: label,
                     args: e.raw,
                     requiresConfirm: true,
                   }),
                 );
-                enqueue(sse("tool_confirm", { id, name: e.tool ?? "approval", args: e.raw }));
+                enqueue(sse("tool_confirm", { id, name: label, args: e.raw }));
                 // Resolve out-of-band — Hermes holds the run open until we
-                // POST the approval choice back.
+                // respond. Approve → allow once; decline → STOP the run
+                // (a bare "deny" leaves the agent blocked indefinitely per
+                // the gateway's approval semantics, so we interrupt it).
                 void waitForApproval(id).then((d) => {
                   enqueue(
                     sse("tool_result", {
                       id,
                       ok: d.approved,
-                      summary: d.approved ? "approved" : "declined",
+                      summary: d.approved ? "approved" : "declined — run stopped",
                     }),
                   );
-                  return runsConnector!.approve?.(externalRunId, d.approved ? "once" : "deny");
+                  return d.approved
+                    ? runsConnector!.approve?.(externalRunId, "once")
+                    : runsConnector!.stop?.(externalRunId);
                 });
                 break;
               }
