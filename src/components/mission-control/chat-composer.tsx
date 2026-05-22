@@ -498,7 +498,10 @@ export function ChatComposer({
     [refreshMentionPopover],
   );
 
-  const busy = disabled || isPending;
+  // `isPending` (a send in flight) no longer blocks the composer — new
+  // messages queue instead. Only a hard `disabled` gates input. `isPending`
+  // still drives the send-button spinner + the "sending…" footer hint.
+  const busy = disabled;
   const hasMentionables =
     mentionableAgents.length > 0 || mentionablePeople.length > 0;
 
