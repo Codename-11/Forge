@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "sonner";
+import { NativeTooltips } from "@/components/native-tooltips";
 import { readAppearance } from "@/server/appearance";
 import "./globals.css";
 
@@ -62,13 +63,17 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       lang="en"
       data-density={appearance.density}
       data-textsize={appearance.textSize}
-      data-motion="on"
+      data-motion={appearance.motion === "reduced" ? "off" : "on"}
       suppressHydrationWarning
     >
       <body className="font-sans">
         <ThemeProvider>
           {children}
           <Toaster position="bottom-right" closeButton richColors theme="system" />
+          {/* Themed tooltips app-wide — intercepts every `title` attribute
+              and renders a token-styled tooltip instead of the browser's
+              native one (restoring `title` at rest for a11y). */}
+          <NativeTooltips />
         </ThemeProvider>
       </body>
     </html>

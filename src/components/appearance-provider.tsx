@@ -28,10 +28,12 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     const html = document.documentElement;
     const density = data.density === "comfortable" ? "comfortable" : "compact";
     const textSize = data.textSize === "larger" ? "larger" : "default";
+    const motion = data.motion === "reduced" ? "reduced" : "full";
     html.setAttribute("data-density", density);
     html.setAttribute("data-textsize", textSize);
-    writeAppearanceCookie({ density, textSize });
-  }, [data?.density, data?.textSize, data]);
+    html.setAttribute("data-motion", motion === "reduced" ? "off" : "on");
+    writeAppearanceCookie({ density, textSize, motion });
+  }, [data?.density, data?.textSize, data?.motion, data]);
 
   return <>{children}</>;
 }
