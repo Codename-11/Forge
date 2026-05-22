@@ -963,18 +963,33 @@ export function ChatThreadView({
   const compactM = trpc.chat.compactThread.useMutation({
     onSuccess: () => void utils.chat.threads.invalidate(),
   });
-  // Optimistic USER bubble shown the instant the operator submits.
-  //   sending — muted, "Sending…"
-  //   sent    — flips on the stream's `meta` event (server persisted the
-  //             row), un-mutes to "Sent"
-  //   failed  — the send never reached the server; the bubble survives with
-  //             a Retry affordance and `rawFiles` preserved for re-upload.
-  const [pendingDraft, setPendingDraft] = useState<{
+  // Outbound queue. Submitting never blocks on the in-flight send — the
+  // message leaves the composer immediately and joins the queue, which
+  // drains FIFO (one stream at a time). Per-item status:
+  //   queued  — waiting its turn (muted, "Queued", cancelable)
+  //   sending — being streamed now (muted, "Sending…", cancelable)
+  //   sent    — server persisted it (flips on the stream's `meta` event)
+  //   failed  — the send never reached the server; survives with Retry +
+  //             Cancel, blocks the queue behind it until resolved.
+  // `rawFiles` is kept so retry / deferred sends can re-upload.
+  type Outbound = {
+    id: string;
     body: string;
-    files: string[];
     rawFiles: File[];
-    status: "sending" | "sent" | "failed";
-  } | null>(null);
+    displayFiles: string[];
+    status: "queued" | "sending" | "sent" | "failed";
+  };
+  const [outbox, setOutbox] = useState<Outbound[]>([]);
+  const outboxRef = useRef<Outbound[]>([]);
+  outboxRef.current = outbox;
+  const sendingRef = useRef(false);
+  const queueIdRef = useRef(0);
+  const markOutbox = useCallback((id: string, status: Outbound["status"]) => {
+    setOutbox((q) => q.map((m) => (m.id === id ? { ...m, status } : m)));
+  }, []);
+  const removeOutbox = useCallback((id: string) => {
+    setOutbox((q) => q.filter((m) => m.id !== id));
+  }, []);
   const [fillRequest, setFillRequest] = useState<{ body: string; nonce: number } | null>(null);
 
   const ctx = useChatContext();
@@ -1069,8 +1084,9 @@ export function ChatThreadView({
     async (
       targetThreadId: string,
       body: string,
-      opts?: { attachmentIds?: string[]; pendingMessageId?: string },
+      opts?: { attachmentIds?: string[]; pendingMessageId?: string; outboxId?: string },
     ) => {
+      const outboxId = opts?.outboxId;
       // Cancel any in-flight stream before starting a new one.
       streamAbortRef.current?.abort();
       const ctrl = new AbortController();
@@ -1094,13 +1110,14 @@ export function ChatThreadView({
       // was sent and only the agent *reply* failed (Retry on the agent
       // bubble — existing behaviour).
       let sawMeta = false;
+      let aborted = false;
       const failSend = (message: string) => {
         if (sawMeta) {
           setStreamBubble((b) =>
             b ? { ...b, error: message, finishedAt: b.finishedAt ?? Date.now() } : b,
           );
         } else {
-          setPendingDraft((d) => (d ? { ...d, status: "failed" } : d));
+          if (outboxId) markOutbox(outboxId, "failed");
           setStreamBubble(null);
         }
       };
@@ -1122,17 +1139,11 @@ export function ChatThreadView({
         });
       } catch (err) {
         if (ctrl.signal.aborted) {
-          // Stop click: mark the bubble as stopped (sentinel error) and
-          // freeze whatever partial content we've accumulated.
-          setStreamBubble((b) =>
-            b
-              ? {
-                  ...b,
-                  error: STREAM_STOP_SENTINEL,
-                  finishedAt: b.finishedAt ?? Date.now(),
-                }
-              : b,
-          );
+          // Canceled before the request even returned → the message never
+          // reached the server. Drop the optimistic bubble and the empty
+          // agent placeholder entirely.
+          if (outboxId) removeOutbox(outboxId);
+          setStreamBubble(null);
           setIsStreaming(false);
           return;
         }
@@ -1170,7 +1181,7 @@ export function ChatThreadView({
           // emits `meta`, so this is the "fully sent" moment — flip the
           // optimistic bubble's receipt from "Sending…" to "Sent".
           sawMeta = true;
-          setPendingDraft((d) => (d ? { ...d, status: "sent" } : d));
+          if (outboxId) markOutbox(outboxId, "sent");
         } else if (event === "content") {
           const { delta } = parsed as { delta?: string };
           if (typeof delta === "string") {
@@ -1346,6 +1357,7 @@ export function ChatThreadView({
         }
       } catch (err) {
         if (ctrl.signal.aborted) {
+          aborted = true;
           setStreamBubble((b) =>
             b
               ? {
@@ -1362,6 +1374,19 @@ export function ChatThreadView({
       } finally {
         setIsStreaming(false);
         if (streamAbortRef.current === ctrl) streamAbortRef.current = null;
+      }
+
+      // Resolve the optimistic outbox bubble. If the message was persisted
+      // (saw `meta`), drop it — the refetched row with its real receipt
+      // takes over. If it was canceled before reaching the server, drop it
+      // too. A pre-meta *failure* is left as "failed" (failSend kept it) so
+      // the operator can Retry.
+      if (outboxId) {
+        if (sawMeta) removeOutbox(outboxId);
+        else if (aborted) {
+          removeOutbox(outboxId);
+          setStreamBubble(null);
+        }
       }
 
       // Trigger a refetch so the persisted AGENT row replaces the bubble.
@@ -1430,13 +1455,11 @@ export function ChatThreadView({
   const respondToToolRef = useRef(respondToTool);
   respondToToolRef.current = respondToTool;
 
-  const handleSend = async (body: string, files: File[] = []) => {
-    setPendingDraft({
-      body,
-      files: files.map((f) => f.name || "attachment"),
-      rawFiles: files,
-      status: "sending",
-    });
+  // Send a single outbox item. The streaming path hands ownership of the
+  // item's lifecycle (sent / failed / removed) to `runStreamingSend` via
+  // `outboxId`; the no-threadId fallback resolves it here.
+  const sendOne = async (item: Outbound) => {
+    const { id, body, rawFiles: files } = item;
     try {
       // Streaming path with optional attachments. Uploads target the
       // *pending* message id we create first; the streaming route then
@@ -1468,11 +1491,16 @@ export function ChatThreadView({
             targetId: pending.messageId,
           });
         }
-        await runStreamingSend(threadId, body, { attachmentIds, pendingMessageId });
+        await runStreamingSend(threadId, body, {
+          attachmentIds,
+          pendingMessageId,
+          outboxId: id,
+        });
         return;
       }
 
-      // No resolved threadId yet (initial mount race).
+      // No resolved threadId yet (initial mount race) — legacy non-stream
+      // fallback so the message still lands.
       if (files.length === 0) {
         await sendM.mutateAsync({
           agentId,
@@ -1480,43 +1508,115 @@ export function ChatThreadView({
           body,
           context: currentContext,
         });
-        return;
-      }
-      // Attachments without a resolved threadId — fall back to the legacy
-      // pending-message + dispatch flow so the message survives.
-      const pending = await createPendingM.mutateAsync({
-        agentId,
-        threadId: selectedThreadId ?? undefined,
-        body,
-        context: currentContext,
-      });
-      for (const file of files) {
-        await uploadAttachmentFile({
-          file,
+      } else {
+        const pending = await createPendingM.mutateAsync({
+          agentId,
+          threadId: selectedThreadId ?? undefined,
+          body,
+          context: currentContext,
+        });
+        for (const file of files) {
+          await uploadAttachmentFile({
+            file,
+            targetType: "chat-message",
+            targetId: pending.messageId,
+            initUpload: initUploadM.mutateAsync,
+            finalize: finalizeM.mutateAsync,
+          });
+        }
+        await utils.attachment.list.invalidate({
           targetType: "chat-message",
           targetId: pending.messageId,
-          initUpload: initUploadM.mutateAsync,
-          finalize: finalizeM.mutateAsync,
         });
+        await dispatchM.mutateAsync({ messageId: pending.messageId });
       }
-      await utils.attachment.list.invalidate({
-        targetType: "chat-message",
-        targetId: pending.messageId,
-      });
-      await dispatchM.mutateAsync({ messageId: pending.messageId });
+      // Fallback succeeded → drop the optimistic bubble; the refetch shows
+      // the persisted row.
+      removeOutbox(id);
     } catch (err) {
-      // Upload / pending-row failure (pre-send). Keep the optimistic bubble
-      // around as Failed+Retry rather than rethrowing — the composer clears
-      // and the failed bubble (with rawFiles) owns the retry. Don't rethrow,
-      // or the composer would also surface its own error for the same fault.
-      const message = err instanceof Error ? err.message : "Failed to send chat attachments";
+      // Upload / pending-row failure (pre-send). Leave the bubble as
+      // Failed+Retry instead of throwing — the composer already cleared and
+      // the queued item (with rawFiles) owns the retry.
+      const message = err instanceof Error ? err.message : "Failed to send message";
       toast.error(message);
-      setPendingDraft((d) => (d ? { ...d, status: "failed" } : d));
-    } finally {
-      // Keep a failed bubble visible; clear it only on a clean send.
-      setPendingDraft((d) => (d && d.status === "failed" ? d : null));
+      markOutbox(id, "failed");
     }
   };
+
+  // Drain the outbox FIFO, one stream at a time. A "failed" item at the head
+  // of the still-pending set blocks the queue until the operator retries or
+  // cancels it (so messages never go out of order). Re-entrancy is guarded
+  // by `sendingRef`; the `outbox` effect below re-kicks on every change.
+  const processQueue = async () => {
+    if (sendingRef.current) return;
+    const next = outboxRef.current.find(
+      (m) => m.status === "queued" || m.status === "failed",
+    );
+    if (!next || next.status === "failed") return;
+    sendingRef.current = true;
+    markOutbox(next.id, "sending");
+    try {
+      await sendOne(next);
+    } finally {
+      sendingRef.current = false;
+      void processQueueRef.current?.();
+    }
+  };
+  const processQueueRef = useRef(processQueue);
+  processQueueRef.current = processQueue;
+  useEffect(() => {
+    void processQueueRef.current?.();
+  }, [outbox]);
+
+  // Composer onSend: never blocks. The message leaves the input immediately
+  // and joins the queue; the processor sends it when its turn comes.
+  const handleSend = (body: string, files: File[] = []) => {
+    const id = `_q_${++queueIdRef.current}`;
+    setOutbox((q) => [
+      ...q,
+      {
+        id,
+        body,
+        rawFiles: files,
+        displayFiles: files.map((f) => f.name || "attachment"),
+        status: "queued",
+      },
+    ]);
+  };
+
+  const retryOutbox = (item: Outbound) => {
+    setStreamBubble(null);
+    markOutbox(item.id, "queued");
+  };
+  const cancelOutbox = (item: Outbound) => {
+    if (item.status === "sending") {
+      // Abort the in-flight stream; runStreamingSend's abort path drops the
+      // optimistic bubble (and the empty agent placeholder).
+      streamAbortRef.current?.abort();
+    } else {
+      removeOutbox(item.id);
+    }
+  };
+  const renderOutbound = (m: Outbound) => (
+    <ChatMessageBubble
+      key={m.id}
+      msg={{
+        id: m.id,
+        role: "USER",
+        body:
+          m.body ||
+          (m.displayFiles.length > 0
+            ? m.displayFiles.map((name) => `📎 ${name}`).join("\n")
+            : ""),
+        createdAt: new Date(),
+        // Muted while queued/sending; un-mutes once the server confirms.
+        isDraft: m.status === "queued" || m.status === "sending",
+        sendState: m.status,
+      }}
+      onRetry={m.status === "failed" ? () => retryOutbox(m) : undefined}
+      onCancel={m.status !== "sent" ? () => cancelOutbox(m) : undefined}
+    />
+  );
 
   // Build slash-command context — stable reference via useMemo.
   // Prefer agentFull (has all fields); fall back to basic agent shape for
@@ -1553,7 +1653,7 @@ export function ChatThreadView({
     const el = scrollerRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages.length, localMessages.length, draft?.body, streamBubble?.body]);
+  }, [messages.length, localMessages.length, outbox.length, draft?.body, streamBubble?.body]);
 
   const messageRows: ChatMessageRow[] = useMemo(
     () =>
@@ -1803,32 +1903,9 @@ export function ChatThreadView({
         {displayRows.map((m) => (
           <ChatMessageBubble key={m.id} msg={m} agentName={agent?.name} />
         ))}
-        {pendingDraft && (composerBusy || pendingDraft.status === "failed") && (
-          <ChatMessageBubble
-            msg={{
-              id: "_pending",
-              role: "USER",
-              body:
-                pendingDraft.body ||
-                (pendingDraft.files.length > 0
-                  ? pendingDraft.files.map((name) => `📎 ${name}`).join("\n")
-                  : ""),
-              createdAt: new Date(),
-              // Muted while "sending"; un-mutes once the server confirms.
-              isDraft: pendingDraft.status === "sending",
-              sendState: pendingDraft.status,
-            }}
-            onRetry={
-              pendingDraft.status === "failed"
-                ? () => {
-                    const d = pendingDraft;
-                    setStreamBubble(null);
-                    void handleSend(d.body, d.rawFiles);
-                  }
-                : undefined
-            }
-          />
-        )}
+        {/* Active outbound messages (sending / sent / failed) sit above the
+            agent's reply. Queued messages render below it as "up next". */}
+        {outbox.filter((m) => m.status !== "queued").map(renderOutbound)}
         {/* Streaming bubble (new /api/chat/stream path). Takes precedence
             over the legacy MCP draft + thinking/wake diagnostics so the
             direct streaming UI is what the operator sees while the model
@@ -1867,6 +1944,8 @@ export function ChatThreadView({
             lastWakeAt={diagnostics?.latestUserMessage?.lastWakeAt ?? null}
           />
         ) : null}
+        {/* Queued messages waiting their turn ("up next"). */}
+        {outbox.filter((m) => m.status === "queued").map(renderOutbound)}
       </div>
       {boundCanvas && (
         <div className="px-2 pt-1">
@@ -1879,7 +1958,9 @@ export function ChatThreadView({
       )}
       <ChatComposer
         onSend={handleSend}
-        disabled={composerBusy}
+        // Never block the composer — messages queue while a send is in
+        // flight. `isPending` drives only the "sending…" footer hint.
+        disabled={false}
         isPending={composerBusy}
         placeholder={composerPlaceholder}
         banner={composerBanner}

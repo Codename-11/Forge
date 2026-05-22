@@ -7,10 +7,12 @@ import {
   CheckCheck,
   ChevronDown,
   ChevronRight,
+  Clock,
   Loader2,
   RefreshCw,
   User as UserIcon,
   Wrench,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -42,12 +44,12 @@ export interface ChatMessageRow {
   outputStartedAt?: Date | string | null;
   /**
    * Optimistic-only send state for an in-flight USER bubble (`id` starts
-   * with `_`): "sending" (muted, spinner) → "sent" (confirmed by the
-   * stream's `meta` event, un-mutes) → "failed" (offer Retry, preserve the
-   * text + attachments). Persisted rows leave this undefined and derive
-   * their receipt from the timestamp columns.
+   * with `_`): "queued" (waiting its turn) → "sending" (muted, spinner) →
+   * "sent" (confirmed by the stream's `meta` event, un-mutes) → "failed"
+   * (offer Retry, preserve the text + attachments). Persisted rows leave
+   * this undefined and derive their receipt from the timestamp columns.
    */
-  sendState?: "sending" | "sent" | "failed";
+  sendState?: "queued" | "sending" | "sent" | "failed";
   /**
    * Rehydration blob for messages produced by /api/chat/stream — the
    * server stashes `thinking` and `tool_use` here on `contextSnapshot`
@@ -144,10 +146,24 @@ function relativeTime(input: Date | string): string {
 function MessageReceipt({
   msg,
   onRetry,
+  onCancel,
 }: {
   msg: ChatMessageRow;
   onRetry?: () => void;
+  onCancel?: () => void;
 }) {
+  const cancelBtn = onCancel ? (
+    <button
+      type="button"
+      onClick={onCancel}
+      title="Cancel"
+      className="ml-0.5 inline-flex items-center gap-0.5 rounded border border-border/60 px-1 py-0 text-[0.5625rem] hover:bg-subtle/60 hover:text-foreground"
+    >
+      <X className="h-2.5 w-2.5" />
+      Cancel
+    </button>
+  ) : null;
+
   const isOptimistic = msg.id.startsWith("_");
   if (isOptimistic) {
     if (msg.sendState === "failed") {
@@ -165,6 +181,7 @@ function MessageReceipt({
               Retry
             </button>
           )}
+          {cancelBtn}
         </span>
       );
     }
@@ -176,10 +193,20 @@ function MessageReceipt({
         </span>
       );
     }
+    if (msg.sendState === "queued") {
+      return (
+        <span className="flex items-center gap-1 text-muted-foreground/60">
+          <Clock className="h-2.5 w-2.5" />
+          Queued
+          {cancelBtn}
+        </span>
+      );
+    }
     return (
       <span className="flex items-center gap-1 text-muted-foreground/60">
         <Loader2 className="h-2.5 w-2.5 animate-spin" />
         Sending…
+        {cancelBtn}
       </span>
     );
   }
@@ -216,11 +243,14 @@ export function ChatMessageBubble({
   msg,
   agentName,
   onRetry,
+  onCancel,
 }: {
   msg: ChatMessageRow;
   agentName?: string;
   /** Retry a failed optimistic send (only used by USER bubbles). */
   onRetry?: () => void;
+  /** Cancel a queued / sending / failed optimistic send (USER bubbles). */
+  onCancel?: () => void;
 }) {
   const isUser = msg.role === "USER";
   const isSystem = msg.role === "SYSTEM";
@@ -279,7 +309,7 @@ export function ChatMessageBubble({
         {!msg.isDraft && <ChatMessageAttachments messageId={msg.id} />}
         <div className="mt-0.5 flex items-center justify-between gap-2 text-[0.5625rem] text-muted-foreground/60">
           {isUser ? (
-            <MessageReceipt msg={msg} onRetry={onRetry} />
+            <MessageReceipt msg={msg} onRetry={onRetry} onCancel={onCancel} />
           ) : !msg.isDraft && !msg.id.startsWith("_") ? (
             <PromoteToArtifactButton
               sourceType="chat-message"
