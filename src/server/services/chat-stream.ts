@@ -200,7 +200,23 @@ export async function* streamChatReply(
   try {
     for await (const chunk of stream) {
       if (args.signal?.aborted) break;
-      const delta = chunk.choices[0]?.delta as
+      // Hermes' OpenAI-compat gateway (and some backends behind it) emit
+      // chunks without a `choices` array — role primers, usage-only tail
+      // chunks, keepalives, or an inline `{ error }` object. The strict
+      // OpenAI SDK type says `choices` is always present; in practice it
+      // isn't, so guard before indexing or we crash the whole stream with
+      // "Cannot read properties of undefined (reading '0')".
+      const choice = chunk.choices?.[0];
+      if (!choice) {
+        // Surface an inline error object if the gateway streamed one.
+        const inlineErr = (chunk as unknown as { error?: { message?: string } })
+          .error;
+        if (inlineErr?.message) {
+          yield { kind: "error", message: inlineErr.message };
+        }
+        continue;
+      }
+      const delta = choice.delta as
         | (OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta & {
             // Anthropic OpenAI-compat surfaces extended thinking deltas
             // under a non-standard `reasoning_content` field. Treat it
@@ -239,7 +255,7 @@ export async function* streamChatReply(
       // When the model signals it's done with a tool_calls turn, flush the
       // accumulated tool buffers as `tool_use` events. We do NOT execute —
       // the UI renders intent cards (display-only in v1).
-      const finishReason = chunk.choices[0]?.finish_reason;
+      const finishReason = choice.finish_reason;
       if (finishReason === "tool_calls") {
         for (const buf of toolBuffers.values()) {
           if (buf.emitted) continue;
