@@ -165,7 +165,7 @@ Suggest a priority, applicable labels (only from the list above — match by id,
   }
 
   const call =
-    completion.choices[0]?.message?.tool_calls?.[0] as
+    completion.choices?.[0]?.message?.tool_calls?.[0] as
       | { type: string; function?: { name?: string; arguments?: string } }
       | undefined;
   if (!call?.function?.arguments) {
@@ -268,7 +268,7 @@ Use plain prose, no bullets, no headers. Do not address the agent directly.`;
     return null;
   }
 
-  const text = completion.choices[0]?.message?.content;
+  const text = completion.choices?.[0]?.message?.content;
   if (typeof text !== "string" || !text.trim()) {
     logger.warn({ completion }, "ai.coach: empty response");
     return null;
