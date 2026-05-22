@@ -963,14 +963,17 @@ export function ChatThreadView({
   const compactM = trpc.chat.compactThread.useMutation({
     onSuccess: () => void utils.chat.threads.invalidate(),
   });
-  // Optimistic USER bubble shown the instant the operator submits. `sent`
-  // flips true on the stream's `meta` event (server has persisted the row),
-  // which un-mutes the bubble from "Sending…" to "Sent" without waiting for
-  // the whole agent reply.
+  // Optimistic USER bubble shown the instant the operator submits.
+  //   sending — muted, "Sending…"
+  //   sent    — flips on the stream's `meta` event (server persisted the
+  //             row), un-mutes to "Sent"
+  //   failed  — the send never reached the server; the bubble survives with
+  //             a Retry affordance and `rawFiles` preserved for re-upload.
   const [pendingDraft, setPendingDraft] = useState<{
     body: string;
     files: string[];
-    sent: boolean;
+    rawFiles: File[];
+    status: "sending" | "sent" | "failed";
   } | null>(null);
   const [fillRequest, setFillRequest] = useState<{ body: string; nonce: number } | null>(null);
 
@@ -1085,6 +1088,23 @@ export function ChatThreadView({
       });
       setIsStreaming(true);
 
+      // Whether the server confirmed the USER row was persisted (the `meta`
+      // event). Decides where a failure surfaces: before meta the *send*
+      // failed (Failed+Retry on the user bubble); after meta the message
+      // was sent and only the agent *reply* failed (Retry on the agent
+      // bubble — existing behaviour).
+      let sawMeta = false;
+      const failSend = (message: string) => {
+        if (sawMeta) {
+          setStreamBubble((b) =>
+            b ? { ...b, error: message, finishedAt: b.finishedAt ?? Date.now() } : b,
+          );
+        } else {
+          setPendingDraft((d) => (d ? { ...d, status: "failed" } : d));
+          setStreamBubble(null);
+        }
+      };
+
       let res: Response;
       try {
         res = await fetch("/api/chat/stream", {
@@ -1117,9 +1137,7 @@ export function ChatThreadView({
           return;
         }
         const msg = err instanceof Error ? err.message : "Network error";
-        setStreamBubble((b) =>
-          b ? { ...b, error: msg, finishedAt: Date.now() } : b,
-        );
+        failSend(msg);
         setIsStreaming(false);
         return;
       }
@@ -1127,9 +1145,7 @@ export function ChatThreadView({
       if (!res.ok || !res.body) {
         const text = await res.text().catch(() => "");
         const msg = text || `Stream request failed (${res.status})`;
-        setStreamBubble((b) =>
-          b ? { ...b, error: msg, finishedAt: Date.now() } : b,
-        );
+        failSend(msg);
         setIsStreaming(false);
         return;
       }
@@ -1153,7 +1169,8 @@ export function ChatThreadView({
           // The route persists the USER row (with dispatchedAt) before it
           // emits `meta`, so this is the "fully sent" moment — flip the
           // optimistic bubble's receipt from "Sending…" to "Sent".
-          setPendingDraft((d) => (d ? { ...d, sent: true } : d));
+          sawMeta = true;
+          setPendingDraft((d) => (d ? { ...d, status: "sent" } : d));
         } else if (event === "content") {
           const { delta } = parsed as { delta?: string };
           if (typeof delta === "string") {
@@ -1291,15 +1308,7 @@ export function ChatThreadView({
           }
         } else if (event === "error") {
           const { message } = parsed as { message?: string };
-          setStreamBubble((b) =>
-            b
-              ? {
-                  ...b,
-                  error: message ?? "Stream error",
-                  finishedAt: b.finishedAt ?? Date.now(),
-                }
-              : b,
-          );
+          failSend(message ?? "Stream error");
         } else if (event === "done") {
           setStreamBubble((b) =>
             b ? { ...b, finishedAt: Date.now() } : b,
@@ -1348,11 +1357,7 @@ export function ChatThreadView({
           );
         } else {
           const msg = err instanceof Error ? err.message : "Stream interrupted";
-          setStreamBubble((b) =>
-            b
-              ? { ...b, error: msg, finishedAt: b.finishedAt ?? Date.now() }
-              : b,
-          );
+          failSend(msg);
         }
       } finally {
         setIsStreaming(false);
@@ -1426,7 +1431,12 @@ export function ChatThreadView({
   respondToToolRef.current = respondToTool;
 
   const handleSend = async (body: string, files: File[] = []) => {
-    setPendingDraft({ body, files: files.map((f) => f.name || "attachment"), sent: false });
+    setPendingDraft({
+      body,
+      files: files.map((f) => f.name || "attachment"),
+      rawFiles: files,
+      status: "sending",
+    });
     try {
       // Streaming path with optional attachments. Uploads target the
       // *pending* message id we create first; the streaming route then
@@ -1495,11 +1505,16 @@ export function ChatThreadView({
       });
       await dispatchM.mutateAsync({ messageId: pending.messageId });
     } catch (err) {
+      // Upload / pending-row failure (pre-send). Keep the optimistic bubble
+      // around as Failed+Retry rather than rethrowing — the composer clears
+      // and the failed bubble (with rawFiles) owns the retry. Don't rethrow,
+      // or the composer would also surface its own error for the same fault.
       const message = err instanceof Error ? err.message : "Failed to send chat attachments";
       toast.error(message);
-      throw err;
+      setPendingDraft((d) => (d ? { ...d, status: "failed" } : d));
     } finally {
-      setPendingDraft(null);
+      // Keep a failed bubble visible; clear it only on a clean send.
+      setPendingDraft((d) => (d && d.status === "failed" ? d : null));
     }
   };
 
@@ -1788,7 +1803,7 @@ export function ChatThreadView({
         {displayRows.map((m) => (
           <ChatMessageBubble key={m.id} msg={m} agentName={agent?.name} />
         ))}
-        {composerBusy && pendingDraft && (
+        {pendingDraft && (composerBusy || pendingDraft.status === "failed") && (
           <ChatMessageBubble
             msg={{
               id: "_pending",
@@ -1799,10 +1814,19 @@ export function ChatThreadView({
                   ? pendingDraft.files.map((name) => `📎 ${name}`).join("\n")
                   : ""),
               createdAt: new Date(),
-              // Muted until the server confirms the send; un-mutes on `meta`.
-              isDraft: !pendingDraft.sent,
-              optimisticSent: pendingDraft.sent,
+              // Muted while "sending"; un-mutes once the server confirms.
+              isDraft: pendingDraft.status === "sending",
+              sendState: pendingDraft.status,
             }}
+            onRetry={
+              pendingDraft.status === "failed"
+                ? () => {
+                    const d = pendingDraft;
+                    setStreamBubble(null);
+                    void handleSend(d.body, d.rawFiles);
+                  }
+                : undefined
+            }
           />
         )}
         {/* Streaming bubble (new /api/chat/stream path). Takes precedence

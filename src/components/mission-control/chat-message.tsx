@@ -1,12 +1,14 @@
 "use client";
 import { useMemo, useState } from "react";
 import {
+  AlertCircle,
   Bot,
   Check,
   CheckCheck,
   ChevronDown,
   ChevronRight,
   Loader2,
+  RefreshCw,
   User as UserIcon,
   Wrench,
 } from "lucide-react";
@@ -39,12 +41,13 @@ export interface ChatMessageRow {
   acknowledgedAt?: Date | string | null;
   outputStartedAt?: Date | string | null;
   /**
-   * Optimistic-only flag: an in-flight USER bubble (`id` starts with `_`)
-   * flips this to true once the stream's `meta` event confirms the server
-   * persisted the row, so it un-mutes from "Sending…" to "Sent" without
-   * waiting for the whole agent reply.
+   * Optimistic-only send state for an in-flight USER bubble (`id` starts
+   * with `_`): "sending" (muted, spinner) → "sent" (confirmed by the
+   * stream's `meta` event, un-mutes) → "failed" (offer Retry, preserve the
+   * text + attachments). Persisted rows leave this undefined and derive
+   * their receipt from the timestamp columns.
    */
-  optimisticSent?: boolean;
+  sendState?: "sending" | "sent" | "failed";
   /**
    * Rehydration blob for messages produced by /api/chat/stream — the
    * server stashes `thinking` and `tool_use` here on `contextSnapshot`
@@ -138,21 +141,45 @@ function relativeTime(input: Date | string): string {
  *
  * Agent + system messages don't get a receipt (only a timestamp).
  */
-function MessageReceipt({ msg }: { msg: ChatMessageRow }) {
+function MessageReceipt({
+  msg,
+  onRetry,
+}: {
+  msg: ChatMessageRow;
+  onRetry?: () => void;
+}) {
   const isOptimistic = msg.id.startsWith("_");
   if (isOptimistic) {
-    if (!msg.optimisticSent) {
+    if (msg.sendState === "failed") {
       return (
-        <span className="flex items-center gap-1 text-muted-foreground/60">
-          <Loader2 className="h-2.5 w-2.5 animate-spin" />
-          Sending…
+        <span className="flex items-center gap-1 text-destructive">
+          <AlertCircle className="h-3 w-3" />
+          Failed to send
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="ml-0.5 inline-flex items-center gap-0.5 rounded border border-destructive/40 px-1 py-0 text-[0.5625rem] hover:bg-destructive/10"
+            >
+              <RefreshCw className="h-2.5 w-2.5" />
+              Retry
+            </button>
+          )}
+        </span>
+      );
+    }
+    if (msg.sendState === "sent") {
+      return (
+        <span className="flex items-center gap-0.5 text-muted-foreground/70">
+          <Check className="h-3 w-3" />
+          Sent
         </span>
       );
     }
     return (
-      <span className="flex items-center gap-0.5 text-muted-foreground/70">
-        <Check className="h-3 w-3" />
-        Sent
+      <span className="flex items-center gap-1 text-muted-foreground/60">
+        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+        Sending…
       </span>
     );
   }
@@ -188,9 +215,12 @@ function MessageReceipt({ msg }: { msg: ChatMessageRow }) {
 export function ChatMessageBubble({
   msg,
   agentName,
+  onRetry,
 }: {
   msg: ChatMessageRow;
   agentName?: string;
+  /** Retry a failed optimistic send (only used by USER bubbles). */
+  onRetry?: () => void;
 }) {
   const isUser = msg.role === "USER";
   const isSystem = msg.role === "SYSTEM";
@@ -249,7 +279,7 @@ export function ChatMessageBubble({
         {!msg.isDraft && <ChatMessageAttachments messageId={msg.id} />}
         <div className="mt-0.5 flex items-center justify-between gap-2 text-[0.5625rem] text-muted-foreground/60">
           {isUser ? (
-            <MessageReceipt msg={msg} />
+            <MessageReceipt msg={msg} onRetry={onRetry} />
           ) : !msg.isDraft && !msg.id.startsWith("_") ? (
             <PromoteToArtifactButton
               sourceType="chat-message"
