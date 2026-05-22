@@ -166,9 +166,40 @@ commands transform input and call `sendM.mutate`.
 Static manifest at `src/server/integrations/adapters.ts` (NOT a Prisma
 table) keyed off the existing `AgentProvider` enum: HERMES, CLAUDE
 (twice — Code session and Desktop persistent), CODEX, CUSTOM. Each
-declares `defaultRuntimeMode`, `defaultKeyKind`, `presence` (daemon |
-session | remote-webhook), `setupMarkdown`, optional `mcpSnippet`.
-Powers `/settings/integrations` index page.
+declares `defaultRuntimeMode`, `defaultRunEngine`, `defaultKeyKind`,
+`presence` (daemon | session | remote-webhook), `setupMarkdown`,
+optional `mcpSnippet`. Powers `/settings/integrations` index page.
+
+## Agent execution engine (completions vs runs)
+
+`Agent.runEngine` (`RunEngine?` — COMPLETIONS | RUNS; null = the
+integration's `defaultRunEngine`, Hermes = COMPLETIONS) picks who owns
+the agent loop. Resolved via `resolveRunEngine()` in
+`src/server/services/dispatch/registry.ts`. The pluggable
+`DispatchConnector` (`src/server/services/dispatch/`) normalises
+"run an agent turn + stream lifecycle" into one interface
+(`startRun`/`subscribe`/`getStatus`/`approve`/`stop` + a `RunEvent`
+union); `HermesRunsConnector` implements it against Hermes
+`/v1/runs` (+ `/events` SSE, `/v1/runs/{id}` poll, `/approval`,
+`/stop`). Other providers slot in via `getRunsConnector(provider)`.
+
+- **COMPLETIONS** — Forge owns the loop: `/api/chat/stream` →
+  `runChatLoop` (chat-stream.ts) over OpenAI-compat
+  `/v1/chat/completions`. Stateless model; Forge owns tools (chat
+  allowlist) + approvals + context injection. Default.
+- **RUNS** — chat delegates the turn to the connector; events map onto
+  the SAME SSE vocab the client already speaks (so chat still streams
+  token-by-token via `message.delta`). Dispatch (assigned work) is
+  driven entirely by the connector: the worker's `runs-dispatch-sweep`
+  job (`run-dispatcher.ts`) opens an `AgentRun` for RUNS-engine
+  assignments, `startRun`s, then **polls** `getStatus` every 5s and
+  mirrors progress (`currentStep` / usage / terminal) onto the
+  `AgentRun` for Mission Control. `AgentRun.externalRunId` correlates
+  the provider run. `audit.ts` branch (a) suppresses the dispatch
+  webhook for RUNS agents so work isn't dispatched twice — a RUNS
+  agent should NOT also carry a `webhookUrl`.
+
+User-docs: `docs/agents/engines.md` (benefits + when to use which).
 
 The Hermes integration has a runtime-side companion skill at
 `~/.hermes/skills/forge-presence/` that calls Forge's MCP

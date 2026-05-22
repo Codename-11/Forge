@@ -5,6 +5,12 @@ Mission Control's Chat tab (keyboard chord `5`). It is not a general-purpose mes
 channel — it is purpose-built for issuing instructions to a specific agent and receiving
 responses grounded in your current workspace context.
 
+::: tip Engine
+How replies are produced depends on the agent's **chat engine** — *Completions*
+(Forge owns the loop; the default) or *Runs* (the agent runs as itself with its
+own memory + tools). Both stream. See [Chat & Dispatch Engines](/agents/engines.html).
+:::
+
 ## How it works
 
 ### Opening a thread

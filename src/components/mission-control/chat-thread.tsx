@@ -1824,6 +1824,18 @@ export function ChatThreadView({
             {isEphemeral ? "session-only" : "persistent"}
           </span>
 
+          {/* Engine pill — only when this agent runs on RUNS (the
+              non-default "runs as itself" mode) so it's discoverable
+              without cluttering the common completions case. */}
+          {(agentFull as { runEngine?: string } | undefined)?.runEngine === "RUNS" && (
+            <span
+              className="rounded-full border border-ember/30 bg-ember/10 px-1.5 py-0 text-[0.5625rem] uppercase tracking-wider text-ember"
+              title="This agent runs via the provider's agent-run API (its own memory + tools). Replies still stream."
+            >
+              runs
+            </span>
+          )}
+
           {/* Override pill — only when at least one override is set. */}
           {(providerOverride || modelOverride) && (
             <span className="rounded-full border border-ember/30 bg-ember/10 px-1.5 py-0 text-[0.5625rem] uppercase tracking-wider text-ember">

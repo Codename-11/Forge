@@ -4,8 +4,19 @@ import type {
   DispatchConnector,
   RunEvent,
   RunInput,
+  RunStatus,
   StartedRun,
 } from "./types";
+
+function mapStatus(raw: string): RunStatus["state"] {
+  const s = raw.toLowerCase();
+  if (s.includes("complete")) return "completed";
+  if (s.includes("cancel")) return "cancelled";
+  if (s.includes("fail") || s.includes("error")) return "failed";
+  if (s.includes("approval")) return "waiting_for_approval";
+  if (s.includes("run") || s.includes("pending") || s.includes("queue")) return "running";
+  return "unknown";
+}
 
 /**
  * Connector for Hermes' structured agent-run API:
@@ -199,6 +210,32 @@ export const hermesRunsConnector: DispatchConnector = {
     }
     // Defensive: if the stream closed without a terminal event, synthesise one.
     if (!terminal) onEvent({ type: "completed" });
+  },
+
+  async getStatus(externalRunId: string): Promise<RunStatus> {
+    const res = await fetch(`${gatewayBase()}/runs/${externalRunId}`, {
+      method: "GET",
+      headers: { accept: "application/json", ...authHeaders() },
+    });
+    if (!res.ok) {
+      // 404 = run swept (TTL) — treat as completed so the poller stops.
+      if (res.status === 404) return { state: "completed" };
+      throw new Error(`Run status failed (${res.status})`);
+    }
+    const json = (await res.json()) as Record<string, unknown>;
+    const usageRaw = (json.usage ?? {}) as Record<string, unknown>;
+    const num = (v: unknown): number | undefined =>
+      typeof v === "number" ? v : undefined;
+    return {
+      state: mapStatus(String(json.status ?? "")),
+      lastEvent: typeof json.last_event === "string" ? json.last_event : undefined,
+      output: typeof json.output === "string" ? json.output : undefined,
+      usage: {
+        tokensIn: num(usageRaw.input_tokens ?? usageRaw.prompt_tokens),
+        tokensOut: num(usageRaw.output_tokens ?? usageRaw.completion_tokens),
+        costUsd: num(usageRaw.cost_usd ?? usageRaw.costUsd),
+      },
+    };
   },
 
   async approve(externalRunId: string, choice: string): Promise<void> {
