@@ -3,11 +3,13 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Section } from "@/components/settings/section";
+import { SectionDivider } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { writeAppearanceCookie } from "@/lib/appearance-cookie";
 
 type Density = "compact" | "comfortable";
 type TextSize = "default" | "larger";
+type Motion = "full" | "reduced";
 
 /**
  * Appearance settings — per-user, server-saved.
@@ -38,11 +40,13 @@ export default function AppearancePage() {
 
   const [density, setDensity] = useState<Density>("compact");
   const [textSize, setTextSize] = useState<TextSize>("default");
+  const [motion, setMotion] = useState<Motion>("full");
 
   useEffect(() => {
     if (!me) return;
     setDensity(me.density === "comfortable" ? "comfortable" : "compact");
     setTextSize(me.textSize === "larger" ? "larger" : "default");
+    setMotion(me.motion === "reduced" ? "reduced" : "full");
   }, [me]);
 
   const update = trpc.user.updateAppearance.useMutation({
@@ -60,7 +64,7 @@ export default function AppearancePage() {
     // re-flow before the round-trip resolves. Cookie is mirrored so
     // the next page reload skips the FOUC entirely.
     document.documentElement.setAttribute("data-density", next);
-    writeAppearanceCookie({ density: next, textSize });
+    writeAppearanceCookie({ density: next, textSize, motion });
     update.mutate({ density: next });
   }
 
@@ -68,8 +72,22 @@ export default function AppearancePage() {
     if (next === textSize) return;
     setTextSize(next);
     document.documentElement.setAttribute("data-textsize", next);
-    writeAppearanceCookie({ density, textSize: next });
+    writeAppearanceCookie({ density, textSize: next, motion });
     update.mutate({ textSize: next });
+  }
+
+  function chooseMotion(next: Motion) {
+    if (next === motion) return;
+    setMotion(next);
+    // Flips the forge-* motion layer live: data-motion="off" freezes
+    // every ambient animation to its static fallback (independent of the
+    // OS reduced-motion media query, which still also gates them).
+    document.documentElement.setAttribute(
+      "data-motion",
+      next === "reduced" ? "off" : "on",
+    );
+    writeAppearanceCookie({ density, textSize, motion: next });
+    update.mutate({ motion: next });
   }
 
   return (
@@ -125,6 +143,8 @@ export default function AppearancePage() {
             </div>
           </section>
 
+          <SectionDivider />
+
           {/* Density -------------------------------------------------- */}
           <Section
             title="Density"
@@ -147,6 +167,8 @@ export default function AppearancePage() {
               />
             </div>
           </Section>
+
+          <SectionDivider />
 
           {/* Text size ------------------------------------------------ */}
           <Section
@@ -173,6 +195,43 @@ export default function AppearancePage() {
                 sample={
                   <span className="font-mono text-[0.6875rem] text-muted-foreground">
                     AXI-1024 · 12px meta
+                  </span>
+                }
+              />
+            </div>
+          </Section>
+
+          <SectionDivider />
+
+          {/* Motion --------------------------------------------------- */}
+          <Section
+            title="Motion"
+            hint="Ambient animation — the grid drift, streaming shimmer, count-ups, and presence breath. Your OS reduced-motion setting is always respected; this is an in-app override."
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <ChoiceCard
+                active={motion === "full"}
+                onClick={() => chooseMotion("full")}
+                title="Full"
+                blurb="Subtle, restrained motion across the app."
+                sample={
+                  <span className="flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
+                    <span className="inline-flex h-1.5 w-1.5 items-center justify-center">
+                      <span className="h-1.5 w-1.5 rounded-full bg-success shadow-[0_0_0_3px_hsl(var(--success)/0.25)] motion-safe:animate-forge-breath" />
+                    </span>
+                    ambient
+                  </span>
+                }
+              />
+              <ChoiceCard
+                active={motion === "reduced"}
+                onClick={() => chooseMotion("reduced")}
+                title="Reduced"
+                blurb="Freeze every ambient animation to its static state."
+                sample={
+                  <span className="flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
+                    <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60" />
+                    static
                   </span>
                 }
               />

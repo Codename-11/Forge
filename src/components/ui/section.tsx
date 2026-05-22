@@ -30,6 +30,17 @@ export function Section({
 }
 
 /**
+ * Hairline divider between stacked sections — M9 (design spec). A static
+ * 1px border line that, when motion is on, periodically runs a slow ember
+ * band across it (a quiet heartbeat for the surface). Reduced-motion /
+ * motion-off renders the plain hairline.
+ */
+export function SectionDivider({ className }: { className?: string }) {
+  // No own margin — let the surrounding stack (e.g. `space-y-*`) space it.
+  return <div aria-hidden className={cn("forge-hairline", className)} />;
+}
+
+/**
  * Standalone section header. Use inside custom layouts that need the
  * same title/hint/actions row shape without the `<Section>` wrapper.
  */

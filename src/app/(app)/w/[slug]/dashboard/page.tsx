@@ -49,7 +49,23 @@ import {
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
+import { useCountUp } from "@/lib/use-count-up";
 import { useWorkspace } from "@/hooks/use-workspace";
+
+/**
+ * M6 (design spec): a metric that counts up from 0 once it scrolls into
+ * view. rAF, no animation library; jumps straight to the value under
+ * reduced-motion / motion-off, and tweens a given value only once per
+ * mount (see {@link useCountUp}).
+ */
+function CountUp({ value, className }: { value: number; className?: string }) {
+  const { value: n, ref } = useCountUp<HTMLSpanElement>(value);
+  return (
+    <span ref={ref} className={className}>
+      {n}
+    </span>
+  );
+}
 
 const PRIORITY_GLYPH: Record<string, string> = {
   URGENT: "!!!",
@@ -232,7 +248,15 @@ export default function DashboardPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-6xl space-y-6 p-6">
+        <div className="relative mx-auto max-w-6xl space-y-6 p-6">
+          {/* M1 (design spec): ambient animated paper grid behind the
+              dashboard. Extends `.grid-striped` to two axes + a slow 48s
+              drift; dialed to 40% so it reads as warmth, not noise.
+              Reduced-motion / motion-off renders a static grid. */}
+          <div
+            aria-hidden
+            className="forge-grid-bg pointer-events-none absolute inset-0 -z-10 opacity-40"
+          />
           <GreetingBar
             greeting={greeting}
             name={firstName}
@@ -343,9 +367,10 @@ export default function DashboardPage() {
                         style={{ backgroundColor: status.color }}
                       />
                       <span className="truncate">{status.name}</span>
-                      <span className="ml-auto font-mono tabular-nums text-muted-foreground">
-                        {count}
-                      </span>
+                      <CountUp
+                        value={count}
+                        className="ml-auto font-mono tabular-nums text-muted-foreground"
+                      />
                     </Link>
                   </li>
                 ))}
