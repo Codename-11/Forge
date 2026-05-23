@@ -604,6 +604,11 @@ export async function POST(req: NextRequest) {
                 errored = true;
                 enqueue(sse("error", { message: e.message }));
                 break;
+              case "approval_resolved":
+                // Confirmation that a pending approval was resolved (our UI
+                // drives the normal case; this also covers resolution by
+                // another client). No further action needed here.
+                break;
               case "usage":
               case "completed":
                 break;

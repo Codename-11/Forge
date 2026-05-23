@@ -150,6 +150,12 @@ export const hermesRunsConnector: DispatchConnector = {
             raw: evt,
           });
           break;
+        case "approval.responded":
+          onEvent({
+            type: "approval_resolved",
+            choice: typeof evt.choice === "string" ? evt.choice : undefined,
+          });
+          break;
         case "run.completed":
           terminal = true;
           onEvent({

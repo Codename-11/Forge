@@ -50,6 +50,12 @@ export type RunEvent =
       tool?: string;
       raw: Record<string, unknown>;
     }
+  | {
+      /** A pending approval was resolved (by us or another client). Lets a
+       * consumer clear a lingering approval card. */
+      type: "approval_resolved";
+      choice?: string;
+    }
   | { type: "usage"; tokensIn?: number; tokensOut?: number; costUsd?: number }
   | { type: "completed"; finalText?: string }
   | { type: "error"; message: string };
