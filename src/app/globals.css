@@ -208,26 +208,43 @@
 
 /* M1: Animated grid background — two-axis paper grid, slow drift.
  * Extends the static `.grid-striped` utility below. */
+/* The grid lives on an oversized ::before driven by a compositor
+ * `transform`, NOT `background-position`. Animating background-position
+ * snaps to whole device pixels, so at this slow drift (~0.8px/s) it
+ * visibly steps one pixel at a time ("tick, tick, tick"); a translate runs
+ * on the GPU and is sub-pixel smooth. The ::before is inset by two tiles
+ * and the element clips it (`overflow: hidden`); a one-tile translate is a
+ * seamless loop because the grid tiles at `--grid-size`.
+ * All consumers are already positioned (signin panel = `relative`, the
+ * dashboard/inbox/command-center overlays = `absolute`), so we don't set
+ * `position` here (it would fight the `.absolute` overlays); `isolation`
+ * gives the negative-z ::before a stacking context to sit behind content. */
 .forge-grid-bg {
   --grid-line: hsl(var(--border) / 0.6);
   --grid-size: 40px;
+  isolation: isolate;
+  overflow: hidden;
+}
+.forge-grid-bg::before {
+  content: "";
+  position: absolute;
+  inset: calc(var(--grid-size) * -2);
+  z-index: -1;
+  pointer-events: none;
   background-image:
     linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
     linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   background-size: var(--grid-size) var(--grid-size);
-  background-position: 0 0, 0 0;
 }
 @media (prefers-reduced-motion: no-preference) {
-  [data-motion="on"] .forge-grid-bg {
+  [data-motion="on"] .forge-grid-bg::before {
     animation: forge-grid-drift 48s linear infinite;
+    will-change: transform;
   }
 }
 @keyframes forge-grid-drift {
-  to {
-    background-position:
-      var(--grid-size) var(--grid-size),
-      var(--grid-size) var(--grid-size);
-  }
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(var(--grid-size), var(--grid-size), 0); }
 }
 
 /* M2: Ember aurora glow (deferred in product; class shipped for parity). */
