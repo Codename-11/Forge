@@ -49,6 +49,9 @@ export async function sweepStalledRuns(
         workspaceId: ws.id,
         status: AgentRunStatus.ACTIVE,
         lastEventAt: { lt: cutoff },
+        // A run paused awaiting operator approval is intentionally idle —
+        // don't misclassify it as stalled.
+        awaitingApprovalAt: null,
       },
       select: {
         id: true,

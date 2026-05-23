@@ -963,6 +963,10 @@ export function ChatThreadView({
   const compactM = trpc.chat.compactThread.useMutation({
     onSuccess: () => void utils.chat.threads.invalidate(),
   });
+  // Backs the `/engine` slash command — switches this agent's chat engine.
+  const setEngineM = trpc.agent.update.useMutation({
+    onSuccess: () => void utils.agent.byId.invalidate({ id: agentId }),
+  });
   // Outbound queue. Submitting never blocks on the in-flight send — the
   // message leaves the composer immediately and joins the queue, which
   // drains FIFO (one stream at a time). Per-item status:
@@ -1626,6 +1630,8 @@ export function ChatThreadView({
   // Build slash-command context — stable reference via useMemo.
   // Prefer agentFull (has all fields); fall back to basic agent shape for
   // id/name/profileKey/status/role which are available from data.agent.
+  const agentRunEngine =
+    (agentFull as { runEngine?: string | null } | undefined)?.runEngine ?? null;
   const slashContext: SlashCommandContext | undefined = useMemo(() => {
     if (!agent || !threadId || !workspace) return undefined;
     return {
@@ -1641,6 +1647,9 @@ export function ChatThreadView({
       },
       thread: { id: threadId },
       workspaceSlug: workspace.slug,
+      currentEngine:
+        agentRunEngine ??
+        (agentFull?.provider === "HERMES" ? "runs (default)" : "completions (default)"),
       appendLocal,
       clearLocal,
       sendPrompt: handleSend,
@@ -1648,9 +1657,20 @@ export function ChatThreadView({
         if (!threadId) return;
         await compactM.mutateAsync({ threadId });
       },
+      setEngine: async (engine) => {
+        await setEngineM.mutateAsync({ id: agent.id, runEngine: engine });
+      },
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agent?.id, agentFull?.runtimeMode, agentFull?.status, threadId, workspace?.slug]);
+  }, [
+    agent?.id,
+    agentFull?.runtimeMode,
+    agentFull?.status,
+    agentRunEngine,
+    agentFull?.provider,
+    threadId,
+    workspace?.slug,
+  ]);
 
   // Auto-scroll to bottom on new messages.
   const scrollerRef = useRef<HTMLDivElement | null>(null);

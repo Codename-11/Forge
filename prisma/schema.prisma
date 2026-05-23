@@ -1746,6 +1746,13 @@ model AgentRun {
   /// approve / stop the live run and correlate streamed `/events`.
   /// Null for webhook/completions-driven runs.
   externalRunId        String?
+  /// Set when a connector-driven run is paused awaiting operator
+  /// permission (e.g. Hermes flagged a dangerous command). Drives the
+  /// Approve/Reject affordance in the Live tab; cleared when the run
+  /// resumes (approved) or finishes (rejected/stopped). The stale
+  /// watchdog skips runs with this set so a blocked run isn't
+  /// misclassified as STALLED.
+  awaitingApprovalAt   DateTime?
   /// Optional pointer at the AGENT_ASSIGNED ActivityEvent that triggered
   /// this run. Useful for ack-window reasoning later.
   assignmentEventId    String?

@@ -1,7 +1,17 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Pin, PinOff, ChevronRight, Bot, ExternalLink } from "lucide-react";
+import {
+  AlertTriangle,
+  Pin,
+  PinOff,
+  ChevronRight,
+  Bot,
+  ExternalLink,
+  ShieldAlert,
+  Check,
+  X,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { RunTimeline } from "./run-timeline";
@@ -36,6 +46,9 @@ export type RunRowData = {
   tokensIn?: number | null;
   tokensOut?: number | null;
   tokensCached?: number | null;
+  /** Set when a connector-driven run paused awaiting operator permission
+   * (e.g. Hermes flagged a dangerous command). Shows Approve/Reject. */
+  awaitingApprovalAt?: Date | string | null;
 };
 
 /** Format a token count compactly: <1k as raw, ≥1k rounded to k. */
@@ -88,10 +101,18 @@ export function RunRow({
   onActivate?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const utils = trpc.useUtils();
   const { data: events } = trpc.agentRun.events.useQuery(
     { runId: run.id, limit: 12 },
     { enabled: expanded, staleTime: 5_000 },
   );
+  const awaitingApproval = Boolean(run.awaitingApprovalAt);
+  const respondApproval = trpc.agentRun.respondApproval.useMutation({
+    onSettled: () => {
+      void utils.agentRun.activeAll.invalidate();
+      void utils.agentRun.activeForIssue.invalidate();
+    },
+  });
 
   const issueKey = run.issue
     ? `${run.issue.workspace.key}-${run.issue.number}`
@@ -239,7 +260,35 @@ export function RunRow({
           </span>
         </span>
       </div>
-      {isStalled && (
+      {awaitingApproval && (
+        <div
+          className="mt-1.5 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-meta"
+          data-no-drag
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+          <span className="min-w-0 flex-1 text-foreground/80">
+            {run.agent.name} needs permission to run a command.
+          </span>
+          <button
+            type="button"
+            disabled={respondApproval.isPending}
+            onClick={() => respondApproval.mutate({ runId: run.id, decision: "approve" })}
+            className="inline-flex items-center gap-1 rounded border border-ember/40 bg-ember/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-ember hover:bg-ember/25 disabled:opacity-50"
+          >
+            <Check className="h-3 w-3" /> Approve
+          </button>
+          <button
+            type="button"
+            disabled={respondApproval.isPending}
+            onClick={() => respondApproval.mutate({ runId: run.id, decision: "reject" })}
+            className="inline-flex items-center gap-1 rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground disabled:opacity-50"
+          >
+            <X className="h-3 w-3" /> Reject
+          </button>
+        </div>
+      )}
+      {isStalled && !awaitingApproval && (
         <div className="mt-1.5 rounded-md border border-warning/30 bg-background/50 px-2 py-1.5 text-meta text-muted-foreground">
           <div className="font-medium text-foreground">
             No run event for {elapsed(lastEventAt)}.

@@ -312,7 +312,10 @@ export function ChatComposer({
   const acceptCommand = useCallback(
     (cmd: SlashCommand) => {
       closePopover();
-      if (cmd.promptDispatch || SLASH_COMMANDS_WITH_ARGS.has(cmd.name)) {
+      // Fill (don't run) when the command takes arguments, so the operator
+      // can type them. `args` metadata is the canonical signal now; keep
+      // the legacy name set as a fallback.
+      if (cmd.args || cmd.promptDispatch || SLASH_COMMANDS_WITH_ARGS.has(cmd.name)) {
         const filled = `/${cmd.name} `;
         setBody(filled);
         requestAnimationFrame(() => {
@@ -529,6 +532,9 @@ export function ChatComposer({
                 )}
               >
                 <span className="text-meta font-mono text-foreground">/{cmd.name}</span>
+                {cmd.args && (
+                  <span className="text-meta font-mono text-ember/80">{cmd.args}</span>
+                )}
                 {cmd.aliases && cmd.aliases.length > 0 && (
                   <span className="text-meta font-mono text-muted-foreground/70">
                     ({cmd.aliases.map((a) => `/${a}`).join(", ")})
