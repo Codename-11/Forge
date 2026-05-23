@@ -386,6 +386,7 @@ export default function AgentsPage() {
           avatar,
           provider: editing.provider,
           runtimeMode: editing.runtimeMode,
+          runEngine: editing.runEngine === "DEFAULT" ? null : editing.runEngine,
           webhookUrl,
           webhookSecret,
           capabilities,

@@ -23,6 +23,8 @@ export interface SlashCommandContext {
   compactThread?: () => Promise<void> | void;
   /** Switch this agent's chat engine (admin only). */
   setEngine?: (engine: "COMPLETIONS" | "RUNS") => Promise<void> | void;
+  /** Fetch live Hermes gateway data (skills/memory/health) as markdown. */
+  hermesInfo?: (resource: "skills" | "memory" | "health") => Promise<string>;
 }
 
 export interface SlashCommand {
@@ -192,19 +194,55 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     },
   },
   {
-    name: "hermes",
-    description: "Safe Hermes bridge: `/hermes status`, `/hermes usage`, `/hermes skills`.",
-    args: "<status|usage|skills>",
-    category: "prompt",
-    promptDispatch: true,
-    run: (args, ctx) => {
-      const allowed = new Set(["status", "usage", "skills"]);
-      const subcommand = args.trim().split(/\s+/)[0]?.toLowerCase();
-      if (!subcommand || !allowed.has(subcommand)) {
-        ctx.appendLocal("_Allowed Hermes commands:_ `/hermes status`, `/hermes usage`, `/hermes skills`.");
+    name: "skills",
+    description: "List this agent's live Hermes skills.",
+    category: "info",
+    run: async (_args, ctx) => {
+      if (!ctx.hermesInfo) {
+        ctx.appendLocal("_Live skills aren't available here._");
         return;
       }
-      ctx.sendPrompt(`Run the safe Hermes ${subcommand} check for this Forge conversation and summarize the result.`);
+      ctx.appendLocal(await ctx.hermesInfo("skills"));
+    },
+  },
+  {
+    name: "memory",
+    description: "Show this agent's live Hermes memory.",
+    category: "info",
+    run: async (_args, ctx) => {
+      if (!ctx.hermesInfo) {
+        ctx.appendLocal("_Live memory isn't available here._");
+        return;
+      }
+      ctx.appendLocal(await ctx.hermesInfo("memory"));
+    },
+  },
+  {
+    name: "hermes",
+    description: "Hermes bridge: `/hermes status` (live), `/hermes usage` (asks the agent).",
+    args: "<status|usage>",
+    category: "info",
+    run: async (args, ctx) => {
+      const sub = args.trim().split(/\s+/)[0]?.toLowerCase();
+      if (sub === "status") {
+        if (!ctx.hermesInfo) {
+          ctx.appendLocal("_Live status isn't available here._");
+          return;
+        }
+        ctx.appendLocal(await ctx.hermesInfo("health"));
+        return;
+      }
+      if (sub === "usage") {
+        // No gateway API for usage — ask the agent to run its own check.
+        ctx.sendPrompt(
+          "Run the safe Hermes usage check for this conversation and summarize the token usage.",
+        );
+        return;
+      }
+      ctx.appendLocal(
+        "_Usage:_ `/hermes status` (live gateway health) · `/hermes usage` (agent token report). " +
+          "See also `/skills` and `/memory`.",
+      );
     },
   },
 ];

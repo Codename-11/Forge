@@ -196,7 +196,8 @@ export function Sidebar({
 
       <button
         data-command-palette
-        title={`Search or jump (${mod}+K)`}
+        title="Search or jump"
+        data-tooltip-kbd={`${mod} K`}
         className={cn(
           "mx-2 mt-3 flex h-7 items-center gap-2 rounded-md border border-border bg-background text-xs text-muted-foreground hover:bg-subtle",
           collapsed
@@ -224,7 +225,8 @@ export function Sidebar({
 
       <button
         data-quick-create
-        title={`${quickCreateLabel} (Shift+C)`}
+        title={quickCreateLabel}
+        data-tooltip-kbd="⇧ C"
         className={cn(
           "mx-2 mt-1 flex h-7 items-center gap-2 rounded-md bg-ember text-xs font-medium text-ember-foreground hover:bg-ember/90",
           collapsed
@@ -326,7 +328,8 @@ export function Sidebar({
       <button
         type="button"
         onClick={() => setCollapsed(!collapsed)}
-        title={`${collapsed ? "Expand" : "Collapse"} sidebar (${mod}+\\)`}
+        title={`${collapsed ? "Expand" : "Collapse"} sidebar`}
+        data-tooltip-kbd={`${mod} \\`}
         className={cn(
           "mx-2 mb-2 flex h-7 items-center gap-2 rounded-md border border-border/70 bg-transparent text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground",
           collapsed
@@ -378,12 +381,12 @@ function NavRow({
   const active = pathname === href || pathname?.startsWith(`${href}/`);
   const badgeCount =
     badge === "inbox" ? inboxCount : badge === "decisions" ? decisionsCount : 0;
-  const chordHint = chord ? `g then ${chord}` : label;
   return (
     <Link
       key={path}
       href={href}
-      title={chordHint}
+      title={label}
+      data-tooltip-kbd={chord ? `G ${chord.toUpperCase()}` : undefined}
       className={cn(
         "row relative h-8 rounded-md text-[0.8125rem]",
         active

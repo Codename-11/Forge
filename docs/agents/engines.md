@@ -4,8 +4,8 @@ Every agent in Forge runs through one of two **execution engines**. The
 engine decides *who owns the agent loop* — Forge, or the agent's own
 runtime (e.g. Hermes).
 
-You pick the engine per agent in **Settings → Agents → (edit) → Chat
-engine**. The default comes from the integration — **Hermes defaults to
+You pick the engine per agent in **Settings → Agents → (create or edit) →
+Chat engine**. The default comes from the integration — **Hermes defaults to
 Runs** (you're talking to *your* agent, with its own memory and tools) —
 and any agent can override it. Flip an agent to **Completions** for a
 stateless, Forge-owned loop.

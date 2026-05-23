@@ -49,6 +49,8 @@ const upsertInput = z.object({
   runtimeMode: z
     .nativeEnum(AgentRuntimeMode)
     .default(AgentRuntimeMode.PERSISTENT),
+  /// Chat engine override at creation. Null/omitted = integration default.
+  runEngine: z.nativeEnum(RunEngine).nullable().optional(),
   webhookUrl: z.string().url().max(500).optional().or(z.literal("")),
   webhookSecret: z.string().max(500).optional().or(z.literal("")),
   capabilities: z.array(z.string().min(1).max(40)).max(32).default([]),
@@ -273,6 +275,7 @@ export const agentRouter = router({
           avatar: input.avatar,
           provider: input.provider,
           runtimeMode: input.runtimeMode,
+          runEngine: input.runEngine ?? null,
           webhookUrl: input.webhookUrl || null,
           webhookSecret: input.webhookSecret || null,
           capabilities: input.capabilities,
