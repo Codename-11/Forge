@@ -126,9 +126,20 @@ runtimes into one managed `hermes` runtime (endpoint/secret moved onto it),
 re-point Victor + Mizu's `runtimeId` at it, and treat per-agent `webhookUrl`
 as an optional override. Idempotent; guarded; verifiable via `agents.list`.
 
-**Phase 4 — deprecation.** Once everything reads from the runtime, drop
-`Agent.webhookUrl` / `webhookSecret` (or keep as explicit override). Remove
-`integrations/adapters.ts` shim.
+**Phase 4 — make the registry canonical; deprecate the legacy manifest.**
+- `resolveRunEngine` now reads the RuntimeAdapter registry, not the
+  provider-keyed `integrations/adapters.ts` manifest (now `@deprecated`,
+  kept only to feed the legacy `/settings/integrations` onboarding page
+  until it renders from the registry).
+- **Deferred (gated, not done):** dropping `Agent.webhookUrl` /
+  `webhookSecret`. They're still the live source of truth for *webhook
+  delivery* (`audit.ts`) — Hermes profiles each have a distinct inbound
+  webhook — so dropping now breaks live dispatch. The drop is contingent on
+  operators consolidating topology onto managed runtimes (one Hermes runtime
+  per gateway, agents attached) via the Phase 2 UI, after which webhook
+  delivery resolves from the runtime and the columns become removable. The
+  schema comments already mark them "slated for removal." This is the
+  correct sequencing, not an omission.
 
 ## Compatibility / rollback
 

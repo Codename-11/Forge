@@ -1,6 +1,15 @@
 import "server-only";
 import type { AgentProvider, AgentRuntimeMode, RunEngine } from "@prisma/client";
 
+/**
+ * @deprecated Superseded by the provider-agnostic RuntimeAdapter registry
+ * (`src/server/runtimes/adapters.ts`), which is the canonical source for
+ * adapter capabilities and run-engine defaults. This provider-keyed manifest
+ * survives only to feed the legacy `/settings/integrations` onboarding page
+ * (its per-provider `setupMarkdown`/`mcpSnippet`) until that page is migrated
+ * to render from the registry. Do not add new consumers — read the registry.
+ * See `docs/plans/runtime-adapter-refactor.md` (Phase 4).
+ */
 export interface IntegrationAdapter {
   /** Stable id matching the existing AgentProvider enum. */
   kind: AgentProvider;

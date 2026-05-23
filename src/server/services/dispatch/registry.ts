@@ -1,20 +1,24 @@
 import "server-only";
 import type { AgentProvider } from "@prisma/client";
-import { getIntegrationAdapter } from "@/server/integrations/adapters";
+import { defaultAdapterForProvider } from "@/server/runtimes/adapters";
 import { hermesRunsConnector, makeHermesRunsConnector } from "./hermes-runs";
 import type { DispatchConnector, RunEngine } from "./types";
 
 /**
  * Resolve the effective chat engine for an agent: its explicit
- * `runEngine` if set, otherwise the integration's `defaultRunEngine`
+ * `runEngine` if set, otherwise the adapter's `defaultRunEngine`
  * (falling back to COMPLETIONS for safety / unknown providers).
+ *
+ * Canonical source is the provider-agnostic RuntimeAdapter registry
+ * (`src/server/runtimes/adapters.ts`); the legacy integrations manifest is
+ * deprecated.
  */
 export function resolveRunEngine(agent: {
   runEngine: RunEngine | null;
   provider: AgentProvider;
 }): RunEngine {
   if (agent.runEngine) return agent.runEngine;
-  return getIntegrationAdapter(agent.provider)?.defaultRunEngine ?? "COMPLETIONS";
+  return defaultAdapterForProvider(agent.provider)?.defaultRunEngine ?? "COMPLETIONS";
 }
 
 /**
