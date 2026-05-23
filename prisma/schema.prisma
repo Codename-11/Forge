@@ -1753,6 +1753,11 @@ model AgentRun {
   /// watchdog skips runs with this set so a blocked run isn't
   /// misclassified as STALLED.
   awaitingApprovalAt   DateTime?
+  /// Detail of the pending approval captured from the live `/events`
+  /// stream (Hermes `approval.request`): `{ command, description,
+  /// choices }`. Lets the Live-tab banner show *what* is being approved,
+  /// not just that something is. Null when not blocked.
+  pendingApproval      Json?
   /// Optional pointer at the AGENT_ASSIGNED ActivityEvent that triggered
   /// this run. Useful for ack-window reasoning later.
   assignmentEventId    String?

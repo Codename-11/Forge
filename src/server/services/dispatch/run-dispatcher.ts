@@ -1,5 +1,5 @@
 import "server-only";
-import { AgentRunStatus, EventKind } from "@prisma/client";
+import { AgentRunStatus, EventKind, Prisma } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/agent-run";
@@ -242,6 +242,7 @@ async function pollActiveRuns(): Promise<number> {
           where: { id: run.id },
           data: {
             awaitingApprovalAt: null,
+            pendingApproval: Prisma.DbNull,
             ...(usage && (usage.tokensIn || usage.tokensOut || usage.costUsd)
               ? {
                   tokensIn: usage.tokensIn ?? null,
@@ -257,12 +258,174 @@ async function pollActiveRuns(): Promise<number> {
   return polled;
 }
 
-/** One worker tick: start fresh runs, then poll live ones. */
-export async function ingestRunsDispatch(): Promise<{ started: number; polled: number }> {
-  const started = await startNewRuns();
-  const polled = await pollActiveRuns();
-  if (started > 0 || polled > 0) {
-    logger.info({ started, polled }, "runs-dispatch: tick");
+// ---------------------------------------------------------------------------
+// Live `/events` enrichment.
+//
+// Polling (above) owns the run lifecycle: terminal finish, usage, and the
+// awaitingApproval flag. This layer adds a *live* SSE subscription per run
+// that enriches the timeline with per-tool / thinking steps and — crucially
+// — captures the exact command behind an `approval.request` (the poll status
+// can't see it). Subscriptions are tracked in-process and re-established by
+// the sweep, so a worker restart self-heals (no durable subscription state).
+// ---------------------------------------------------------------------------
+
+const subscriptions = new Map<string, AbortController>();
+
+function fireDb(p: Promise<unknown>, runId: string, what: string): void {
+  void p.catch((err) => logger.warn({ err, runId }, `runs-dispatch: ${what} failed`));
+}
+
+async function subscribeRun(run: {
+  id: string;
+  workspaceId: string;
+  issueId: string;
+  agentId: string;
+  externalRunId: string;
+  provider: import("@prisma/client").AgentProvider;
+}): Promise<void> {
+  if (subscriptions.has(run.id)) return;
+  const connector = getRunsConnector(run.provider);
+  if (!connector?.subscribe) return;
+  const ctrl = new AbortController();
+  subscriptions.set(run.id, ctrl);
+  const base = {
+    runId: run.id,
+    workspaceId: run.workspaceId,
+    issueId: run.issueId,
+    agentId: run.agentId,
+  };
+  try {
+    await connector.subscribe(
+      run.externalRunId,
+      (e) => {
+        switch (e.type) {
+          case "tool_started":
+            fireDb(
+              db.$transaction((tx) =>
+                appendRunEvent(tx, {
+                  ...base,
+                  kind: "TOOL_CALL",
+                  currentStep: `running ${e.tool}`,
+                  payload: { tool: e.tool, preview: e.preview ?? null },
+                }),
+              ),
+              run.id,
+              "tool step",
+            );
+            break;
+          case "tool_completed":
+            fireDb(
+              db.$transaction((tx) =>
+                appendRunEvent(tx, {
+                  ...base,
+                  kind: "TOOL_CALL",
+                  payload: { tool: e.tool, done: true, error: e.isError ?? false },
+                }),
+              ),
+              run.id,
+              "tool done",
+            );
+            break;
+          case "thinking":
+            fireDb(
+              db.$transaction((tx) =>
+                appendRunEvent(tx, {
+                  ...base,
+                  kind: "STEP",
+                  currentStep: "thinking",
+                  payload: { thinking: e.text.slice(0, 280) },
+                }),
+              ),
+              run.id,
+              "thinking step",
+            );
+            break;
+          case "approval_required":
+            // Capture the command + set the block (whichever of poll/sub
+            // is first wins via the awaitingApprovalAt guard).
+            fireDb(
+              db.agentRun.updateMany({
+                where: { id: run.id, awaitingApprovalAt: null },
+                data: {
+                  awaitingApprovalAt: new Date(),
+                  pendingApproval: {
+                    command: typeof e.raw.command === "string" ? e.raw.command : null,
+                    description:
+                      typeof e.raw.description === "string" ? e.raw.description : null,
+                    choices: e.choices,
+                  },
+                },
+              }),
+              run.id,
+              "approval capture",
+            );
+            break;
+          case "approval_resolved":
+            fireDb(
+              db.agentRun.update({
+                where: { id: run.id },
+                data: { awaitingApprovalAt: null, pendingApproval: Prisma.DbNull },
+              }),
+              run.id,
+              "approval clear",
+            );
+            break;
+          // Terminal + content are owned by the poll loop / final summary.
+          default:
+            break;
+        }
+      },
+      ctrl.signal,
+    );
+  } catch (err) {
+    logger.warn({ err, runId: run.id }, "runs-dispatch: subscription error");
+  } finally {
+    subscriptions.delete(run.id);
   }
-  return { started, polled };
+}
+
+/** Ensure a live subscription exists for each active connector-driven run. */
+async function ensureSubscriptions(): Promise<number> {
+  const runs = await db.agentRun.findMany({
+    where: { status: AgentRunStatus.ACTIVE, externalRunId: { not: null } },
+    take: POLL_BATCH,
+    select: {
+      id: true,
+      workspaceId: true,
+      issueId: true,
+      agentId: true,
+      externalRunId: true,
+      agent: { select: { provider: true } },
+    },
+  });
+  let n = 0;
+  for (const run of runs) {
+    if (subscriptions.has(run.id) || !run.externalRunId) continue;
+    // Detached — runs for the lifetime of the run; self-removes on end.
+    void subscribeRun({
+      id: run.id,
+      workspaceId: run.workspaceId,
+      issueId: run.issueId,
+      agentId: run.agentId,
+      externalRunId: run.externalRunId,
+      provider: run.agent.provider,
+    });
+    n++;
+  }
+  return n;
+}
+
+/** One worker tick: start fresh runs, poll lifecycle, ensure live subs. */
+export async function ingestRunsDispatch(): Promise<{
+  started: number;
+  polled: number;
+  subscribed: number;
+}> {
+  const started = await startNewRuns();
+  const subscribed = await ensureSubscriptions();
+  const polled = await pollActiveRuns();
+  if (started > 0 || polled > 0 || subscribed > 0) {
+    logger.info({ started, polled, subscribed }, "runs-dispatch: tick");
+  }
+  return { started, polled, subscribed };
 }

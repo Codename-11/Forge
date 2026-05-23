@@ -356,6 +356,26 @@
   }
 }
 
+/* M5 cursor: blinking ember caret trailing the streaming draft text.
+ * Reuses the M8 `forge-caret-blink` keyframe. The parent `.forge-streaming`
+ * sets `color: transparent` for the text clip; this `::after` carries its
+ * own explicit ember background so it renders regardless. Static (non-
+ * blinking) bar under reduced-motion / motion-off — still signals "live". */
+.forge-streaming-cursor::after {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 1.05em;
+  margin-left: 2px;
+  background: hsl(var(--ember));
+  vertical-align: -0.15em;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-streaming-cursor::after {
+    animation: forge-caret-blink 1.05s steps(2, start) infinite;
+  }
+}
+
 /* M7: Active-path glow on the single RUNNING node. Pairs with the
  * existing `.dag-edge-flow` marching dash. */
 .forge-active-node {
