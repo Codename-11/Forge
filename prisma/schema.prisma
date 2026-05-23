@@ -1586,6 +1586,12 @@ model Runtime {
   workspaceId        String
   name               String
   kind               RuntimeKind
+  /// Which provider-agnostic RuntimeAdapter this runtime instances
+  /// (`src/server/runtimes/adapters.ts`) — "hermes", "local-daemon",
+  /// "custom-http", … Source of truth for "what manages this runtime,"
+  /// replacing inference from `kind`. Nullable for back-compat; backfilled
+  /// in migration 0059. See `docs/plans/runtime-adapter-refactor.md`.
+  adapterKey         String?
   /// Webhook URL for REMOTE_HTTP. Null for LOCAL_DAEMON (the daemon
   /// polls Forge via SSE).
   endpoint           String?
