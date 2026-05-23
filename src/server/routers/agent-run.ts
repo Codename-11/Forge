@@ -8,7 +8,7 @@ import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { appendRunEvent, finishRun } from "@/server/services/agent-run";
-import { getRunsConnector } from "@/server/services/dispatch/registry";
+import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // a loose validator instead of `.cuid()` so both shapes pass.
@@ -813,7 +813,12 @@ export const agentRunRouter = router({
           status: true,
           externalRunId: true,
           awaitingApprovalAt: true,
-          agent: { select: { provider: true } },
+          agent: {
+            select: {
+              provider: true,
+              runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+            },
+          },
         },
       });
       if (!run) throw new TRPCError({ code: "NOT_FOUND", message: "Run not found." });
@@ -823,7 +828,10 @@ export const agentRunRouter = router({
           message: "Run is not awaiting approval.",
         });
       }
-      const connector = getRunsConnector(run.agent.provider);
+      const connector = getRunsConnectorForAgent({
+        provider: run.agent.provider,
+        runtime: run.agent.runtime,
+      });
       if (!connector) {
         throw new TRPCError({
           code: "BAD_REQUEST",

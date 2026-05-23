@@ -1,7 +1,7 @@
 import "server-only";
 import type { AgentProvider } from "@prisma/client";
 import { getIntegrationAdapter } from "@/server/integrations/adapters";
-import { hermesRunsConnector } from "./hermes-runs";
+import { hermesRunsConnector, makeHermesRunsConnector } from "./hermes-runs";
 import type { DispatchConnector, RunEngine } from "./types";
 
 /**
@@ -30,4 +30,31 @@ export function getRunsConnector(provider: AgentProvider): DispatchConnector | n
     default:
       return null;
   }
+}
+
+export type AgentRuntimeRef = {
+  adapterKey: string | null;
+  endpoint: string | null;
+  secret: string | null;
+} | null | undefined;
+
+/**
+ * Runs connector for an agent, honoring a managed runtime's endpoint/secret
+ * when present. A Hermes runtime with a configured `endpoint` targets that
+ * specific gateway; otherwise we fall back to the env-based connector.
+ *
+ * Backfilled "(legacy webhook)" runtimes have their `endpoint` nulled in
+ * migration 0060 (a Hermes runtime's endpoint must be the runs gateway base,
+ * not the per-agent webhook URL 0018 put there), so they fall through to the
+ * env gateway until an operator sets the real base in Settings → Runtimes.
+ */
+export function getRunsConnectorForAgent(agent: {
+  provider: AgentProvider;
+  runtime?: AgentRuntimeRef;
+}): DispatchConnector | null {
+  const rt = agent.runtime;
+  if (rt && rt.adapterKey === "hermes" && rt.endpoint) {
+    return makeHermesRunsConnector({ baseUrl: rt.endpoint, token: rt.secret });
+  }
+  return getRunsConnector(agent.provider);
 }

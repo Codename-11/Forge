@@ -17,7 +17,7 @@ import {
 } from "@/server/services/chat-tools-allowlist";
 import { executeChatTool } from "@/server/services/chat-tool-exec";
 import { pendingApprovals } from "@/server/services/chat-stream-state";
-import { resolveRunEngine, getRunsConnector } from "@/server/services/dispatch/registry";
+import { resolveRunEngine, getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
 import { loadCanvasContextSummary } from "@/server/services/chat-context-canvas";
 import { presignDownloadUrl } from "@/server/services/storage";
 import { logger } from "@/server/logger";
@@ -101,6 +101,7 @@ export async function POST(req: NextRequest) {
           runEngine: true,
           templateMarkdown: true,
           capabilities: true,
+          runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
         },
       },
     },
@@ -120,7 +121,12 @@ export async function POST(req: NextRequest) {
     runEngine: agent.runEngine,
     provider: effectiveProvider,
   });
-  const runsConnector = getRunsConnector(effectiveProvider);
+  // Honor a managed runtime's gateway endpoint when one is configured;
+  // falls back to the env gateway otherwise (see getRunsConnectorForAgent).
+  const runsConnector = getRunsConnectorForAgent({
+    provider: effectiveProvider,
+    runtime: agent.runtime,
+  });
   const useRuns = runEngine === "RUNS" && runsConnector != null;
 
   // Resolve + verify attachments before opening the stream so we don't
