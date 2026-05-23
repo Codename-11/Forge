@@ -89,7 +89,7 @@ export default function IntegrationsPage() {
                         {a.agents.length > 0 ? "Manage keys" : "Generate key"}
                       </Link>
                       <Link
-                        href={`/w/${ws.slug}/settings/integrations/deliveries`}
+                        href={`/w/${ws.slug}/settings/deliveries`}
                         className="text-[0.75rem] text-muted-foreground hover:text-foreground"
                       >
                         Deliveries →

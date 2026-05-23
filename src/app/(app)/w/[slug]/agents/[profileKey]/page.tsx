@@ -251,14 +251,14 @@ function HealthFocusBanner({
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Link
-          href={`/w/${ws.slug}/settings/integrations/deliveries?status=DEAD_LETTER&agentId=${encodeURIComponent(agent.id)}`}
+          href={`/w/${ws.slug}/settings/deliveries?status=DEAD_LETTER&agentId=${encodeURIComponent(agent.id)}`}
           className="focus-ring inline-flex items-center gap-1 rounded-sm text-foreground hover:text-ember"
         >
           Open dead letters
           <ExternalLink className="h-3 w-3" />
         </Link>
         <Link
-          href={`/w/${ws.slug}/settings/integrations/deliveries?status=FAILED&agentId=${encodeURIComponent(agent.id)}`}
+          href={`/w/${ws.slug}/settings/deliveries?status=FAILED&agentId=${encodeURIComponent(agent.id)}`}
           className="focus-ring inline-flex items-center gap-1 rounded-sm text-muted-foreground hover:text-foreground"
         >
           Open failed deliveries
@@ -1333,7 +1333,7 @@ function deliveryInspectorHref(
   const params = new URLSearchParams({ status: input.status });
   if (input.deliveryId) params.set("deliveryId", input.deliveryId);
   if (input.agentId) params.set("agentId", input.agentId);
-  return `/w/${slug}/settings/integrations/deliveries?${params.toString()}`;
+  return `/w/${slug}/settings/deliveries?${params.toString()}`;
 }
 
 function formatDuration(ms: number | null | undefined): string {

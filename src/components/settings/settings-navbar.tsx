@@ -2,32 +2,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  ArrowLeft,
-  Bot,
-  ClipboardList,
-  Key,
-  Layers,
-  ListChecks,
-  Palette,
-  Plug,
-  PlugZap,
-  Repeat,
-  Send,
-  Server,
-  Settings as SettingsIcon,
-  Shield,
-  Tag,
-  User as UserIcon,
-  Users,
-  Workflow,
-} from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  ACCOUNT_SETTINGS_GROUP,
+  WORKSPACE_SETTINGS_GROUPS,
+  type SettingsNavItem,
+} from "./settings-nav";
 
 type NavItem = {
   href: string;
   label: string;
-  Icon: React.ComponentType<{ className?: string }>;
+  icon: SettingsNavItem["icon"];
   exact?: boolean;
 };
 
@@ -146,7 +132,7 @@ function SettingsLinkRow({
                 : "text-muted-foreground hover:bg-subtle/70 hover:text-foreground",
             )}
           >
-            <item.Icon className="h-3.5 w-3.5 shrink-0" />
+            <item.icon className="h-3.5 w-3.5 shrink-0" />
             <span className="whitespace-nowrap">{item.label}</span>
           </Link>
         );
@@ -160,62 +146,29 @@ function isActiveItem(pathname: string | null, item: NavItem) {
   return item.exact ? pathname === item.href : pathname === item.href || pathname.startsWith(`${item.href}/`);
 }
 
+// Both scopes derive their nav from the single source of truth in
+// `settings-nav.ts`, so the navbar and the Overview index can't drift.
 function workspaceGroups(slug: string): NavGroup[] {
-  const w = (p: string) => `/w/${slug}/settings${p}`;
-  return [
-    {
-      label: "Workspace",
-      items: [
-        { href: w(""), label: "Overview", Icon: SettingsIcon, exact: true },
-        { href: w("/workspace"), label: "General", Icon: SettingsIcon },
-        { href: w("/members"), label: "Members", Icon: Users },
-      ],
-    },
-    {
-      label: "Workflow",
-      items: [
-        { href: w("/statuses"), label: "Statuses", Icon: ListChecks },
-        { href: w("/labels"), label: "Labels", Icon: Tag },
-        { href: w("/templates"), label: "Templates", Icon: ClipboardList },
-        { href: w("/views"), label: "Saved views", Icon: Layers },
-        { href: w("/recurring"), label: "Recurring", Icon: Repeat },
-      ],
-    },
-    {
-      label: "Automation",
-      items: [
-        { href: w("/agents"), label: "Agents", Icon: Bot },
-        { href: w("/dispatch-rules"), label: "Dispatch", Icon: Workflow },
-      ],
-    },
-    {
-      label: "Integrations",
-      items: [
-        { href: w("/integrations"), label: "Integrations", Icon: PlugZap },
-        { href: w("/runtimes"), label: "Runtimes", Icon: Server },
-        { href: w("/plugins"), label: "Plugins", Icon: Plug },
-        { href: w("/integrations/deliveries"), label: "Deliveries", Icon: Send },
-      ],
-    },
-    {
-      label: "Admin",
-      items: [
-        { href: w("/admin"), label: "Admin portal", Icon: Shield },
-      ],
-    },
-  ];
+  return WORKSPACE_SETTINGS_GROUPS.map((group) => ({
+    label: group.label,
+    items: group.items.map((item) => ({
+      href: `/w/${slug}/settings${item.path}`,
+      label: item.label,
+      icon: item.icon,
+    })),
+  }));
 }
 
 function accountGroups(): NavGroup[] {
   return [
     {
-      label: "Account",
-      items: [
-        { href: "/settings/account", label: "Profile", Icon: UserIcon },
-        { href: "/settings/appearance", label: "Appearance", Icon: Palette },
-        { href: "/settings/access", label: "Developer access", Icon: Key },
-        { href: "/settings/workspaces", label: "Workspaces", Icon: Layers },
-      ],
+      label: ACCOUNT_SETTINGS_GROUP.label,
+      items: ACCOUNT_SETTINGS_GROUP.items.map((item) => ({
+        // Account paths are already rooted at `/settings`.
+        href: item.path,
+        label: item.label,
+        icon: item.icon,
+      })),
     },
   ];
 }

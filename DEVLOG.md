@@ -6494,6 +6494,47 @@ bytes. Single-shot deploy.
   could let comments embed bare LINK chips without a separate
   Attachment row.
 
+## 2026-05-22 — fix(ui): tooltip polish + settings IA restructure
+
+Post-merge cleanup of the design-system landing.
+
+### Motion-merge regressions found + fixed
+- **M1 grid invisible** — the animated paper grid used `-z-10` inside a
+  `.relative` parent with no stacking context, so it painted behind
+  `<main>`'s opaque `bg-background`. Added `isolate` to the parent on the
+  dashboard, and wired the (previously missing) grid into Command Center.
+- **M5 streaming caret** — `chat-message.tsx` referenced
+  `.forge-streaming-cursor` (per `motion.md` M5 = "sweep + caret") but the
+  CSS rule was never written. Added the `::after` caret reusing the
+  `forge-caret-blink` keyframe. Audited every other `forge-*` resting state
+  for invisibility; rest are sound.
+
+### Themed tooltips (`native-tooltips.tsx`)
+- Two-pass measure-and-clamp: tooltips now stay fully inside the viewport
+  (was: only the horizontal center was clamped, no vertical clamp at all,
+  so edge tooltips clipped). Vertical placement flips by available room.
+- `data-tooltip-kbd` support: keyboard shortcuts render as `.kbd` chips
+  inside the tooltip; `title` carries the clean label only.
+- Sidebar collapsed icons now tooltip the page/view **name** (was the bare
+  "g then d" chord), with the chord as `G`/`<key>` chips. Same treatment
+  for the Search, Quick-create, and Collapse controls.
+
+### Settings information architecture
+- **Single source of truth** — new `components/settings/settings-nav.ts`.
+  Both the `SettingsNavbar` and the settings Overview index render from it;
+  they previously kept separate, drifting inventories (crews in one,
+  runtimes in the other, admin grouped differently).
+- **Crews folded out of settings** — the canonical surface is the
+  top-level `/crews` (+ `/crews/<id>` detail with full roster mgmt). The
+  stale `/settings/crews` page is now a redirect; removed the top-level
+  "Manage" detour button.
+- **Deliveries flattened** — `/settings/integrations/deliveries` →
+  `/settings/deliveries` (query-preserving redirect at the old path;
+  internal deep-links from the agents page repointed).
+- Fixed the wrong `(app)/layout.tsx` comment claiming the account redirect
+  stubs "preserve the workspace shell" (they redirect to the chromeless
+  account shell).
+
 ## Known gaps / TODOs in code
 
 - `auth.ts` assumes `nodemailer` provider; install and configure SMTP.
