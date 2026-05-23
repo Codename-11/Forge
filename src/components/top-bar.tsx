@@ -144,7 +144,7 @@ function UserMenu({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-[calc(100%+6px)] w-60 overflow-hidden rounded-md border border-border bg-card shadow-lg"
+          className="absolute right-0 top-[calc(100%+6px)] z-50 w-60 overflow-hidden rounded-md border border-border bg-card shadow-lg"
         >
           <div className="border-b border-border px-3 py-2">
             <div className="truncate text-xs font-medium">{user.name ?? user.email}</div>
