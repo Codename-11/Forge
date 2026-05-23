@@ -1655,16 +1655,17 @@ model Agent {
   /// Dispatch (assigned work) always uses RUNS when the connector
   /// supports it; this column governs the interactive chat surface.
   runEngine        RunEngine?
-  /// Outbound webhook for push dispatch (issue.assigned etc).
-  /// Legacy: kept in lockstep with `runtime.endpoint` for REMOTE_HTTP
-  /// runtimes during the Runtime-as-primitive transition. A future
-  /// migration will drop this column once Runtime is the sole source
-  /// of truth (and all dispatch code reads from `Runtime.endpoint`).
+  /// Outbound webhook for push dispatch (issue.assigned etc) — the BYO /
+  /// custom-webhook path and a per-agent OVERRIDE. As of the runtime-adapter
+  /// refactor the managed Runtime owns the *runs* loop endpoint
+  /// (`Runtime.endpoint`, see getRunsConnectorForAgent); this column is the
+  /// override for agents that receive push delivery (RUNS-engine agents have
+  /// it suppressed — they're dispatched via the runs API). Retained, not
+  /// dropped: it backs the custom-webhook agent feature.
   webhookUrl       String?
   /// Optional HMAC secret for webhook signing; falls back to the
-  /// workspace-level synthetic webhook secret when unset.
-  /// Legacy: see note on `webhookUrl` — slated for removal once
-  /// `Runtime.secret` is authoritative.
+  /// workspace-level synthetic webhook secret when unset. Per-agent override,
+  /// same status as `webhookUrl`.
   webhookSecret    String?
   /// Runtime that hosts this agent. Null = legacy / unbound. SetNull on
   /// runtime delete so the agent row survives runtime churn.
