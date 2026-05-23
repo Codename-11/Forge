@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-22 — Dispatch approval UI + slash-command enhancements
+
+**Dispatch approvals (the deferred Phase-2 follow-up).** A connector-driven
+run that pauses for operator permission is now actionable from Mission Control.
+- Migration 0056: `AgentRun.awaitingApprovalAt`.
+- `run-dispatcher` poll: on `waiting_for_approval` sets the flag + a one-shot
+  BLOCKED event (keeps the run ACTIVE so it stays in the Live tab); on resume
+  clears it; terminal always clears it.
+- Stale watchdog skips `awaitingApprovalAt` runs (a blocked run is
+  intentionally idle, not dead).
+- `agentRun.respondApproval({ runId, decision })`: approve → connector
+  `approve('once')` + resume; reject → connector `stop()` + finishRun ABANDONED.
+- RunRow shows an amber "needs permission" banner with Approve / Reject.
+- engines.md gained a "Permission blocks (approvals)" section (chat + dispatch).
+
+**Slash commands.** Added an `args` usage-hint field (rendered in the `/`
+autocomplete + `/help`), and new commands:
+- `/engine [completions|runs]` — show or switch this agent's chat engine
+  (ties into the engine work; admin-only switch, errors surfaced inline).
+- `/assign <KEY>` — ask the agent to take an issue.
+- Existing commands tagged with arg hints.
+- chat-thread wires `currentEngine` + `setEngine` (via `agent.update`) into the
+  slash context.
+
+typecheck + eslint clean; chat/dispatcher/run-stale/orchestration tests green.
+
 ## 2026-05-22 — Hermes default→runs, approval semantics, FREE_FORM answers
 
 Follow-on to the engine work, after researching the Hermes gateway approval

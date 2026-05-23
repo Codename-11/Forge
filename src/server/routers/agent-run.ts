@@ -7,6 +7,8 @@ import { recordChange } from "@/server/audit";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
+import { appendRunEvent, finishRun } from "@/server/services/agent-run";
+import { getRunsConnector } from "@/server/services/dispatch/registry";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // a loose validator instead of `.cuid()` so both shapes pass.
@@ -724,6 +726,82 @@ export const agentRunRouter = router({
    * Records `EventKind.AGENT_RUN_KICKED` so the timeline distinguishes
    * a kick from auto-dispatch / control-request flows.
    */
+  /**
+   * Resolve a connector-driven run that paused awaiting operator
+   * permission (Hermes flagged a dangerous command). Approve → allow the
+   * command once and resume; reject → stop the run (a bare gateway "deny"
+   * leaves the agent blocked, so we interrupt it) and mark it ABANDONED.
+   */
+  respondApproval: workspaceProcedure
+    .input(z.object({ runId: idString, decision: z.enum(["approve", "reject"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const run = await ctx.db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          issueId: true,
+          agentId: true,
+          status: true,
+          externalRunId: true,
+          awaitingApprovalAt: true,
+          agent: { select: { provider: true } },
+        },
+      });
+      if (!run) throw new TRPCError({ code: "NOT_FOUND", message: "Run not found." });
+      if (!run.externalRunId || !run.awaitingApprovalAt) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Run is not awaiting approval.",
+        });
+      }
+      const connector = getRunsConnector(run.agent.provider);
+      if (!connector) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "No run connector for this agent's provider.",
+        });
+      }
+
+      if (input.decision === "approve") {
+        await connector.approve?.(run.externalRunId, "once");
+        await ctx.db.$transaction(async (tx) => {
+          await tx.agentRun.update({
+            where: { id: run.id },
+            data: { awaitingApprovalAt: null, lastEventAt: new Date() },
+          });
+          await appendRunEvent(tx, {
+            runId: run.id,
+            workspaceId: ctx.workspaceId,
+            issueId: run.issueId,
+            agentId: run.agentId,
+            kind: "STEP",
+            currentStep: "approved · resuming",
+            payload: { approval: "once" },
+          });
+        });
+        return { ok: true as const, decision: "approve" as const };
+      }
+
+      // Reject → stop the live run, then close the AgentRun.
+      await connector.stop?.(run.externalRunId);
+      await ctx.db.$transaction(async (tx) => {
+        await tx.agentRun.update({
+          where: { id: run.id },
+          data: { awaitingApprovalAt: null },
+        });
+        await finishRun(tx, {
+          runId: run.id,
+          workspaceId: ctx.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          status: "ABANDONED",
+          summary: "Operator rejected a permission request; run stopped.",
+          actorId: ctx.session.user.id,
+        });
+      });
+      return { ok: true as const, decision: "reject" as const };
+    }),
+
   kick: workspaceProcedure
     .input(z.object({ runId: idString }))
     .mutation(async ({ ctx, input }) => {

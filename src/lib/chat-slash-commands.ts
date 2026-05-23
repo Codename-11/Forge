@@ -11,6 +11,8 @@ export interface SlashCommandContext {
   };
   thread: { id: string };
   workspaceSlug: string;
+  /** Current chat engine for this agent (COMPLETIONS | RUNS), if known. */
+  currentEngine?: string | null;
   /** Append a SYSTEM-role message to the current thread, locally (no server round-trip). */
   appendLocal: (body: string) => void;
   /** Clear the local message list (cosmetic — server data unchanged). */
@@ -19,6 +21,8 @@ export interface SlashCommandContext {
   sendPrompt: (body: string) => void;
   /** Request server-side compaction for the current conversation. */
   compactThread?: () => Promise<void> | void;
+  /** Switch this agent's chat engine (admin only). */
+  setEngine?: (engine: "COMPLETIONS" | "RUNS") => Promise<void> | void;
 }
 
 export interface SlashCommand {
@@ -26,6 +30,8 @@ export interface SlashCommand {
   aliases?: string[];
   description: string;
   category: "info" | "control" | "prompt";
+  /** Optional usage hint shown in the autocomplete (e.g. "<KEY>"). */
+  args?: string;
   /** When true, the command is dispatched as a structured prompt (not local). */
   promptDispatch?: boolean;
   /** Args parsed from after the command name (everything after first space). */
@@ -40,7 +46,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     category: "info",
     run: (_args, ctx) => {
       const lines = SLASH_COMMANDS.filter((c) => c.name !== "help").map(
-        (c) => `- **/${c.name}** — ${c.description}`,
+        (c) => `- **/${c.name}${c.args ? ` ${c.args}` : ""}** — ${c.description}`,
       );
       ctx.appendLocal(
         `### Commands\n\n${lines.join("\n")}\n\n_Tip: type \`/\` to see this menu inline._`,
@@ -86,8 +92,59 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     },
   },
   {
+    name: "engine",
+    description: "Show or switch this agent's chat engine.",
+    args: "[completions|runs]",
+    category: "control",
+    run: async (args, ctx) => {
+      const current = (ctx.currentEngine ?? "default").toLowerCase();
+      const choice = args.trim().toLowerCase();
+      if (!choice) {
+        ctx.appendLocal(
+          `**${ctx.agent.name}** is on the **${current}** engine.\n\n` +
+            "- **completions** — Forge owns the loop (stateless, fast).\n" +
+            "- **runs** — the agent runs as itself (memory + its own tools).\n\n" +
+            "_Switch with_ `/engine runs` _or_ `/engine completions`.",
+        );
+        return;
+      }
+      if (choice !== "completions" && choice !== "runs") {
+        ctx.appendLocal("_Usage:_ `/engine runs` or `/engine completions`.");
+        return;
+      }
+      if (!ctx.setEngine) {
+        ctx.appendLocal("_Switching the engine isn't available here (admin only)._");
+        return;
+      }
+      try {
+        await ctx.setEngine(choice.toUpperCase() as "COMPLETIONS" | "RUNS");
+        ctx.appendLocal(`Switched **${ctx.agent.name}** to the **${choice}** engine.`);
+      } catch (e) {
+        ctx.appendLocal(`_Couldn't switch engine: ${e instanceof Error ? e.message : "error"}._`);
+      }
+    },
+  },
+  {
+    name: "assign",
+    description: "Ask this agent to take an issue: `/assign AXI-31`.",
+    args: "<KEY>",
+    category: "prompt",
+    promptDispatch: true,
+    run: (args, ctx) => {
+      const key = args.trim();
+      if (!key) {
+        ctx.appendLocal("_Usage:_ `/assign AXI-31`");
+        return;
+      }
+      ctx.sendPrompt(
+        `Please take ownership of ${key}: assign it to yourself, review it, and start working it.`,
+      );
+    },
+  },
+  {
     name: "issue",
     description: "Look up an issue: `/issue AXI-31` (asks the agent to summarize).",
+    args: "<KEY>",
     category: "prompt",
     promptDispatch: true,
     run: (args, ctx) => {
@@ -137,6 +194,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   {
     name: "hermes",
     description: "Safe Hermes bridge: `/hermes status`, `/hermes usage`, `/hermes skills`.",
+    args: "<status|usage|skills>",
     category: "prompt",
     promptDispatch: true,
     run: (args, ctx) => {

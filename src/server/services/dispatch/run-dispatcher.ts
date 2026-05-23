@@ -145,6 +145,7 @@ async function pollActiveRuns(): Promise<number> {
       agentId: true,
       externalRunId: true,
       currentStep: true,
+      awaitingApprovalAt: true,
       agent: { select: { provider: true } },
     },
   });
@@ -162,24 +163,56 @@ async function pollActiveRuns(): Promise<number> {
     }
     polled++;
 
-    if (status.state === "running" || status.state === "waiting_for_approval") {
-      const step =
-        status.state === "waiting_for_approval"
-          ? "waiting for approval"
-          : (status.lastEvent ?? "running");
-      if (step !== run.currentStep) {
+    if (status.state === "waiting_for_approval") {
+      // Transition into a blocked state (set the flag + a BLOCKED event)
+      // only once, so we don't spam the timeline while it waits.
+      if (!run.awaitingApprovalAt) {
         await db
-          .$transaction((tx) =>
-            appendRunEvent(tx, {
+          .$transaction(async (tx) => {
+            await tx.agentRun.update({
+              where: { id: run.id },
+              data: { awaitingApprovalAt: new Date() },
+            });
+            await appendRunEvent(tx, {
               runId: run.id,
               workspaceId: run.workspaceId,
               issueId: run.issueId,
               agentId: run.agentId,
-              kind: status.state === "waiting_for_approval" ? "BLOCKED" : "STEP",
+              kind: "BLOCKED",
+              currentStep: "waiting for approval",
+              payload: { lastEvent: status.lastEvent ?? null },
+            });
+          })
+          .catch((err) =>
+            logger.warn({ err, runId: run.id }, "runs-dispatch: block update failed"),
+          );
+      }
+      continue;
+    }
+
+    if (status.state === "running") {
+      const step = status.lastEvent ?? "running";
+      // Clear a prior approval block (operator approved → agent resumed)
+      // or just advance the step label.
+      if (run.awaitingApprovalAt || step !== run.currentStep) {
+        await db
+          .$transaction(async (tx) => {
+            if (run.awaitingApprovalAt) {
+              await tx.agentRun.update({
+                where: { id: run.id },
+                data: { awaitingApprovalAt: null },
+              });
+            }
+            await appendRunEvent(tx, {
+              runId: run.id,
+              workspaceId: run.workspaceId,
+              issueId: run.issueId,
+              agentId: run.agentId,
+              kind: "STEP",
               currentStep: step,
               payload: { lastEvent: status.lastEvent ?? null },
-            }),
-          )
+            });
+          })
           .catch((err) =>
             logger.warn({ err, runId: run.id }, "runs-dispatch: step update failed"),
           );
@@ -205,16 +238,19 @@ async function pollActiveRuns(): Promise<number> {
           summary: status.output ?? null,
         });
         const usage = status.usage;
-        if (usage && (usage.tokensIn || usage.tokensOut || usage.costUsd)) {
-          await tx.agentRun.update({
-            where: { id: run.id },
-            data: {
-              tokensIn: usage.tokensIn ?? null,
-              tokensOut: usage.tokensOut ?? null,
-              costUsd: usage.costUsd ?? null,
-            },
-          });
-        }
+        await tx.agentRun.update({
+          where: { id: run.id },
+          data: {
+            awaitingApprovalAt: null,
+            ...(usage && (usage.tokensIn || usage.tokensOut || usage.costUsd)
+              ? {
+                  tokensIn: usage.tokensIn ?? null,
+                  tokensOut: usage.tokensOut ?? null,
+                  costUsd: usage.costUsd ?? null,
+                }
+              : {}),
+          },
+        });
       })
       .catch((err) => logger.warn({ err, runId: run.id }, "runs-dispatch: finish failed"));
   }

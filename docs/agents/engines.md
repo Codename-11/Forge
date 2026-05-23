@@ -86,6 +86,24 @@ the same work twice. Leave the webhook blank for Runs agents.
 Completions / webhook-based agents keep using the existing webhook
 dispatch path unchanged.
 
+## Permission blocks (approvals)
+
+The Hermes runtime can pause an agent when it's about to run a dangerous
+shell command (depending on its `approvals.mode`; agents running
+`approvals.mode: off` never pause). Forge surfaces this as a block you
+resolve:
+
+- **In chat** — the reply shows an approval card with the command. **Approve**
+  allows it once and the agent continues; **Decline** stops the run (a bare
+  "deny" would otherwise leave the agent blocked).
+- **In dispatch** — a paused run shows **"needs permission to run a command"**
+  with **Approve / Reject** in Mission Control's Live tab. Approve resumes it;
+  Reject stops and abandons the run. While blocked, the stale watchdog leaves
+  the run alone (it's intentionally idle, not dead).
+
+Either way, approving forwards `once` to the gateway; rejecting interrupts the
+run via `/v1/runs/{id}/stop`.
+
 ## Switching engines
 
 Changing an agent's engine takes effect on the **next** chat turn or
