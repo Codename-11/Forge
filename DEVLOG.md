@@ -4,6 +4,28 @@
 
 ## 2026-05-22 — Dispatch approval UI + slash-command enhancements
 
+**Dispatch permission blocks (the deferred piece).** Migration 0056 adds
+`AgentRun.awaitingApprovalAt`. The runs-dispatch poller flips it on when a
+run reports `waiting_for_approval` (BLOCKED event, once) and clears it when
+the run resumes or finishes; the stale watchdog now skips runs with it set
+(intentionally idle, not dead). New `agentRun.respondApproval({ runId,
+decision })` tRPC: approve → `connector.approve(once)` + resume; reject →
+`connector.stop()` + `finishRun(ABANDONED)`. RunRow shows an amber "needs
+permission to run a command" banner with Approve/Reject when the flag is set.
+(Won't fire for agents on `approvals.mode: off`, but the path is complete.)
+
+**Slash commands.** Added `args` usage-hint metadata to `SlashCommand` (shown
+in the autocomplete + `/help`; accepting an arg-taking command fills the stub).
+New commands: **`/engine [completions|runs]`** (show or switch this agent's
+chat engine — wired via `agent.update` through a new `setEngine`/`currentEngine`
+slash-context capability) and **`/assign <KEY>`** (ask the agent to take an
+issue). Added arg hints to `/issue`, `/hermes`. Docs: engines.md gained an
+"Permission blocks (approvals)" section; agents/chat.md slash table updated.
+
+typecheck + eslint clean; chat/dispatcher/run-stale tests (27) green; docs build clean.
+
+## 2026-05-22 — Dispatch approval UI + slash-command enhancements
+
 **Dispatch approvals (the deferred Phase-2 follow-up).** A connector-driven
 run that pauses for operator permission is now actionable from Mission Control.
 - Migration 0056: `AgentRun.awaitingApprovalAt`.
