@@ -4,7 +4,7 @@ import type { AgentProvider } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/agent-run";
-import { getRunsConnector, resolveRunEngine } from "./registry";
+import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from "./registry";
 
 /**
  * Dispatch-via-runs ingestion (worker-hosted, poll-based).
@@ -83,7 +83,12 @@ async function startNewRuns(): Promise<number> {
         assignedAgentId: true,
         workspace: { select: { key: true } },
         assignedAgent: {
-          select: { id: true, provider: true, runEngine: true },
+          select: {
+            id: true,
+            provider: true,
+            runEngine: true,
+            runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+          },
         },
       },
     });
@@ -92,7 +97,7 @@ async function startNewRuns(): Promise<number> {
     if (resolveRunEngine({ runEngine: agent.runEngine, provider: agent.provider }) !== "RUNS") {
       continue;
     }
-    const connector = getRunsConnector(agent.provider);
+    const connector = getRunsConnectorForAgent({ provider: agent.provider, runtime: agent.runtime });
     if (!connector) continue;
 
     try {
@@ -147,13 +152,21 @@ async function pollActiveRuns(): Promise<number> {
       externalRunId: true,
       currentStep: true,
       awaitingApprovalAt: true,
-      agent: { select: { provider: true } },
+      agent: {
+        select: {
+          provider: true,
+          runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+        },
+      },
     },
   });
 
   let polled = 0;
   for (const run of runs) {
-    const connector = getRunsConnector(run.agent.provider);
+    const connector = getRunsConnectorForAgent({
+      provider: run.agent.provider,
+      runtime: run.agent.runtime,
+    });
     if (!connector?.getStatus || !run.externalRunId) continue;
     let status;
     try {
@@ -283,9 +296,10 @@ async function subscribeRun(run: {
   agentId: string;
   externalRunId: string;
   provider: AgentProvider;
+  runtime?: AgentRuntimeRef;
 }): Promise<void> {
   if (subscriptions.has(run.id)) return;
-  const connector = getRunsConnector(run.provider);
+  const connector = getRunsConnectorForAgent({ provider: run.provider, runtime: run.runtime });
   if (!connector?.subscribe) return;
   const ctrl = new AbortController();
   subscriptions.set(run.id, ctrl);
@@ -396,7 +410,12 @@ async function ensureSubscriptions(): Promise<number> {
       issueId: true,
       agentId: true,
       externalRunId: true,
-      agent: { select: { provider: true } },
+      agent: {
+        select: {
+          provider: true,
+          runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+        },
+      },
     },
   });
   let n = 0;
@@ -410,6 +429,7 @@ async function ensureSubscriptions(): Promise<number> {
       agentId: run.agentId,
       externalRunId: run.externalRunId,
       provider: run.agent.provider,
+      runtime: run.agent.runtime,
     });
     n++;
   }
