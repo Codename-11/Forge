@@ -524,6 +524,13 @@ export async function POST(req: NextRequest) {
         const toolIdByName = new Map<string, string>();
         let toolSeq = 0;
         let approvalSeq = 0;
+        // The gateway only emits `message.delta` events when the agent's
+        // turn actually streams. Tool-heavy turns (or a non-streaming model
+        // response) deliver the full answer ONLY in `run.completed.output`.
+        // Capture it so we can fall back when no deltas arrived — otherwise
+        // the reply persists empty as "(no response — provider stream
+        // errored)" even though the run succeeded.
+        let completedFinalText: string | null = null;
         await runsConnector!.subscribe(
           externalRunId,
           (e) => {
@@ -609,13 +616,26 @@ export async function POST(req: NextRequest) {
                 // drives the normal case; this also covers resolution by
                 // another client). No further action needed here.
                 break;
-              case "usage":
               case "completed":
+                if (typeof e.finalText === "string" && e.finalText.length > 0) {
+                  completedFinalText = e.finalText;
+                }
+                break;
+              case "usage":
                 break;
             }
           },
           abortController.signal,
         );
+
+        // Fallback: the run finished but streamed no text deltas (tool-only
+        // turn, or a non-streaming model response). Emit the run's final
+        // output so the client renders it and it persists, rather than
+        // leaking an empty bubble / a spurious "provider stream errored".
+        if (assembled.length === 0 && completedFinalText) {
+          assembled.push(completedFinalText);
+          enqueue(sse("content", { delta: completedFinalText }));
+        }
       };
 
       try {
