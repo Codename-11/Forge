@@ -71,7 +71,7 @@ const BASE_TABS: { id: MissionControlTab; label: string; chord: string; adminOnl
   { id: "agents", label: "Agents", chord: "3" },
   { id: "history", label: "History", chord: "4" },
   { id: "chat", label: "Chat", chord: "5" },
-  { id: "control", label: "Control", chord: "6", adminOnly: true },
+  { id: "control", label: "Admin", chord: "6", adminOnly: true },
   { id: "plans", label: "Plans", chord: "7" },
 ];
 
@@ -128,6 +128,10 @@ export function MissionControl() {
   });
 
   const activeCount = activeRuns?.length ?? 0;
+  // Runs blocked on a human approve/reject — surfaced as an amber badge on
+  // the Live tab so it's actionable from any tab, not just inside Live.
+  const approvalCount =
+    activeRuns?.filter((r) => r.awaitingApprovalAt != null).length ?? 0;
   const queueCount = (queue ?? []).filter((q) => !q.assignedAgent).length;
   const stalledRuns = useMemo(() => {
     // Detect runs that haven't ticked in >5min — even if the watchdog
@@ -777,6 +781,14 @@ export function MissionControl() {
                   )}
                 >
                   {count}
+                </span>
+              )}
+              {t.id === "live" && approvalCount > 0 && (
+                <span
+                  title={`${approvalCount} run${approvalCount === 1 ? "" : "s"} awaiting approval`}
+                  className="rounded-md bg-amber-500/20 px-1 font-mono text-[0.625rem] text-amber-600 dark:text-amber-400"
+                >
+                  {approvalCount}✋
                 </span>
               )}
             </button>

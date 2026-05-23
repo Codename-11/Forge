@@ -182,6 +182,37 @@ See [Automation → API keys](/automation/api-keys.html).
 - **Default workspace** — which workspace opens when you sign in.
 - **Leave** — leave a workspace (audit trail preserved).
 
+### Authentication
+
+URL: `/settings/auth`. **Instance-admin only** — gated on the operator
+whose email matches `ADMIN_EMAIL`, since sign-in providers are global to
+the whole self-hosted instance (auth is per *user*, not per workspace).
+
+Configure how people sign in, without a redeploy:
+
+- **Email + password** is always available (the bootstrap admin
+  credential). It can't be removed here.
+- **Add a provider** — pick a type:
+  - **OpenID Connect (OIDC)** — the generic, discovery-based type. Covers
+    any OIDC IdP: self-hosted **Authelia**, Authentik, Keycloak, or hosted
+    Okta / Azure AD / Auth0. You supply an **Issuer URL**; Forge discovers
+    the endpoints from `<issuer>/.well-known/openid-configuration` (use
+    **Test** to verify reachability before saving).
+  - **GitHub** / **Google** — first-party OAuth.
+- **Client secret** is encrypted at rest (AES-256-GCM, keyed off
+  `AUTH_SECRET`) and never shown again — leave the field blank on edit to
+  keep the stored value. Rotating `AUTH_SECRET` invalidates stored secrets;
+  re-enter them here afterward.
+- **Callback / redirect URI** — each row shows the exact
+  `/api/auth/callback/<id>` URL to register in your IdP.
+- **Link accounts by email** — opt-in per provider; only enable when you
+  trust the IdP to assert verified emails.
+- **Enable / disable** toggles take effect within ~30s, no restart.
+
+Existing `AUTH_GITHUB_*` / `AUTH_GOOGLE_*` env vars (if set) are seeded into
+this table once on first boot, then managed here — see
+[Reference → Environment](/reference/env.html#auth-nextauth-v5).
+
 ## Where to next
 
 - [Workspaces](/guide/workspaces.html) — the configurability principle and

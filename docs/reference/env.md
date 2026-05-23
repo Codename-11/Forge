@@ -27,18 +27,40 @@ transaction mode, append `?pgbouncer=true&connection_limit=1` to
 | Var               | Required | Notes                                              |
 |-------------------|----------|----------------------------------------------------|
 | `AUTH_URL`        | Yes      | Public app URL (e.g. `https://forge.example`).     |
-| `AUTH_SECRET`     | Yes      | JWT secret. Generate with `openssl rand -base64 32`. |
+| `AUTH_SECRET`     | Yes      | JWT secret. Generate with `openssl rand -base64 32`. Also keys the AES-256-GCM encryption of stored SSO client secrets. |
 | `AUTH_TRUST_HOST` | No       | Set to `true` if proxied behind a load balancer.   |
+| `ADMIN_EMAIL`     | Yes      | Bootstrap admin login **and** the instance admin who manages SSO providers (Settings → Authentication). |
+| `ADMIN_PASSWORD`  | Yes      | Password for the `ADMIN_EMAIL` credential login.   |
+| `ADMIN_NAME` / `ADMIN_HANDLE` | No | Display name / handle for the bootstrap admin. |
 
 ```bash
 AUTH_URL="https://forge.example"
 AUTH_SECRET="..."
 AUTH_TRUST_HOST="true"
+ADMIN_EMAIL="admin@forge.example"
+ADMIN_PASSWORD="..."
 ```
 
+### SSO providers (optional bootstrap)
+
+Sign-in providers (OIDC / GitHub / Google) are configured at runtime in
+**Settings → Authentication** and stored in the `SsoProvider` table — not
+in env. The vars below are **optional one-time bootstrap**: if set and no
+provider row of that type exists yet, a row is seeded from them on first
+boot, then managed in the UI. Leave them blank to manage everything from
+the UI.
+
+| Var                  | Required | Notes                          |
+|----------------------|----------|--------------------------------|
+| `AUTH_GITHUB_ID`     | No       | Seeds a GitHub provider row.   |
+| `AUTH_GITHUB_SECRET` | No       | "                              |
+| `AUTH_GOOGLE_ID`     | No       | Seeds a Google provider row.   |
+| `AUTH_GOOGLE_SECRET` | No       | "                              |
+
 ::: warning
-Rotating `AUTH_SECRET` invalidates all active sessions. Plan accordingly —
-users will be signed out on the next request.
+Rotating `AUTH_SECRET` invalidates all active sessions (users are signed out
+on the next request) **and** the encrypted SSO client secrets — re-enter each
+provider's secret in Settings → Authentication after a rotation.
 :::
 
 ## Storage (MinIO / S3)

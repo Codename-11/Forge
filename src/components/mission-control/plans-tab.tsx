@@ -186,6 +186,28 @@ function PlanRow({
     }));
   }, [detail]);
 
+  // Resolve each step's sourceRun for per-step cost + approval overlay.
+  // Steps carry a loose sourceRunId (no relation), so batch-fetch the meta.
+  const sourceRunIds = useMemo(
+    () =>
+      steps.map((s) => s.sourceRunId).filter((id): id is string => !!id),
+    [steps],
+  );
+  const { data: runMeta } = trpc.agentRun.metaByIds.useQuery(
+    { ids: sourceRunIds },
+    { enabled: expanded && sourceRunIds.length > 0, staleTime: 3_000 },
+  );
+  const dagSteps = useMemo<DagStep[]>(() => {
+    if (!runMeta || runMeta.length === 0) return steps;
+    const metaById = new Map(runMeta.map((m) => [m.id, m]));
+    return steps.map((s) => {
+      const meta = s.sourceRunId ? metaById.get(s.sourceRunId) : undefined;
+      return meta
+        ? { ...s, costUsd: meta.costUsd, awaitingApproval: meta.awaitingApproval }
+        : s;
+    });
+  }, [steps, runMeta]);
+
   // Build an agent lookup. The detail query may include assigned-agent
   // relations on steps in the contract; fall back to the workspace agent
   // list so glyphs render even on the base schema.
@@ -296,7 +318,7 @@ function PlanRow({
             </div>
           ) : (
             <DagView
-              steps={steps}
+              steps={dagSteps}
               agentsById={agentsById}
               planHref={`/w/${slug}/plans/${plan.id}`}
               className="max-h-72"

@@ -22,11 +22,29 @@ function relativeTime(input: Date | string | null): string {
   return `${Math.floor(ms / 86_400_000)}d ago`;
 }
 
+function fmtCost(n: number): string {
+  if (n <= 0) return "$0";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  if (n < 100) return `$${n.toFixed(2)}`;
+  return `$${Math.round(n)}`;
+}
+
+function fmtTokens(n: number): string {
+  if (n < 1000) return `${n}`;
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
 export function AgentsTab({ slug }: { slug: string }) {
   const { data: agents, isLoading } = trpc.agent.list.useQuery({
     includeArchived: false,
   });
   const { data: activeRuns } = trpc.agentRun.activeAll.useQuery({ limit: 50 });
+  // Per-agent spend over the last 30d for the cost chip.
+  const { data: costStats } = trpc.agentRun.costByAgent.useQuery(
+    { sinceDays: 30 },
+    { staleTime: 60_000 },
+  );
 
   if (isLoading) {
     return (
@@ -39,6 +57,9 @@ export function AgentsTab({ slug }: { slug: string }) {
   for (const run of activeRuns ?? []) {
     loadByAgent.set(run.agentId, (loadByAgent.get(run.agentId) ?? 0) + 1);
   }
+  const costByAgent = new Map(
+    (costStats?.byAgent ?? []).map((c) => [c.agentId, c]),
+  );
 
   // Sort: PERSISTENT+ONLINE first, PERSISTENT+BUSY, EPHEMERAL (by lastHeartbeatAt desc), then OFFLINE
   const sorted = [...(agents ?? [])].sort((a, b) => {
@@ -83,6 +104,7 @@ export function AgentsTab({ slug }: { slug: string }) {
         const load = loadByAgent.get(a.id) ?? 0;
         const cap = a.maxConcurrent;
         const atCap = cap > 0 && load >= cap;
+        const cost = costByAgent.get(a.id);
         const mode = a.runtimeMode ?? "PERSISTENT";
         const modeLabel = mode === "PERSISTENT" ? "persistent" : "session";
         const isOffline = a.status === "OFFLINE";
@@ -122,6 +144,14 @@ export function AgentsTab({ slug }: { slug: string }) {
                 {a.role !== "WORKER" && (
                   <span className="rounded-md border border-border bg-subtle px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
                     {a.role}
+                  </span>
+                )}
+                {cost && cost.costUsd > 0 && (
+                  <span
+                    className="rounded border border-border bg-subtle/40 px-1 py-0 font-mono text-[0.625rem] text-muted-foreground"
+                    title={`${fmtCost(cost.costUsd)} over ${cost.runs} run${cost.runs === 1 ? "" : "s"} · ${fmtTokens(cost.tokensIn + cost.tokensOut)} tokens (last 30d)`}
+                  >
+                    {fmtCost(cost.costUsd)}
                   </span>
                 )}
                 <span

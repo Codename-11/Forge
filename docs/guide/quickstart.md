@@ -14,8 +14,10 @@ workspace, `pnpm dev` uses the deployed compose data by default. Use
 
 ## 1. Sign in
 
-Open the app root. NextAuth handles authentication; the available providers
-depend on what's configured for your deployment (email, GitHub, OAuth, etc).
+Open the app root. NextAuth handles authentication. Email + password is
+always available; additional SSO providers (OIDC, GitHub, Google) are
+managed by the instance admin under **Settings → Authentication** and
+appear as buttons on the sign-in page when enabled.
 
 If this is a fresh install with no users, the first signed-in account becomes
 the system bootstrap user. Subsequent users join via workspace invitation —

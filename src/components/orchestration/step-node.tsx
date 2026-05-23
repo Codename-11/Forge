@@ -15,6 +15,13 @@ import {
 export const STEP_NODE_WIDTH = 184;
 export const STEP_NODE_HEIGHT = 72;
 
+function fmtCost(n: number): string {
+  if (n <= 0) return "$0";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  if (n < 100) return `$${n.toFixed(2)}`;
+  return `$${Math.round(n)}`;
+}
+
 /**
  * A single step in the DAG — a dense node card.
  *
@@ -62,6 +69,8 @@ export const StepNode = forwardRef<
         // motion-off renders the static inset ring (no pulse).
         running && "forge-active-node",
         active && "ring-1 ring-ember/30",
+        // Blocked on a human approve/reject — amber overrides the active glow.
+        step.awaitingApproval && "border-amber-500/60 ring-1 ring-amber-500/40",
       )}
     >
       {/* status flip highlight — keyed remount on status change in parent
@@ -87,6 +96,14 @@ export const StepNode = forwardRef<
           <Loader2 className="h-2.5 w-2.5 shrink-0 text-ember motion-safe:animate-spin" />
         )}
         <span className="ml-auto flex items-center gap-1">
+          {step.awaitingApproval && (
+            <span
+              className="inline-flex items-center rounded border border-amber-500/40 bg-amber-500/10 px-1 font-mono text-[0.5625rem] text-amber-600 dark:text-amber-400"
+              title="Blocked — needs approval to run a command"
+            >
+              ✋ approval
+            </span>
+          )}
           {retry > 0 && (
             <span
               className="inline-flex items-center gap-0.5 rounded border border-warning/40 bg-warning/10 px-1 font-mono text-[0.5625rem] text-warning"
@@ -126,11 +143,17 @@ export const StepNode = forwardRef<
             unassigned
           </span>
         )}
-        {step.judgeVerdict && (
-          <span className="ml-auto">
-            <JudgeVerdictBadge verdict={step.judgeVerdict} />
-          </span>
-        )}
+        <span className="ml-auto flex items-center gap-1.5">
+          {step.costUsd != null && step.costUsd > 0 && (
+            <span
+              className="font-mono text-[0.5625rem] text-muted-foreground"
+              title="Run cost so far"
+            >
+              {fmtCost(step.costUsd)}
+            </span>
+          )}
+          {step.judgeVerdict && <JudgeVerdictBadge verdict={step.judgeVerdict} />}
+        </span>
       </div>
       {href && (
         <a

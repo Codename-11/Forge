@@ -26,3 +26,6 @@ output/
 # build artifact and should never be committed. See scripts/build-docs.sh.
 /public/docs/
 .hermes/
+
+# Local agent/tool scratch workspace (design drops, etc.) — not source.
+.orca/

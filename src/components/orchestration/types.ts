@@ -48,6 +48,9 @@ export type DagStep = {
   judgeVerdict?: JudgeVerdict | null;
   retryCount?: number | null;
   lastFeedback?: string | null;
+  /** Resolved from the step's sourceRun — Plans DAG cost + approval overlay. */
+  costUsd?: number | null;
+  awaitingApproval?: boolean;
   childPlanId?: string | null;
   sourceRunId?: string | null;
 };

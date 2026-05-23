@@ -117,6 +117,23 @@ export const adminProcedure = workspaceProcedure.use(async ({ ctx, next }) => {
 });
 
 /**
+ * Instance-admin gate — for settings that are global to the whole
+ * self-hosted instance rather than a single workspace (e.g. sign-in / SSO
+ * providers). The instance admin is the bootstrapped operator whose email
+ * matches `ADMIN_EMAIL` (the same identity `auth.ts` upserts on first
+ * Credentials sign-in). Distinct from `adminProcedure`, which is a *per
+ * workspace* OWNER/ADMIN check.
+ */
+export const instanceAdminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase();
+  const who = ctx.session.user?.email?.toLowerCase();
+  if (!adminEmail || !who || who !== adminEmail) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Instance admin required." });
+  }
+  return next({ ctx });
+});
+
+/**
  * Per-procedure rate limiter. Key includes userId so one user can't exhaust
  * a workspace-wide bucket, and procedure path so limits are isolated.
  */
