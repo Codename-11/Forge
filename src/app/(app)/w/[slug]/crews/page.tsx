@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Info, Plus, Settings2, UsersRound } from "lucide-react";
+import { Info, Plus, UsersRound } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -57,17 +57,9 @@ export default function CrewsPage() {
         title="Crews"
         subtitle={data ? `${crews.length} active` : undefined}
         actions={
-          <>
-            <Link
-              href={`/w/${ws.slug}/settings/crews`}
-              className="focus-ring inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors hover:bg-subtle"
-            >
-              <Settings2 className="h-3.5 w-3.5" /> Manage
-            </Link>
-            <Button size="sm" variant="ember" onClick={() => setCreating(true)}>
-              <Plus className="h-3.5 w-3.5" /> New crew
-            </Button>
-          </>
+          <Button size="sm" variant="ember" onClick={() => setCreating(true)}>
+            <Plus className="h-3.5 w-3.5" /> New crew
+          </Button>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
