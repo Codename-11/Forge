@@ -81,19 +81,27 @@ export type ChatStreamEvent =
   | { kind: "done"; hasToolCalls: boolean }
   | { kind: "error"; message: string };
 
-/** Maps Agent.provider → the ai-providers.ts ProviderId. */
+/**
+ * Maps Agent.provider → the ai-providers.ts ProviderId.
+ *
+ * Each provider resolves to its OWN platform — we deliberately do NOT fall
+ * back to Hermes for a non-Hermes agent. A configured Codex/Claude agent
+ * answering via Hermes would be misleading (right persona, wrong platform).
+ * When the provider's endpoint isn't configured, `getClient` returns null and
+ * the caller surfaces a clear "not configured" error instead of silently
+ * routing to another platform. If you actually want Hermes to serve an agent,
+ * set its provider to HERMES (or attach it to the Hermes runtime).
+ */
 function providerIdFor(provider: AgentProvider): string {
   switch (provider) {
     case AgentProvider.HERMES:
       return "hermes";
     case AgentProvider.CLAUDE:
-      // Bailey's setup: prefer Anthropic direct when ANTHROPIC_API_KEY is set,
-      // otherwise let the resolver fall back through Hermes.
-      return process.env.ANTHROPIC_API_KEY ? "anthropic" : "hermes";
+      return "anthropic";
     case AgentProvider.CODEX:
-      return process.env.OPENAI_API_KEY ? "openai" : "hermes";
+      return "openai";
     case AgentProvider.CUSTOM:
-      return process.env.FORGE_AI_BASE_URL ? "custom" : "hermes";
+      return "custom";
     default:
       return "hermes";
   }
@@ -122,7 +130,11 @@ export async function* streamChatReply(
   if (!ctx) {
     yield {
       kind: "error",
-      message: `Provider ${providerId} is not configured. Set the matching API key in env.`,
+      message:
+        `No chat model is configured for this agent's provider (${providerId}). ` +
+        `Set its API key (e.g. OPENAI_API_KEY / ANTHROPIC_API_KEY / FORGE_AI_BASE_URL), ` +
+        `or back the agent with a runtime that serves chat. This agent will not fall ` +
+        `back to another platform.`,
     };
     yield { kind: "done", hasToolCalls: false };
     return;

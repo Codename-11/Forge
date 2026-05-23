@@ -131,15 +131,28 @@ as an optional override. Idempotent; guarded; verifiable via `agents.list`.
   provider-keyed `integrations/adapters.ts` manifest (now `@deprecated`,
   kept only to feed the legacy `/settings/integrations` onboarding page
   until it renders from the registry).
-- **Deferred (gated, not done):** dropping `Agent.webhookUrl` /
-  `webhookSecret`. They're still the live source of truth for *webhook
-  delivery* (`audit.ts`) — Hermes profiles each have a distinct inbound
-  webhook — so dropping now breaks live dispatch. The drop is contingent on
-  operators consolidating topology onto managed runtimes (one Hermes runtime
-  per gateway, agents attached) via the Phase 2 UI, after which webhook
-  delivery resolves from the runtime and the columns become removable. The
-  schema comments already mark them "slated for removal." This is the
-  correct sequencing, not an omission.
+- **No cross-platform chat fallback.** `chat-stream.ts:providerIdFor` no
+  longer falls a CLAUDE/CODEX/CUSTOM agent back to Hermes when its own
+  endpoint isn't configured. Each provider resolves to its own platform; an
+  unconfigured one yields a clear "no chat model configured" error rather
+  than silently answering via Hermes (which is misleading — right persona,
+  wrong platform). To have Hermes serve an agent, set its provider to HERMES
+  or attach it to the Hermes runtime.
+- **`Agent.webhookUrl` / `webhookSecret` are retained as an explicit
+  per-agent override — NOT dropped.** Resolution: the managed Runtime owns
+  the *runs* loop endpoint (Phase 3); per-agent webhook is the BYO /
+  custom-webhook push path and override. Dropping the columns would remove
+  the custom-webhook-agent feature, so it is intentionally not done. There is
+  no split-brain: runs dispatch is runtime-authoritative, webhook delivery is
+  per-agent-by-design (RUNS-engine agents have webhook suppressed anyway).
+  Schema comments updated to reflect "override," not "slated for removal."
+
+**Status: complete.** The provider-agnostic managed-runtime model, unified
+runs dispatch, canonical registry, runtime/agent management UI, and the
+chat-platform fix are all shipped. A future webhook-transport *managed*
+runtime (custom-http) could make the worker's shim resolution prefer
+`Runtime.endpoint` over the per-agent override — a clean extension point, not
+outstanding work.
 
 ## Compatibility / rollback
 
