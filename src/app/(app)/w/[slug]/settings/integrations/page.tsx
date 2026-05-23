@@ -55,6 +55,12 @@ export default function IntegrationsPage() {
                       <span className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
                         {a.defaultRuntimeMode === "PERSISTENT" ? "persistent" : "session"}
                       </span>
+                      <span
+                        className="rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-ember"
+                        title="Default chat engine for new agents on this integration"
+                      >
+                        {a.defaultRunEngine === "RUNS" ? "runs" : "completions"}
+                      </span>
                       {a.agents.length > 0 && (
                         <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-emerald-700">
                           installed · {a.agents.length}

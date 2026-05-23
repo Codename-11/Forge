@@ -341,4 +341,103 @@ export const aiRouter = router({
       void triageIssue(issue.id);
       return { ok: true };
     }),
+
+  /**
+   * Native Hermes command passthrough — proxies the gateway's real
+   * `/api/skills`, `/api/memory`, and `/health/detailed` endpoints so the
+   * `/hermes skills|memory|status` chat commands return live data instead
+   * of a prose approximation. Server-side so the gateway token never
+   * reaches the client. `agentProfileKey` is forwarded as the memory-scope
+   * session key so multi-profile gateways answer for the right agent.
+   * Native commands without an API (`/usage`, `/yolo`) stay prose-bridged.
+   */
+  hermesInfo: workspaceProcedure
+    .input(
+      z.object({
+        resource: z.enum(["skills", "memory", "health"]),
+        agentProfileKey: z.string().max(120).optional(),
+      }),
+    )
+    .query(async ({ input }) => {
+      const base =
+        process.env.HERMES_GATEWAY_URL ??
+        `http://127.0.0.1:${process.env.HERMES_GATEWAY_PORT ?? "8642"}/v1`;
+      const root = base.replace(/\/v1\/?$/, "");
+      const path =
+        input.resource === "skills"
+          ? "/api/skills"
+          : input.resource === "memory"
+            ? "/api/memory"
+            : "/health/detailed";
+      const headers: Record<string, string> = {
+        accept: "application/json",
+        authorization: `Bearer ${process.env.HERMES_GATEWAY_TOKEN ?? ""}`,
+      };
+      if (input.agentProfileKey) headers["x-session-key"] = input.agentProfileKey;
+      let res: Response;
+      try {
+        res = await fetch(`${root}${path}`, { headers });
+      } catch (e) {
+        return {
+          ok: false as const,
+          markdown: `_Couldn't reach the Hermes gateway: ${e instanceof Error ? e.message : "error"}._`,
+        };
+      }
+      if (!res.ok) {
+        return {
+          ok: false as const,
+          markdown: `_Hermes ${input.resource} returned HTTP ${res.status}._`,
+        };
+      }
+      const data: unknown = await res.json().catch(() => null);
+      return { ok: true as const, markdown: formatHermesInfo(input.resource, data) };
+    }),
 });
+
+/** Format a Hermes gateway response into a compact markdown block. */
+function formatHermesInfo(
+  resource: "skills" | "memory" | "health",
+  data: unknown,
+): string {
+  if (data == null) return `_No ${resource} data returned._`;
+  if (resource === "skills") {
+    const list = Array.isArray(data)
+      ? data
+      : Array.isArray((data as { skills?: unknown[] }).skills)
+        ? (data as { skills: unknown[] }).skills
+        : [];
+    if (list.length === 0) return "_No skills reported._";
+    const names = list.map((s) => {
+      if (typeof s === "string") return s;
+      const o = s as Record<string, unknown>;
+      const name = String(o.name ?? o.id ?? "skill");
+      const desc = typeof o.description === "string" ? ` — ${o.description}` : "";
+      return `${name}${desc}`;
+    });
+    return `### Skills (${names.length})\n\n${names.map((n) => `- ${n}`).join("\n")}`;
+  }
+  if (resource === "memory") {
+    const entries = Array.isArray(data)
+      ? data
+      : Array.isArray((data as { entries?: unknown[] }).entries)
+        ? (data as { entries: unknown[] }).entries
+        : null;
+    if (entries) {
+      if (entries.length === 0) return "_Memory is empty._";
+      const lines = entries.slice(0, 20).map((e) => {
+        if (typeof e === "string") return `- ${e}`;
+        const o = e as Record<string, unknown>;
+        return `- ${String(o.text ?? o.content ?? o.key ?? JSON.stringify(o)).slice(0, 160)}`;
+      });
+      return `### Memory (${entries.length})\n\n${lines.join("\n")}`;
+    }
+    return "### Memory\n\n```json\n" + JSON.stringify(data, null, 2).slice(0, 1200) + "\n```";
+  }
+  const o = (typeof data === "object" && data ? data : {}) as Record<string, unknown>;
+  return (
+    `### Hermes gateway\n\n- **status:** ${String(o.status ?? "unknown")}\n\n` +
+    "```json\n" +
+    JSON.stringify(data, null, 2).slice(0, 800) +
+    "\n```"
+  );
+}

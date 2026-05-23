@@ -2,6 +2,34 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-22 — Dispatch /events live, native commands, agent-config parity
+
+**1. Dispatch runs consume `/events` live (migration 0057: `AgentRun.pendingApproval`).**
+The worker now keeps a live SSE subscription per active connector-driven run
+(tracked in-process, re-established by the 5s sweep → restart-safe) *alongside*
+the status poll. The poll still owns lifecycle (terminal/usage/awaiting flag);
+the subscription enriches the timeline with per-tool + thinking steps and
+**captures the exact `approval.request` command** (poll status can't see it).
+RunRow's approval banner now shows the command + risk. respondApproval +
+poll + subscription all clear `pendingApproval` (Prisma.DbNull).
+
+**2. Native Hermes command passthrough.** `ai.hermesInfo` proxies the gateway's
+real `/api/skills`, `/api/memory`, `/health/detailed` (server-side, token never
+leaves the server; agent profileKey forwarded as the memory-scope session key).
+New chat commands `/skills`, `/memory`, and `/hermes status` return **live**
+data; `/hermes usage` stays prose (no gateway API). Connector also handles the
+9th event type `approval.responded` (→ `approval_resolved`).
+
+**3. Agent config/onboarding parity.** Fixed: the wizard's "Chat engine"
+selector was ignored on **create** (only `update` carried `runEngine`). Added
+`runEngine` to the create input + mutation + create payload. Integration cards
+(`/settings/integrations`) now show each integration's default engine
+(runs/completions) next to the runtime badge. Runtime detection (forge CLI
+daemon) is orthogonal and unaffected — RUNS agents are driven by the worker via
+`/v1/runs`, not the local daemon.
+
+typecheck + eslint clean; orchestration/chat/dispatch/run-stale tests green.
+
 ## 2026-05-22 — Dispatch approval UI + slash-command enhancements
 
 **Dispatch permission blocks (the deferred piece).** Migration 0056 adds

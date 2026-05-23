@@ -112,6 +112,9 @@ Arrow keys cycle, Enter or Tab accepts, Escape closes.
 | `/assign <KEY>` | prompt | Asks the agent to take ownership of an issue and start working it. |
 | `/status` | prompt | Transforms into a status-request prompt and sends normally. |
 | `/engine [completions\|runs]` | control | Shows the agent's current [chat engine](/agents/engines.html), or switches it (admin). |
+| `/skills` | info | Lists the agent's **live** Hermes skills (via the gateway `/api/skills`). |
+| `/memory` | info | Shows the agent's **live** Hermes memory (via the gateway `/api/memory`). |
+| `/hermes <status\|usage>` | info | `status` = live gateway health; `usage` = asks the agent for a token report. |
 | `/summarize` | prompt | Asks the agent to summarize the conversation. |
 | `/compact` | control | Compacts the conversation into Forge-owned summary context. |
 

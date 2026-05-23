@@ -1660,6 +1660,17 @@ export function ChatThreadView({
       setEngine: async (engine) => {
         await setEngineM.mutateAsync({ id: agent.id, runEngine: engine });
       },
+      hermesInfo: async (resource) => {
+        try {
+          const r = await utils.ai.hermesInfo.fetch({
+            resource,
+            agentProfileKey: agent.profileKey,
+          });
+          return r.markdown;
+        } catch (e) {
+          return `_Couldn't fetch Hermes ${resource}: ${e instanceof Error ? e.message : "error"}._`;
+        }
+      },
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [

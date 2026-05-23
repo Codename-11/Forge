@@ -49,9 +49,21 @@ export type RunRowData = {
   /** Set when a connector-driven run paused awaiting operator permission
    * (e.g. Hermes flagged a dangerous command). Shows Approve/Reject. */
   awaitingApprovalAt?: Date | string | null;
-  /** Command/risk detail captured from the live events stream. */
-  pendingApproval?: { command?: string | null; description?: string | null } | null;
+  /** Command/risk detail captured from the live events stream (JSON). */
+  pendingApproval?: unknown;
 };
+
+/** Narrow the JSON `pendingApproval` blob to its displayable fields. */
+function readPendingApproval(
+  v: unknown,
+): { command: string | null; description: string | null } {
+  if (!v || typeof v !== "object") return { command: null, description: null };
+  const o = v as Record<string, unknown>;
+  return {
+    command: typeof o.command === "string" ? o.command : null,
+    description: typeof o.description === "string" ? o.description : null,
+  };
+}
 
 /** Format a token count compactly: <1k as raw, ≥1k rounded to k. */
 function formatTokens(n: number): string {
@@ -109,6 +121,7 @@ export function RunRow({
     { enabled: expanded, staleTime: 5_000 },
   );
   const awaitingApproval = Boolean(run.awaitingApprovalAt);
+  const pendingApproval = readPendingApproval(run.pendingApproval);
   const respondApproval = trpc.agentRun.respondApproval.useMutation({
     onSettled: () => {
       void utils.agentRun.activeAll.invalidate();
@@ -264,28 +277,28 @@ export function RunRow({
       </div>
       {awaitingApproval && (
         <div
-          className="mt-1.5 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-meta"
+          className="mt-1.5 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-meta"
           data-no-drag
           onClick={(e) => e.stopPropagation()}
         >
           <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
           <span className="min-w-0 flex-1 text-foreground/80">
             {run.agent.name} needs permission
-            {run.pendingApproval?.command ? (
+            {pendingApproval.command ? (
               <>
                 {" "}to run{" "}
                 <code className="rounded bg-background/60 px-1 font-mono text-[0.625rem] text-foreground">
-                  {run.pendingApproval.command.length > 80
-                    ? `${run.pendingApproval.command.slice(0, 77)}…`
-                    : run.pendingApproval.command}
+                  {pendingApproval.command.length > 80
+                    ? `${pendingApproval.command.slice(0, 77)}…`
+                    : pendingApproval.command}
                 </code>
               </>
             ) : (
               " to run a command"
             )}
-            {run.pendingApproval?.description ? (
+            {pendingApproval.description ? (
               <span className="mt-0.5 block text-[0.625rem] text-muted-foreground">
-                {run.pendingApproval.description}
+                {pendingApproval.description}
               </span>
             ) : null}
           </span>

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 
@@ -19,25 +19,55 @@ import { cn } from "@/lib/utils";
  * New code can keep using `title` (or the {@link Tooltip} wrapper, which
  * just sets `title`).
  *
+ * ### Keyboard-shortcut chips
+ *
+ * An element may carry an optional `data-tooltip-kbd` attribute alongside
+ * its `title`. Its value is a space-separated list of keys (e.g. `"⌘ K"`
+ * or `"G D"`); each key renders as a `.kbd` chip to the right of the label
+ * text inside the tooltip. The plain `title` should hold the
+ * human-readable label only, so the at-rest accessible name stays clean.
+ * `data-tooltip-kbd` is left on the element (it is not a native-tooltip
+ * source), so only `title` is stashed / restored.
+ *
+ * ### Positioning
+ *
+ * Placement is two-pass: the tooltip is first rendered at a tentative
+ * anchor point, then `useLayoutEffect` measures the real rendered box and
+ * clamps it fully inside the viewport with an 8px margin on all sides.
+ * Vertical placement prefers above the target and flips below when it
+ * would clip the top edge (and vice-versa). Horizontal placement stays
+ * centered on the target when possible, shifting left/right only as needed
+ * to respect the margins.
+ *
  * The fade-in is `motion-safe` only; the tooltip itself always works
  * regardless of the motion preference (a tooltip is an affordance, not
  * ambient motion).
  */
 const SHOW_DELAY_MS = 350;
 const STASH_ATTR = "data-native-title";
+const KBD_ATTR = "data-tooltip-kbd";
+const MARGIN = 8;
 
-type TipState = {
+type Anchor = {
   text: string;
-  x: number;
-  y: number;
+  keys: string[];
+  /** Target rect, in viewport coords — the tooltip is placed against this. */
+  rect: { top: number; bottom: number; left: number; width: number };
+};
+
+type Placed = {
+  left: number;
+  top: number;
   placement: "top" | "bottom";
-} | null;
+};
 
 export function NativeTooltips() {
-  const [tip, setTip] = useState<TipState>(null);
+  const [anchor, setAnchor] = useState<Anchor | null>(null);
+  const [placed, setPlaced] = useState<Placed | null>(null);
   const [mounted, setMounted] = useState(false);
   const activeRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<number>(0);
+  const tipRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => setMounted(true), []);
 
@@ -57,19 +87,24 @@ export function NativeTooltips() {
     const hide = () => {
       window.clearTimeout(timerRef.current);
       restore();
-      setTip(null);
+      setAnchor(null);
+      setPlaced(null);
     };
+
+    const parseKeys = (raw: string | null): string[] =>
+      raw ? raw.split(/\s+/).filter(Boolean) : [];
 
     const place = (el: HTMLElement, text: string) => {
       if (!el.isConnected) return;
       const r = el.getBoundingClientRect();
-      const placement: "top" | "bottom" = r.top > 48 ? "top" : "bottom";
-      const x = Math.min(
-        Math.max(r.left + r.width / 2, 8),
-        window.innerWidth - 8,
-      );
-      const y = placement === "top" ? r.top - 8 : r.bottom + 8;
-      setTip({ text, x, y, placement });
+      // Reset the measured placement so the next layout pass repositions
+      // against fresh geometry rather than flashing at the old spot.
+      setPlaced(null);
+      setAnchor({
+        text,
+        keys: parseKeys(el.getAttribute(KBD_ATTR)),
+        rect: { top: r.top, bottom: r.bottom, left: r.left, width: r.width },
+      });
     };
 
     const claim = (el: HTMLElement, text: string, immediate: boolean) => {
@@ -141,19 +176,70 @@ export function NativeTooltips() {
     };
   }, []);
 
-  if (!mounted || !tip) return null;
+  // Second pass: measure the rendered tooltip and clamp it into the
+  // viewport. Runs synchronously before paint so the user never sees the
+  // tentative (pre-clamp) position.
+  useLayoutEffect(() => {
+    if (!anchor) return;
+    const node = tipRef.current;
+    if (!node) return;
+    const box = node.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const { rect } = anchor;
+    const centerX = rect.left + rect.width / 2;
+
+    // Horizontal: center on the target, then clamp so the box stays within
+    // the 8px margins. If the box is wider than the viewport it pins left.
+    let left = centerX - box.width / 2;
+    left = Math.min(Math.max(left, MARGIN), Math.max(MARGIN, vw - MARGIN - box.width));
+
+    // Vertical: prefer above the target; flip below if it would clip the
+    // top edge. The gap mirrors the old 8px offset.
+    const fitsAbove = rect.top - MARGIN - box.height >= MARGIN;
+    const fitsBelow = rect.bottom + MARGIN + box.height <= vh - MARGIN;
+    let placement: "top" | "bottom";
+    if (fitsAbove) placement = "top";
+    else if (fitsBelow) placement = "bottom";
+    else placement = rect.top > vh - rect.bottom ? "top" : "bottom"; // more room wins
+
+    let top =
+      placement === "top" ? rect.top - MARGIN - box.height : rect.bottom + MARGIN;
+    top = Math.min(Math.max(top, MARGIN), Math.max(MARGIN, vh - MARGIN - box.height));
+
+    setPlaced({ left, top, placement });
+  }, [anchor]);
+
+  if (!mounted || !anchor) return null;
 
   return createPortal(
     <div
+      ref={tipRef}
       role="tooltip"
       className={cn(
-        "pointer-events-none fixed z-[1000] max-w-xs -translate-x-1/2 whitespace-normal rounded-md border border-border bg-popover px-2 py-1 text-xs leading-snug text-popover-foreground shadow-md",
-        tip.placement === "top" && "-translate-y-full",
+        "pointer-events-none fixed z-[1000] flex max-w-xs items-center gap-2 whitespace-normal rounded-md border border-border bg-popover px-2 py-1 text-xs leading-snug text-popover-foreground shadow-md",
         "motion-safe:animate-in motion-safe:fade-in motion-safe:duration-100",
+        // Hidden until measured so the tentative position never paints.
+        placed ? "visible" : "invisible",
       )}
-      style={{ left: tip.x, top: tip.y }}
+      style={
+        placed
+          ? { left: placed.left, top: placed.top }
+          : // Tentative: render near the anchor (off the measured path) so
+            // the box has real geometry to read in the layout pass.
+            { left: anchor.rect.left, top: anchor.rect.top }
+      }
     >
-      {tip.text}
+      <span className="min-w-0">{anchor.text}</span>
+      {anchor.keys.length > 0 && (
+        <span className="ml-auto flex shrink-0 items-center gap-px">
+          {anchor.keys.map((key, i) => (
+            <span key={`${key}-${i}`} className="kbd !h-4 !min-w-[1rem] !px-1">
+              {key}
+            </span>
+          ))}
+        </span>
+      )}
     </div>,
     document.body,
   );

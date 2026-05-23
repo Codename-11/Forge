@@ -1,5 +1,6 @@
 import "server-only";
 import { AgentRunStatus, EventKind, Prisma } from "@prisma/client";
+import type { AgentProvider } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/agent-run";
@@ -281,7 +282,7 @@ async function subscribeRun(run: {
   issueId: string;
   agentId: string;
   externalRunId: string;
-  provider: import("@prisma/client").AgentProvider;
+  provider: AgentProvider;
 }): Promise<void> {
   if (subscriptions.has(run.id)) return;
   const connector = getRunsConnector(run.provider);
