@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { AgentRunControlState, AgentRunStatus, EventKind } from "@prisma/client";
+import { AgentRunControlState, AgentRunStatus, EventKind, Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -767,7 +767,11 @@ export const agentRunRouter = router({
         await ctx.db.$transaction(async (tx) => {
           await tx.agentRun.update({
             where: { id: run.id },
-            data: { awaitingApprovalAt: null, lastEventAt: new Date() },
+            data: {
+              awaitingApprovalAt: null,
+              pendingApproval: Prisma.DbNull,
+              lastEventAt: new Date(),
+            },
           });
           await appendRunEvent(tx, {
             runId: run.id,
@@ -787,7 +791,7 @@ export const agentRunRouter = router({
       await ctx.db.$transaction(async (tx) => {
         await tx.agentRun.update({
           where: { id: run.id },
-          data: { awaitingApprovalAt: null },
+          data: { awaitingApprovalAt: null, pendingApproval: Prisma.DbNull },
         });
         await finishRun(tx, {
           runId: run.id,

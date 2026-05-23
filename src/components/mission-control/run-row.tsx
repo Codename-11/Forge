@@ -49,6 +49,8 @@ export type RunRowData = {
   /** Set when a connector-driven run paused awaiting operator permission
    * (e.g. Hermes flagged a dangerous command). Shows Approve/Reject. */
   awaitingApprovalAt?: Date | string | null;
+  /** Command/risk detail captured from the live events stream. */
+  pendingApproval?: { command?: string | null; description?: string | null } | null;
 };
 
 /** Format a token count compactly: <1k as raw, ≥1k rounded to k. */
@@ -266,9 +268,26 @@ export function RunRow({
           data-no-drag
           onClick={(e) => e.stopPropagation()}
         >
-          <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+          <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
           <span className="min-w-0 flex-1 text-foreground/80">
-            {run.agent.name} needs permission to run a command.
+            {run.agent.name} needs permission
+            {run.pendingApproval?.command ? (
+              <>
+                {" "}to run{" "}
+                <code className="rounded bg-background/60 px-1 font-mono text-[0.625rem] text-foreground">
+                  {run.pendingApproval.command.length > 80
+                    ? `${run.pendingApproval.command.slice(0, 77)}…`
+                    : run.pendingApproval.command}
+                </code>
+              </>
+            ) : (
+              " to run a command"
+            )}
+            {run.pendingApproval?.description ? (
+              <span className="mt-0.5 block text-[0.625rem] text-muted-foreground">
+                {run.pendingApproval.description}
+              </span>
+            ) : null}
           </span>
           <button
             type="button"
