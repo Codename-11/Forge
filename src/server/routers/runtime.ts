@@ -1,7 +1,21 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { AgentProvider, RuntimeKind } from "@prisma/client";
+import { AgentProvider, RuntimeKind, type Runtime } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
+import { getRuntimeAdapter, managedAdapters } from "@/server/runtimes/adapters";
+
+/** Compute location a managed adapter's transport implies. */
+function kindForAdapterTransport(transport: string): RuntimeKind {
+  if (transport === "local-daemon") return RuntimeKind.LOCAL_DAEMON;
+  // runs-api + webhook are both reached over HTTP from Forge.
+  return RuntimeKind.REMOTE_HTTP;
+}
+
+/** Never leak the HMAC secret to clients — surface only whether one is set. */
+function redactRuntime<T extends Partial<Runtime>>(rt: T): Omit<T, "secret"> & { hasSecret: boolean } {
+  const { secret, ...rest } = rt as T & { secret?: string | null };
+  return { ...(rest as Omit<T, "secret">), hasSecret: !!secret };
+}
 
 /**
  * Runtime registry. A Runtime is the compute environment that hosts one
@@ -35,8 +49,8 @@ export const runtimeRouter = router({
         .object({ includeArchived: z.boolean().default(false) })
         .default({ includeArchived: false }),
     )
-    .query(({ ctx, input }) =>
-      ctx.db.runtime.findMany({
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.runtime.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           ...(input.includeArchived ? {} : { archivedAt: null }),
@@ -46,8 +60,9 @@ export const runtimeRouter = router({
           owner: { select: { id: true, name: true, image: true } },
           _count: { select: { agents: true } },
         },
-      }),
-    ),
+      });
+      return rows.map(redactRuntime);
+    }),
 
   byId: workspaceProcedure
     .input(z.object({ id: runtimeId }))
@@ -71,7 +86,7 @@ export const runtimeRouter = router({
         },
       });
       if (!runtime) throw new TRPCError({ code: "NOT_FOUND" });
-      return runtime;
+      return redactRuntime(runtime);
     }),
 
   register: workspaceProcedure
@@ -157,11 +172,54 @@ export const runtimeRouter = router({
       });
     }),
 
+  /**
+   * Create a *managed* runtime from an adapter (Hermes gateway, custom HTTP,
+   * …). The compute `kind` is derived from the adapter's transport, so the
+   * operator picks "what manages this" rather than a low-level kind. The
+   * `forge` daemon still self-registers LOCAL_DAEMON rows via `register`.
+   */
+  create: workspaceProcedure
+    .input(
+      z.object({
+        adapterKey: z.string().min(1).max(60),
+        name: z.string().min(1).max(120),
+        endpoint: z.string().url().max(500).optional().or(z.literal("")),
+        secret: z.string().max(500).optional(),
+        providersAvailable: z.array(z.nativeEnum(AgentProvider)).max(16).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const adapter = getRuntimeAdapter(input.adapterKey);
+      if (!adapter || !adapter.managed) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Unknown or non-managed adapter. Only managed runtimes can be created here.",
+        });
+      }
+      const row = await ctx.db.runtime.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          name: input.name,
+          adapterKey: adapter.key,
+          kind: kindForAdapterTransport(adapter.transport),
+          endpoint: input.endpoint || null,
+          secret: input.secret || null,
+          providersAvailable: input.providersAvailable ?? adapter.providers,
+          ownerId: ctx.session.user.id,
+        },
+      });
+      return redactRuntime(row);
+    }),
+
   update: workspaceProcedure
     .input(
       z.object({
         id: runtimeId,
         name: z.string().min(1).max(120).optional(),
+        adapterKey: z.string().min(1).max(60).optional(),
+        endpoint: z.string().url().max(500).nullable().optional().or(z.literal("")),
+        // Empty string = leave the stored secret unchanged; explicit null clears it.
+        secret: z.string().max(500).nullable().optional(),
         providersAvailable: z
           .array(z.nativeEnum(AgentProvider))
           .max(16)
@@ -169,15 +227,39 @@ export const runtimeRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { id, ...patch } = input;
+      const { id, secret, endpoint, adapterKey, ...rest } = input;
       const row = await ctx.db.runtime.findFirst({
         where: { id, workspaceId: ctx.workspaceId },
         select: { id: true },
       });
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      return ctx.db.runtime.update({
+      if (adapterKey !== undefined && !getRuntimeAdapter(adapterKey)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown adapter key." });
+      }
+      const updated = await ctx.db.runtime.update({
         where: { id: row.id },
-        data: patch,
+        data: {
+          ...rest,
+          ...(adapterKey !== undefined ? { adapterKey } : {}),
+          ...(endpoint !== undefined ? { endpoint: endpoint || null } : {}),
+          // "" → keep; null → clear; non-empty → set.
+          ...(secret === undefined ? {} : { secret: secret || null }),
+        },
       });
+      return redactRuntime(updated);
     }),
+
+  /** Adapter catalog for the UI (managed runtimes are creatable). */
+  adapters: workspaceProcedure.query(() =>
+    managedAdapters().map((a) => ({
+      key: a.key,
+      title: a.title,
+      tagline: a.tagline,
+      iconKey: a.iconKey,
+      transport: a.transport,
+      multiAgent: a.multiAgent,
+      providers: a.providers,
+      capabilities: a.capabilities,
+    })),
+  ),
 });
