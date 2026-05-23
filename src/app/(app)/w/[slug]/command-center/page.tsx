@@ -109,7 +109,14 @@ export default function CommandCenterPage() {
             : "Decisions & live agent ops"
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="relative isolate min-h-0 flex-1 overflow-y-auto p-4">
+        {/* M1 (design spec): ambient animated paper grid, matching the
+            dashboard. `isolate` forms a stacking context so the `-z-10`
+            grid paints above <main>'s opaque bg-background. */}
+        <div
+          aria-hidden
+          className="forge-grid-bg pointer-events-none absolute inset-0 -z-10 opacity-40"
+        />
         {isLoading ? (
           <SkeletonList rows={6} />
         ) : !data ? (
