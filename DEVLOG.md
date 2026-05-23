@@ -6535,6 +6535,29 @@ Post-merge cleanup of the design-system landing.
   stubs "preserve the workspace shell" (they redirect to the chromeless
   account shell).
 
+## 2026-05-22 — chat reliability + chat/dashboard UX polish
+
+- **Stuck "Sending…" — root cause fixed.** `chat.getThread` selected message
+  fields but omitted the receipt columns (`dispatchedAt` / `acknowledgedAt`
+  / `outputStartedAt`), so every persisted USER row fell through to the
+  spinner forever even though the send succeeded. Added them to the select.
+  This is why the earlier optimistic-bubble fix didn't hold — it fixed the
+  transient bubble, not the persisted row that replaces it. Also added a
+  **30s acceptance watchdog** in `chat-thread.tsx` `runStreamingSend`: an
+  unconfirmed send now flips to "Failed" (with Retry) instead of spinning.
+- **Grid background full-bleed.** `forge-grid-bg` moved onto a full-width
+  `relative isolate` wrapper (was clamped to the centered `max-w` column) on
+  the dashboard, and wired into the Inbox (which never had it).
+- **M5 stream shimmer wired to the live bubble.** `AgentStreamBubble` was
+  rendering markdown + an ad-hoc `▍` cursor while streaming and never used
+  the M5 classes. It now renders raw text with `forge-streaming
+  forge-streaming-cursor` (ember sweep + blinking caret) while live, then
+  switches to selectable markdown on commit. CSS already existed.
+- **Chat conversations pane: collapse + resize.** `chat-workspace.tsx` grid
+  → flex; the Conversations pane collapses to a slim rail and is
+  drag-resizable (240–560px, double-click resets). Geometry persists in
+  `localStorage` (per-device view state).
+
 ## Known gaps / TODOs in code
 
 - `auth.ts` assumes `nodemailer` provider; install and configure SMTP.

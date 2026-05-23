@@ -248,18 +248,19 @@ export default function DashboardPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="relative isolate mx-auto max-w-6xl space-y-6 p-6">
-          {/* M1 (design spec): ambient animated paper grid behind the
-              dashboard. Extends `.grid-striped` to two axes + a slow 48s
-              drift; dialed to 40% so it reads as warmth, not noise.
-              Reduced-motion / motion-off renders a static grid.
-              `isolate` on the parent forms a stacking context so the
-              `-z-10` grid paints above <main>'s opaque bg-background
-              (without it the grid hides behind the shell background). */}
+        {/* M1 (design spec): ambient animated paper grid. Lives on a
+            full-width relative wrapper (not the centered max-w column) so it
+            spans the entire main area while still growing to the full scroll
+            height. `isolate` forms a stacking context so the `-z-10` grid
+            paints above <main>'s opaque bg-background (without it the grid
+            hides behind the shell). Reduced-motion / motion-off renders a
+            static grid. */}
+        <div className="relative isolate">
           <div
             aria-hidden
             className="forge-grid-bg pointer-events-none absolute inset-0 -z-10 opacity-40"
           />
+          <div className="mx-auto max-w-6xl space-y-6 p-6">
           <GreetingBar
             greeting={greeting}
             name={firstName}
@@ -411,6 +412,7 @@ export default function DashboardPage() {
               </Rows>
             </Column>
           </section>
+          </div>
         </div>
       </div>
     </>
