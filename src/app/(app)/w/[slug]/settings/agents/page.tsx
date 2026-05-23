@@ -73,6 +73,8 @@ type EditingState = {
   connectionMode: ConnectionMode;
   webhookUrl: string;
   webhookSecret: string;
+  /** Managed runtime this agent attaches to. "" = unattached. */
+  runtimeId: string;
   capabilitiesRaw: string;
   maxConcurrent: number;
   /** Chat engine: DEFAULT = integration default, else explicit override. */
@@ -143,6 +145,7 @@ const EMPTY_EDITING: EditingState = {
   connectionMode: "webhook",
   webhookUrl: "",
   webhookSecret: "",
+  runtimeId: "",
   capabilitiesRaw: "",
   maxConcurrent: 1,
   runEngine: "DEFAULT",
@@ -167,6 +170,7 @@ export default function AgentsPage() {
   const { data: agents, refetch, isLoading } = trpc.agent.list.useQuery({
     includeArchived: true,
   });
+  const { data: runtimes } = trpc.runtime.list.useQuery({ includeArchived: false });
 
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [step, setStep] = useState(0);
@@ -373,6 +377,7 @@ export default function AgentsPage() {
           runEngine: editing.runEngine === "DEFAULT" ? null : editing.runEngine,
           webhookUrl: webhookUrl || null,
           webhookSecret: webhookSecret || null,
+          runtimeId: editing.runtimeId || null,
           capabilities,
           maxConcurrent: Math.floor(editing.maxConcurrent),
           templateMarkdown: templateMarkdown ?? null,
@@ -389,6 +394,7 @@ export default function AgentsPage() {
           runEngine: editing.runEngine === "DEFAULT" ? null : editing.runEngine,
           webhookUrl,
           webhookSecret,
+          runtimeId: editing.runtimeId || null,
           capabilities,
           maxConcurrent: Math.floor(editing.maxConcurrent),
           templateMarkdown,
@@ -604,6 +610,7 @@ export default function AgentsPage() {
                           connectionMode: a.webhookUrl ? "webhook" : "mcp",
                           webhookUrl: a.webhookUrl ?? "",
                           webhookSecret: a.webhookSecret ?? "",
+                          runtimeId: a.runtime?.id ?? "",
                           capabilitiesRaw: a.capabilities.join(", "),
                           maxConcurrent: a.maxConcurrent,
                           runEngine: (a.runEngine ?? "DEFAULT") as EditingState["runEngine"],
@@ -860,6 +867,31 @@ export default function AgentsPage() {
 
               {step === 2 && (
                 <div className="space-y-4">
+                  <Field
+                    label="Managed runtime"
+                    hint="Attach this agent to a managed runtime (e.g. a Hermes gateway) that hosts it. Profiles on the same daemon share one runtime. Leave unattached for a thin MCP/webhook connection. Manage runtimes under Settings → Runtimes."
+                  >
+                    <select
+                      className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm"
+                      value={editing.runtimeId}
+                      onChange={(e) => setEditing({ ...editing, runtimeId: e.target.value })}
+                    >
+                      <option value="">— None (unattached) —</option>
+                      {(runtimes ?? [])
+                        .filter(
+                          (r) =>
+                            r.providersAvailable.length === 0 ||
+                            r.providersAvailable.includes(editing.provider) ||
+                            r.id === editing.runtimeId,
+                        )
+                        .map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                          </option>
+                        ))}
+                    </select>
+                  </Field>
+
                   <div className="grid gap-2 md:grid-cols-2">
                     <RuntimeOption
                       selected={editing.connectionMode === "mcp"}

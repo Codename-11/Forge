@@ -45,6 +45,16 @@ const KIND_ICON: Record<RuntimeKind, typeof Server> = {
   CLOUD: Cloud,
 };
 
+/** Display label for an adapter key (mirrors src/server/runtimes/adapters.ts). */
+const ADAPTER_LABEL: Record<string, string> = {
+  hermes: "Hermes · managed",
+  "local-daemon": "Local daemon · managed",
+  "custom-http": "Custom · webhook",
+  "claude-code": "Claude Code",
+  "claude-desktop": "Claude Desktop",
+  codex: "Codex",
+};
+
 export default function RuntimesPage() {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
@@ -53,14 +63,19 @@ export default function RuntimesPage() {
     includeArchived,
   });
 
-  const [renameTarget, setRenameTarget] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<{
     id: string;
     name: string;
   } | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<{
+    id: string;
+    name: string;
+    endpoint: string;
+    hasSecret: boolean;
+  } | null>(null);
+
+  const { data: adapters } = trpc.runtime.adapters.useQuery();
 
   function invalidate() {
     void utils.runtime.list.invalidate();
@@ -68,8 +83,17 @@ export default function RuntimesPage() {
 
   const update = trpc.runtime.update.useMutation({
     onSuccess: () => {
-      toast.success("Runtime renamed.");
+      toast.success("Runtime saved.");
       invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const create = trpc.runtime.create.useMutation({
+    onSuccess: () => {
+      toast.success("Runtime created.");
+      invalidate();
+      setCreateOpen(false);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -99,18 +123,23 @@ export default function RuntimesPage() {
         title="Runtimes"
         subtitle="Compute environments that host agents."
         actions={
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setIncludeArchived((v) => !v)}
-            title={
-              includeArchived
-                ? "Hide archived runtimes"
-                : "Show archived runtimes alongside active"
-            }
-          >
-            {includeArchived ? "Hide archived" : "Show archived"}
-          </Button>
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setIncludeArchived((v) => !v)}
+              title={
+                includeArchived
+                  ? "Hide archived runtimes"
+                  : "Show archived runtimes alongside active"
+              }
+            >
+              {includeArchived ? "Hide archived" : "Show archived"}
+            </Button>
+            <Button size="sm" variant="ember" onClick={() => setCreateOpen(true)}>
+              Add runtime
+            </Button>
+          </>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -139,7 +168,16 @@ export default function RuntimesPage() {
                         >
                           {rt.name}
                         </Link>
-                        <KindBadge kind={rt.kind} />
+                        {rt.adapterKey && ADAPTER_LABEL[rt.adapterKey] ? (
+                          <span
+                            className="rounded-md border border-ember/30 bg-ember/5 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-foreground/80"
+                            title="Runtime adapter — what manages this runtime"
+                          >
+                            {ADAPTER_LABEL[rt.adapterKey]}
+                          </span>
+                        ) : (
+                          <KindBadge kind={rt.kind} />
+                        )}
                         {isArchived && (
                           <span
                             className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
@@ -202,10 +240,15 @@ export default function RuntimesPage() {
                         size="sm"
                         variant="ghost"
                         onClick={() =>
-                          setRenameTarget({ id: rt.id, name: rt.name })
+                          setEditTarget({
+                            id: rt.id,
+                            name: rt.name,
+                            endpoint: rt.endpoint ?? "",
+                            hasSecret: rt.hasSecret,
+                          })
                         }
                       >
-                        Rename
+                        Edit
                       </Button>
                       {isArchived ? (
                         <Button
@@ -252,13 +295,23 @@ export default function RuntimesPage() {
         </div>
       </div>
 
-      <RenameModal
-        target={renameTarget}
-        onCancel={() => setRenameTarget(null)}
-        onSubmit={async (name) => {
-          if (!renameTarget) return;
-          await update.mutateAsync({ id: renameTarget.id, name });
-          setRenameTarget(null);
+      <CreateRuntimeModal
+        open={createOpen}
+        adapters={adapters ?? []}
+        onCancel={() => setCreateOpen(false)}
+        onSubmit={async (vals) => {
+          await create.mutateAsync(vals);
+        }}
+        pending={create.isPending}
+      />
+
+      <EditRuntimeModal
+        target={editTarget}
+        onCancel={() => setEditTarget(null)}
+        onSubmit={async (vals) => {
+          if (!editTarget) return;
+          await update.mutateAsync({ id: editTarget.id, ...vals });
+          setEditTarget(null);
         }}
         pending={update.isPending}
       />
@@ -297,60 +350,215 @@ function KindBadge({ kind }: { kind: RuntimeKind }) {
   );
 }
 
-function RenameModal({
+type AdapterOption = {
+  key: string;
+  title: string;
+  tagline: string;
+  transport: string;
+  multiAgent: boolean;
+  providers: string[];
+};
+
+const fieldLabel = "mb-1 block font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-muted-foreground";
+
+function CreateRuntimeModal({
+  open,
+  adapters,
+  onCancel,
+  onSubmit,
+  pending,
+}: {
+  open: boolean;
+  adapters: AdapterOption[];
+  onCancel: () => void;
+  onSubmit: (vals: {
+    adapterKey: string;
+    name: string;
+    endpoint?: string;
+    secret?: string;
+  }) => Promise<void>;
+  pending: boolean;
+}) {
+  const [adapterKey, setAdapterKey] = useState("");
+  const [name, setName] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [secret, setSecret] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      const first = adapters[0]?.key ?? "";
+      setAdapterKey(first);
+      setName("");
+      setEndpoint("");
+      setSecret("");
+    }
+  }, [open, adapters]);
+
+  const adapter = adapters.find((a) => a.key === adapterKey);
+
+  return (
+    <QuickForm
+      open={open}
+      onOpenChange={(v) => !v && onCancel()}
+      title="Add managed runtime"
+      description="A managed runtime owns its endpoint + secret and can host agents (e.g. a Hermes gateway). Attach agents to it from the Agents page."
+      primaryLabel="Create"
+      loading={pending}
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!adapterKey) return { error: "Pick an adapter." };
+        if (!name.trim()) return { error: "Name cannot be empty." };
+        try {
+          await onSubmit({
+            adapterKey,
+            name: name.trim(),
+            endpoint: endpoint.trim() || undefined,
+            secret: secret.trim() || undefined,
+          });
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : "Create failed." };
+        }
+      }}
+    >
+      <div className="space-y-3">
+        <label className="block">
+          <span className={fieldLabel}>Adapter</span>
+          <select
+            className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm"
+            value={adapterKey}
+            onChange={(e) => setAdapterKey(e.target.value)}
+          >
+            {adapters.map((a) => (
+              <option key={a.key} value={a.key}>
+                {a.title}
+              </option>
+            ))}
+          </select>
+          {adapter && (
+            <span className="mt-1 block text-xs text-muted-foreground">{adapter.tagline}</span>
+          )}
+        </label>
+        <label className="block">
+          <span className={fieldLabel}>Name</span>
+          <Input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={120}
+            placeholder={adapter?.title ?? "Runtime name"}
+          />
+        </label>
+        <label className="block">
+          <span className={fieldLabel}>
+            Endpoint{" "}
+            <span className="normal-case text-muted-foreground/70">
+              (gateway base URL, e.g. http://127.0.0.1:8642/v1)
+            </span>
+          </span>
+          <Input
+            value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+            placeholder="https://…"
+            className="font-mono"
+          />
+        </label>
+        <label className="block">
+          <span className={fieldLabel}>Secret (optional)</span>
+          <Input
+            type="password"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            placeholder="HMAC / gateway token"
+            className="font-mono"
+          />
+        </label>
+      </div>
+    </QuickForm>
+  );
+}
+
+function EditRuntimeModal({
   target,
   onCancel,
   onSubmit,
   pending,
 }: {
-  target: { id: string; name: string } | null;
+  target: { id: string; name: string; endpoint: string; hasSecret: boolean } | null;
   onCancel: () => void;
-  onSubmit: (name: string) => Promise<void>;
+  onSubmit: (vals: { name: string; endpoint: string; secret?: string }) => Promise<void>;
   pending: boolean;
 }) {
-  const [value, setValue] = useState("");
+  const [name, setName] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [secret, setSecret] = useState("");
 
-  // Re-seed the input each time the target changes.
   useEffect(() => {
-    if (target) setValue(target.name);
-    else setValue("");
+    if (target) {
+      setName(target.name);
+      setEndpoint(target.endpoint);
+      setSecret("");
+    }
   }, [target]);
 
   return (
     <QuickForm
       open={!!target}
-      onOpenChange={(v) => {
-        if (!v) {
-          setValue("");
-          onCancel();
-        }
-      }}
-      title="Rename runtime"
-      description="The runtime keeps its id and the agents pointing at it. Only the display label changes."
+      onOpenChange={(v) => !v && onCancel()}
+      title="Edit runtime"
+      description="Update the connection details. Agents attached to this runtime keep their attachment."
       primaryLabel="Save"
       loading={pending}
       onSubmit={async (e) => {
         e.preventDefault();
-        const trimmed = value.trim();
-        if (!trimmed) {
-          return { error: "Name cannot be empty." };
-        }
+        if (!name.trim()) return { error: "Name cannot be empty." };
         try {
-          await onSubmit(trimmed);
+          // Empty secret = leave the stored one unchanged.
+          await onSubmit({
+            name: name.trim(),
+            endpoint: endpoint.trim(),
+            secret: secret.trim() || undefined,
+          });
         } catch (err) {
-          return {
-            error: err instanceof Error ? err.message : "Rename failed.",
-          };
+          return { error: err instanceof Error ? err.message : "Save failed." };
         }
       }}
     >
-      <Input
-        autoFocus
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        maxLength={120}
-        placeholder="Runtime name"
-      />
+      <div className="space-y-3">
+        <label className="block">
+          <span className={fieldLabel}>Name</span>
+          <Input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={120}
+            placeholder="Runtime name"
+          />
+        </label>
+        <label className="block">
+          <span className={fieldLabel}>Endpoint</span>
+          <Input
+            value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+            placeholder="https://…"
+            className="font-mono"
+          />
+        </label>
+        <label className="block">
+          <span className={fieldLabel}>
+            Secret{" "}
+            <span className="normal-case text-muted-foreground/70">
+              ({target?.hasSecret ? "configured — blank keeps it" : "none set"})
+            </span>
+          </span>
+          <Input
+            type="password"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            placeholder={target?.hasSecret ? "••••••••" : "HMAC / gateway token"}
+            className="font-mono"
+          />
+        </label>
+      </div>
     </QuickForm>
   );
 }

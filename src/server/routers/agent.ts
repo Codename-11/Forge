@@ -9,6 +9,7 @@ import {
   RelationKind,
   RunEngine,
   type Prisma,
+  type PrismaClient,
 } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange, agentDispatchUrlFor } from "@/server/audit";
@@ -53,6 +54,9 @@ const upsertInput = z.object({
   runEngine: z.nativeEnum(RunEngine).nullable().optional(),
   webhookUrl: z.string().url().max(500).optional().or(z.literal("")),
   webhookSecret: z.string().max(500).optional().or(z.literal("")),
+  /// Optional managed runtime this agent attaches to (Hermes gateway, local
+  /// daemon, …). Empty string / null = unattached (thin connection).
+  runtimeId: z.string().min(1).max(40).nullable().optional().or(z.literal("")),
   capabilities: z.array(z.string().min(1).max(40)).max(32).default([]),
   maxConcurrent: z.number().int().min(0).max(100).default(1),
   /// Freeform markdown applied to the issue description when this agent
@@ -67,6 +71,27 @@ function redactWebhookSecret<T extends { webhookSecret?: string | null }>(
     ...value,
     webhookSecret: value.webhookSecret ? "[redacted]" : value.webhookSecret,
   };
+}
+
+/**
+ * Normalize an incoming `runtimeId` ("" / null / undefined → null) and, when
+ * non-null, assert the runtime belongs to this workspace. Returns the value
+ * to write, or `undefined` to mean "leave unchanged" (only when the caller
+ * passed `undefined`).
+ */
+async function resolveRuntimeId(
+  db: PrismaClient,
+  workspaceId: string,
+  raw: string | null | undefined,
+): Promise<string | null> {
+  const id = raw || null; // "" and null both clear the attachment
+  if (!id) return null;
+  const rt = await db.runtime.findFirst({
+    where: { id, workspaceId },
+    select: { id: true },
+  });
+  if (!rt) throw new TRPCError({ code: "BAD_REQUEST", message: "Runtime not found in this workspace." });
+  return rt.id;
 }
 
 export const agentRouter = router({
@@ -265,6 +290,7 @@ export const agentRouter = router({
     if (existing) {
       throw new TRPCError({ code: "CONFLICT", message: "profileKey already used." });
     }
+    const runtimeId = await resolveRuntimeId(ctx.db, ctx.workspaceId, input.runtimeId);
     return ctx.db.$transaction(async (tx) => {
       const agent = await tx.agent.create({
         data: {
@@ -278,6 +304,7 @@ export const agentRouter = router({
           runEngine: input.runEngine ?? null,
           webhookUrl: input.webhookUrl || null,
           webhookSecret: input.webhookSecret || null,
+          runtimeId,
           capabilities: input.capabilities,
           maxConcurrent: input.maxConcurrent,
           templateMarkdown: input.templateMarkdown || null,
@@ -320,6 +347,8 @@ export const agentRouter = router({
         runEngine: z.nativeEnum(RunEngine).nullable().optional(),
         webhookUrl: z.string().url().max(500).nullable().optional(),
         webhookSecret: z.string().max(500).nullable().optional(),
+        /// Managed runtime attachment. "" / null detaches; omit = unchanged.
+        runtimeId: z.string().min(1).max(40).nullable().optional().or(z.literal("")),
         capabilities: z.array(z.string().min(1).max(40)).max(32).optional(),
         maxConcurrent: z.number().int().min(0).max(100).optional(),
         /// Freeform markdown template. Null clears. No length cap.
@@ -327,12 +356,17 @@ export const agentRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { id, ...patch } = input;
+      const { id, runtimeId, ...patch } = input;
       const before = await ctx.db.agent.findFirstOrThrow({
         where: { id, workspaceId: ctx.workspaceId },
       });
+      // Only touch the attachment when the caller sent the field at all.
+      const runtimePatch =
+        runtimeId === undefined
+          ? {}
+          : { runtimeId: await resolveRuntimeId(ctx.db, ctx.workspaceId, runtimeId) };
       return ctx.db.$transaction(async (tx) => {
-        const after = await tx.agent.update({ where: { id }, data: patch });
+        const after = await tx.agent.update({ where: { id }, data: { ...patch, ...runtimePatch } });
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
