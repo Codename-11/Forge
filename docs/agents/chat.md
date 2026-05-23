@@ -109,7 +109,14 @@ Arrow keys cycle, Enter or Tab accepts, Escape closes.
 | `/info` | info | Appends a local bubble with the agent's profile, status, and runtime mode. |
 | `/agents` | info | Appends a local link to the Agents page. |
 | `/issue <KEY>` | prompt | Transforms into `Summarize <KEY> — current status, blockers, recent activity.` and sends normally. |
+| `/assign <KEY>` | prompt | Asks the agent to take ownership of an issue and start working it. |
 | `/status` | prompt | Transforms into a status-request prompt and sends normally. |
+| `/engine [completions\|runs]` | control | Shows the agent's current [chat engine](/agents/engines.html), or switches it (admin). |
+| `/summarize` | prompt | Asks the agent to summarize the conversation. |
+| `/compact` | control | Compacts the conversation into Forge-owned summary context. |
+
+Commands that take arguments show a usage hint (e.g. `<KEY>`) in the autocomplete,
+and accepting one fills the stub so you can type the argument.
 
 `info` and `control` commands append a SYSTEM-role bubble client-side only — they never
 hit the server. `prompt` commands (`/issue`, `/status`) dispatch as real user messages.
