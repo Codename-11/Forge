@@ -43,8 +43,49 @@ function fmtTokens(n: number): string {
 export function HistoryTab({ slug: _slug }: { slug: string }) {
   const [activityView, setActivityView] = useState<"heatmap" | "swimlane">("heatmap");
 
+  // Heatmap autosizing. Measure the card's inner width and lay out a
+  // GitHub-style grid that fills it *exactly*: keep the column pitch near
+  // ~13px (≈11px cell + 2px gap) so the cell height is unchanged, pick the
+  // week count that best fits the width, then derive a fractional cell
+  // size so the columns span the full width with no right-edge gap and no
+  // overflow. `days` is fetched to match the visible range so the grid
+  // fills with real data instead of capping at a fixed 90.
+  const CELL_GAP = 2;
+  const LABEL_RESERVE = 32; // day-of-week label column + the gap before the grid
+  const TARGET_PITCH = 13; // px per column at the reference 11px cell
+  const heatmapBoxRef = useRef<HTMLDivElement | null>(null);
+  const [heatmapWidth, setHeatmapWidth] = useState(0);
+  useEffect(() => {
+    if (activityView !== "heatmap") return;
+    const node = heatmapBoxRef.current;
+    if (!node) return;
+    const measure = (w: number) => setHeatmapWidth(w);
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) measure(e.contentRect.width);
+    });
+    ro.observe(node);
+    // clientWidth includes the p-2 padding; subtract it to match contentRect.
+    measure(Math.max(0, node.clientWidth - 16));
+    return () => ro.disconnect();
+  }, [activityView]);
+
+  const usableWidth = useMemo(
+    () => Math.max(0, heatmapWidth - LABEL_RESERVE),
+    [heatmapWidth],
+  );
+  const computedWeeks = useMemo(() => {
+    if (usableWidth < 1) return 16;
+    const weeks = Math.round((usableWidth + CELL_GAP) / TARGET_PITCH);
+    return Math.max(10, Math.min(53, weeks)); // 10 weeks … ~1 year
+  }, [usableWidth]);
+  const heatmapCell = useMemo(() => {
+    if (usableWidth < 1) return 11;
+    const raw = (usableWidth - (computedWeeks - 1) * CELL_GAP) / computedWeeks;
+    return Math.max(9, Math.min(15, raw));
+  }, [usableWidth, computedWeeks]);
+
   const { data: heatmap } = trpc.agentRun.heatmap.useQuery(
-    { days: 90 },
+    { days: Math.min(365, computedWeeks * 7) },
     { staleTime: 60_000 },
   );
 
@@ -87,33 +128,6 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
       };
     });
   }, [rangeEvents]);
-
-  // Heatmap autosizing: measure the card's inner width and derive how
-  // many weeks fit at our cell size. The grid stays calibrated to the
-  // panel without hardcoded width assumptions, so resizing the panel
-  // (or future "expanded" mode) just shows more history.
-  const heatmapBoxRef = useRef<HTMLDivElement | null>(null);
-  const [heatmapWidth, setHeatmapWidth] = useState(0);
-  useEffect(() => {
-    if (activityView !== "heatmap") return;
-    const node = heatmapBoxRef.current;
-    if (!node) return;
-    const ro = new ResizeObserver((entries) => {
-      for (const e of entries) setHeatmapWidth(e.contentRect.width);
-    });
-    ro.observe(node);
-    setHeatmapWidth(node.getBoundingClientRect().width);
-    return () => ro.disconnect();
-  }, [activityView]);
-
-  // Cells are 11px with a 2px gap; reserve ~26px for the day labels in
-  // the heatmap component. Min 12 weeks, max 30 (≈7 months).
-  const computedWeeks = useMemo(() => {
-    if (heatmapWidth < 1) return 16;
-    const usable = Math.max(0, heatmapWidth - 28);
-    const weeks = Math.floor((usable + 2) / (11 + 2));
-    return Math.max(12, Math.min(30, weeks));
-  }, [heatmapWidth]);
 
   const spend = costStats?.totals;
   return (
@@ -172,8 +186,8 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
             <ActivityHeatmap
               data={heatmap ?? []}
               weeks={computedWeeks}
-              cellSize={11}
-              cellGap={2}
+              cellSize={heatmapCell}
+              cellGap={CELL_GAP}
             />
           </div>
         ) : (
