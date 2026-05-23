@@ -636,6 +636,27 @@ export async function POST(req: NextRequest) {
           assembled.push(completedFinalText);
           enqueue(sse("content", { delta: completedFinalText }));
         }
+        // Last resort: the SSE stream can end without ever delivering the
+        // final text — a missed terminal event, or a `run.completed` that
+        // carried no `output`. Poll the run once for its persisted output so
+        // a real reply isn't lost to a dropped stream (a frequent cause of
+        // "the agent never answered" with a blank bubble).
+        if (
+          assembled.length === 0 &&
+          !completedFinalText &&
+          !abortController.signal.aborted &&
+          runsConnector?.getStatus
+        ) {
+          try {
+            const st = await runsConnector.getStatus(externalRunId);
+            if (st.output && st.output.trim()) {
+              assembled.push(st.output);
+              enqueue(sse("content", { delta: st.output }));
+            }
+          } catch (err) {
+            logger.warn({ err, externalRunId }, "chat-stream: getStatus output fallback failed");
+          }
+        }
       };
 
       try {
@@ -686,11 +707,26 @@ export async function POST(req: NextRequest) {
       // error we want the row populated (or removed) so the UI doesn't
       // leak an empty bubble. If the model produced nothing and we hit
       // an error, prefer a clear apology body over a blank row.
-      const persistedBody =
-        finalBody ||
-        (errored
-          ? "(no response — provider stream errored; check logs)"
-          : "");
+      // Decide the body we persist. A turn can do real work (tool calls)
+      // yet stream no assistant text — Hermes sometimes ends a turn right
+      // after tool execution, and a dropped/aborted stream lands here too.
+      // Persisting "" leaves a blank bubble that reads as a failed chat, so
+      // whenever we keep the row, give it an accurate, non-empty body.
+      let persistedBody = finalBody;
+      if (!persistedBody) {
+        if (errored) {
+          persistedBody = "(no response — provider stream errored; check logs)";
+        } else if (abortController.signal.aborted) {
+          persistedBody = "_(Reply interrupted before it finished.)_";
+        } else if (toolCalls.length > 0) {
+          const names = Array.from(new Set(toolCalls.map((c) => c.name))).join(", ");
+          persistedBody = `_(The agent ran ${toolCalls.length} tool call${
+            toolCalls.length === 1 ? "" : "s"
+          }${names ? ` — ${names}` : ""} but returned no message.)_`;
+        } else if (thinkingFull) {
+          persistedBody = "_(The agent finished without a message.)_";
+        }
+      }
 
       try {
         if (!persistedBody && !thinkingFull && toolCalls.length === 0) {
