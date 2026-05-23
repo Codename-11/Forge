@@ -324,10 +324,19 @@ function AgentStreamBubble({
         )}
 
         {bubble.body ? (
-          <div className="relative">
+          isLive ? (
+            // While streaming, render the raw text with the M5 ember-sweep
+            // shimmer + trailing ember caret (forge-streaming-cursor).
+            // Markdown parsing waits until the body commits — `background-
+            // clip:text` needs plain text to clip the gradient fill, and the
+            // persisted bubble re-renders as real, selectable markdown via
+            // the realtime refetch.
+            <div className="forge-streaming forge-streaming-cursor whitespace-pre-wrap break-words">
+              {bubble.body}
+            </div>
+          ) : (
             <ChatMarkdown body={bubble.body} />
-            {isLive && <span className="inline-block animate-pulse text-muted-foreground">▍</span>}
-          </div>
+          )
         ) : isLive ? (
           <span className="flex gap-1">
             <span
@@ -1108,6 +1117,31 @@ export function ChatThreadView({
       });
       setIsStreaming(true);
 
+      // Acceptance watchdog. The route enqueues the `meta` SSE event as its
+      // very first byte (after persisting the USER row), so a healthy stream
+      // resolves `res.ok` in well under a second. If neither acceptance nor a
+      // failure has landed within this window — a dead connection or a proxy
+      // buffering the response so the `fetch` promise never resolves — flip
+      // the optimistic bubble to "failed" so it surfaces Retry instead of
+      // spinning on "Sending…" forever. Cleared the instant the send is
+      // accepted (or otherwise resolves).
+      let acceptanceSettled = false;
+      let watchdogFired = false;
+      const ACCEPTANCE_TIMEOUT_MS = 30_000;
+      const acceptanceTimer = setTimeout(() => {
+        if (acceptanceSettled) return;
+        acceptanceSettled = true;
+        watchdogFired = true;
+        if (outboxId) markOutbox(outboxId, "failed");
+        setStreamBubble(null);
+        // Abort the stalled request so the reader/connection is released.
+        ctrl.abort();
+      }, ACCEPTANCE_TIMEOUT_MS);
+      const clearAcceptanceTimer = () => {
+        acceptanceSettled = true;
+        clearTimeout(acceptanceTimer);
+      };
+
       // Whether the server accepted the send (HTTP response received OK).
       // The route persists the USER row in a transaction *before* it returns
       // the stream, so a 2xx response is a reliable "delivered" signal —
@@ -1145,12 +1179,16 @@ export function ChatThreadView({
           signal: ctrl.signal,
         });
       } catch (err) {
+        clearAcceptanceTimer();
         if (ctrl.signal.aborted) {
-          // Canceled before the request even returned → the message never
-          // reached the server. Drop the optimistic bubble and the empty
-          // agent placeholder entirely.
-          if (outboxId) removeOutbox(outboxId);
-          setStreamBubble(null);
+          // Canceled before the request even returned. If the watchdog
+          // tripped, it already marked the bubble "failed" — leave it for
+          // Retry. Otherwise this is a user cancel: the message never reached
+          // the server, so drop the optimistic bubble and agent placeholder.
+          if (!watchdogFired) {
+            if (outboxId) removeOutbox(outboxId);
+            setStreamBubble(null);
+          }
           setIsStreaming(false);
           return;
         }
@@ -1159,6 +1197,7 @@ export function ChatThreadView({
         setIsStreaming(false);
         return;
       }
+      clearAcceptanceTimer();
 
       if (!res.ok || !res.body) {
         const text = await res.text().catch(() => "");

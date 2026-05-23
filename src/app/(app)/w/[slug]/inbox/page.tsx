@@ -353,7 +353,16 @@ export default function InboxPage() {
             })}
           />
         )}
-        <div className="mx-auto max-w-5xl space-y-8 p-5">
+        {/* M1: ambient animated paper grid behind the inbox, spanning the
+            full main width. Full-width relative wrapper grows to the scroll
+            height; `isolate` forms a stacking context so the `-z-10` grid
+            paints above <main>'s opaque bg-background. */}
+        <div className="relative isolate">
+          <div
+            aria-hidden
+            className="forge-grid-bg pointer-events-none absolute inset-0 -z-10 opacity-40"
+          />
+          <div className="mx-auto max-w-5xl space-y-8 p-5">
           {/* Rollups — always render so the page doesn't jump while loading. */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <FocusRollup
@@ -635,6 +644,7 @@ export default function InboxPage() {
               )}
             </>
           )}
+          </div>
         </div>
       </div>
 

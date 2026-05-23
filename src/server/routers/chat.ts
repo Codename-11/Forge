@@ -709,6 +709,11 @@ export const chatRouter = router({
         take: 100,
         // contextSnapshot is included so the streaming chat path can
         // rehydrate `thinking` + `tool_use` blocks on page reload.
+        // The delivery-receipt columns MUST be selected too — the client's
+        // MessageReceipt derives "Sent"/"Read" from them, and without them
+        // every persisted USER row falls through to a stuck "Sending…"
+        // spinner (the `thread` mutation path returns them by default, so
+        // only this explicit-select read regressed).
         select: {
           id: true,
           role: true,
@@ -716,6 +721,9 @@ export const chatRouter = router({
           createdAt: true,
           sourceRunId: true,
           contextSnapshot: true,
+          dispatchedAt: true,
+          acknowledgedAt: true,
+          outputStartedAt: true,
         },
       });
       const messagesWithAttachments = await attachChatMessageMetadata(

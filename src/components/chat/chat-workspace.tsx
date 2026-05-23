@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -9,6 +9,8 @@ import {
   Clock3,
   ImageIcon,
   MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
   Paperclip,
   Plus,
   Radio,
@@ -101,6 +103,61 @@ export function ChatWorkspaceSurface() {
   const [newTitle, setNewTitle] = useState("");
   const [newTopic, setNewTopic] = useState("");
   const [newContextMode, setNewContextMode] = useState<"SMART" | "RECENT_ONLY" | "FULL_SUMMARY" | "PINNED_CONTEXT">("SMART");
+
+  // Conversations-pane geometry. Collapse + drag-resize are per-device view
+  // state, so they live in localStorage (read once after mount to avoid an
+  // SSR hydration mismatch) rather than a server-side setting.
+  const CONV_MIN = 240;
+  const CONV_MAX = 560;
+  const CONV_DEFAULT = 320;
+  const [convCollapsed, setConvCollapsed] = useState(false);
+  const [convWidth, setConvWidth] = useState(CONV_DEFAULT);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("forge:chat:convpane");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { width?: number; collapsed?: boolean };
+      if (typeof parsed.width === "number") {
+        setConvWidth(Math.min(CONV_MAX, Math.max(CONV_MIN, parsed.width)));
+      }
+      if (typeof parsed.collapsed === "boolean") setConvCollapsed(parsed.collapsed);
+    } catch {
+      /* ignore malformed prefs */
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "forge:chat:convpane",
+        JSON.stringify({ width: convWidth, collapsed: convCollapsed }),
+      );
+    } catch {
+      /* ignore quota / privacy-mode errors */
+    }
+  }, [convWidth, convCollapsed]);
+
+  const startResize = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startW = convWidth;
+      const onMove = (ev: MouseEvent) => {
+        const next = Math.min(CONV_MAX, Math.max(CONV_MIN, startW + ev.clientX - startX));
+        setConvWidth(next);
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+    },
+    [convWidth],
+  );
 
   const { data: threads, isLoading: threadsLoading } = trpc.chat.threads.useQuery(
     { query: query.trim() || undefined, state: stateFilter, archived },
@@ -293,12 +350,37 @@ export function ChatWorkspaceSurface() {
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-hidden">
-        <div className="grid h-full min-h-0 grid-cols-[20rem_minmax(0,1fr)] border-b border-border/60 max-lg:grid-cols-[17rem_minmax(0,1fr)] max-md:grid-cols-1 xl:grid-cols-[20rem_minmax(0,1fr)_18rem]">
-          <aside className="flex min-h-0 flex-col border-r border-border/70 bg-card/30 max-md:hidden">
+        <div className="flex h-full min-h-0 border-b border-border/60">
+          {convCollapsed && (
+            <button
+              type="button"
+              onClick={() => setConvCollapsed(false)}
+              title="Show conversations"
+              className="hidden w-9 shrink-0 flex-col items-center gap-2 border-r border-border/70 bg-card/30 py-3 text-muted-foreground hover:text-foreground md:flex"
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+              <MessageSquare className="h-4 w-4 text-ember/70" />
+            </button>
+          )}
+          <aside
+            style={{ width: convCollapsed ? undefined : convWidth }}
+            className={cn(
+              "min-h-0 shrink-0 flex-col border-r border-border/70 bg-card/30 max-md:hidden",
+              convCollapsed ? "hidden" : "flex",
+            )}
+          >
             <div className="border-b border-border/60 px-4 py-3">
               <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 <MessageSquare className="h-4 w-4 text-ember" />
                 Conversations
+                <button
+                  type="button"
+                  onClick={() => setConvCollapsed(true)}
+                  title="Collapse conversations"
+                  className="ml-auto text-muted-foreground hover:text-foreground"
+                >
+                  <PanelLeftClose className="h-4 w-4" />
+                </button>
               </div>
               <p className="text-subtitle mt-1 text-muted-foreground">
                 Recent operator ⇄ agent threads in this workspace.
@@ -495,7 +577,18 @@ export function ChatWorkspaceSurface() {
             </div>
           </aside>
 
-          <main className="flex min-h-0 flex-col bg-background">
+          {!convCollapsed && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={startResize}
+              onDoubleClick={() => setConvWidth(CONV_DEFAULT)}
+              title="Drag to resize · double-click to reset"
+              className="hidden w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-ember/40 md:block"
+            />
+          )}
+
+          <main className="flex min-h-0 flex-1 flex-col bg-background">
             <div className="flex items-center gap-2 border-b border-border/70 bg-card/40 px-3 py-2 md:hidden">
               <Button variant="subtle" size="sm" onClick={() => setMobilePickerOpen(true)}>
                 <MessageSquare className="mr-1.5 h-3.5 w-3.5" /> Conversations
@@ -609,7 +702,7 @@ export function ChatWorkspaceSurface() {
             )}
           </main>
 
-          <section className="hidden border-l border-border/70 bg-card/20 p-4 xl:block">
+          <section className="hidden w-72 shrink-0 overflow-y-auto border-l border-border/70 bg-card/20 p-4 xl:block">
             <ChatStatusRail workspaceSlug={ws.slug} thread={selectedThread ?? null} />
             {selectedThread && (
               <div className="mt-3 rounded-xl border border-border bg-card/40 p-3">
