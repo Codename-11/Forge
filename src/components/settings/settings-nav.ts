@@ -2,6 +2,7 @@ import {
   Bot,
   ClipboardList,
   Key,
+  KeyRound,
   Layers,
   ListChecks,
   Palette,
@@ -212,6 +213,14 @@ export const ACCOUNT_SETTINGS_GROUP: SettingsNavGroup = {
       badge: "external agents",
       description:
         "API keys + MCP endpoints. Provider setup for Hermes, Claude, Codex, custom HTTP, and env vars.",
+    },
+    {
+      path: "/settings/auth",
+      label: "Authentication",
+      icon: KeyRound,
+      badge: "instance admin",
+      description:
+        "Sign-in providers for the whole instance. Add OIDC (Authelia, Keycloak, Okta…), GitHub, or Google; enable/disable without a redeploy.",
     },
     {
       path: "/settings/workspaces",

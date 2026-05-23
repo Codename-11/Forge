@@ -21,7 +21,16 @@ type AgentLite = {
   name: string;
   profileKey: string;
   status: string;
+  /** Avg cost per run over the last 30d — helps right-size a dispatch. */
+  avgCostUsd?: number;
 };
+
+function fmtCost(n: number): string {
+  if (n <= 0) return "$0";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  if (n < 100) return `$${n.toFixed(2)}`;
+  return `$${Math.round(n)}`;
+}
 
 export function QueueTab({ slug }: { slug: string }) {
   const utils = trpc.useUtils();
@@ -30,19 +39,26 @@ export function QueueTab({ slug }: { slug: string }) {
     limit: 30,
   });
   const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false });
+  const { data: costStats } = trpc.agentRun.costByAgent.useQuery(
+    { sinceDays: 30 },
+    { staleTime: 60_000 },
+  );
 
-  const eligibleAgents: AgentLite[] = useMemo(
-    () =>
-      (agents ?? [])
-        .filter((a) => a.role === "WORKER" && !a.archivedAt)
-        .map((a) => ({
+  const eligibleAgents: AgentLite[] = useMemo(() => {
+    const costById = new Map((costStats?.byAgent ?? []).map((c) => [c.agentId, c]));
+    return (agents ?? [])
+      .filter((a) => a.role === "WORKER" && !a.archivedAt)
+      .map((a) => {
+        const c = costById.get(a.id);
+        return {
           id: a.id,
           name: a.name,
           profileKey: a.profileKey,
           status: a.status,
-        })),
-    [agents],
-  );
+          avgCostUsd: c && c.runs > 0 ? c.costUsd / c.runs : undefined,
+        };
+      });
+  }, [agents, costStats]);
 
   const update = trpc.issue.update.useMutation({
     onSuccess: () => {
@@ -239,6 +255,14 @@ function QueueRow({
                 title={`Status: ${a.status}`}
               >
                 <Bot className="h-3 w-3 text-ember" /> @{a.profileKey}
+                {a.avgCostUsd != null && (
+                  <span
+                    className="ml-1 text-meta text-muted-foreground"
+                    title="Avg cost per run, last 30d"
+                  >
+                    ~{fmtCost(a.avgCostUsd)}
+                  </span>
+                )}
                 {a.status === "OFFLINE" && (
                   <span className="ml-1 text-meta text-muted-foreground">
                     (offline)

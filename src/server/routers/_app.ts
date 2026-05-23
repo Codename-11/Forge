@@ -16,6 +16,7 @@ import { contextSetRouter } from "./context-set";
 import { analyticsRouter } from "./analytics";
 import { pluginRouter } from "./plugin";
 import { statusRouter } from "./status";
+import { ssoRouter } from "./sso";
 import { accessRouter } from "./access";
 import { adminRouter } from "./admin";
 import { attachmentRouter } from "./attachment";
@@ -90,6 +91,7 @@ export const appRouter = router({
   savedView: savedViewRouter,
   standup: standupRouter,
   status: statusRouter,
+  sso: ssoRouter,
   system: systemRouter,
   template: issueTemplateRouter,
   timeEntry: timeEntryRouter,

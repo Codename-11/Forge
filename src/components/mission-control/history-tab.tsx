@@ -27,6 +27,19 @@ function relativeTime(input: Date | string): string {
   return `${Math.floor(ms / 86_400_000)}d ago`;
 }
 
+function fmtCost(n: number): string {
+  if (n <= 0) return "$0";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  if (n < 100) return `$${n.toFixed(2)}`;
+  return `$${Math.round(n)}`;
+}
+
+function fmtTokens(n: number): string {
+  if (n < 1000) return `${n}`;
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
 export function HistoryTab({ slug: _slug }: { slug: string }) {
   const [activityView, setActivityView] = useState<"heatmap" | "swimlane">("heatmap");
 
@@ -42,6 +55,10 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
   const { data: terminal } = trpc.agentRun.recentTerminal.useQuery(
     { windowMinutes: 60, limit: 30 },
     { staleTime: 5_000 },
+  );
+  const { data: costStats } = trpc.agentRun.costByAgent.useQuery(
+    { sinceDays: 30 },
+    { staleTime: 60_000 },
   );
 
   // Scrubber pulls events from the last hour. Re-anchored every minute
@@ -98,8 +115,23 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
     return Math.max(12, Math.min(30, weeks));
   }, [heatmapWidth]);
 
+  const spend = costStats?.totals;
   return (
     <div className="space-y-3 overflow-y-auto px-2 py-2">
+      {spend && spend.runs > 0 && (
+        <section>
+          <SectionHeader>Spend · last 30d</SectionHeader>
+          <div className="grid grid-cols-3 gap-1.5">
+            <SpendStat label="Cost" value={fmtCost(spend.costUsd)} />
+            <SpendStat label="Runs" value={`${spend.runs}`} />
+            <SpendStat
+              label="Tokens"
+              value={fmtTokens(spend.tokensIn + spend.tokensOut)}
+              title={`${fmtTokens(spend.tokensIn)} in · ${fmtTokens(spend.tokensOut)} out · ${fmtTokens(spend.tokensCached)} cached`}
+            />
+          </div>
+        </section>
+      )}
       <section>
         <div className="flex items-center justify-between">
           <SectionHeader>
@@ -216,5 +248,27 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
     <h3 className="mb-1.5 px-1 text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
       {children}
     </h3>
+  );
+}
+
+function SpendStat({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+}) {
+  return (
+    <div
+      className="rounded-md border border-border bg-card/40 px-2 py-1.5"
+      title={title}
+    >
+      <div className="text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className="font-mono text-sm tabular-nums text-foreground">{value}</div>
+    </div>
   );
 }

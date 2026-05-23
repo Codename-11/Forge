@@ -134,6 +134,75 @@ export const agentRunRouter = router({
     }),
 
   /**
+   * Per-agent cost + token aggregates over a sliding window. Powers the
+   * cost chips on the Agents tab, the Queue dispatch picker, and the
+   * History totals. Decimal `costUsd` is coerced to a plain number for the
+   * wire. Window defaults to 30 days.
+   */
+  costByAgent: workspaceProcedure
+    .input(
+      z
+        .object({ sinceDays: z.number().int().min(1).max(365).default(30) })
+        .default({ sinceDays: 30 }),
+    )
+    .query(async ({ ctx, input }) => {
+      const since = new Date(Date.now() - input.sinceDays * 86_400_000);
+      const grouped = await ctx.db.agentRun.groupBy({
+        by: ["agentId"],
+        where: { workspaceId: ctx.workspaceId, startedAt: { gte: since } },
+        _sum: { costUsd: true, tokensIn: true, tokensOut: true, tokensCached: true },
+        _count: true,
+      });
+      const byAgent = grouped.map((g) => ({
+        agentId: g.agentId,
+        runs: g._count,
+        costUsd: g._sum?.costUsd ? Number(g._sum.costUsd) : 0,
+        tokensIn: g._sum?.tokensIn ?? 0,
+        tokensOut: g._sum?.tokensOut ?? 0,
+        tokensCached: g._sum?.tokensCached ?? 0,
+      }));
+      const totals = byAgent.reduce(
+        (acc, a) => ({
+          runs: acc.runs + a.runs,
+          costUsd: acc.costUsd + a.costUsd,
+          tokensIn: acc.tokensIn + a.tokensIn,
+          tokensOut: acc.tokensOut + a.tokensOut,
+          tokensCached: acc.tokensCached + a.tokensCached,
+        }),
+        { runs: 0, costUsd: 0, tokensIn: 0, tokensOut: 0, tokensCached: 0 },
+      );
+      return { sinceDays: input.sinceDays, byAgent, totals };
+    }),
+
+  /**
+   * Cost + approval metadata for a set of run ids. Powers the per-step
+   * cost label + approval overlay on the Plans DAG, where steps carry a
+   * loose `sourceRunId` (no relation) so we resolve it in one batch.
+   */
+  metaByIds: workspaceProcedure
+    .input(z.object({ ids: z.array(z.string().min(1)).max(100) }))
+    .query(async ({ ctx, input }) => {
+      if (input.ids.length === 0) return [];
+      const rows = await ctx.db.agentRun.findMany({
+        where: { workspaceId: ctx.workspaceId, id: { in: input.ids } },
+        select: {
+          id: true,
+          costUsd: true,
+          tokensIn: true,
+          tokensOut: true,
+          awaitingApprovalAt: true,
+        },
+      });
+      return rows.map((r) => ({
+        id: r.id,
+        costUsd: r.costUsd ? Number(r.costUsd) : 0,
+        tokensIn: r.tokensIn ?? 0,
+        tokensOut: r.tokensOut ?? 0,
+        awaitingApproval: r.awaitingApprovalAt != null,
+      }));
+    }),
+
+  /**
    * Recent terminal runs (COMPLETED / ABANDONED / STALLED) within a
    * sliding window. Drives the History tab — by default the last hour,
    * which keeps the panel responsive but still surfaces "Mizu finished

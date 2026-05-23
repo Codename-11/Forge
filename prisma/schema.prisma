@@ -32,6 +32,17 @@ enum Role {
   GUEST
 }
 
+/// Sign-in provider kind for {@link SsoProvider}. OIDC is the generic,
+/// discovery-based type that covers any OpenID-Connect IdP (Authelia,
+/// Authentik, Keycloak, Okta, Azure AD, …). GITHUB / GOOGLE are the two
+/// first-party OAuth providers, kept distinct so they map onto NextAuth's
+/// built-in provider factories instead of generic OIDC discovery.
+enum SsoType {
+  OIDC
+  GITHUB
+  GOOGLE
+}
+
 enum WorkItemKind {
   ISSUE
   TASK
@@ -548,6 +559,39 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+/// Instance-global sign-in provider, configured from the admin UI rather
+/// than env vars. Auth is per *user* (not per workspace), so these rows are
+/// not tenant-scoped. The provider list is read at request time by the
+/// NextAuth lazy config (`buildAuthProviders`), so enable/disable/add takes
+/// effect without a redeploy (subject to a short read cache).
+///
+/// `clientSecret` is encrypted at rest by the app layer (AES-256-GCM, key
+/// derived from AUTH_SECRET — see `src/server/crypto.ts`); it is never
+/// returned to the client.
+model SsoProvider {
+  id           String  @id @default(cuid())
+  /// Doubles as the NextAuth provider id, so the OAuth callback URL is
+  /// `/api/auth/callback/<id>`. Stable for the row's lifetime.
+  type         SsoType
+  /// Display name + button label, e.g. "Authelia", "Company SSO".
+  name         String
+  enabled      Boolean @default(false)
+  /// OIDC issuer base URL (discovery via `<issuer>/.well-known/
+  /// openid-configuration`). Required for OIDC, null for GitHub/Google.
+  issuer       String?
+  clientId     String
+  /// Encrypted (`iv:tag:ciphertext`, base64). Decrypted only server-side.
+  clientSecret String
+  /// Space-separated OAuth scopes; defaults applied per type when null.
+  scopes       String?
+  /// Maps to NextAuth `allowDangerousEmailAccountLinking`. Off by default —
+  /// only enable when you trust the IdP to assert verified emails.
+  allowLinking Boolean @default(false)
+  sortOrder    Int     @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
 // ----------------------------------------------------------------------------

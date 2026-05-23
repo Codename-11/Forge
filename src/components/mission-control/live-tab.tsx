@@ -27,17 +27,25 @@ export function LiveTab({
     { staleTime: 3_000 },
   );
 
-  const { stalled, pinned, rest } = useMemo(() => {
+  const { awaiting, stalled, pinned, rest } = useMemo(() => {
     const all = runs ?? [];
     const pinnedSet = new Set(pinnedIds);
+    // Blocked-on-approval runs float to the very top — they're idle until a
+    // human approves/rejects, so they're the most actionable thing here.
+    const awaitingRows = all.filter((r) => r.awaitingApprovalAt != null);
+    const awaitingSet = new Set(awaitingRows.map((r) => r.id));
     const stalledRows = all.filter(
-      (r) => Date.now() - new Date(r.lastEventAt).getTime() > STALE_RUN_MS,
+      (r) =>
+        !awaitingSet.has(r.id) &&
+        Date.now() - new Date(r.lastEventAt).getTime() > STALE_RUN_MS,
     );
     const stalledSet = new Set(stalledRows.map((r) => r.id));
+    const excluded = (id: string) => awaitingSet.has(id) || stalledSet.has(id);
     return {
+      awaiting: awaitingRows,
       stalled: stalledRows,
-      pinned: all.filter((r) => pinnedSet.has(r.id) && !stalledSet.has(r.id)),
-      rest: all.filter((r) => !pinnedSet.has(r.id) && !stalledSet.has(r.id)),
+      pinned: all.filter((r) => pinnedSet.has(r.id) && !excluded(r.id)),
+      rest: all.filter((r) => !pinnedSet.has(r.id) && !excluded(r.id)),
     };
   }, [runs, pinnedIds]);
 
@@ -61,6 +69,21 @@ export function LiveTab({
 
   return (
     <div className="space-y-1.5 overflow-y-auto px-2 py-2">
+      {awaiting.length > 0 && (
+        <>
+          <SectionLabel>Needs approval</SectionLabel>
+          {awaiting.map((run) => (
+            <RunRow
+              key={run.id}
+              run={run}
+              pinned={pinnedIds.includes(run.id)}
+              onTogglePin={() => onTogglePin(run.id)}
+              active={activeRunId === run.id}
+              onActivate={() => setActiveRunId(run.id)}
+            />
+          ))}
+        </>
+      )}
       {stalled.length > 0 && (
         <>
           <SectionLabel>Needs attention</SectionLabel>

@@ -6558,6 +6558,70 @@ Post-merge cleanup of the design-system landing.
   drag-resizable (240–560px, double-click resets). Geometry persists in
   `localStorage` (per-device view state).
 
+## 2026-05-23 — feat(auth): split sign-in from Claude Design handoff
+
+- **Rebuilt `/signin` as the "Split" concept** from the Claude Design
+  bundle (`Forge Sign-in.html`). Two-column on `lg+`, stacked on mobile.
+- **Left marquee — pre-auth safe.** New `signin/live-status-panel.tsx`:
+  brand, headline, an abstract animated "Forge loop" DAG
+  (init→plan→edit→test→ship) using the existing `dag-edge-flow` +
+  `forge-active-node` motion classes, three generic capability tiles
+  (Cycles / Agents / Runs), and a `forge-breath` "All systems normal"
+  footer. Panel on `forge-grid-bg`. Carries a load-bearing comment: this
+  surface renders before auth, so it must never leak workspace state —
+  no issue keys, agent names, run/token counts. `LiveLoopCard` is the
+  compact mobile variant above the form.
+- **Right form.** Keeps the existing Credentials server action; adds
+  conditional GitHub / Google OAuth provider buttons (rendered only when
+  the matching `AUTH_*` env pair is set). "Keep me signed in" checkbox,
+  inline "Reset" hint (self-hosted note via title), `↵` Kbd on submit.
+- All motion CSS already shipped in `globals.css`; no token or keyframe
+  changes. Companion concepts (two-factor, join-via-code) deferred — no
+  backend flow exists for them under env-driven single-admin auth.
+
+## 2026-05-23 — feat(auth): pluggable SSO providers (DB-backed, admin-managed)
+
+Self-hosted instances can now add/enable/disable sign-in providers from the
+UI without a redeploy. One generic **OIDC** type covers any OpenID-Connect
+IdP (Authelia, Authentik, Keycloak, Okta, Azure AD…); GitHub/Google kept as
+first-party types.
+
+- **Model** `SsoProvider` (migration `0058_sso_providers`, applied
+  manually via `db execute` + `migrate resolve` to avoid a drift-triggered
+  reset). Instance-global (auth is per-user, not per-workspace). `type`
+  (OIDC|GITHUB|GOOGLE), `issuer`, `clientId`, encrypted `clientSecret`,
+  `scopes`, `allowLinking`, `enabled`, `sortOrder`.
+- **Runtime — the linchpin.** `auth.ts` switched to NextAuth v5's *lazy
+  async config* (`NextAuth(async () => …)`), so `providers` are built from
+  the DB at request time. `ssoProvidersFromDb()` maps rows → providers
+  (OIDC via `type:"oidc"` discovery from `<issuer>/.well-known/…`;
+  GitHub/Google via their factories so callback URLs stay
+  `/api/auth/callback/{github,google}`). OIDC rows are addressed by row id.
+- **Secrets at rest.** New `src/server/crypto.ts` — AES-256-GCM, key
+  derived from `AUTH_SECRET` (no new key to manage; rotating it invalidates
+  stored secrets). Never returned to the client; UI shows configured/replace.
+- **Read path.** `src/server/sso.ts` — 30s-TTL cache over enabled rows
+  (auth runs on most RSC renders), `bustSsoCache()` on mutation,
+  `listEnabledSsoProviders()` (secret-free) for the sign-in buttons, and a
+  one-time **env→DB seed** so existing `AUTH_GITHUB_*`/`AUTH_GOOGLE_*` keep
+  working (env is now optional bootstrap only).
+- **Gating.** New `instanceAdminProcedure` (trpc.ts) — gated on
+  `session.email === ADMIN_EMAIL` (the bootstrapped operator), distinct
+  from per-workspace `adminProcedure`.
+- **API.** `sso` router: `list` (masked), `create`, `update` (blank
+  secret = keep), `setEnabled`, `remove`, `testDiscovery` (probes the OIDC
+  well-known doc for live feedback).
+- **UI.** `/settings/auth` (account-level, "instance admin" badge in
+  settings nav). Add/edit modal with type picker, issuer + **Test**
+  discovery button, copy-ready callback URI, account-linking opt-in.
+  Non-admins get an "instance admin only" empty state (FORBIDDEN surfaced).
+- **Sign-in page** now lists enabled DB providers via a generic
+  `oauthAction` (hidden `providerId`) instead of hardcoded GitHub/Google.
+
+Not done: SAML (use OIDC — BoxyHQ later if ever needed); forward-auth /
+trusted-header Authelia mode (deferred — OIDC is the cleaner fit). Not yet
+run as a live build — verify sign-in end-to-end before relying on it.
+
 ## Known gaps / TODOs in code
 
 - `auth.ts` assumes `nodemailer` provider; install and configure SMTP.

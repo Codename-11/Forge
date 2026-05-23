@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -8,6 +8,7 @@ import {
   Bot,
   Clock3,
   ImageIcon,
+  Info,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { ChatThreadView } from "@/components/mission-control/chat-thread";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -212,6 +214,23 @@ export function ChatWorkspaceSurface() {
     }
   }, [agents, selectedAgentId, selectedThread, threadParam, threads]);
 
+  // First load with no ?thread → drop into the most-recently-active thread
+  // (chat.threads is ordered lastMessageAt desc) instead of an empty pane.
+  // One-shot via a ref so we never fight the operator's later navigation.
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    if (threadParam) {
+      autoOpenedRef.current = true;
+      return;
+    }
+    if (!threads) return;
+    autoOpenedRef.current = true;
+    if (threads.length > 0) {
+      router.replace(`/w/${ws.slug}/chat?thread=${encodeURIComponent(threads[0].id)}`);
+    }
+  }, [threadParam, threads, router, ws.slug]);
+
   const threadAgentIds = useMemo(
     () => new Set((threads ?? []).filter((thread) => thread.isDefault).map((thread) => thread.agent.id)),
     [threads],
@@ -373,6 +392,14 @@ export function ChatWorkspaceSurface() {
               <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 <MessageSquare className="h-4 w-4 text-ember" />
                 Conversations
+                <Tooltip content="“Main” is your always-on default thread with each agent. “New conversation” starts a named, context-scoped side-thread. Both stream live and carry your current page context.">
+                  <span
+                    tabIndex={0}
+                    className="cursor-help text-muted-foreground hover:text-foreground"
+                  >
+                    <Info className="h-3.5 w-3.5" />
+                  </span>
+                </Tooltip>
                 <button
                   type="button"
                   onClick={() => setConvCollapsed(true)}

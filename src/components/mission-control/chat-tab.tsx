@@ -1,9 +1,11 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Bot, Plus } from "lucide-react";
+import Link from "next/link";
+import { Bot, Info, Plus, SquareArrowOutUpRight } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { Tooltip } from "@/components/ui/tooltip";
 import { ChatThreadView } from "./chat-thread";
 
 /**
@@ -11,7 +13,7 @@ import { ChatThreadView } from "./chat-thread";
  * right pane is the active thread.
  */
 export function ChatTab({
-  slug: _slug,
+  slug,
   autoFocus = false,
 }: {
   slug: string;
@@ -102,7 +104,12 @@ export function ChatTab({
     });
   const defaultThreadId =
     agentThreads.find((t) => t.isDefault)?.id ?? agentThreads[0]?.id ?? null;
-  const activeThreadId = selectedThreadId ?? defaultThreadId;
+  // Default to the agent's most-recently-active thread (chat.threads comes
+  // back ordered by lastMessageAt desc), not the "Main" default — so
+  // reopening Chat drops you back into your last conversation.
+  const lastActiveThreadId =
+    (threads ?? []).find((t) => t.agent.id === selectedAgentId)?.id ?? defaultThreadId;
+  const activeThreadId = selectedThreadId ?? lastActiveThreadId;
 
   return (
     <div className="flex h-full">
@@ -186,19 +193,39 @@ export function ChatTab({
                   </button>
                 );
               })}
-              <button
-                type="button"
-                onClick={() => {
-                  if (selectedAgentId && !createConversation.isPending) {
-                    createConversation.mutate({ agentId: selectedAgentId });
-                  }
-                }}
-                disabled={createConversation.isPending}
-                className="ml-auto inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:border-ember/40 hover:text-ember disabled:opacity-50"
-                title="Start a new conversation with this agent"
-              >
-                <Plus className="h-3 w-3" /> New chat
-              </button>
+              <div className="ml-auto flex shrink-0 items-center gap-1">
+                <Tooltip content="“Main” is your always-on thread with this agent. “New chat” starts a named side-conversation. Every message carries your current page context.">
+                  <span
+                    tabIndex={0}
+                    className="inline-flex h-5 w-5 cursor-help items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                  >
+                    <Info className="h-3 w-3" />
+                  </span>
+                </Tooltip>
+                {activeThreadId && (
+                  <Tooltip content="Open this conversation in the full Chat page">
+                    <Link
+                      href={`/w/${slug}/chat?thread=${encodeURIComponent(activeThreadId)}`}
+                      className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:border-ember/40 hover:text-ember"
+                    >
+                      <SquareArrowOutUpRight className="h-3 w-3" /> Open in Chat
+                    </Link>
+                  </Tooltip>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedAgentId && !createConversation.isPending) {
+                      createConversation.mutate({ agentId: selectedAgentId });
+                    }
+                  }}
+                  disabled={createConversation.isPending}
+                  className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:border-ember/40 hover:text-ember disabled:opacity-50"
+                  title="Start a new conversation with this agent"
+                >
+                  <Plus className="h-3 w-3" /> New chat
+                </button>
+              </div>
             </div>
             <div className="min-h-0 flex-1">
               <ChatThreadView
