@@ -56,7 +56,6 @@ describe("agent.verifyConnection", () => {
       name: "Verify Bot",
       profileKey: "verifybot",
       provider: "CODEX",
-      createApiKey: false,
     });
     const r = await caller.verifyConnection({ id: agent.id });
     expect(["runs", "completions", "dispatch", "none"]).toContain(r.mode);

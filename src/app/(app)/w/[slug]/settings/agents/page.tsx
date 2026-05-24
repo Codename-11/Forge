@@ -18,6 +18,7 @@ import {
 import { Topbar } from "@/components/topbar";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { TransportChip } from "@/components/agents/transport-chip";
+import { FleetChecklist } from "@/components/agents/fleet-checklist";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -535,6 +536,7 @@ export default function AgentsPage() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-6 p-6">
+          <FleetChecklist slug={ws.slug} />
           <Card>
             {rows.map((a) => {
               const isArchived = !!a.archivedAt;
