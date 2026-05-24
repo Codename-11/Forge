@@ -557,3 +557,121 @@ describe("chatRouter deferred dispatch", () => {
     expect(event?.payload).toMatchObject({ runId: run.id, threadId: sent.threadId });
   });
 });
+
+describe("chatRouter delete & stop", () => {
+  it("hard-deletes a thread, cascades messages, purges attachments, and audits", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "delete me" });
+    const att = await prisma.attachment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        targetType: "chat-message",
+        targetId: sent.messageId,
+        kind: "LINK",
+        filename: "Spec",
+        mimeType: "text/url",
+        size: 0,
+        url: "https://example.com/spec",
+        externalUrl: "https://example.com/spec",
+        linkTitle: "Spec",
+      },
+    });
+
+    const result = await caller.deleteThread({ threadId: sent.threadId });
+    expect(result).toMatchObject({ ok: true, deleted: true, stoppedRun: false });
+    expect(result.messageCount).toBeGreaterThanOrEqual(1);
+
+    expect(await prisma.chatThread.findUnique({ where: { id: sent.threadId } })).toBeNull();
+    expect(await prisma.chatMessage.count({ where: { threadId: sent.threadId } })).toBe(0);
+    expect(await prisma.attachment.findUnique({ where: { id: att.id } })).toBeNull();
+
+    const audit = await prisma.auditLog.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        entity: "ChatThread",
+        entityId: sent.threadId,
+        action: "delete",
+      },
+    });
+    expect(audit).not.toBeNull();
+  });
+
+  it("re-creates a deleted default thread empty on next open", async () => {
+    const { agent, caller } = await setup();
+    const first = await caller.thread({ agentId: agent.id });
+    await caller.send({ agentId: agent.id, threadId: first.thread.id, body: "hi" });
+
+    await caller.deleteThread({ threadId: first.thread.id });
+
+    const second = await caller.thread({ agentId: agent.id });
+    expect(second.thread.id).not.toBe(first.thread.id);
+    expect(second.thread.isDefault).toBe(true);
+    expect(second.messages).toHaveLength(0);
+  });
+
+  it("forbids deleting another operator's thread", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "mine" });
+    const secondCtx = await buildContext(fixture, { asUserId: fixture.secondUser.id });
+    const secondCaller = chatRouter.createCaller(secondCtx);
+
+    await expect(secondCaller.deleteThread({ threadId: sent.threadId })).rejects.toThrow();
+    expect(await prisma.chatThread.findUnique({ where: { id: sent.threadId } })).not.toBeNull();
+  });
+
+  it("stopThreadRun no-ops on a terminal run and refuses a run with no runtime session", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "work please" });
+    const issue = await createIssue(fixture);
+
+    const completed = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.COMPLETED,
+      },
+    });
+    const r1 = await caller.stopThreadRun({ threadId: sent.threadId, runId: completed.id });
+    expect(r1).toMatchObject({ ok: true, stopped: false });
+
+    // ACTIVE but no externalRunId / connector → not a stoppable runtime session.
+    const active = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+      },
+    });
+    const r2 = await caller.stopThreadRun({ threadId: sent.threadId, runId: active.id });
+    expect(r2).toMatchObject({ ok: false, stopped: false });
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: active.id } });
+    expect(after.status).toBe(AgentRunStatus.ACTIVE);
+  });
+
+  it("stopThreadRun rejects a run that belongs to a different agent", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "x" });
+    const otherAgent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `other-${Date.now()}`,
+        name: "Other",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: otherAgent.id,
+        status: AgentRunStatus.ACTIVE,
+      },
+    });
+
+    await expect(
+      caller.stopThreadRun({ threadId: sent.threadId, runId: run.id }),
+    ).rejects.toThrow();
+  });
+});

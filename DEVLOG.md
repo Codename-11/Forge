@@ -2,6 +2,54 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-23 — Chat session management: delete, stop runtime run, connector-aware status rail
+
+Closing the gaps in chat session/thread management on top of the in-progress
+connector/provider work (`chat-readiness.ts` steering banner).
+
+**1. Hard delete (`chat.deleteThread`).** Archive (reversible hide) stays; this
+is the irreversible purge. Order: best-effort stop a live runs-backed run →
+purge `chat-message` attachments (polymorphic, no FK cascade — uses
+`deleteAttachment` for the MinIO object + row) → delete the `ChatThread`
+(`ChatMessage` rows cascade via FK) → audit. Owner-scoped. A deleted default
+thread re-creates empty on next open. Two-click confirm in the UI.
+
+**2. Stop the live runtime session (`chat.stopThreadRun`).** For a RUNS-engine
+agent whose run is owned by a managed runtime (Hermes today; Codex
+app-server / ACP later), calls `connector.stop(externalRunId)` then marks the
+`AgentRun` ABANDONED via `finishRun` (mirrors agent-run `respondApproval`
+reject). Best-effort on the external call so Forge can always close its mirror.
+COMPLETIONS agents have no external session — the composer's Stop button owns
+that. Surfaced as a "Stop run" action (only when an active runs-backed run
+exists).
+
+**3. Connector-aware status rail.** `chat-status-rail.tsx` rewritten to
+self-fetch (`agent.byId` + `chat.chatReadiness` + `threadDiagnostics`) and lead
+with a **Connection** card: effective provider · engine (`runs`/`completions`
+from `readiness.mode`) · managed runtime (name + kind, links to Settings →
+Runtimes) · readiness chip (reaches a model / amber hint). Replaces the old
+hardcoded "Hermes-backed conversation" copy that mislabeled Claude/Codex/
+local-daemon threads. Actions now: retry · stop · kick · compact · archive/
+restore · **delete**. `full` + `compact` variants.
+
+**4. Both surfaces.** Full Chat page (`chat-workspace.tsx`) uses the rail (folded
+the standalone archive button into it). Mission Control Chat tab (`chat-tab.tsx`)
+gains a collapsible compact rail toggled from the thread strip — it had no
+status/connection surface before.
+
+**5. Mobile/tablet parity.** The right rail is `xl:block`, so sub-`xl` had no
+inspector (mobile got only an archive button; tablet got nothing). Added a
+right-side inspector **drawer** (`xl:hidden`) mirroring the existing left
+conversations drawer — same overlay/panel classes + theme tokens — carrying the
+full rail (connection · stop · kick · compact · archive/restore · delete). The
+thread toolbar is now `xl:hidden` (was `md:hidden`) so tablet gets it too; the
+"Conversations" button within stays `md:hidden`, and the lone archive button
+became a connection/status (`SlidersHorizontal`) toggle.
+
+typecheck + eslint clean; chat router tests 21 pass (5 new: delete cascade +
+attachment purge + audit, default re-create, owner-scope forbid, stop no-op/
+cross-agent), chat-readiness unit tests 6 pass.
+
 ## 2026-05-22 — Dispatch /events live, native commands, agent-config parity
 
 **1. Dispatch runs consume `/events` live (migration 0057: `AgentRun.pendingApproval`).**

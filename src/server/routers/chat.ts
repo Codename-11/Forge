@@ -14,6 +14,9 @@ import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { compactChatThread } from "@/server/services/chat-compaction";
 import { resolveChatReadiness } from "@/server/services/chat-readiness";
+import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
+import { finishRun } from "@/server/services/agent-run";
+import { deleteAttachment } from "@/server/services/storage";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // the same loose validator the rest of the codebase uses for entity ids.
@@ -1190,6 +1193,219 @@ export const chatRouter = router({
         kicked: true,
         idleMs,
         message: "Stale run kick event sent.",
+      } as const;
+    }),
+
+  /**
+   * Stop the live runtime session backing this thread's latest run. Only
+   * meaningful for a RUNS-engine agent whose run is owned by a managed
+   * runtime (Hermes today; a Codex app-server / ACP session later): we ask
+   * the connector to terminate the provider-side run, then mark the Forge
+   * `AgentRun` ABANDONED so its state isn't stuck ACTIVE. Best-effort on the
+   * external call — a gateway that's already torn the run down shouldn't
+   * leave Forge unable to close its mirror. A COMPLETIONS agent (Forge owns
+   * the loop) has no external session to stop; the operator uses the chat
+   * composer's Stop button for an in-flight stream instead.
+   */
+  stopThreadRun: workspaceProcedure
+    .input(z.object({ threadId: idString, runId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
+        select: { id: true, agentId: true },
+      });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+      const run = await ctx.db.agentRun.findFirst({
+        where: { id: input.runId, workspaceId: ctx.workspaceId, agentId: thread.agentId },
+        select: {
+          id: true,
+          issueId: true,
+          agentId: true,
+          status: true,
+          externalRunId: true,
+          agent: {
+            select: {
+              provider: true,
+              runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+            },
+          },
+        },
+      });
+      if (!run) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Run not found for this thread agent." });
+      }
+      if (run.status !== AgentRunStatus.ACTIVE) {
+        return {
+          ok: true,
+          action: "stop",
+          stopped: false,
+          message: `Run is ${run.status.toLowerCase()}; nothing to stop.`,
+        } as const;
+      }
+      const connector = getRunsConnectorForAgent({
+        provider: run.agent.provider,
+        runtime: run.agent.runtime,
+      });
+      if (!connector?.stop || !run.externalRunId) {
+        return {
+          ok: false,
+          action: "stop",
+          stopped: false,
+          message:
+            "This run isn't backed by a stoppable runtime session (no managed runtime owns it).",
+        } as const;
+      }
+      // Best-effort terminate the provider-side run; still close the mirror
+      // even if the gateway has already dropped it.
+      try {
+        await connector.stop(run.externalRunId);
+      } catch {
+        /* gateway unreachable / run already gone — fall through and finalize */
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await finishRun(tx, {
+          runId: run.id,
+          workspaceId: ctx.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          status: "ABANDONED",
+          summary: "Operator stopped the run from chat.",
+          actorId: ctx.session.user.id,
+        });
+      });
+      return { ok: true, action: "stop", stopped: true, message: "Run stopped." } as const;
+    }),
+
+  /**
+   * Hard-delete a thread and everything it owns. Distinct from
+   * `archiveThread` (reversible hide): this is irreversible and purges
+   * persisted content. Order matters:
+   *   1. Best-effort stop a live runs-backed run so we don't orphan a
+   *      provider-side session (same connector path as `stopThreadRun`).
+   *   2. Purge `chat-message` attachments — they're polymorphic (no FK), so
+   *      cascade won't reach them; `deleteAttachment` removes the MinIO
+   *      object and the row.
+   *   3. Delete the `ChatThread`; `ChatMessage` rows cascade via FK.
+   * Owner-scoped: only the thread's operator can delete it. A deleted
+   * default thread simply re-creates empty the next time chat opens.
+   */
+  deleteThread: workspaceProcedure
+    .input(z.object({ threadId: idString, stopRun: z.boolean().default(true) }))
+    .mutation(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
+        select: {
+          id: true,
+          title: true,
+          isDefault: true,
+          agentId: true,
+          agent: {
+            select: {
+              provider: true,
+              runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+            },
+          },
+        },
+      });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+
+      // (1) Stop a live runs-backed run, if any. Resolve it the same way
+      // diagnostics does — the most recent run referenced by a message in
+      // this thread — and only act when it's still ACTIVE + externally owned.
+      let stoppedRun = false;
+      if (input.stopRun) {
+        const lastSourceMessage = await ctx.db.chatMessage.findFirst({
+          where: { workspaceId: ctx.workspaceId, threadId: thread.id, sourceRunId: { not: null } },
+          orderBy: { createdAt: "desc" },
+          select: { sourceRunId: true },
+        });
+        if (lastSourceMessage?.sourceRunId) {
+          const run = await ctx.db.agentRun.findFirst({
+            where: {
+              id: lastSourceMessage.sourceRunId,
+              workspaceId: ctx.workspaceId,
+              agentId: thread.agentId,
+              status: AgentRunStatus.ACTIVE,
+            },
+            select: { id: true, issueId: true, agentId: true, externalRunId: true },
+          });
+          const connector = getRunsConnectorForAgent({
+            provider: thread.agent.provider,
+            runtime: thread.agent.runtime,
+          });
+          if (run?.externalRunId && connector?.stop) {
+            try {
+              await connector.stop(run.externalRunId);
+            } catch {
+              /* best-effort */
+            }
+            await ctx.db.$transaction(async (tx) => {
+              await finishRun(tx, {
+                runId: run.id,
+                workspaceId: ctx.workspaceId,
+                issueId: run.issueId,
+                agentId: run.agentId,
+                status: "ABANDONED",
+                summary: "Run stopped — chat thread deleted by operator.",
+                actorId: ctx.session.user.id,
+              });
+            });
+            stoppedRun = true;
+          }
+        }
+      }
+
+      // (2) Purge chat-message attachments (MinIO object + row). Polymorphic,
+      // so no FK cascade reaches them.
+      const messages = await ctx.db.chatMessage.findMany({
+        where: { workspaceId: ctx.workspaceId, threadId: thread.id },
+        select: { id: true },
+      });
+      let purgedAttachments = 0;
+      if (messages.length > 0) {
+        const attachments = await ctx.db.attachment.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            targetType: "chat-message",
+            targetId: { in: messages.map((m) => m.id) },
+          },
+          select: { id: true },
+        });
+        for (const att of attachments) {
+          try {
+            await deleteAttachment(att.id);
+            purgedAttachments += 1;
+          } catch {
+            /* leave orphaned object rather than block the delete */
+          }
+        }
+      }
+
+      // (3) Delete the thread; ChatMessage rows cascade via FK.
+      await ctx.db.$transaction(async (tx) => {
+        await tx.chatThread.delete({ where: { id: thread.id } });
+        await tx.auditLog.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            entity: "ChatThread",
+            entityId: thread.id,
+            action: "delete",
+            before: {
+              title: thread.title,
+              isDefault: thread.isDefault,
+              agentId: thread.agentId,
+              messageCount: messages.length,
+            },
+          },
+        });
+      });
+      return {
+        ok: true,
+        deleted: true,
+        stoppedRun,
+        purgedAttachments,
+        messageCount: messages.length,
       } as const;
     }),
 

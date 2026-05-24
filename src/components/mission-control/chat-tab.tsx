@@ -1,12 +1,20 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Bot, Info, Plus, SquareArrowOutUpRight } from "lucide-react";
+import {
+  Bot,
+  Info,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  SquareArrowOutUpRight,
+} from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ChatThreadView } from "./chat-thread";
+import { ChatStatusRail } from "@/components/chat/chat-status-rail";
 
 /**
  * Chat tab: left rail of agents (existing threads + all known agents),
@@ -25,6 +33,8 @@ export function ChatTab({
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   // Null = show the agent's default thread; set = a specific conversation.
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  // Collapsible connection/status inspector (compact rail) for this thread.
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   // Once the user clicks into an agent we stop auto-shuffling under them.
   const userPickedRef = useRef(false);
   const utils = trpc.useUtils();
@@ -225,15 +235,46 @@ export function ChatTab({
                 >
                   <Plus className="h-3 w-3" /> New chat
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setInspectorOpen((v) => !v)}
+                  className={cn(
+                    "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border text-muted-foreground hover:border-ember/40 hover:text-ember",
+                    inspectorOpen && "border-ember/40 text-ember",
+                  )}
+                  title={inspectorOpen ? "Hide connection & status" : "Show connection & status"}
+                >
+                  {inspectorOpen ? (
+                    <PanelRightClose className="h-3 w-3" />
+                  ) : (
+                    <PanelRightOpen className="h-3 w-3" />
+                  )}
+                </button>
               </div>
             </div>
-            <div className="min-h-0 flex-1">
-              <ChatThreadView
-                key={activeThreadId ?? selectedAgentId}
-                agentId={selectedAgentId}
-                threadId={selectedThreadId}
-                autoFocus={autoFocus}
-              />
+            <div className="flex min-h-0 flex-1">
+              <div className="min-w-0 flex-1">
+                <ChatThreadView
+                  key={activeThreadId ?? selectedAgentId}
+                  agentId={selectedAgentId}
+                  threadId={selectedThreadId}
+                  autoFocus={autoFocus}
+                />
+              </div>
+              {inspectorOpen && (
+                <aside className="w-64 shrink-0 overflow-y-auto border-l border-border/60 bg-card/20 p-2">
+                  <ChatStatusRail
+                    workspaceSlug={slug}
+                    threadId={activeThreadId}
+                    agentId={selectedAgentId}
+                    variant="compact"
+                    onDeleted={() => {
+                      setSelectedThreadId(null);
+                      void utils.chat.threads.invalidate();
+                    }}
+                  />
+                </aside>
+              )}
             </div>
           </div>
         ) : (
