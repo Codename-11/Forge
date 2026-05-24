@@ -9,6 +9,7 @@ import {
   type SettingsNavItem,
 } from "@/components/settings/settings-nav";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { trpc } from "@/lib/trpc";
 
 /**
  * Workspace settings landing. Renders the grouped index from the single
@@ -71,8 +72,34 @@ export default function SettingsPage() {
               ))}
             </Card>
           </Section>
+
+          <AboutFooter slug={ws.slug} />
         </div>
       </div>
     </>
+  );
+}
+
+/** Build identity — precise "what's running" anchor for support / bug reports. */
+function AboutFooter({ slug }: { slug: string }) {
+  const { data: build } = trpc.system.buildInfo.useQuery(undefined, {
+    staleTime: 5 * 60_000,
+  });
+  const parts = [
+    `Forge v${build?.version ?? "—"}`,
+    build?.release ? `release ${build.release}` : null,
+    build?.gitSha ? `build ${build.gitSha}` : "build dev",
+    build?.buildTime ? new Date(build.buildTime).toLocaleString() : null,
+  ].filter(Boolean);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 px-1 pb-2 text-meta text-muted-foreground/70">
+      <span className="font-mono">{parts.join(" · ")}</span>
+      <Link
+        href={`/w/${slug}/whats-new`}
+        className="hover:text-foreground hover:underline"
+      >
+        What&apos;s new →
+      </Link>
+    </div>
   );
 }

@@ -44,6 +44,13 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# Build identity — passed at `docker compose build` (deploy ritual exports
+# GIT_SHA + BUILD_TIME). Baked into the image so `system.buildInfo` can report
+# exactly which commit is running. Blank in a bare `docker build`.
+ARG GIT_SHA=""
+ARG BUILD_TIME=""
+ENV FORGE_GIT_SHA=$GIT_SHA
+ENV FORGE_BUILD_TIME=$BUILD_TIME
 
 # Install Prisma CLI at a pinned version for the boot-time migrate step.
 # The client + query engine travel with the standalone bundle via

@@ -11,6 +11,62 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-05-24] — Agent runtimes & chat clarity
+
+### Added
+
+- **Codex as a first-class agent** — connect a Codex *app server* as a
+  managed runtime and chat with a Codex agent that answers as itself, the
+  same way Hermes agents do.
+- **Local agent sessions over ACP** — drive a local CLI (Claude Code,
+  Codex, OpenCode) as a live agent via the Agent Client Protocol, run by
+  the `forge` daemon.
+- **Model credentials in Settings → Workspace → AI** — store an
+  OpenAI / Anthropic / custom chat-model key (encrypted) so the Streaming
+  engine works without environment variables.
+- **"Verify connection"** in the agent editor — confirms an agent can
+  actually chat (and probes the runtime endpoint) before you rely on it.
+- **Fleet-setup checklist** on Settings → Agents — runtime → agent → key →
+  chat-ready, at a glance.
+- **About / build line** on the Settings page showing the running version,
+  release date, and build, plus a "What's new" link.
+
+### Changed
+
+- **Integrations page** now groups every connector by tier — first-class
+  managed runtimes, session CLIs, and basic webhooks — with clear
+  transport and chat badges.
+- **Chat now shows how each agent is served** — a transport chip (Hermes,
+  Codex app server, ACP session, local daemon, or streaming) in the chat
+  header, Mission Control, and the status rail, so you always know where a
+  reply comes from. Slash commands adapt to the agent (e.g. Hermes-only
+  commands are hidden elsewhere; a new `/runtime` shows the chat path).
+
+## [2026-05-23] — Sign-in, SSO & agent platforms
+
+### Added
+
+- **New sign-in experience** with a refreshed split layout.
+- **Single sign-on (SSO)** — admins can enable and manage OIDC providers
+  (Authelia and other self-hosted IdPs) plus GitHub / Google from
+  Settings → Auth.
+
+### Changed
+
+- **Agents answer on the right platform.** A configured agent no longer
+  silently falls back to another provider — if its chat backend isn't set
+  up, you get a clear "no chat model configured" notice instead of a reply
+  from the wrong platform.
+
+### Fixed
+
+- Chat replies no longer occasionally show an empty agent bubble.
+- An error notice in chat now stays visible until you retry or send again,
+  instead of disappearing on its own.
+- Smoother animated backgrounds (sign-in and dashboard) — no more stutter.
+- Navbar account menu items are all clickable again; Mission Control's
+  History heatmap fits its column width.
+
 ## [2026-05-21] — Customizable dashboard
 
 ### Added

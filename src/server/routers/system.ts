@@ -158,6 +158,22 @@ export const systemRouter = router({
     const cache = await readChangelog();
     return { rawBody: cache.rawBody, entries: cache.entries };
   }),
+
+  /**
+   * Build identity — the precise "what's running" anchor for support + "is my
+   * fix live?". `gitSha` + `buildTime` are baked at `docker compose build`
+   * (deploy ritual); `release` is the latest curated CHANGELOG date (the
+   * human-facing version); `version` is the coarse package.json major.
+   */
+  buildInfo: workspaceProcedure.query(async () => {
+    const cache = await readChangelog();
+    return {
+      version: process.env.npm_package_version ?? "1.0.0",
+      gitSha: process.env.FORGE_GIT_SHA || null,
+      buildTime: process.env.FORGE_BUILD_TIME || null,
+      release: cache.entries.find((e) => e.date)?.version ?? null,
+    };
+  }),
 });
 
 /** Test helper — drops the in-process cache. Not exported via tRPC. */
