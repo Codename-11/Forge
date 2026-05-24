@@ -259,13 +259,32 @@ export function makeCodexAppServerConnector(opts: {
         return;
       }
 
+      // Capture the authoritative final agent message — `item/completed` for
+      // an agentMessage carries the whole text, so it's a reliable fallback
+      // if delta events were missed (keeps the reply from finalizing empty).
+      if (method === "item/completed") {
+        const item = params.item as { type?: string; text?: string } | undefined;
+        if (item?.type === "agentMessage" && typeof item.text === "string" && item.text) {
+          run.finalText = item.text;
+        }
+      }
+
       // Plain notification.
       const evt = mapCodexNotification(method, params);
       if (method === "turn/completed") {
         run.usage = mapCodexUsage(params.usage as Record<string, unknown> | undefined);
         run.terminal = true;
       }
-      if (evt) emit(run, evt);
+      if (evt) {
+        // Attach the assembled/authoritative text to the terminal event so a
+        // delta-less turn still yields a non-empty reply (route falls back to
+        // `completed.finalText` when no content deltas streamed).
+        if (evt.type === "completed") {
+          emit(run, { type: "completed", finalText: run.finalText || undefined });
+        } else {
+          emit(run, evt);
+        }
+      }
     });
 
     run.ws.on("error", (err: Error) => {

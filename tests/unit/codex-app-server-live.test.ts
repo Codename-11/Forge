@@ -96,13 +96,19 @@ describe.skipIf(!LIVE)("codex-app-server connector (live)", () => {
     expect(externalRunId).toMatch(/#/); // threadId#turnId
 
     let assembled = "";
+    let finalText = "";
     let completed = false;
     await connector!.subscribe(externalRunId, (e: RunEvent) => {
       if (e.type === "content_delta") assembled += e.delta;
-      if (e.type === "completed") completed = true;
+      if (e.type === "completed") {
+        completed = true;
+        if (e.finalText) finalText = e.finalText;
+      }
     });
 
     expect(completed).toBe(true);
-    expect(assembled).toContain("FORGE_CODEX_OK");
+    // Mirror the route: prefer streamed deltas, fall back to the terminal
+    // event's authoritative final text.
+    expect(assembled || finalText).toContain("FORGE_CODEX_OK");
   }, 90_000);
 });
