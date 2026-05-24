@@ -55,6 +55,34 @@ export function tierForTransport(transport: string): { n: 1 | 2 | 3; label: stri
   }
 }
 
+/**
+ * How an agent's *availability* should be read — distinct from chat transport.
+ * Heartbeat-tracked agents (Hermes daemon) have a meaningful online/offline;
+ * a managed app-server / completions / dispatch agent is reached **on demand**
+ * (it connects when you send, so a heartbeat "offline" badge is misleading);
+ * session agents are ephemeral. Drives presence display in chat + the detail
+ * page so e.g. Codex app server reads "on-demand · via Codex app server"
+ * instead of a permanent "offline".
+ */
+export type AvailabilityModel = "heartbeat" | "on-demand" | "session";
+
+export function agentAvailabilityModel(input: {
+  runtimeMode?: string | null;
+  lastHeartbeatAt?: Date | string | null;
+  transportMode: TransportMode;
+  /** True when the agent's runtime genuinely heartbeats (Hermes gateway). */
+  runtimeHeartbeats?: boolean;
+}): AvailabilityModel {
+  if (input.runtimeMode === "EPHEMERAL") return "session";
+  // Genuinely heartbeat-tracked (Hermes) or has ever reported a heartbeat →
+  // online/offline is meaningful.
+  if (input.runtimeHeartbeats || input.lastHeartbeatAt) return "heartbeat";
+  // A chat-capable agent that never heartbeats is reached on demand.
+  if (input.transportMode !== "none") return "on-demand";
+  // No chat path + no heartbeat — fall back to the heartbeat display.
+  return "heartbeat";
+}
+
 /** One-word qualifier for compact surfaces (roster rows, etc.). */
 export function transportModeWord(mode: TransportMode): string {
   switch (mode) {

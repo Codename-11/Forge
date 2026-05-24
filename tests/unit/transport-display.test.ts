@@ -3,6 +3,7 @@ import {
   transportTone,
   transportTitle,
   transportModeWord,
+  agentAvailabilityModel,
   type TransportMode,
 } from "@/lib/transport-display";
 
@@ -35,5 +36,60 @@ describe("transport-display", () => {
     expect(transportModeWord("completions")).toBe("streaming");
     expect(transportModeWord("dispatch")).toBe("dispatch");
     expect(transportModeWord("none")).toBe("no chat");
+  });
+});
+
+describe("agentAvailabilityModel", () => {
+  it("Codex app server (runs, never heartbeat) is on-demand, not offline", () => {
+    expect(
+      agentAvailabilityModel({
+        runtimeMode: "PERSISTENT",
+        lastHeartbeatAt: null,
+        transportMode: "runs",
+        runtimeHeartbeats: false,
+      }),
+    ).toBe("on-demand");
+  });
+
+  it("Hermes (heartbeats) uses the heartbeat model", () => {
+    expect(
+      agentAvailabilityModel({
+        runtimeMode: "PERSISTENT",
+        lastHeartbeatAt: null,
+        transportMode: "runs",
+        runtimeHeartbeats: true,
+      }),
+    ).toBe("heartbeat");
+  });
+
+  it("an agent that has ever heartbeat uses the heartbeat model", () => {
+    expect(
+      agentAvailabilityModel({
+        runtimeMode: "PERSISTENT",
+        lastHeartbeatAt: new Date(),
+        transportMode: "completions",
+      }),
+    ).toBe("heartbeat");
+  });
+
+  it("dispatch + completions agents with no heartbeat are on-demand", () => {
+    expect(
+      agentAvailabilityModel({ runtimeMode: "PERSISTENT", lastHeartbeatAt: null, transportMode: "dispatch" }),
+    ).toBe("on-demand");
+    expect(
+      agentAvailabilityModel({ runtimeMode: "PERSISTENT", lastHeartbeatAt: null, transportMode: "completions" }),
+    ).toBe("on-demand");
+  });
+
+  it("ephemeral agents are session", () => {
+    expect(
+      agentAvailabilityModel({ runtimeMode: "EPHEMERAL", lastHeartbeatAt: null, transportMode: "runs" }),
+    ).toBe("session");
+  });
+
+  it("no chat path + no heartbeat falls back to heartbeat display", () => {
+    expect(
+      agentAvailabilityModel({ runtimeMode: "PERSISTENT", lastHeartbeatAt: null, transportMode: "none" }),
+    ).toBe("heartbeat");
   });
 });

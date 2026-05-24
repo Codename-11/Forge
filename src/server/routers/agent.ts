@@ -18,6 +18,7 @@ import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { resolveChatReadiness } from "@/server/services/chat-readiness";
 import { workspaceChatProviderAvailability } from "@/server/services/ai-providers";
 import { probeRuntime } from "@/server/services/dispatch/runtime-probe";
+import { agentAvailabilityModel } from "@/lib/transport-display";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { agentIdSchema } from "@/server/validators";
 
@@ -276,8 +277,8 @@ export const agentRouter = router({
 
   byProfileKey: workspaceProcedure
     .input(z.object({ profileKey }))
-    .query(({ ctx, input }) =>
-      ctx.db.agent.findUnique({
+    .query(async ({ ctx, input }) => {
+      const agent = await ctx.db.agent.findUnique({
         where: {
           workspaceId_profileKey: {
             workspaceId: ctx.workspaceId,
@@ -292,11 +293,47 @@ export const agentRouter = router({
               kind: true,
               heartbeatAt: true,
               providersAvailable: true,
+              adapterKey: true,
+              disabledAt: true,
+              endpoint: true,
             },
           },
         },
-      }),
-    ),
+      });
+      if (!agent) return null;
+      // Resolved chat transport + an availability model so the detail page can
+      // show how chat is served and stop applying a heartbeat "offline" badge
+      // to an on-demand managed-runtime agent (e.g. Codex app server).
+      const providerAvailable = await workspaceChatProviderAvailability(
+        ctx.db,
+        ctx.workspaceId,
+      );
+      const daemonLinked =
+        (await ctx.db.apiKey.count({
+          where: { workspaceId: ctx.workspaceId, linkedAgentId: agent.id, revokedAt: null },
+        })) > 0;
+      const r = resolveChatReadiness({
+        provider: agent.provider,
+        runEngine: agent.runEngine,
+        runtime: agent.runtime
+          ? { adapterKey: agent.runtime.adapterKey, endpoint: agent.runtime.endpoint, secret: null }
+          : null,
+        webhookUrl: agent.webhookUrl,
+        runtimeKind: agent.runtime?.kind ?? null,
+        daemonLinked,
+        providerAvailable,
+      });
+      return {
+        ...agent,
+        transport: { mode: r.mode, label: r.transportLabel, ready: r.ready },
+        availability: agentAvailabilityModel({
+          runtimeMode: agent.runtimeMode,
+          lastHeartbeatAt: agent.lastHeartbeatAt,
+          transportMode: r.mode,
+          runtimeHeartbeats: agent.runtime?.adapterKey === "hermes",
+        }),
+      };
+    }),
 
   /**
    * Crews this agent belongs to + what it's actively working on right
