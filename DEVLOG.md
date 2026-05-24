@@ -6919,3 +6919,36 @@ Codex app-server + ACP paths needs the operator's running endpoint/agent; the
 wire mappings are unit-tested and the code is inert/opt-in until configured.
 Verified: typecheck + lint clean, unit suite 650 passing, daemon + docs build
 clean.
+
+## 2026-05-23 (cont.) — Codex app server wired + validated end-to-end (live)
+
+Stood up a real `codex app-server` and validated the connector against it.
+Findings + fixes:
+
+- **codex-cli 0.133 has no `--listen ws://`** — transports are stdio (plain
+  `codex app-server`) and a Unix-socket daemon. So the server-side ws connector
+  needs a **stdio↔WebSocket bridge**. Wrote one at
+  `/home/bailey/codex-appserver-bridge.cjs` (ws server on :4505; per connection
+  spawns `codex app-server -c sandbox_mode=danger-full-access` and relays
+  ndjson↔ws). Running via nohup (PID-managed); NOT yet durable across reboot
+  (cron persistence was declined — operator can add a `@reboot` entry).
+- **Protocol shapes** (from `codex app-server generate-ts`, verified live):
+  fixed three connector mismatches — `initialize` capabilities need
+  `requestAttestation`; `UserInput` text needs `text_elements: []`;
+  `turn/completed` status is at `params.turn.status`. Added an
+  `item/completed` agentMessage fallback (delta-less turns still finalize
+  non-empty) and folded chat history into the turn (fresh thread per run).
+- **Validation:** (1) gated live vitest `codex-app-server-live.test.ts`
+  (CODEX_LIVE=1) bridges stdio→ws and runs the *shipped* connector through real
+  codex — streams `FORGE_CODEX_OK`. (2) The **deployed Forge container** drove
+  the bridge→codex round-trip over the network (<internal-host>:4505) and got
+  `FORGE_PROD_OK` via both streamed deltas and the fallback.
+- **Prod wiring:** created Runtime `rt_codex_appserver` (adapterKey
+  codex-app-server, endpoint `ws://<internal-host>:4505`) in workspace
+  cmo6cui6q…, attached the `@codex` agent. resolveRunEngine→RUNS via the
+  attached adapter; getRunsConnectorForAgent→codex-app-server connector.
+
+Remaining: the operator sends a chat to `@codex` in the UI (auth-walled, can't
+do headless) — every layer beneath that is proven. Bridge durability is the
+only ops follow-up. Verified: typecheck + lint clean, 651 unit tests (+1 gated
+live), daemon + docs build clean.

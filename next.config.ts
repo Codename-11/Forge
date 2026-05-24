@@ -4,7 +4,10 @@ const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: "standalone",
-  serverExternalPackages: ["ioredis", "bullmq"],
+  // `ws` (Codex app-server connector) must NOT be bundled/minified — the
+  // bundler mangles its frame-masking util, yielding "b.mask is not a
+  // function" when the client masks an outgoing frame. Load it unbundled.
+  serverExternalPackages: ["ioredis", "bullmq", "ws"],
   eslint: {
     // Lint in CI / pre-commit via `pnpm lint`; don't gate production
     // build on warnings.
