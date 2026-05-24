@@ -2,6 +2,7 @@ import { callTool } from "../mcp.js";
 import type { AuthFile } from "../auth.js";
 import { runClaudeChat } from "./claude-code.js";
 import { runCodexChat } from "./codex.js";
+import { acpEnabled, runAcpChat } from "./acp.js";
 import type {
   ChatMessageHistoryRow,
   DispatchAgent,
@@ -34,6 +35,23 @@ export interface DispatchChatArgs {
 
 export async function dispatchChat(args: DispatchChatArgs): Promise<void> {
   const provider = args.agent.provider as AgentProviderId;
+
+  // Flexible transport: when an ACP agent is configured (FORGE_ACP_CMD), drive
+  // chat through the portable Agent Client Protocol regardless of provider.
+  // Opt-in + additive — unset falls through to the per-vendor adapters below.
+  if (acpEnabled()) {
+    return runAcpChat({
+      auth: args.auth,
+      threadId: args.threadId,
+      agent: args.agent,
+      userMessage: args.userMessage,
+      workspaceSlug: args.workspaceSlug,
+      threadHistory: args.threadHistory ?? [],
+      issueContext: args.issueContext ?? null,
+      attachments: args.attachments ?? [],
+    });
+  }
+
   switch (provider) {
     case "CLAUDE":
       return runClaudeChat({

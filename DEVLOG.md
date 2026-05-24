@@ -6891,3 +6891,31 @@ providerId ∈ openai|anthropic|custom), `apiKeyEnc` AES-256-GCM via `crypto.ts`
 Migration 0061 is additive (CREATE TABLE) — applies on prod boot via
 `migrate deploy`. Verified: typecheck + lint clean, unit suite 650 passing
 (+7: credential precedence/availability + readiness DB predicate).
+
+## 2026-05-23 (cont.) — ACP transport (daemon-mediated) + roadmap shipped
+
+ADR item 2: ACP (Agent Client Protocol) for Tier-2 CLI sessions. ACP is stdio
+JSON-RPC, so it's **daemon-mediated** — implemented in the `forge` daemon
+(`tools/forge-cli/src/dispatch/acp.ts`), NOT a server connector. The adapter
+spawns an ACP agent, does `initialize → session/new → session/prompt`, streams
+`session/update` (`agent_message_chunk` → chat draft deltas), auto-resolves
+`session/request_permission` (chat shouldn't block), and finalizes on
+stopReason — reusing the same `chat.startDraft/appendDraftChunk/finalizeDraft`
+plumbing as the Claude/Codex adapters. **Flexible + opt-in:** set
+`FORGE_ACP_CMD="<agent> acp"` (claude-code-acp / codex acp / opencode acp) and
+the daemon drives chat over ACP for any provider; unset → per-vendor adapters.
+`pnpm build:cli` clean.
+
+Registry: promoted both originally-planned adapters into RUNTIME_ADAPTERS —
+`acp` (session-tier connection, managed:false, chatMode "acp") and (earlier)
+`codex-app-server`. `PLANNED_ADAPTERS` is now empty (kept as an extension
+point). Updated docs (providers-and-transports.md: Codex app server + ACP no
+longer "planned"; chat-only backend now points at the Model credentials UI)
+and the ADR TODO list (all four items ✅).
+
+This closes the deferred list: (1) chat steering, (2) DB model keys, (3) Codex
+app-server connector, (4) ACP transport — all shipped. Live end-to-end of the
+Codex app-server + ACP paths needs the operator's running endpoint/agent; the
+wire mappings are unit-tested and the code is inert/opt-in until configured.
+Verified: typecheck + lint clean, unit suite 650 passing, daemon + docs build
+clean.

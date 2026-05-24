@@ -22,10 +22,11 @@ the runtime runs the model; the agent answers *as itself*.
 - **Hermes** — persistent daemon hosting multiple profiles (Victor, Mizu)
   behind one gateway (`/v1/runs`). Owns the loop, streams, approvals,
   runtime-level presence. `chatMode: "runs"`.
-- **Codex (app server)** *(planned)* — Codex's long-lived `app server`, the
-  OpenAI analogue to the Hermes gateway: a managed runtime so a Codex agent is
-  first-class exactly like a Hermes profile. `chatMode: "runs"`,
-  `transport: "app-server"`.
+- **Codex (app server)** — Codex's long-lived `app server` (WebSocket
+  JSON-RPC), the OpenAI analogue to the Hermes gateway: a managed runtime so a
+  Codex agent is first-class exactly like a Hermes profile. `chatMode: "runs"`,
+  `transport: "app-server"`. Start it with `codex app-server --listen
+  ws://HOST:PORT` and add a runtime pointing at that URL (Settings → Runtimes).
 
 **Engine choice (per agent):**
 
@@ -50,9 +51,13 @@ Local CLIs: **Claude Code**, **Codex CLI**, **OpenCode**. **Full
 functionality while the session is active**, but **ephemeral presence** — not
 always online. Best for in-session, active work rather than always-on duty.
 
-- **ACP** *(planned)* — Agent Client Protocol: a portable, bidirectional agent
-  session. The CLI chats *as itself* while live, with no per-vendor wiring.
-  `transport: "acp"`, `chatMode: "acp"`.
+- **ACP** — Agent Client Protocol: a portable, bidirectional agent session.
+  The CLI chats *as itself* while live, with no per-vendor wiring.
+  `transport: "acp"`, `chatMode: "acp"`. **Daemon-mediated** (ACP is stdio
+  JSON-RPC): on the daemon host set `FORGE_ACP_CMD="<agent> acp"` (e.g.
+  `claude-code-acp`, `codex acp`, `opencode acp`) and run `forge daemon start`
+  — the daemon then drives chat over ACP for any provider. Unset → the
+  per-vendor adapters are used. So ACP is opt-in and flexible.
 - **MCP (pull/act, today)** — the CLI connects over MCP with a Bearer key to
   **read context and take actions**. It does **not** serve an interactive chat
   turn (`chatMode: "none"`) — it has no model key and isn't a chat backend.
@@ -79,17 +84,19 @@ runtimes.
 | 2 — Session CLI | Claude Code, Codex CLI, OpenCode | `acp`, `mcp`, `local-daemon` | Session/ephemeral | ACP (as itself) or pull/act | In-session active work |
 | 3 — Basic | Custom bot | `webhook`, `http` | Delivery-derived | None | BYO integrations |
 
-## Two kinds of "provider", and the deferred chat-only concept
+## Two kinds of "provider", and the chat-only model backend
 
 - **Agent/runtime providers** (all of the above) — the agent is the provider;
   no Forge-held API key. Reached via a transport tier.
-- **Chat-only providers** — raw OpenAI-compatible model access via API
+- **Chat-only model backends** — raw OpenAI-compatible model access via API
   key/base URL (plain OpenAI/Anthropic/custom gateway). This is the **backend
-  the Streaming engine calls**. Today it's configured by environment
-  (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `FORGE_AI_BASE_URL`); a UI to
-  register one as a first-class provider is a tracked item. Forge never lets a
-  first-class agent silently borrow another platform's model — an unconfigured
-  Streaming backend yields a clear "no chat model configured" notice.
+  the Streaming engine calls**. Configure it per-workspace in **Settings →
+  Workspace → AI → Model credentials** (key encrypted at rest) — a stored
+  credential takes precedence over the `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
+  / `FORGE_AI_BASE_URL` environment fallback, so Streaming works with no env
+  config. Forge never lets a first-class agent silently borrow another
+  platform's model — an unconfigured Streaming backend yields a clear "no chat
+  model configured" notice that links to the credential UI.
 
 ## Where this lives in code
 

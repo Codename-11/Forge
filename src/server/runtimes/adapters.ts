@@ -30,16 +30,13 @@ import type { DispatchConnector } from "@/server/services/dispatch/types";
  *   bidirectional agent session (richer than fire-and-react MCP, lighter
  *   than a bespoke runs API). The portable way to drive CLIs like Claude
  *   Code / Codex / OpenCode as live agents without per-vendor wiring.
- *   PLANNED — see `docs/plans/runtime-adapter-refactor.md` (Transports).
+ *   Daemon-mediated (stdio) — see `forge` daemon `dispatch/acp.ts`.
  * - **`app-server`** — a vendor's own long-lived agent server (e.g. Codex's
  *   `app server`), analogous to how Hermes exposes `/v1/runs`. The *rich*
- *   tier for a specific vendor when ACP isn't enough.
+ *   tier for a specific vendor when ACP isn't enough. WebSocket JSON-RPC —
+ *   see `dispatch/codex-app-server.ts`.
  * - **`runs-api`** — a managed runtime that owns the full agent loop and
  *   exposes a runs API + streaming + approvals (Hermes today). Richest tier.
- *
- * `acp` and `app-server` are declared so the registry can express the
- * taxonomy and the editor/onboarding can offer them; their dispatch
- * connectors are not wired yet (deferred — see the ADR's TODO list).
  */
 export type RuntimeTransport =
   | "runs-api"
@@ -67,7 +64,7 @@ export type RuntimeTransport =
  *   `ai-providers`, but creating an agent whose chat depends on it is the
  *   thing we now surface a clear "no chat model configured" error for instead
  *   of silently falling back to another platform.
- * - **`acp`** — chat served over an Agent Client Protocol session (planned).
+ * - **`acp`** — chat served over an Agent Client Protocol session (daemon-mediated).
  * - **`none`** — this connection does **not** serve interactive chat in Forge.
  *   It reads context and takes actions over MCP/webhook (pull/act), e.g. a
  *   Claude Code or Codex CLI session. To chat with such an agent, attach it
@@ -286,6 +283,40 @@ a chat-capable runtime: a Codex **app server** (\`app-server\` transport) or an
 Hermes agents chat via \`/v1/runs\`.`,
   },
   {
+    key: "acp",
+    title: "ACP session (CLI)",
+    tagline:
+      "Drive a local agent CLI (Claude Code, Codex, OpenCode, …) as a live agent over the Agent Client Protocol. Daemon-mediated; chats as itself while the session is active.",
+    iconKey: "TerminalSquare",
+    managed: false,
+    multiAgent: false,
+    transport: "acp",
+    chatMode: "acp",
+    providers: ["CLAUDE", "CODEX", "CUSTOM"],
+    defaultRunEngine: "COMPLETIONS",
+    defaultRuntimeMode: "EPHEMERAL",
+    defaultKeyKind: "AGENT",
+    capabilities: { streaming: true, approvals: true, presence: "session" },
+    autoProvisionable: false,
+    setupMarkdown: `# ACP session (Agent Client Protocol)
+
+The portable, multi-vendor way to run a local agent CLI as a live agent —
+no per-vendor flag wiring. ACP is JSON-RPC 2.0 over the agent's stdio, so it's
+**daemon-mediated**: the \`forge daemon\` spawns the agent and bridges its
+\`session/update\` stream onto Forge chat.
+
+**Enable on the daemon host:**
+\`\`\`bash
+# Point the daemon at any ACP-capable agent command:
+export FORGE_ACP_CMD="claude-code-acp"   # or "codex acp", "opencode acp", …
+forge daemon start
+\`\`\`
+When set, the daemon prefers ACP for chat dispatch (Tier 2 — full power while
+the session is live). Unset → the per-vendor adapters are used. To make such an
+agent a *first-class* always-on member instead, back it with a managed runtime
+(Hermes, or the Codex app server).`,
+  },
+  {
     key: "custom-http",
     title: "Custom (webhook)",
     tagline: "Bring your own runtime — register an agent + webhook URL.",
@@ -354,14 +385,9 @@ export const PLANNED_ADAPTERS: ReadonlyArray<
     note: string;
   }
 > = [
-  {
-    key: "acp",
-    title: "Agent Client Protocol",
-    transport: "acp",
-    chatMode: "acp",
-    managed: true,
-    note: "Portable bidirectional agent session for CLIs (Claude Code, Codex, OpenCode, …) without per-vendor wiring. The mid tier between pull/act MCP and a vendor app server. Needs an ACP DispatchConnector.",
-  },
+  // (Empty.) Both originally-planned adapters now ship as real entries in
+  // RUNTIME_ADAPTERS: `codex-app-server` (managed runs connector) and `acp`
+  // (daemon-mediated session connection). Kept as an extension point.
 ];
 
 /**
