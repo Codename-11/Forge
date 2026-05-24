@@ -6737,3 +6737,48 @@ Verified: `pnpm typecheck` clean, lint clean on touched files, full unit
 suite 615 passing (+2 new adapter taxonomy tests incl. a "Codex must not
 present as a chat backend" regression guard). Not committed/deployed — left
 to the operator (a parallel session is also working this tree).
+
+## 2026-05-23 (cont.) — Deferred items: chat-readiness steering + tier UI/docs
+
+Shipped the prior batch (banner fix + taxonomy + data export/import) then
+worked the deferred list.
+
+**Chat-readiness steering (ADR item 4).** New
+`src/server/services/chat-readiness.ts` `resolveChatReadiness()` mirrors what
+`/api/chat/stream` does at send time — resolves effective provider+engine and
+checks the *same* backend (runs connector for RUNS, `isProviderAvailable` for
+COMPLETIONS) — returning `{ ready, mode, reason, hint }`. Exposed via
+`chat.chatReadiness({ agentId, threadId? })` (honours per-thread provider
+override). `ChatThreadView` renders an on-theme amber steering banner above
+the composer when not ready: distinct copy for `pull-act-only` (CLI/MCP
+connection isn't a chat backend → attach a chat-capable runtime),
+`no-runs-connector` (RUNS engine, no managed runtime), and `no-model`
+(streaming, unset key) — each with Configure agent / Manage runtimes /
+Integrations links. `providerIdFor` exported from chat-stream for reuse.
+6 new unit tests.
+
+**Tier model in UI + docs (messages: elaborate + enrich UI).** Rewrote
+`docs/agents/providers-and-transports.md` around the three tiers — **Tier 1
+first-class** (managed runtimes: Hermes, Codex app server — always-on, runs
+as itself), **Tier 2 session** (CLIs over ACP/MCP — full power while active,
+ephemeral), **Tier 3 basic** (webhook/HTTP) — with engine (runs vs streaming)
+as an orthogonal axis; wired into the VitePress sidebar. Runtimes settings
+page gained: a "Connection tiers" explainer card (1/2/3 with links to the
+engine + transport docs), tier/transport/chatMode/multi-agent badges in the
+create-runtime modal, and a "Planned runtimes" roadmap section listing
+declared-but-not-yet-connectable adapters. `runtime.adapters` now returns
+`chatMode`; added `runtime.plannedAdapters` (from `PLANNED_ADAPTERS`).
+
+**Deferred items 1–3 status.** Item 1 (chat-only/completions provider as a
+UI-registered surface): the *selection/availability* surface already exists in
+Settings → Workspace → AI (env-keyed via `listProviders`); UI-based key
+*registration* (DB-backed, encrypted) remains. Items 2 (ACP) & 3 (Codex app
+server): adapters are first-class in the taxonomy + visible in UI as Planned;
+their dispatch connectors are intentionally NOT fabricated — ACP is likely
+daemon-mediated (stdio JSON-RPC) rather than an HTTP runs connector, and the
+Codex app-server wire protocol needs a live endpoint to implement+validate.
+Shipping guessed protocol code to an auto-deploying prod was judged unsafe;
+these need the operator's target endpoint/protocol to finish.
+
+Verified: typecheck + lint clean, unit suite 621 passing (+6), docs build
+clean (no dead links).
