@@ -6,7 +6,9 @@ import {
   Cloud,
   Globe,
   HardDrive,
+  Layers,
   Server,
+  Sparkles,
   Users as UsersIcon,
 } from "lucide-react";
 import type { RuntimeKind } from "@prisma/client";
@@ -55,6 +57,50 @@ const ADAPTER_LABEL: Record<string, string> = {
   codex: "Codex",
 };
 
+/** Which connection tier a transport belongs to (see providers-and-transports.md). */
+function tierForTransport(transport: string): { n: 1 | 2 | 3; label: string } {
+  switch (transport) {
+    case "runs-api":
+    case "app-server":
+      return { n: 1, label: "First-class" };
+    case "acp":
+    case "mcp":
+    case "local-daemon":
+      return { n: 2, label: "Session" };
+    default:
+      return { n: 3, label: "Basic" };
+  }
+}
+
+/** Human label for how an adapter serves chat. */
+const CHATMODE_LABEL: Record<string, string> = {
+  runs: "chats as itself",
+  acp: "chats as itself",
+  completions: "streaming model",
+  none: "pull/act only",
+};
+
+function ChatModeBadge({ chatMode }: { chatMode: string }) {
+  const servesChat = chatMode !== "none";
+  return (
+    <span
+      className={cn(
+        "rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+        servesChat
+          ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
+          : "border-border bg-subtle/40 text-muted-foreground",
+      )}
+      title={
+        servesChat
+          ? "This runtime serves interactive chat — the agent answers as itself."
+          : "Pull/act connection: reads context and acts, but doesn't serve a chat turn."
+      }
+    >
+      {CHATMODE_LABEL[chatMode] ?? chatMode}
+    </span>
+  );
+}
+
 export default function RuntimesPage() {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
@@ -76,6 +122,7 @@ export default function RuntimesPage() {
   } | null>(null);
 
   const { data: adapters } = trpc.runtime.adapters.useQuery();
+  const { data: plannedAdapters } = trpc.runtime.plannedAdapters.useQuery();
 
   function invalidate() {
     void utils.runtime.list.invalidate();
@@ -144,6 +191,7 @@ export default function RuntimesPage() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-6 p-6">
+          <TierExplainer />
           <Card as="div" className="divide-y-0 p-0">
             <ul className="divide-y divide-border">
               {rows.map((rt) => {
@@ -292,6 +340,10 @@ export default function RuntimesPage() {
               )}
             </ul>
           </Card>
+
+          {(plannedAdapters?.length ?? 0) > 0 && (
+            <PlannedAdapters adapters={plannedAdapters ?? []} />
+          )}
         </div>
       </div>
 
@@ -332,6 +384,136 @@ export default function RuntimesPage() {
   );
 }
 
+/**
+ * Compact explainer of the three connection tiers. Keeps the mental model
+ * in front of the operator right where they manage runtimes, and links to
+ * the full doc.
+ */
+function TierExplainer() {
+  const tiers: Array<{ n: number; title: string; body: string; tone: string }> = [
+    {
+      n: 1,
+      title: "First-class",
+      body: "Managed runtimes (Hermes, Codex app server). Always-on, full member: chat, dispatch, orchestration. Runs as itself.",
+      tone: "border-emerald-500/30 bg-emerald-500/5",
+    },
+    {
+      n: 2,
+      title: "Session",
+      body: "CLIs over ACP / MCP (Claude Code, Codex CLI, OpenCode). Full power while active, but ephemeral — best for in-session work.",
+      tone: "border-ember/30 bg-ember/5",
+    },
+    {
+      n: 3,
+      title: "Basic",
+      body: "Webhook / HTTP. Fire-and-react push/pull for any runtime that speaks HTTP. No interactive chat turn.",
+      tone: "border-border bg-subtle/30",
+    },
+  ];
+  return (
+    <Card as="div" className="p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-subtle/50 text-foreground/80">
+          <Layers className="h-3.5 w-3.5" />
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-foreground">Connection tiers</h3>
+          <p className="text-meta text-muted-foreground">
+            How richly an agent connects — independent of its chat{" "}
+            <a
+              href="/docs/agents/engines.html"
+              target="_blank"
+              rel="noreferrer"
+              className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+            >
+              engine
+            </a>
+            .{" "}
+            <a
+              href="/docs/agents/providers-and-transports.html"
+              target="_blank"
+              rel="noreferrer"
+              className="text-ember hover:underline"
+            >
+              Full breakdown →
+            </a>
+          </p>
+        </div>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {tiers.map((t) => (
+          <div key={t.n} className={cn("rounded-lg border p-2.5", t.tone)}>
+            <div className="flex items-center gap-1.5">
+              <span className="flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background/60 text-[0.5625rem] font-semibold text-foreground/80">
+                {t.n}
+              </span>
+              <span className="text-[0.75rem] font-medium text-foreground">{t.title}</span>
+            </div>
+            <p className="mt-1 text-[0.6875rem] leading-relaxed text-muted-foreground">{t.body}</p>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+type PlannedAdapterOption = {
+  key: string;
+  title: string;
+  transport: string;
+  chatMode: string;
+  managed: boolean;
+  note: string;
+};
+
+/** Roadmap section — declared adapters whose connector hasn't shipped yet. */
+function PlannedAdapters({ adapters }: { adapters: PlannedAdapterOption[] }) {
+  return (
+    <Card as="div" className="p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-subtle/50 text-foreground/80">
+          <Sparkles className="h-3.5 w-3.5" />
+        </span>
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Planned runtimes</h3>
+          <p className="text-meta text-muted-foreground">
+            Declared in the adapter registry; not creatable until their connector ships.
+          </p>
+        </div>
+      </div>
+      <ul className="space-y-2">
+        {adapters.map((a) => {
+          const tier = tierForTransport(a.transport);
+          return (
+            <li
+              key={a.key}
+              className="rounded-lg border border-dashed border-border bg-background/30 p-3"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-foreground">{a.title}</span>
+                <span
+                  className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+                  title="Connection tier"
+                >
+                  tier {tier.n} · {tier.label.toLowerCase()}
+                </span>
+                <span className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                  {a.transport}
+                </span>
+                <ChatModeBadge chatMode={a.chatMode} />
+                <span className="rounded-full border border-ember/30 bg-ember/10 px-1.5 py-0 text-[0.5625rem] uppercase tracking-wider text-ember">
+                  planned
+                </span>
+              </div>
+              <p className="mt-1 text-[0.6875rem] leading-relaxed text-muted-foreground">{a.note}</p>
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
+  );
+}
+
 function KindBadge({ kind }: { kind: RuntimeKind }) {
   return (
     <span
@@ -355,6 +537,7 @@ type AdapterOption = {
   title: string;
   tagline: string;
   transport: string;
+  chatMode: string;
   multiAgent: boolean;
   providers: string[];
 };
@@ -435,7 +618,34 @@ function CreateRuntimeModal({
             ))}
           </select>
           {adapter && (
-            <span className="mt-1 block text-xs text-muted-foreground">{adapter.tagline}</span>
+            <>
+              <span className="mt-1 block text-xs text-muted-foreground">{adapter.tagline}</span>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {(() => {
+                  const tier = tierForTransport(adapter.transport);
+                  return (
+                    <span
+                      className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+                      title="Connection tier"
+                    >
+                      tier {tier.n} · {tier.label.toLowerCase()}
+                    </span>
+                  );
+                })()}
+                <span className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                  {adapter.transport}
+                </span>
+                <ChatModeBadge chatMode={adapter.chatMode} />
+                {adapter.multiAgent && (
+                  <span
+                    className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+                    title="One runtime can host multiple agent profiles"
+                  >
+                    multi-agent
+                  </span>
+                )}
+              </div>
+            </>
           )}
         </label>
         <label className="block">

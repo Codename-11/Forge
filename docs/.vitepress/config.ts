@@ -149,6 +149,7 @@ export default defineConfig({
           text: "Agents in Forge",
           items: [
             { text: "Overview", link: "/agents/overview.html" },
+            { text: "Agents, Tiers & Transports", link: "/agents/providers-and-transports.html" },
             { text: "Runtimes", link: "/agents/runtimes.html" },
             { text: "Hermes Integration", link: "/agents/hermes.html" },
             { text: "Chat & Dispatch Engines", link: "/agents/engines.html" },

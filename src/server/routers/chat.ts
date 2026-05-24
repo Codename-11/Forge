@@ -13,6 +13,7 @@ import { recordChange } from "@/server/audit";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { compactChatThread } from "@/server/services/chat-compaction";
+import { resolveChatReadiness } from "@/server/services/chat-readiness";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // the same loose validator the rest of the codebase uses for entity ids.
@@ -1003,6 +1004,45 @@ export const chatRouter = router({
       });
       if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
       return buildThreadDiagnostics(ctx.db, ctx.workspaceId, thread.id);
+    }),
+
+  /**
+   * Whether a chat turn for this agent will actually reach a model — so the
+   * composer can steer the operator (attach a chat-capable runtime / set a
+   * model) instead of presenting an input that can only error. Resolves the
+   * same provider+engine+backend the stream route uses; honours a per-thread
+   * provider override when `threadId` is given.
+   */
+  chatReadiness: workspaceProcedure
+    .input(z.object({ agentId: idString, threadId: idString.optional() }))
+    .query(async ({ ctx, input }) => {
+      const agent = await ctx.db.agent.findFirst({
+        where: { id: input.agentId, workspaceId: ctx.workspaceId },
+        select: {
+          provider: true,
+          runEngine: true,
+          runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+        },
+      });
+      if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
+      let providerOverride: AgentProvider | null = null;
+      if (input.threadId) {
+        const thread = await ctx.db.chatThread.findFirst({
+          where: {
+            id: input.threadId,
+            workspaceId: ctx.workspaceId,
+            userId: ctx.session.user.id,
+          },
+          select: { providerOverride: true },
+        });
+        providerOverride = thread?.providerOverride ?? null;
+      }
+      return resolveChatReadiness({
+        provider: agent.provider,
+        runEngine: agent.runEngine,
+        runtime: agent.runtime,
+        providerOverride,
+      });
     }),
 
   retryLastUserMessage: workspaceProcedure

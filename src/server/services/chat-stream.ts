@@ -92,7 +92,7 @@ export type ChatStreamEvent =
  * routing to another platform. If you actually want Hermes to serve an agent,
  * set its provider to HERMES (or attach it to the Hermes runtime).
  */
-function providerIdFor(provider: AgentProvider): string {
+export function providerIdFor(provider: AgentProvider): string {
   switch (provider) {
     case AgentProvider.HERMES:
       return "hermes";

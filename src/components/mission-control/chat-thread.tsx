@@ -5,12 +5,14 @@ import {
   ChevronDown,
   ChevronRight,
   Layers,
+  PlugZap,
   RefreshCw,
   Settings2,
   Square,
   Wrench,
 } from "lucide-react";
 import type { AgentProvider } from "@prisma/client";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -889,6 +891,14 @@ export function ChatThreadView({
   const { data: agentFull } = trpc.agent.byId.useQuery(
     { id: agentId },
     { enabled: Boolean(agentId), staleTime: 10_000 },
+  );
+  // Will a chat turn actually reach a model? Drives the pre-send steering
+  // banner so a pull/act CLI connection (or an agent with no configured
+  // model) points the operator at attaching a chat-capable runtime instead
+  // of presenting an input that can only error.
+  const { data: readiness } = trpc.chat.chatReadiness.useQuery(
+    { agentId, threadId: threadId ?? undefined },
+    { enabled: Boolean(agentId), staleTime: 30_000 },
   );
   // Use agentFull for rich presence fields, fall back to thread data for basics.
   const agent = agentFull ?? data?.agent;
@@ -2059,6 +2069,59 @@ export function ChatThreadView({
             <Layers className="h-3 w-3 text-ember" />
             Bound to canvas
             <span className="font-mono text-foreground">{boundCanvas.name}</span>
+          </div>
+        </div>
+      )}
+      {readiness && !readiness.ready && (
+        <div className="px-2 pt-1">
+          <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+            <PlugZap className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[0.6875rem] font-semibold text-amber-700 dark:text-amber-300">
+                  {readiness.reason === "pull-act-only"
+                    ? "This connection doesn't serve chat"
+                    : readiness.reason === "no-runs-connector"
+                      ? "No runtime attached for this agent"
+                      : "No chat model configured"}
+                </span>
+                <span
+                  className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[0.5625rem] uppercase tracking-wider text-amber-700 dark:text-amber-300"
+                  title={
+                    readiness.mode === "runs"
+                      ? "Runs engine — a managed runtime must own the loop"
+                      : "Streaming engine — a chat model must be configured"
+                  }
+                >
+                  {readiness.mode}
+                </span>
+              </div>
+              <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                {readiness.hint}
+              </p>
+              {workspace && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <Link
+                    href={`/w/${workspace.slug}/settings/agents`}
+                    className="inline-flex items-center gap-1 rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-foreground/90 transition-colors hover:border-ember/40 hover:text-foreground"
+                  >
+                    <Settings2 className="h-2.5 w-2.5" /> Configure agent
+                  </Link>
+                  <Link
+                    href={`/w/${workspace.slug}/settings/runtimes`}
+                    className="inline-flex items-center gap-1 rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-foreground/90 transition-colors hover:border-ember/40 hover:text-foreground"
+                  >
+                    <PlugZap className="h-2.5 w-2.5" /> Manage runtimes
+                  </Link>
+                  <Link
+                    href={`/w/${workspace.slug}/settings/integrations`}
+                    className="text-[0.625rem] text-muted-foreground hover:text-foreground"
+                  >
+                    Integrations →
+                  </Link>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

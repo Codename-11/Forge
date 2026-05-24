@@ -2,7 +2,11 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { AgentProvider, RuntimeKind, type Runtime } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
-import { getRuntimeAdapter, managedAdapters } from "@/server/runtimes/adapters";
+import {
+  getRuntimeAdapter,
+  managedAdapters,
+  PLANNED_ADAPTERS,
+} from "@/server/runtimes/adapters";
 
 /** Compute location a managed adapter's transport implies. */
 function kindForAdapterTransport(transport: string): RuntimeKind {
@@ -261,6 +265,23 @@ export const runtimeRouter = router({
       multiAgent: a.multiAgent,
       providers: a.providers,
       capabilities: a.capabilities,
+    })),
+  ),
+
+  /**
+   * Declared-but-not-yet-connectable adapters (e.g. Codex app server, ACP).
+   * Surfaced so the full tier model is discoverable in-product; not
+   * creatable until their dispatch connector ships. See
+   * `docs/agents/providers-and-transports.md`.
+   */
+  plannedAdapters: workspaceProcedure.query(() =>
+    PLANNED_ADAPTERS.map((a) => ({
+      key: a.key,
+      title: a.title,
+      transport: a.transport,
+      chatMode: a.chatMode,
+      managed: a.managed,
+      note: a.note,
     })),
   ),
 });

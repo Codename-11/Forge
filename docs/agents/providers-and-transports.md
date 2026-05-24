@@ -1,85 +1,101 @@
-# Providers & Transports
+# Agents, Tiers & Transports
 
-Forge talks to agents in two fundamentally different ways. Keeping them
-straight is what stops a Codex agent from "answering via Hermes" — right
-persona, wrong platform.
+Forge talks to agents in a few fundamentally different ways. This page lays
+out the tiers so it's clear what each kind of agent can do, when it's
+available, and how chat is served — and why a Codex CLI session must **not**
+"answer via Hermes" (right persona, wrong platform).
 
-## Two kinds of provider
+There are two independent axes:
 
-**Agent / runtime providers** — the normal case. The *agent itself* (running
-in some runtime) is the provider: Hermes profiles (Victor, Mizu), a Codex
-agent, a Claude Code session, OpenCode, a custom webhook bot. Forge does **not**
-hold a model API key for these — it reaches the runtime, and the runtime runs
-the model. How it reaches the runtime is the **transport** (below).
+- **Tier** — *how reachable and how rich* the connection is (presence +
+  transport). First-class managed runtime → session CLI → basic webhook.
+- **Engine** — *who owns the agent loop* for a chat turn: **Runs** (the
+  runtime) or **Streaming/Completions** (Forge). Orthogonal to tier; see
+  [Chat & Dispatch Engines](./engines.md).
 
-**Chat-only providers** — *(its own concept, deferred)* — raw model access over
-an OpenAI-compatible endpoint with an API key / base URL (plain OpenAI,
-Anthropic, or a custom gateway). Here Forge owns the loop and the model is a
-stateless completion backend. This is the **Completions** engine's backend.
-It is intentionally **not** a first-class adapter in the runtime registry yet;
-`streamChatReply` supports it via env-configured `ai-providers`, but there's
-no UI to register "an OpenAI key as a provider." Tracked as a TODO — see the
-[runtime-adapter ADR](../plans/runtime-adapter-refactor.md).
+## Tier 1 — First-class agents (managed runtimes)
 
-> The split matters because an *agent/runtime* provider with no chat-capable
-> runtime attached has **no** way to chat — and it must not borrow another
-> platform's model to fake one. Forge surfaces a "no chat model configured"
-> notice instead.
+The agent is a **full workspace member**: always-on presence, realtime chat,
+orchestration, issues, and dispatched work. Forge holds **no model API key** —
+the runtime runs the model; the agent answers *as itself*.
 
-## Transport tiers (agent/runtime providers)
+- **Hermes** — persistent daemon hosting multiple profiles (Victor, Mizu)
+  behind one gateway (`/v1/runs`). Owns the loop, streams, approvals,
+  runtime-level presence. `chatMode: "runs"`.
+- **Codex (app server)** *(planned)* — Codex's long-lived `app server`, the
+  OpenAI analogue to the Hermes gateway: a managed runtime so a Codex agent is
+  first-class exactly like a Hermes profile. `chatMode: "runs"`,
+  `transport: "app-server"`.
 
-How Forge sends work to a runtime, from basic to rich:
+**Engine choice (per agent):**
 
-| Tier | Transport | What it is | Chat? |
-|------|-----------|------------|-------|
-| Basic | `webhook` / `mcp` | Push a webhook, or the agent pulls/acts over MCP with a Bearer key. Fire-and-react. | No (pull/act) |
-| Basic | `local-daemon` | The `forge` CLI daemon — a managed SSE bridge that spawns a local CLI per event. | Via the spawned CLI |
-| Mid | `acp` *(planned)* | Agent Client Protocol — a portable, bidirectional agent session. Drives CLIs (Claude Code, Codex, OpenCode) as live agents without per-vendor wiring. | Yes (as itself) |
-| Rich | `app-server` *(planned)* | A vendor's own long-lived agent server, e.g. Codex's `app server` — the OpenAI analogue to the Hermes gateway. | Yes (as itself) |
-| Rich | `runs-api` | A managed runtime that owns the full agent loop + streaming + approvals (**Hermes** today, via `/v1/runs`). | Yes (as itself) |
+| | **Runs** (recommended) | **Streaming** (Completions) |
+|---|---|---|
+| Loop owner | The runtime | Forge |
+| Agent memory / persona / commands | **Preserved** — runs as itself | None (stateless) |
+| Tools | The agent's own | Forge's chat allowlist + approvals |
+| Same engine as dispatched work | Yes | No |
+| Latency | Slightly higher | Lowest |
+| Model | Provider-native | Any OpenAI-compatible |
 
-`acp` and `app-server` are declared in the adapter taxonomy
-(`src/server/runtimes/adapters.ts`, `PLANNED_ADAPTERS`) but their dispatch
-connectors aren't wired yet. We deliberately support **both** so the operator
-keeps flexibility: ACP for portable, multi-vendor CLI control; a vendor app
-server (Codex) when its native protocol is richer than ACP — exactly the role
-Hermes already fills for its own agents.
+We default first-class agents to **Runs** so Hermes/Codex keep their memory,
+session, and native commands. Flip to **Streaming** only for a stateless
+utility assistant where identity doesn't matter — and note it needs a
+configured chat model (see Tier-1 streaming backend below). Full pros/cons:
+[engines.md](./engines.md).
 
-## How chat is served (`chatMode`)
+## Tier 2 — Session connectors (CLI)
 
-Each adapter declares a `chatMode` — the axis the "Codex via Hermes" bug lived
-on:
+Local CLIs: **Claude Code**, **Codex CLI**, **OpenCode**. **Full
+functionality while the session is active**, but **ephemeral presence** — not
+always online. Best for in-session, active work rather than always-on duty.
 
-- **`runs`** — a managed runtime owns the loop and streams the reply (Hermes;
-  the local daemon's spawned CLI; a future Codex app server).
-- **`acp`** — chat over an ACP session *(planned)*.
-- **`completions`** — Forge owns the loop and calls an OpenAI-compatible model.
-  The **chat-only provider** concept (deferred — no shipped adapter uses it).
-- **`none`** — pull/act connection: reads context and takes actions over
-  MCP/webhook, but does not serve an interactive chat turn. Claude Code, Codex
-  CLI, Claude Desktop, custom webhook. To chat with one of these agents,
-  attach it to a chat-capable runtime.
+- **ACP** *(planned)* — Agent Client Protocol: a portable, bidirectional agent
+  session. The CLI chats *as itself* while live, with no per-vendor wiring.
+  `transport: "acp"`, `chatMode: "acp"`.
+- **MCP (pull/act, today)** — the CLI connects over MCP with a Bearer key to
+  **read context and take actions**. It does **not** serve an interactive chat
+  turn (`chatMode: "none"`) — it has no model key and isn't a chat backend.
+  Chatting with such an agent shows a "no chat model configured" notice *by
+  design*; to chat with it as itself, give it an ACP session or promote it to
+  a first-class app-server runtime.
 
-## Worked example: a Codex agent
+The `forge` **local daemon** is a managed bridge in this tier: `forge daemon
+start` registers over MCP, opens an SSE subscription, and spawns the detected
+local CLI per event, streaming replies back via chat drafts.
 
-- **Codex CLI (MCP connection)** → `chatMode: "none"`. It reads issues and
-  acts via MCP. Chatting with it shows "no chat model configured" *by design*
-  — it has no model key and is not a chat backend.
-- **Codex app server** *(planned)* → `chatMode: "runs"`. The Codex agent chats
-  as itself, with its own memory/tools, the same way Hermes agents do.
-- If you genuinely want a stateless OpenAI completion, that's the **chat-only
-  provider** path (deferred): set `OPENAI_API_KEY` and run the agent on the
-  Completions engine. That is *not* "Codex the agent" — it's a bare model.
+## Tier 3 — Basic connectors
 
-## Deferred / TODO
+`webhook` / `http`. Any runtime that can receive a Forge webhook (or be polled)
+and call back over MCP with a Bearer token. Fire-and-react; no Forge-driven
+chat turn (`chatMode: "none"`). The lowest common denominator for bring-your-own
+runtimes.
 
-1. **Chat-only providers as a first-class surface** — register an OpenAI /
-   Anthropic / custom-gateway key as a provider in the UI, instead of only via
-   env. (`chatMode: "completions"`.)
-2. **ACP connector** — a `DispatchConnector` over Agent Client Protocol;
-   promote the `acp` entry from `PLANNED_ADAPTERS` into `RUNTIME_ADAPTERS`.
-3. **Codex app-server connector** — a `DispatchConnector` over Codex's app
-   server; promote `codex-app-server` likewise.
-4. **Editor steering** — when an agent's only connection is `chatMode: "none"`,
-   the chat composer should point the operator at attaching a chat-capable
-   runtime rather than presenting an input that can only error.
+## At a glance
+
+| Tier | Examples | Transport | Presence | Chat | Best for |
+|------|----------|-----------|----------|------|----------|
+| 1 — First-class | Hermes, Codex app server | `runs-api`, `app-server` | Always-on | Runs (or Streaming) | Full members: chat + dispatch + orchestration |
+| 2 — Session CLI | Claude Code, Codex CLI, OpenCode | `acp`, `mcp`, `local-daemon` | Session/ephemeral | ACP (as itself) or pull/act | In-session active work |
+| 3 — Basic | Custom bot | `webhook`, `http` | Delivery-derived | None | BYO integrations |
+
+## Two kinds of "provider", and the deferred chat-only concept
+
+- **Agent/runtime providers** (all of the above) — the agent is the provider;
+  no Forge-held API key. Reached via a transport tier.
+- **Chat-only providers** — raw OpenAI-compatible model access via API
+  key/base URL (plain OpenAI/Anthropic/custom gateway). This is the **backend
+  the Streaming engine calls**. Today it's configured by environment
+  (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `FORGE_AI_BASE_URL`); a UI to
+  register one as a first-class provider is a tracked item. Forge never lets a
+  first-class agent silently borrow another platform's model — an unconfigured
+  Streaming backend yields a clear "no chat model configured" notice.
+
+## Where this lives in code
+
+- Taxonomy + capabilities: `src/server/runtimes/adapters.ts`
+  (`RuntimeAdapter`, `RuntimeTransport`, `ChatMode`, `RUNTIME_ADAPTERS`,
+  `PLANNED_ADAPTERS`).
+- Engine resolution + connectors: `src/server/services/dispatch/`.
+- Design history + remaining work:
+  [runtime-adapter ADR](../plans/runtime-adapter-refactor.md).
