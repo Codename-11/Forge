@@ -70,6 +70,69 @@ describe("resolveChatReadiness", () => {
     expect(r.reason).toBe("model-configured");
   });
 
+  it("a daemon-linked agent with no server model is served via dispatch (not 'no model')", () => {
+    // The local daemon / ACP answers via chat drafts on the event — ready.
+    const r = resolveChatReadiness({
+      provider: "CLAUDE",
+      runEngine: "COMPLETIONS",
+      runtime: null,
+      daemonLinked: true,
+    });
+    expect(r.ready).toBe(true);
+    expect(r.mode).toBe("dispatch");
+    expect(r.reason).toBe("dispatch-path");
+  });
+
+  it("a per-agent webhook counts as a dispatch path", () => {
+    const r = resolveChatReadiness({
+      provider: "CUSTOM",
+      runEngine: "COMPLETIONS",
+      runtime: null,
+      webhookUrl: "https://bot.example/hook",
+    });
+    expect(r.ready).toBe(true);
+    expect(r.mode).toBe("dispatch");
+  });
+
+  it("an ACP-adapter connection is served via dispatch (ACP session label)", () => {
+    const r = resolveChatReadiness({
+      provider: "CODEX",
+      runEngine: "COMPLETIONS",
+      runtime: { adapterKey: "acp", endpoint: null, secret: null },
+    });
+    expect(r.ready).toBe(true);
+    expect(r.mode).toBe("dispatch");
+    expect(r.transportLabel).toBe("ACP session");
+  });
+
+  it("a LOCAL_DAEMON runtime is served via dispatch (local daemon label)", () => {
+    const r = resolveChatReadiness({
+      provider: "CLAUDE",
+      runEngine: "COMPLETIONS",
+      runtime: { adapterKey: "local-daemon", endpoint: null, secret: null },
+      runtimeKind: "LOCAL_DAEMON",
+    });
+    expect(r.mode).toBe("dispatch");
+    expect(r.transportLabel).toBe("local daemon");
+  });
+
+  it("a configured model still wins over a dispatch path (server completions)", () => {
+    const r = resolveChatReadiness({
+      provider: "CODEX",
+      runEngine: "COMPLETIONS",
+      runtime: null,
+      daemonLinked: true,
+      providerAvailable: () => true,
+    });
+    expect(r.mode).toBe("completions");
+  });
+
+  it("runs agents report a transport label", () => {
+    const r = resolveChatReadiness({ provider: "HERMES", runEngine: "RUNS", runtime: null });
+    expect(r.mode).toBe("runs");
+    expect(r.transportLabel.length).toBeGreaterThan(0);
+  });
+
   it("a thread provider override is honoured", () => {
     // Agent is CODEX (no key), but the thread overrides to HERMES → ready.
     const r = resolveChatReadiness({

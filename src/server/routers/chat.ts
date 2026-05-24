@@ -1023,9 +1023,11 @@ export const chatRouter = router({
       const agent = await ctx.db.agent.findFirst({
         where: { id: input.agentId, workspaceId: ctx.workspaceId },
         select: {
+          id: true,
           provider: true,
           runEngine: true,
-          runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+          webhookUrl: true,
+          runtime: { select: { adapterKey: true, endpoint: true, secret: true, kind: true } },
         },
       });
       if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
@@ -1045,10 +1047,19 @@ export const chatRouter = router({
         ctx.db,
         ctx.workspaceId,
       );
+      // A daemon/runtime authenticating as this agent (AGENT-kind ApiKey) is
+      // the strongest "served via dispatch" signal.
+      const daemonLinked =
+        (await ctx.db.apiKey.count({
+          where: { workspaceId: ctx.workspaceId, linkedAgentId: agent.id, revokedAt: null },
+        })) > 0;
       return resolveChatReadiness({
         provider: agent.provider,
         runEngine: agent.runEngine,
         runtime: agent.runtime,
+        webhookUrl: agent.webhookUrl,
+        runtimeKind: agent.runtime?.kind ?? null,
+        daemonLinked,
         providerOverride,
         providerAvailable,
       });

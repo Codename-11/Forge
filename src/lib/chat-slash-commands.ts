@@ -13,6 +13,10 @@ export interface SlashCommandContext {
   workspaceSlug: string;
   /** Current chat engine for this agent (COMPLETIONS | RUNS), if known. */
   currentEngine?: string | null;
+  /** Agent provider (HERMES | CLAUDE | CODEX | CUSTOM) — gates provider-specific commands. */
+  provider?: string | null;
+  /** How this agent's chat is actually served (from chatReadiness). */
+  transport?: { mode: string; label: string } | null;
   /** Append a SYSTEM-role message to the current thread, locally (no server round-trip). */
   appendLocal: (body: string) => void;
   /** Clear the local message list (cosmetic — server data unchanged). */
@@ -36,9 +40,19 @@ export interface SlashCommand {
   args?: string;
   /** When true, the command is dispatched as a structured prompt (not local). */
   promptDispatch?: boolean;
+  /**
+   * Optional gate — when present and it returns false for the current agent,
+   * the command is hidden from `/help` + autocomplete and rejected on run.
+   * Used to make the command set runtime/provider-aware (e.g. Hermes-only
+   * skills/memory). Omitted ⇒ always available.
+   */
+  available?: (ctx: SlashCommandContext) => boolean;
   /** Args parsed from after the command name (everything after first space). */
   run: (args: string, ctx: SlashCommandContext) => Promise<void> | void;
 }
+
+/** Commands that only make sense for a Hermes-backed agent. */
+const isHermes = (ctx: SlashCommandContext) => ctx.provider === "HERMES";
 
 export const SLASH_COMMANDS: SlashCommand[] = [
   {
@@ -47,9 +61,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: "List available commands.",
     category: "info",
     run: (_args, ctx) => {
-      const lines = SLASH_COMMANDS.filter((c) => c.name !== "help").map(
-        (c) => `- **/${c.name}${c.args ? ` ${c.args}` : ""}** — ${c.description}`,
-      );
+      const lines = SLASH_COMMANDS.filter(
+        (c) => c.name !== "help" && (!c.available || c.available(ctx)),
+      ).map((c) => `- **/${c.name}${c.args ? ` ${c.args}` : ""}** — ${c.description}`);
       ctx.appendLocal(
         `### Commands\n\n${lines.join("\n")}\n\n_Tip: type \`/\` to see this menu inline._`,
       );
@@ -80,6 +94,36 @@ export const SLASH_COMMANDS: SlashCommand[] = [
           `- **role:** ${a.role}\n` +
           `- **capabilities:** ${a.capabilities.join(", ") || "_none_"}\n` +
           `- **last heartbeat:** ${seen}\n`,
+      );
+    },
+  },
+  {
+    name: "runtime",
+    description: "Show how this agent's chat is served (engine + runtime/transport).",
+    category: "info",
+    run: (_args, ctx) => {
+      const t = ctx.transport;
+      const engine = (ctx.currentEngine ?? "default").toLowerCase();
+      if (!t) {
+        ctx.appendLocal(
+          `**${ctx.agent.name}** · provider ${ctx.provider ?? "?"} · engine ${engine}.\n\n` +
+            "_Transport detail isn't available in this surface._",
+        );
+        return;
+      }
+      const how =
+        t.mode === "runs"
+          ? `**Runs** — \`${t.label}\` owns the loop; the agent answers as itself (its own memory + tools).`
+          : t.mode === "completions"
+            ? `**Streaming** — Forge runs a stateless loop against \`${t.label}\`.`
+            : t.mode === "dispatch"
+              ? `**Dispatch** — served by the agent's \`${t.label}\` (its runtime/daemon replies via chat drafts; ensure it's running).`
+              : "**Not chat-capable** — no model or runtime can serve a turn yet.";
+      ctx.appendLocal(
+        `### ${ctx.agent.name} — chat transport\n\n` +
+          `- **provider:** ${ctx.provider ?? "?"}\n` +
+          `- **engine:** ${engine}\n` +
+          `- **served via:** ${how}\n`,
       );
     },
   },
@@ -197,6 +241,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     name: "skills",
     description: "List this agent's live Hermes skills.",
     category: "info",
+    available: isHermes,
     run: async (_args, ctx) => {
       if (!ctx.hermesInfo) {
         ctx.appendLocal("_Live skills aren't available here._");
@@ -209,6 +254,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     name: "memory",
     description: "Show this agent's live Hermes memory.",
     category: "info",
+    available: isHermes,
     run: async (_args, ctx) => {
       if (!ctx.hermesInfo) {
         ctx.appendLocal("_Live memory isn't available here._");
@@ -222,6 +268,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: "Hermes bridge: `/hermes status` (live), `/hermes usage` (asks the agent).",
     args: "<status|usage>",
     category: "info",
+    available: isHermes,
     run: async (args, ctx) => {
       const sub = args.trim().split(/\s+/)[0]?.toLowerCase();
       if (sub === "status") {
@@ -276,14 +323,19 @@ export function isSlashInput(input: string): boolean {
   return trimmed.startsWith("/");
 }
 
-export function matchSlashCommands(input: string): SlashCommand[] {
+export function matchSlashCommands(
+  input: string,
+  ctx?: SlashCommandContext,
+): SlashCommand[] {
   const trimmed = input.trimStart();
   if (!trimmed.startsWith("/")) return [];
+  const available = (c: SlashCommand) => !c.available || !ctx || c.available(ctx);
   const fragment = trimmed.slice(1).split(" ")[0]?.toLowerCase() ?? "";
-  if (!fragment) return SLASH_COMMANDS;
+  if (!fragment) return SLASH_COMMANDS.filter(available);
   return SLASH_COMMANDS.filter(
     (c) =>
-      c.name.startsWith(fragment) ||
-      (c.aliases ?? []).some((a) => a.startsWith(fragment)),
+      available(c) &&
+      (c.name.startsWith(fragment) ||
+        (c.aliases ?? []).some((a) => a.startsWith(fragment))),
   );
 }
