@@ -467,6 +467,13 @@ export const chatRouter = router({
               avatar: true,
               status: true,
               role: true,
+              // Availability inputs so the sidebar shows "on-demand" instead
+              // of a false "offline" for managed-runtime / dispatch agents.
+              provider: true,
+              runtimeMode: true,
+              lastHeartbeatAt: true,
+              webhookUrl: true,
+              runtimeId: true,
             },
           },
           messages: {

@@ -5,6 +5,7 @@ import type { RuntimeKind } from "@prisma/client";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { TransportChip } from "@/components/agents/transport-chip";
+import { presenceAvailability } from "@/lib/transport-display";
 
 /**
  * Agents tab. Roster of workspace agents with status pill, runtime mode
@@ -116,7 +117,7 @@ export function AgentsTab({ slug }: { slug: string }) {
             className="flex flex-col gap-0.5 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem] hover:border-ember/40"
           >
             <div className="flex items-center gap-2">
-              <PresenceDot status={a.status} />
+              <PresenceDot status={a.status} availability={presenceAvailability(a)} />
               <Bot className="h-3.5 w-3.5 shrink-0 text-ember" />
               <span className="font-medium text-foreground">{a.name}</span>
               <span className="font-mono text-[0.65625rem] text-muted-foreground">
@@ -175,8 +176,9 @@ export function AgentsTab({ slug }: { slug: string }) {
                 <ExternalLink className="h-3 w-3 text-muted-foreground" />
               </span>
             </div>
-            {/* Last-seen freshness when offline */}
-            {isOffline && (
+            {/* Last-seen freshness when offline — only for heartbeat-tracked
+                agents; on-demand agents have no heartbeat by design. */}
+            {isOffline && presenceAvailability(a) !== "on-demand" && (
               <div className="pl-7 text-meta text-muted-foreground">
                 {a.lastHeartbeatAt
                   ? `seen ${relativeTime(a.lastHeartbeatAt)}`
@@ -249,9 +251,11 @@ function kindLabel(kind: RuntimeKind): string {
   }
 }
 
-function PresenceDot({ status }: { status: string }) {
-  const colorClass =
-    status === "ONLINE"
+function PresenceDot({ status, availability }: { status: string; availability?: string }) {
+  const onDemand = availability === "on-demand";
+  const colorClass = onDemand
+    ? "bg-sky-500"
+    : status === "ONLINE"
       ? "bg-emerald-500"
       : status === "BUSY"
         ? "bg-ember"
@@ -259,7 +263,7 @@ function PresenceDot({ status }: { status: string }) {
   return (
     <span
       className={cn("h-2 w-2 shrink-0 rounded-full", colorClass)}
-      title={status}
+      title={onDemand ? "on-demand — connects when work is sent" : status}
     />
   );
 }
