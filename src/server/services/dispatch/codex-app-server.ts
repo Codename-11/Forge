@@ -94,9 +94,11 @@ export function mapCodexNotification(
       return { type: "tool_completed", tool: codexItemLabel(type, params), isError };
     }
     case "turn/completed": {
-      const status = typeof params.status === "string" ? params.status : "completed";
+      // Status lives at params.turn.status (verified against codex-cli 0.133).
+      const turn = params.turn as { status?: string; error?: unknown } | undefined;
+      const status = typeof turn?.status === "string" ? turn.status : "completed";
       if (status === "failed") {
-        return { type: "error", message: codexFailureMessage(params) };
+        return { type: "error", message: codexFailureMessage(turn ?? params) };
       }
       // interrupted + completed both terminate cleanly; final text is
       // assembled from deltas by the caller.
@@ -313,10 +315,11 @@ export function makeCodexAppServerConnector(opts: {
       };
       attachPump(run);
 
-      // Handshake.
+      // Handshake. capabilities requires both experimentalApi + requestAttestation
+      // (verified against codex-cli 0.133 InitializeCapabilities).
       await request(run, "initialize", {
         clientInfo: { name: "forge", title: "Forge", version: "1" },
-        capabilities: { experimentalApi: true },
+        capabilities: { experimentalApi: true, requestAttestation: false },
       });
       send(ws, "initialized");
 
@@ -332,9 +335,13 @@ export function makeCodexAppServerConnector(opts: {
       }
       run.threadId = threadId;
 
+      // UserInput text blocks require `text_elements` (verified against
+      // codex-cli 0.133 UserInput) — omitting it fails deserialization.
       const turnInput: Array<Record<string, unknown>> = [];
-      if (input.instructions) turnInput.push({ type: "text", text: input.instructions });
-      turnInput.push({ type: "text", text: input.message });
+      if (input.instructions) {
+        turnInput.push({ type: "text", text: input.instructions, text_elements: [] });
+      }
+      turnInput.push({ type: "text", text: input.message, text_elements: [] });
       const turnRes = (await request(run, "turn/start", {
         threadId,
         input: turnInput,

@@ -53,13 +53,26 @@ describe("mapCodexNotification", () => {
     expect(mapCodexNotification("item/completed", { type: "userMessage" })).toBeNull();
   });
 
-  it("maps turn completion and failure to terminal events", () => {
-    expect(mapCodexNotification("turn/completed", { status: "completed" })).toEqual({
-      type: "completed",
-    });
+  it("maps turn completion and failure to terminal events (status under params.turn)", () => {
+    // Verified shape against codex-cli 0.133: { threadId, turn: { status, error } }.
     expect(
-      mapCodexNotification("turn/completed", { status: "failed", error: { message: "boom" } }),
+      mapCodexNotification("turn/completed", { turn: { status: "completed" } }),
+    ).toEqual({ type: "completed" });
+    expect(
+      mapCodexNotification("turn/completed", {
+        turn: { status: "failed", error: { message: "boom" } },
+      }),
     ).toEqual({ type: "error", message: "boom" });
+  });
+
+  it("treats real agentMessage deltas (plain string) as content", () => {
+    // Verified shape: { threadId, turnId, itemId, delta: "Hello" }
+    expect(
+      mapCodexNotification("item/agentMessage/delta", {
+        itemId: "msg_1",
+        delta: "Hello",
+      }),
+    ).toEqual({ type: "content_delta", delta: "Hello" });
   });
 
   it("ignores non-chat notifications", () => {
