@@ -1,6 +1,10 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
 import { AgentStatus, EventKind } from "@prisma/client";
-import { sweepIdleAgents } from "@/server/services/heartbeat";
+import {
+  sweepIdleAgents,
+  recordRuntimeHeartbeatPresence,
+} from "@/server/services/heartbeat";
+import { RuntimeKind } from "@prisma/client";
 import {
   createWorkspaceFixture,
   disconnectPrisma,
@@ -312,5 +316,121 @@ describe("heartbeat — sweepIdleAgents", () => {
     expect(events.length).toBe(1);
     const payload = events[0].payload as { from: string };
     expect(payload.from).toBe(AgentStatus.BUSY);
+  });
+});
+
+describe("heartbeat — recordRuntimeHeartbeatPresence", () => {
+  async function makeRuntime(workspaceId: string): Promise<{ id: string }> {
+    const prisma = getPrisma();
+    return prisma.runtime.create({
+      data: {
+        workspaceId,
+        name: "Local daemon",
+        kind: RuntimeKind.LOCAL_DAEMON,
+        adapterKey: "local-daemon",
+      },
+      select: { id: true },
+    });
+  }
+
+  async function makeAgent(
+    workspaceId: string,
+    runtimeId: string | null,
+    opts: {
+      profileKey: string;
+      runtimeMode: "PERSISTENT" | "EPHEMERAL";
+      status: AgentStatus;
+    },
+  ): Promise<{ id: string }> {
+    const prisma = getPrisma();
+    return prisma.agent.create({
+      data: {
+        workspaceId,
+        name: opts.profileKey,
+        profileKey: opts.profileKey,
+        status: opts.status,
+        runtimeMode: opts.runtimeMode,
+        runtimeId,
+        lastHeartbeatAt: null,
+      },
+      select: { id: true },
+    });
+  }
+
+  it("flips an OFFLINE persistent agent ONLINE + bumps heartbeat + emits an event", async () => {
+    const fixture = await createWorkspaceFixture();
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const rt = await makeRuntime(fixture.workspace.id);
+    const agent = await makeAgent(fixture.workspace.id, rt.id, {
+      profileKey: "codex-daemon",
+      runtimeMode: "PERSISTENT",
+      status: AgentStatus.OFFLINE,
+    });
+
+    const now = new Date();
+    await recordRuntimeHeartbeatPresence(rt.id, now, prisma);
+
+    const after = await prisma.agent.findUniqueOrThrow({
+      where: { id: agent.id },
+      select: { status: true, lastHeartbeatAt: true },
+    });
+    expect(after.status).toBe(AgentStatus.ONLINE);
+    expect(after.lastHeartbeatAt?.getTime()).toBe(now.getTime());
+
+    const events = await prisma.activityEvent.findMany({
+      where: { subjectId: agent.id, kind: EventKind.AGENT_STATUS_CHANGED },
+    });
+    expect(events.length).toBe(1);
+    expect((events[0].payload as { reason: string }).reason).toBe(
+      "runtime-heartbeat",
+    );
+  });
+
+  it("keeps a BUSY agent BUSY but refreshes its heartbeat (no event)", async () => {
+    const fixture = await createWorkspaceFixture();
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const rt = await makeRuntime(fixture.workspace.id);
+    const agent = await makeAgent(fixture.workspace.id, rt.id, {
+      profileKey: "busy-daemon",
+      runtimeMode: "PERSISTENT",
+      status: AgentStatus.BUSY,
+    });
+
+    const now = new Date();
+    await recordRuntimeHeartbeatPresence(rt.id, now, prisma);
+
+    const after = await prisma.agent.findUniqueOrThrow({
+      where: { id: agent.id },
+      select: { status: true, lastHeartbeatAt: true },
+    });
+    expect(after.status).toBe(AgentStatus.BUSY);
+    expect(after.lastHeartbeatAt?.getTime()).toBe(now.getTime());
+    const events = await prisma.activityEvent.count({
+      where: { subjectId: agent.id, kind: EventKind.AGENT_STATUS_CHANGED },
+    });
+    expect(events).toBe(0);
+  });
+
+  it("leaves an EPHEMERAL (session) agent on the runtime untouched", async () => {
+    const fixture = await createWorkspaceFixture();
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const rt = await makeRuntime(fixture.workspace.id);
+    const agent = await makeAgent(fixture.workspace.id, rt.id, {
+      profileKey: "session-cli",
+      runtimeMode: "EPHEMERAL",
+      status: AgentStatus.OFFLINE,
+    });
+
+    await recordRuntimeHeartbeatPresence(rt.id, new Date(), prisma);
+
+    const after = await prisma.agent.findUniqueOrThrow({
+      where: { id: agent.id },
+      select: { status: true, lastHeartbeatAt: true },
+    });
+    expect(after.status).toBe(AgentStatus.OFFLINE);
+    expect(after.lastHeartbeatAt).toBeNull();
   });
 });

@@ -75,6 +75,14 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   longer blocks persistent Claude outright or restricts persistent Codex to
   the app server alone.
 
+### Changed
+
+- **Local-daemon agents now show true online/offline.** An agent hosted on
+  the Forge local daemon goes **online** while the daemon is heartbeating and
+  flips to **offline** when it stops — instead of always reading "on-demand."
+  (Agents on outbound runtimes that don't heartbeat — e.g. the Codex app
+  server — still read "on-demand," since there's nothing to report liveness.)
+
 ## [2026-05-23] — Sign-in, SSO & agent platforms
 
 ### Added

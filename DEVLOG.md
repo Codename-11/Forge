@@ -7351,3 +7351,30 @@ adapters (local-daemon, codex-app-server) always read "on-demand" and don't
 reflect their runtime's actual up/down — availability keys on
 provider==="HERMES" + Agent.lastHeartbeatAt, ignoring the adapter presence
 capability + Runtime.heartbeatAt (which the daemons actually bump).
+
+## 2026-05-24 (cont.) — True runtime-heartbeat presence (daemon-hosted agents)
+
+Implemented true online/offline for agents on a heartbeating managed runtime.
+
+Mechanism (no client/resolver changes): `runtimes.heartbeat` is called only by
+the forge CLI daemon (LOCAL_DAEMON, adapter `local-daemon`, presence
+`runtime-heartbeat`). The handler now, when the runtime's adapter presence is
+`runtime-heartbeat`, calls a new `recordRuntimeHeartbeatPresence(runtimeId,
+now)` (heartbeat.ts) that bumps `lastHeartbeatAt` on the runtime's PERSISTENT
+agents and flips OFFLINE→ONLINE (with an AGENT_STATUS_CHANGED event, reason
+`runtime-heartbeat`); BUSY agents keep status + get a fresh heartbeat;
+EPHEMERAL (session) agents are left alone. The existing `sweepIdleAgents` job
+flips them back to OFFLINE once the daemon stops (their heartbeats go stale
+together). Because the agents now carry a real `lastHeartbeatAt` + status,
+every existing surface resolves them to "heartbeat" presence and shows
+online/offline — zero surface changes.
+
+Scope/limitation (by design): runtimes reached *outbound* from Forge that
+don't heartbeat inbound — Codex app server (REMOTE_HTTP), webhooks — never hit
+this path, so their agents keep null `lastHeartbeatAt` → on-demand. Giving
+codex-app-server true presence would need an active health probe (Forge pings
+the endpoint) or the bridge calling `runtimes.heartbeat` itself (runtime-side,
+out of this repo) — at which point this same code lights it up automatically.
+
+Tests: +3 in heartbeat.test.ts (OFFLINE→ONLINE+event, BUSY preserved+bump,
+EPHEMERAL untouched). typecheck + lint clean, 697 unit tests pass.
