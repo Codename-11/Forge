@@ -30,6 +30,7 @@ import { toast } from "sonner";
 import { ChatMarkdown } from "./chat-markdown";
 import type { SlashCommandContext } from "@/lib/chat-slash-commands";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
+import { TransportChip } from "@/components/agents/transport-chip";
 
 /**
  * Active chat thread between the operator and one agent. Polls via
@@ -1937,27 +1938,10 @@ export function ChatThreadView({
               (resolved engine + runtime/transport), so local ACP vs remote
               app-server vs Hermes vs streaming is distinguishable at a glance.
               Driven by chatReadiness so it reflects the attached runtime, not
-              just the explicit runEngine field. */}
-          {readiness && readiness.mode !== "none" && (
-            <span
-              className={cn(
-                "rounded-full border px-1.5 py-0 text-[0.5625rem] uppercase tracking-wider",
-                readiness.mode === "runs"
-                  ? "border-ember/30 bg-ember/10 text-ember"
-                  : readiness.mode === "dispatch"
-                    ? "border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400"
-                    : "border-border bg-subtle/40 text-muted-foreground",
-              )}
-              title={
-                readiness.mode === "runs"
-                  ? `Runs engine — ${readiness.transportLabel} owns the loop (the agent answers as itself with its own memory + tools).`
-                  : readiness.mode === "dispatch"
-                    ? `Served by the agent's ${readiness.transportLabel} — replies are delivered by its runtime/daemon, not a Forge model.`
-                    : `Streaming engine — Forge runs a stateless loop against ${readiness.transportLabel}.`
-              }
-            >
-              {readiness.transportLabel}
-            </span>
+              just the explicit runEngine field. Shared with the agents tab,
+              status rail, wizard, and checklist via <TransportChip>. */}
+          {readiness && (
+            <TransportChip mode={readiness.mode} label={readiness.transportLabel} />
           )}
 
           {/* Override pill — only when at least one override is set. */}
