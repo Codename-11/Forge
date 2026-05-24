@@ -6991,3 +6991,114 @@ Audit found the chat UI was only accurate for server-side runtimes. Fixes:
 
 Verified: typecheck + lint clean, unit suite 661 passing (+10: dispatch-mode
 readiness, transport labels, command gating).
+
+## 2026-05-24 — Secure the Codex app-server runtime: sandbox + approval toggle, enable/disable, containerised bridge
+
+The Codex app-server runtime had **full host access**: the host nohup bridge
+(`/home/bailey/codex-appserver-bridge.cjs`) spawned `codex app-server -c
+sandbox_mode=danger-full-access` as user `bailey`, so every Codex turn could
+read/write the whole home dir (`~/SYSTEM.md`, `~/.hermes` secrets, all of
+`~/.codex`). Also no lifecycle control: archive was a soft-delete, nothing
+gated the dial, and the bridge was an un-managed nohup (no durability). Fixed
+on two layers, keeping today's full-access behavior as the default.
+
+**1. Per-turn sandbox + approval, Forge-driven.** codex-cli 0.133
+`TurnStartParams` accepts `cwd` / `approvalPolicy` / `sandboxPolicy` overrides
+(verified via `codex app-server generate-ts`). The connector
+(`dispatch/codex-app-server.ts`) now sends them every turn from
+`Runtime.config = { sandboxMode, approvalPolicy, workspaceRoot }`:
+- `sandboxMode` → `SandboxPolicy`: `danger-full-access` → `dangerFullAccess`;
+  `workspace-write` → `workspaceWrite{ writableRoots:[cwd], networkAccess:false }`;
+  `read-only` → `readOnly{ networkAccess:false }`.
+- `approvalPolicy` (`never|on-request|on-failure|untrusted`) — anything but
+  `never` makes Codex raise `item/.../requestApproval`, which the connector
+  already maps to approval cards (accept/deny in chat).
+- Defaults (omitted config) reproduce today's behavior exactly:
+  `danger-full-access` + `never`. `parseCodexRuntimeConfig` reads the untyped
+  `Json` defensively (drops unknown enums → safe default; never throws).
+
+**2. Enable/disable kill-switch.** New `Runtime.disabledAt` (migration 0062,
+additive). Distinct from `archivedAt` (reversible *delete*): disabling is a
+reversible *pause* that keeps the row configured + visible. `registry.ts`
+short-circuits a disabled runtime to a **sentinel connector** (`kind:
+"disabled"`) whose `startRun` throws `[runtime disabled]` — so chat shows a
+clear message instead of a silent transport fallback. The dispatch sweep
+(`run-dispatcher.ts`) skips disabled runtimes outright so it doesn't spin
+failed runs; the assignment stays queued and dispatches when re-enabled.
+Threaded `config` + `disabledAt` (+ `name`) through all 9 `agent.runtime`
+selects and `AgentRuntimeRef`.
+
+**3. Router + UI.** `runtime.setEnabled({ id, enabled })` toggles
+`disabledAt`; `create`/`update` take a validated `config` (`codexConfigSchema`,
+`.strict()` so a typo can't silently disable the sandbox; only the
+`codex-app-server` adapter accepts config today). Settings → Runtimes gained a
+per-row Enable/Disable button + a `disabled` badge, and the create/edit modals
+gained a **Codex sandbox** panel (sandbox mode + approval policy selects +
+workspace root) shown only for the app-server adapter.
+
+**4. Containerised bridge = the real jail (`~/docker/codex-bridge/`).** Replaces
+the host nohup bridge. The container is the hard boundary: it mounts **only**
+the host's `~/.codex/auth.json` (read-only, seeded into a container-local
+`CODEX_HOME` named volume so token refresh stays inside) and a single scoped
+`./workspace → /work` (the agent's cwd + writable root). `restart:
+unless-stopped` gives durability; `docker compose up/stop` gives lifecycle.
+node:22-slim + `@openai/codex@0.133.0` + git/ripgrep/curl. Verified live: image
+builds, `codex --version` = 0.133.0 inside, the ws→bridge→codex `initialize`
+handshake round-trips, and **the host fs is unreachable from the container**
+(`/home/bailey/SYSTEM.md` and `~/.hermes` both absent; only `/work` + auth
+present). The spawn-time `sandbox_mode` is just a default — Forge's per-turn
+override is authoritative.
+
+**Cutover (operator, not done yet — replaces a live service):**
+1. `pkill -f codex-appserver-bridge.cjs` (free :4505)
+2. `cd ~/docker/codex-bridge && docker compose up -d --build`
+3. In Forge → Settings → Runtimes, edit `rt_codex_appserver`: set
+   `workspaceRoot=/work` and pick a sandbox/approval tier (leave
+   full-access/never for parity with today). Endpoint stays
+   `ws://172.16.24.250:4505`.
+Live end-to-end of a sandboxed Codex *turn* still needs the operator to send a
+chat (auth-walled) — every layer beneath that is proven.
+
+Verified: typecheck + lint clean, unit suite 676 passing (+4:
+`parseCodexRuntimeConfig` mapping), CLI build clean, codex-bridge image builds
++ smoke-tested (handshake + jail).
+
+## 2026-05-24 — Agent/runtime UX pass (settings · onboarding · MC · chat)
+
+Executed the fleet-UX plan (5 workstreams), each committed + deployed.
+
+0. **Shared transport surface.** `src/lib/transport-display.ts` (tone/title/
+   word/tier per `runs|completions|dispatch|none`) + `<TransportChip>`
+   (`src/components/agents/transport-chip.tsx`). Chat header now uses the shared
+   chip. Dedupes transport rendering across header / MC / rail / wizard /
+   checklist.
+1. **Integrations index → registry.** `/settings/integrations` + `integration.list`
+   now source `RUNTIME_ADAPTERS` (tier-grouped: first-class / session / basic)
+   instead of the retired provider-keyed manifest — so Codex app server, ACP,
+   local-daemon all appear, with transport/chatMode/managed badges, in-use agent
+   chips, tier-appropriate actions, and a Model-credentials card. Deleted
+   `src/server/integrations/adapters.ts` (no importers). `tierForTransport`
+   moved into the shared helper.
+2. **Mission Control surfacing.** `agent.list` attaches a resolved
+   `transport {mode,label}` per agent (chatReadiness; env availability +
+   linked-key signal; no secret exposed). Agents tab shows `<TransportChip>` +
+   a runtime-presence dot on the runtime chip; the chat status rail's Connection
+   card uses the shared chip (dispatch / none render honestly).
+3. **Tier-aware wizard + verify.** `agent.previewTransport` powers a live
+   "Chat served via …" line in the Connection + Review steps (with a
+   Configure-models link when a streaming model is missing). `agent.verifyConnection`
+   resolves readiness and, for a managed runs runtime, probes the endpoint
+   (handshake only — WS initialize for codex-app-server, GET for hermes) via the
+   self-contained `dispatch/runtime-probe.ts`; surfaced as a Review-step button.
+4. **Fleet-setup checklist.** Read-only card atop Settings → Agents threading
+   runtime → agent → key → chat-ready (each linked; collapses to a "ready" badge
+   when complete), derived from existing queries.
+
+Also fixed a build-blocking JSDoc (`*delete*/hide` in the `Runtime.disabledAt`
+schema comment closed the generated client's comment early) and applied the
+parallel session's migration 0062 to dev.
+
+Verified: typecheck + lint clean (one pre-existing Prisma type-import warning in
+a parallel-session file), unit suite 672→ (+ this pass's transport/integration/
+verify tests), daemon + docs build clean, deployed live (`/signin` 200, 63
+migrations applied).
