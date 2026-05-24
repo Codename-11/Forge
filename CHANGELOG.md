@@ -84,6 +84,10 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   pings the Codex app server; its agent reads **online** when the server
   answers and **offline** when it doesn't, so a dead bridge is visible at a
   glance instead of failing only when you message it.
+- **New workspaces auto-offline idle agents by default.** The agent idle
+  timeout now defaults to **15 minutes** (was off), so a heartbeat agent whose
+  runtime goes quiet flips to offline on its own — true presence works out of
+  the box. Existing workspaces keep their current setting; `0` still disables.
 
 ## [2026-05-23] — Sign-in, SSO & agent platforms
 

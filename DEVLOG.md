@@ -7406,3 +7406,19 @@ OFFLINE). typecheck + lint clean, 699 unit tests pass.
 Net: presence is now true online/offline for every managed runtime (Hermes,
 local daemon, Codex app server); session CLIs stay "session"; nothing reads a
 false "offline" or a stale "on-demand."
+
+## 2026-05-24 (cont.) — Default agentIdleTimeoutMinutes 0 → 15 + E2E
+
+Closing the presence default gap: `Workspace.agentIdleTimeoutMinutes` defaulted
+to 0, which disables `sweepIdleAgents` — so on a fresh workspace the "offline
+when the runtime dies" half of true presence never fired (agents stuck ONLINE
+after the last heartbeat/probe). Migration 0063 sets the column DEFAULT to 15
+(new rows only — no backfill, so any deliberate 0 opt-out is preserved; 0 still
+means disabled). 15min sits well above the 60s heartbeat/probe cadence, so no
+flapping. Also corrected the stale schema doc-comment (it described claimed-
+issue auto-release; the field actually drives the heartbeat agent-offline
+sweep). The live workspaces were already at 15, so no behavior change there.
+
+E2E: ran the full Playwright suite (9 specs — a11y, chat surface/streaming/
+attachments, issue flow, data export, runtime management) against a fresh
+prod build. Green.
