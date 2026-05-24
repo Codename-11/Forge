@@ -17,6 +17,7 @@ import type { db as PrismaDb } from "@/server/db";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { resolveChatReadiness } from "@/server/services/chat-readiness";
 import { workspaceChatProviderAvailability } from "@/server/services/ai-providers";
+import { probeRuntime } from "@/server/services/dispatch/runtime-probe";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { agentIdSchema } from "@/server/validators";
 
@@ -176,6 +177,101 @@ export const agentRouter = router({
       });
       if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
       return agent;
+    }),
+
+  /**
+   * Preview how a (not-yet-created) agent's chat would be served, given a
+   * provider + optional runtime + engine. Powers the wizard Review step so the
+   * operator sees "will chat via Codex app server · runs" before saving.
+   */
+  previewTransport: workspaceProcedure
+    .input(
+      z.object({
+        provider: z.nativeEnum(AgentProvider),
+        runtimeId: z.string().min(1).max(40).nullable().optional(),
+        runEngine: z.nativeEnum(RunEngine).nullable().optional(),
+        webhookUrl: z.string().max(500).optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const runtime = input.runtimeId
+        ? await ctx.db.runtime.findFirst({
+            where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
+            select: { adapterKey: true, endpoint: true, kind: true },
+          })
+        : null;
+      const providerAvailable = await workspaceChatProviderAvailability(
+        ctx.db,
+        ctx.workspaceId,
+      );
+      const r = resolveChatReadiness({
+        provider: input.provider,
+        runEngine: input.runEngine ?? null,
+        runtime: runtime
+          ? { adapterKey: runtime.adapterKey, endpoint: runtime.endpoint, secret: null }
+          : null,
+        webhookUrl: input.webhookUrl || null,
+        runtimeKind: runtime?.kind ?? null,
+        providerAvailable,
+      });
+      return { mode: r.mode, transportLabel: r.transportLabel, ready: r.ready, hint: r.hint };
+    }),
+
+  /**
+   * Verify an existing agent's chat connection: resolve readiness and, for a
+   * runs runtime with an endpoint, probe reachability (handshake only — no
+   * turn). Lets the operator confirm setup from the agent editor.
+   */
+  verifyConnection: workspaceProcedure
+    .input(z.object({ id: agentId }))
+    .mutation(async ({ ctx, input }) => {
+      const agent = await ctx.db.agent.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          provider: true,
+          runEngine: true,
+          webhookUrl: true,
+          runtime: {
+            select: { adapterKey: true, endpoint: true, secret: true, kind: true },
+          },
+        },
+      });
+      if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
+      const providerAvailable = await workspaceChatProviderAvailability(
+        ctx.db,
+        ctx.workspaceId,
+      );
+      const daemonLinked =
+        (await ctx.db.apiKey.count({
+          where: { workspaceId: ctx.workspaceId, linkedAgentId: agent.id, revokedAt: null },
+        })) > 0;
+      const readiness = resolveChatReadiness({
+        provider: agent.provider,
+        runEngine: agent.runEngine,
+        runtime: agent.runtime
+          ? { adapterKey: agent.runtime.adapterKey, endpoint: agent.runtime.endpoint, secret: agent.runtime.secret }
+          : null,
+        webhookUrl: agent.webhookUrl,
+        runtimeKind: agent.runtime?.kind ?? null,
+        daemonLinked,
+        providerAvailable,
+      });
+      const probe =
+        readiness.mode === "runs"
+          ? await probeRuntime({
+              adapterKey: agent.runtime?.adapterKey,
+              endpoint: agent.runtime?.endpoint,
+              secret: agent.runtime?.secret,
+            })
+          : { attempted: false, reachable: null, detail: "" };
+      return {
+        mode: readiness.mode,
+        transportLabel: readiness.transportLabel,
+        ready: readiness.ready,
+        hint: readiness.hint,
+        probe,
+      };
     }),
 
   byProfileKey: workspaceProcedure
