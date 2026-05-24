@@ -515,6 +515,8 @@ export default function WorkspaceSettingsPage() {
                 />
               </Field>
 
+              <ModelCredentials canEdit={canEdit} />
+
               <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/40 px-3 py-2">
                 <div className="min-w-0">
                   <div className="text-sm font-medium">Coach agent</div>
@@ -647,3 +649,162 @@ function Field({
   );
 }
 
+
+/**
+ * Per-workspace chat-model credentials (DB-backed, key encrypted). Lets the
+ * Streaming (Completions) engine and Forge's internal AI features reach a
+ * model with NO environment variables. Keys are write-only — the server
+ * returns `hasKey`, never the secret.
+ */
+const CRED_PROVIDERS: Array<{ id: "openai" | "anthropic" | "custom"; label: string; hint: string; needsBase?: boolean }> = [
+  { id: "openai", label: "OpenAI", hint: "Direct OpenAI API key (sk-…). Optional base URL for OpenRouter / LM Studio." },
+  { id: "anthropic", label: "Anthropic", hint: "Anthropic API key — used via the OpenAI-compatible endpoint." },
+  { id: "custom", label: "Custom (OpenAI-compatible)", hint: "Any OpenAI-compatible endpoint (vLLM, OpenRouter, …). Base URL required.", needsBase: true },
+];
+
+function ModelCredentials({ canEdit }: { canEdit: boolean }) {
+  const utils = trpc.useUtils();
+  const { data: creds } = trpc.ai.credentials.useQuery(undefined, { enabled: canEdit });
+  const setM = trpc.ai.setCredential.useMutation({
+    onSuccess: () => {
+      void utils.ai.credentials.invalidate();
+      void utils.ai.status.invalidate();
+      toast.success("Model credential saved.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const rmM = trpc.ai.removeCredential.useMutation({
+    onSuccess: () => {
+      void utils.ai.credentials.invalidate();
+      void utils.ai.status.invalidate();
+      toast.success("Credential removed.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (!canEdit) return null;
+
+  return (
+    <div className="space-y-2 rounded-md border border-border/60 bg-background/40 p-3">
+      <div>
+        <div className="text-sm font-medium">Model credentials</div>
+        <div className="text-xs text-muted-foreground">
+          Store a chat-model key per provider so the Streaming engine and AI
+          features work without environment variables. Keys are encrypted at
+          rest and never shown again. A stored key overrides any env var.
+        </div>
+      </div>
+      <div className="space-y-2">
+        {CRED_PROVIDERS.map((p) => {
+          const existing = creds?.find((c) => c.providerId === p.id);
+          return (
+            <CredentialRow
+              key={p.id}
+              meta={p}
+              existing={existing}
+              busy={setM.isPending || rmM.isPending}
+              onSave={(vals) => setM.mutate({ providerId: p.id, ...vals })}
+              onRemove={() => rmM.mutate({ providerId: p.id })}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CredentialRow({
+  meta,
+  existing,
+  busy,
+  onSave,
+  onRemove,
+}: {
+  meta: { id: string; label: string; hint: string; needsBase?: boolean };
+  existing?: { hasKey: boolean; baseUrl: string | null; defaultModel: string | null; enabled: boolean };
+  busy: boolean;
+  onSave: (vals: { apiKey?: string; baseUrl?: string; defaultModel?: string; enabled?: boolean }) => void;
+  onRemove: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(existing?.baseUrl ?? "");
+  const [model, setModel] = useState(existing?.defaultModel ?? "");
+
+  return (
+    <div className="rounded-md border border-border/60 bg-card/40 p-2.5">
+      <div className="flex items-center gap-2">
+        <span
+          className={
+            "h-1.5 w-1.5 rounded-full " +
+            (existing?.hasKey ? "bg-emerald-500" : "bg-muted-foreground/40")
+          }
+          title={existing?.hasKey ? "Key configured" : "No key stored"}
+        />
+        <span className="text-sm font-medium text-foreground">{meta.label}</span>
+        {existing?.hasKey && (
+          <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0 text-[0.5625rem] uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+            configured
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="ml-auto text-[0.6875rem] text-muted-foreground hover:text-foreground"
+        >
+          {open ? "Close" : existing?.hasKey ? "Edit" : "Add key"}
+        </button>
+      </div>
+      {!open && <div className="mt-1 text-[0.6875rem] text-muted-foreground">{meta.hint}</div>}
+      {open && (
+        <div className="mt-2 space-y-2">
+          <Input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={existing?.hasKey ? "•••••••• (blank keeps current)" : "API key"}
+            className="font-mono"
+          />
+          {meta.needsBase && (
+            <Input
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="Base URL (https://…/v1)"
+              className="font-mono"
+            />
+          )}
+          <Input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="Default model (optional)"
+            className="font-mono"
+          />
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ember"
+              disabled={busy}
+              onClick={() => {
+                onSave({
+                  apiKey: apiKey.trim() || undefined,
+                  baseUrl: meta.needsBase ? baseUrl.trim() : undefined,
+                  defaultModel: model.trim(),
+                  enabled: true,
+                });
+                setApiKey("");
+                setOpen(false);
+              }}
+            >
+              Save
+            </Button>
+            {existing && (
+              <Button size="sm" variant="ghost" disabled={busy} onClick={onRemove}>
+                Remove
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

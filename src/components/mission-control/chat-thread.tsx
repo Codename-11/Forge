@@ -2101,6 +2101,14 @@ export function ChatThreadView({
               </p>
               {workspace && (
                 <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  {readiness.reason === "no-model" && (
+                    <Link
+                      href={`/w/${workspace.slug}/settings/workspace`}
+                      className="inline-flex items-center gap-1 rounded border border-ember/40 bg-ember/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-ember transition-colors hover:bg-ember/20"
+                    >
+                      <Settings2 className="h-2.5 w-2.5" /> Configure model
+                    </Link>
+                  )}
                   <Link
                     href={`/w/${workspace.slug}/settings/agents`}
                     className="inline-flex items-center gap-1 rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-foreground/90 transition-colors hover:border-ember/40 hover:text-foreground"

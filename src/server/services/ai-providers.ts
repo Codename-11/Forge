@@ -1,6 +1,8 @@
 import "server-only";
 import OpenAI from "openai";
+import type { PrismaClient } from "@prisma/client";
 import { logger } from "@/server/logger";
+import { decryptSecret } from "@/server/crypto";
 
 /**
  * AI provider registry. Mirrors Mission-Control's pattern:
@@ -12,8 +14,11 @@ import { logger } from "@/server/logger";
  *
  *   - **Other providers are explicit overrides.** Operators can point a
  *     workspace at OpenAI, Anthropic, or a custom OpenAI-compatible
- *     endpoint (vLLM, OpenRouter, LM Studio…). Provider-specific URLs
- *     and tokens live in env — never in the DB.
+ *     endpoint (vLLM, OpenRouter, LM Studio…). These can be configured two
+ *     ways: per-workspace **`ProviderCredential`** rows (key encrypted via
+ *     `crypto.ts`, managed in Settings → Workspace → AI), which take
+ *     precedence; or environment variables as a fallback. A DB credential
+ *     means the Streaming engine works with no env config at all.
  *
  *   - **The interface is OpenAI's chat-completions shape.** Anthropic's
  *     native `/v1/messages` is reached through their OpenAI-compat
@@ -179,4 +184,101 @@ export function getClient(
     providerId: provider.id,
     supportsImageInput: provider.supportsImageInput,
   };
+}
+
+export type ResolvedProviderClient = {
+  client: OpenAI;
+  defaultModel: string;
+  providerId: ProviderId;
+  supportsImageInput: boolean;
+};
+
+/**
+ * Canonical OpenAI-compatible base URL + headers for a provider when its key
+ * comes from a DB credential (rather than env, which embeds the base in
+ * `resolve()`). `custom` has no canonical base — the credential must carry one.
+ */
+function canonicalBaseFor(
+  id: ProviderId,
+  credBaseUrl: string | null | undefined,
+): { baseURL: string; headers?: Record<string, string> } | null {
+  if (credBaseUrl && credBaseUrl.trim()) {
+    const headers = id === "anthropic" ? { "anthropic-version": "2023-06-01" } : undefined;
+    return { baseURL: credBaseUrl.trim(), headers };
+  }
+  switch (id) {
+    case "openai":
+      return { baseURL: "https://api.openai.com/v1" };
+    case "anthropic":
+      return {
+        baseURL: "https://api.anthropic.com/v1",
+        headers: { "anthropic-version": "2023-06-01" },
+      };
+    case "hermes":
+      return {
+        baseURL:
+          process.env.HERMES_GATEWAY_URL ??
+          `http://127.0.0.1:${process.env.HERMES_GATEWAY_PORT ?? "8642"}/v1`,
+      };
+    case "custom":
+      return null; // custom requires an explicit base URL on the credential
+  }
+}
+
+/**
+ * Resolve a chat client for a workspace+provider, **DB credential first**,
+ * env fallback. Returns null when neither is configured (caller surfaces a
+ * "no chat model configured" notice — never falls back to another platform).
+ */
+export async function resolveWorkspaceProviderClient(
+  db: PrismaClient,
+  workspaceId: string,
+  providerId: string | null | undefined,
+): Promise<ResolvedProviderClient | null> {
+  const provider = getProvider(providerId);
+  const cred = await db.providerCredential.findUnique({
+    where: { workspaceId_providerId: { workspaceId, providerId: provider.id } },
+    select: { apiKeyEnc: true, baseUrl: true, defaultModel: true, enabled: true },
+  });
+  if (cred && cred.enabled && cred.apiKeyEnc) {
+    const base = canonicalBaseFor(provider.id, cred.baseUrl);
+    if (!base) {
+      logger.warn(
+        { provider: provider.id },
+        "ai-providers: custom credential missing base URL",
+      );
+      return getClient(provider.id);
+    }
+    let apiKey: string;
+    try {
+      apiKey = decryptSecret(cred.apiKeyEnc);
+    } catch (err) {
+      logger.warn({ err, provider: provider.id }, "ai-providers: credential decrypt failed");
+      return getClient(provider.id);
+    }
+    return {
+      client: new OpenAI({ baseURL: base.baseURL, apiKey, defaultHeaders: base.headers }),
+      defaultModel: cred.defaultModel || provider.defaultModel,
+      providerId: provider.id,
+      supportsImageInput: provider.supportsImageInput,
+    };
+  }
+  return getClient(provider.id);
+}
+
+/**
+ * The set of providerIds a workspace can serve chat with — DB credentials
+ * (enabled + key) unioned with env-available providers. Used by chat-readiness
+ * to decide if a Completions turn will reach a model. One query, sync predicate.
+ */
+export async function workspaceChatProviderAvailability(
+  db: PrismaClient,
+  workspaceId: string,
+): Promise<(providerId: string) => boolean> {
+  const creds = await db.providerCredential.findMany({
+    where: { workspaceId, enabled: true, NOT: { apiKeyEnc: null } },
+    select: { providerId: true },
+  });
+  const dbSet = new Set(creds.map((c) => c.providerId));
+  return (providerId: string) => dbSet.has(getProvider(providerId).id) || isProviderAvailable(providerId);
 }

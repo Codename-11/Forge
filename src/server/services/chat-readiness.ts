@@ -47,6 +47,13 @@ export function resolveChatReadiness(input: {
   runEngine: RunEngine | null;
   runtime?: AgentRuntimeRef;
   providerOverride?: AgentProvider | null;
+  /**
+   * Predicate: is a chat model configured for this providerId? Defaults to the
+   * env-based `isProviderAvailable`; the chat router passes a DB-aware
+   * predicate (`workspaceChatProviderAvailability`) so per-workspace
+   * `ProviderCredential` rows count as configured.
+   */
+  providerAvailable?: (providerId: string) => boolean;
 }): ChatReadiness {
   const provider = input.providerOverride ?? input.provider;
   const engine = resolveRunEngine({
@@ -55,6 +62,7 @@ export function resolveChatReadiness(input: {
     runtime: input.runtime,
   });
   const adapter = getRuntimeAdapter(input.runtime?.adapterKey);
+  const isAvailable = input.providerAvailable ?? isProviderAvailable;
 
   if (engine === "RUNS") {
     const connector = getRunsConnectorForAgent({ provider, runtime: input.runtime });
@@ -76,7 +84,7 @@ export function resolveChatReadiness(input: {
 
   // COMPLETIONS — Forge owns the loop and needs a configured chat model.
   const providerId = providerIdFor(provider);
-  if (isProviderAvailable(providerId)) {
+  if (isAvailable(providerId)) {
     return { ready: true, mode: "completions", provider, reason: "model-configured", hint: "" };
   }
 
