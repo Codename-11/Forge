@@ -6,6 +6,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { presenceAvailability, type AvailabilityModel } from "@/lib/transport-display";
 import { HoverPreviewPortal } from "@/components/ui/hover-preview-portal";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
@@ -145,6 +146,9 @@ type AgentSummary = {
   capabilities: string[];
   lastHeartbeatAt: Date | null;
   maxConcurrent: number;
+  runtimeMode: "PERSISTENT" | "EPHEMERAL";
+  runtimeId: string | null;
+  webhookUrl: string | null;
 };
 
 function AgentCard({ data }: { data: AgentSummary }) {
@@ -152,6 +156,7 @@ function AgentCard({ data }: { data: AgentSummary }) {
   const detailHref = ws ? `/w/${ws.slug}/agents/${data.profileKey}` : null;
   const visibleCaps = data.capabilities.slice(0, 3);
   const extraCaps = data.capabilities.length - visibleCaps.length;
+  const availability = presenceAvailability(data);
 
   return (
     <div className="px-3 py-2.5">
@@ -183,7 +188,7 @@ function AgentCard({ data }: { data: AgentSummary }) {
             @{data.profileKey}
           </div>
         </div>
-        <StatusPill status={data.status} />
+        <StatusPill status={data.status} availability={availability} />
       </div>
 
       {/* Row 2: capabilities */}
@@ -220,6 +225,7 @@ function AgentCard({ data }: { data: AgentSummary }) {
               status={data.status}
               size="sm"
               lastHeartbeatAt={data.lastHeartbeatAt}
+              availability={availability}
             />
             <span>{relativeTime(data.lastHeartbeatAt)}</span>
           </span>
@@ -270,15 +276,30 @@ function UserCard({ data }: { data: UserSummary }) {
   );
 }
 
-function StatusPill({ status }: { status: "ONLINE" | "BUSY" | "OFFLINE" }) {
-  const tone =
-    status === "ONLINE"
+function StatusPill({
+  status,
+  availability,
+}: {
+  status: "ONLINE" | "BUSY" | "OFFLINE";
+  availability?: AvailabilityModel;
+}) {
+  // On-demand agents (managed app server) connect when sent — never a true
+  // "offline" — so the pill reads "On-demand" in sky, matching the dot.
+  const onDemand = availability === "on-demand" && status !== "ONLINE" && status !== "BUSY";
+  const tone = onDemand
+    ? "border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400"
+    : status === "ONLINE"
       ? "border-success/40 bg-success/10 text-success"
       : status === "BUSY"
         ? "border-warning/40 bg-warning/10 text-warning"
         : "border-border bg-subtle/60 text-muted-foreground";
-  const label =
-    status === "ONLINE" ? "Online" : status === "BUSY" ? "Busy" : "Offline";
+  const label = onDemand
+    ? "On-demand"
+    : status === "ONLINE"
+      ? "Online"
+      : status === "BUSY"
+        ? "Busy"
+        : "Offline";
   return (
     <span
       className={cn(
@@ -286,7 +307,7 @@ function StatusPill({ status }: { status: "ONLINE" | "BUSY" | "OFFLINE" }) {
         tone,
       )}
     >
-      <AgentPresenceDot status={status} size="sm" />
+      <AgentPresenceDot status={status} availability={availability} size="sm" />
       {label}
     </span>
   );

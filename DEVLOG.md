@@ -7308,3 +7308,24 @@ agent-hover-preview's inner badge still render raw status — low-value rosters
 without the signal in their queries.
 
 Verified: typecheck + lint clean, 694 unit tests pass.
+
+## 2026-05-24 (cont.) — Presence: last three surfaces
+
+Finished the on-demand presence sweep — no raw-status `AgentPresenceDot`
+left on agent surfaces.
+
+- **Agent timeline** (`agent-timeline.tsx`): the agent chips iterate the
+  page's `agent.list` rows (full fields) → `availability={presenceAvailability(a)}`.
+- **Dashboard agent-activity tile**: `dashboard.agentActivity` select didn't
+  carry the signal. Enriched the select (provider/runtimeMode/runtimeId/
+  webhookUrl) and computed `availability` server-side per row
+  (presenceAvailability is client-safe, importable here); tile consumes
+  `a.availability`.
+- **Agent hover card** (`agent-hover-preview.tsx`): enriched `agent.summary`
+  select with runtimeMode/runtimeId/webhookUrl; `AgentCard` computes
+  availability once; both the row-3 dot and the `StatusPill` are now
+  availability-aware (pill reads "On-demand" in sky instead of "Offline" —
+  row-3 dot only renders when a heartbeat exists, so the pill is the real
+  fix for null-heartbeat on-demand agents).
+
+Verified: typecheck + lint clean, 694 unit tests pass.

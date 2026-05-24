@@ -3,6 +3,7 @@ import { AgentRunStatus } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
+import { presenceAvailability } from "@/lib/transport-display";
 
 /**
  * Dashboard zero-state suggestions. Three buckets — current sprint,
@@ -363,6 +364,11 @@ export const dashboardRouter = router({
         status: true,
         lastHeartbeatAt: true,
         maxConcurrent: true,
+        // Presence inputs so the tile can read on-demand agents correctly.
+        provider: true,
+        runtimeMode: true,
+        runtimeId: true,
+        webhookUrl: true,
       },
     });
 
@@ -440,6 +446,8 @@ export const dashboardRouter = router({
       avatar: a.avatar,
       status: a.status,
       lastHeartbeatAt: a.lastHeartbeatAt,
+      // On-demand agents (managed app server) read "on-demand", not "offline".
+      availability: presenceAvailability(a),
       load: loadByAgent.get(a.id) ?? 0,
       maxConcurrent: a.maxConcurrent,
       stalledRuns: stalledRunsByAgent.get(a.id) ?? 0,
