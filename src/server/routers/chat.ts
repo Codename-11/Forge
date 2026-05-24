@@ -1027,7 +1027,7 @@ export const chatRouter = router({
           provider: true,
           runEngine: true,
           webhookUrl: true,
-          runtime: { select: { adapterKey: true, endpoint: true, secret: true, kind: true } },
+          runtime: { select: { adapterKey: true, endpoint: true, secret: true, kind: true, config: true, disabledAt: true, name: true } },
         },
       });
       if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
@@ -1243,7 +1243,7 @@ export const chatRouter = router({
           agent: {
             select: {
               provider: true,
-              runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+              runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
             },
           },
         },
@@ -1319,7 +1319,7 @@ export const chatRouter = router({
           agent: {
             select: {
               provider: true,
-              runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+              runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
             },
           },
         },

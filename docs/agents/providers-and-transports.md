@@ -22,11 +22,16 @@ the runtime runs the model; the agent answers *as itself*.
 - **Hermes** — persistent daemon hosting multiple profiles (Victor, Mizu)
   behind one gateway (`/v1/runs`). Owns the loop, streams, approvals,
   runtime-level presence. `chatMode: "runs"`.
-- **Codex (app server)** — Codex's long-lived `app server` (WebSocket
-  JSON-RPC), the OpenAI analogue to the Hermes gateway: a managed runtime so a
-  Codex agent is first-class exactly like a Hermes profile. `chatMode: "runs"`,
-  `transport: "app-server"`. Start it with `codex app-server --listen
-  ws://HOST:PORT` and add a runtime pointing at that URL (Settings → Runtimes).
+- **Codex (app server)** — Codex's long-lived `app server` (stdio JSON-RPC),
+  the OpenAI analogue to the Hermes gateway: a managed runtime so a Codex
+  agent is first-class exactly like a Hermes profile. `chatMode: "runs"`,
+  `transport: "app-server"`. Forge dials a WebSocket, so a small **stdio↔ws
+  bridge** sits in front of `codex app-server` (it has no `--listen ws://`
+  flag). The reference deployment runs that bridge in a container
+  (`~/docker/codex-bridge/` on docker-server) so the agent is sandboxed to a
+  scoped workspace; add a runtime pointing at the bridge's `ws(s)://` URL
+  (Settings → Runtimes). **Sandbox + approvals are configurable per runtime**
+  — see [Codex sandboxing](#codex-sandboxing--approvals) below.
 
 **Engine choice (per agent):**
 
@@ -83,6 +88,34 @@ runtimes.
 | 1 — First-class | Hermes, Codex app server | `runs-api`, `app-server` | Always-on | Runs (or Streaming) | Full members: chat + dispatch + orchestration |
 | 2 — Session CLI | Claude Code, Codex CLI, OpenCode | `acp`, `mcp`, `local-daemon` | Session/ephemeral | ACP (as itself) or pull/act | In-session active work |
 | 3 — Basic | Custom bot | `webhook`, `http` | Delivery-derived | None | BYO integrations |
+
+## Codex sandboxing & approvals
+
+A Codex app-server runtime touches a real filesystem, so its blast radius is
+controlled on **two layers**:
+
+1. **The bridge container is the hard boundary.** The reference bridge
+   (`~/docker/codex-bridge/`) mounts only the operator's Codex *auth*
+   (read-only) and a single scoped workspace (`/work`). The host filesystem is
+   unreachable from inside, so even a full-access Codex turn can't read host
+   secrets. This is fixed by the deployment, not a per-runtime setting.
+2. **Per-turn sandbox + approval policy, set in Forge.** Each Codex runtime
+   carries a config the connector sends with every turn (codex-cli's
+   `sandboxPolicy` / `approvalPolicy` / `cwd` overrides). Edit it in
+   **Settings → Runtimes → (the Codex runtime) → Codex sandbox**:
+
+   | Field | Values | Effect |
+   |-------|--------|--------|
+   | **Sandbox mode** | `Full access` · `Workspace-write` · `Read-only` | OS-level file/network scope. Workspace-write limits writes to the workspace root. |
+   | **Approval policy** | `Never` · `On request` · `On failure` · `Untrusted` | Anything but `Never` makes Codex raise an approval before risky commands/edits — Forge renders these as **accept/deny cards in chat**. |
+   | **Workspace root** | a path, e.g. `/work` | The turn's working dir; in workspace-write it's the only writable root. |
+
+   Defaults (no config) = **full access, no prompts** — the original behavior.
+
+**Disable without deleting.** Each runtime has an **Enable/Disable** toggle
+(distinct from Archive, which hides/deletes). A disabled runtime stays
+configured but won't dial: dispatch skips it and chat reports
+`[runtime disabled]`. Use it as a kill-switch for a host-touching runtime.
 
 ## Two kinds of "provider", and the chat-only model backend
 

@@ -87,13 +87,17 @@ async function startNewRuns(): Promise<number> {
             id: true,
             provider: true,
             runEngine: true,
-            runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+            runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
           },
         },
       },
     });
     const agent = issue?.assignedAgent;
     if (!issue || !agent) continue;
+    // Paused runtime: skip dispatch entirely (don't open a run that the
+    // disabled-sentinel connector would only fail). The assignment stays
+    // queued and dispatches once the runtime is re-enabled.
+    if (agent.runtime?.disabledAt) continue;
     if (
       resolveRunEngine({
         runEngine: agent.runEngine,
@@ -161,7 +165,7 @@ async function pollActiveRuns(): Promise<number> {
       agent: {
         select: {
           provider: true,
-          runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+          runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
         },
       },
     },
@@ -419,7 +423,7 @@ async function ensureSubscriptions(): Promise<number> {
       agent: {
         select: {
           provider: true,
-          runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+          runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
         },
       },
     },

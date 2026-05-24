@@ -2,8 +2,41 @@ import "server-only";
 import type { AgentProvider } from "@prisma/client";
 import { defaultAdapterForProvider, getRuntimeAdapter } from "@/server/runtimes/adapters";
 import { hermesRunsConnector, makeHermesRunsConnector } from "./hermes-runs";
-import { makeCodexAppServerConnector } from "./codex-app-server";
-import type { DispatchConnector, RunEngine } from "./types";
+import {
+  makeCodexAppServerConnector,
+  parseCodexRuntimeConfig,
+} from "./codex-app-server";
+import type { DispatchConnector, RunEngine, RunEvent } from "./types";
+
+/**
+ * Sentinel connector for a *disabled* runtime. A disabled runtime is paused,
+ * not deleted: it stays configured and visible, but must not open a session.
+ * Returning this (rather than `null`) keeps the engine resolving to RUNS so
+ * the operator sees a clear `[runtime disabled]` message in chat / on the
+ * `AgentRun` instead of a silent fallback to a different transport.
+ */
+function makeDisabledConnector(label: string): DispatchConnector {
+  const reason = `Runtime "${label}" is disabled — enable it in Settings → Runtimes to dispatch.`;
+  return {
+    kind: "disabled",
+    async startRun() {
+      throw new Error(reason);
+    },
+    async subscribe(_id: string, onEvent: (e: RunEvent) => void) {
+      onEvent({ type: "error", message: reason });
+      onEvent({ type: "completed" });
+    },
+    async getStatus() {
+      return { state: "failed" as const, output: reason };
+    },
+    async approve() {
+      /* no live session to approve against */
+    },
+    async stop() {
+      /* nothing running */
+    },
+  };
+}
 
 /**
  * Resolve the effective chat engine for an agent. Precedence:
@@ -49,6 +82,12 @@ export type AgentRuntimeRef = {
   adapterKey: string | null;
   endpoint: string | null;
   secret: string | null;
+  /** Adapter-specific config (`Runtime.config`); parsed per adapter. */
+  config?: unknown;
+  /** Set when the runtime is paused — see `makeDisabledConnector`. */
+  disabledAt?: Date | null;
+  /** For the disabled message; falls back to the adapter key. */
+  name?: string | null;
 } | null | undefined;
 
 /**
@@ -66,14 +105,27 @@ export function getRunsConnectorForAgent(agent: {
   runtime?: AgentRuntimeRef;
 }): DispatchConnector | null {
   const rt = agent.runtime;
+  // A paused runtime never dials, regardless of adapter — short-circuit to
+  // the sentinel so chat/dispatch report it clearly.
+  if (rt?.disabledAt) {
+    return makeDisabledConnector(rt.name || rt.adapterKey || "runtime");
+  }
   if (rt && rt.endpoint) {
     if (rt.adapterKey === "hermes") {
       return makeHermesRunsConnector({ baseUrl: rt.endpoint, token: rt.secret });
     }
     if (rt.adapterKey === "codex-app-server") {
       // Codex app server (WebSocket JSON-RPC). Only resolvable when the
-      // runtime carries a concrete ws(s):// endpoint.
-      return makeCodexAppServerConnector({ baseUrl: rt.endpoint, token: rt.secret });
+      // runtime carries a concrete ws(s):// endpoint. `config` drives the
+      // per-turn sandbox / approval / cwd overrides.
+      const codex = parseCodexRuntimeConfig(rt.config);
+      return makeCodexAppServerConnector({
+        baseUrl: rt.endpoint,
+        token: rt.secret,
+        sandboxMode: codex.sandboxMode,
+        approvalPolicy: codex.approvalPolicy,
+        workspaceRoot: codex.workspaceRoot,
+      });
     }
   }
   return getRunsConnector(agent.provider);

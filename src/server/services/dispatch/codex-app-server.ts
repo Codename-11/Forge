@@ -159,12 +159,97 @@ export function mapCodexUsage(
   return { tokensIn: inTok, tokensOut: outTok };
 }
 
+/** Operator-chosen sandbox tier for a Codex run. Maps to `SandboxPolicy`. */
+export type CodexSandboxMode = "danger-full-access" | "workspace-write" | "read-only";
+/** Codex approval gating. Subset of codex's `AskForApproval` we expose. */
+export type CodexApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
+
+export const CODEX_SANDBOX_MODES: CodexSandboxMode[] = [
+  "danger-full-access",
+  "workspace-write",
+  "read-only",
+];
+export const CODEX_APPROVAL_POLICIES: CodexApprovalPolicy[] = [
+  "never",
+  "on-request",
+  "on-failure",
+  "untrusted",
+];
+
+export interface CodexRuntimeConfig {
+  sandboxMode?: CodexSandboxMode;
+  approvalPolicy?: CodexApprovalPolicy;
+  workspaceRoot?: string;
+}
+
+/**
+ * Defensively read `Runtime.config` (untyped Prisma `Json`) into the codex
+ * policy knobs. Unknown / malformed values are dropped so the connector
+ * falls back to its safe defaults (full access, no prompts) — never throws.
+ */
+export function parseCodexRuntimeConfig(config: unknown): CodexRuntimeConfig {
+  if (!config || typeof config !== "object") return {};
+  const c = config as Record<string, unknown>;
+  const out: CodexRuntimeConfig = {};
+  if (typeof c.sandboxMode === "string" && CODEX_SANDBOX_MODES.includes(c.sandboxMode as CodexSandboxMode))
+    out.sandboxMode = c.sandboxMode as CodexSandboxMode;
+  if (
+    typeof c.approvalPolicy === "string" &&
+    CODEX_APPROVAL_POLICIES.includes(c.approvalPolicy as CodexApprovalPolicy)
+  )
+    out.approvalPolicy = c.approvalPolicy as CodexApprovalPolicy;
+  if (typeof c.workspaceRoot === "string" && c.workspaceRoot.trim())
+    out.workspaceRoot = c.workspaceRoot.trim();
+  return out;
+}
+
+/**
+ * Translate the operator-facing sandbox tier into codex's per-turn
+ * `SandboxPolicy` (verified against codex-cli 0.133 `SandboxPolicy`). For
+ * `workspace-write` the writable root is the run's working dir (`cwd`), so a
+ * sandboxed Codex can only modify the scoped workspace the bridge mounts.
+ * Network stays off in the sandboxed tiers — escalation routes through the
+ * approval policy, surfacing as approval cards in Forge.
+ */
+function toSandboxPolicy(
+  mode: CodexSandboxMode,
+  cwd: string | undefined,
+): Record<string, unknown> {
+  switch (mode) {
+    case "read-only":
+      return { type: "readOnly", networkAccess: false };
+    case "workspace-write":
+      return {
+        type: "workspaceWrite",
+        writableRoots: cwd ? [cwd] : [],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      };
+    case "danger-full-access":
+    default:
+      return { type: "dangerFullAccess" };
+  }
+}
+
 export function makeCodexAppServerConnector(opts: {
   baseUrl: string | null;
   token?: string | null;
+  /**
+   * Per-runtime policy from `Runtime.config`. Drives per-turn overrides sent
+   * in `turn/start`. Omitted/partial = today's behavior (full access, no
+   * prompts) so existing Codex runtimes are unchanged.
+   */
+  sandboxMode?: CodexSandboxMode | null;
+  approvalPolicy?: CodexApprovalPolicy | null;
+  /** Working directory + writable root for the run (e.g. the bridge's /work). */
+  workspaceRoot?: string | null;
 }): DispatchConnector | null {
   const url = opts.baseUrl?.trim();
   if (!url) return null;
+  const sandboxMode = opts.sandboxMode ?? "danger-full-access";
+  const approvalPolicy = opts.approvalPolicy ?? "never";
+  const workspaceRoot = opts.workspaceRoot?.trim() || undefined;
 
   const runs = new Map<string, PendingRun>();
   let nextId = 1;
@@ -368,10 +453,16 @@ export function makeCodexAppServerConnector(opts: {
         turnInput.push(textBlock(`# Conversation so far\n${transcript}`));
       }
       turnInput.push(textBlock(input.message));
-      const turnRes = (await request(run, "turn/start", {
-        threadId,
-        input: turnInput,
-      })) as { turn?: { id?: string } };
+      // Per-turn policy overrides (codex-cli 0.133 TurnStartParams accepts
+      // cwd / approvalPolicy / sandboxPolicy and applies them to this turn and
+      // subsequent turns on the thread). Defaults reproduce today's behavior.
+      const turnParams: Record<string, unknown> = { threadId, input: turnInput };
+      if (workspaceRoot) turnParams.cwd = workspaceRoot;
+      turnParams.approvalPolicy = approvalPolicy;
+      turnParams.sandboxPolicy = toSandboxPolicy(sandboxMode, workspaceRoot);
+      const turnRes = (await request(run, "turn/start", turnParams)) as {
+        turn?: { id?: string };
+      };
       const turnId = turnRes.turn?.id ?? "";
       run.turnId = turnId;
 

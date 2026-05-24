@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
           webhookUrl: true,
           templateMarkdown: true,
           capabilities: true,
-          runtime: { select: { adapterKey: true, endpoint: true, secret: true, kind: true } },
+          runtime: { select: { adapterKey: true, endpoint: true, secret: true, kind: true, config: true, disabledAt: true, name: true } },
         },
       },
     },

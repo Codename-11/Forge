@@ -432,7 +432,7 @@ export async function recordChange(
             webhookUrl: true,
             provider: true,
             runEngine: true,
-            runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+            runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
           },
         },
       },

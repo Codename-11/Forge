@@ -119,6 +119,8 @@ export default function RuntimesPage() {
     name: string;
     endpoint: string;
     hasSecret: boolean;
+    adapterKey: string | null;
+    config: unknown;
   } | null>(null);
 
   const { data: adapters } = trpc.runtime.adapters.useQuery();
@@ -162,6 +164,14 @@ export default function RuntimesPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const setEnabled = trpc.runtime.setEnabled.useMutation({
+    onSuccess: (rt) => {
+      toast.success(rt.disabledAt ? "Runtime disabled." : "Runtime enabled.");
+      invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const rows = runtimes ?? [];
 
   return (
@@ -197,12 +207,13 @@ export default function RuntimesPage() {
               {rows.map((rt) => {
                 const KindIcon = KIND_ICON[rt.kind];
                 const isArchived = Boolean(rt.archivedAt);
+                const isDisabled = Boolean(rt.disabledAt);
                 return (
                   <li
                     key={rt.id}
                     className={cn(
                       "flex flex-wrap items-start gap-3 px-4 py-3",
-                      isArchived && "opacity-60",
+                      (isArchived || isDisabled) && "opacity-60",
                     )}
                   >
                     <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-subtle/50 text-foreground/80">
@@ -232,6 +243,14 @@ export default function RuntimesPage() {
                             title="Archived — hidden from active list, heartbeats rejected"
                           >
                             archived
+                          </span>
+                        )}
+                        {isDisabled && !isArchived && (
+                          <span
+                            className="rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-amber-700 dark:text-amber-400"
+                            title="Disabled — stays configured but won't dial; dispatch skips it and chat reports it disabled"
+                          >
+                            disabled
                           </span>
                         )}
                         {rt.providersAvailable.length > 0 && (
@@ -293,11 +312,30 @@ export default function RuntimesPage() {
                             name: rt.name,
                             endpoint: rt.endpoint ?? "",
                             hasSecret: rt.hasSecret,
+                            adapterKey: rt.adapterKey,
+                            config: rt.config,
                           })
                         }
                       >
                         Edit
                       </Button>
+                      {!isArchived && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            setEnabled.mutate({ id: rt.id, enabled: isDisabled })
+                          }
+                          disabled={setEnabled.isPending}
+                          title={
+                            isDisabled
+                              ? "Resume — let this runtime dial again"
+                              : "Pause — stop this runtime dialing without deleting it"
+                          }
+                        >
+                          {isDisabled ? "Enable" : "Disable"}
+                        </Button>
+                      )}
                       {isArchived ? (
                         <Button
                           size="sm"
@@ -559,6 +597,7 @@ function CreateRuntimeModal({
     name: string;
     endpoint?: string;
     secret?: string;
+    config?: Record<string, unknown>;
   }) => Promise<void>;
   pending: boolean;
 }) {
@@ -566,6 +605,7 @@ function CreateRuntimeModal({
   const [name, setName] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [secret, setSecret] = useState("");
+  const [codex, setCodex] = useState<CodexPolicy>(DEFAULT_CODEX_POLICY);
 
   useEffect(() => {
     if (open) {
@@ -574,10 +614,12 @@ function CreateRuntimeModal({
       setName("");
       setEndpoint("");
       setSecret("");
+      setCodex(DEFAULT_CODEX_POLICY);
     }
   }, [open, adapters]);
 
   const adapter = adapters.find((a) => a.key === adapterKey);
+  const isCodex = adapterKey === "codex-app-server";
 
   return (
     <QuickForm
@@ -597,6 +639,7 @@ function CreateRuntimeModal({
             name: name.trim(),
             endpoint: endpoint.trim() || undefined,
             secret: secret.trim() || undefined,
+            config: isCodex ? codexPolicyToConfig(codex) : undefined,
           });
         } catch (err) {
           return { error: err instanceof Error ? err.message : "Create failed." };
@@ -688,6 +731,7 @@ function CreateRuntimeModal({
             className="font-mono"
           />
         </label>
+        {isCodex && <CodexPolicyFields value={codex} onChange={setCodex} />}
       </div>
     </QuickForm>
   );
@@ -699,20 +743,35 @@ function EditRuntimeModal({
   onSubmit,
   pending,
 }: {
-  target: { id: string; name: string; endpoint: string; hasSecret: boolean } | null;
+  target: {
+    id: string;
+    name: string;
+    endpoint: string;
+    hasSecret: boolean;
+    adapterKey: string | null;
+    config: unknown;
+  } | null;
   onCancel: () => void;
-  onSubmit: (vals: { name: string; endpoint: string; secret?: string }) => Promise<void>;
+  onSubmit: (vals: {
+    name: string;
+    endpoint: string;
+    secret?: string;
+    config?: Record<string, unknown>;
+  }) => Promise<void>;
   pending: boolean;
 }) {
   const [name, setName] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [secret, setSecret] = useState("");
+  const [codex, setCodex] = useState<CodexPolicy>(DEFAULT_CODEX_POLICY);
+  const isCodex = target?.adapterKey === "codex-app-server";
 
   useEffect(() => {
     if (target) {
       setName(target.name);
       setEndpoint(target.endpoint);
       setSecret("");
+      setCodex(codexPolicyFromConfig(target.config));
     }
   }, [target]);
 
@@ -733,6 +792,7 @@ function EditRuntimeModal({
             name: name.trim(),
             endpoint: endpoint.trim(),
             secret: secret.trim() || undefined,
+            config: isCodex ? codexPolicyToConfig(codex) : undefined,
           });
         } catch (err) {
           return { error: err instanceof Error ? err.message : "Save failed." };
@@ -774,7 +834,137 @@ function EditRuntimeModal({
             className="font-mono"
           />
         </label>
+        {isCodex && <CodexPolicyFields value={codex} onChange={setCodex} />}
       </div>
     </QuickForm>
+  );
+}
+
+/** Operator-facing Codex sandbox / approval policy (mirrors the connector). */
+type CodexPolicy = {
+  sandboxMode: "danger-full-access" | "workspace-write" | "read-only";
+  approvalPolicy: "never" | "on-request" | "on-failure" | "untrusted";
+  workspaceRoot: string;
+};
+
+const DEFAULT_CODEX_POLICY: CodexPolicy = {
+  sandboxMode: "danger-full-access",
+  approvalPolicy: "never",
+  workspaceRoot: "",
+};
+
+const SANDBOX_MODE_OPTIONS: Array<{ value: CodexPolicy["sandboxMode"]; label: string }> = [
+  { value: "danger-full-access", label: "Full access (no sandbox)" },
+  { value: "workspace-write", label: "Workspace-write (scoped to root)" },
+  { value: "read-only", label: "Read-only" },
+];
+
+const APPROVAL_POLICY_OPTIONS: Array<{ value: CodexPolicy["approvalPolicy"]; label: string }> = [
+  { value: "never", label: "Never ask (auto-run)" },
+  { value: "on-request", label: "On request (escalations prompt)" },
+  { value: "on-failure", label: "On failure (prompt if sandbox blocks)" },
+  { value: "untrusted", label: "Untrusted (prompt for anything risky)" },
+];
+
+function codexPolicyFromConfig(config: unknown): CodexPolicy {
+  const c = (config && typeof config === "object" ? config : {}) as Record<string, unknown>;
+  return {
+    sandboxMode:
+      (SANDBOX_MODE_OPTIONS.find((o) => o.value === c.sandboxMode)?.value as
+        | CodexPolicy["sandboxMode"]
+        | undefined) ?? DEFAULT_CODEX_POLICY.sandboxMode,
+    approvalPolicy:
+      (APPROVAL_POLICY_OPTIONS.find((o) => o.value === c.approvalPolicy)?.value as
+        | CodexPolicy["approvalPolicy"]
+        | undefined) ?? DEFAULT_CODEX_POLICY.approvalPolicy,
+    workspaceRoot: typeof c.workspaceRoot === "string" ? c.workspaceRoot : "",
+  };
+}
+
+function codexPolicyToConfig(p: CodexPolicy): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    sandboxMode: p.sandboxMode,
+    approvalPolicy: p.approvalPolicy,
+  };
+  if (p.workspaceRoot.trim()) out.workspaceRoot = p.workspaceRoot.trim();
+  return out;
+}
+
+/**
+ * Codex app-server sandbox + approval controls. The connector sends these as
+ * per-turn `sandboxPolicy` / `approvalPolicy` / `cwd` overrides — so flipping
+ * them here re-scopes the agent without restarting the bridge. The container
+ * the bridge runs in is the outer jail regardless of these values.
+ */
+function CodexPolicyFields({
+  value,
+  onChange,
+}: {
+  value: CodexPolicy;
+  onChange: (v: CodexPolicy) => void;
+}) {
+  const selectClass =
+    "focus-ring h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm";
+  return (
+    <div className="space-y-3 rounded-lg border border-border bg-subtle/20 p-3">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[0.75rem] font-medium text-foreground">Codex sandbox</span>
+        <span className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+          per-turn
+        </span>
+      </div>
+      <label className="block">
+        <span className={fieldLabel}>Sandbox mode</span>
+        <select
+          className={selectClass}
+          value={value.sandboxMode}
+          onChange={(e) =>
+            onChange({ ...value, sandboxMode: e.target.value as CodexPolicy["sandboxMode"] })
+          }
+        >
+          {SANDBOX_MODE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block">
+        <span className={fieldLabel}>Approval policy</span>
+        <select
+          className={selectClass}
+          value={value.approvalPolicy}
+          onChange={(e) =>
+            onChange({ ...value, approvalPolicy: e.target.value as CodexPolicy["approvalPolicy"] })
+          }
+        >
+          {APPROVAL_POLICY_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <span className="mt-1 block text-[0.625rem] text-muted-foreground/70">
+          Anything but “never” surfaces command/file approvals as cards in chat for you to
+          accept or deny.
+        </span>
+      </label>
+      <label className="block">
+        <span className={fieldLabel}>
+          Workspace root{" "}
+          <span className="normal-case text-muted-foreground/70">(writable dir, e.g. /work)</span>
+        </span>
+        <Input
+          value={value.workspaceRoot}
+          onChange={(e) => onChange({ ...value, workspaceRoot: e.target.value })}
+          placeholder="/work"
+          className="font-mono"
+        />
+        <span className="mt-1 block text-[0.625rem] text-muted-foreground/70">
+          Working directory for each turn. In workspace-write mode this is the only writable
+          root.
+        </span>
+      </label>
+    </div>
   );
 }
