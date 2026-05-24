@@ -58,6 +58,12 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   on-demand agent always is), so Codex/app-server agents are eligible for
   round-robin / capability / priority assignment. Disabled runtimes are
   skipped up front.
+- **A Codex app-server agent can now be set to persistent.** Settings →
+  Agents previously forced Codex (and Claude) to single-session and blocked
+  the persistent option — so a Codex agent stayed single-session and read
+  "offline" everywhere despite the on-demand work above. You can now choose
+  **Persistent** for a Codex agent attached to the Codex app-server runtime,
+  and it shows **"on-demand."**
 
 ## [2026-05-23] — Sign-in, SSO & agent platforms
 
