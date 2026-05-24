@@ -7149,3 +7149,26 @@ tests + 5 new contract tests), typecheck/lint clean, 681 unit tests.
 
 All inert-in-prod: the mock connector + seed fixtures only activate under
 `FORGE_E2E=1`, which prod compose never sets.
+
+## 2026-05-24 (cont.) — Agent detail page: transport-aware presence + Connection card
+
+Answered "why does Codex app server show offline in chat" + "does the detail
+page show the new context". Root cause: `agent.status` ONLINE is set only by
+`agents.heartbeat` / `recordAgentReachable` (webhook delivery); a runs/app-server
+agent does neither, so it's stuck OFFLINE though chat is request-time reachable.
+
+- New `agentAvailabilityModel` (transport-display.ts): `heartbeat` (Hermes) vs
+  **`on-demand`** (managed app server / completions / dispatch — no heartbeat,
+  connects on send) vs `session`. Chat header + detail header + dispatch-
+  eligibility now render "on-demand · via <runtime>" instead of "offline" for
+  those agents, and skip the heartbeat composer banner / stale-heartbeat nag.
+- `agent.byProfileKey` now returns resolved `transport` + `availability` +
+  runtime `adapterKey`/`disabledAt` (no secret).
+- Detail page: `RuntimeCard` → `ConnectionCard` (TransportChip + adapter label
+  instead of raw "remote webhook" + runtime-disabled badge + Verify button);
+  webhook-health card hidden for no-webhook agents; dispatch-eligibility
+  heartbeat warning suppressed + "on-demand" status for on-demand agents.
+
+Verified: typecheck + lint clean, 688 unit tests (+availability model +
+byProfileKey transport), deployed (`/signin` 200, stamped 286dba1). CHANGELOG
+entry added (user-facing presence fix).
