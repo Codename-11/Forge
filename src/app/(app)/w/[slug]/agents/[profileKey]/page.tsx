@@ -28,6 +28,7 @@ import { Badge, Card, EmptyState, Section, SkeletonList } from "@/components/ui"
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import AgentTimeline from "@/components/agents/agent-timeline";
 import { AgentContextCard } from "@/components/agents/agent-context-card";
+import { TransportChip } from "@/components/agents/transport-chip";
 import { RoleChip } from "@/components/crews/role-chip";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -115,14 +116,23 @@ export default function AgentDetailPage() {
                 @{agent.profileKey}
               </span>
             )}
-            {agent && (
-              <AgentPresenceDot
-                status={agent.status}
-                size="md"
-                pulse
-                lastHeartbeatAt={agent.lastHeartbeatAt}
-              />
-            )}
+            {agent &&
+              (agent.availability === "on-demand" ? (
+                <span
+                  className="inline-flex items-center gap-1 text-[0.6875rem] text-sky-600 dark:text-sky-400"
+                  title="Reached on demand — connects when work is sent. Not heartbeat-tracked."
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+                  on-demand
+                </span>
+              ) : (
+                <AgentPresenceDot
+                  status={agent.status}
+                  size="md"
+                  pulse
+                  lastHeartbeatAt={agent.lastHeartbeatAt}
+                />
+              ))}
           </span>
         }
         subtitle={agent?.description ?? "Agent detail."}
@@ -157,8 +167,13 @@ export default function AgentDetailPage() {
                 <div className="space-y-4">
                   <AgentContextCard agentId={agent.id} />
                   <CrewsAndWorkSection agentId={agent.id} slug={ws.slug} />
-                  <RuntimeCard agent={agent} />
-                  <WebhookHealthCard agentId={agent.id} focus={healthFocus} />
+                  <ConnectionCard agent={agent} />
+                  {/* Webhook trail only matters for webhook-dispatched agents.
+                      Hide it for an on-demand managed-runtime agent (Codex app
+                      server etc.) with no webhook, where it's always "N/A". */}
+                  {(agent.webhookUrl || healthFocus === "webhook" || healthFocus === "noack") && (
+                    <WebhookHealthCard agentId={agent.id} focus={healthFocus} />
+                  )}
                   <DispatchEligibilityCard agent={agent} focus={healthFocus} />
                 </div>
               </div>
@@ -1115,74 +1130,138 @@ function CrewsAndWorkSection({
   );
 }
 
-function RuntimeCard({ agent }: { agent: AgentRow }) {
+const ADAPTER_LABEL: Record<string, string> = {
+  hermes: "Hermes gateway",
+  "codex-app-server": "Codex app server",
+  "local-daemon": "Local daemon",
+  "custom-http": "Custom webhook",
+  "claude-code": "Claude Code",
+  "claude-desktop": "Claude Desktop",
+  codex: "Codex CLI",
+  acp: "ACP session",
+};
+
+function ConnectionCard({ agent }: { agent: AgentRow }) {
   const ws = useWorkspace();
   const runtime = agent.runtime;
-  if (!runtime) return null;
+  const transport = agent.transport;
+  const [verifyResult, setVerifyResult] = useState<{
+    ready: boolean;
+    transportLabel: string;
+    probe: { attempted: boolean; reachable: boolean | null; detail: string };
+  } | null>(null);
+  const verify = trpc.agent.verifyConnection.useMutation({
+    onSuccess: (r) => {
+      setVerifyResult(r);
+      if (r.probe.attempted && r.probe.reachable === false) {
+        toast.error(`Runtime unreachable: ${r.probe.detail}`);
+      } else if (r.ready) {
+        toast.success(`Chat ready · ${r.transportLabel}`);
+      } else {
+        toast.message("Not chat-ready — see details.");
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const KindIcon =
-    runtime.kind === "LOCAL_DAEMON"
+    runtime?.kind === "LOCAL_DAEMON"
       ? HardDrive
-      : runtime.kind === "REMOTE_HTTP"
+      : runtime?.kind === "REMOTE_HTTP"
         ? Globe
-        : runtime.kind === "CLOUD"
+        : runtime?.kind === "CLOUD"
           ? Cloud
           : Server;
-  const kindLabel =
-    runtime.kind === "LOCAL_DAEMON"
-      ? "local daemon"
-      : runtime.kind === "REMOTE_HTTP"
-        ? "remote webhook"
-        : "cloud";
+  const adapterLabel = runtime?.adapterKey
+    ? (ADAPTER_LABEL[runtime.adapterKey] ?? runtime.adapterKey)
+    : null;
+  const disabled = Boolean(runtime?.disabledAt);
 
   return (
     <Section
       title={
         <span className="flex items-center gap-2">
           <Server className="h-3.5 w-3.5 text-muted-foreground" />
-          Runtime
+          Connection
         </span>
       }
     >
       <Card className="space-y-2 p-3 text-[0.75rem]">
-        <Link
-          href={`/w/${ws.slug}/settings/runtimes/${runtime.id}`}
-          className="focus-ring flex items-start gap-2 rounded-md hover:text-ember"
-        >
-          <KindIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium text-foreground">
-              {runtime.name}
+        {/* How chat is served — engine + runtime/transport. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {transport && <TransportChip mode={transport.mode} label={transport.label} showNone />}
+          {disabled && (
+            <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wider text-amber-700 dark:text-amber-300">
+              runtime disabled
             </span>
-            <span className="block text-meta text-muted-foreground">
-              {kindLabel}
-            </span>
-          </span>
-          <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
-        </Link>
-        <div className="flex items-baseline justify-between gap-3 text-meta text-muted-foreground">
-          <span>Heartbeat</span>
-          <span className="text-right text-foreground/80">
-            {runtime.heartbeatAt
-              ? `${relativeTime(runtime.heartbeatAt)} ago`
-              : "—"}
-          </span>
+          )}
         </div>
-        {runtime.providersAvailable.length > 0 && (
-          <div className="flex flex-wrap items-baseline justify-between gap-2 text-meta text-muted-foreground">
-            <span>Providers</span>
-            <span className="flex flex-wrap justify-end gap-1">
-              {runtime.providersAvailable.map((p) => (
-                <span
-                  key={p}
-                  className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
-                >
-                  {p}
-                </span>
-              ))}
+
+        {runtime ? (
+          <Link
+            href={`/w/${ws.slug}/settings/runtimes/${runtime.id}`}
+            className="focus-ring flex items-start gap-2 rounded-md hover:text-ember"
+          >
+            <KindIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium text-foreground">
+                {runtime.name}
+              </span>
+              <span className="block text-meta text-muted-foreground">
+                {adapterLabel ?? runtime.kind.toLowerCase().replace("_", " ")}
+              </span>
+            </span>
+            <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+          </Link>
+        ) : (
+          <div className="text-meta text-muted-foreground">
+            No managed runtime attached — {transport?.mode === "completions"
+              ? "chat uses a configured model (Streaming engine)."
+              : transport?.mode === "dispatch"
+                ? "chat is delivered by the agent's daemon/webhook."
+                : "attach a runtime or configure a model to chat."}
+          </div>
+        )}
+
+        {/* Runtime heartbeat only matters for heartbeat-tracked runtimes. */}
+        {runtime && agent.availability === "heartbeat" && (
+          <div className="flex items-baseline justify-between gap-3 text-meta text-muted-foreground">
+            <span>Heartbeat</span>
+            <span className="text-right text-foreground/80">
+              {runtime.heartbeatAt ? `${relativeTime(runtime.heartbeatAt)} ago` : "—"}
             </span>
           </div>
         )}
+
+        {/* Verify connection — readiness + (runs) endpoint probe. */}
+        <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 text-[0.6875rem]"
+            disabled={verify.isPending}
+            onClick={() => verify.mutate({ id: agent.id })}
+          >
+            {verify.isPending ? "Verifying…" : "Verify connection"}
+          </Button>
+          {verifyResult && (
+            <span
+              className={cn(
+                "text-[0.6875rem]",
+                verifyResult.ready
+                  ? "text-success"
+                  : "text-amber-700 dark:text-amber-300",
+              )}
+              title={verifyResult.probe.detail || undefined}
+            >
+              {verifyResult.ready ? "ready" : "not ready"}
+              {verifyResult.probe.attempted
+                ? ` · ${verifyResult.probe.reachable ? "reachable" : "unreachable"}`
+                : ""}
+            </span>
+          )}
+        </div>
       </Card>
     </Section>
   );
@@ -1200,11 +1279,15 @@ function DispatchEligibilityCard({
   const load = lane?.counts.load ?? 0;
   const cap = agent.maxConcurrent;
   const atCap = cap > 0 && load >= cap;
+  const onDemand = agent.availability === "on-demand";
+  // On-demand agents (managed app server, completions, dispatch) aren't
+  // heartbeat-tracked, so don't nag about a stale/absent heartbeat.
   const shouldExplainHeartbeat =
-    focus === "heartbeat" ||
-    focus === "noack" ||
-    agent.status === "OFFLINE" ||
-    !agent.lastHeartbeatAt;
+    !onDemand &&
+    (focus === "heartbeat" ||
+      focus === "noack" ||
+      agent.status === "OFFLINE" ||
+      !agent.lastHeartbeatAt);
 
   return (
     <Section
@@ -1222,10 +1305,17 @@ function DispatchEligibilityCard({
         )}
       >
         <Row label="Status">
-          <span className="inline-flex items-center gap-1.5">
-            <AgentPresenceDot status={agent.status} size="sm" />
-            <span className="capitalize">{agent.status.toLowerCase()}</span>
-          </span>
+          {onDemand ? (
+            <span className="inline-flex items-center gap-1.5 text-sky-600 dark:text-sky-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+              on-demand
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5">
+              <AgentPresenceDot status={agent.status} size="sm" />
+              <span className="capitalize">{agent.status.toLowerCase()}</span>
+            </span>
+          )}
         </Row>
         <Row label="Load">
           <span

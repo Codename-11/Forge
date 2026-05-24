@@ -31,6 +31,7 @@ import { ChatMarkdown } from "./chat-markdown";
 import type { SlashCommandContext } from "@/lib/chat-slash-commands";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { TransportChip } from "@/components/agents/transport-chip";
+import { agentAvailabilityModel } from "@/lib/transport-display";
 
 /**
  * Active chat thread between the operator and one agent. Polls via
@@ -1817,23 +1818,36 @@ export function ChatThreadView({
   const lastHeartbeatAt = agentFull?.lastHeartbeatAt ?? null;
   const isEphemeral = mode === "EPHEMERAL";
   const status = agent?.status ?? "OFFLINE";
-  const isPersistentOnline = !isEphemeral && status === "ONLINE";
-  const isPersistentBusy = !isEphemeral && status === "BUSY";
-  const isPersistentOffline = !isEphemeral && status === "OFFLINE";
+  // Availability model — distinguishes heartbeat-tracked agents (Hermes) from
+  // on-demand managed runtimes (Codex app server, completions, dispatch) which
+  // connect when you send and shouldn't read as a permanent "offline".
+  const availability = agentAvailabilityModel({
+    runtimeMode: mode,
+    lastHeartbeatAt,
+    transportMode: readiness?.mode ?? "none",
+    runtimeHeartbeats: agentFull?.provider === "HERMES",
+  });
+  const isOnDemand = availability === "on-demand";
+  const isPersistentOnline = !isEphemeral && !isOnDemand && status === "ONLINE";
+  const isPersistentBusy = !isEphemeral && !isOnDemand && status === "BUSY";
+  const isPersistentOffline = !isEphemeral && !isOnDemand && status === "OFFLINE";
 
   // Composer placeholder copy
   let composerPlaceholder = agent ? `Message ${agent.name}…` : "Message agent…";
   if (agent) {
-    if (isPersistentOffline) {
+    if (isOnDemand) {
+      composerPlaceholder = `Message ${agent.name}… (connects on send)`;
+    } else if (isPersistentOffline) {
       composerPlaceholder = `Message ${agent.name}… (offline — will reply when back)`;
     } else if (isEphemeral) {
       composerPlaceholder = `Message ${agent.name}… (async — replies on next session)`;
     }
   }
 
-  // Banner for offline/ephemeral agents
+  // Banner for offline/ephemeral agents (on-demand agents need no banner —
+  // the transport chip + "on-demand" presence already convey it).
   let composerBanner: string | undefined;
-  if (agent) {
+  if (agent && !isOnDemand) {
     if (isPersistentOffline) {
       composerBanner = `${agent.name} is offline. Your message will be queued and delivered on next heartbeat.`;
     } else if (isEphemeral) {
@@ -1958,7 +1972,18 @@ export function ChatThreadView({
 
           {/* Presence indicator */}
           <span className="ml-auto flex items-center gap-1.5">
-            {isEphemeral ? (
+            {isOnDemand ? (
+              // Managed runtime dialed per turn (Codex app server, completions,
+              // dispatch) — reachable on demand, not heartbeat-tracked, so don't
+              // claim "offline". It connects when you send.
+              <span
+                className="flex items-center gap-1 text-[0.625rem] text-sky-600 dark:text-sky-400"
+                title="Reached on demand — connects when you send. Not heartbeat-tracked; a failure surfaces as a connection error."
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+                on-demand
+              </span>
+            ) : isEphemeral ? (
               <span className="text-[0.625rem] text-muted-foreground">
                 {lastHeartbeatAt
                   ? `session · ${relativeTime(lastHeartbeatAt)}`

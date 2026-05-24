@@ -63,3 +63,17 @@ describe("agent.verifyConnection", () => {
     expect(r.probe.attempted).toBe(false);
   });
 });
+
+describe("agent.byProfileKey transport + availability", () => {
+  it("returns resolved transport + availability for the detail page", async () => {
+    const { caller } = await setup();
+    await caller.create({ name: "Detail Bot", profileKey: "detailbot", provider: "CODEX" });
+    const agent = await caller.byProfileKey({ profileKey: "detailbot" });
+    expect(agent).not.toBeNull();
+    expect(agent!.transport).toBeDefined();
+    expect(["runs", "completions", "dispatch", "none"]).toContain(agent!.transport.mode);
+    // CODEX, no runtime, no heartbeat → on-demand (or none if no path) — not a
+    // heartbeat agent.
+    expect(["on-demand", "heartbeat", "session"]).toContain(agent!.availability);
+  });
+});
