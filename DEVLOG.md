@@ -7329,3 +7329,25 @@ left on agent surfaces.
   fix for null-heartbeat on-demand agents).
 
 Verified: typecheck + lint clean, 694 unit tests pass.
+
+## 2026-05-24 (cont.) — Coverage audit: generalize the persistent gate
+
+Audited the full adapter matrix (8 adapters) vs the wizard's runtime-mode
+gate. Found my earlier Codex fix was too narrow: `local-daemon` is a managed,
+PERSISTENT, runtime-heartbeat adapter that serves CLAUDE/CODEX/CUSTOM/HERMES,
+but the gate only allowed persistent on `codex-app-server` (Codex) and blocked
+persistent Claude entirely — so a Claude/Codex agent on the Forge local daemon
+couldn't be persistent.
+
+Generalized: the gate is now provider-agnostic for CLAUDE/CODEX — persistent
+allowed iff a managed-persistent runtime is attached (MANAGED_PERSISTENT_-
+ADAPTER_KEYS broadened to {codex-app-server, local-daemon, hermes}). Enabled
+the Persistent toggle for both, refreshed hints + footer copy. All 8 adapters
+are coherent (defaultRuntimeMode vs presence). Verified: typecheck + lint
+clean, 694 tests.
+
+Known remaining (design choice, not shipped): non-Hermes runtime-heartbeat
+adapters (local-daemon, codex-app-server) always read "on-demand" and don't
+reflect their runtime's actual up/down — availability keys on
+provider==="HERMES" + Agent.lastHeartbeatAt, ignoring the adapter presence
+capability + Runtime.heartbeatAt (which the daemons actually bump).

@@ -71,7 +71,11 @@ type KeyPreset = "agent" | "read" | "full";
 // unlike thin MCP/CLI sessions. Mirrors `managed && transport: "app-server"`
 // in src/server/runtimes/adapters.ts. Keep in sync if a new managed runs
 // runtime ships. (The page can't import the server-only manifest directly.)
-const MANAGED_PERSISTENT_ADAPTER_KEYS = new Set(["codex-app-server"]);
+const MANAGED_PERSISTENT_ADAPTER_KEYS = new Set([
+  "codex-app-server",
+  "local-daemon",
+  "hermes",
+]);
 
 type EditingState = {
   id?: string;
@@ -342,18 +346,18 @@ export default function AgentsPage() {
     }
     // Persistent presence requires a managed runtime that actually hosts the
     // agent (so presence resolves to "on-demand" rather than a misleading
-    // "offline"). Codex gets this from its app-server runtime; Claude has no
-    // managed runs runtime yet. The server itself has no gate — this is UX
-    // guidance, enforced at Review once the runtime attachment is known.
-    if (e.runtimeMode === "PERSISTENT") {
-      if (e.provider === "CLAUDE") {
-        return "Persistent Claude isn't supported yet — there's no managed Claude runtime. Use single-session mode.";
-      }
-      if (e.provider === "CODEX") {
-        const rt = (runtimes ?? []).find((r) => r.id === e.runtimeId);
-        if (!rt || !MANAGED_PERSISTENT_ADAPTER_KEYS.has(rt.adapterKey ?? "")) {
-          return "Persistent Codex needs the Codex app-server runtime attached (Connection step). Attach it, or use single-session mode.";
-        }
+    // "offline"). Claude/Codex have no native always-on transport, so they
+    // need one attached — the Codex app server, or the Forge local daemon.
+    // (Hermes/Custom carry their own delivery path, so they're unrestricted.)
+    // The server has no gate — this is UX guidance, enforced at Review once
+    // the runtime attachment is known.
+    if (
+      e.runtimeMode === "PERSISTENT" &&
+      (e.provider === "CLAUDE" || e.provider === "CODEX")
+    ) {
+      const rt = (runtimes ?? []).find((r) => r.id === e.runtimeId);
+      if (!rt || !MANAGED_PERSISTENT_ADAPTER_KEYS.has(rt.adapterKey ?? "")) {
+        return "Persistent mode needs a managed runtime attached (Connection step) — the Codex app server or the Forge local daemon. Attach one, or use single-session mode.";
       }
     }
     if (!Number.isFinite(e.maxConcurrent) || e.maxConcurrent < 0)
@@ -745,8 +749,8 @@ export default function AgentsPage() {
               {editing?.provider === "HERMES"
                 ? "Hermes supports persistent webhook dispatch plus MCP callbacks."
                 : editing?.provider === "CODEX"
-                  ? "Codex runs single-session over MCP, or persistent via the Codex app-server runtime."
-                  : "Claude runs single-session over MCP today."}
+                  ? "Codex runs single-session over MCP, or persistent via the Codex app server / local daemon."
+                  : "Claude runs single-session over MCP, or persistent via the Forge local daemon."}
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -853,13 +857,10 @@ export default function AgentsPage() {
                       icon={ServerCog}
                       title="Persistent runtime"
                       hint={
-                        editing.provider === "CLAUDE"
-                          ? "No managed Claude runtime yet — use single-session."
-                          : editing.provider === "CODEX"
-                            ? "Attach the Codex app-server runtime (Connection step) — the agent chats as itself, reachable on demand."
-                            : "Best for Hermes or a custom always-on bridge that can receive webhooks."
+                        editing.provider === "CLAUDE" || editing.provider === "CODEX"
+                          ? "Attach a managed runtime (Connection step) — the Codex app server or the Forge local daemon — so the agent is reachable on demand."
+                          : "Best for Hermes or a custom always-on bridge that can receive webhooks."
                       }
-                      disabled={editing.provider === "CLAUDE"}
                       onClick={() => setEditing({ ...editing, runtimeMode: "PERSISTENT" })}
                     />
                   </div>
