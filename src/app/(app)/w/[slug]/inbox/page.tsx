@@ -25,6 +25,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge, Card, EmptyState, Kbd, MOTION, Section, SkeletonList } from "@/components/ui";
 import { Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { presenceAvailability } from "@/lib/transport-display";
 import { BulkBar, type BulkBarAction } from "@/components/bulk-bar";
 import { ProjectChip } from "@/components/project-chip";
 import { RowQuickActions } from "@/components/row-quick-actions";
@@ -958,7 +959,11 @@ function IssueRow({
               {issue.assignedAgent.avatar}
             </span>
           ) : null}
-          <AgentPresenceDot status={issue.assignedAgent.status} size="sm" />
+          <AgentPresenceDot
+            status={issue.assignedAgent.status}
+            size="sm"
+            availability={presenceAvailability(issue.assignedAgent)}
+          />
           <span className="text-id">@{issue.assignedAgent.profileKey}</span>
         </span>
       )}
@@ -1473,7 +1478,7 @@ function AssigneePickerModal({
                 </span>
               )}
             </span>
-            <AgentPresenceDot status={r.status} />
+            <AgentPresenceDot status={r.status} availability={presenceAvailability(r)} />
             <span className="truncate">{r.name}</span>
             <span className="text-id ml-auto text-muted-foreground">
               @{r.profileKey}
@@ -1710,7 +1715,11 @@ function AgentQueueSection({
                     className="inline-flex items-center gap-1"
                     title={`Assigned to ${issue.assignedAgent.name}`}
                   >
-                    <AgentPresenceDot status={issue.assignedAgent.status} size="sm" />
+                    <AgentPresenceDot
+                      status={issue.assignedAgent.status}
+                      size="sm"
+                      availability={presenceAvailability(issue.assignedAgent)}
+                    />
                     <span className="font-mono">@{issue.assignedAgent.profileKey}</span>
                   </span>
                 ) : (
