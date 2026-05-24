@@ -41,6 +41,17 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   header, Mission Control, and the status rail, so you always know where a
   reply comes from. Slash commands adapt to the agent (e.g. Hermes-only
   commands are hidden elsewhere; a new `/runtime` shows the chat path).
+- **Agent detail page** gained a Connection card (transport, runtime
+  adapter, disabled state, and a Verify-connection button); dispatch-only
+  cards (webhook health, heartbeat) are hidden for agents that don't use
+  them, so the page fits the agent.
+
+### Fixed
+
+- **Managed-runtime agents no longer show a false "offline."** An agent
+  reached on demand (Codex app server, a streaming model, or a daemon)
+  now reads **"on-demand"** — it connects when you message it — instead of
+  a permanent offline that only applied to heartbeat agents like Hermes.
 
 ## [2026-05-23] — Sign-in, SSO & agent platforms
 
