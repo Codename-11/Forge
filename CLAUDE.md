@@ -339,6 +339,34 @@ hardcoded — those should stay small regardless of Appearance.
   add bypass).
 - No giant feature commits — DEVLOG each session, then commit.
 
+## Local development
+
+Two `next dev` modes (both HMR):
+- `pnpm dev` (= `scripts/dev-live.sh`) — points at the **deployed**
+  Postgres/Redis/MinIO. Real data, real writes. Default.
+- `pnpm dev:local` (`scripts/dev-local.sh`) — **isolated** stack from
+  `docker/docker-compose.yml` (PG :55432 / Redis :56379 / MinIO :59000).
+  Boots the stack, `migrate deploy`s, seeds an empty DB, runs dev. Sign in
+  `owner@forge.local` / `forge-dev`. Flags `--fresh` (drop+reseed),
+  `--no-seed`.
+
+Data in:
+- `pnpm db:clone-prod` (`scripts/db-clone-prod.sh`) — `pg_dump`s the live
+  container into the local one (full replica; read-only on prod; MinIO
+  bytes NOT copied). Follow with `pnpm dev:local --no-seed`.
+- `prisma/seed.ts` (`pnpm prisma:seed`) — rich, **idempotent** fixtures
+  (forge/FRG workspace, members, statuses, labels, 2 initiatives, 3
+  projects, 2 sprints, victor+mizu agents, ~24 issues w/ assignees/labels/
+  relations, comments). `scripts/seed-agents.ts` still targets the prod
+  AXI workspace and is no longer wired into dev:local.
+
+Data move (per-workspace, portable): `dataPortability` tRPC router
+(`src/server/routers/data-portability.ts`, admin-gated) + Settings →
+Admin → Data export / import (`/w/[slug]/settings/data`). Export = core
+content → JSON; import = additive (upsert config by natural key, issues
+created fresh, relations/comments remapped). Never deletes. User-docs:
+`docs/guide/local-development.md`.
+
 ## Before shipping
 
 1. `pnpm lint && pnpm typecheck && pnpm test`

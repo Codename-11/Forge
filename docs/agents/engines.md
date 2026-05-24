@@ -10,6 +10,20 @@ Runs** (you're talking to *your* agent, with its own memory and tools) —
 and any agent can override it. Flip an agent to **Completions** for a
 stateless, Forge-owned loop.
 
+::: warning Completions needs a configured chat model
+**Completions** calls an OpenAI-compatible endpoint, so it only works when a
+chat model is actually configured for the agent's provider (e.g.
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or a `FORGE_AI_BASE_URL` gateway). A
+CLI/MCP connection like **Codex CLI** or **Claude Code** does *not* answer
+chat from an API key — those reach Forge to read context and take actions
+(pull/act), not to serve a chat turn. To chat with such an agent *as itself*,
+back it with a chat-capable runtime (Hermes, or — planned — a Codex app
+server / ACP session). If neither is configured, chat returns a clear "no
+chat model configured" notice and **does not** fall back to another platform.
+See **[Providers & transports](./providers-and-transports.md)** for the full
+model.
+:::
+
 | | **Completions** | **Runs** (Hermes default) |
 |---|---|---|
 | Underlying API | OpenAI-compat `/v1/chat/completions` | Provider agent-run API (Hermes `/v1/runs`) |

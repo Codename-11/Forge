@@ -5,6 +5,7 @@ import {
   runtimeAdaptersForProvider,
   defaultAdapterForProvider,
   managedAdapters,
+  adapterServesChat,
   adapterKeyForLegacyRuntime,
 } from "@/server/runtimes/adapters";
 
@@ -35,6 +36,26 @@ describe("runtime adapter registry", () => {
       expect(a.managed).toBe(false);
       expect(a.transport).toBe("mcp");
     }
+  });
+
+  it("every adapter declares a chatMode", () => {
+    for (const a of RUNTIME_ADAPTERS) {
+      expect(["runs", "completions", "acp", "none"]).toContain(a.chatMode);
+    }
+  });
+
+  it("pull/act CLI connections do not serve chat; Hermes does", () => {
+    // Codex/Claude Code are reached over MCP for context+actions — they
+    // must NOT present as chat backends (this is the "Codex via Hermes"
+    // regression guard).
+    expect(adapterServesChat(getRuntimeAdapter("codex"))).toBe(false);
+    expect(adapterServesChat(getRuntimeAdapter("claude-code"))).toBe(false);
+    expect(adapterServesChat(getRuntimeAdapter("custom-http"))).toBe(false);
+    // Managed loop-owners serve chat as themselves.
+    expect(adapterServesChat(getRuntimeAdapter("hermes"))).toBe(true);
+    // No registered adapter relies on the deferred completions chat-only
+    // provider concept yet.
+    expect(RUNTIME_ADAPTERS.some((a) => a.chatMode === "completions")).toBe(false);
   });
 
   it("orders managed adapters first for a provider", () => {

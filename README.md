@@ -155,27 +155,47 @@ mcp_servers:
 ## Quick start
 
 ```bash
-# 1. Services (Postgres + Redis + MinIO for isolated dev/test)
-cd docker && docker compose up -d
-# MinIO console: http://localhost:59001 (forgeminio / forgeminio-dev-password)
-
-# 2. Install + bootstrap DB
 cp .env.example .env            # fill in values (S3 vars are pre-filled for the
                                 # bundled MinIO; rotate creds before deploying)
 pnpm install
+```
+
+Then pick a development mode:
+
+```bash
+# A. Isolated local stack (recommended for UI iteration) — boots
+#    docker/docker-compose.yml (Postgres :55432 / Redis :56379 / MinIO
+#    :59000), migrates, seeds rich demo data, then runs HMR dev. One
+#    command, no manual bootstrap. Sign in: owner@forge.local / forge-dev.
+pnpm dev:local                  # http://localhost:3000
+pnpm dev:local --fresh          # wipe + reseed the local DB first
+pnpm dev:local --no-seed        # skip seeding (e.g. after db:clone-prod)
+
+# B. Live data — HMR dev server pointed at the *deployed* Postgres / Redis
+#    / MinIO. Instant frontend iteration against real data; edits are real.
+pnpm dev                        # http://localhost:3000
+
+# Optional: clone the deployed DB into the local stack for a safe sandbox
+# with real data (full Postgres-level copy; attachment bytes excluded).
+pnpm db:clone-prod && pnpm dev:local --no-seed
+```
+
+Manual DB bootstrap (only needed if you're not using `dev:local`):
+
+```bash
+cd docker && docker compose up -d   # Postgres + Redis + MinIO
 pnpm prisma:generate
-pnpm prisma:migrate             # applies all migrations
-pnpm prisma:seed                # seeds workspaces + issues + labels
+pnpm prisma:migrate                 # applies all migrations
+pnpm prisma:seed                    # rich demo fixtures (workspace, issues,
+                                    # sprints, agents, labels, relations)
+pnpm worker                         # optional separate process for queues
+```
 
-# 3. Seed agents (optional — creates Victor + Mizu in AXI)
-pnpm seed:agents
+Move data between instances from **Settings → Admin → Data export / import**
+(portable per-workspace JSON), or `pnpm db:clone-prod` for a full replica.
 
-# 4. Run
-pnpm dev                        # live compose data, http://localhost:3000
-pnpm dev:isolated               # isolated local services from docker/
-pnpm worker                     # separate process: webhook + metric workers
-
-# 5. Docs (optional — VitePress, served at /docs/)
+```bash
+# Docs (optional — VitePress, served at /docs/)
 pnpm docs:install               # one-time, standalone install in docs/
 pnpm docs:dev                   # http://localhost:5181/docs/
 pnpm dev:all                    # both app and docs in one terminal

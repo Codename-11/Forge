@@ -118,6 +118,24 @@ Engineering-flavored controls.
   individually, or replay in bulk.
 - **Audit log** — search across the workspace's `AuditLog`.
 
+### Data export / import
+
+URL: `/w/<slug>/settings/data`. **Admin only.** Move a workspace's core
+content between instances as portable JSON.
+
+- **Export** downloads settings, statuses, labels, initiatives, projects,
+  sprints, agents, and issues (with assignees, labels, and relations) plus
+  comments. Infra rows — API keys, webhooks, the audit log, and attachment
+  bytes — are excluded.
+- **Import** loads a snapshot into the current workspace. It is *additive*:
+  config rows are matched by natural key and reused, issues are created
+  fresh with new numbers, relations and comments are rewired onto them, and
+  unknown authors fall back to you. Nothing is deleted.
+
+For a full-fidelity copy of a deployed instance locally, use
+`pnpm db:clone-prod` instead — see
+[Local Development](/guide/local-development.html).
+
 ### Views
 
 Saved filter presets for the Issues list. Each saved view captures a query

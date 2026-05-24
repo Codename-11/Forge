@@ -6,10 +6,10 @@ where to point your first agent. This assumes you have Forge running locally
 or against a deployed instance.
 
 ::: info
-If you don't have Forge running yet, see the README at the repo root. In this
-workspace, `pnpm dev` uses the deployed compose data by default. Use
-`pnpm dev:isolated` only when you explicitly want the local
-`docker/docker-compose.yml` services.
+If you don't have Forge running yet, see [Local Development](/guide/local-development.html)
+for the full setup. In short: `pnpm dev:local` runs an isolated local stack
+that auto-migrates and seeds demo data, while `pnpm dev` points the dev
+server at the *deployed* database (real data, real writes).
 :::
 
 ## 1. Sign in
