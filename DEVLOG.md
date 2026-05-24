@@ -7230,3 +7230,47 @@ fields so minimal `{status}` picker rows don't trip TS2559; pickers without
 the signal degrade safely to status. Presence is now availability-aware app-
 wide for the surfaces an on-demand agent actually appears in. Deployed 78c97e3
 (`/signin` 200); typecheck + lint clean, 694 unit tests.
+
+## 2026-05-24 (cont.) — Codex stuck single-session; worker build stamp
+
+Operator reported a Codex (app-server) agent reading "offline" in chat
+despite replying, and a general "UI changes aren't reaching live" worry.
+
+Deploy was fine: live `forge` is built from 78c97e3 (HEAD 53b9f7d is
+docs-only), all 63 migrations applied, on-demand presence block confirmed
+present in the live commit. `COPY . .` content-hashes source, so Docker
+cache can't silently drop changes. Not a deploy gap.
+
+Root cause: the Codex **agent row** is `runtimeMode: EPHEMERAL`, which
+short-circuits both `agentAvailabilityModel` and `presenceAvailability`
+(transport-display.ts) to "session" *before* the on-demand branch — and
+chat-workspace.tsx maps non-"on-demand" → "offline". Why EPHEMERAL: the
+Settings → Agents wizard hard-blocked PERSISTENT for CLAUDE/CODEX
+(`validate()` gate + disabled RuntimeOption at :840 + stale "roadmap"
+copy at :43/:339/:729/:837) — stale gating predating the codex-app-server
+adapter (which is `managed`, `transport: app-server`,
+`defaultRuntimeMode: PERSISTENT`, `presence: runtime-heartbeat`). Server
+has **no** gate (agent.ts just takes the enum), so the flip is clean.
+
+Fix (settings/agents/page.tsx): enable Persistent for CODEX (keep CLAUDE
+blocked — no managed Claude runtime yet); `validate()` now requires a
+managed app-server runtime (`MANAGED_PERSISTENT_ADAPTER_KEYS`, mirrors the
+server-only manifest) be attached for a persistent Codex; refreshed the
+stale copy. Then flip the live Codex agent EPHEMERAL→PERSISTENT.
+
+Also: worker image reported a blank build stamp — the `worker` Dockerfile
+stage never declared ARG/ENV GIT_SHA/BUILD_TIME and compose didn't pass
+the args. Added both so the worker reports its commit (was cosmetic, but
+read as staleness).
+
+Sweep (Explore) for the same bug class — passive surfaces still rendering
+`AgentPresenceDot status=…` without `availability` (plans step dots,
+crews roster, chat-composer mention popover): real but their query/types
+(`AgentLite`, `MentionableAgent`, `crew.members[].agent`) are trimmed and
+don't carry the provider/runtime signal — same known follow-up the prior
+sweep flagged. Not half-fixed (would be a no-op). Also noted: `claude-
+desktop` adapter is `defaultRuntimeMode: PERSISTENT` + `presence: session`
+(incoherent); `runtimeHeartbeats: provider === "HERMES"` is provider-
+hardcoded (fine for now — on-demand is the intended Codex display).
+
+Verified: typecheck + lint clean, heartbeat tests pass.
