@@ -7192,3 +7192,28 @@ retry. Replaced with a **production `next build` + `next start`** server
 
 Result: full suite **9/9 in ~10s** (was 47–70s on dev), three consecutive runs
 clean, zero flakes. typecheck + lint clean.
+
+## 2026-05-24 (cont.) — Presence consistency sweep + auto-dispatch eligibility
+
+The "offline" fix was incomplete (only chat header + detail page) and had a
+functional twin. Swept the same root issue (heartbeat-presence ≠ on-demand
+availability) across surfaces + the dispatch path.
+
+- `presenceAvailability` (transport-display.ts): cheap, **null-safe**,
+  base-column derivation (no per-agent transport resolve) — heartbeat (Hermes /
+  has-heartbeat) vs on-demand (has runtime/webhook, non-Hermes) vs session.
+  `AgentPresenceDot` gained an `availability` prop → sky "on-demand" dot.
+- Applied: chat conversations **sidebar** (statusMeta + `chat.threads` now
+  selects provider/runtimeMode/lastHeartbeatAt/webhookUrl/runtimeId), MC
+  **Agents tab** + **Glance view** (local PresenceDots + freshness/heartbeat
+  labels), **Settings → Agents** roster. The shared dot is availability-aware,
+  so the remaining passive assignee-chips/pickers/hover-previews degrade
+  safely to status (no regression) until their queries carry the signal —
+  tracked as a follow-up.
+- **Auto-dispatch eligibility** (`dispatcher.ts`): was `status != OFFLINE`,
+  which excluded on-demand agents (always OFFLINE). Now availability-aware —
+  heartbeat agents must be non-OFFLINE; on-demand/session agents are eligible
+  regardless; disabled-runtime agents are pre-skipped at selection.
+
+Verified: typecheck + lint clean, 689 unit tests (+presenceAvailability),
+deployed (`/signin` 200, f7988ba). CHANGELOG updated (presence + auto-dispatch).
