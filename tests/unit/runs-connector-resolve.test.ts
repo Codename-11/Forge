@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   getRunsConnector,
   getRunsConnectorForAgent,
+  resolveRunEngine,
 } from "@/server/services/dispatch/registry";
 
 describe("getRunsConnectorForAgent", () => {
@@ -42,5 +43,50 @@ describe("getRunsConnectorForAgent", () => {
       runtime: { adapterKey: "custom-http", endpoint: "https://hook.example", secret: null },
     });
     expect(c).toBe(envSingleton);
+  });
+
+  it("builds a Codex app-server connector for a codex-app-server runtime", () => {
+    const c = getRunsConnectorForAgent({
+      provider: "CODEX",
+      runtime: { adapterKey: "codex-app-server", endpoint: "wss://codex.example:4500", secret: "t" },
+    });
+    expect(c).not.toBeNull();
+    expect(c!.kind).toBe("codex-app-server");
+  });
+
+  it("a codex-app-server runtime with no endpoint stays null (inert until configured)", () => {
+    const c = getRunsConnectorForAgent({
+      provider: "CODEX",
+      runtime: { adapterKey: "codex-app-server", endpoint: null, secret: null },
+    });
+    expect(c).toBeNull();
+  });
+});
+
+describe("resolveRunEngine runtime precedence", () => {
+  it("a Codex agent defaults to COMPLETIONS without a runs runtime", () => {
+    expect(resolveRunEngine({ runEngine: null, provider: "CODEX", runtime: null })).toBe(
+      "COMPLETIONS",
+    );
+  });
+
+  it("attaching a Codex agent to the app-server runtime flips it to RUNS", () => {
+    expect(
+      resolveRunEngine({
+        runEngine: null,
+        provider: "CODEX",
+        runtime: { adapterKey: "codex-app-server", endpoint: "wss://x:4500", secret: null },
+      }),
+    ).toBe("RUNS");
+  });
+
+  it("an explicit per-agent runEngine still wins over the runtime default", () => {
+    expect(
+      resolveRunEngine({
+        runEngine: "COMPLETIONS",
+        provider: "CODEX",
+        runtime: { adapterKey: "codex-app-server", endpoint: "wss://x:4500", secret: null },
+      }),
+    ).toBe("COMPLETIONS");
   });
 });

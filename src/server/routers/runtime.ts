@@ -11,8 +11,46 @@ import {
 /** Compute location a managed adapter's transport implies. */
 function kindForAdapterTransport(transport: string): RuntimeKind {
   if (transport === "local-daemon") return RuntimeKind.LOCAL_DAEMON;
-  // runs-api + webhook are both reached over HTTP from Forge.
+  // runs-api + app-server + webhook are all reached over the network from Forge.
   return RuntimeKind.REMOTE_HTTP;
+}
+
+/** Loopback / private-LAN host — plaintext transport is acceptable here. */
+function isPrivateHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "::1" || h.endsWith(".local") || h.endsWith(".internal"))
+    return true;
+  if (/^127\./.test(h)) return true;
+  if (/^10\./.test(h)) return true;
+  if (/^192\.168\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
+  if (/^169\.254\./.test(h)) return true; // link-local
+  if (h.startsWith("fc") || h.startsWith("fd")) return true; // IPv6 ULA
+  return false;
+}
+
+/**
+ * Best-practice transport guard: a runtime endpoint reaching a **public**
+ * host must use TLS (`https://` or `wss://`). Plaintext `http://` / `ws://`
+ * is allowed only to loopback / private-LAN hosts (the internal-network case).
+ * Secrets and agent traffic must never cross the public internet in the clear.
+ */
+function assertEndpointTransport(endpoint: string | null | undefined): void {
+  if (!endpoint) return;
+  let u: URL;
+  try {
+    u = new URL(endpoint);
+  } catch {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Endpoint must be a valid URL." });
+  }
+  const scheme = u.protocol.replace(/:$/, "");
+  const secure = scheme === "https" || scheme === "wss";
+  if (!secure && !isPrivateHost(u.hostname)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `External endpoints must use a secure transport — use wss:// or https:// (got ${scheme}:// to a public host "${u.hostname}"). Plaintext is allowed only for loopback / private-LAN hosts.`,
+    });
+  }
 }
 
 /** Never leak the HMAC secret to clients — surface only whether one is set. */
@@ -200,6 +238,7 @@ export const runtimeRouter = router({
           message: "Unknown or non-managed adapter. Only managed runtimes can be created here.",
         });
       }
+      assertEndpointTransport(input.endpoint || null);
       const row = await ctx.db.runtime.create({
         data: {
           workspaceId: ctx.workspaceId,
@@ -240,6 +279,7 @@ export const runtimeRouter = router({
       if (adapterKey !== undefined && !getRuntimeAdapter(adapterKey)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown adapter key." });
       }
+      if (endpoint) assertEndpointTransport(endpoint);
       const updated = await ctx.db.runtime.update({
         where: { id: row.id },
         data: {

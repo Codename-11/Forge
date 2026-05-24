@@ -49,7 +49,11 @@ export function resolveChatReadiness(input: {
   providerOverride?: AgentProvider | null;
 }): ChatReadiness {
   const provider = input.providerOverride ?? input.provider;
-  const engine = resolveRunEngine({ runEngine: input.runEngine, provider });
+  const engine = resolveRunEngine({
+    runEngine: input.runEngine,
+    provider,
+    runtime: input.runtime,
+  });
   const adapter = getRuntimeAdapter(input.runtime?.adapterKey);
 
   if (engine === "RUNS") {

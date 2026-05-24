@@ -662,15 +662,21 @@ function CreateRuntimeModal({
           <span className={fieldLabel}>
             Endpoint{" "}
             <span className="normal-case text-muted-foreground/70">
-              (gateway base URL, e.g. http://127.0.0.1:8642/v1)
+              {adapter?.transport === "app-server"
+                ? "(Codex app-server WebSocket, e.g. ws://127.0.0.1:4500)"
+                : "(gateway base URL, e.g. http://127.0.0.1:8642/v1)"}
             </span>
           </span>
           <Input
             value={endpoint}
             onChange={(e) => setEndpoint(e.target.value)}
-            placeholder="https://…"
+            placeholder={adapter?.transport === "app-server" ? "wss://…" : "https://…"}
             className="font-mono"
           />
+          <span className="mt-1 block text-[0.625rem] text-muted-foreground/70">
+            Public hosts must use a secure transport (wss:// or https://); plaintext is
+            allowed only for loopback / private-LAN addresses.
+          </span>
         </label>
         <label className="block">
           <span className={fieldLabel}>Secret (optional)</span>

@@ -120,6 +120,7 @@ export async function POST(req: NextRequest) {
   const runEngine = resolveRunEngine({
     runEngine: agent.runEngine,
     provider: effectiveProvider,
+    runtime: agent.runtime,
   });
   // Honor a managed runtime's gateway endpoint when one is configured;
   // falls back to the env gateway otherwise (see getRunsConnectorForAgent).
