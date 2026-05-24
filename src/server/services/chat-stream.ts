@@ -115,6 +115,17 @@ interface StreamArgs {
   model?: string;
   /** Optional tool catalog. Empty/omitted disables function-calling. */
   tools?: OpenAI.Chat.Completions.ChatCompletionTool[];
+  /**
+   * Pre-resolved client (e.g. from a per-workspace `ProviderCredential` via
+   * `resolveWorkspaceProviderClient`). When provided it's used as-is — DB
+   * credentials over env. When omitted we fall back to the env-based
+   * `getClient(providerIdFor(provider))`.
+   */
+  resolvedClient?: {
+    client: OpenAI;
+    defaultModel: string;
+    supportsImageInput: boolean;
+  } | null;
 }
 
 /**
@@ -126,7 +137,7 @@ export async function* streamChatReply(
   args: StreamArgs,
 ): AsyncGenerator<ChatStreamEvent, void, void> {
   const providerId = providerIdFor(args.provider);
-  const ctx = getClient(providerId);
+  const ctx = args.resolvedClient ?? getClient(providerId);
   if (!ctx) {
     yield {
       kind: "error",
@@ -336,6 +347,8 @@ export interface RunChatLoopArgs {
   tools: OpenAI.Chat.Completions.ChatCompletionTool[];
   model?: string;
   signal?: AbortSignal;
+  /** Pre-resolved client (DB credential over env). See `StreamArgs`. */
+  resolvedClient?: StreamArgs["resolvedClient"];
   /** Maximum number of model turns. Defaults to 5. */
   maxTurns?: number;
   onContent?: (delta: string) => void;
@@ -403,6 +416,7 @@ export async function runChatLoop(args: RunChatLoopArgs): Promise<void> {
       signal: args.signal,
       model: args.model,
       tools: args.tools,
+      resolvedClient: args.resolvedClient,
     })) {
       if (args.signal?.aborted) break;
       switch (evt.kind) {

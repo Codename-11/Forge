@@ -5,6 +5,10 @@ import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { triageIssue } from "@/server/services/ai-triage";
 import { listProviders } from "@/server/services/ai";
+import { encryptSecret } from "@/server/crypto";
+
+/** Providers that accept a DB-backed key (hermes is a runtime, not a key). */
+const CREDENTIAL_PROVIDER_IDS = ["openai", "anthropic", "custom"] as const;
 
 /**
  * AI router — apply / dismiss / re-run for the triage suggestion that
@@ -42,6 +46,98 @@ export const aiRouter = router({
       apiKeyConfigured: active.available,
     };
   }),
+
+  /**
+   * Per-workspace chat-model credentials (DB-backed, key encrypted). Lets the
+   * Streaming engine work with no env config. Keys are NEVER returned — only
+   * `hasKey`. Workspace-admin gated.
+   */
+  credentials: adminProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db.providerCredential.findMany({
+      where: { workspaceId: ctx.workspaceId },
+      select: {
+        providerId: true,
+        label: true,
+        baseUrl: true,
+        defaultModel: true,
+        enabled: true,
+        apiKeyEnc: true,
+        updatedAt: true,
+      },
+      orderBy: { providerId: "asc" },
+    });
+    return rows.map(({ apiKeyEnc, ...r }) => ({ ...r, hasKey: !!apiKeyEnc }));
+  }),
+
+  setCredential: adminProcedure
+    .input(
+      z.object({
+        providerId: z.enum(CREDENTIAL_PROVIDER_IDS),
+        // Empty string = leave an existing key unchanged; a value sets/replaces it.
+        apiKey: z.string().max(400).optional(),
+        baseUrl: z.string().url().max(500).nullable().optional().or(z.literal("")),
+        defaultModel: z.string().max(120).nullable().optional().or(z.literal("")),
+        label: z.string().max(120).nullable().optional().or(z.literal("")),
+        enabled: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // `custom` requires a base URL to be usable.
+      if (input.providerId === "custom" && input.baseUrl !== undefined && !input.baseUrl) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "A custom provider needs a base URL.",
+        });
+      }
+      const enc = input.apiKey ? encryptSecret(input.apiKey) : undefined;
+      const norm = (v: string | null | undefined) =>
+        v === undefined ? undefined : v === "" ? null : v;
+      const baseUrl = norm(input.baseUrl);
+      const defaultModel = norm(input.defaultModel);
+      const label = norm(input.label);
+      const row = await ctx.db.providerCredential.upsert({
+        where: {
+          workspaceId_providerId: {
+            workspaceId: ctx.workspaceId,
+            providerId: input.providerId,
+          },
+        },
+        create: {
+          workspaceId: ctx.workspaceId,
+          providerId: input.providerId,
+          apiKeyEnc: enc ?? null,
+          baseUrl: baseUrl ?? null,
+          defaultModel: defaultModel ?? null,
+          label: label ?? null,
+          enabled: input.enabled ?? true,
+        },
+        update: {
+          ...(enc !== undefined ? { apiKeyEnc: enc } : {}),
+          ...(baseUrl !== undefined ? { baseUrl } : {}),
+          ...(defaultModel !== undefined ? { defaultModel } : {}),
+          ...(label !== undefined ? { label } : {}),
+          ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+        },
+        select: { providerId: true, apiKeyEnc: true },
+      });
+      return { providerId: row.providerId, hasKey: !!row.apiKeyEnc };
+    }),
+
+  removeCredential: adminProcedure
+    .input(z.object({ providerId: z.enum(CREDENTIAL_PROVIDER_IDS) }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.providerCredential
+        .delete({
+          where: {
+            workspaceId_providerId: {
+              workspaceId: ctx.workspaceId,
+              providerId: input.providerId,
+            },
+          },
+        })
+        .catch(() => undefined); // already gone — idempotent
+      return { ok: true };
+    }),
 
   /**
    * Idempotent Coach setup. Finds the workspace's COACH agent or creates

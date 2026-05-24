@@ -58,6 +58,18 @@ describe("resolveChatReadiness", () => {
     expect(r.reason).toBe("model-configured");
   });
 
+  it("a DB-aware providerAvailable predicate marks a keyless provider ready", () => {
+    // No OPENAI_API_KEY in env, but the workspace stored a credential → ready.
+    const r = resolveChatReadiness({
+      provider: "CODEX",
+      runEngine: "COMPLETIONS",
+      runtime: null,
+      providerAvailable: (pid) => pid === "openai",
+    });
+    expect(r.ready).toBe(true);
+    expect(r.reason).toBe("model-configured");
+  });
+
   it("a thread provider override is honoured", () => {
     // Agent is CODEX (no key), but the thread overrides to HERMES → ready.
     const r = resolveChatReadiness({

@@ -6865,3 +6865,29 @@ The connector is **inert until** an operator creates a codex-app-server runtime
 with a real endpoint, so shipping is prod-safe; live end-to-end validation
 needs a running `codex app-server`. Verified: typecheck + lint clean, unit
 suite 643 passing (+22).
+
+## 2026-05-23 (cont.) — DB-backed model credentials (no env-only config)
+
+ADR item 1: the Streaming (Completions) engine + internal AI features can now
+reach a model via a **per-workspace, encrypted DB credential** instead of env
+vars. New `ProviderCredential` model (migration 0061) keyed (workspaceId,
+providerId ∈ openai|anthropic|custom), `apiKeyEnc` AES-256-GCM via `crypto.ts`.
+
+- `ai-providers.ts`: `resolveWorkspaceProviderClient(db, ws, providerId)` —
+  **DB credential first, env fallback**; builds the OpenAI client from the
+  decrypted key + canonical/credential base URL. `workspaceChatProviderAvailability`
+  returns a sync predicate (DB ∪ env) for readiness.
+- `chat-stream.ts`: `streamChatReply`/`runChatLoop` accept a pre-resolved
+  `resolvedClient`; the chat-stream route resolves it per workspace and passes
+  it (DB key wins; null → env).
+- `chat-readiness.ts`: takes a DB-aware `providerAvailable` predicate so a
+  keyless-env provider with a stored credential reads as ready; the steering
+  banner's "no-model" case now links to Settings → Workspace (Configure model).
+- `ai` router: `credentials` (list, redacted to `hasKey`), `setCredential`
+  (upsert, encrypt; custom requires base URL), `removeCredential` — all
+  workspace-admin gated. UI: a "Model credentials" manager in Settings →
+  Workspace → AI (per-provider key/baseUrl/model, write-only key, enable).
+
+Migration 0061 is additive (CREATE TABLE) — applies on prod boot via
+`migrate deploy`. Verified: typecheck + lint clean, unit suite 650 passing
+(+7: credential precedence/availability + readiness DB predicate).

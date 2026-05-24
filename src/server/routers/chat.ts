@@ -14,6 +14,7 @@ import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { compactChatThread } from "@/server/services/chat-compaction";
 import { resolveChatReadiness } from "@/server/services/chat-readiness";
+import { workspaceChatProviderAvailability } from "@/server/services/ai-providers";
 import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
 import { finishRun } from "@/server/services/agent-run";
 import { deleteAttachment } from "@/server/services/storage";
@@ -1040,11 +1041,16 @@ export const chatRouter = router({
         });
         providerOverride = thread?.providerOverride ?? null;
       }
+      const providerAvailable = await workspaceChatProviderAvailability(
+        ctx.db,
+        ctx.workspaceId,
+      );
       return resolveChatReadiness({
         provider: agent.provider,
         runEngine: agent.runEngine,
         runtime: agent.runtime,
         providerOverride,
+        providerAvailable,
       });
     }),
 

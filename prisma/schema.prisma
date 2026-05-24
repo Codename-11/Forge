@@ -742,6 +742,7 @@ model Workspace {
   chatThreads        ChatThread[]
   chatMessages       ChatMessage[]
   runtimes           Runtime[]
+  providerCredentials ProviderCredential[]
   pins               Pin[]
   recentItems        RecentItem[]
   notes              Note[]
@@ -1624,6 +1625,36 @@ model Runtime {
 
   @@index([workspaceId, archivedAt])
   @@index([ownerId])
+}
+
+/// A per-workspace chat-model credential — lets the Streaming (Completions)
+/// engine reach an OpenAI-compatible backend WITHOUT environment variables.
+/// `providerId` matches `ai-providers.ts` ProviderId ("openai" | "anthropic"
+/// | "custom" | "hermes"). `apiKeyEnc` is AES-256-GCM via `crypto.ts`
+/// (never returned to clients — the router redacts to `hasKey`). A DB row
+/// takes precedence over env for that provider; env remains the fallback.
+model ProviderCredential {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  /// ai-providers ProviderId this credential configures.
+  providerId   String
+  /// Optional human label for the connection.
+  label        String?
+  /// Override base URL (OpenAI-compatible). Null = provider default.
+  baseUrl      String?
+  /// Encrypted API key (AES-256-GCM). Null = no key stored.
+  apiKeyEnc    String?
+  /// Default model for this provider in this workspace. Null = provider default.
+  defaultModel String?
+  /// When false, the credential is ignored (falls back to env).
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, providerId])
+  @@index([workspaceId])
 }
 
 // ----------------------------------------------------------------------------

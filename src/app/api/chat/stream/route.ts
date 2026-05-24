@@ -6,11 +6,13 @@ import { db } from "@/server/db";
 import { recordChange } from "@/server/audit";
 import {
   runChatLoop,
+  providerIdFor,
   type ChatStreamContentBlock,
   type ChatStreamMessage,
   type ChatToolCall,
   type ChatToolExecResult,
 } from "@/server/services/chat-stream";
+import { resolveWorkspaceProviderClient } from "@/server/services/ai-providers";
 import {
   chatToolsAsOpenAITools,
   findChatTool,
@@ -676,6 +678,12 @@ export async function POST(req: NextRequest) {
             messages,
             tools: chatToolsAsOpenAITools(),
             signal: abortController.signal,
+            // Per-workspace ProviderCredential (DB) over env; null → env fallback.
+            resolvedClient: await resolveWorkspaceProviderClient(
+              db,
+              workspaceId,
+              providerIdFor(effectiveProvider),
+            ),
             rebuildSystemPrompt: boundCanvasId
               ? async () => buildSystemPrompt()
               : undefined,
