@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { TransportChip } from "@/components/agents/transport-chip";
 
 /**
  * Right-hand status rail for a chat thread. Surfaces, top to bottom:
@@ -221,22 +222,8 @@ export function ChatStatusRail({
             <span className="rounded border border-border bg-background/60 px-1 py-0 text-[0.625rem] uppercase tracking-wider text-foreground/80">
               {effectiveProvider ?? "—"}
             </span>
-            {engine && (
-              <span
-                title={
-                  engine === "runs"
-                    ? "Runs engine — a managed runtime owns the agent loop and streams the reply."
-                    : "Streaming engine — Forge owns the loop and calls a chat model directly."
-                }
-                className={cn(
-                  "rounded-full border px-1.5 py-0 text-[0.625rem] uppercase tracking-wider",
-                  engine === "runs"
-                    ? "border-ember/30 bg-ember/10 text-ember"
-                    : "border-border bg-subtle/40 text-muted-foreground",
-                )}
-              >
-                {engine}
-              </span>
+            {readiness && (
+              <TransportChip mode={readiness.mode} label={readiness.transportLabel} showNone />
             )}
           </div>
           <div className="flex items-center gap-1.5">

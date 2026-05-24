@@ -15,6 +15,8 @@ import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import type { db as PrismaDb } from "@/server/db";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
+import { resolveChatReadiness } from "@/server/services/chat-readiness";
+import { workspaceChatProviderAvailability } from "@/server/services/ai-providers";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { agentIdSchema } from "@/server/validators";
 
@@ -103,8 +105,8 @@ export const agentRouter = router({
         })
         .default({ includeArchived: false }),
     )
-    .query(({ ctx, input }) =>
-      ctx.db.agent.findMany({
+    .query(async ({ ctx, input }) => {
+      const agents = await ctx.db.agent.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           ...(input.includeArchived ? {} : { archivedAt: null }),
@@ -113,11 +115,52 @@ export const agentRouter = router({
         include: {
           _count: { select: { assignedIssues: true } },
           runtime: {
-            select: { id: true, name: true, kind: true, heartbeatAt: true },
+            select: {
+              id: true,
+              name: true,
+              kind: true,
+              heartbeatAt: true,
+              adapterKey: true,
+              endpoint: true,
+            },
           },
         },
-      }),
-    ),
+      });
+      // Attach the resolved chat transport per agent so the roster (Mission
+      // Control, pickers) can show the transport chip without re-deriving it.
+      // Indicative — uses env model availability + linked-key presence (not a
+      // per-thread provider override). Secret is never needed for the readiness
+      // decision, so it isn't selected or exposed.
+      const providerAvailable = await workspaceChatProviderAvailability(
+        ctx.db,
+        ctx.workspaceId,
+      );
+      const linkedRows = await ctx.db.apiKey.groupBy({
+        by: ["linkedAgentId"],
+        where: {
+          workspaceId: ctx.workspaceId,
+          revokedAt: null,
+          linkedAgentId: { not: null },
+        },
+      });
+      const daemonLinkedIds = new Set(
+        linkedRows.map((r) => r.linkedAgentId).filter((id): id is string => !!id),
+      );
+      return agents.map((a) => {
+        const r = resolveChatReadiness({
+          provider: a.provider,
+          runEngine: a.runEngine,
+          runtime: a.runtime
+            ? { adapterKey: a.runtime.adapterKey, endpoint: a.runtime.endpoint, secret: null }
+            : null,
+          webhookUrl: a.webhookUrl,
+          runtimeKind: a.runtime?.kind ?? null,
+          daemonLinked: daemonLinkedIds.has(a.id),
+          providerAvailable,
+        });
+        return { ...a, transport: { mode: r.mode, label: r.transportLabel } };
+      });
+    }),
 
   byId: workspaceProcedure
     .input(z.object({ id: agentId }))
