@@ -70,6 +70,16 @@ describe("runtime adapter registry", () => {
     expect(managedAdapters().every((a) => a.managed)).toBe(true);
   });
 
+  it("Codex app server is a first-class managed runs adapter", () => {
+    const c = getRuntimeAdapter("codex-app-server")!;
+    expect(c.managed).toBe(true);
+    expect(c.transport).toBe("app-server");
+    expect(c.chatMode).toBe("runs");
+    expect(c.defaultRunEngine).toBe("RUNS");
+    expect(c.providers).toContain("CODEX");
+    expect(adapterServesChat(c)).toBe(true);
+  });
+
   it("legacy backfill matches the SQL in migration 0059", () => {
     expect(adapterKeyForLegacyRuntime({ kind: "LOCAL_DAEMON", providersAvailable: [] })).toBe(
       "local-daemon",

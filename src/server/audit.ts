@@ -4,7 +4,7 @@ import { EventKind } from "@prisma/client";
 import { publish } from "@/server/realtime";
 import { nanoid } from "nanoid";
 import { ensureCanonicalFromEvent } from "@/server/services/agent-dispatch-inbox";
-import { resolveRunEngine, getRunsConnector } from "@/server/services/dispatch/registry";
+import { resolveRunEngine, getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
 
 /**
  * Synthetic slug + url used to route agent-bound dispatches through the
@@ -427,7 +427,13 @@ export async function recordChange(
       select: {
         assignedAgentId: true,
         assignedAgent: {
-          select: { id: true, webhookUrl: true, provider: true, runEngine: true },
+          select: {
+            id: true,
+            webhookUrl: true,
+            provider: true,
+            runEngine: true,
+            runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+          },
         },
       },
     });
@@ -442,8 +448,12 @@ export async function recordChange(
       // webhook so they aren't dispatched twice.
       const runsDriven =
         !!a &&
-        resolveRunEngine({ runEngine: a.runEngine, provider: a.provider }) === "RUNS" &&
-        getRunsConnector(a.provider) != null;
+        resolveRunEngine({
+          runEngine: a.runEngine,
+          provider: a.provider,
+          runtime: a.runtime,
+        }) === "RUNS" &&
+        getRunsConnectorForAgent({ provider: a.provider, runtime: a.runtime }) != null;
       if (a?.webhookUrl && !runsDriven) {
         const wid = await upsertAgentDispatchWebhook(
           tx,

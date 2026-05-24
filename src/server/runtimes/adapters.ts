@@ -185,6 +185,43 @@ subscription to Forge, and dispatches \`CHAT_MESSAGE_POSTED\` to a local CLI
 (claude/codex/hermes/gemini/cursor-agent). Heartbeats every 60s.`,
   },
   {
+    key: "codex-app-server",
+    title: "Codex (app server)",
+    tagline:
+      "OpenAI Codex's long-lived app server over WebSocket JSON-RPC. Managed runtime — a Codex agent chats as itself, like Hermes.",
+    iconKey: "Code2",
+    managed: true,
+    multiAgent: false,
+    transport: "app-server",
+    chatMode: "runs",
+    providers: ["CODEX"],
+    defaultRunEngine: "RUNS",
+    defaultRuntimeMode: "PERSISTENT",
+    defaultKeyKind: "AGENT",
+    capabilities: { streaming: true, approvals: true, presence: "runtime-heartbeat" },
+    autoProvisionable: false,
+    setupMarkdown: `# Codex app server (managed runtime)
+
+OpenAI's \`codex app-server\` is a long-lived process speaking bidirectional
+JSON-RPC 2.0 — the same surface that powers the Codex web/desktop/VS Code
+clients. Running it with a network listener makes a Codex agent **first-class**
+in Forge (owns the loop, streams, approvals), the OpenAI analogue to Hermes.
+
+**Connect:**
+1. Start the server with a WebSocket listener:
+   \`\`\`bash
+   codex app-server --listen ws://0.0.0.0:4500
+   # external/non-loopback hosts MUST use wss:// (TLS) — see endpoint rules
+   \`\`\`
+2. Add a runtime here with this adapter; set **endpoint** to the
+   \`ws(s)://HOST:PORT\` URL and (if your deployment gates the socket) a
+   **secret** sent as a Bearer header.
+3. Register a Codex Agent and **attach it to this runtime**. It defaults to the
+   Runs engine, so it chats as itself with its own tools + approvals.
+
+Pin exact method shapes with \`codex app-server generate-ts\`.`,
+  },
+  {
     key: "claude-code",
     title: "Claude Code (session)",
     tagline: "Local Claude Code session — reads context and acts over MCP. Pull/act, not chat.",
@@ -317,14 +354,6 @@ export const PLANNED_ADAPTERS: ReadonlyArray<
     note: string;
   }
 > = [
-  {
-    key: "codex-app-server",
-    title: "Codex (app server)",
-    transport: "app-server",
-    chatMode: "runs",
-    managed: true,
-    note: "Codex's long-lived `app server`, the OpenAI analogue to the Hermes gateway: a managed runtime that owns the agent loop so a Codex agent chats as itself (no Forge-held API key). Needs an app-server DispatchConnector.",
-  },
   {
     key: "acp",
     title: "Agent Client Protocol",

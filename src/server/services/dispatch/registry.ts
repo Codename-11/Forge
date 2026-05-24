@@ -1,13 +1,19 @@
 import "server-only";
 import type { AgentProvider } from "@prisma/client";
-import { defaultAdapterForProvider } from "@/server/runtimes/adapters";
+import { defaultAdapterForProvider, getRuntimeAdapter } from "@/server/runtimes/adapters";
 import { hermesRunsConnector, makeHermesRunsConnector } from "./hermes-runs";
+import { makeCodexAppServerConnector } from "./codex-app-server";
 import type { DispatchConnector, RunEngine } from "./types";
 
 /**
- * Resolve the effective chat engine for an agent: its explicit
- * `runEngine` if set, otherwise the adapter's `defaultRunEngine`
- * (falling back to COMPLETIONS for safety / unknown providers).
+ * Resolve the effective chat engine for an agent. Precedence:
+ *   1. the agent's explicit `runEngine`, if set;
+ *   2. the **attached runtime's** adapter default — so attaching an agent to
+ *      a managed runs runtime (Hermes, Codex app server) makes it run as
+ *      itself even when the provider's *default* adapter is a completions one
+ *      (e.g. CODEX's default is the local daemon);
+ *   3. the provider's default adapter;
+ *   4. COMPLETIONS as a safe fallback.
  *
  * Canonical source is the provider-agnostic RuntimeAdapter registry
  * (`src/server/runtimes/adapters.ts`); the legacy integrations manifest is
@@ -16,8 +22,11 @@ import type { DispatchConnector, RunEngine } from "./types";
 export function resolveRunEngine(agent: {
   runEngine: RunEngine | null;
   provider: AgentProvider;
+  runtime?: AgentRuntimeRef;
 }): RunEngine {
   if (agent.runEngine) return agent.runEngine;
+  const attached = getRuntimeAdapter(agent.runtime?.adapterKey);
+  if (attached) return attached.defaultRunEngine;
   return defaultAdapterForProvider(agent.provider)?.defaultRunEngine ?? "COMPLETIONS";
 }
 
@@ -57,8 +66,15 @@ export function getRunsConnectorForAgent(agent: {
   runtime?: AgentRuntimeRef;
 }): DispatchConnector | null {
   const rt = agent.runtime;
-  if (rt && rt.adapterKey === "hermes" && rt.endpoint) {
-    return makeHermesRunsConnector({ baseUrl: rt.endpoint, token: rt.secret });
+  if (rt && rt.endpoint) {
+    if (rt.adapterKey === "hermes") {
+      return makeHermesRunsConnector({ baseUrl: rt.endpoint, token: rt.secret });
+    }
+    if (rt.adapterKey === "codex-app-server") {
+      // Codex app server (WebSocket JSON-RPC). Only resolvable when the
+      // runtime carries a concrete ws(s):// endpoint.
+      return makeCodexAppServerConnector({ baseUrl: rt.endpoint, token: rt.secret });
+    }
   }
   return getRunsConnector(agent.provider);
 }

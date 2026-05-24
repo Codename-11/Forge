@@ -94,7 +94,13 @@ async function startNewRuns(): Promise<number> {
     });
     const agent = issue?.assignedAgent;
     if (!issue || !agent) continue;
-    if (resolveRunEngine({ runEngine: agent.runEngine, provider: agent.provider }) !== "RUNS") {
+    if (
+      resolveRunEngine({
+        runEngine: agent.runEngine,
+        provider: agent.provider,
+        runtime: agent.runtime,
+      }) !== "RUNS"
+    ) {
       continue;
     }
     const connector = getRunsConnectorForAgent({ provider: agent.provider, runtime: agent.runtime });

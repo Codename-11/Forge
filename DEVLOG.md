@@ -6830,3 +6830,38 @@ these need the operator's target endpoint/protocol to finish.
 
 Verified: typecheck + lint clean, unit suite 621 passing (+6), docs build
 clean (no dead links).
+
+## 2026-05-23 (cont.) — Codex app server = first-class (Tier 1) runtime
+
+Checked OpenAI's Codex docs: the "app server" is a long-lived process speaking
+**bidirectional JSON-RPC 2.0**, started with `codex app-server --listen
+ws://HOST:PORT` (also stdio / unix). So it's a WebSocket session, not an HTTP
+runs API — built `src/server/services/dispatch/codex-app-server.ts`
+(`makeCodexAppServerConnector`) accordingly: one `ws` socket per run,
+`initialize`/`initialized` handshake → `thread/start` → `turn/start`, drains
+`item/agentMessage/delta` (content), `item/reasoning/summaryTextDelta`
+(thinking), `item/started|completed` (tool cards), `turn/completed` (terminal +
+usage); server→client approval requests (`item/commandExecution/requestApproval`)
+surface as approval cards answered with `{decision}` (accept / acceptForSession
+/ decline / cancel); `turn/interrupt` for stop. Pure mappers
+(`mapCodexNotification`, `mapCodexUsage`) are unit-tested without a live socket.
+
+Promoted `codex-app-server` from PLANNED to a first-class **managed, runs,
+app-server** adapter in `RUNTIME_ADAPTERS` (defaultRunEngine RUNS). Wired
+`getRunsConnectorForAgent` to build it from a runtime's `ws(s)://` endpoint.
+
+Fixed an engine-resolution gap: `resolveRunEngine` now prefers the **attached
+runtime's** adapter default over the provider's default adapter — so attaching
+a Codex agent to the app-server runtime flips it to RUNS (CODEX's default
+adapter is the local daemon = COMPLETIONS, which would otherwise have bypassed
+the connector). Threaded `runtime` through all callers (chat-stream route,
+run-dispatcher, audit webhook-suppression, chat-readiness).
+
+Security: `assertEndpointTransport` on runtime create/update — public hosts
+must use `wss://`/`https://`; plaintext only for loopback / private-LAN. UI:
+adapter-aware endpoint hint + secure-transport note in the create modal.
+
+The connector is **inert until** an operator creates a codex-app-server runtime
+with a real endpoint, so shipping is prod-safe; live end-to-end validation
+needs a running `codex app-server`. Verified: typecheck + lint clean, unit
+suite 643 passing (+22).
