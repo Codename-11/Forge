@@ -371,5 +371,25 @@ created fresh, relations/comments remapped). Never deletes. User-docs:
 
 1. `pnpm lint && pnpm typecheck && pnpm test`
 2. `pnpm test:e2e` (needs Postgres + Redis)
-3. Append to `DEVLOG.md`
-4. Commit; optional push.
+3. Append to `DEVLOG.md` (dev log — dense, internal).
+4. **If the change is user-facing, add a `CHANGELOG.md` entry** under a
+   dated `## [YYYY-MM-DD] — title` heading (`Added`/`Changed`/`Fixed`/
+   `Removed`, terse, written for users not devs). This feeds the in-app
+   **What's New** rail + `/whats-new` — it's curated, NOT derived from
+   commits, so it only stays accurate if you write it. `DEVLOG` ≠ `CHANGELOG`.
+5. Commit; optional push.
+
+### Deploy (build identity)
+
+Prod builds from this working tree. Stamp the image with the commit so
+`system.buildInfo` / the Settings About line report what's running:
+
+```
+cd ~/docker/forge
+GIT_SHA=$(git -C /home/bailey/forge rev-parse --short HEAD) \
+BUILD_TIME=$(date -u +%FT%TZ) \
+  docker compose build forge forge-worker
+docker compose up -d
+```
+
+(Plain `docker compose build` still works — the stamp is just blank.)
