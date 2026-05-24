@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { TransportChip } from "@/components/agents/transport-chip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -174,6 +175,20 @@ export default function AgentsPage() {
 
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [step, setStep] = useState(0);
+
+  // Live preview of how this agent's chat would be served, for the Connection
+  // + Review steps. Recomputed as provider / runtime / engine change.
+  const { data: transportPreview } = trpc.agent.previewTransport.useQuery(
+    {
+      provider: editing?.provider ?? "HERMES",
+      runtimeId: editing?.runtimeId || null,
+      runEngine:
+        editing?.runEngine && editing.runEngine !== "DEFAULT" ? editing.runEngine : null,
+      webhookUrl:
+        editing?.connectionMode === "webhook" ? editing.webhookUrl || undefined : undefined,
+    },
+    { enabled: Boolean(editing) && step >= 2, staleTime: 5_000 },
+  );
   const [webhookTestResult, setWebhookTestResult] = useState<{
     ok: boolean;
     status: number;
@@ -212,6 +227,25 @@ export default function AgentsPage() {
   const create = trpc.agent.create.useMutation();
   const update = trpc.agent.update.useMutation();
   const issueKey = trpc.access.create.useMutation();
+  const [verifyResult, setVerifyResult] = useState<{
+    ready: boolean;
+    transportLabel: string;
+    hint: string;
+    probe: { attempted: boolean; reachable: boolean | null; detail: string };
+  } | null>(null);
+  const verify = trpc.agent.verifyConnection.useMutation({
+    onSuccess: (r) => {
+      setVerifyResult(r);
+      if (r.probe.attempted && r.probe.reachable === false) {
+        toast.error(`Runtime unreachable: ${r.probe.detail}`);
+      } else if (r.ready) {
+        toast.success(`Chat ready · ${r.transportLabel}`);
+      } else {
+        toast.error("Not chat-ready — see details.");
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const testWebhook = trpc.agent.testWebhook.useMutation({
     onSuccess: (res) => {
       setWebhookTestResult(res);
@@ -892,6 +926,37 @@ export default function AgentsPage() {
                     </select>
                   </Field>
 
+                  {/* Resolved chat transport preview — shows the consequence of
+                      the provider + runtime + engine choice before saving. */}
+                  {transportPreview && (
+                    <div
+                      className={
+                        "flex flex-wrap items-center gap-2 rounded-lg border p-2.5 text-xs " +
+                        (transportPreview.ready
+                          ? "border-border bg-background/50 text-muted-foreground"
+                          : "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300")
+                      }
+                    >
+                      <span className="font-medium text-foreground">Chat served via</span>
+                      <TransportChip
+                        mode={transportPreview.mode}
+                        label={transportPreview.transportLabel}
+                        showNone
+                      />
+                      {!transportPreview.ready && (
+                        <span className="w-full">
+                          {transportPreview.hint}{" "}
+                          <Link
+                            href={`/w/${ws.slug}/settings/workspace`}
+                            className="underline decoration-dotted hover:text-foreground"
+                          >
+                            Configure models
+                          </Link>
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   <div className="grid gap-2 md:grid-cols-2">
                     <RuntimeOption
                       selected={editing.connectionMode === "mcp"}
@@ -1129,6 +1194,29 @@ export default function AgentsPage() {
                     label="Connection"
                     value={editing.connectionMode === "webhook" ? "Webhook + MCP" : "MCP-only"}
                   />
+                  <div className="rounded-lg border border-border bg-background/50 p-2.5">
+                    <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+                      Chat transport
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-foreground">
+                      {transportPreview ? (
+                        <>
+                          <TransportChip
+                            mode={transportPreview.mode}
+                            label={transportPreview.transportLabel}
+                            showNone
+                          />
+                          {!transportPreview.ready && (
+                            <span className="text-[0.6875rem] text-amber-700 dark:text-amber-300">
+                              {transportPreview.hint}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">resolving…</span>
+                      )}
+                    </div>
+                  </div>
                   <ReviewItem
                     label="Capabilities"
                     value={parseCapabilities(editing.capabilitiesRaw).join(", ") || "none"}
@@ -1141,6 +1229,53 @@ export default function AgentsPage() {
                         : "not created here"
                     }
                   />
+                  {!isNew && editing.id && (
+                    <div className="md:col-span-2 rounded-lg border border-border bg-background/50 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-medium">Verify connection</div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Resolves chat readiness and, for a managed runs runtime,
+                            probes the endpoint (handshake only — no turn).
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={verify.isPending}
+                          onClick={() => editing.id && verify.mutate({ id: editing.id })}
+                        >
+                          {verify.isPending ? "Verifying…" : "Verify connection"}
+                        </Button>
+                      </div>
+                      {verifyResult && (
+                        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                          <span
+                            className={
+                              verifyResult.ready
+                                ? "text-emerald-600 dark:text-emerald-400"
+                                : "text-amber-700 dark:text-amber-300"
+                            }
+                          >
+                            {verifyResult.ready ? "Chat-ready" : "Not ready"} · {verifyResult.transportLabel}
+                          </span>
+                          {verifyResult.probe.attempted && (
+                            <span className="text-muted-foreground">
+                              · probe:{" "}
+                              {verifyResult.probe.reachable
+                                ? "reachable"
+                                : "unreachable"}{" "}
+                              ({verifyResult.probe.detail})
+                            </span>
+                          )}
+                          {!verifyResult.ready && verifyResult.hint && (
+                            <span className="w-full text-muted-foreground">{verifyResult.hint}</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div className="md:col-span-2 rounded-lg border border-border bg-background/50 p-3 text-xs text-muted-foreground">
                     {editing.connectionMode === "webhook"
                       ? "The webhook test is optional; production dispatch health will appear on the agent detail page after real deliveries."
