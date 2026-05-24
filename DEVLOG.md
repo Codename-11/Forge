@@ -7274,3 +7274,37 @@ desktop` adapter is `defaultRuntimeMode: PERSISTENT` + `presence: session`
 hardcoded (fine for now — on-demand is the intended Codex display).
 
 Verified: typecheck + lint clean, heartbeat tests pass.
+
+## 2026-05-24 (cont.) — Presence follow-up: passive surfaces + adapter coherence
+
+Closed the remaining same-class items from the Codex-offline sweep.
+
+Threaded the on-demand availability signal through the surfaces still
+rendering raw `AgentPresenceDot status=…`. Used `agent.list` (which spreads
+the full agent row — provider/runtimeMode/runtimeId/webhookUrl) as the single
+authoritative source, mapped by agent id — purely client-side, no router/
+Prisma changes:
+- **Plans cockpit**: widened `AgentLite` with the presence inputs; pass
+  `availability={presenceAvailability(agent)}` on the assignee dot; added
+  `availability` to `DagAgent` (orchestration/types.ts), computed in the
+  `dagAgentsById` builder, consumed by `StepNode` (graph view).
+- **Crew page** (`crews/[crewId]`): built `availabilityById` from the page's
+  existing `agent.list` query; pass it on the member dot.
+- **Crew roster panel** (plan + goal cockpits): self-contained — added a
+  cached `agent.list` query inside the panel (hook lifted above the
+  `if (!crew)` early return) → id→availability map → member dot.
+- **Chat @-mention popover**: added `availability` to `MentionableAgent`,
+  computed in the chat-thread builder from `workspaceAgents`, consumed in
+  `chat-composer`.
+
+Adapter coherence: `claude-desktop` was `defaultRuntimeMode: PERSISTENT` +
+`presence: "session"` (incoherent — PERSISTENT resolves to heartbeat presence
+→ false "offline"). It's an MCP pull/act client (not push-reachable, not
+heartbeat-tracked), so flipped the default to EPHEMERAL and reworded the
+tagline.
+
+Out of scope (noted, not fixed): agent-timeline, dashboard activity tile, and
+agent-hover-preview's inner badge still render raw status — low-value rosters
+without the signal in their queries.
+
+Verified: typecheck + lint clean, 694 unit tests pass.

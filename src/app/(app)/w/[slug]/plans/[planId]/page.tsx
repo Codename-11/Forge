@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
 import type { AgentStatus } from "@prisma/client";
+import { presenceAvailability } from "@/lib/transport-display";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -131,6 +132,12 @@ type AgentLite = {
   image: string | null;
   status: AgentStatus;
   lastHeartbeatAt: string | Date | null;
+  // Presence inputs (carried by agent.list) so on-demand agents — e.g. a
+  // Codex app-server — read "on-demand" on step dots, not a false "offline".
+  provider?: string | null;
+  runtimeMode?: string | null;
+  runtimeId?: string | null;
+  webhookUrl?: string | null;
 };
 
 type ViewMode = "list" | "timeline" | "graph";
@@ -432,6 +439,7 @@ export default function PlanDetailPage() {
         status:
           a.status === "ONLINE" || a.status === "BUSY" ? a.status : "OFFLINE",
         avatar: a.image,
+        availability: presenceAvailability(a),
       };
     }
     return rec;
@@ -1415,6 +1423,7 @@ function StepMetaStrip({
             <AgentPresenceDot
               status={agent.status}
               lastHeartbeatAt={agent.lastHeartbeatAt}
+              availability={presenceAvailability(agent)}
               className="absolute -bottom-0.5 -right-0.5 ring-1 ring-card"
             />
           </span>

@@ -134,6 +134,7 @@ export const StepNode = forwardRef<
           >
             <AgentPresenceDot
               status={(agent.status as AgentStatus) ?? "OFFLINE"}
+              availability={agent.availability}
               size="sm"
             />
             <span className="truncate">@{agent.profileKey}</span>

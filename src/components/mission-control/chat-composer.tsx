@@ -23,6 +23,7 @@ import {
   type SlashCommand,
 } from "@/lib/chat-slash-commands";
 import type { AgentStatus } from "@prisma/client";
+import type { AvailabilityModel } from "@/lib/transport-display";
 
 export interface ChatComposerAttachmentDraft {
   id: string;
@@ -39,6 +40,8 @@ export interface MentionableAgent {
   status?: AgentStatus;
   avatar?: string | null;
   lastHeartbeatAt?: Date | string | null;
+  /** Availability model so on-demand agents read "on-demand", not "offline". */
+  availability?: AvailabilityModel;
 }
 
 export interface MentionablePerson {
@@ -603,6 +606,7 @@ export function ChatComposer({
                             <AgentPresenceDot
                               status={m.agent.status}
                               lastHeartbeatAt={m.agent.lastHeartbeatAt ?? null}
+                              availability={m.agent.availability}
                               size="sm"
                             />
                           </span>
