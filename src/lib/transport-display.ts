@@ -36,6 +36,25 @@ export function transportTitle(mode: TransportMode, label: string): string {
   }
 }
 
+/**
+ * Connection tier for a runtime transport (see providers-and-transports.md):
+ *  1 — first-class managed runtime (owns the loop), 2 — session CLI,
+ *  3 — basic webhook/http.
+ */
+export function tierForTransport(transport: string): { n: 1 | 2 | 3; label: string } {
+  switch (transport) {
+    case "runs-api":
+    case "app-server":
+      return { n: 1, label: "First-class" };
+    case "acp":
+    case "mcp":
+    case "local-daemon":
+      return { n: 2, label: "Session" };
+    default:
+      return { n: 3, label: "Basic" };
+  }
+}
+
 /** One-word qualifier for compact surfaces (roster rows, etc.). */
 export function transportModeWord(mode: TransportMode): string {
   switch (mode) {
