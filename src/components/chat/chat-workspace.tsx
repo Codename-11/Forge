@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
-  Archive,
   Bot,
   Clock3,
   ImageIcon,
@@ -17,6 +16,7 @@ import {
   Radio,
   Search,
   Settings2,
+  SlidersHorizontal,
   X,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
@@ -100,6 +100,10 @@ export function ChatWorkspaceSurface() {
   const [stateFilter, setStateFilter] = useState<ThreadStateFilter>("all");
   const [archived, setArchived] = useState(false);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
+  // Sub-`xl` inspector drawer (connection + status + actions). The right rail
+  // is `xl:block`; below that it lives behind this toggle so mobile and tablet
+  // keep parity (stop / archive / delete / connection info).
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [newConversationOpen, setNewConversationOpen] = useState(false);
   const [newAgentId, setNewAgentId] = useState("");
   const [newTitle, setNewTitle] = useState("");
@@ -169,12 +173,6 @@ export function ChatWorkspaceSurface() {
     { includeArchived: false },
     { staleTime: 60_000 },
   );
-  const archiveM = trpc.chat.archiveThread.useMutation({
-    onSuccess: () => void utils.chat.threads.invalidate(),
-  });
-  const restoreM = trpc.chat.restoreThread.useMutation({
-    onSuccess: () => void utils.chat.threads.invalidate(),
-  });
   const createConversationM = trpc.chat.createConversation.useMutation({
     onSuccess: async (result) => {
       await utils.chat.threads.invalidate();
@@ -616,8 +614,13 @@ export function ChatWorkspaceSurface() {
           )}
 
           <main className="flex min-h-0 flex-1 flex-col bg-background">
-            <div className="flex items-center gap-2 border-b border-border/70 bg-card/40 px-3 py-2 md:hidden">
-              <Button variant="subtle" size="sm" onClick={() => setMobilePickerOpen(true)}>
+            <div className="flex items-center gap-2 border-b border-border/70 bg-card/40 px-3 py-2 xl:hidden">
+              <Button
+                variant="subtle"
+                size="sm"
+                className="md:hidden"
+                onClick={() => setMobilePickerOpen(true)}
+              >
                 <MessageSquare className="mr-1.5 h-3.5 w-3.5" /> Conversations
               </Button>
               <div className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
@@ -625,13 +628,14 @@ export function ChatWorkspaceSurface() {
                   ? `${selectedAgent.name} · @${selectedAgent.profileKey}`
                   : "No conversation selected"}
               </div>
-              {selectedThread && !archived && (
+              {selectedThread && (
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => archiveM.mutate({ threadId: selectedThread.id })}
+                  title="Connection & status"
+                  onClick={() => setInspectorOpen(true)}
                 >
-                  <Archive className="h-3.5 w-3.5" />
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
                 </Button>
               )}
             </div>
@@ -692,6 +696,37 @@ export function ChatWorkspaceSurface() {
                 </div>
               </div>
             )}
+            {inspectorOpen && selectedThread && (
+              <div
+                className="fixed inset-0 z-50 bg-background/80 backdrop-blur xl:hidden"
+                onClick={() => setInspectorOpen(false)}
+              >
+                <div
+                  className="absolute right-0 top-0 flex h-full w-[86vw] max-w-sm flex-col border-l border-border bg-card p-3 shadow-xl"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="text-sm font-semibold text-foreground">Connection &amp; status</div>
+                    <Button variant="ghost" size="sm" onClick={() => setInspectorOpen(false)}>
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    <ChatStatusRail
+                      workspaceSlug={ws.slug}
+                      threadId={selectedThread.id}
+                      agentId={selectedThread.agent.id}
+                      context={selectedThread}
+                      archived={archived}
+                      onDeleted={() => {
+                        setInspectorOpen(false);
+                        router.replace(`/w/${ws.slug}/chat`);
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
             {threadParam && threads && !selectedThread ? (
               <div className="flex h-full items-center justify-center p-8 text-center">
                 <div className="max-w-sm rounded-xl border border-border bg-card/40 p-6 shadow-sm">
@@ -730,24 +765,14 @@ export function ChatWorkspaceSurface() {
           </main>
 
           <section className="hidden w-72 shrink-0 overflow-y-auto border-l border-border/70 bg-card/20 p-4 xl:block">
-            <ChatStatusRail workspaceSlug={ws.slug} thread={selectedThread ?? null} />
-            {selectedThread && (
-              <div className="mt-3 rounded-xl border border-border bg-card/40 p-3">
-                <Button
-                  variant="subtle"
-                  size="sm"
-                  className="w-full justify-start"
-                  onClick={() =>
-                    archived
-                      ? restoreM.mutate({ threadId: selectedThread.id })
-                      : archiveM.mutate({ threadId: selectedThread.id })
-                  }
-                >
-                  <Archive className="mr-1.5 h-3.5 w-3.5" />
-                  {archived ? "Restore conversation" : "Archive conversation"}
-                </Button>
-              </div>
-            )}
+            <ChatStatusRail
+              workspaceSlug={ws.slug}
+              threadId={selectedThread?.id ?? null}
+              agentId={selectedThread?.agent.id ?? null}
+              context={selectedThread ?? null}
+              archived={archived}
+              onDeleted={() => router.replace(`/w/${ws.slug}/chat`)}
+            />
           </section>
         </div>
       </div>
