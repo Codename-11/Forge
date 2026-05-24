@@ -13,11 +13,10 @@ export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  // The webServer is a single `next dev` (on-demand compile) shared by all
-  // workers, so the heaviest ops occasionally time out under load. One local
-  // retry absorbs that without hiding logic bugs (those fail every attempt);
-  // CI keeps two.
-  retries: process.env.CI ? 2 : 1,
+  // The webServer is a production build served by `next start` (no on-demand
+  // compilation), so runs are deterministic — no local retry needed. CI keeps
+  // two retries purely for infra hiccups (runner contention, cold caches).
+  retries: process.env.CI ? 2 : 0,
   // Sharded in CI for speed as the suite grows (see ci.yml matrix).
   workers: process.env.CI ? 2 : undefined,
   reporter: [["list"], ["html", { open: "never" }]],
@@ -36,8 +35,8 @@ export default defineConfig({
     command: "bash scripts/e2e-web.sh",
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
-    // First boot migrates + seeds + cold-compiles Next, so allow headroom.
-    timeout: 240_000,
+    // First boot migrates + seeds + runs a full `next build`, so allow headroom.
+    timeout: 360_000,
     stdout: "pipe",
     stderr: "pipe",
   },

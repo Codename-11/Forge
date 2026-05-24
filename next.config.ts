@@ -1,9 +1,15 @@
 import type { NextConfig } from "next";
 
+const isolatedBuild =
+  !!process.env.NEXT_DIST_DIR && process.env.NEXT_DIST_DIR !== ".next";
+
 const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  output: "standalone",
+  // `standalone` is for the prod Docker image. The E2E build (NEXT_DIST_DIR=
+  // .next-e2e) is served with plain `next start`, which doesn't support
+  // standalone — so skip it there to keep `next start` clean.
+  output: isolatedBuild ? undefined : "standalone",
   // Allow an isolated build dir (E2E sets NEXT_DIST_DIR=.next-e2e) so a
   // parallel `next dev` on the same checkout can't clobber the build output.
   distDir: process.env.NEXT_DIST_DIR || ".next",
