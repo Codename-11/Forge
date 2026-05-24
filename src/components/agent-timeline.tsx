@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { presenceAvailability } from "@/lib/transport-display";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import {
   DispatchReasonChip,
@@ -379,7 +380,11 @@ export default function AgentTimeline() {
                 : "border-border bg-card text-muted-foreground hover:text-foreground",
             )}
           >
-            <AgentPresenceDot status={a.status} size="sm" />
+            <AgentPresenceDot
+              status={a.status}
+              availability={presenceAvailability(a)}
+              size="sm"
+            />
             <span className={cn(active ? "text-ember" : "text-foreground")}>
               {a.name}
             </span>
