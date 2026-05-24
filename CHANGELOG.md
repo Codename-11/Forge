@@ -69,6 +69,11 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   cockpits), the chat @-mention list, the agent timeline, the dashboard
   agent-activity tile, and agent hover cards no longer show a managed
   app-server agent as "offline."
+- **Persistent mode is gated by the attached runtime, not the provider.**
+  A Claude or Codex agent can be persistent when hosted on a managed
+  runtime (the Codex app server or the Forge local daemon); the wizard no
+  longer blocks persistent Claude outright or restricts persistent Codex to
+  the app server alone.
 
 ## [2026-05-23] — Sign-in, SSO & agent platforms
 
