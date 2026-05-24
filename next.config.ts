@@ -4,6 +4,9 @@ const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: "standalone",
+  // Allow an isolated build dir (E2E sets NEXT_DIST_DIR=.next-e2e) so a
+  // parallel `next dev` on the same checkout can't clobber the build output.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // `ws` (Codex app-server connector) must NOT be bundled/minified — the
   // bundler mangles its frame-masking util, yielding "b.mask is not a
   // function" when the client masks an outgoing frame. Load it unbundled.

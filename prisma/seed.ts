@@ -25,6 +25,8 @@ import {
   AgentProvider,
   AgentRole,
   AgentStatus,
+  RuntimeKind,
+  RunEngine,
 } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -218,6 +220,62 @@ async function main() {
       maxConcurrent: 1,
     },
   });
+
+  // ---- E2E fixtures (only when FORGE_E2E=1) --------------------------
+  // Deterministic runtimes + an agent the browser suite drives without any
+  // external service. `e2e-mock` resolves to the in-process mock-runs
+  // connector (registry.ts, also FORGE_E2E-gated); `e2e-codex` exists so the
+  // Codex sandbox config panel + enable/disable toggle have a real row.
+  if (process.env.FORGE_E2E === "1") {
+    const mockRuntime = await prisma.runtime.upsert({
+      where: { id: "e2e-mock-runtime" },
+      update: { disabledAt: null },
+      create: {
+        id: "e2e-mock-runtime",
+        workspaceId: wid,
+        name: "E2E Mock Runtime",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "mock-runs",
+        endpoint: "mock://e2e",
+        ownerId: owner.id,
+        heartbeatAt: new Date(),
+        connectedAt: new Date(),
+      },
+    });
+    await prisma.agent.upsert({
+      where: { workspaceId_profileKey: { workspaceId: wid, profileKey: "e2ebot" } },
+      update: { runtimeId: mockRuntime.id, runEngine: RunEngine.RUNS, status: AgentStatus.ONLINE },
+      create: {
+        workspaceId: wid,
+        profileKey: "e2ebot",
+        name: "E2E Bot",
+        description: "Scripted mock-runs agent for the E2E suite.",
+        avatar: "🤖",
+        provider: AgentProvider.CUSTOM,
+        role: AgentRole.WORKER,
+        status: AgentStatus.ONLINE,
+        runEngine: RunEngine.RUNS,
+        runtimeId: mockRuntime.id,
+        capabilities: ["e2e"],
+        maxConcurrent: 2,
+        lastHeartbeatAt: new Date(),
+      },
+    });
+    await prisma.runtime.upsert({
+      where: { id: "e2e-codex-runtime" },
+      update: { disabledAt: null, config: {} },
+      create: {
+        id: "e2e-codex-runtime",
+        workspaceId: wid,
+        name: "E2E Codex Runtime",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "codex-app-server",
+        endpoint: "ws://127.0.0.1:4505",
+        config: {},
+        ownerId: owner.id,
+      },
+    });
+  }
 
   // ---- Issues --------------------------------------------------------
   // [title, projectKey, statusName, priority, labelNames, assigneeUserId?,

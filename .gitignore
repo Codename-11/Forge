@@ -29,3 +29,9 @@ output/
 
 # Local agent/tool scratch workspace (design drops, etc.) — not source.
 .orca/
+
+# Playwright auth storageState
+tests/e2e/.auth/
+playwright-report/
+test-results/
+.next-e2e/
