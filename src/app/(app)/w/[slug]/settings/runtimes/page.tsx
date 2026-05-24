@@ -211,6 +211,7 @@ export default function RuntimesPage() {
                 return (
                   <li
                     key={rt.id}
+                    data-testid={`runtime-row-${rt.id}`}
                     className={cn(
                       "flex flex-wrap items-start gap-3 px-4 py-3",
                       (isArchived || isDisabled) && "opacity-60",
@@ -247,6 +248,7 @@ export default function RuntimesPage() {
                         )}
                         {isDisabled && !isArchived && (
                           <span
+                            data-testid="runtime-disabled-badge"
                             className="rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-amber-700 dark:text-amber-400"
                             title="Disabled — stays configured but won't dial; dispatch skips it and chat reports it disabled"
                           >
@@ -323,6 +325,7 @@ export default function RuntimesPage() {
                         <Button
                           size="sm"
                           variant="ghost"
+                          data-testid="runtime-toggle-enabled"
                           onClick={() =>
                             setEnabled.mutate({ id: rt.id, enabled: isDisabled })
                           }
@@ -906,7 +909,10 @@ function CodexPolicyFields({
   const selectClass =
     "focus-ring h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm";
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-subtle/20 p-3">
+    <div
+      data-testid="codex-sandbox-fields"
+      className="space-y-3 rounded-lg border border-border bg-subtle/20 p-3"
+    >
       <div className="flex items-center gap-1.5">
         <span className="text-[0.75rem] font-medium text-foreground">Codex sandbox</span>
         <span className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
@@ -916,6 +922,7 @@ function CodexPolicyFields({
       <label className="block">
         <span className={fieldLabel}>Sandbox mode</span>
         <select
+          data-testid="codex-sandbox-mode"
           className={selectClass}
           value={value.sandboxMode}
           onChange={(e) =>

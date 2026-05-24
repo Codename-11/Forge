@@ -27,15 +27,19 @@ jobs:
       - run: pnpm test
 
   e2e:
-    name: Playwright E2E
+    name: Playwright E2E (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     services:
       postgres:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: forge
           POSTGRES_PASSWORD: forge
-          POSTGRES_DB: forge
+          POSTGRES_DB: forge_e2e
         ports: ["5432:5432"]
         options: >-
           --health-cmd="pg_isready -U forge"
@@ -44,11 +48,22 @@ jobs:
         image: redis:7-alpine
         ports: ["6379:6379"]
     env:
-      DATABASE_URL: postgresql://forge:forge@localhost:5432/forge?schema=public
+      # E2E harness (see scripts/e2e-web.sh + playwright.config.ts).
+      E2E_MANAGE_STACK: "0" # use the service containers above, not docker-compose
+      E2E_PORT: "3200"
+      FORGE_E2E: "1" # mock-runs connector + seed fixtures
+      DATABASE_URL: postgresql://forge:forge@localhost:5432/forge_e2e?schema=public
       REDIS_URL: redis://localhost:6379
       AUTH_SECRET: test-secret-test-secret-test-secret
+      AUTH_URL: http://localhost:3200
+      AUTH_TRUST_HOST: "true"
+      NEXT_PUBLIC_APP_URL: http://localhost:3200
+      PLAYWRIGHT_BASE_URL: http://localhost:3200
+      ADMIN_EMAIL: owner@forge.local
+      ADMIN_PASSWORD: forge-dev
+      ADMIN_NAME: Forge Owner
+      ADMIN_HANDLE: forge
       PLUGIN_JWT_SECRET: test-plugin-secret
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -57,13 +72,11 @@ jobs:
         with: { node-version: 20, cache: "pnpm" }
       - run: pnpm install --frozen-lockfile
       - run: pnpm prisma:generate
-      - run: pnpm prisma:deploy
-      - run: pnpm prisma:seed
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm build
-      - run: pnpm test:e2e
+      # e2e-web.sh (the Playwright webServer) migrates + seeds the forge_e2e DB.
+      - run: pnpm exec playwright test --shard=${{ matrix.shard }}/2
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: playwright-report/

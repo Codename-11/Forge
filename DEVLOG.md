@@ -7102,3 +7102,50 @@ Verified: typecheck + lint clean (one pre-existing Prisma type-import warning in
 a parallel-session file), unit suite 672→ (+ this pass's transport/integration/
 verify tests), daemon + docs build clean, deployed live (`/signin` 200, 63
 migrations applied).
+
+## 2026-05-24 (cont.) — E2E testing overhaul: 6 lanes, real auth, isolated stack, fake runtime
+
+The E2E suite was effectively one spec: auth was hand-waved ("session cookie via
+storageState" with no setup), two chat specs were `test.skip`-gated, and the
+golden-path spec targeted the prod `axiom-labs` workspace via `pnpm dev` (the
+**deployed** DB). Rebuilt it across six lanes; all green locally (9 Playwright
+tests + 5 new contract tests), typecheck/lint clean, 681 unit tests.
+
+1. **Auth fixture + seed alignment.** `tests/e2e/global-setup.ts` signs in the
+   seeded owner via the real credentials form and saves a `storageState` the
+   suite reuses (auth is JWT-strategy, so no DB session row to forge). Specs
+   realigned from `axiom-labs` → the seeded `forge` workspace.
+2. **Isolated stack.** `scripts/e2e-web.sh` serves a Next dev server on :3200
+   against a **dedicated `forge_e2e` database** + Redis logical DB 15 on the
+   existing docker stack — never prod, never the shared dev:local data. Its own
+   `NEXT_DIST_DIR=.next-e2e` so a parallel `next dev` on the same checkout can't
+   clobber the build (was causing `MODULE_NOT_FOUND` worker-chunk flakiness);
+   `distDir` is now env-driven in `next.config.ts`.
+3. **Fake DispatchConnector + agent E2E.** `dispatch/mock-runs.ts` — an
+   in-process connector that streams scripted `RunEvent`s (deltas → optional
+   approval → completed), wired in `registry.ts` strictly behind
+   `FORGE_E2E=1` for `adapterKey: "mock-runs"` (inert in prod). The seed (also
+   `FORGE_E2E`-gated) provisions an `e2e-mock` runtime + `E2E Bot` (RUNS) and an
+   `e2e-codex` runtime. `chat-runs-streaming.spec.ts` drives a full chat → runs
+   → SSE → render with no external runtime or auth.
+4. **Stable selectors + coverage.** New `data-testid`s (runtime row/toggle/
+   disabled-badge/codex-sandbox panel + mode, new-conversation agent select).
+   New specs: `runtime-management` (Codex sandbox config round-trip +
+   enable/disable kill-switch — i.e. this morning's secure-Codex work),
+   `data-portability` (export download), and the two chat specs un-skipped to
+   run authenticated.
+5. **Determinism + speed.** Video/screenshot/trace on failure; `axe`
+   accessibility smoke (`@axe-core/playwright`) on inbox + runtimes settings,
+   gating serious/critical violations but excluding `color-contrast` +
+   `link-in-text-block` as documented warm-earthy brand tradeoffs; CI e2e job
+   2-way **sharded** and pointed at GH service containers
+   (`E2E_MANAGE_STACK=0`). One local retry absorbs single-dev-server compile
+   contention (CI keeps two).
+6. **API/MCP contract tests.** `runtime-dispatch-contract.test.ts` (vitest,
+   real Postgres) asserts the surface agents drive: codex `config` validation
+   round-trip + bad-enum rejection, the `disabledAt` kill-switch → refusing
+   sentinel connector, the mock-runs streaming + approval contract, and tenant
+   isolation on runtime create.
+
+All inert-in-prod: the mock connector + seed fixtures only activate under
+`FORGE_E2E=1`, which prod compose never sets.

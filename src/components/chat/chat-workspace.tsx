@@ -310,6 +310,7 @@ export function ChatWorkspaceSurface() {
               <label className="block text-meta text-muted-foreground">
                 Agent
                 <select
+                  data-testid="new-conversation-agent"
                   value={newAgentId}
                   onChange={(event) => setNewAgentId(event.target.value)}
                   className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"

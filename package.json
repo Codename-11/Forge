@@ -34,7 +34,9 @@
     "dev:all": "./scripts/dev-all.sh",
     "build:cli": "tsc -p tools/forge-cli",
     "forge": "node tools/forge-cli/dist/index.js",
-    "changelog": "tsx tools/scripts/changelog-scaffold.ts"
+    "changelog": "tsx tools/scripts/changelog-scaffold.ts",
+    "e2e": "playwright test",
+    "e2e:web": "bash scripts/e2e-web.sh"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
@@ -77,6 +79,7 @@
     "zod-to-json-schema": "^3.24.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.3",
     "@eslint/eslintrc": "^3.3.5",
     "@playwright/test": "^1.49.1",
     "@types/katex": "^0.16.8",

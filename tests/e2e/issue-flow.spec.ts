@@ -1,29 +1,34 @@
 import { test, expect } from "@playwright/test";
 
 /**
- * Golden-path E2E: sign in (seeded owner), create an issue via the quick-
- * create dialog, verify it appears in the inbox list, open it, move status.
- *
- * Phase 2E moved workspace-scoped routes under `/w/[slug]/*`. The seed
- * ships an `AXI` workspace at slug `axiom-labs`; entering via
- * `/inbox` would be redirected by the middleware to
- * `/w/axiom-labs/inbox` via the hint cookie, but tests skip that by
- * using the canonical URL directly so they don't depend on cookie state.
+ * Golden-path E2E: create an issue via the quick-create dialog, verify it
+ * appears in the inbox list, open it, move status. Runs authenticated via the
+ * storageState minted in global-setup against the seeded `forge` workspace.
  */
 
 test.describe("Issue flow", () => {
   test("create and transition an issue", async ({ page }) => {
-    await page.goto("/w/axiom-labs/inbox");
-    // Sign-in handled out-of-band in dev — assume session cookie via storageState.
+    await page.goto("/w/forge/inbox");
 
-    await page.keyboard.press("c");
-    await expect(page.getByPlaceholder("Issue title")).toBeVisible();
-    await page.getByPlaceholder("Issue title").fill("E2E: migrate cache");
-    await page.keyboard.press("Enter");
+    // QuickCreate opens on the ⇧C global hotkey (src/components/quick-create.tsx).
+    await page.locator("body").click();
+    await page.keyboard.press("Shift+C");
+    const titleField = page.getByPlaceholder(/Issue title/i);
+    await expect(titleField).toBeVisible();
+    const title = `E2E migrate cache ${Date.now()}`;
+    await titleField.click();
+    await titleField.fill(title);
+    // Gate submit on the value having committed to React state — otherwise the
+    // keydown handler can fire with a stale (empty) body under dev-server load.
+    await expect(titleField).toHaveValue(title);
+    // Ctrl/⌘+⏎ = create + open, so we land on the new issue's detail page (Inbox
+    // is a filtered "needs attention" view that wouldn't list a fresh issue).
+    await titleField.press("Control+Enter");
 
-    await expect(page.getByText("E2E: migrate cache")).toBeVisible();
-    await page.getByText("E2E: migrate cache").click();
+    await expect(page).toHaveURL(/\/w\/forge\/issues\//, { timeout: 20_000 });
+    await expect(page.getByText(title).first()).toBeVisible();
 
+    // Move status on the detail page and confirm it sticks.
     await page.locator("select").first().selectOption({ label: "In Progress" });
     await expect(page.locator("select").first()).toHaveValue(/.+/);
   });
