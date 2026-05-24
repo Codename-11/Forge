@@ -4,6 +4,7 @@ import {
   transportTitle,
   transportModeWord,
   agentAvailabilityModel,
+  presenceAvailability,
   type TransportMode,
 } from "@/lib/transport-display";
 
@@ -91,5 +92,40 @@ describe("agentAvailabilityModel", () => {
     expect(
       agentAvailabilityModel({ runtimeMode: "PERSISTENT", lastHeartbeatAt: null, transportMode: "none" }),
     ).toBe("heartbeat");
+  });
+});
+
+describe("presenceAvailability (base-column derivation)", () => {
+  it("a CODEX agent attached to a runtime, no heartbeat → on-demand", () => {
+    expect(
+      presenceAvailability({ provider: "CODEX", runtimeMode: "PERSISTENT", runtimeId: "rt_x" }),
+    ).toBe("on-demand");
+  });
+
+  it("a CUSTOM agent with a webhook, no heartbeat → on-demand", () => {
+    expect(
+      presenceAvailability({ provider: "CUSTOM", runtimeMode: "PERSISTENT", webhookUrl: "https://x" }),
+    ).toBe("on-demand");
+  });
+
+  it("Hermes uses the heartbeat model even with a runtime", () => {
+    expect(
+      presenceAvailability({ provider: "HERMES", runtimeMode: "PERSISTENT", runtimeId: "rt_h" }),
+    ).toBe("heartbeat");
+  });
+
+  it("an agent that has heartbeat uses the heartbeat model", () => {
+    expect(
+      presenceAvailability({ provider: "CODEX", runtimeMode: "PERSISTENT", lastHeartbeatAt: new Date(), runtimeId: "rt" }),
+    ).toBe("heartbeat");
+  });
+
+  it("an unconfigured agent (no runtime/webhook/heartbeat) stays heartbeat (shows status)", () => {
+    expect(presenceAvailability({ provider: "CODEX", runtimeMode: "PERSISTENT" })).toBe("heartbeat");
+  });
+
+  it("ephemeral → session; missing fields are null-safe", () => {
+    expect(presenceAvailability({ runtimeMode: "EPHEMERAL" })).toBe("session");
+    expect(presenceAvailability({})).toBe("heartbeat");
   });
 });

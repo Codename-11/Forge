@@ -19,6 +19,7 @@ import { Topbar } from "@/components/topbar";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { TransportChip } from "@/components/agents/transport-chip";
 import { FleetChecklist } from "@/components/agents/fleet-checklist";
+import { presenceAvailability } from "@/lib/transport-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -574,8 +575,9 @@ export default function AgentsPage() {
                           size="sm"
                           pulse
                           lastHeartbeatAt={a.lastHeartbeatAt}
+                          availability={presenceAvailability(a)}
                         />
-                        {a.status}
+                        {presenceAvailability(a) === "on-demand" ? "ON-DEMAND" : a.status}
                       </span>
                       {isArchived && <Badge>archived</Badge>}
                     </div>
