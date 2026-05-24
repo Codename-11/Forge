@@ -202,13 +202,26 @@ flexibility). `acp` + `codex-app-server` are declared in `PLANNED_ADAPTERS`
 shift `defaultAdapterForProvider`). Promote into the live array when a
 `DispatchConnector` lands. User-docs: `docs/agents/providers-and-transports.md`.
 
-### Deferred TODO (post-this-addendum)
+### Deferred TODO — all shipped (2026-05-23)
 
-1. Chat-only providers as a first-class registered surface (`completions`).
-2. ACP `DispatchConnector`; promote the `acp` adapter.
-3. Codex app-server `DispatchConnector`; promote `codex-app-server`.
-4. Chat composer steering for `chatMode: "none"` agents (point at attaching a
-   chat-capable runtime rather than an input that can only error).
+1. ✅ **Chat composer steering** for `chatMode: "none"` / unconfigured agents —
+   `resolveChatReadiness` + `chat.chatReadiness` + an on-theme banner with fix
+   links.
+2. ✅ **Chat-only model backend as a UI-registered surface** — encrypted
+   per-workspace `ProviderCredential` (migration 0061), DB-over-env resolution
+   in `resolveWorkspaceProviderClient`, managed in Settings → Workspace → AI.
+3. ✅ **Codex app-server connector** — WebSocket JSON-RPC `DispatchConnector`
+   (`dispatch/codex-app-server.ts`); `codex-app-server` promoted to a managed
+   runs adapter. Inert until a `ws(s)://` runtime endpoint is configured.
+4. ✅ **ACP transport** — daemon-mediated (`forge` daemon `dispatch/acp.ts`),
+   opt-in via `FORGE_ACP_CMD`; `acp` promoted to a session-tier connection
+   adapter. Reuses the chat-draft streaming plumbing; works for any provider.
+
+Remaining external validation: the Codex app-server connector and the ACP
+adapter are exercised against a live `codex app-server` / ACP agent the
+operator runs — the wire mappings are unit-tested but end-to-end needs the
+real endpoint. Transport security is enforced for app-server runtimes
+(`wss://`/`https://` for public hosts).
 
 ## Compatibility / rollback
 
