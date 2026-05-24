@@ -10,11 +10,13 @@ import { Button } from "@/components/ui/button";
 import {
   Server,
   Terminal,
+  TerminalSquare,
   MonitorPlay,
   Code2,
   Webhook,
   Mail,
   KeyRound,
+  KeySquare,
   Copy,
   RefreshCw,
   Activity,
@@ -22,7 +24,31 @@ import {
   CircleSlash,
 } from "lucide-react";
 
-const ICONS = { Server, Terminal, MonitorPlay, Code2, Webhook } as const;
+const ICONS = { Server, Terminal, TerminalSquare, MonitorPlay, Code2, Webhook } as const;
+
+const CHATMODE_LABEL: Record<string, string> = {
+  runs: "chats as itself",
+  acp: "chats as itself",
+  completions: "streaming model",
+  none: "pull / act",
+};
+
+type IntegrationAdapterRow = {
+  key: string;
+  title: string;
+  tagline: string;
+  iconKey: string;
+  transport: string;
+  chatMode: string;
+  managed: boolean;
+  multiAgent: boolean;
+  tier: number;
+  tierLabel: string;
+  defaultRuntimeMode: string;
+  defaultRunEngine: string;
+  defaultKeyKind: string;
+  agents: Array<{ id: string; profileKey: string }>;
+};
 
 export default function IntegrationsPage() {
   const ws = useWorkspace();
@@ -41,71 +67,156 @@ export default function IntegrationsPage() {
               Loading integrations…
             </div>
           )}
-          {(adapters ?? []).map((a) => {
-            const Icon = ICONS[a.iconKey as keyof typeof ICONS] ?? Webhook;
-            return (
-              <Card key={`${a.kind}-${a.presence}`} as="div">
-                <div className="flex items-start gap-3 p-4">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-subtle/40 text-foreground/80">
-                    <Icon className="h-5 w-5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-semibold text-foreground">{a.title}</h3>
-                      <span className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-                        {a.defaultRuntimeMode === "PERSISTENT" ? "persistent" : "session"}
-                      </span>
-                      <span
-                        className="rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-ember"
-                        title="Default chat engine for new agents on this integration"
-                      >
-                        {a.defaultRunEngine === "RUNS" ? "runs" : "completions"}
-                      </span>
-                      {a.agents.length > 0 && (
-                        <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-emerald-700">
-                          installed · {a.agents.length}
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-1 text-[0.8125rem] text-muted-foreground">{a.tagline}</p>
-                    {a.agents.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {a.agents.map((ag) => (
-                          <Link
-                            key={ag.id}
-                            href={`/w/${ws.slug}/agents/${ag.profileKey}`}
-                            className="rounded-md border border-border bg-card/40 px-2 py-0.5 font-mono text-[0.625rem] text-foreground/80 hover:border-ember/40"
-                          >
-                            @{ag.profileKey}
-                          </Link>
-                        ))}
-                      </div>
-                    )}
-                    <div className="mt-3 flex items-center gap-2">
-                      <Link
-                        href={`/w/${ws.slug}/settings/access?kind=${a.defaultKeyKind}`}
-                        className="rounded-md border border-border bg-card/40 px-2.5 py-1 text-[0.75rem] text-foreground hover:border-ember/40"
-                      >
-                        {a.agents.length > 0 ? "Manage keys" : "Generate key"}
-                      </Link>
-                      <Link
-                        href={`/w/${ws.slug}/settings/deliveries`}
-                        className="text-[0.75rem] text-muted-foreground hover:text-foreground"
-                      >
-                        Deliveries →
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
 
+          {!isLoading &&
+            ([
+              [1, "First-class", "Managed runtimes — always-on members. Own the loop; the agent chats as itself."],
+              [2, "Session (CLIs)", "Local CLI sessions over ACP / MCP. Full power while active, ephemeral presence."],
+              [3, "Basic", "Webhook / HTTP. Fire-and-react for any runtime that speaks HTTP."],
+            ] as const).map(([tier, label, blurb]) => {
+              const rows = (adapters ?? []).filter(
+                (a) => (a as IntegrationAdapterRow).tier === tier,
+              ) as IntegrationAdapterRow[];
+              if (rows.length === 0) return null;
+              return (
+                <section key={tier} className="space-y-2">
+                  <div className="flex items-baseline gap-2 px-1 pt-1">
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full border border-border bg-subtle/40 text-[0.5625rem] font-semibold text-foreground/80">
+                      {tier}
+                    </span>
+                    <h2 className="text-[0.8125rem] font-semibold text-foreground">{label}</h2>
+                    <span className="text-meta text-muted-foreground">{blurb}</span>
+                  </div>
+                  {rows.map((a) => (
+                    <AdapterCard key={a.key} a={a} slug={ws.slug} />
+                  ))}
+                </section>
+              );
+            })}
+
+          <ModelCredentialsCard slug={ws.slug} />
           <RuntimeHealthSection />
           <EmailIngestSection />
         </div>
       </div>
     </div>
+  );
+}
+
+/** One adapter card (registry-sourced) with tier/transport/chatMode badges. */
+function AdapterCard({ a, slug }: { a: IntegrationAdapterRow; slug: string }) {
+  const Icon = ICONS[a.iconKey as keyof typeof ICONS] ?? Webhook;
+  const servesChat = a.chatMode !== "none";
+  return (
+    <Card as="div">
+      <div className="flex items-start gap-3 p-4">
+        <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-subtle/40 text-foreground/80">
+          <Icon className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-foreground">{a.title}</h3>
+            <span className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+              {a.transport}
+            </span>
+            <span
+              className={
+                "rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider " +
+                (servesChat
+                  ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
+                  : "border-border bg-subtle/40 text-muted-foreground")
+              }
+              title={
+                servesChat
+                  ? "Serves interactive chat — the agent answers as itself."
+                  : "Pull/act connection: reads context + acts, doesn't serve a chat turn."
+              }
+            >
+              {CHATMODE_LABEL[a.chatMode] ?? a.chatMode}
+            </span>
+            {a.managed && (
+              <span
+                className="rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-ember"
+                title="A managed runtime — create one in Settings → Runtimes and attach agents."
+              >
+                managed
+              </span>
+            )}
+            {a.agents.length > 0 && (
+              <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-emerald-700">
+                in use · {a.agents.length}
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-[0.8125rem] text-muted-foreground">{a.tagline}</p>
+          {a.agents.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {a.agents.map((ag) => (
+                <Link
+                  key={ag.id}
+                  href={`/w/${slug}/agents/${ag.profileKey}`}
+                  className="rounded-md border border-border bg-card/40 px-2 py-0.5 font-mono text-[0.625rem] text-foreground/80 hover:border-ember/40"
+                >
+                  @{ag.profileKey}
+                </Link>
+              ))}
+            </div>
+          )}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {a.managed ? (
+              <Link
+                href={`/w/${slug}/settings/runtimes`}
+                className="rounded-md border border-border bg-card/40 px-2.5 py-1 text-[0.75rem] text-foreground hover:border-ember/40"
+              >
+                Manage runtimes
+              </Link>
+            ) : (
+              <Link
+                href={`/w/${slug}/settings/access?kind=${a.defaultKeyKind}`}
+                className="rounded-md border border-border bg-card/40 px-2.5 py-1 text-[0.75rem] text-foreground hover:border-ember/40"
+              >
+                {a.agents.length > 0 ? "Manage keys" : "Generate key"}
+              </Link>
+            )}
+            <Link
+              href={`/w/${slug}/settings/agents`}
+              className="text-[0.75rem] text-muted-foreground hover:text-foreground"
+            >
+              Add agent →
+            </Link>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/** Pointer to the per-workspace chat-model credential surface (Streaming engine). */
+function ModelCredentialsCard({ slug }: { slug: string }) {
+  return (
+    <Card as="div">
+      <div className="flex items-start gap-3 p-4">
+        <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-subtle/40 text-foreground/80">
+          <KeySquare className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold text-foreground">Model credentials</h3>
+          <p className="mt-1 text-[0.8125rem] text-muted-foreground">
+            The chat model the <span className="font-medium">Streaming</span> engine
+            calls (OpenAI / Anthropic / custom OpenAI-compatible). Stored encrypted
+            per workspace — no env vars required.
+          </p>
+          <div className="mt-3">
+            <Link
+              href={`/w/${slug}/settings/workspace`}
+              className="rounded-md border border-border bg-card/40 px-2.5 py-1 text-[0.75rem] text-foreground hover:border-ember/40"
+            >
+              Configure models →
+            </Link>
+          </div>
+        </div>
+      </div>
+    </Card>
   );
 }
 

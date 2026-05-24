@@ -1,14 +1,15 @@
-import { z } from "zod";
 import { router, workspaceProcedure } from "@/server/trpc";
-import { INTEGRATION_ADAPTERS } from "@/server/integrations/adapters";
+import { RUNTIME_ADAPTERS, defaultAdapterForProvider } from "@/server/runtimes/adapters";
+import { tierForTransport } from "@/lib/transport-display";
 
-const idString = z.string().min(1).max(40);
-
+/**
+ * Integrations index — now sourced from the canonical provider-agnostic
+ * RuntimeAdapter registry (`src/server/runtimes/adapters.ts`), NOT the retired
+ * provider-keyed manifest. Each adapter carries its tier (first-class / session
+ * / basic), transport, and chatMode so the page can group + badge them, and we
+ * attach the workspace's agents that use each adapter.
+ */
 export const integrationRouter = router({
-  /**
-   * List all known integration adapters + which agents in this workspace
-   * are using each. Drives the integrations index page.
-   */
   list: workspaceProcedure.query(async ({ ctx }) => {
     const agents = await ctx.db.agent.findMany({
       where: { workspaceId: ctx.workspaceId, archivedAt: null },
@@ -21,83 +22,45 @@ export const integrationRouter = router({
         runtimeMode: true,
         status: true,
         lastHeartbeatAt: true,
+        runtime: { select: { adapterKey: true } },
       },
     });
-    const byProvider = new Map<string, typeof agents>();
+
+    // Associate each agent with an adapter: precise via its attached runtime's
+    // adapterKey, else by its provider's default adapter (so unattached agents
+    // still surface under the right card without double-counting CLAUDE across
+    // claude-code + claude-desktop).
+    const byAdapter = new Map<string, typeof agents>();
     for (const a of agents) {
-      const list = byProvider.get(a.provider) ?? [];
+      const key = a.runtime?.adapterKey ?? defaultAdapterForProvider(a.provider)?.key;
+      if (!key) continue;
+      const list = byAdapter.get(key) ?? [];
       list.push(a);
-      byProvider.set(a.provider, list);
+      byAdapter.set(key, list);
     }
-    return INTEGRATION_ADAPTERS.map((adapter) => ({
-      ...adapter,
-      agents: byProvider.get(adapter.kind) ?? [],
-    }));
+
+    return RUNTIME_ADAPTERS.map((adapter) => {
+      const tier = tierForTransport(adapter.transport);
+      return {
+        key: adapter.key,
+        title: adapter.title,
+        tagline: adapter.tagline,
+        iconKey: adapter.iconKey,
+        transport: adapter.transport,
+        chatMode: adapter.chatMode,
+        managed: adapter.managed,
+        multiAgent: adapter.multiAgent,
+        tier: tier.n,
+        tierLabel: tier.label,
+        providers: adapter.providers,
+        defaultRuntimeMode: adapter.defaultRuntimeMode,
+        defaultRunEngine: adapter.defaultRunEngine,
+        defaultKeyKind: adapter.defaultKeyKind,
+        capabilities: adapter.capabilities,
+        setupMarkdown: adapter.setupMarkdown,
+        mcpSnippet: adapter.mcpSnippet,
+        agents: byAdapter.get(adapter.key) ?? [],
+      };
+    });
   }),
-
-  /**
-   * Return the manifest for a single adapter, plus its installed agents.
-   * Powers the "install" detail page.
-   */
-  byKind: workspaceProcedure
-    .input(
-      z.object({
-        kind: z.string().min(1).max(40),
-        presence: z.string().optional(),
-      }),
-    )
-    .query(async ({ ctx, input }) => {
-      const adapter = INTEGRATION_ADAPTERS.find(
-        (a) =>
-          a.kind === input.kind &&
-          (!input.presence || a.presence === input.presence),
-      );
-      if (!adapter) return null;
-      const agents = await ctx.db.agent.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          provider: adapter.kind as never,
-          archivedAt: null,
-        },
-        select: {
-          id: true,
-          name: true,
-          profileKey: true,
-          avatar: true,
-          runtimeMode: true,
-          status: true,
-          lastHeartbeatAt: true,
-          webhookUrl: true,
-        },
-      });
-      return { ...adapter, agents };
-    }),
-
-  /**
-   * Apply an adapter's defaults to an existing agent (sets provider +
-   * runtimeMode to match). Useful for tagging legacy agents.
-   */
-  applyToAgent: workspaceProcedure
-    .input(
-      z.object({
-        agentId: idString,
-        kind: z.string().min(1).max(40),
-        presence: z.string().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const adapter = INTEGRATION_ADAPTERS.find(
-        (a) =>
-          a.kind === input.kind &&
-          (!input.presence || a.presence === input.presence),
-      );
-      if (!adapter) throw new Error("Unknown integration");
-      return ctx.db.agent.update({
-        where: { id: input.agentId },
-        data: {
-          provider: adapter.kind as never,
-          runtimeMode: adapter.defaultRuntimeMode,
-        },
-      });
-    }),
 });
