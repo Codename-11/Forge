@@ -64,6 +64,10 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   "offline" everywhere despite the on-demand work above. You can now choose
   **Persistent** for a Codex agent attached to the Codex app-server runtime,
   and it shows **"on-demand."**
+- **On-demand presence now reads correctly on the remaining surfaces** —
+  execution-plan step dots, the crew rosters (crew page + plan/goal
+  cockpits), and the chat @-mention list no longer show a managed
+  app-server agent as "offline."
 
 ## [2026-05-23] — Sign-in, SSO & agent platforms
 

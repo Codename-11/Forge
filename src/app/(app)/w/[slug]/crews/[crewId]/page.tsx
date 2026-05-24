@@ -18,6 +18,7 @@ import { EmptyState, SkeletonList } from "@/components/ui";
 import { Confirm } from "@/components/ui/modal";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { presenceAvailability, type AvailabilityModel } from "@/lib/transport-display";
 import {
   CREW_ROLES,
   ROLE_META,
@@ -59,6 +60,14 @@ export default function CrewDetailPage() {
   const stats = statsQuery.data;
   const history = useMemo(() => historyQuery.data?.items ?? [], [historyQuery.data]);
   const agents = useMemo(() => agentsData ?? [], [agentsData]);
+  // agent.list carries the on-demand presence signal; the crew member relation
+  // doesn't. Map agentId → availability so member dots read "on-demand" for a
+  // managed app-server agent (e.g. Codex) instead of a false "offline".
+  const availabilityById = useMemo(() => {
+    const m = new Map<string, AvailabilityModel>();
+    for (const a of agents) m.set(a.id, presenceAvailability(a));
+    return m;
+  }, [agents]);
 
   // Live: presence, current-step assignments, and goal status all move
   // the detail view. Invalidate the relevant queries on those events.
@@ -277,6 +286,7 @@ export default function CrewDetailPage() {
                             status={m.agent?.status ?? "OFFLINE"}
                             size="md"
                             lastHeartbeatAt={m.agent?.lastHeartbeatAt ?? null}
+                            availability={availabilityById.get(m.agentId)}
                           />
                         </span>
                       </span>

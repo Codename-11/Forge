@@ -1,10 +1,13 @@
 "use client";
+import { useMemo } from "react";
 import Link from "next/link";
 import type { AgentStatus } from "@prisma/client";
 import { ArrowUpRight, Users } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { trpc } from "@/lib/trpc";
+import { presenceAvailability, type AvailabilityModel } from "@/lib/transport-display";
 import { cn } from "@/lib/utils";
 
 /**
@@ -64,6 +67,18 @@ export function CrewRosterPanel({
   className?: string;
 }) {
   const ws = useMaybeWorkspace();
+  // The crew prop (from plan/goal queries) doesn't carry the on-demand presence
+  // signal; agent.list does. Map agentId → availability so member dots read
+  // "on-demand" for a managed app-server agent instead of a false "offline".
+  const { data: agentsData } = trpc.agent.list.useQuery(
+    { includeArchived: false },
+    { enabled: Boolean(ws), staleTime: 30_000 },
+  );
+  const availabilityById = useMemo(() => {
+    const m = new Map<string, AvailabilityModel>();
+    for (const a of agentsData ?? []) m.set(a.id, presenceAvailability(a));
+    return m;
+  }, [agentsData]);
   if (!crew) return null;
   const members = crew.members ?? [];
   const crewHref = ws ? `/w/${ws.slug}/crews/${crew.id}` : null;
@@ -123,6 +138,7 @@ export function CrewRosterPanel({
                   <AgentPresenceDot
                     status={(m.agent.status ?? "OFFLINE") as AgentStatus}
                     lastHeartbeatAt={m.agent.lastHeartbeatAt}
+                    availability={availabilityById.get(m.agent.id)}
                     className="absolute -bottom-0.5 -right-0.5 ring-1 ring-card"
                   />
                 </span>

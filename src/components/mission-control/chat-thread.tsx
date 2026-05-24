@@ -31,7 +31,7 @@ import { ChatMarkdown } from "./chat-markdown";
 import type { SlashCommandContext } from "@/lib/chat-slash-commands";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { TransportChip } from "@/components/agents/transport-chip";
-import { agentAvailabilityModel } from "@/lib/transport-display";
+import { agentAvailabilityModel, presenceAvailability } from "@/lib/transport-display";
 
 /**
  * Active chat thread between the operator and one agent. Polls via
@@ -1064,6 +1064,7 @@ export function ChatThreadView({
         status: a.status,
         avatar: a.avatar ?? null,
         lastHeartbeatAt: a.lastHeartbeatAt ?? null,
+        availability: presenceAvailability(a),
       })),
     [workspaceAgents],
   );
