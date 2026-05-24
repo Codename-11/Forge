@@ -4,6 +4,7 @@ import { Bot, Cloud, ExternalLink, Globe, HardDrive, Server } from "lucide-react
 import type { RuntimeKind } from "@prisma/client";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { TransportChip } from "@/components/agents/transport-chip";
 
 /**
  * Agents tab. Roster of workspace agents with status pill, runtime mode
@@ -133,12 +134,16 @@ export function AgentsTab({ slug }: { slug: string }) {
                 >
                   {modeLabel}
                 </span>
+                {a.transport && (
+                  <TransportChip mode={a.transport.mode} label={a.transport.label} />
+                )}
                 {a.runtime && (
                   <RuntimeChip
                     slug={slug}
                     runtimeId={a.runtime.id}
                     name={a.runtime.name}
                     kind={a.runtime.kind}
+                    heartbeatAt={a.runtime.heartbeatAt}
                   />
                 )}
                 {a.role !== "WORKER" && (
@@ -190,11 +195,13 @@ function RuntimeChip({
   runtimeId,
   name,
   kind,
+  heartbeatAt,
 }: {
   slug: string;
   runtimeId: string;
   name: string;
   kind: RuntimeKind;
+  heartbeatAt?: Date | string | null;
 }) {
   const Icon =
     kind === "LOCAL_DAEMON"
@@ -204,13 +211,25 @@ function RuntimeChip({
         : kind === "CLOUD"
           ? Cloud
           : Server;
+  // Runtime liveness (distinct from the agent's own presence): live <90s,
+  // idle <5m, else offline — matches the integrations Runtime-presence rows.
+  const ageMs = heartbeatAt ? Date.now() - new Date(heartbeatAt).getTime() : Infinity;
+  const presence =
+    Number.isNaN(ageMs) || ageMs >= 300_000 ? "offline" : ageMs < 90_000 ? "live" : "idle";
+  const dot =
+    presence === "live"
+      ? "bg-emerald-500"
+      : presence === "idle"
+        ? "bg-warning"
+        : "bg-muted-foreground/40";
   return (
     <Link
       href={`/w/${slug}/settings/runtimes/${runtimeId}`}
       onClick={(e) => e.stopPropagation()}
-      title={`Runtime · ${kindLabel(kind)} · ${name}`}
+      title={`Runtime · ${kindLabel(kind)} · ${name} · ${presence}`}
       className="inline-flex max-w-[10rem] items-center gap-1 rounded border border-border bg-subtle/40 px-1 py-0 text-[0.5625rem] text-muted-foreground hover:border-ember/40 hover:text-foreground"
     >
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot)} />
       <Icon className="h-2.5 w-2.5 shrink-0" />
       <span className="truncate font-mono">{name}</span>
     </Link>
