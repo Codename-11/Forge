@@ -11,6 +11,7 @@ import {
   CODEX_APPROVAL_POLICIES,
   CODEX_SANDBOX_MODES,
 } from "@/server/services/dispatch/codex-app-server";
+import { recordRuntimeHeartbeatPresence } from "@/server/services/heartbeat";
 
 /**
  * Validation for `Runtime.config`. Today only the `codex-app-server` adapter
@@ -195,7 +196,7 @@ export const runtimeRouter = router({
     .mutation(async ({ ctx, input }) => {
       const row = await ctx.db.runtime.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: { id: true, archivedAt: true },
+        select: { id: true, archivedAt: true, adapterKey: true },
       });
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       if (row.archivedAt) {
@@ -204,11 +205,22 @@ export const runtimeRouter = router({
           message: "Runtime is archived; cannot heartbeat.",
         });
       }
-      return ctx.db.runtime.update({
+      const now = new Date();
+      const updated = await ctx.db.runtime.update({
         where: { id: row.id },
-        data: { heartbeatAt: new Date() },
+        data: { heartbeatAt: now },
         select: { id: true, heartbeatAt: true },
       });
+      // For a runtime whose adapter derives presence from its own heartbeat
+      // (the Forge local daemon), propagate liveness to the persistent agents
+      // it hosts so they read true online/offline. Runtimes reached outbound
+      // (Codex app server, webhooks) don't heartbeat, so their agents stay
+      // on-demand — never reached here.
+      const adapter = getRuntimeAdapter(row.adapterKey);
+      if (adapter?.capabilities.presence === "runtime-heartbeat") {
+        await recordRuntimeHeartbeatPresence(row.id, now, ctx.db);
+      }
+      return updated;
     }),
 
   archive: workspaceProcedure
