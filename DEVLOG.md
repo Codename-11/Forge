@@ -6960,3 +6960,34 @@ Fix: add `ws` to `serverExternalPackages` in `next.config.ts` so it loads
 unbundled from node_modules (same as ioredis/bullmq). Verified post-deploy:
 `require.resolve("ws")` → `ws@8.20.0` in the container, and a masked-frame
 round-trip from the deployed container → bridge → codex returns `FORGE_WS_OK`.
+
+## 2026-05-23 (cont.) — Chat accuracy per runtime + runtime-aware commands
+
+Audit found the chat UI was only accurate for server-side runtimes. Fixes:
+
+- **Transport-aware readiness.** `resolveChatReadiness` now resolves *how* chat
+  is served with a 4-way mode + `transportLabel`: `runs` (Hermes / Codex app
+  server), `completions` (configured model), **`dispatch`** (no server model
+  but reachable via the agent's runtime/daemon — per-agent webhook, LOCAL_DAEMON
+  runtime, ACP/local-daemon/webhook adapter, or an AGENT-kind ApiKey linked to
+  it), and `none`. The daemon's `handleChatDispatch` doesn't filter
+  `streamed:true`, so local CLI / **ACP** agents *do* answer — they now read as
+  ready (dispatch) instead of a false "no chat model" warning.
+- **Route agrees with the banner.** `/api/chat/stream` computes the same
+  transport; for `dispatch` mode it runs **no server loop** — persists the USER
+  row + emits CHAT_MESSAGE_POSTED (daemon replies via chat drafts) and closes,
+  with the thinking/wake indicator covering the gap. Only changes agents that
+  previously errored (no model); model-configured agents are unchanged.
+- **Header transport chip.** Replaced the explicit-`runEngine` "runs" pill
+  (which missed runtime-resolved RUNS like `@codex`) with a chatReadiness-driven
+  chip showing the actual transport — "Hermes" / "Codex app server" (ember),
+  "ACP session" / "local daemon" (sky), "Streaming · OpenAI" (subtle). Now you
+  can tell local-ACP vs remote-app-server vs Hermes vs streaming at a glance.
+- **Runtime/agent-aware slash commands.** Added an `available?(ctx)` gate;
+  `/skills`, `/memory`, `/hermes` are hidden for non-Hermes agents (`/help` +
+  autocomplete filter by it). New `/runtime` command prints the resolved
+  engine + transport ("served via …"). Composer passes `slashContext` to
+  `matchSlashCommands`; `/info` + `/engine` reflect the resolved engine.
+
+Verified: typecheck + lint clean, unit suite 661 passing (+10: dispatch-mode
+readiness, transport labels, command gating).

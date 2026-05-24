@@ -231,7 +231,7 @@ export function ChatComposer({
   useEffect(() => {
     if (!slashContext) return;
     if (isSlashInput(body) && !body.includes(" ") && attachments.length === 0) {
-      const matches = matchSlashCommands(body);
+      const matches = matchSlashCommands(body, slashContext);
       setPopoverMatches(matches);
       setPopoverOpen(matches.length > 0);
       setPopoverHighlight(0);

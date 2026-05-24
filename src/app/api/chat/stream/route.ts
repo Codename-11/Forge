@@ -12,7 +12,11 @@ import {
   type ChatToolCall,
   type ChatToolExecResult,
 } from "@/server/services/chat-stream";
-import { resolveWorkspaceProviderClient } from "@/server/services/ai-providers";
+import {
+  resolveWorkspaceProviderClient,
+  workspaceChatProviderAvailability,
+} from "@/server/services/ai-providers";
+import { resolveChatReadiness } from "@/server/services/chat-readiness";
 import {
   chatToolsAsOpenAITools,
   findChatTool,
@@ -101,9 +105,10 @@ export async function POST(req: NextRequest) {
           profileKey: true,
           provider: true,
           runEngine: true,
+          webhookUrl: true,
           templateMarkdown: true,
           capabilities: true,
-          runtime: { select: { adapterKey: true, endpoint: true, secret: true } },
+          runtime: { select: { adapterKey: true, endpoint: true, secret: true, kind: true } },
         },
       },
     },
@@ -131,6 +136,29 @@ export async function POST(req: NextRequest) {
     runtime: agent.runtime,
   });
   const useRuns = runEngine === "RUNS" && runsConnector != null;
+
+  // Resolve how this agent's chat is actually served. When it's `dispatch`
+  // (no server model — answered by the agent's runtime/daemon via chat drafts
+  // on the CHAT_MESSAGE_POSTED event), the route must NOT also run a server
+  // loop: it persists the USER row + emits the event (below) and closes the
+  // stream, letting the daemon reply. This keeps the readiness banner, the
+  // header chip, and the actual behaviour in agreement (and avoids a
+  // double-reply / "no model" error for local CLI + ACP agents).
+  const daemonLinked =
+    !useRuns &&
+    (await db.apiKey.count({
+      where: { workspaceId, linkedAgentId: agent.id, revokedAt: null },
+    })) > 0;
+  const transport = resolveChatReadiness({
+    provider: effectiveProvider,
+    runEngine: agent.runEngine,
+    runtime: agent.runtime,
+    webhookUrl: agent.webhookUrl,
+    runtimeKind: agent.runtime?.kind ?? null,
+    daemonLinked,
+    providerAvailable: await workspaceChatProviderAvailability(db, workspaceId),
+  });
+  const useDispatch = !useRuns && transport.mode === "dispatch";
 
   // Resolve + verify attachments before opening the stream so we don't
   // leave a half-written user message if one points outside the workspace.
@@ -671,6 +699,13 @@ export async function POST(req: NextRequest) {
       try {
         if (useRuns && runsConnector) {
           await streamViaRuns();
+        } else if (useDispatch) {
+          // The agent's runtime/daemon owns this turn — it replies via chat
+          // drafts on the CHAT_MESSAGE_POSTED event already emitted above. Run
+          // no server loop: leave `assembled` empty so the placeholder AGENT
+          // row is cleaned up below, and let the daemon's draft arrive over
+          // realtime (the thinking/wake indicator covers the gap). This keeps
+          // local CLI + ACP agents from erroring with "no model".
         } else {
           await runChatLoop({
             provider: effectiveProvider,
