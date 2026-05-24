@@ -818,6 +818,13 @@ function ProviderOverridePopover({
               <option value="CODEX">CODEX</option>
               <option value="CUSTOM">CUSTOM</option>
             </select>
+            <p className="text-[0.5625rem] italic text-muted-foreground/60">
+              Routes this thread to the chosen platform&apos;s configured chat
+              backend — it does not fall back to another. A provider with no
+              chat model (a pull/act CLI, or an unset API key) returns a
+              &ldquo;no chat model configured&rdquo; notice rather than
+              answering as a different platform.
+            </p>
           </div>
           <div className="space-y-1">
             <label className="block text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1446,8 +1453,20 @@ export function ChatThreadView({
       }
       void utils.chat.threads.invalidate();
       setTimeout(() => {
-        // Only clear if not replaced by a newer stream.
-        setStreamBubble((b) => (b && b.finishedAt ? null : b));
+        // Clear the finished bubble so the persisted AGENT row takes over —
+        // BUT keep it when it carries a real error. An errored reply has no
+        // persisted row to swap in, so dropping it would make the amber
+        // "no chat model configured / stream failed" banner vanish a beat
+        // after it appears (the bug operators hit when messaging a provider
+        // with no chat backend). The banner must persist until the operator
+        // resolves it (Retry) or sends another message, which replaces the
+        // bubble at the top of runStreamingSend. A user-initiated Stop
+        // (STREAM_STOP_SENTINEL) is not an error and still clears.
+        setStreamBubble((b) =>
+          b && b.finishedAt && (!b.error || b.error === STREAM_STOP_SENTINEL)
+            ? null
+            : b,
+        );
       }, 800);
     },
     // utils + threadM are stable refs from trpc; the linter doesn't know.

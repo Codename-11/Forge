@@ -257,6 +257,7 @@ export const runtimeRouter = router({
       tagline: a.tagline,
       iconKey: a.iconKey,
       transport: a.transport,
+      chatMode: a.chatMode,
       multiAgent: a.multiAgent,
       providers: a.providers,
       capabilities: a.capabilities,

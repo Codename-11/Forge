@@ -6632,3 +6632,108 @@ run as a live build — verify sign-in end-to-end before relying on it.
   trpc v11; double-check when installing.
 - `audit.ts` fire-and-forget pub/sub — acceptable because deliveries are
   durable via `WebhookDelivery` rows, but add a retry guard in prod.
+
+## 2026-05-23 — Local dev loop: dev:local, db:clone-prod, rich seed, data export/import
+
+Goal: rapid local UI iteration without the dev/build/deploy-live cycle, plus
+a real "import existing db" path. Four pieces:
+
+- **`pnpm dev:local`** (`scripts/dev-local.sh`) — fully isolated loop:
+  boots `docker/docker-compose.yml` (postgres 55432 / redis 56379 / minio
+  59000), runs `prisma migrate deploy`, seeds an empty DB, then runs
+  `next dev --turbo` against the LOCAL stack. Contrast with `dev:live`
+  which points at the *deployed* data. Flags: `--fresh` (drop+recreate
+  schema), `--no-seed`. Stable dev auth (fixed AUTH_SECRET; sign in with
+  `owner@forge.local` / `forge-dev`, ADMIN_HANDLE=forge so the credentials
+  bootstrap workspace lines up with the seed's slug).
+- **`pnpm db:clone-prod`** (`scripts/db-clone-prod.sh`) — pg_dump the live
+  `forge-postgres` container straight into `forge-dev-postgres`
+  (`--clean --if-exists --no-owner --no-acl`), then `migrate deploy` for
+  any newer local migrations. Full-fidelity replica; the reliable
+  "import existing db" path (vs the JSON export which is per-workspace and
+  scoped). pg_dump is read-only — never writes prod. MinIO bytes are NOT
+  copied (FILE attachment rows will dangle; everything else intact).
+- **Rich seed** (`prisma/seed.ts`) — replaced the 5-issue stub with a
+  realistic fixture: workspace `forge`/FRG (timeTracking + CAPABILITY_MATCH
+  autodispatch on), 3 members, 6 statuses, 7 labels, 2 initiatives, 3
+  projects, 2 sprints (1 active/1 planned), 2 agents (victor/mizu), 24
+  issues across the board with assignees/labels/relations, 3 comments.
+  Idempotent: appends issue numbers off the current max and only creates
+  issues/relations/comments when the workspace has none. (seed-agents.ts
+  still targets the prod AXI workspace and is no longer called by
+  dev:local — agents are seeded inline now.)
+- **Data export/import** — new `dataPortability` tRPC router
+  (`src/server/routers/data-portability.ts`, admin-gated) + Settings →
+  Admin → "Data export / import" page
+  (`/w/[slug]/settings/data`). Export serialises core content
+  (settings, statuses, labels, initiatives, projects, cycles, agents,
+  issues + assignees/labels/relations, BODY comments) to a portable JSON
+  the browser downloads. Import is ADDITIVE: config rows upsert by natural
+  key (status/label/cycle name, project key, initiative slug, agent
+  profileKey), issues always create fresh with appended numbers, relations
+  + comments remap onto the new ids, users matched by email (unknown →
+  importing admin). Never deletes. Round-trip verified end-to-end via a
+  throwaway createCaller test (24 issues / 40 issue-labels / 2 relations /
+  3 comments reproduced exactly into a fresh workspace).
+
+Verified: fresh migrate + seed against local stack (counts correct),
+seed idempotency (re-run creates 0), export→import round-trip, typecheck,
+lint clean on all touched files.
+
+Docs: rewrote README Quick start (two dev modes + db:clone-prod + data
+export/import), added `docs/guide/local-development.md` (wired into the
+VitePress sidebar under Getting Started), updated the quickstart info box
+and `docs/guide/settings.md` (new Data export/import surface under Admin),
+and added a Local development section to this repo's `CLAUDE.md`. Docs
+build passes (no dead links).
+
+Also ran `pnpm db:clone-prod` — local `forge-dev-postgres` now mirrors
+live exactly (3 workspaces / 46 issues / 4 agents). Pointing local dev at
+the live DB directly already exists as `pnpm dev` (= dev-live.sh); the
+clone is the isolated-sandbox alternative via `pnpm dev:local --no-seed`.
+
+## 2026-05-23 — Chat error-banner persistence + provider/transport taxonomy
+
+**Bug: error banner vanished on chat reload.** Messaging a provider with no
+chat backend (e.g. a Codex CLI agent) surfaced the amber "no chat model
+configured" banner, then it disappeared ~800ms later on both Mission Control
+and the standalone Chat view. Root cause: that error is emitted as an SSE
+`error` event *after* the route accepts the send (200 + `meta`), so
+`serverAccepted` is true and `failSend` sets `error` **and** `finishedAt`.
+The cleanup timer at the end of `runStreamingSend` (`chat-thread.tsx`) cleared
+any bubble whose `finishedAt` was set — including errored ones. Fix: retain
+the bubble when it carries a real error; only clear on clean finish or a
+user-initiated Stop (`STREAM_STOP_SENTINEL`). The banner now persists until
+the operator hits Retry or sends another message (which replaces the bubble
+at the top of `runStreamingSend`). Both surfaces share `ChatThreadView`, so
+one fix covers both.
+
+**Architecture: provider/transport taxonomy (decision + scaffolding).**
+Encoded the two-kinds-of-provider model in `src/server/runtimes/adapters.ts`:
+- **Agent/runtime providers** (the agent *is* the provider; no Forge-held API
+  key) vs **chat-only providers** (raw OpenAI-compat model via key/base URL —
+  the Completions backend). Chat-only is **deferred** as its own first-class
+  surface (no registry adapter ships with it).
+- New `RuntimeAdapter.chatMode` (`runs | completions | acp | none`). Pull/act
+  CLI connections (Codex CLI, Claude Code, Claude Desktop, custom-http) are
+  `"none"` — they read context + act over MCP/webhook but don't answer chat
+  from a key they lack. `hermes`/`local-daemon` are `"runs"`. Added
+  `adapterServesChat()` for UI steering.
+- `RuntimeTransport` extended with `"acp"` (mid tier — Agent Client Protocol,
+  portable multi-vendor CLI sessions) and `"app-server"` (rich, vendor —
+  Codex's `app server`, the OpenAI analogue to the Hermes gateway). Both
+  declared in `PLANNED_ADAPTERS` (documentation-only; no connector yet, kept
+  out of `RUNTIME_ADAPTERS` so they don't shift `defaultAdapterForProvider`).
+  We support both ACP and vendor app servers by design for flexibility.
+
+UI/docs: clarified the chat ProviderOverride popover subtext (routes to the
+chosen platform's configured backend, never falls back); `runtime.adapters`
+catalog now returns `chatMode`; added user-doc
+`docs/agents/providers-and-transports.md`, a callout in
+`docs/agents/engines.md`, and an addendum + deferred-TODO list in the
+runtime-adapter ADR.
+
+Verified: `pnpm typecheck` clean, lint clean on touched files, full unit
+suite 615 passing (+2 new adapter taxonomy tests incl. a "Codex must not
+present as a chat backend" regression guard). Not committed/deployed — left
+to the operator (a parallel session is also working this tree).

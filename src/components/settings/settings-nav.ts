@@ -1,6 +1,7 @@
 import {
   Bot,
   ClipboardList,
+  DatabaseBackup,
   Key,
   KeyRound,
   Layers,
@@ -179,6 +180,14 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
         badge: "admin only",
         description:
           "Workspace-wide observability — audit log, activity events, webhook delivery status.",
+      },
+      {
+        path: "/data",
+        label: "Data export / import",
+        icon: DatabaseBackup,
+        badge: "admin only",
+        description:
+          "Download this workspace's core content as a portable JSON snapshot, or import one into this workspace. Great for cloning a workspace into local dev.",
       },
     ],
   },

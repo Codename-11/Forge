@@ -154,6 +154,62 @@ runtime (custom-http) could make the worker's shim resolution prefer
 `Runtime.endpoint` over the per-agent override — a clean extension point, not
 outstanding work.
 
+## Provider taxonomy & transport tiers (2026-05-23 addendum)
+
+Refining the model after the "Codex agent answered via Hermes" report. Two
+orthogonal clarifications, both now encoded in `src/server/runtimes/adapters.ts`.
+
+### Two kinds of provider
+
+- **Agent / runtime providers** — the agent itself is the provider (Hermes
+  profiles, Codex, Claude Code, OpenCode, custom bots). Forge holds **no model
+  API key**; it reaches the runtime and the runtime runs the model.
+- **Chat-only providers** — raw OpenAI-compatible model access via API key /
+  base URL (plain OpenAI/Anthropic/custom gateway). Forge owns the loop; the
+  model is a stateless completion backend. **Deferred as its own first-class
+  surface** — `streamChatReply` still supports it via env `ai-providers`, but
+  no registry adapter ships with this mode and there's no UI to register a key
+  as a provider. (User direction: "chat only providers would be their own
+  concept — defer that in TODO.")
+
+### `chatMode` capability
+
+New `RuntimeAdapter.chatMode: "runs" | "completions" | "acp" | "none"` — *how*
+(or whether) an adapter serves an interactive chat turn. Pull/act CLI
+connections (Codex CLI, Claude Code, Claude Desktop, custom-http webhook) are
+`"none"`: they read context + act over MCP/webhook but do **not** answer chat
+from an API key they don't have. `hermes` and `local-daemon` are `"runs"`.
+`adapterServesChat()` lets the UI steer the operator toward a chat-capable
+runtime instead of presenting a composer that can only error.
+
+### Transport tiers
+
+`RuntimeTransport` extended with `"acp"` and `"app-server"` to express the
+full ladder, basic → rich:
+
+- `webhook` / `mcp` / `local-daemon` — **basic**: push/pull, fire-and-react.
+- `acp` *(planned)* — **mid**: Agent Client Protocol session; portable
+  multi-vendor CLI control (Claude Code, Codex, OpenCode) without per-vendor
+  wiring.
+- `app-server` *(planned)* — **rich, vendor-specific**: a vendor's own
+  long-lived agent server, e.g. Codex's `app server` — the OpenAI analogue to
+  the Hermes gateway.
+- `runs-api` — **richest**: managed runtime owning the full loop (Hermes).
+
+We support **both** ACP and vendor app servers by design (operator keeps the
+flexibility). `acp` + `codex-app-server` are declared in `PLANNED_ADAPTERS`
+(documentation-only; no connector, not in `RUNTIME_ADAPTERS`, so they don't
+shift `defaultAdapterForProvider`). Promote into the live array when a
+`DispatchConnector` lands. User-docs: `docs/agents/providers-and-transports.md`.
+
+### Deferred TODO (post-this-addendum)
+
+1. Chat-only providers as a first-class registered surface (`completions`).
+2. ACP `DispatchConnector`; promote the `acp` adapter.
+3. Codex app-server `DispatchConnector`; promote `codex-app-server`.
+4. Chat composer steering for `chatMode: "none"` agents (point at attaching a
+   chat-capable runtime rather than an input that can only error).
+
 ## Compatibility / rollback
 
 Each phase is independently shippable and reversible. Phase 1 changes no

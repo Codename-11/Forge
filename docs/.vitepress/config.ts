@@ -96,6 +96,7 @@ export default defineConfig({
             { text: "Welcome", link: "/guide/welcome.html" },
             { text: "Architecture", link: "/guide/architecture.html" },
             { text: "Quickstart", link: "/guide/quickstart.html" },
+            { text: "Local Development", link: "/guide/local-development.html" },
           ],
         },
         {

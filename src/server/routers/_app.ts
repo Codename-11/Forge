@@ -30,6 +30,7 @@ import { standupRouter } from "./standup";
 import { systemRouter } from "./system";
 import { cycleRouter } from "./cycle";
 import { dashboardRouter } from "./dashboard";
+import { dataPortabilityRouter } from "./data-portability";
 import { dispatchRuleRouter } from "./dispatch-rule";
 import { embedRouter } from "./embed";
 import { eventRouter } from "./event";
@@ -67,6 +68,7 @@ export const appRouter = router({
   contextSet: contextSetRouter,
   cycle: cycleRouter,
   dashboard: dashboardRouter,
+  dataPortability: dataPortabilityRouter,
   dispatchRule: dispatchRuleRouter,
   embed: embedRouter,
   event: eventRouter,
