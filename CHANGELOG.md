@@ -77,11 +77,13 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Changed
 
-- **Local-daemon agents now show true online/offline.** An agent hosted on
-  the Forge local daemon goes **online** while the daemon is heartbeating and
+- **Managed agents now show true online/offline.** An agent hosted on the
+  Forge local daemon goes **online** while the daemon is heartbeating and
   flips to **offline** when it stops — instead of always reading "on-demand."
-  (Agents on outbound runtimes that don't heartbeat — e.g. the Codex app
-  server — still read "on-demand," since there's nothing to report liveness.)
+- **Codex app-server presence is health-checked.** Forge now periodically
+  pings the Codex app server; its agent reads **online** when the server
+  answers and **offline** when it doesn't, so a dead bridge is visible at a
+  glance instead of failing only when you message it.
 
 ## [2026-05-23] — Sign-in, SSO & agent platforms
 

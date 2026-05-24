@@ -7378,3 +7378,31 @@ out of this repo) — at which point this same code lights it up automatically.
 
 Tests: +3 in heartbeat.test.ts (OFFLINE→ONLINE+event, BUSY preserved+bump,
 EPHEMERAL untouched). typecheck + lint clean, 697 unit tests pass.
+
+## 2026-05-24 (cont.) — Active health probe for outbound managed runtimes
+
+Closed the last presence gap: the Codex app server (REMOTE_HTTP, reached
+outbound, never heartbeats inbound) now gets true online/offline via an active
+probe.
+
+New `sweepRuntimeHealth()` (runtime-health.ts), a 60s maintenance job: finds
+non-archived, non-disabled runtimes with an endpoint whose adapter is
+`transport: "app-server"` + presence `runtime-heartbeat` (today: codex-app-
+server; Hermes `runs-api` and LOCAL_DAEMON are intentionally excluded — Hermes
+reports per-agent, the daemon self-heartbeats, probing them could override a
+better signal). Reuses the existing `probeRuntime()` (WS `initialize`
+handshake) from the verify-connection path. A reachable endpoint == heartbeat:
+bumps `Runtime.heartbeatAt` + calls `recordRuntimeHeartbeatPresence()` so the
+hosted persistent agents read online; an unreachable one isn't bumped and
+`sweepIdleAgents` flips the agents OFFLINE once stale.
+
+Wired into worker.ts (job id `runtime-health-sweep`, 60s, registered on boot).
+Secret is passed to the probe as-is (same as verifyConnection — not decrypted).
+
+Tests: runtime-health.test.ts — real in-process `ws` server (reachable →
+agent ONLINE + runtime heartbeatAt set) + unreachable endpoint (agent stays
+OFFLINE). typecheck + lint clean, 699 unit tests pass.
+
+Net: presence is now true online/offline for every managed runtime (Hermes,
+local daemon, Codex app server); session CLIs stay "session"; nothing reads a
+false "offline" or a stale "on-demand."
