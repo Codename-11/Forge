@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Confirm, Picker } from "@/components/ui/modal";
 import { EmptyState, Skeleton, SkeletonText } from "@/components/ui";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { presenceAvailability } from "@/lib/transport-display";
 import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
@@ -940,7 +941,11 @@ function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => 
               </span>
             )}
           </span>
-          <AgentPresenceDot status={current.status} size="sm" />
+          <AgentPresenceDot
+            status={current.status}
+            size="sm"
+            availability={presenceAvailability(current)}
+          />
           <span className="truncate">{current.name}</span>
           <span className="font-mono text-[0.6875rem] text-muted-foreground">@{current.profileKey}</span>
         </>
@@ -1047,7 +1052,12 @@ function AgentPickerModal({
                 </span>
               )}
             </span>
-            <AgentPresenceDot status={it.status} size="md" lastHeartbeatAt={it.lastHeartbeatAt} />
+            <AgentPresenceDot
+              status={it.status}
+              size="md"
+              lastHeartbeatAt={it.lastHeartbeatAt}
+              availability={presenceAvailability(it)}
+            />
             <span className="truncate">{it.name}</span>
             <span className="font-mono text-[0.6875rem] text-muted-foreground">@{it.profileKey}</span>
             {it.capabilities.length > 0 && (

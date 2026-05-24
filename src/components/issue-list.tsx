@@ -15,6 +15,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { EmptyState, Kbd, SkeletonList, useDensity } from "@/components/ui";
 import { Confirm, Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { presenceAvailability } from "@/lib/transport-display";
 import { AgentHoverPreview } from "@/components/agent-hover-preview";
 import { IssueHoverPreview } from "@/components/issue-hover-preview";
 import { BulkBar, type BulkBarAction } from "@/components/bulk-bar";
@@ -518,6 +519,7 @@ export function IssueList({
                         <AgentPresenceDot
                           status={issue.assignedAgent.status}
                           size="sm"
+                          availability={presenceAvailability(issue.assignedAgent)}
                         />
                         <span className="text-id">
                           @{issue.assignedAgent.profileKey}
@@ -961,7 +963,10 @@ function BulkAssigneePicker({
                 </span>
               )}
             </span>
-            <AgentPresenceDot status={r.status as "ONLINE" | "BUSY" | "OFFLINE"} />
+            <AgentPresenceDot
+              status={r.status as "ONLINE" | "BUSY" | "OFFLINE"}
+              availability={presenceAvailability(r)}
+            />
             <span className="truncate">{r.name}</span>
             <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
               @{r.profileKey}

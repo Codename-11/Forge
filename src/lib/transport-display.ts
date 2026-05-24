@@ -100,6 +100,11 @@ export function presenceAvailability(input: {
   lastHeartbeatAt?: Date | string | null;
   webhookUrl?: string | null;
   runtimeId?: string | null;
+  // Accepted-but-ignored identity fields so any agent-like object (even a
+  // minimal `{ status }` picker row) is assignable here without a TS2559
+  // "no properties in common" error — the function only reads the fields above.
+  id?: string;
+  status?: string | null;
 }): AvailabilityModel {
   if (input.runtimeMode === "EPHEMERAL") return "session";
   if (input.provider === "HERMES" || input.lastHeartbeatAt) return "heartbeat";
