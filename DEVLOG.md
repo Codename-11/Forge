@@ -7172,3 +7172,23 @@ agent does neither, so it's stuck OFFLINE though chat is request-time reachable.
 Verified: typecheck + lint clean, 688 unit tests (+availability model +
 byProfileKey transport), deployed (`/signin` 200, stamped 286dba1). CHANGELOG
 entry added (user-facing presence fix).
+
+## 2026-05-24 (cont.) — E2E: rock-solid local determinism (prod build, not dev)
+
+Follow-up to the E2E overhaul. The webServer was `next dev`, whose on-demand
+compilation stalled under parallel workers — the heaviest ops (issue
+create+open, data export) occasionally timed out, papered over with a local
+retry. Replaced with a **production `next build` + `next start`** server
+(`scripts/e2e-web.sh`): no per-request compilation, so runs are deterministic.
+
+- `next.config.ts` skips `output: "standalone"` for the isolated E2E build
+  (`NEXT_DIST_DIR=.next-e2e`) since `next start` doesn't support standalone;
+  the prod Docker image (no `NEXT_DIST_DIR`) keeps standalone unchanged.
+- `e2e-web.sh` builds once (or on `E2E_FORCE_BUILD=1`, set by `pnpm e2e`) then
+  `next start`s; reuses the build otherwise. `pnpm e2e` kills any stale :3200
+  server + forces a fresh build so it always reflects current source.
+- Dropped the local Playwright retry (`retries: CI ? 2 : 0`) — no longer
+  needed. CI keeps 2 purely for runner-infra hiccups.
+
+Result: full suite **9/9 in ~10s** (was 47–70s on dev), three consecutive runs
+clean, zero flakes. typecheck + lint clean.

@@ -71,5 +71,15 @@ pnpm exec prisma migrate deploy >/dev/null
 pnpm exec prisma generate >/dev/null
 pnpm exec tsx prisma/seed.ts
 
-echo "[e2e] Starting Next dev on :${PORT} (DB forge_e2e, FORGE_E2E=1)…"
-exec pnpm exec next dev -p "$PORT"
+# Production build → `next start` (NOT `next dev`): no on-demand compilation, so
+# the server doesn't stall under parallel workers — the source of E2E flakiness.
+# Rebuild only when missing or forced (E2E_FORCE_BUILD=1, set by `pnpm e2e`).
+if [[ "${E2E_FORCE_BUILD:-0}" == "1" || ! -f "$ROOT/$NEXT_DIST_DIR/BUILD_ID" ]]; then
+  echo "[e2e] Building production bundle (NEXT_DIST_DIR=$NEXT_DIST_DIR)…"
+  pnpm exec next build
+else
+  echo "[e2e] Reusing existing $NEXT_DIST_DIR build (E2E_FORCE_BUILD=1 to rebuild)."
+fi
+
+echo "[e2e] Starting Next (production) on :${PORT} (DB forge_e2e, FORGE_E2E=1)…"
+exec pnpm exec next start -p "$PORT"
