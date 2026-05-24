@@ -6952,3 +6952,11 @@ Remaining: the operator sends a chat to `@codex` in the UI (auth-walled, can't
 do headless) — every layer beneath that is proven. Bridge durability is the
 only ops follow-up. Verified: typecheck + lint clean, 651 unit tests (+1 gated
 live), daemon + docs build clean.
+
+**Follow-up — `b.mask is not a function` (first real UI chat).** Next's server
+bundling minified `ws` and mangled its frame-masking util, so the connector
+threw when masking an outbound WebSocket frame (client frames are masked).
+Fix: add `ws` to `serverExternalPackages` in `next.config.ts` so it loads
+unbundled from node_modules (same as ioredis/bullmq). Verified post-deploy:
+`require.resolve("ws")` → `ws@8.20.0` in the container, and a masked-frame
+round-trip from the deployed container → bridge → codex returns `FORGE_WS_OK`.
