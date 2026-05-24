@@ -356,11 +356,18 @@ export function makeCodexAppServerConnector(opts: {
 
       // UserInput text blocks require `text_elements` (verified against
       // codex-cli 0.133 UserInput) — omitting it fails deserialization.
+      // Each run opens a fresh thread, so prior turns won't be in Codex's
+      // context — fold the conversation history into the prompt for continuity.
+      const textBlock = (text: string) => ({ type: "text", text, text_elements: [] });
       const turnInput: Array<Record<string, unknown>> = [];
-      if (input.instructions) {
-        turnInput.push({ type: "text", text: input.instructions, text_elements: [] });
+      if (input.instructions) turnInput.push(textBlock(input.instructions));
+      if (input.history && input.history.length > 0) {
+        const transcript = input.history
+          .map((m) => `${m.role === "assistant" ? "Assistant" : m.role === "system" ? "System" : "User"}: ${m.content}`)
+          .join("\n");
+        turnInput.push(textBlock(`# Conversation so far\n${transcript}`));
       }
-      turnInput.push({ type: "text", text: input.message, text_elements: [] });
+      turnInput.push(textBlock(input.message));
       const turnRes = (await request(run, "turn/start", {
         threadId,
         input: turnInput,
