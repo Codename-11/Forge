@@ -1,12 +1,47 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { AgentProvider, RuntimeKind, type Runtime } from "@prisma/client";
+import { AgentProvider, RuntimeKind, type Prisma, type Runtime } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import {
   getRuntimeAdapter,
   managedAdapters,
   PLANNED_ADAPTERS,
 } from "@/server/runtimes/adapters";
+import {
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+} from "@/server/services/dispatch/codex-app-server";
+
+/**
+ * Validation for `Runtime.config`. Today only the `codex-app-server` adapter
+ * uses it — `{ sandboxMode, approvalPolicy, workspaceRoot }`, the per-turn
+ * policy the connector sends. Defaults (omitted keys) reproduce today's
+ * full-access, no-prompt behavior. `.strict()` rejects unknown keys so a typo
+ * can't silently disable the sandbox.
+ */
+const codexConfigSchema = z
+  .object({
+    sandboxMode: z.enum(CODEX_SANDBOX_MODES as [string, ...string[]]).optional(),
+    approvalPolicy: z.enum(CODEX_APPROVAL_POLICIES as [string, ...string[]]).optional(),
+    workspaceRoot: z.string().max(500).optional(),
+  })
+  .strict();
+
+/** Validate a `config` payload for the resolved adapter. */
+function validateRuntimeConfig(adapterKey: string | null | undefined, config: unknown): Prisma.InputJsonValue {
+  if (adapterKey === "codex-app-server") {
+    return codexConfigSchema.parse(config ?? {}) as Prisma.InputJsonValue;
+  }
+  // Other adapters carry no config today; reject non-empty payloads so we
+  // don't persist values nothing reads.
+  if (config && Object.keys(config as object).length > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Adapter "${adapterKey ?? "unknown"}" takes no config.`,
+    });
+  }
+  return {} as Prisma.InputJsonValue;
+}
 
 /** Compute location a managed adapter's transport implies. */
 function kindForAdapterTransport(transport: string): RuntimeKind {
@@ -228,6 +263,7 @@ export const runtimeRouter = router({
         endpoint: z.string().url().max(500).optional().or(z.literal("")),
         secret: z.string().max(500).optional(),
         providersAvailable: z.array(z.nativeEnum(AgentProvider)).max(16).optional(),
+        config: z.record(z.unknown()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -239,6 +275,7 @@ export const runtimeRouter = router({
         });
       }
       assertEndpointTransport(input.endpoint || null);
+      const config = validateRuntimeConfig(adapter.key, input.config);
       const row = await ctx.db.runtime.create({
         data: {
           workspaceId: ctx.workspaceId,
@@ -248,6 +285,7 @@ export const runtimeRouter = router({
           endpoint: input.endpoint || null,
           secret: input.secret || null,
           providersAvailable: input.providersAvailable ?? adapter.providers,
+          config,
           ownerId: ctx.session.user.id,
         },
       });
@@ -267,19 +305,24 @@ export const runtimeRouter = router({
           .array(z.nativeEnum(AgentProvider))
           .max(16)
           .optional(),
+        config: z.record(z.unknown()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { id, secret, endpoint, adapterKey, ...rest } = input;
+      const { id, secret, endpoint, adapterKey, config, ...rest } = input;
       const row = await ctx.db.runtime.findFirst({
         where: { id, workspaceId: ctx.workspaceId },
-        select: { id: true },
+        select: { id: true, adapterKey: true },
       });
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       if (adapterKey !== undefined && !getRuntimeAdapter(adapterKey)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown adapter key." });
       }
       if (endpoint) assertEndpointTransport(endpoint);
+      // Validate against the effective adapter (incoming override or stored).
+      const effectiveAdapter = adapterKey ?? row.adapterKey;
+      const validatedConfig =
+        config !== undefined ? validateRuntimeConfig(effectiveAdapter, config) : undefined;
       const updated = await ctx.db.runtime.update({
         where: { id: row.id },
         data: {
@@ -288,7 +331,29 @@ export const runtimeRouter = router({
           ...(endpoint !== undefined ? { endpoint: endpoint || null } : {}),
           // "" → keep; null → clear; non-empty → set.
           ...(secret === undefined ? {} : { secret: secret || null }),
+          ...(validatedConfig !== undefined ? { config: validatedConfig } : {}),
         },
+      });
+      return redactRuntime(updated);
+    }),
+
+  /**
+   * Pause / resume a runtime (the `disabledAt` kill-switch). Distinct from
+   * `archive` (a reversible delete): disabling keeps the row configured and
+   * visible but stops it dialing — dispatch skips it and chat reports
+   * `[runtime disabled]` via the sentinel connector. Idempotent.
+   */
+  setEnabled: workspaceProcedure
+    .input(z.object({ id: runtimeId, enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const row = await ctx.db.runtime.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+      const updated = await ctx.db.runtime.update({
+        where: { id: row.id },
+        data: { disabledAt: input.enabled ? null : new Date() },
       });
       return redactRuntime(updated);
     }),

@@ -1616,6 +1616,21 @@ model Runtime {
   /// User who registered this runtime.
   ownerId            String?
   archivedAt         DateTime?
+  /// Soft kill-switch. When set, the runtime is "disabled": dispatch +
+  /// chat refuse to dial it (the connector resolves to a sentinel that
+  /// reports `[runtime disabled]` rather than opening a session). Distinct
+  /// from `archivedAt` (a reversible delete / hide) — `disabledAt` is a
+  /// reversible pause that keeps the row visible and configured. Added
+  /// 2026-05-24 (migration 0062) for operator control of host-touching
+  /// runtimes like the Codex app server.
+  disabledAt         DateTime?
+  /// Adapter-specific runtime configuration (validated per `adapterKey` in
+  /// the runtime router; opaque here). For `codex-app-server` this carries
+  /// `{ sandboxMode, approvalPolicy, workspaceRoot }` — the connector sends
+  /// them as per-turn `sandboxPolicy`/`approvalPolicy`/`cwd` overrides so an
+  /// operator can flip a Codex runtime between full-access (today's default)
+  /// and a sandboxed, approval-gated mode without restarting the bridge.
+  config             Json?
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
 

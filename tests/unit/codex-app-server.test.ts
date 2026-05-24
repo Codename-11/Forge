@@ -3,6 +3,7 @@ import {
   mapCodexNotification,
   mapCodexUsage,
   makeCodexAppServerConnector,
+  parseCodexRuntimeConfig,
 } from "@/server/services/dispatch/codex-app-server";
 
 /**
@@ -109,5 +110,37 @@ describe("makeCodexAppServerConnector", () => {
     expect(typeof c?.startRun).toBe("function");
     expect(typeof c?.approve).toBe("function");
     expect(typeof c?.stop).toBe("function");
+  });
+});
+
+describe("parseCodexRuntimeConfig", () => {
+  it("returns empty config for null/garbage (connector falls back to safe defaults)", () => {
+    expect(parseCodexRuntimeConfig(null)).toEqual({});
+    expect(parseCodexRuntimeConfig("nope")).toEqual({});
+    expect(parseCodexRuntimeConfig(42)).toEqual({});
+  });
+  it("keeps only valid sandbox/approval values", () => {
+    expect(
+      parseCodexRuntimeConfig({
+        sandboxMode: "workspace-write",
+        approvalPolicy: "on-request",
+        workspaceRoot: "/work",
+      }),
+    ).toEqual({
+      sandboxMode: "workspace-write",
+      approvalPolicy: "on-request",
+      workspaceRoot: "/work",
+    });
+  });
+  it("drops unknown enum values rather than passing them through", () => {
+    expect(
+      parseCodexRuntimeConfig({ sandboxMode: "yolo", approvalPolicy: "maybe" }),
+    ).toEqual({});
+  });
+  it("trims and drops a blank workspaceRoot", () => {
+    expect(parseCodexRuntimeConfig({ workspaceRoot: "  /scoped  " })).toEqual({
+      workspaceRoot: "/scoped",
+    });
+    expect(parseCodexRuntimeConfig({ workspaceRoot: "   " })).toEqual({});
   });
 });

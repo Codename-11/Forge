@@ -205,18 +205,21 @@ clients. Running it with a network listener makes a Codex agent **first-class**
 in Forge (owns the loop, streams, approvals), the OpenAI analogue to Hermes.
 
 **Connect:**
-1. Start the server with a WebSocket listener:
-   \`\`\`bash
-   codex app-server --listen ws://0.0.0.0:4500
-   # external/non-loopback hosts MUST use wss:// (TLS) — see endpoint rules
-   \`\`\`
+1. \`codex app-server\` speaks **stdio** only (no \`--listen\` flag), so a small
+   **stdio↔WebSocket bridge** sits in front of it. The reference deployment runs
+   that bridge in a container (\`~/docker/codex-bridge/\`) so the agent is
+   sandboxed to a scoped \`/work\` and can't reach the host filesystem. Run the
+   bridge (publishes \`ws://HOST:4505\`); external hosts MUST use \`wss://\` (TLS).
 2. Add a runtime here with this adapter; set **endpoint** to the
    \`ws(s)://HOST:PORT\` URL and (if your deployment gates the socket) a
    **secret** sent as a Bearer header.
 3. Register a Codex Agent and **attach it to this runtime**. It defaults to the
    Runs engine, so it chats as itself with its own tools + approvals.
+4. (Optional) Set **sandbox mode** + **approval policy** + **workspace root** on
+   the runtime — the connector sends them per turn (defaults: full access, no
+   prompts). Use **Disable** to pause the runtime without deleting it.
 
-Pin exact method shapes with \`codex app-server generate-ts\`.`,
+Pin exact method shapes with \`codex app-server generate-ts --out <dir>\`.`,
   },
   {
     key: "claude-code",
