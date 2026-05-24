@@ -50,8 +50,14 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 - **Managed-runtime agents no longer show a false "offline."** An agent
   reached on demand (Codex app server, a streaming model, or a daemon)
-  now reads **"on-demand"** — it connects when you message it — instead of
-  a permanent offline that only applied to heartbeat agents like Hermes.
+  now reads **"on-demand"** consistently across chat, Mission Control, and
+  Settings → Agents — it connects when you message it — instead of a
+  permanent offline that only applied to heartbeat agents like Hermes.
+- **On-demand agents can be auto-assigned work again.** Auto-dispatch no
+  longer skips an agent just because it's "offline" by heartbeat (which an
+  on-demand agent always is), so Codex/app-server agents are eligible for
+  round-robin / capability / priority assignment. Disabled runtimes are
+  skipped up front.
 
 ## [2026-05-23] — Sign-in, SSO & agent platforms
 
