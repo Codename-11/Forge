@@ -7217,3 +7217,16 @@ availability) across surfaces + the dispatch path.
 
 Verified: typecheck + lint clean, 689 unit tests (+presenceAvailability),
 deployed (`/signin` 200, f7988ba). CHANGELOG updated (presence + auto-dispatch).
+
+## 2026-05-24 (cont.) — Presence sweep: assignee-chip surfaces
+
+Finished the long tail. Enriched the assignee-chip data sources to carry the
+on-demand signals (provider/runtimeMode/lastHeartbeatAt/webhookUrl/runtimeId):
+`issue.list`, `issue.byId`, `issue.summary`, `issue.queue` (issue.ts) +
+`inbox.get` (inbox.ts). Wired `availability={presenceAvailability(agent)}`
+through issue list, board, detail page, hover preview, issue agent panel, and
+the inbox chips. Widened `presenceAvailability`'s input with ignored identity
+fields so minimal `{status}` picker rows don't trip TS2559; pickers without
+the signal degrade safely to status. Presence is now availability-aware app-
+wide for the surfaces an on-demand agent actually appears in. Deployed 78c97e3
+(`/signin` 200); typecheck + lint clean, 694 unit tests.
