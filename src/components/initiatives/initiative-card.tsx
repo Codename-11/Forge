@@ -35,6 +35,18 @@ export function InitiativeCard({
      * supplies a partial shape (legacy `initiative.get` etc.).
      */
     _count: { projects: number; issues?: number; doneIssues?: number };
+    /**
+     * Nested per-project tally, projected by `initiative.list`. Optional so
+     * partial-shape callers (legacy `initiative.get` etc.) still render.
+     */
+    projects?: Array<{
+      id: string;
+      key: string;
+      name: string;
+      color: string | null;
+      done: number;
+      total: number;
+    }>;
   };
   draggable?: boolean;
   onDragStart?: (id: string) => void;
@@ -46,6 +58,10 @@ export function InitiativeCard({
   const total = initiative._count.issues ?? 0;
   const done = initiative._count.doneIssues ?? 0;
   const completion = total === 0 ? 0 : Math.round((done / total) * 100);
+  const projects = initiative.projects ?? [];
+  const PROJECT_CAP = 4;
+  const visibleProjects = projects.slice(0, PROJECT_CAP);
+  const hiddenProjectCount = projects.length - visibleProjects.length;
 
   return (
     <Link
@@ -117,6 +133,34 @@ export function InitiativeCard({
           }}
         />
       </div>
+      {visibleProjects.length > 0 && (
+        <ul className="mt-3 space-y-1">
+          {visibleProjects.map((p) => (
+            <li
+              key={p.id}
+              className="flex items-center gap-2 text-meta text-muted-foreground"
+            >
+              <span
+                aria-hidden="true"
+                className="inline-block h-2 w-2 shrink-0 rounded-sm"
+                style={{ backgroundColor: p.color ?? "#78716c" }}
+              />
+              <span className="text-id shrink-0">{p.key}</span>
+              <span className="min-w-0 flex-1 truncate text-foreground/80">
+                {p.name}
+              </span>
+              <span className="shrink-0 tabular-nums">
+                {p.done}/{p.total}
+              </span>
+            </li>
+          ))}
+          {hiddenProjectCount > 0 && (
+            <li className="text-meta text-muted-foreground">
+              +{hiddenProjectCount} more
+            </li>
+          )}
+        </ul>
+      )}
     </Link>
   );
 }

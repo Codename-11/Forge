@@ -494,6 +494,194 @@
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* BG3 — drifting glow grid (Atlas dashboard background, Forge tokens).
+ * A static dot grid with two soft radial "lights" that drift on
+ * independent, non-syncing paths. `mix-blend-mode: plus-lighter` makes
+ * the lights *add luminance* to the dots beneath, so it reads as
+ * ambient light moving through the grid rather than a glow layered on
+ * top. Transform-only, GPU-composited. Blob B uses ember tone for the
+ * single warm-accent bias. Gated on [data-motion="on"] + reduced-motion.
+ * ------------------------------------------------------------------ */
+.forge-glow-grid {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  mask-image: radial-gradient(
+    ellipse at center,
+    rgb(0 0 0 / 1) 30%,
+    rgb(0 0 0 / 0.6) 60%,
+    transparent 95%
+  );
+  -webkit-mask-image: radial-gradient(
+    ellipse at center,
+    rgb(0 0 0 / 1) 30%,
+    rgb(0 0 0 / 0.6) 60%,
+    transparent 95%
+  );
+}
+.forge-glow-grid-dots {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle, hsl(var(--foreground) / 0.07) 1px, transparent 1.5px),
+    radial-gradient(circle, hsl(var(--foreground) / 0.03) 1.5px, transparent 2px);
+  background-size: 24px 24px, 24px 24px;
+}
+.forge-glow-grid-blob {
+  position: absolute;
+  inset: -50%;
+  mix-blend-mode: plus-lighter;
+  will-change: transform;
+  pointer-events: none;
+}
+.forge-glow-grid-blob-a {
+  background: radial-gradient(
+    circle at 50% 50%,
+    hsl(var(--foreground) / 0.07) 0%,
+    hsl(var(--foreground) / 0.03) 18%,
+    transparent 38%
+  );
+}
+.forge-glow-grid-blob-b {
+  background: radial-gradient(
+    circle at 50% 50%,
+    hsl(var(--ember) / 0.12) 0%,
+    hsl(var(--ember) / 0.05) 20%,
+    transparent 40%
+  );
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-glow-grid-blob-a {
+    animation: forge-glow-drift-a 28s linear infinite;
+  }
+  [data-motion="on"] .forge-glow-grid-blob-b {
+    animation: forge-glow-drift-b 36s linear infinite;
+  }
+}
+@keyframes forge-glow-drift-a {
+  0% {
+    transform: translate3d(-15%, -10%, 0);
+  }
+  25% {
+    transform: translate3d(10%, -18%, 0);
+  }
+  50% {
+    transform: translate3d(18%, 12%, 0);
+  }
+  75% {
+    transform: translate3d(-12%, 16%, 0);
+  }
+  100% {
+    transform: translate3d(-15%, -10%, 0);
+  }
+}
+@keyframes forge-glow-drift-b {
+  0% {
+    transform: translate3d(20%, 15%, 0);
+  }
+  33% {
+    transform: translate3d(-18%, 10%, 0);
+  }
+  66% {
+    transform: translate3d(-10%, -20%, 0);
+  }
+  100% {
+    transform: translate3d(20%, 15%, 0);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Ambient page background — ONE layer, mounted once in the app shell
+ * <main> as `absolute inset-0` (see w/[slug]/layout.tsx), driven by the
+ * per-user `data-bg` appearance pref. Because <main> is the
+ * viewport-height, NON-scrolling flex parent (the page's inner div is
+ * what scrolls), this layer always covers the visible content area and
+ * is exactly one viewport tall — so the animated compositor layer stays
+ * small and drifts smoothly. The previous per-page `.forge-grid-bg` was
+ * `absolute inset-0` inside the *scroll container*, so on tall pages it
+ * either failed to cover the full scroll height or promoted an enormous
+ * janky layer. Default = grid. `data-bg="none"` hides it.
+ * ------------------------------------------------------------------ */
+.forge-page-bg {
+  position: absolute;
+  inset: 0;
+  z-index: -10;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0.4;
+}
+.forge-page-bg::before {
+  content: "";
+  position: absolute;
+  inset: -80px;
+  pointer-events: none;
+}
+
+/* grid (default, and the no-attr fallback) */
+[data-bg="grid"] .forge-page-bg::before,
+html:not([data-bg]) .forge-page-bg::before {
+  background-image:
+    linear-gradient(to right, hsl(var(--border) / 0.6) 1px, transparent 1px),
+    linear-gradient(to bottom, hsl(var(--border) / 0.6) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"][data-bg="grid"] .forge-page-bg::before,
+  [data-motion="on"]:not([data-bg]) .forge-page-bg::before {
+    will-change: transform;
+    animation: forge-grid-drift 48s linear infinite;
+  }
+}
+
+/* dots */
+[data-bg="dots"] .forge-page-bg::before {
+  background-image: radial-gradient(
+    hsl(var(--foreground) / 0.18) 1px,
+    transparent 1.5px
+  );
+  background-size: 22px 22px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"][data-bg="dots"] .forge-page-bg::before {
+    will-change: transform;
+    animation: forge-grid-drift 60s linear infinite;
+  }
+}
+
+/* glow — quiet dot grid + one drifting ember bloom (plus-lighter) */
+[data-bg="glow"] .forge-page-bg::before {
+  background-image: radial-gradient(
+    hsl(var(--foreground) / 0.1) 1px,
+    transparent 1.5px
+  );
+  background-size: 24px 24px;
+}
+[data-bg="glow"] .forge-page-bg::after {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    hsl(var(--ember) / 0.1) 0%,
+    hsl(var(--ember) / 0.04) 22%,
+    transparent 45%
+  );
+  mix-blend-mode: plus-lighter;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"][data-bg="glow"] .forge-page-bg::after {
+    will-change: transform;
+    animation: forge-glow-drift-a 30s linear infinite;
+  }
+}
+
+/* none */
+[data-bg="none"] .forge-page-bg {
+  display: none;
+}
+
 @layer utilities {
   .scrollbar-none {
     scrollbar-width: none;

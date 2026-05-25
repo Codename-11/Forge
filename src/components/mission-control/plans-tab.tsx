@@ -33,6 +33,25 @@ import {
  * goal / agent-run subjects. No polling.
  */
 
+type PlanStripStep = {
+  id: string;
+  position: number;
+  status: StepStatus;
+};
+
+type PlanOwnerUser = {
+  id: string;
+  name: string | null;
+  image: string | null;
+} | null;
+
+type PlanOwnerAgent = {
+  id: string;
+  profileKey: string;
+  name: string | null;
+  avatar: string | null;
+} | null;
+
 type PlanListItem = {
   id: string;
   title: string;
@@ -41,7 +60,90 @@ type PlanListItem = {
   totalCostUsd?: number | null;
   maxTotalCostUsd?: number | null;
   _count?: { steps: number };
+  steps?: PlanStripStep[];
+  doneSteps?: number;
+  createdBy?: PlanOwnerUser;
+  createdByAgent?: PlanOwnerAgent;
 };
+
+const STRIP_MAX_PIPS = 12;
+
+// Collapsed-row pip color by step status. Tokens only — DONE success,
+// RUNNING ember (pulses via .forge-active-node), BLOCKED danger, the
+// rest fade to muted/subtle so the strip reads as a progress glance.
+function pipClass(status: StepStatus): string {
+  switch (status) {
+    case "DONE":
+      return "bg-success";
+    case "RUNNING":
+      return "bg-ember forge-active-node";
+    case "BLOCKED":
+      return "bg-danger";
+    case "REVIEW":
+      return "bg-warning";
+    case "READY":
+      return "bg-ember/50";
+    case "CANCELED":
+      return "bg-muted-foreground/30";
+    default:
+      return "bg-muted-foreground/30";
+  }
+}
+
+function StepStrip({ steps }: { steps: PlanStripStep[] }) {
+  if (steps.length === 0) return null;
+  const shown = steps.slice(0, STRIP_MAX_PIPS);
+  const overflow = steps.length - shown.length;
+  return (
+    <div className="flex min-w-0 items-center gap-0.5">
+      {shown.map((s, i) => (
+        <span key={s.id} className="flex items-center gap-0.5">
+          {i > 0 && <span className="h-px w-1 bg-border" aria-hidden />}
+          <span
+            className={cn("h-1.5 w-1.5 rounded-full", pipClass(s.status))}
+            title={`Step ${s.position + 1}: ${s.status.toLowerCase()}`}
+          />
+        </span>
+      ))}
+      {overflow > 0 && (
+        <span className="ml-1 font-mono text-[0.625rem] text-muted-foreground">
+          +{overflow}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function PlanOwner({
+  createdBy,
+  createdByAgent,
+}: {
+  createdBy?: PlanOwnerUser;
+  createdByAgent?: PlanOwnerAgent;
+}) {
+  const agentName = createdByAgent?.name ?? createdByAgent?.profileKey ?? null;
+  const name = agentName ?? createdBy?.name ?? null;
+  if (!name) return null;
+  const image = createdByAgent ? createdByAgent.avatar : (createdBy?.image ?? null);
+  const initial = name.charAt(0).toUpperCase();
+  return (
+    <span className="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted-foreground">
+      {image ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={image}
+          alt=""
+          className="h-3.5 w-3.5 shrink-0 rounded-full object-cover"
+        />
+      ) : (
+        <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-subtle font-mono text-[0.5rem] text-muted-foreground">
+          {initial}
+        </span>
+      )}
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
 
 export function PlansTab({ slug }: { slug: string }) {
   const utils = trpc.useUtils();
@@ -229,9 +331,19 @@ function PlanRow({
     return map;
   }, [agents]);
 
-  const totalSteps = plan._count?.steps ?? steps.length;
-  const doneSteps = steps.filter((s) => isStepDone(s.status)).length;
-  const runningSteps = steps.filter((s) => s.status === "RUNNING").length;
+  // Collapsed-row summary comes from the list payload (steps strip +
+  // done count) so the row is accurate without expanding. When expanded,
+  // the hydrated detail steps are authoritative.
+  const stripSteps = plan.steps ?? [];
+  const totalSteps =
+    plan._count?.steps ?? (stripSteps.length || steps.length);
+  const doneSteps = expanded
+    ? steps.filter((s) => isStepDone(s.status)).length
+    : (plan.doneSteps ??
+      stripSteps.filter((s) => s.status === "DONE").length);
+  const runningSteps = expanded
+    ? steps.filter((s) => s.status === "RUNNING").length
+    : stripSteps.filter((s) => s.status === "RUNNING").length;
 
   // Budget: prefer the contract fields on the list/detail row; absent →
   // hide the meter rather than render a fake bar.
@@ -290,6 +402,14 @@ function PlanRow({
         </span>
       </button>
 
+      {/* DAG step strip — collapsed-row summary of the plan's steps in
+          position order, one pip per step colored by status. */}
+      {stripSteps.length > 0 && (
+        <div className="flex items-center border-t border-border/40 px-2.5 py-1">
+          <StepStrip steps={stripSteps} />
+        </div>
+      )}
+
       {/* progress + budget strip (always visible on the row) */}
       <div className="flex items-center gap-3 border-t border-border/40 px-2.5 py-1">
         <div className="h-1 flex-1 overflow-hidden rounded-full bg-subtle">
@@ -309,6 +429,16 @@ function PlanRow({
           />
         )}
       </div>
+
+      {/* owner footer — who authored the plan (agent preferred over user) */}
+      {(plan.createdByAgent || plan.createdBy) && (
+        <div className="flex items-center border-t border-border/40 px-2.5 py-1">
+          <PlanOwner
+            createdBy={plan.createdBy}
+            createdByAgent={plan.createdByAgent}
+          />
+        </div>
+      )}
 
       {expanded && (
         <div className="border-t border-border/40">

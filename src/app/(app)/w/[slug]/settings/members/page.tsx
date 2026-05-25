@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { Section } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { initials, relativeTime } from "@/lib/utils";
 
@@ -24,6 +25,29 @@ import { initials, relativeTime } from "@/lib/utils";
  */
 const ROLES = ["OWNER", "ADMIN", "MEMBER", "GUEST"] as const;
 type Role = (typeof ROLES)[number];
+
+const ROLE_HELP: { role: Role; blurb: string }[] = [
+  {
+    role: "OWNER",
+    blurb:
+      "Full control, including workspace deletion and ownership transfer. There is always at least one owner.",
+  },
+  {
+    role: "ADMIN",
+    blurb:
+      "Manage members, roles, agents, and workspace settings. Cannot delete the workspace.",
+  },
+  {
+    role: "MEMBER",
+    blurb:
+      "Create and work issues, projects, and sprints. The default for most teammates.",
+  },
+  {
+    role: "GUEST",
+    blurb:
+      "Read-mostly access for external collaborators — scoped to what they're explicitly granted.",
+  },
+];
 
 export default function MembersPage() {
   const { data: members, refetch, isLoading } =
@@ -66,7 +90,7 @@ export default function MembersPage() {
     <>
       <Topbar
         title="Members"
-        subtitle="Admin-gated access for this workspace."
+        subtitle="Admin-gated access. Authelia owns identity — this is the one place to grant access by email."
         actions={
           <Button variant="ember" size="sm" onClick={() => setAddOpen(true)}>
             Add member
@@ -74,75 +98,110 @@ export default function MembersPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
-          <Card>
-            {(members ?? []).map((m) => {
-              const isSelf = me?.user.id === m.userId;
-              return (
-                <li
-                  key={m.membershipId}
-                  className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-subtle/40"
-                >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-subtle text-xs font-medium text-muted-foreground">
-                    {initials(m.name ?? m.email)}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {m.name ?? m.email}
-                      </div>
-                      {isSelf && <Badge>you</Badge>}
-                    </div>
-                    <div className="truncate text-[0.6875rem] text-muted-foreground">
-                      <span className="font-mono">{m.email}</span>
-                      {m.handle && (
-                        <>
-                          {" "}
-                          · <span className="font-mono">@{m.handle}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <select
-                    value={m.role}
-                    disabled={setMemberRole.isPending}
-                    onChange={(e) =>
-                      setMemberRole.mutate({
-                        userId: m.userId,
-                        role: e.target.value as Role,
-                      })
-                    }
-                    className="focus-ring h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground disabled:opacity-50"
-                    aria-label={`Role for ${m.email}`}
-                  >
-                    {ROLES.map((r) => (
-                      <option key={r}>{r}</option>
-                    ))}
-                  </select>
-                  <span className="text-[0.6875rem] text-muted-foreground">
-                    joined {relativeTime(m.joinedAt)}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={removeMember.isPending}
-                    onClick={() =>
-                      setRemoveTarget({ userId: m.userId, email: m.email })
-                    }
-                  >
-                    Remove
-                  </Button>
-                </li>
-              );
-            })}
-            {!isLoading && members?.length === 0 && (
+        <div className="mx-auto max-w-3xl space-y-8 p-6">
+          <Section
+            title="Roster"
+            hint="Email-based access. A member binds to a real identity on first SSO login; until then they hold their assigned role in waiting."
+            actions={
+              members && members.length > 0 ? (
+                <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
+                  {members.length} member{members.length === 1 ? "" : "s"}
+                </span>
+              ) : undefined
+            }
+          >
+            {!isLoading && members?.length === 0 ? (
               <EmptyState
+                as="div"
                 icon={Users}
                 title="No members yet"
-                hint="Add teammates by email — they bind on first SSO login."
+                hint="Members are people who can sign in to this workspace. Add a teammate by email and they'll bind to their account on first SSO login — then change their role any time."
+                action={
+                  <Button variant="ember" size="sm" onClick={() => setAddOpen(true)}>
+                    Add your first member
+                  </Button>
+                }
               />
+            ) : (
+              <Card>
+                {(members ?? []).map((m) => {
+                  const isSelf = me?.user.id === m.userId;
+                  return (
+                    <li
+                      key={m.membershipId}
+                      className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-subtle/40"
+                    >
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-subtle text-xs font-medium text-muted-foreground">
+                        {initials(m.name ?? m.email)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <div className="truncate text-sm font-medium text-foreground">
+                            {m.name ?? m.email}
+                          </div>
+                          {isSelf && <Badge>you</Badge>}
+                        </div>
+                        <div className="truncate text-[0.6875rem] text-muted-foreground">
+                          <span className="font-mono">{m.email}</span>
+                          {m.handle && (
+                            <>
+                              {" "}
+                              · <span className="font-mono">@{m.handle}</span>
+                            </>
+                          )}
+                          {" "}· joined {relativeTime(m.joinedAt)}
+                        </div>
+                      </div>
+                      <select
+                        value={m.role}
+                        disabled={setMemberRole.isPending}
+                        onChange={(e) =>
+                          setMemberRole.mutate({
+                            userId: m.userId,
+                            role: e.target.value as Role,
+                          })
+                        }
+                        className="focus-ring h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground disabled:opacity-50"
+                        aria-label={`Role for ${m.email}`}
+                      >
+                        {ROLES.map((r) => (
+                          <option key={r}>{r}</option>
+                        ))}
+                      </select>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={removeMember.isPending}
+                        onClick={() =>
+                          setRemoveTarget({ userId: m.userId, email: m.email })
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </li>
+                  );
+                })}
+              </Card>
             )}
-          </Card>
+          </Section>
+
+          <Section
+            title="Roles"
+            hint="What each role can do in this workspace. Change a member's role from the dropdown on their row."
+          >
+            <Card as="div" className="divide-y divide-border">
+              {ROLE_HELP.map((r) => (
+                <div key={r.role} className="flex gap-3 px-4 py-3">
+                  <span className="mt-px w-16 shrink-0 font-mono text-[0.6875rem] uppercase tracking-wider text-foreground">
+                    {r.role}
+                  </span>
+                  <span className="text-[0.6875rem] text-muted-foreground">
+                    {r.blurb}
+                  </span>
+                </div>
+              ))}
+            </Card>
+          </Section>
         </div>
       </div>
 

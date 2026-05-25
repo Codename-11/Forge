@@ -237,7 +237,11 @@ export default function WebhookDeliveriesPage() {
                       ? `No ${status.toLowerCase().replace("_", " ")} deliveries`
                       : "No deliveries yet"
                   }
-                  hint="Register a plugin webhook or assign an issue to an agent to generate these."
+                  hint={
+                    status === "DEAD_LETTER"
+                      ? "Nothing has exhausted its retries — the queue is healthy. Dead-letter rows show up here with a Retry action when an endpoint keeps failing."
+                      : "Register a plugin webhook or assign an issue to an agent to generate deliveries. Failures land in Dead letter, where you can requeue them onto the worker."
+                  }
                 />
               </Card>
             ) : (

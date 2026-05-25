@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Plus, Target } from "lucide-react";
+import { Plus, Target, UsersRound } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -334,35 +334,94 @@ function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
         </p>
       ) : null}
 
-      <div className="mt-auto flex flex-col gap-1.5 pt-1">
+      {/* Crew + plan-count meta row */}
+      <div className="flex items-center gap-1.5 text-meta text-muted-foreground">
+        <UsersRound className="h-3 w-3" />
+        {goal.crew?.name ? (
+          <>
+            <span className="truncate">{goal.crew.name}</span>
+            <span>·</span>
+          </>
+        ) : null}
+        <span>
+          {planCount} plan{planCount === 1 ? "" : "s"}
+        </span>
         {stepsTotal > 0 ? (
-          <div className="flex h-1 w-full overflow-hidden rounded-full bg-subtle">
-            <div
-              className="h-full bg-emerald-700 transition-all duration-500"
-              style={{ width: `${(stepsDone / stepsTotal) * 100}%` }}
-            />
+          <>
+            <span>·</span>
+            <span>
+              {stepsTotal} step{stepsTotal === 1 ? "" : "s"}
+            </span>
+          </>
+        ) : null}
+      </div>
+
+      <div className="mt-auto flex flex-col gap-2 pt-1">
+        {/* Segmented step ladder — one segment per step. */}
+        {stepsTotal > 0 ? (
+          <div>
+            <div className="flex items-center justify-between text-meta text-muted-foreground">
+              <span>
+                {stepsDone}/{stepsTotal} steps
+              </span>
+              <span className="tabular-nums">
+                {Math.round((stepsDone / stepsTotal) * 100)}%
+              </span>
+            </div>
+            <div className="mt-1 flex h-1.5 gap-px overflow-hidden rounded-full bg-subtle">
+              {Array.from({ length: stepsTotal }).map((_, idx) => (
+                <div
+                  key={idx}
+                  className={cn(
+                    "h-full flex-1",
+                    idx < stepsDone
+                      ? "bg-success"
+                      : idx === stepsDone
+                        ? "bg-ember"
+                        : "bg-transparent",
+                  )}
+                />
+              ))}
+            </div>
           </div>
         ) : null}
-        <div className="flex items-center justify-between text-meta text-muted-foreground">
-          <span>
-            {stepsTotal > 0
-              ? `${stepsDone}/${stepsTotal} steps`
-              : `${planCount} plan${planCount === 1 ? "" : "s"}`}
-          </span>
-          <span
-            className={cn(
-              "font-mono tabular-nums",
-              pct >= 100
-                ? "text-danger"
-                : pct >= 80
-                  ? "text-warning"
-                  : "text-muted-foreground",
-            )}
-          >
-            {fmtUsd(spent)}
-            {typeof cap === "number" && cap > 0 ? ` / ${fmtUsd(cap)}` : ""}
-          </span>
-        </div>
+
+        {/* Dedicated budget meter. */}
+        {typeof cap === "number" && cap > 0 ? (
+          <div>
+            <div className="flex items-center justify-between text-meta text-muted-foreground">
+              <span>Budget</span>
+              <span
+                className={cn(
+                  "font-mono tabular-nums",
+                  pct >= 100
+                    ? "text-danger"
+                    : pct >= 80
+                      ? "text-warning"
+                      : "text-muted-foreground",
+                )}
+              >
+                {fmtUsd(spent)} / {fmtUsd(cap)}
+              </span>
+            </div>
+            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-subtle">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all duration-500",
+                  pct >= 80 ? "bg-warning" : "bg-ember",
+                )}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between text-meta text-muted-foreground">
+            <span>Budget</span>
+            <span className="font-mono tabular-nums text-muted-foreground">
+              {fmtUsd(spent)}
+            </span>
+          </div>
+        )}
       </div>
     </Link>
   );

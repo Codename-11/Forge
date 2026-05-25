@@ -3,10 +3,12 @@ export const APPEARANCE_COOKIE = "forge.appearance";
 export type AppearanceDensity = "compact" | "comfortable";
 export type AppearanceTextSize = "default" | "larger";
 export type AppearanceMotion = "full" | "reduced";
+export type AppearanceBackground = "grid" | "glow" | "dots" | "none";
 export interface AppearancePrefs {
   density: AppearanceDensity;
   textSize: AppearanceTextSize;
   motion: AppearanceMotion;
+  background: AppearanceBackground;
 }
 
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;

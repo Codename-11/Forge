@@ -69,7 +69,10 @@ export default function AdminPage() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl space-y-6 p-6">
-          <Section title="Overview">
+          <Section
+            title="Overview"
+            hint="Workspace-wide health at a glance. Counts update as activity flows through the workspace."
+          >
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
               {cards.map((c) => (
                 <div
@@ -96,7 +99,10 @@ export default function AdminPage() {
             </div>
           </Section>
 
-          <Section title="Activity">
+          <Section
+            title="Activity"
+            hint="Audit log, raw activity events, and outbound webhook delivery health. Switch streams below."
+          >
             <div className="space-y-2">
               <div className="flex gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
                 {tabs.map((t) => (
@@ -137,7 +143,11 @@ function AuditTab() {
   if (items.length === 0)
     return (
       <Card>
-        <EmptyState icon={ScrollText} title="No audit rows" hint="Actions will appear here as they happen." />
+        <EmptyState
+          icon={ScrollText}
+          title="No audit rows yet"
+          hint="Mutations like status changes, label edits, and agent dispatch land here with the actor and a timestamp as they happen."
+        />
       </Card>
     );
   return (
@@ -215,7 +225,11 @@ function EventsTab() {
   if (items.length === 0)
     return (
       <Card>
-        <EmptyState icon={Activity} title="No events yet" hint="Issue and project changes publish here." />
+        <EmptyState
+          icon={Activity}
+          title="No events yet"
+          hint="Issue and project changes publish onto the activity stream here, feeding the timeline and SSE subscribers."
+        />
       </Card>
     );
   return (
@@ -252,7 +266,7 @@ function DeliveriesTab() {
         <EmptyState
           icon={Webhook}
           title="No webhook deliveries"
-          hint="Register a plugin with a webhook URL to generate these."
+          hint="Register a plugin webhook or assign an issue to an agent to generate deliveries. The dedicated Deliveries page lets you requeue failures."
         />
       </Card>
     );

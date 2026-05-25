@@ -64,6 +64,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       data-density={appearance.density}
       data-textsize={appearance.textSize}
       data-motion={appearance.motion === "reduced" ? "off" : "on"}
+      data-bg={appearance.background}
       suppressHydrationWarning
     >
       <body className="font-sans">

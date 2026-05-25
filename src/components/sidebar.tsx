@@ -418,7 +418,16 @@ function NavRow({
       >
         <span className="truncate">{label}</span>
         {badgeCount > 0 && (
-          <span className="ml-2 rounded-full bg-ember/15 px-1.5 py-0 font-mono text-[0.6875rem] text-ember">
+          <span
+            className={cn(
+              "ml-2 rounded-full px-1.5 py-0 font-mono text-[0.6875rem]",
+              // Decisions (action requests + review gates) get the ember
+              // accent; routine inbox unread reads as a quiet subtle count.
+              badge === "decisions"
+                ? "bg-ember/15 text-ember"
+                : "bg-subtle text-foreground",
+            )}
+          >
             {badgeCount > 99 ? "99+" : badgeCount}
           </span>
         )}

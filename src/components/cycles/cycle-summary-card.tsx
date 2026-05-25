@@ -44,8 +44,11 @@ export function CycleSummaryCard({
   const done = issues.filter(
     (i) => i.status.category === "DONE" || i.status.category === "CANCELED",
   ).length;
+  const inProgress = issues.filter(
+    (i) => i.status.category === "IN_PROGRESS",
+  ).length;
   const total = issues.length;
-  const completion = total === 0 ? 0 : done / total;
+  const remainingIssues = total - done;
   const series = burndownSeries(startsAt, endsAt, issues);
 
   return (
@@ -74,13 +77,11 @@ export function CycleSummaryCard({
             {remaining === 0 ? "ended" : `${remaining}d remaining`}
           </span>
         </div>
-        <div className="mt-3 grid grid-cols-3 gap-3 text-meta">
-          <Stat label="Issues" value={total} />
-          <Stat label="Done" value={done} />
-          <Stat
-            label="Completion"
-            value={`${Math.round(completion * 100)}%`}
-          />
+        <div className="mt-3 grid grid-cols-4 gap-3">
+          <Stat label="Scope" value={total} hint="issues" />
+          <Stat label="Done" value={done} hint="complete" />
+          <Stat label="In progress" value={inProgress} hint="running" />
+          <Stat label="Remaining" value={remainingIssues} hint="to do" />
         </div>
         <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-subtle">
           <div
@@ -108,13 +109,26 @@ export function CycleSummaryCard({
   );
 }
 
-function Stat({ label, value }: { label: string; value: number | string }) {
+function Stat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: number | string;
+  hint?: string;
+}) {
   return (
-    <div>
+    <div className="rounded-md border border-border bg-background/40 p-2">
       <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
-      <div className="mt-0.5 font-mono text-sm">{value}</div>
+      <div className="mt-0.5 font-mono text-2xl font-semibold tabular-nums tracking-tight">
+        {value}
+      </div>
+      {hint && (
+        <div className="text-meta text-muted-foreground">{hint}</div>
+      )}
     </div>
   );
 }

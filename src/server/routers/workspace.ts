@@ -261,7 +261,7 @@ export const workspaceRouter = router({
 
   /**
    * Whether the email-ingest secret is currently set (without
-   * leaking the secret itself). Used by `/settings/integrations` to
+   * leaking the secret itself). Used by `/settings/connections` to
    * decide whether to show "Generate secret" or "Rotate secret".
    */
   emailIngestStatus: workspaceProcedure.query(async ({ ctx }) => {

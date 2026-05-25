@@ -182,7 +182,12 @@ export const commandCenterRouter = router({
       ]);
 
       // Live goals — what the crews are actively driving right now.
-      const liveGoals = await ctx.db.goal.findMany({
+      // Steps live under `Goal.plans[].steps` (no direct relation), so we
+      // pull a thin status-only projection of every step, count DONE vs
+      // total per goal, then DROP the heavy `plans` array from the
+      // returned shape. Goals are capped (limit ~20) so the nested
+      // fan-out is bounded.
+      const liveGoalRows = await ctx.db.goal.findMany({
         where: { workspaceId: ctx.workspaceId, status: { in: LIVE_GOAL_STATUSES } },
         orderBy: { updatedAt: "desc" },
         take: input.limit,
@@ -194,7 +199,14 @@ export const commandCenterRouter = router({
           maxTotalCostUsd: true,
           crew: { select: { id: true, name: true } },
           _count: { select: { plans: true } },
+          plans: { select: { steps: { select: { status: true } } } },
         },
+      });
+      const liveGoals = liveGoalRows.map(({ plans, ...rest }) => {
+        const steps = plans.flatMap((p) => p.steps);
+        const totalSteps = steps.length;
+        const doneSteps = steps.filter((s) => s.status === "DONE").length;
+        return { ...rest, doneSteps, totalSteps };
       });
 
       return {

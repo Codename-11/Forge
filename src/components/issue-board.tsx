@@ -1,6 +1,7 @@
 "use client";
 import { useMemo } from "react";
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
@@ -74,6 +75,25 @@ export function IssueBoard({
               <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
                 {column.length}
               </span>
+              {/* Quick-add into this column. Opens the shared new-issue
+                  flow (prefilled to the project when the board is project-
+                  scoped). Status prefill isn't supported by quick-create
+                  yet, so the new issue lands in the default status. */}
+              <button
+                type="button"
+                title="New issue"
+                aria-label={`New issue in ${s.name}`}
+                onClick={() =>
+                  window.dispatchEvent(
+                    new CustomEvent("forge:quick-create", {
+                      detail: projectId ? { projectId } : {},
+                    }),
+                  )
+                }
+                className="focus-ring -mr-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
             </header>
             <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
               {column.map((i) => (

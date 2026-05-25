@@ -1935,6 +1935,16 @@ export function ChatThreadView({
       {agent && (
         <div className="flex items-center gap-2 border-b border-border/70 bg-card/40 px-3 py-1.5">
           <AgentAvatar agent={agent} size="xs" shape="circle" active />
+          {/* Live-presence breath dot — pulses next to the title when the
+              agent is actually reachable (persistent online/busy or an
+              on-demand managed runtime). Suppressed for offline/ephemeral so
+              it never falsely claims liveness. */}
+          {(isPersistentOnline || isPersistentBusy || isOnDemand) && (
+            <span
+              className="forge-breath shrink-0"
+              title={isOnDemand ? "live · on-demand" : isPersistentBusy ? "live · busy" : "live · online"}
+            />
+          )}
           <span className="text-[0.75rem] font-medium text-foreground">{agent.name}</span>
           <span className="text-[0.625rem] text-muted-foreground">@{agent.profileKey}</span>
 
@@ -2156,10 +2166,10 @@ export function ChatThreadView({
                     <PlugZap className="h-2.5 w-2.5" /> Manage runtimes
                   </Link>
                   <Link
-                    href={`/w/${workspace.slug}/settings/integrations`}
+                    href={`/w/${workspace.slug}/settings/connections`}
                     className="text-[0.625rem] text-muted-foreground hover:text-foreground"
                   >
-                    Integrations →
+                    Connections →
                   </Link>
                 </div>
               )}

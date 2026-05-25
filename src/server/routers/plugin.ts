@@ -21,6 +21,37 @@ export const pluginRouter = router({
     }),
   ),
 
+  byId: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const plugin = await ctx.db.plugin.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        include: {
+          skills: true,
+          apiKeys: {
+            where: { revokedAt: null },
+            orderBy: { createdAt: "desc" },
+            select: {
+              id: true,
+              name: true,
+              prefix: true,
+              scopes: true,
+              lastUsedAt: true,
+              expiresAt: true,
+              createdAt: true,
+            },
+          },
+          webhooks: {
+            select: { id: true, url: true, events: true, active: true },
+          },
+        },
+      });
+      if (!plugin) throw new TRPCError({ code: "NOT_FOUND" });
+      // Never expose the HMAC `secret` to the client.
+      const { secret: _secret, ...rest } = plugin;
+      return rest;
+    }),
+
   register: adminProcedure
     .input(
       z.object({
@@ -133,4 +164,36 @@ export const pluginRouter = router({
         data: { revokedAt: new Date() },
       }),
     ),
+
+  // Hard-delete the registration. Cascades drop the plugin's skills,
+  // api keys, and webhooks (FK onDelete: Cascade). Linked issues are
+  // unaffected — they don't reference the plugin.
+  remove: adminProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const plugin = await ctx.db.plugin.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!plugin) throw new TRPCError({ code: "NOT_FOUND" });
+      await ctx.db.plugin.delete({ where: { id: plugin.id } });
+      return { id: plugin.id };
+    }),
+
+  // Roll the plugin's HMAC signing secret. The raw value is never
+  // returned to the client; the plugin re-fetches it out of band.
+  rotateSecret: adminProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const plugin = await ctx.db.plugin.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!plugin) throw new TRPCError({ code: "NOT_FOUND" });
+      await ctx.db.plugin.update({
+        where: { id: plugin.id },
+        data: { secret: randomBytes(24).toString("base64url") },
+      });
+      return { id: plugin.id };
+    }),
 });

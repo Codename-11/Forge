@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { toast } from "sonner";
-import { KeyRound, Plus, Trash2, Pencil, ShieldAlert, CheckCircle2, XCircle } from "lucide-react";
+import { KeyRound, Plus, Trash2, Pencil, ShieldAlert, Shield, CheckCircle2, XCircle } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -188,10 +188,30 @@ export default function AuthSettingsPage() {
       />
 
       <div className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-3xl">
+        <div className="mx-auto max-w-3xl space-y-6">
+          {/* Instance-admin notice — these providers are global to the
+              Forge instance, not per-workspace. */}
+          <div className="flex items-start gap-3 rounded-md border border-ember/30 bg-ember/5 p-3 text-xs">
+            <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ember" />
+            <div>
+              <span className="font-medium text-foreground">Instance admin only.</span>{" "}
+              <span className="text-muted-foreground">
+                Sign-in providers are global to this Forge instance. Changes apply
+                within ~30 seconds without a redeploy.
+              </span>
+            </div>
+          </div>
+
           <Section
             title="Providers"
-            hint="Email + password is always available. Add SSO providers below — OIDC covers any OpenID-Connect IdP, including self-hosted Authelia. Changes apply within ~30s without a redeploy."
+            hint="Email + password is always available. Add SSO providers below — OIDC covers any OpenID-Connect IdP, including self-hosted Authelia."
+            actions={
+              providers.length > 0 ? (
+                <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
+                  {providers.length} configured · {providers.filter((p) => p.enabled).length} enabled
+                </span>
+              ) : undefined
+            }
           >
             {providers.length === 0 ? (
               <EmptyState
@@ -221,6 +241,9 @@ export default function AuthSettingsPage() {
                         ) : (
                           <Badge className="text-muted-foreground">disabled</Badge>
                         )}
+                        {p.allowLinking && (
+                          <Badge className="bg-ember/10 text-ember">links by email</Badge>
+                        )}
                       </div>
                       <div className="mt-0.5 truncate font-mono text-[0.6875rem] text-muted-foreground">
                         callback: {p.callbackPath}
@@ -249,6 +272,24 @@ export default function AuthSettingsPage() {
                 ))}
               </Card>
             )}
+          </Section>
+
+          {/* Teach: what you can connect. Mirrors the SSO_TYPES catalog so
+              the copy stays in sync with the create modal's type picker. */}
+          <Section
+            title="What you can connect"
+            hint="Forge handles OIDC discovery automatically — paste the issuer and it pulls the endpoints."
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {SSO_TYPES.map((t) => (
+                <div key={t.value} className="rounded-lg border border-border bg-card/40 p-3">
+                  <div className="text-sm font-semibold">{t.label}</div>
+                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                    {t.hint}
+                  </p>
+                </div>
+              ))}
+            </div>
           </Section>
         </div>
       </div>

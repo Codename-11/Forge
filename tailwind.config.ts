@@ -107,6 +107,20 @@ const config: Config = {
           "0%, 100%": { boxShadow: "0 0 0 0 hsl(var(--success) / 0.4)" },
           "50%": { boxShadow: "0 0 0 5px hsl(var(--success) / 0)" },
         },
+        // BG3 glow-grid: two soft lights drifting on non-syncing paths.
+        "forge-glow-drift-a": {
+          "0%": { transform: "translate3d(-15%, -10%, 0)" },
+          "25%": { transform: "translate3d(10%, -18%, 0)" },
+          "50%": { transform: "translate3d(18%, 12%, 0)" },
+          "75%": { transform: "translate3d(-12%, 16%, 0)" },
+          "100%": { transform: "translate3d(-15%, -10%, 0)" },
+        },
+        "forge-glow-drift-b": {
+          "0%": { transform: "translate3d(20%, 15%, 0)" },
+          "33%": { transform: "translate3d(-18%, 10%, 0)" },
+          "66%": { transform: "translate3d(-10%, -20%, 0)" },
+          "100%": { transform: "translate3d(20%, 15%, 0)" },
+        },
       },
       animation: {
         "fade-in": "fade-in 120ms ease-out",
@@ -120,6 +134,8 @@ const config: Config = {
         "forge-caret-blink": "forge-caret-blink 1.05s steps(2, start) infinite",
         "forge-hairline-sweep": "forge-hairline-sweep 6s ease-in-out infinite",
         "forge-breath": "forge-breath 3.2s ease-in-out infinite",
+        "forge-glow-drift-a": "forge-glow-drift-a 28s linear infinite",
+        "forge-glow-drift-b": "forge-glow-drift-b 36s linear infinite",
       },
     },
   },

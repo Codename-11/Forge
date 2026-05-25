@@ -10,6 +10,7 @@ import { writeAppearanceCookie } from "@/lib/appearance-cookie";
 type Density = "compact" | "comfortable";
 type TextSize = "default" | "larger";
 type Motion = "full" | "reduced";
+type Background = "grid" | "glow" | "dots" | "none";
 
 /**
  * Appearance settings — per-user, server-saved.
@@ -41,12 +42,20 @@ export default function AppearancePage() {
   const [density, setDensity] = useState<Density>("compact");
   const [textSize, setTextSize] = useState<TextSize>("default");
   const [motion, setMotion] = useState<Motion>("full");
+  const [background, setBackground] = useState<Background>("grid");
 
   useEffect(() => {
     if (!me) return;
     setDensity(me.density === "comfortable" ? "comfortable" : "compact");
     setTextSize(me.textSize === "larger" ? "larger" : "default");
     setMotion(me.motion === "reduced" ? "reduced" : "full");
+    setBackground(
+      me.backgroundStyle === "glow" ||
+        me.backgroundStyle === "dots" ||
+        me.backgroundStyle === "none"
+        ? me.backgroundStyle
+        : "grid",
+    );
   }, [me]);
 
   const update = trpc.user.updateAppearance.useMutation({
@@ -64,7 +73,7 @@ export default function AppearancePage() {
     // re-flow before the round-trip resolves. Cookie is mirrored so
     // the next page reload skips the FOUC entirely.
     document.documentElement.setAttribute("data-density", next);
-    writeAppearanceCookie({ density: next, textSize, motion });
+    writeAppearanceCookie({ density: next, textSize, motion, background });
     update.mutate({ density: next });
   }
 
@@ -72,7 +81,7 @@ export default function AppearancePage() {
     if (next === textSize) return;
     setTextSize(next);
     document.documentElement.setAttribute("data-textsize", next);
-    writeAppearanceCookie({ density, textSize: next, motion });
+    writeAppearanceCookie({ density, textSize: next, motion, background });
     update.mutate({ textSize: next });
   }
 
@@ -86,8 +95,18 @@ export default function AppearancePage() {
       "data-motion",
       next === "reduced" ? "off" : "on",
     );
-    writeAppearanceCookie({ density, textSize, motion: next });
+    writeAppearanceCookie({ density, textSize, motion: next, background });
     update.mutate({ motion: next });
+  }
+
+  function chooseBackground(next: Background) {
+    if (next === background) return;
+    setBackground(next);
+    // Live-swaps the shell's ambient background layer (.forge-page-bg)
+    // via the data-bg attribute the provider also stamps.
+    document.documentElement.setAttribute("data-bg", next);
+    writeAppearanceCookie({ density, textSize, motion, background: next });
+    update.mutate({ backgroundStyle: next });
   }
 
   return (
@@ -238,6 +257,45 @@ export default function AppearancePage() {
             </div>
           </Section>
 
+          <SectionDivider />
+
+          {/* Background ----------------------------------------------- */}
+          <Section
+            title="Background"
+            hint="The ambient layer behind every page. Drifts gently when Motion is Full; static otherwise. Default is the grid."
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <ChoiceCard
+                active={background === "grid"}
+                onClick={() => chooseBackground("grid")}
+                title="Grid"
+                blurb="The default paper grid. Quiet, structural."
+                sample={<BackgroundSample variant="grid" />}
+              />
+              <ChoiceCard
+                active={background === "glow"}
+                onClick={() => chooseBackground("glow")}
+                title="Glow"
+                blurb="Dot grid with a slow ember bloom drifting through it."
+                sample={<BackgroundSample variant="glow" />}
+              />
+              <ChoiceCard
+                active={background === "dots"}
+                onClick={() => chooseBackground("dots")}
+                title="Dots"
+                blurb="A fine dot field. Lighter than the grid."
+                sample={<BackgroundSample variant="dots" />}
+              />
+              <ChoiceCard
+                active={background === "none"}
+                onClick={() => chooseBackground("none")}
+                title="None"
+                blurb="Plain paper. No ambient layer at all."
+                sample={<BackgroundSample variant="none" />}
+              />
+            </div>
+          </Section>
+
           <p className="pb-4 text-center text-[0.6875rem] text-muted-foreground">
             Saved automatically. Changes apply across every workspace.
           </p>
@@ -291,6 +349,63 @@ function ChoiceCard({
         {sample}
       </div>
     </button>
+  );
+}
+
+function BackgroundSample({
+  variant,
+}: {
+  variant: "grid" | "glow" | "dots" | "none";
+}) {
+  // Honest, self-contained preview of each background (doesn't depend on
+  // the user's current data-bg). Small static swatch.
+  const common = "h-12 w-full overflow-hidden rounded-md border border-border/70";
+  if (variant === "none") {
+    return <div className={`${common} bg-background`} />;
+  }
+  if (variant === "grid") {
+    return (
+      <div
+        className={`${common} bg-background`}
+        style={{
+          backgroundImage:
+            "linear-gradient(to right, hsl(var(--border) / 0.6) 1px, transparent 1px), linear-gradient(to bottom, hsl(var(--border) / 0.6) 1px, transparent 1px)",
+          backgroundSize: "12px 12px",
+        }}
+      />
+    );
+  }
+  if (variant === "dots") {
+    return (
+      <div
+        className={`${common} bg-background`}
+        style={{
+          backgroundImage:
+            "radial-gradient(hsl(var(--foreground) / 0.2) 1px, transparent 1.5px)",
+          backgroundSize: "10px 10px",
+        }}
+      />
+    );
+  }
+  // glow
+  return (
+    <div
+      className={`${common} relative bg-background`}
+      style={{
+        backgroundImage:
+          "radial-gradient(hsl(var(--foreground) / 0.14) 1px, transparent 1.5px)",
+        backgroundSize: "11px 11px",
+      }}
+    >
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(circle at 35% 50%, hsl(var(--ember) / 0.35) 0%, transparent 55%)",
+          mixBlendMode: "plus-lighter",
+        }}
+      />
+    </div>
   );
 }
 

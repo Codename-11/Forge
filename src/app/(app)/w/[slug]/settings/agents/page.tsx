@@ -11,6 +11,7 @@ import {
   KeyRound,
   PlugZap,
   Radio,
+  Server,
   ServerCog,
   Terminal,
   Webhook,
@@ -23,7 +24,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CenterModal, Confirm } from "@/components/ui/modal";
-import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { AgentQuickActions } from "@/components/agent-quick-actions";
@@ -291,6 +291,24 @@ export default function AgentsPage() {
     setWebhookTestResult(null);
   }
 
+  /**
+   * Launch the onboarding wizard pre-seeded for a provider recipe. Used by
+   * the "Add an agent" gallery, which absorbed the old first-class
+   * integration adapter cards — provider + runtime + connection now wire up
+   * in one flow instead of across three settings pages.
+   */
+  function openNewWithProvider(p: (typeof PROVIDERS)[number]) {
+    setEditing({
+      ...EMPTY_EDITING,
+      provider: p.id,
+      connectionMode: p.defaultConnectionMode,
+      runtimeMode: p.defaultRuntimeMode,
+      createApiKey: p.defaultConnectionMode === "mcp",
+    });
+    setStep(0);
+    setWebhookTestResult(null);
+  }
+
   function parseCapabilities(raw: string): string[] {
     return Array.from(
       new Set(
@@ -527,7 +545,7 @@ export default function AgentsPage() {
     <>
       <Topbar
         title="Agents"
-        subtitle="MCP-first actors that hold keys and receive work."
+        subtitle="MCP-first actors that hold keys and receive work. Profile, provider, runtime, and connection in one place."
         actions={
           <Button variant="ember" size="sm" onClick={openNew}>
             New agent
@@ -537,175 +555,365 @@ export default function AgentsPage() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-6 p-6">
           <FleetChecklist slug={ws.slug} />
-          <Card>
+          {/* Merged agent cards — provider / runtime / connection inline,
+              with an Infrastructure accordion (design "AgentMergedCard"). */}
+          <ul className="space-y-3">
             {rows.map((a) => {
               const isArchived = !!a.archivedAt;
               const assignedCount = a._count?.assignedIssues ?? 0;
               const provider = (a.provider ?? "HERMES") as AgentProviderId;
               const runtimeMode = (a.runtimeMode ?? "PERSISTENT") as RuntimeMode;
+              const capacity = a.maxConcurrent; // 0 = unlimited
+              const capacityLabel = capacity === 0 ? "∞" : String(capacity);
+              const pct = capacity === 0 ? 0 : Math.min(1, assignedCount / Math.max(1, capacity * 3));
+              const connection = a.webhookUrl ? "webhook + mcp" : "mcp";
+              const rt = a.runtime;
+              const heartbeatRel = rt?.heartbeatAt
+                ? relativeTime(rt.heartbeatAt)
+                : a.lastHeartbeatAt
+                  ? relativeTime(a.lastHeartbeatAt)
+                  : "—";
               return (
                 <li
                   key={a.id}
-                  className="flex flex-wrap items-start gap-3 px-4 py-3"
+                  className="overflow-hidden rounded-lg border border-border bg-card/40"
                 >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-subtle text-sm">
-                    {a.avatar ? (
-                      <span aria-hidden>{a.avatar}</span>
-                    ) : (
-                      <span className="text-xs font-medium text-muted-foreground">
-                        {a.name.slice(0, 1).toUpperCase()}
+                  {/* Header strip */}
+                  <header className="flex items-start justify-between gap-3 px-4 py-3.5">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-subtle text-base">
+                        {a.avatar ? (
+                          <span aria-hidden>{a.avatar}</span>
+                        ) : (
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {a.name.slice(0, 1).toUpperCase()}
+                          </span>
+                        )}
                       </span>
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="truncate text-sm font-medium">{a.name}</span>
-                      <span
-                        className="text-id text-muted-foreground"
-                        title="Profile key - stable cross-system handle."
-                      >
-                        @{a.profileKey}
-                      </span>
-                      <Badge>{PROVIDER_LABEL.get(provider) ?? provider}</Badge>
-                      <Badge>{runtimeMode === "PERSISTENT" ? "persistent" : "single-session"}</Badge>
-                      <span className="inline-flex items-center gap-1.5 rounded-sm bg-subtle px-1.5 py-0.5 text-[0.6875rem] font-medium">
-                        <AgentPresenceDot
-                          status={a.status}
-                          size="sm"
-                          pulse
-                          lastHeartbeatAt={a.lastHeartbeatAt}
-                        />
-                        {a.status}
-                      </span>
-                      {isArchived && <Badge>archived</Badge>}
-                    </div>
-                    {a.description && (
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {a.description}
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate text-sm font-semibold">{a.name}</span>
+                          <span
+                            className="text-id text-muted-foreground"
+                            title="Profile key — stable cross-system handle."
+                          >
+                            @{a.profileKey}
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 text-meta">
+                            <AgentPresenceDot
+                              status={a.status}
+                              size="sm"
+                              pulse
+                              lastHeartbeatAt={a.lastHeartbeatAt}
+                            />
+                            <span className="text-muted-foreground">{a.status.toLowerCase()}</span>
+                          </span>
+                          <span className="text-meta text-muted-foreground/70">·</span>
+                          <span className="text-meta text-muted-foreground tabular-nums">
+                            {assignedCount} / {capacityLabel} concurrent
+                          </span>
+                          {isArchived && <Badge>archived</Badge>}
+                        </div>
+                        {a.description && (
+                          <p className="mt-0.5 text-meta text-muted-foreground">{a.description}</p>
+                        )}
                       </div>
-                    )}
-                    <div
-                      className="mt-2 flex flex-wrap items-center gap-1"
-                      title="Capabilities are tags used by capability and priority matching."
-                    >
-                      {a.capabilities.map((c) => (
-                        <Badge key={c}>{c}</Badge>
-                      ))}
-                      {a.capabilities.length === 0 && (
-                        <span className="text-[0.6875rem] text-muted-foreground/70">
-                          No capabilities declared.
-                        </span>
-                      )}
                     </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-3 text-meta text-muted-foreground">
-                      <span>
-                        {assignedCount} assigned issue{assignedCount === 1 ? "" : "s"}
-                      </span>
-                      <span>.</span>
-                      <span>
-                        {a.webhookUrl ? "push webhook configured" : "MCP-only"}
-                      </span>
-                      <span>.</span>
-                      <span>
-                        {a.lastHeartbeatAt
-                          ? `heartbeat ${relativeTime(a.lastHeartbeatAt)}`
-                          : "no heartbeat yet"}
-                      </span>
-                      {a.maxConcurrent !== 1 && (
-                        <>
-                          <span>.</span>
-                          <span className="font-mono">max {a.maxConcurrent}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <AgentQuickActions
-                      agentId={a.id}
-                      profileKey={a.profileKey}
-                      name={a.name}
-                      status={a.status}
-                    />
-                    <Link href={`/w/${ws.slug}/agents/${a.profileKey}`}>
-                      <Button size="sm" variant="ghost">
-                        View
+                    <div className="flex shrink-0 items-center gap-1">
+                      <AgentQuickActions
+                        agentId={a.id}
+                        profileKey={a.profileKey}
+                        name={a.name}
+                        status={a.status}
+                      />
+                      <Link href={`/w/${ws.slug}/agents/${a.profileKey}`}>
+                        <Button size="sm" variant="ghost">
+                          View
+                        </Button>
+                      </Link>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setEditing({
+                            id: a.id,
+                            name: a.name,
+                            profileKey: a.profileKey,
+                            description: a.description ?? "",
+                            avatar: a.avatar ?? "",
+                            provider,
+                            runtimeMode,
+                            connectionMode: a.webhookUrl ? "webhook" : "mcp",
+                            webhookUrl: a.webhookUrl ?? "",
+                            webhookSecret: a.webhookSecret ?? "",
+                            runtimeId: a.runtime?.id ?? "",
+                            capabilitiesRaw: a.capabilities.join(", "),
+                            maxConcurrent: a.maxConcurrent,
+                            runEngine: (a.runEngine ?? "DEFAULT") as EditingState["runEngine"],
+                            templateMarkdown: a.templateMarkdown ?? "",
+                            createApiKey: false,
+                            keyPreset: "agent",
+                            keyName: "",
+                            keyExpiresInDays: "",
+                          });
+                          setWebhookTestResult(null);
+                          setStep(0);
+                        }}
+                      >
+                        Edit
                       </Button>
-                    </Link>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setEditing({
-                          id: a.id,
-                          name: a.name,
-                          profileKey: a.profileKey,
-                          description: a.description ?? "",
-                          avatar: a.avatar ?? "",
-                          provider,
-                          runtimeMode,
-                          connectionMode: a.webhookUrl ? "webhook" : "mcp",
-                          webhookUrl: a.webhookUrl ?? "",
-                          webhookSecret: a.webhookSecret ?? "",
-                          runtimeId: a.runtime?.id ?? "",
-                          capabilitiesRaw: a.capabilities.join(", "),
-                          maxConcurrent: a.maxConcurrent,
-                          runEngine: (a.runEngine ?? "DEFAULT") as EditingState["runEngine"],
-                          templateMarkdown: a.templateMarkdown ?? "",
-                          createApiKey: false,
-                          keyPreset: "agent",
-                          keyName: "",
-                          keyExpiresInDays: "",
-                        });
-                        setWebhookTestResult(null);
-                        setStep(0);
-                      }}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        setArchiveTarget({
-                          id: a.id,
-                          name: a.name,
-                          archived: isArchived,
-                        })
-                      }
-                    >
-                      {isArchived ? "Restore" : "Archive"}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        setDeleteTarget({
-                          id: a.id,
-                          name: a.name,
-                          profileKey: a.profileKey,
-                          assigned: assignedCount,
-                        })
-                      }
-                    >
-                      Delete
-                    </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setArchiveTarget({ id: a.id, name: a.name, archived: isArchived })
+                        }
+                      >
+                        {isArchived ? "Restore" : "Archive"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setDeleteTarget({
+                            id: a.id,
+                            name: a.name,
+                            profileKey: a.profileKey,
+                            assigned: assignedCount,
+                          })
+                        }
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </header>
+
+                  {/* Inline provider / runtime / connection strip */}
+                  <div className="grid grid-cols-2 gap-3 border-y border-border/60 bg-background/40 px-4 py-3 sm:grid-cols-4">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Provider
+                      </div>
+                      <div className="mt-1 flex items-center gap-1.5 text-meta">
+                        <span className="rounded-md bg-subtle px-1.5 py-0.5 font-mono text-[0.6875rem]">
+                          {provider.toLowerCase()}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {runtimeMode === "PERSISTENT" ? "persistent" : "single-session"}
+                        </span>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Runtime
+                      </div>
+                      <div className="mt-1 flex items-center gap-1.5 text-meta">
+                        {rt ? (
+                          <>
+                            <Server className="h-3 w-3 text-muted-foreground" />
+                            <span className="truncate font-mono">{rt.name}</span>
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">unattached</span>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Connection
+                      </div>
+                      <div className="mt-1 font-mono text-meta">{connection}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Last heartbeat
+                      </div>
+                      <div className="mt-1 text-meta tabular-nums">{heartbeatRel}</div>
+                    </div>
                   </div>
+
+                  {/* Capabilities + workload */}
+                  <div className="grid grid-cols-1 gap-4 px-4 py-3 sm:grid-cols-[1fr_220px]">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Capabilities
+                      </div>
+                      <div
+                        className="mt-1.5 flex flex-wrap items-center gap-1.5"
+                        title="Capabilities are tags used by capability and priority matching."
+                      >
+                        {a.capabilities.map((c) => (
+                          <span
+                            key={c}
+                            className="inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground"
+                          >
+                            {c}
+                          </span>
+                        ))}
+                        {a.capabilities.length === 0 && (
+                          <span className="text-[0.6875rem] text-muted-foreground/70">
+                            No capabilities declared.
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+                        <span>Workload</span>
+                        <span className="tabular-nums text-muted-foreground/70">
+                          {assignedCount}/{capacityLabel}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-subtle">
+                        <div
+                          className="h-full rounded-full bg-ember"
+                          style={{ width: `${pct * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Infrastructure accordion — read-only runtime detail +
+                      deep link to the advanced runtime editor. */}
+                  <details className="group border-t border-border/60">
+                    <summary className="flex cursor-pointer items-center gap-2 bg-background/40 px-4 py-2.5 text-meta text-muted-foreground hover:bg-subtle">
+                      <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
+                      <span className="font-medium text-foreground">Infrastructure</span>
+                      <span>· runtime endpoint, kind, advanced settings</span>
+                      <span className="ml-auto rounded border border-border bg-background px-1 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                        advanced
+                      </span>
+                    </summary>
+                    <div className="grid grid-cols-1 gap-4 border-t border-border/60 bg-background/30 px-4 py-4 sm:grid-cols-2">
+                      <Field label="Runtime kind" hint="LOCAL_DAEMON, REMOTE_HTTP, or CLOUD.">
+                        <div className="font-mono text-sm">
+                          {rt ? rt.kind.replace("_", " ").toLowerCase() : "— (unattached)"}
+                        </div>
+                      </Field>
+                      <Field label="Endpoint">
+                        <div className="truncate font-mono text-sm">
+                          {rt?.endpoint || "—"}
+                        </div>
+                      </Field>
+                      <Field
+                        label="Heartbeat"
+                        hint="Idle timeout flips the agent OFFLINE. Configured workspace-wide."
+                      >
+                        <div className="text-sm tabular-nums">{heartbeatRel}</div>
+                      </Field>
+                      <Field label="Manage" hint="Endpoint, providers, and Codex policy live in the runtime editor.">
+                        {rt ? (
+                          <Link
+                            href={`/w/${ws.slug}/settings/runtimes/${rt.id}`}
+                            className="inline-flex items-center gap-1 text-sm text-foreground underline decoration-dotted underline-offset-2 hover:text-ember"
+                          >
+                            Open runtime editor →
+                          </Link>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">
+                            Attach a runtime from Edit → Connection.
+                          </span>
+                        )}
+                      </Field>
+                    </div>
+                  </details>
                 </li>
               );
             })}
             {!isLoading && rows.length === 0 && (
-              <EmptyState
-                icon={Bot}
-                title="No agents yet"
-                hint="Register an agent profile, then connect it with MCP, webhooks, or both."
-                action={
-                  <Button variant="ember" size="sm" onClick={openNew}>
-                    Create your first agent
-                  </Button>
-                }
-              />
+              <li className="rounded-lg border border-border bg-card/40">
+                <EmptyState
+                  icon={Bot}
+                  title="No agents yet"
+                  hint="Register an agent profile, then connect it with MCP, webhooks, or both."
+                  action={
+                    <Button variant="ember" size="sm" onClick={openNew}>
+                      Create your first agent
+                    </Button>
+                  }
+                />
+              </li>
             )}
-          </Card>
+          </ul>
+
+          {/* Add an agent — recipe gallery. Absorbs the old first-class
+              integration adapter cards: provider + runtime + first key now
+              wire up in one flow. */}
+          <section className="space-y-2">
+            <div className="px-1">
+              <h2 className="text-[0.8125rem] font-semibold text-foreground">Add an agent</h2>
+              <p className="mt-0.5 text-meta text-muted-foreground">
+                Pre-baked recipes that wire profile + runtime + first API key in one flow.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {PROVIDERS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => openNewWithProvider(p)}
+                  className="group flex flex-col gap-2 rounded-lg border border-border bg-card/40 p-3 text-left transition-colors hover:border-ember/40"
+                >
+                  <span
+                    className={
+                      "grid h-8 w-8 place-items-center rounded-md " +
+                      (p.id === "HERMES"
+                        ? "bg-ember/10 text-ember"
+                        : "bg-subtle text-foreground/80")
+                    }
+                  >
+                    <p.Icon className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <div className="text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                      {p.eyebrow}
+                    </div>
+                    <div className="text-sm font-semibold text-foreground">{p.label}</div>
+                  </div>
+                  <p className="line-clamp-2 text-meta text-muted-foreground">{p.description}</p>
+                  <span className="mt-auto text-meta text-muted-foreground group-hover:text-ember">
+                    Set up →
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* Provider matrix — quick reference for which connection mode each
+              provider uses. Read-only. */}
+          <section className="space-y-2">
+            <div className="px-1">
+              <h2 className="text-[0.8125rem] font-semibold text-foreground">Provider matrix</h2>
+              <p className="mt-0.5 text-meta text-muted-foreground">
+                Which connection mode and presence model each provider uses.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {PROVIDERS.map((p) => (
+                <div
+                  key={p.id}
+                  className="rounded-lg border border-border bg-card/40 p-3"
+                >
+                  <div className="font-mono text-id text-foreground">{p.id}</div>
+                  <div className="mt-1 text-meta text-muted-foreground">
+                    {p.defaultRuntimeMode === "PERSISTENT" ? "Persistent" : "Single-session"} ·{" "}
+                    {p.defaultConnectionMode === "webhook" ? "webhook + MCP" : "MCP"}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="px-1 text-meta text-muted-foreground">
+              Runtimes (compute hosts) are managed per-agent during onboarding. Advanced
+              endpoint, kind, and Codex sandbox settings live in the{" "}
+              <Link
+                href={`/w/${ws.slug}/settings/runtimes`}
+                className="text-foreground underline decoration-dotted underline-offset-2 hover:text-ember"
+              >
+                runtime editor
+              </Link>
+              .
+            </p>
+          </section>
         </div>
       </div>
 
@@ -905,7 +1113,7 @@ export default function AgentsPage() {
                 <div className="space-y-4">
                   <Field
                     label="Managed runtime"
-                    hint="Attach this agent to a managed runtime (e.g. a Hermes gateway) that hosts it. Profiles on the same daemon share one runtime. Leave unattached for a thin MCP/webhook connection. Manage runtimes under Settings → Runtimes."
+                    hint="Attach this agent to a managed runtime (e.g. a Hermes gateway) that hosts it. Profiles on the same daemon share one runtime. Leave unattached for a thin MCP/webhook connection. Advanced runtime settings live in the runtime editor."
                   >
                     <select
                       className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm"

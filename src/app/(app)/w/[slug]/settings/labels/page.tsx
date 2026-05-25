@@ -10,6 +10,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { Section } from "@/components/settings/section";
 import { trpc } from "@/lib/trpc";
 
 const DEFAULT_COLORS = [
@@ -55,7 +56,7 @@ export default function LabelsPage() {
     <>
       <Topbar
         title="Labels"
-        subtitle="Colored tags for issues."
+        subtitle="Colored tags for issues. Use them sparingly — the best label sets stay below ~10."
         actions={
           <Button
             variant="ember"
@@ -67,44 +68,85 @@ export default function LabelsPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
-          <Card>
-            {(labels ?? []).map((l) => (
-              <li key={l.id} className="flex items-center gap-3 px-4 py-3">
-                <Badge color={l.color}>{l.name}</Badge>
-                <span className="ml-auto text-[0.6875rem] text-muted-foreground">
-                  {l._count.issues} issue{l._count.issues === 1 ? "" : "s"}
+        <div className="mx-auto max-w-3xl space-y-8 p-6">
+          <Section
+            title="Labels"
+            hint="Tag issues with a color and name to slice and filter your work. Recolor or rename any time — changes apply everywhere the label is used."
+            actions={
+              labels && labels.length > 0 ? (
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {labels.length} label{labels.length === 1 ? "" : "s"}
                 </span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setEditing({ id: l.id, name: l.name, color: l.color })}
-                >
-                  Edit
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    setDeleteTarget({
-                      id: l.id,
-                      name: l.name,
-                      attached: l._count.issues,
-                    })
+              ) : undefined
+            }
+          >
+            <Card>
+              {(labels ?? []).map((l) => (
+                <li key={l.id} className="group flex items-center gap-3 px-4 py-3">
+                  <Badge color={l.color}>{l.name}</Badge>
+                  <span className="text-[0.6875rem] text-muted-foreground">
+                    {l._count.issues} issue{l._count.issues === 1 ? "" : "s"}
+                  </span>
+                  <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+                    {l.color}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setEditing({ id: l.id, name: l.name, color: l.color })}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setDeleteTarget({
+                        id: l.id,
+                        name: l.name,
+                        attached: l._count.issues,
+                      })
+                    }
+                  >
+                    Delete
+                  </Button>
+                </li>
+              ))}
+              {labels?.length === 0 && (
+                <EmptyState
+                  icon={Tags}
+                  title="No labels yet"
+                  hint="Labels are colored tags you attach to issues — handy for things like bug, design, or needs-review. Create your first one to get started."
+                  action={
+                    <Button
+                      variant="ember"
+                      size="sm"
+                      onClick={() => setEditing({ name: "", color: DEFAULT_COLORS[0] })}
+                    >
+                      New label
+                    </Button>
                   }
+                />
+              )}
+            </Card>
+          </Section>
+
+          <Section
+            title="Palette"
+            hint="Suggested colors. The create and edit dialogs default to these swatches, but the color picker accepts any hex value."
+          >
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/40 p-5">
+              {DEFAULT_COLORS.map((c) => (
+                <span
+                  key={c}
+                  className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1"
                 >
-                  Delete
-                </Button>
-              </li>
-            ))}
-            {labels?.length === 0 && (
-              <EmptyState
-                icon={Tags}
-                title="No labels yet"
-                hint="Create one to tag issues with a color and name."
-              />
-            )}
-          </Card>
+                  <span className="h-4 w-4 rounded" style={{ backgroundColor: c }} />
+                  <span className="font-mono text-[0.6875rem] text-muted-foreground">{c}</span>
+                </span>
+              ))}
+            </div>
+          </Section>
         </div>
       </div>
 

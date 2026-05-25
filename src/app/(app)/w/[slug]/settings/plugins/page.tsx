@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Puzzle } from "lucide-react";
 import { Topbar } from "@/components/topbar";
@@ -9,7 +10,9 @@ import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
+import { PLUGIN_SCOPE_HELP, PLUGIN_SCOPE_ORDER } from "@/lib/plugin-scopes";
 
 const statusTone: Record<string, string> = {
   APPROVED: "#65a30d",
@@ -19,6 +22,7 @@ const statusTone: Record<string, string> = {
 };
 
 export default function PluginsPage() {
+  const ws = useWorkspace();
   const { data: plugins, refetch } = trpc.plugin.list.useQuery();
   const approve = trpc.plugin.approve.useMutation({ onSuccess: () => refetch() });
   const suspend = trpc.plugin.suspend.useMutation({ onSuccess: () => refetch() });
@@ -42,7 +46,7 @@ export default function PluginsPage() {
     <>
       <Topbar
         title="Plugins"
-        subtitle="Extensible agents with scoped access to your workspace."
+        subtitle="Extensible agents with scoped access to your workspace. Approve, configure, or suspend installed plugins."
         actions={
           <Button variant="ember" size="sm" onClick={() => setRegisterOpen(true)}>
             Register plugin
@@ -56,7 +60,12 @@ export default function PluginsPage() {
               <li key={p.id} className="flex items-start gap-4 px-4 py-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-medium">{p.name}</span>
+                    <Link
+                      href={`/w/${ws.slug}/settings/plugins/${p.id}`}
+                      className="font-medium hover:text-ember"
+                    >
+                      {p.name}
+                    </Link>
                     <Badge color={statusTone[p.status]}>{p.status}</Badge>
                     <span className="font-mono text-[0.6875rem] text-muted-foreground">
                       v{p.version} · {p.slug}
@@ -65,7 +74,8 @@ export default function PluginsPage() {
                   {p.description && (
                     <div className="mt-1 text-xs text-muted-foreground">{p.description}</div>
                   )}
-                  <div className="mt-2 flex flex-wrap gap-1">
+                  <div className="mt-2 flex flex-wrap items-center gap-1 text-meta">
+                    <span className="text-muted-foreground">scopes</span>
                     {p.scopes.map((s) => (
                       <Badge key={s}>{s}</Badge>
                     ))}
@@ -96,6 +106,11 @@ export default function PluginsPage() {
                       Suspend
                     </Button>
                   )}
+                  <Link href={`/w/${ws.slug}/settings/plugins/${p.id}`}>
+                    <Button variant="ghost" size="sm" className="w-full">
+                      Details
+                    </Button>
+                  </Link>
                 </div>
               </li>
             ))}
@@ -107,6 +122,33 @@ export default function PluginsPage() {
               />
             )}
           </Card>
+
+          {/* Permission reference — what each manifest scope grants. Reviewers
+              should approve the smallest set that does the job. Mirrors the
+              real PluginScope enum (prisma/schema.prisma). */}
+          <section className="space-y-2">
+            <div className="px-1">
+              <h2 className="text-[0.8125rem] font-semibold text-foreground">
+                Permission reference
+              </h2>
+              <p className="mt-0.5 text-meta text-muted-foreground">
+                Scopes a plugin manifest can request. Approve the smallest set that
+                does the job.
+              </p>
+            </div>
+            <Card as="div">
+              <ul className="grid grid-cols-1 gap-3 p-4 text-meta sm:grid-cols-2 lg:grid-cols-3">
+                {PLUGIN_SCOPE_ORDER.map((scope) => (
+                  <li key={scope}>
+                    <div className="font-mono text-[0.6875rem] text-ember">{scope}</div>
+                    <div className="mt-0.5 text-muted-foreground">
+                      {PLUGIN_SCOPE_HELP[scope]}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          </section>
         </div>
       </div>
 

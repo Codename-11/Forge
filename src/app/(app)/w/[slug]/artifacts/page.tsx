@@ -8,6 +8,7 @@ import {
   MoreHorizontal,
   Plus,
   RotateCcw,
+  Search,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -69,8 +70,38 @@ export default function ArtifactsPage() {
   const [creating, setCreating] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ArtifactRow | null>(null);
+  const [typeFilter, setTypeFilter] = useState<ArtifactType | "all">("all");
+  const [query, setQuery] = useState("");
 
   const items = useMemo(() => data?.items ?? [], [data]);
+
+  // Types present in the loaded set, in a stable canonical order, so the
+  // chip row only offers filters that match real rows.
+  const availableTypes = useMemo(() => {
+    const present = new Set(items.map((r) => r.type));
+    return (Object.keys(TYPE_LABEL) as ArtifactType[]).filter((t) =>
+      present.has(t),
+    );
+  }, [items]);
+
+  // Reset a type filter that no longer matches anything (e.g. tab switch).
+  useEffect(() => {
+    if (typeFilter !== "all" && !availableTypes.includes(typeFilter)) {
+      setTypeFilter("all");
+    }
+  }, [availableTypes, typeFilter]);
+
+  const visibleItems = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return items.filter((r) => {
+      if (typeFilter !== "all" && r.type !== typeFilter) return false;
+      if (q) {
+        const haystack = `${r.title} ${r.summary ?? ""}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [items, typeFilter, query]);
 
   const invalidateLists = () => {
     void utils.artifact.list.invalidate();
@@ -136,32 +167,62 @@ export default function ArtifactsPage() {
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="mb-3 inline-flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5">
-          <button
-            type="button"
-            onClick={() => setTab("active")}
-            className={cn(
-              "rounded px-2.5 py-1 text-xs transition",
-              tab === "active"
-                ? "bg-subtle text-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Active
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("archived")}
-            className={cn(
-              "rounded px-2.5 py-1 text-xs transition",
-              tab === "archived"
-                ? "bg-subtle text-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Archived
-          </button>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="inline-flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5">
+            <button
+              type="button"
+              onClick={() => setTab("active")}
+              className={cn(
+                "rounded px-2.5 py-1 text-xs transition",
+                tab === "active"
+                  ? "bg-subtle text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Active
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("archived")}
+              className={cn(
+                "rounded px-2.5 py-1 text-xs transition",
+                tab === "archived"
+                  ? "bg-subtle text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Archived
+            </button>
+          </div>
+          <div className="relative ml-auto">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search artifacts…"
+              className="focus-ring h-7 w-56 rounded-md border border-border bg-background px-2 pr-7 text-xs text-foreground placeholder:text-muted-foreground"
+            />
+            <Search className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+          </div>
         </div>
+
+        {availableTypes.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center gap-1.5 text-meta">
+            <TypeChip
+              label="All types"
+              active={typeFilter === "all"}
+              onClick={() => setTypeFilter("all")}
+            />
+            {availableTypes.map((t) => (
+              <TypeChip
+                key={t}
+                label={TYPE_LABEL[t]}
+                active={typeFilter === t}
+                onClick={() => setTypeFilter(t)}
+              />
+            ))}
+          </div>
+        )}
 
         {isLoading ? (
           <SkeletonList rows={4} />
@@ -198,9 +259,13 @@ export default function ArtifactsPage() {
               }
             />
           )
+        ) : visibleItems.length === 0 ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">
+            No artifacts match the current filters.
+          </div>
         ) : (
           <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
-            {items.map((row) => (
+            {visibleItems.map((row) => (
               <li key={row.id} className="relative">
                 <Link
                   href={`/w/${ws.slug}/artifacts/${row.slug}`}
@@ -427,6 +492,31 @@ function RowMenu({
         </div>
       )}
     </div>
+  );
+}
+
+function TypeChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 transition",
+        active
+          ? "bg-ember/15 text-ember"
+          : "border border-border bg-background text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {label}
+    </button>
   );
 }
 
