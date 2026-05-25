@@ -1,4 +1,5 @@
 "use client";
+import { Inbox } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId } from "@/lib/utils";
 import { MOTION } from "@/lib/motion";
@@ -21,15 +22,15 @@ export function CycleBacklogPanel() {
   return (
     <aside
       data-cycle-backlog-panel
-      className="hidden h-full w-72 shrink-0 flex-col border-l border-border bg-card/40 lg:flex"
+      className="hidden h-full w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-dashed border-border bg-card/40 lg:flex"
     >
-      <header className="flex h-9 items-center gap-2 border-b border-border px-3">
-        <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
-          Backlog
-        </span>
-        <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+      <header className="flex h-9 items-center gap-2 border-b border-border/60 px-3">
+        <Inbox className="h-3 w-3 text-muted-foreground" />
+        <span className="text-sm font-medium">Backlog</span>
+        <span className="font-mono text-[0.6875rem] tabular-nums text-muted-foreground">
           {data?.items.length ?? 0}
         </span>
+        <span className="ml-auto text-meta text-muted-foreground">drag → plan</span>
       </header>
       <div className="flex-1 overflow-y-auto p-2">
         {isLoading && (

@@ -13,10 +13,10 @@ import { trpc } from "@/lib/trpc";
 
 /**
  * Workspace settings landing. Renders the grouped index from the single
- * source of truth in `settings-nav.ts` — the same list the compact
- * {@link SettingsNavbar} uses — followed by the account-level group as a
+ * source of truth in `settings-nav.ts` — the same list the
+ * {@link SettingsRail} uses — followed by the account-level group as a
  * cross-link. Add or move a settings surface in `settings-nav.ts` and both
- * this page and the navbar update together.
+ * this page and the rail update together.
  */
 function EntryRow({ href, item }: { href: string; item: SettingsNavItem }) {
   return (

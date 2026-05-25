@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Code2,
   KeyRound,
+  Plus,
   PlugZap,
   Radio,
   Server,
@@ -302,6 +303,39 @@ export default function AgentsPage() {
     setEditing({ ...EMPTY_EDITING });
     setStep(0);
     setWebhookTestResult(null);
+  }
+
+  /**
+   * Open the edit wizard for an existing agent row, pre-seeded from its
+   * current values. Shared by the row's "Edit" button and the dashed
+   * "+ Add" affordances (capabilities / providers) so those are functional.
+   */
+  function openEdit(a: (typeof rows)[number]) {
+    const provider = (a.provider ?? "HERMES") as AgentProviderId;
+    const runtimeMode = (a.runtimeMode ?? "PERSISTENT") as RuntimeMode;
+    setEditing({
+      id: a.id,
+      name: a.name,
+      profileKey: a.profileKey,
+      description: a.description ?? "",
+      avatar: a.avatar ?? "",
+      provider,
+      runtimeMode,
+      connectionMode: a.webhookUrl ? "webhook" : "mcp",
+      webhookUrl: a.webhookUrl ?? "",
+      webhookSecret: a.webhookSecret ?? "",
+      runtimeId: a.runtime?.id ?? "",
+      capabilitiesRaw: a.capabilities.join(", "),
+      maxConcurrent: a.maxConcurrent,
+      runEngine: (a.runEngine ?? "DEFAULT") as EditingState["runEngine"],
+      templateMarkdown: a.templateMarkdown ?? "",
+      createApiKey: false,
+      keyPreset: "agent",
+      keyName: "",
+      keyExpiresInDays: "",
+    });
+    setWebhookTestResult(null);
+    setStep(0);
   }
 
   /**
@@ -662,31 +696,7 @@ export default function AgentsPage() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => {
-                          setEditing({
-                            id: a.id,
-                            name: a.name,
-                            profileKey: a.profileKey,
-                            description: a.description ?? "",
-                            avatar: a.avatar ?? "",
-                            provider,
-                            runtimeMode,
-                            connectionMode: a.webhookUrl ? "webhook" : "mcp",
-                            webhookUrl: a.webhookUrl ?? "",
-                            webhookSecret: a.webhookSecret ?? "",
-                            runtimeId: a.runtime?.id ?? "",
-                            capabilitiesRaw: a.capabilities.join(", "),
-                            maxConcurrent: a.maxConcurrent,
-                            runEngine: (a.runEngine ?? "DEFAULT") as EditingState["runEngine"],
-                            templateMarkdown: a.templateMarkdown ?? "",
-                            createApiKey: false,
-                            keyPreset: "agent",
-                            keyName: "",
-                            keyExpiresInDays: "",
-                          });
-                          setWebhookTestResult(null);
-                          setStep(0);
-                        }}
+                        onClick={() => openEdit(a)}
                       >
                         Edit
                       </Button>
@@ -783,6 +793,13 @@ export default function AgentsPage() {
                             No capabilities declared.
                           </span>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => openEdit(a)}
+                          className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-meta text-muted-foreground hover:text-foreground"
+                        >
+                          <Plus className="h-[9px] w-[9px]" /> Add
+                        </button>
                       </div>
                     </div>
                     <div>
@@ -821,6 +838,31 @@ export default function AgentsPage() {
                       <Field label="Endpoint">
                         <div className="truncate font-mono text-sm">
                           {rt?.endpoint || "—"}
+                        </div>
+                      </Field>
+                      <Field label="Providers" hint="Models this runtime can serve.">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {rt ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => openEdit(a)}
+                                className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-meta text-muted-foreground hover:text-foreground"
+                              >
+                                <Plus className="h-[9px] w-[9px]" /> Add
+                              </button>
+                              <Link
+                                href={`/w/${ws.slug}/settings/runtimes/${rt.id}`}
+                                className="text-meta text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-ember"
+                              >
+                                Open runtime editor →
+                              </Link>
+                            </>
+                          ) : (
+                            <span className="text-meta text-muted-foreground">
+                              Attach a runtime first.
+                            </span>
+                          )}
                         </div>
                       </Field>
                       <Field

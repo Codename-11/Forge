@@ -316,10 +316,23 @@ export default function RoadmapPage() {
           <span className="flex items-center gap-1.5">
             <span
               aria-hidden="true"
-              className="inline-block h-3 w-4 rounded-full"
-              style={{ backgroundColor: "#78716c" }}
+              className="inline-block h-3 w-4 rounded-md"
+              style={{
+                backgroundColor: "#78716c",
+                borderLeft: "3px solid color-mix(in srgb, #78716c 60%, #000)",
+              }}
             />
             Project bar
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="inline-flex h-3 w-4 items-stretch overflow-hidden rounded-md"
+              style={{ backgroundColor: "#78716c" }}
+            >
+              <span className="h-full w-1/2 bg-black/25" />
+            </span>
+            Progress fill = done so far
           </span>
           <span className="flex items-center gap-1.5">
             <span aria-hidden="true" className="h-3 w-px bg-ember" />
@@ -348,6 +361,7 @@ function RoadmapRow({
     color: string | null;
     startDate: Date | string | null;
     targetDate: Date | string | null;
+    _count?: { issues: number; doneIssues: number };
   }>;
   rangeStart: Date;
   totalDays: number;
@@ -408,24 +422,44 @@ function RoadmapRow({
             pct(dayOffset(actualEnd)) - left + (end ? 0 : 1),
           );
           const bar = Math.min(width, 100 - left);
+          const accent = p.color ?? initiative.color ?? "#78716c";
+          // Inset interior progress fill — done/total clipped to the
+          // bar width. A subtly darker tint of the bar's own surface.
+          const total = p._count?.issues ?? 0;
+          const done = p._count?.doneIssues ?? 0;
+          const fillPct =
+            total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
           return (
             <Link
               key={p.id}
               href={`/w/${ws.slug}/projects/${p.id}`}
               className={cn(
-                "mb-1.5 flex h-5 items-center overflow-hidden rounded-full text-[0.6875rem] font-medium hover:opacity-90",
+                "relative mb-1.5 flex h-5 items-center overflow-hidden rounded-md text-[0.6875rem] font-medium hover:opacity-90",
                 MOTION.fast,
               )}
               style={{
                 marginLeft: `${left}%`,
                 width: `${bar}%`,
-                backgroundColor: p.color ?? initiative.color ?? "#78716c",
+                backgroundColor: accent,
                 color: "#fff",
+                borderLeft: `3px solid color-mix(in srgb, ${accent} 60%, #000)`,
                 marginTop: i === 0 ? 0 : undefined,
               }}
-              title={`${p.key} · ${p.name}`}
+              title={
+                total > 0
+                  ? `${p.key} · ${p.name} — ${done}/${total} done`
+                  : `${p.key} · ${p.name}`
+              }
             >
-              <span className="flex min-w-0 items-center gap-1.5 px-2">
+              {/* Inset interior progress fill — done so far. */}
+              {fillPct > 0 ? (
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-y-0 left-0 bg-black/25"
+                  style={{ width: `${fillPct}%` }}
+                />
+              ) : null}
+              <span className="relative flex min-w-0 items-center gap-1.5 px-2">
                 <span className="text-id shrink-0 font-mono tabular-nums opacity-80">
                   {p.key}
                 </span>

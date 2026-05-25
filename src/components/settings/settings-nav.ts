@@ -45,7 +45,7 @@ export type SettingsNavGroup = {
 /**
  * Single source of truth for workspace settings navigation.
  *
- * Both the compact {@link SettingsNavbar} and the settings Overview index
+ * Both the {@link SettingsRail} and the settings Overview index
  * (`/w/<slug>/settings`) render from this list, so the two surfaces can
  * never drift (they used to maintain separate, disagreeing inventories —
  * crews appeared in one, runtimes in the other, admin in different groups).

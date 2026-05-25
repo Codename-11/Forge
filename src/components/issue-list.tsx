@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
+import { StatusDot } from "@/components/ui/status-dot";
+import { PriorityGlyph } from "@/components/ui/priority-glyph";
 import { EmptyState, Kbd, SkeletonList, useDensity } from "@/components/ui";
 import { Confirm, Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
@@ -26,14 +28,6 @@ import { useHotkey } from "@/lib/keyboard";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import type { SavedViewFilters } from "@/lib/saved-view-filters";
-
-const priorityGlyph: Record<string, string> = {
-  URGENT: "!!!",
-  HIGH: "!!",
-  MEDIUM: "!",
-  LOW: "·",
-  NONE: "—",
-};
 
 export function IssueList({
   workspaceKey,
@@ -129,7 +123,7 @@ export function IssueList({
       else byStatus.set(issue.statusId, [issue]);
     }
     const ordered: Array<{
-      status: { id: string; name: string; color: string };
+      status: { id: string; name: string; color: string; category: string };
       issues: IssueRow[];
     }> = [];
     const seen = new Set<string>();
@@ -138,7 +132,7 @@ export function IssueList({
       const group = byStatus.get(s.id);
       if (group && group.length > 0) {
         ordered.push({
-          status: { id: s.id, name: s.name, color: s.color },
+          status: { id: s.id, name: s.name, color: s.color, category: s.category },
           issues: group,
         });
         seen.add(s.id);
@@ -155,6 +149,7 @@ export function IssueList({
           id: issue.status.id,
           name: issue.status.name,
           color: issue.status.color,
+          category: issue.status.category,
         },
         issues: group,
       });
@@ -453,11 +448,7 @@ export function IssueList({
       {statusGroups.map((group) => (
         <div key={group.status.id}>
           <div className="sticky top-0 z-[5] flex items-center gap-2 border-b border-border bg-card/80 px-5 py-1.5 backdrop-blur">
-            <span
-              aria-hidden
-              className="inline-block h-2 w-2 shrink-0 rounded-full"
-              style={{ backgroundColor: group.status.color }}
-            />
+            <StatusDot status={group.status} size={12} />
             <span className="text-xs font-medium">{group.status.name}</span>
             <span className="text-meta tabular-nums text-muted-foreground">
               {group.issues.length}
@@ -541,13 +532,16 @@ export function IssueList({
                     />
                   )}
                 </span>
-                <span className="w-4 text-center font-mono text-[0.6875rem] text-muted-foreground">
-                  {priorityGlyph[issue.priority]}
-                </span>
+                <PriorityGlyph priority={issue.priority} className="w-4" />
                 <span className={keyCls}>
                   {formatIssueId(workspaceKey, issue.number)}
                 </span>
-                <Badge color={issue.status.color}>{issue.status.name}</Badge>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <StatusDot status={issue.status} />
+                  <span className="text-meta text-muted-foreground">
+                    {issue.status.name}
+                  </span>
+                </span>
                 <IssueHoverPreview
                   issueKey={formatIssueId(workspaceKey, issue.number)}
                   workspaceSlug={ws?.slug}
