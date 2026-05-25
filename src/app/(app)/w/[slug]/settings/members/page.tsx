@@ -1,15 +1,17 @@
 "use client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Users } from "lucide-react";
+import { ChevronRight, Send, Users, X } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Confirm, QuickForm } from "@/components/ui/modal";
+import { Kbd } from "@/components/ui/kbd";
+import { Confirm } from "@/components/ui/modal";
+import { CenterModal } from "@/components/ui/modal/center-modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { Section } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { initials, relativeTime } from "@/lib/utils";
 
@@ -49,26 +51,129 @@ const ROLE_HELP: { role: Role; blurb: string }[] = [
   },
 ];
 
+const ROLE_BLURB: Record<Role, string> = Object.fromEntries(
+  ROLE_HELP.map((r) => [r.role, r.blurb]),
+) as Record<Role, string>;
+
+/** Roles an admin can hand out via invite. OWNER is special (transfer-only). */
+const INVITE_ROLES = ["ADMIN", "MEMBER", "GUEST"] as const satisfies readonly Role[];
+
+// Permissive-but-real email shape. Mirrors the server's `z.string().email()`
+// closely enough to flag obvious typos client-side without false rejects.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+type ChipStatus = "ready" | "exists" | "invalid";
+type Chip = { email: string; status: ChipStatus };
+
+/**
+ * Parse a raw recipients blob into de-duped, validated chips. Splits on
+ * commas, whitespace, and newlines; lowercases for both de-dup and the
+ * already-a-member check (membership emails are stored lowercased).
+ */
+function parseRecipients(raw: string, memberEmails: Set<string>): Chip[] {
+  const seen = new Set<string>();
+  const chips: Chip[] = [];
+  for (const tokenRaw of raw.split(/[\s,]+/)) {
+    const email = tokenRaw.trim().toLowerCase();
+    if (!email) continue;
+    if (seen.has(email)) continue;
+    seen.add(email);
+    const status: ChipStatus = !EMAIL_RE.test(email)
+      ? "invalid"
+      : memberEmails.has(email)
+        ? "exists"
+        : "ready";
+    chips.push({ email, status });
+  }
+  return chips;
+}
+
 export default function MembersPage() {
+  const utils = trpc.useUtils();
   const { data: members, refetch, isLoading } =
     trpc.workspace.listMembers.useQuery();
   const { data: me } = trpc.workspace.me.useQuery();
-  const [addOpen, setAddOpen] = useState(false);
-  const [addRole, setAddRole] = useState<Role>("MEMBER");
+  const { data: workspace } = trpc.workspace.current.useQuery();
   const [removeTarget, setRemoveTarget] = useState<{
     userId: string;
     email: string;
   } | null>(null);
 
-  const addMember = trpc.workspace.addMember.useMutation({
-    onSuccess: (res) => {
-      toast.success(res.created ? "Member added." : "Already a member — no change.");
-      setAddOpen(false);
-      setAddRole("MEMBER");
-      refetch();
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  // ── Invite composer state ──────────────────────────────────────────
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [recipientsRaw, setRecipientsRaw] = useState("");
+  const [inviteRole, setInviteRole] = useState<Role>("MEMBER");
+  const [note, setNote] = useState("");
+  const [sending, setSending] = useState(false);
+
+  // Lowercased roster emails — the client-side "already a member" oracle.
+  const memberEmails = useMemo(
+    () => new Set((members ?? []).map((m) => m.email.toLowerCase())),
+    [members],
+  );
+  const chips = useMemo(
+    () => parseRecipients(recipientsRaw, memberEmails),
+    [recipientsRaw, memberEmails],
+  );
+  const readyChips = chips.filter((c) => c.status === "ready");
+  const existsCount = chips.filter((c) => c.status === "exists").length;
+  const invalidCount = chips.filter((c) => c.status === "invalid").length;
+  const readyCount = readyChips.length;
+
+  function removeChip(email: string) {
+    // Rebuild the raw string without the removed token, preserving the rest.
+    const next = chips.filter((c) => c.email !== email).map((c) => c.email);
+    setRecipientsRaw(next.join(", "));
+  }
+
+  function resetComposer() {
+    setRecipientsRaw("");
+    setInviteRole("MEMBER");
+    setNote("");
+  }
+
+  const addMember = trpc.workspace.addMember.useMutation();
+
+  /**
+   * Send one invite per ready recipient by looping the existing
+   * single-email `addMember` mutation (no bulk endpoint exists — by
+   * design). Fired in parallel; we tally created vs. already-existing
+   * vs. failed from the settled results, toast a summary, then refetch.
+   */
+  async function sendInvites() {
+    if (readyCount === 0 || sending) return;
+    setSending(true);
+    try {
+      const results = await Promise.allSettled(
+        readyChips.map((c) =>
+          addMember.mutateAsync({ email: c.email, role: inviteRole }),
+        ),
+      );
+      let invited = 0;
+      let skipped = 0;
+      let failed = 0;
+      for (const r of results) {
+        if (r.status === "rejected") failed += 1;
+        else if (r.value.created) invited += 1;
+        else skipped += 1;
+      }
+      const parts: string[] = [];
+      if (invited) parts.push(`Invited ${invited}`);
+      if (skipped) parts.push(`skipped ${skipped} existing`);
+      if (failed) parts.push(`${failed} failed`);
+      const summary = parts.join(" · ") || "Nothing to send.";
+      if (failed && !invited) toast.error(summary);
+      else toast.success(summary);
+
+      await utils.workspace.listMembers.invalidate();
+      if (!failed) {
+        setInviteOpen(false);
+        resetComposer();
+      }
+    } finally {
+      setSending(false);
+    }
+  }
 
   const setMemberRole = trpc.workspace.setMemberRole.useMutation({
     onSuccess: () => {
@@ -92,8 +197,8 @@ export default function MembersPage() {
         title="Members"
         subtitle="Admin-gated access. Authelia owns identity — this is the one place to grant access by email."
         actions={
-          <Button variant="ember" size="sm" onClick={() => setAddOpen(true)}>
-            Add member
+          <Button variant="ember" size="sm" onClick={() => setInviteOpen(true)}>
+            Invite members
           </Button>
         }
       />
@@ -117,8 +222,8 @@ export default function MembersPage() {
                 title="No members yet"
                 hint="Members are people who can sign in to this workspace. Add a teammate by email and they'll bind to their account on first SSO login — then change their role any time."
                 action={
-                  <Button variant="ember" size="sm" onClick={() => setAddOpen(true)}>
-                    Add your first member
+                  <Button variant="ember" size="sm" onClick={() => setInviteOpen(true)}>
+                    Invite your first member
                   </Button>
                 }
               />
@@ -205,49 +310,209 @@ export default function MembersPage() {
         </div>
       </div>
 
-      <QuickForm
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        title="Add member"
-        description="They'll get access once Authelia lets this email through. Role can be changed later."
-        primaryLabel={addMember.isPending ? "Adding…" : "Add"}
-        loading={addMember.isPending}
-        onSubmit={(e) => {
-          const fd = new FormData(e.currentTarget);
-          const email = String(fd.get("email") ?? "").trim();
-          const role = String(fd.get("role") ?? "MEMBER") as Role;
-          if (!email.includes("@")) {
-            return { error: "Enter a valid email." };
-          }
-          addMember.mutate({ email, role });
+      <CenterModal
+        open={inviteOpen}
+        onOpenChange={(v) => {
+          setInviteOpen(v);
+          if (!v) resetComposer();
         }}
+        size="md"
+        title="Invite members"
+        description="Authelia owns identity — invitees sign in with their existing SSO account on first visit."
+        footer={
+          <div className="flex w-full flex-wrap items-center justify-between gap-2">
+            <span className="text-[0.6875rem] text-muted-foreground">
+              {readyCount === 0
+                ? "Add at least one valid email"
+                : `${readyCount} invite${readyCount === 1 ? "" : "s"} will be sent`}{" "}
+              · <Kbd>⌘⏎</Kbd> send
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={sending}
+                onClick={() => {
+                  setInviteOpen(false);
+                  resetComposer();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="ember"
+                size="sm"
+                disabled={sending || readyCount === 0}
+                onClick={sendInvites}
+              >
+                <Send className="h-3.5 w-3.5" />
+                {sending
+                  ? "Sending…"
+                  : `Send ${readyCount} invite${readyCount === 1 ? "" : "s"}`}
+              </Button>
+            </div>
+          </div>
+        }
       >
-        <QuickForm.Field label="Email" htmlFor="add-member-email" required>
-          <Input
-            id="add-member-email"
-            name="email"
-            type="email"
-            placeholder="teammate@example.com"
-            autoFocus
-            required
-          />
-        </QuickForm.Field>
-        <QuickForm.Field label="Role" htmlFor="add-member-role">
-          <select
-            id="add-member-role"
-            name="role"
-            value={addRole}
-            onChange={(e) => setAddRole(e.target.value as Role)}
-            className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+        <div
+          className="space-y-6"
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              void sendInvites();
+            }
+          }}
+        >
+          {/* Recipients ──────────────────────────────────────────── */}
+          <Section
+            title="Recipients"
+            hint="Comma, space, or newline-separated. We'll de-dupe and skip people already in this workspace."
           >
-            {ROLES.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        </QuickForm.Field>
-      </QuickForm>
+            <div className="space-y-2">
+              <div className="flex min-h-[58px] flex-wrap items-center gap-1.5 rounded-md border border-input bg-background p-2">
+                {chips.map((c) => (
+                  <span
+                    key={c.email}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[0.6875rem]",
+                      c.status === "exists" &&
+                        "border-warning/40 bg-warning/10 text-warning",
+                      c.status === "invalid" &&
+                        "border-danger/40 bg-danger/10 text-danger",
+                      c.status === "ready" &&
+                        "border-border bg-background text-foreground",
+                    )}
+                  >
+                    <span className="font-mono">{c.email}</span>
+                    {c.status === "exists" && (
+                      <span className="text-[10px]">already a member</span>
+                    )}
+                    {c.status === "invalid" && (
+                      <span className="text-[10px]">invalid</span>
+                    )}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${c.email}`}
+                      onClick={() => removeChip(c.email)}
+                      className={cn(
+                        "hover:opacity-70",
+                        c.status === "ready" && "text-muted-foreground",
+                      )}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+                <textarea
+                  rows={1}
+                  autoFocus
+                  value={recipientsRaw}
+                  onChange={(e) => setRecipientsRaw(e.target.value)}
+                  placeholder={chips.length === 0 ? "teammate@example.com, …" : "add another email…"}
+                  aria-label="Recipient emails"
+                  className="min-w-[160px] flex-1 resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                />
+              </div>
+              {chips.length > 0 && (
+                <div className="flex items-center gap-3 text-[0.6875rem] text-muted-foreground">
+                  <span>{readyCount} ready</span>
+                  {existsCount > 0 && (
+                    <>
+                      <span>·</span>
+                      <span className="text-warning">
+                        {existsCount} already {existsCount === 1 ? "a member" : "members"}
+                      </span>
+                    </>
+                  )}
+                  {invalidCount > 0 && (
+                    <>
+                      <span>·</span>
+                      <span className="text-danger">{invalidCount} invalid</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </Section>
+
+          {/* Role ────────────────────────────────────────────────── */}
+          <Section title="Role" hint="You can change per-member roles after they accept.">
+            <div className="rounded-md border border-border bg-background p-3">
+              <div
+                role="radiogroup"
+                aria-label="Invite role"
+                className="inline-flex rounded-md border border-border bg-card/40 p-0.5"
+              >
+                {INVITE_ROLES.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    role="radio"
+                    aria-checked={inviteRole === r}
+                    onClick={() => setInviteRole(r)}
+                    className={cn(
+                      "rounded px-3 py-1 text-xs font-medium transition-colors",
+                      inviteRole === r
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {r.charAt(0) + r.slice(1).toLowerCase()}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-[0.6875rem] text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  {inviteRole.charAt(0) + inviteRole.slice(1).toLowerCase()}
+                </span>{" "}
+                · {ROLE_BLURB[inviteRole]}
+              </p>
+            </div>
+          </Section>
+
+          {/* Optional note ───────────────────────────────────────── */}
+          <Section
+            title="Optional note"
+            hint="Appears in the invite email. Markdown supported."
+          >
+            <textarea
+              rows={3}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="focus-ring w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground"
+              placeholder="Hey — added you to our Forge workspace. We're using it for sprint planning + agent dispatch."
+            />
+          </Section>
+
+          {/* Preview email ───────────────────────────────────────── */}
+          <details className="group rounded-md border border-border bg-card/40">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-sm font-medium text-foreground [&::-webkit-details-marker]:hidden">
+              <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
+              Preview email
+            </summary>
+            <div className="border-t border-border/60 bg-background px-4 py-3 text-[0.6875rem] text-muted-foreground">
+              <div>
+                <span className="text-foreground">From</span> · Forge
+                &lt;no-reply@forge.local&gt;
+              </div>
+              <div className="mt-0.5">
+                <span className="text-foreground">Subject</span> ·{" "}
+                {me?.user.name ?? me?.user.email ?? "An admin"} invited you to
+                {workspace?.name ? ` "${workspace.name}"` : " your workspace"} on Forge
+              </div>
+              <div className="mt-2 rounded-md border border-border bg-card/30 p-3 text-sm leading-relaxed text-foreground/90">
+                {note.trim() ||
+                  "Hey — you've been added to our Forge workspace. Sign in with your SSO account to get started."}
+                <br />
+                <br />
+                <span className="text-ember underline">Accept the invite →</span>
+              </div>
+            </div>
+          </details>
+        </div>
+      </CenterModal>
 
       <Confirm
         open={!!removeTarget}

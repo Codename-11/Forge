@@ -42,6 +42,11 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   timestamps, an initiatives "Roadmap view" shortcut, Command Center shows who's
   asking, an inbox "Mark read" (M), and the new-API-key dialog recaps the key
   details behind an "I've saved it" confirm.
+- **Connections** now open a **detail page** (Configure/Connect → its own page).
+- **Inviting members** is now a multi-recipient composer — paste a list, see
+  who's valid / already a member, pick a role, add a note, send in one go.
+- **Plugin** detail pages are organized into Overview / Permissions /
+  Configuration / Activity tabs.
 
 ## [2026-05-24] — Choose your background, richer agent & plan cards, plugin pages
 
