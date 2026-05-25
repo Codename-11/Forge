@@ -7413,3 +7413,233 @@ retry. Replaced with a **production `next build` + `next start`** server
 
 Result: full suite **9/9 in ~10s** (was 47–70s on dev), three consecutive runs
 clean, zero flakes. typecheck + lint clean.
+
+## 2026-05-24 (cont.) — Presence consistency sweep + auto-dispatch eligibility
+
+The "offline" fix was incomplete (only chat header + detail page) and had a
+functional twin. Swept the same root issue (heartbeat-presence ≠ on-demand
+availability) across surfaces + the dispatch path.
+
+- `presenceAvailability` (transport-display.ts): cheap, **null-safe**,
+  base-column derivation (no per-agent transport resolve) — heartbeat (Hermes /
+  has-heartbeat) vs on-demand (has runtime/webhook, non-Hermes) vs session.
+  `AgentPresenceDot` gained an `availability` prop → sky "on-demand" dot.
+- Applied: chat conversations **sidebar** (statusMeta + `chat.threads` now
+  selects provider/runtimeMode/lastHeartbeatAt/webhookUrl/runtimeId), MC
+  **Agents tab** + **Glance view** (local PresenceDots + freshness/heartbeat
+  labels), **Settings → Agents** roster. The shared dot is availability-aware,
+  so the remaining passive assignee-chips/pickers/hover-previews degrade
+  safely to status (no regression) until their queries carry the signal —
+  tracked as a follow-up.
+- **Auto-dispatch eligibility** (`dispatcher.ts`): was `status != OFFLINE`,
+  which excluded on-demand agents (always OFFLINE). Now availability-aware —
+  heartbeat agents must be non-OFFLINE; on-demand/session agents are eligible
+  regardless; disabled-runtime agents are pre-skipped at selection.
+
+Verified: typecheck + lint clean, 689 unit tests (+presenceAvailability),
+deployed (`/signin` 200, f7988ba). CHANGELOG updated (presence + auto-dispatch).
+
+## 2026-05-24 (cont.) — Presence sweep: assignee-chip surfaces
+
+Finished the long tail. Enriched the assignee-chip data sources to carry the
+on-demand signals (provider/runtimeMode/lastHeartbeatAt/webhookUrl/runtimeId):
+`issue.list`, `issue.byId`, `issue.summary`, `issue.queue` (issue.ts) +
+`inbox.get` (inbox.ts). Wired `availability={presenceAvailability(agent)}`
+through issue list, board, detail page, hover preview, issue agent panel, and
+the inbox chips. Widened `presenceAvailability`'s input with ignored identity
+fields so minimal `{status}` picker rows don't trip TS2559; pickers without
+the signal degrade safely to status. Presence is now availability-aware app-
+wide for the surfaces an on-demand agent actually appears in. Deployed 78c97e3
+(`/signin` 200); typecheck + lint clean, 694 unit tests.
+
+## 2026-05-24 (cont.) — Codex stuck single-session; worker build stamp
+
+Operator reported a Codex (app-server) agent reading "offline" in chat
+despite replying, and a general "UI changes aren't reaching live" worry.
+
+Deploy was fine: live `forge` is built from 78c97e3 (HEAD 53b9f7d is
+docs-only), all 63 migrations applied, on-demand presence block confirmed
+present in the live commit. `COPY . .` content-hashes source, so Docker
+cache can't silently drop changes. Not a deploy gap.
+
+Root cause: the Codex **agent row** is `runtimeMode: EPHEMERAL`, which
+short-circuits both `agentAvailabilityModel` and `presenceAvailability`
+(transport-display.ts) to "session" *before* the on-demand branch — and
+chat-workspace.tsx maps non-"on-demand" → "offline". Why EPHEMERAL: the
+Settings → Agents wizard hard-blocked PERSISTENT for CLAUDE/CODEX
+(`validate()` gate + disabled RuntimeOption at :840 + stale "roadmap"
+copy at :43/:339/:729/:837) — stale gating predating the codex-app-server
+adapter (which is `managed`, `transport: app-server`,
+`defaultRuntimeMode: PERSISTENT`, `presence: runtime-heartbeat`). Server
+has **no** gate (agent.ts just takes the enum), so the flip is clean.
+
+Fix (settings/agents/page.tsx): enable Persistent for CODEX (keep CLAUDE
+blocked — no managed Claude runtime yet); `validate()` now requires a
+managed app-server runtime (`MANAGED_PERSISTENT_ADAPTER_KEYS`, mirrors the
+server-only manifest) be attached for a persistent Codex; refreshed the
+stale copy. Then flip the live Codex agent EPHEMERAL→PERSISTENT.
+
+Also: worker image reported a blank build stamp — the `worker` Dockerfile
+stage never declared ARG/ENV GIT_SHA/BUILD_TIME and compose didn't pass
+the args. Added both so the worker reports its commit (was cosmetic, but
+read as staleness).
+
+Sweep (Explore) for the same bug class — passive surfaces still rendering
+`AgentPresenceDot status=…` without `availability` (plans step dots,
+crews roster, chat-composer mention popover): real but their query/types
+(`AgentLite`, `MentionableAgent`, `crew.members[].agent`) are trimmed and
+don't carry the provider/runtime signal — same known follow-up the prior
+sweep flagged. Not half-fixed (would be a no-op). Also noted: `claude-
+desktop` adapter is `defaultRuntimeMode: PERSISTENT` + `presence: session`
+(incoherent); `runtimeHeartbeats: provider === "HERMES"` is provider-
+hardcoded (fine for now — on-demand is the intended Codex display).
+
+Verified: typecheck + lint clean, heartbeat tests pass.
+
+## 2026-05-24 (cont.) — Presence follow-up: passive surfaces + adapter coherence
+
+Closed the remaining same-class items from the Codex-offline sweep.
+
+Threaded the on-demand availability signal through the surfaces still
+rendering raw `AgentPresenceDot status=…`. Used `agent.list` (which spreads
+the full agent row — provider/runtimeMode/runtimeId/webhookUrl) as the single
+authoritative source, mapped by agent id — purely client-side, no router/
+Prisma changes:
+- **Plans cockpit**: widened `AgentLite` with the presence inputs; pass
+  `availability={presenceAvailability(agent)}` on the assignee dot; added
+  `availability` to `DagAgent` (orchestration/types.ts), computed in the
+  `dagAgentsById` builder, consumed by `StepNode` (graph view).
+- **Crew page** (`crews/[crewId]`): built `availabilityById` from the page's
+  existing `agent.list` query; pass it on the member dot.
+- **Crew roster panel** (plan + goal cockpits): self-contained — added a
+  cached `agent.list` query inside the panel (hook lifted above the
+  `if (!crew)` early return) → id→availability map → member dot.
+- **Chat @-mention popover**: added `availability` to `MentionableAgent`,
+  computed in the chat-thread builder from `workspaceAgents`, consumed in
+  `chat-composer`.
+
+Adapter coherence: `claude-desktop` was `defaultRuntimeMode: PERSISTENT` +
+`presence: "session"` (incoherent — PERSISTENT resolves to heartbeat presence
+→ false "offline"). It's an MCP pull/act client (not push-reachable, not
+heartbeat-tracked), so flipped the default to EPHEMERAL and reworded the
+tagline.
+
+Out of scope (noted, not fixed): agent-timeline, dashboard activity tile, and
+agent-hover-preview's inner badge still render raw status — low-value rosters
+without the signal in their queries.
+
+Verified: typecheck + lint clean, 694 unit tests pass.
+
+## 2026-05-24 (cont.) — Presence: last three surfaces
+
+Finished the on-demand presence sweep — no raw-status `AgentPresenceDot`
+left on agent surfaces.
+
+- **Agent timeline** (`agent-timeline.tsx`): the agent chips iterate the
+  page's `agent.list` rows (full fields) → `availability={presenceAvailability(a)}`.
+- **Dashboard agent-activity tile**: `dashboard.agentActivity` select didn't
+  carry the signal. Enriched the select (provider/runtimeMode/runtimeId/
+  webhookUrl) and computed `availability` server-side per row
+  (presenceAvailability is client-safe, importable here); tile consumes
+  `a.availability`.
+- **Agent hover card** (`agent-hover-preview.tsx`): enriched `agent.summary`
+  select with runtimeMode/runtimeId/webhookUrl; `AgentCard` computes
+  availability once; both the row-3 dot and the `StatusPill` are now
+  availability-aware (pill reads "On-demand" in sky instead of "Offline" —
+  row-3 dot only renders when a heartbeat exists, so the pill is the real
+  fix for null-heartbeat on-demand agents).
+
+Verified: typecheck + lint clean, 694 unit tests pass.
+
+## 2026-05-24 (cont.) — Coverage audit: generalize the persistent gate
+
+Audited the full adapter matrix (8 adapters) vs the wizard's runtime-mode
+gate. Found my earlier Codex fix was too narrow: `local-daemon` is a managed,
+PERSISTENT, runtime-heartbeat adapter that serves CLAUDE/CODEX/CUSTOM/HERMES,
+but the gate only allowed persistent on `codex-app-server` (Codex) and blocked
+persistent Claude entirely — so a Claude/Codex agent on the Forge local daemon
+couldn't be persistent.
+
+Generalized: the gate is now provider-agnostic for CLAUDE/CODEX — persistent
+allowed iff a managed-persistent runtime is attached (MANAGED_PERSISTENT_-
+ADAPTER_KEYS broadened to {codex-app-server, local-daemon, hermes}). Enabled
+the Persistent toggle for both, refreshed hints + footer copy. All 8 adapters
+are coherent (defaultRuntimeMode vs presence). Verified: typecheck + lint
+clean, 694 tests.
+
+Known remaining (design choice, not shipped): non-Hermes runtime-heartbeat
+adapters (local-daemon, codex-app-server) always read "on-demand" and don't
+reflect their runtime's actual up/down — availability keys on
+provider==="HERMES" + Agent.lastHeartbeatAt, ignoring the adapter presence
+capability + Runtime.heartbeatAt (which the daemons actually bump).
+
+## 2026-05-24 (cont.) — True runtime-heartbeat presence (daemon-hosted agents)
+
+Implemented true online/offline for agents on a heartbeating managed runtime.
+
+Mechanism (no client/resolver changes): `runtimes.heartbeat` is called only by
+the forge CLI daemon (LOCAL_DAEMON, adapter `local-daemon`, presence
+`runtime-heartbeat`). The handler now, when the runtime's adapter presence is
+`runtime-heartbeat`, calls a new `recordRuntimeHeartbeatPresence(runtimeId,
+now)` (heartbeat.ts) that bumps `lastHeartbeatAt` on the runtime's PERSISTENT
+agents and flips OFFLINE→ONLINE (with an AGENT_STATUS_CHANGED event, reason
+`runtime-heartbeat`); BUSY agents keep status + get a fresh heartbeat;
+EPHEMERAL (session) agents are left alone. The existing `sweepIdleAgents` job
+flips them back to OFFLINE once the daemon stops (their heartbeats go stale
+together). Because the agents now carry a real `lastHeartbeatAt` + status,
+every existing surface resolves them to "heartbeat" presence and shows
+online/offline — zero surface changes.
+
+Scope/limitation (by design): runtimes reached *outbound* from Forge that
+don't heartbeat inbound — Codex app server (REMOTE_HTTP), webhooks — never hit
+this path, so their agents keep null `lastHeartbeatAt` → on-demand. Giving
+codex-app-server true presence would need an active health probe (Forge pings
+the endpoint) or the bridge calling `runtimes.heartbeat` itself (runtime-side,
+out of this repo) — at which point this same code lights it up automatically.
+
+Tests: +3 in heartbeat.test.ts (OFFLINE→ONLINE+event, BUSY preserved+bump,
+EPHEMERAL untouched). typecheck + lint clean, 697 unit tests pass.
+
+## 2026-05-24 (cont.) — Active health probe for outbound managed runtimes
+
+Closed the last presence gap: the Codex app server (REMOTE_HTTP, reached
+outbound, never heartbeats inbound) now gets true online/offline via an active
+probe.
+
+New `sweepRuntimeHealth()` (runtime-health.ts), a 60s maintenance job: finds
+non-archived, non-disabled runtimes with an endpoint whose adapter is
+`transport: "app-server"` + presence `runtime-heartbeat` (today: codex-app-
+server; Hermes `runs-api` and LOCAL_DAEMON are intentionally excluded — Hermes
+reports per-agent, the daemon self-heartbeats, probing them could override a
+better signal). Reuses the existing `probeRuntime()` (WS `initialize`
+handshake) from the verify-connection path. A reachable endpoint == heartbeat:
+bumps `Runtime.heartbeatAt` + calls `recordRuntimeHeartbeatPresence()` so the
+hosted persistent agents read online; an unreachable one isn't bumped and
+`sweepIdleAgents` flips the agents OFFLINE once stale.
+
+Wired into worker.ts (job id `runtime-health-sweep`, 60s, registered on boot).
+Secret is passed to the probe as-is (same as verifyConnection — not decrypted).
+
+Tests: runtime-health.test.ts — real in-process `ws` server (reachable →
+agent ONLINE + runtime heartbeatAt set) + unreachable endpoint (agent stays
+OFFLINE). typecheck + lint clean, 699 unit tests pass.
+
+Net: presence is now true online/offline for every managed runtime (Hermes,
+local daemon, Codex app server); session CLIs stay "session"; nothing reads a
+false "offline" or a stale "on-demand."
+
+## 2026-05-24 (cont.) — Default agentIdleTimeoutMinutes 0 → 15 + E2E
+
+Closing the presence default gap: `Workspace.agentIdleTimeoutMinutes` defaulted
+to 0, which disables `sweepIdleAgents` — so on a fresh workspace the "offline
+when the runtime dies" half of true presence never fired (agents stuck ONLINE
+after the last heartbeat/probe). Migration 0063 sets the column DEFAULT to 15
+(new rows only — no backfill, so any deliberate 0 opt-out is preserved; 0 still
+means disabled). 15min sits well above the 60s heartbeat/probe cadence, so no
+flapping. Also corrected the stale schema doc-comment (it described claimed-
+issue auto-release; the field actually drives the heartbeat agent-offline
+sweep). The live workspaces were already at 15, so no behavior change there.
+
+E2E: ran the full Playwright suite (9 specs — a11y, chat surface/streaming/
+attachments, issue flow, data export, runtime management) against a fresh
+prod build. Green.

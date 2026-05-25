@@ -448,6 +448,13 @@ export const issueRouter = router({
               profileKey: true,
               avatar: true,
               status: true,
+              // On-demand availability signals (so assignee chips don't show a
+              // false "offline" for managed-runtime agents like Codex).
+              provider: true,
+              runtimeMode: true,
+              lastHeartbeatAt: true,
+              webhookUrl: true,
+              runtimeId: true,
             },
           },
           labels: { include: { label: true } },
@@ -477,6 +484,13 @@ export const issueRouter = router({
               profileKey: true,
               avatar: true,
               status: true,
+              // On-demand availability signals (so assignee chips don't show a
+              // false "offline" for managed-runtime agents like Codex).
+              provider: true,
+              runtimeMode: true,
+              lastHeartbeatAt: true,
+              webhookUrl: true,
+              runtimeId: true,
             },
           },
           labels: { include: { label: true } },
@@ -597,6 +611,13 @@ export const issueRouter = router({
               profileKey: true,
               avatar: true,
               status: true,
+              // On-demand availability signals (so assignee chips don't show a
+              // false "offline" for managed-runtime agents like Codex).
+              provider: true,
+              runtimeMode: true,
+              lastHeartbeatAt: true,
+              webhookUrl: true,
+              runtimeId: true,
             },
           },
           project: {
@@ -1544,6 +1565,11 @@ export const issueRouter = router({
               name: true,
               profileKey: true,
               status: true,
+              provider: true,
+              runtimeMode: true,
+              lastHeartbeatAt: true,
+              webhookUrl: true,
+              runtimeId: true,
             },
           },
         },

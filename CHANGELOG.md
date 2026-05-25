@@ -143,8 +143,44 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 - **Managed-runtime agents no longer show a false "offline."** An agent
   reached on demand (Codex app server, a streaming model, or a daemon)
-  now reads **"on-demand"** — it connects when you message it — instead of
-  a permanent offline that only applied to heartbeat agents like Hermes.
+  now reads **"on-demand"** consistently across chat, Mission Control, and
+  Settings → Agents — it connects when you message it — instead of a
+  permanent offline that only applied to heartbeat agents like Hermes.
+- **On-demand agents can be auto-assigned work again.** Auto-dispatch no
+  longer skips an agent just because it's "offline" by heartbeat (which an
+  on-demand agent always is), so Codex/app-server agents are eligible for
+  round-robin / capability / priority assignment. Disabled runtimes are
+  skipped up front.
+- **A Codex app-server agent can now be set to persistent.** Settings →
+  Agents previously forced Codex (and Claude) to single-session and blocked
+  the persistent option — so a Codex agent stayed single-session and read
+  "offline" everywhere despite the on-demand work above. You can now choose
+  **Persistent** for a Codex agent attached to the Codex app-server runtime,
+  and it shows **"on-demand."**
+- **On-demand presence now reads correctly on every surface** —
+  execution-plan step dots, the crew rosters (crew page + plan/goal
+  cockpits), the chat @-mention list, the agent timeline, the dashboard
+  agent-activity tile, and agent hover cards no longer show a managed
+  app-server agent as "offline."
+- **Persistent mode is gated by the attached runtime, not the provider.**
+  A Claude or Codex agent can be persistent when hosted on a managed
+  runtime (the Codex app server or the Forge local daemon); the wizard no
+  longer blocks persistent Claude outright or restricts persistent Codex to
+  the app server alone.
+
+### Changed
+
+- **Managed agents now show true online/offline.** An agent hosted on the
+  Forge local daemon goes **online** while the daemon is heartbeating and
+  flips to **offline** when it stops — instead of always reading "on-demand."
+- **Codex app-server presence is health-checked.** Forge now periodically
+  pings the Codex app server; its agent reads **online** when the server
+  answers and **offline** when it doesn't, so a dead bridge is visible at a
+  glance instead of failing only when you message it.
+- **New workspaces auto-offline idle agents by default.** The agent idle
+  timeout now defaults to **15 minutes** (was off), so a heartbeat agent whose
+  runtime goes quiet flips to offline on its own — true presence works out of
+  the box. Existing workspaces keep their current setting; `0` still disables.
 
 ## [2026-05-23] — Sign-in, SSO & agent platforms
 

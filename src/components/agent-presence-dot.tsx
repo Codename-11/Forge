@@ -1,5 +1,6 @@
 import type { AgentStatus } from "@prisma/client";
 import { cn, relativeTime } from "@/lib/utils";
+import type { AvailabilityModel } from "@/lib/transport-display";
 
 /**
  * Agent presence indicator.
@@ -23,6 +24,13 @@ export type AgentPresenceDotProps = {
   pulse?: boolean;
   /** Last heartbeat. If supplied, included in the hover title. */
   lastHeartbeatAt?: Date | string | null;
+  /**
+   * Availability model. When "on-demand" (managed app server / completions /
+   * dispatch — reached when work is sent, not heartbeat-tracked), the dot is
+   * sky-blue "on-demand" rather than a misleading "offline". "session" keeps
+   * the status color but labels it a session. Omitted/"heartbeat" → raw status.
+   */
+  availability?: AvailabilityModel;
   className?: string;
 };
 
@@ -43,18 +51,30 @@ export function AgentPresenceDot({
   size = "sm",
   pulse = false,
   lastHeartbeatAt,
+  availability,
   className,
 }: AgentPresenceDotProps) {
   const dim = size === "md" ? "h-2 w-2" : "h-1.5 w-1.5";
-  const color = STATUS_COLOR[status] ?? STATUS_COLOR.OFFLINE;
-  const label = STATUS_LABEL[status] ?? STATUS_LABEL.OFFLINE;
-  const title = lastHeartbeatAt
-    ? `${label} · heartbeat ${relativeTime(lastHeartbeatAt)}`
-    : label;
+  // On-demand agents aren't heartbeat-tracked — show sky "on-demand" instead
+  // of a heartbeat status that would read as a permanent "offline".
+  const onDemand = availability === "on-demand";
+  const color = onDemand
+    ? "bg-sky-500"
+    : (STATUS_COLOR[status] ?? STATUS_COLOR.OFFLINE);
+  const label = onDemand
+    ? "On-demand"
+    : (STATUS_LABEL[status] ?? STATUS_LABEL.OFFLINE);
+  const title = onDemand
+    ? "On-demand — connects when work is sent (not heartbeat-tracked)"
+    : availability === "session"
+      ? `Session${lastHeartbeatAt ? ` · ${relativeTime(lastHeartbeatAt)}` : ""}`
+      : lastHeartbeatAt
+        ? `${label} · heartbeat ${relativeTime(lastHeartbeatAt)}`
+        : label;
   // M10 (design spec): ONLINE presence "breathes" — a slow success halo
   // via box-shadow. Only ONLINE breathes; BUSY/OFFLINE stay flat.
   // Reduced-motion / motion-off renders a static dot.
-  const showBreath = pulse && status === "ONLINE";
+  const showBreath = pulse && status === "ONLINE" && !onDemand;
 
   return (
     <span

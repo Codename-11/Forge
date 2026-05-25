@@ -2,6 +2,7 @@ import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { AgentStatus, AutoDispatchMode, EventKind } from "@prisma/client";
 import { recordChange } from "@/server/audit";
+import { presenceAvailability } from "@/lib/transport-display";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { autoWatchAgent } from "@/server/services/issue-watchers";
 
@@ -105,14 +106,17 @@ export async function maybeAutoDispatch(
     return { agentId: null, reason: "manual-only" };
   }
 
-  // Load candidate agents in the workspace. We pull all non-archived,
-  // non-OFFLINE agents in one go; pagination is unnecessary because agent
-  // counts per workspace are small (O(10s) realistically).
+  // Load candidate agents in the workspace. We pull all non-archived agents
+  // (not just non-OFFLINE) because OFFLINE is only meaningful for
+  // heartbeat-tracked agents (Hermes). An on-demand agent (managed app server
+  // / completions / dispatch) never heartbeats, so it's OFFLINE by default yet
+  // fully reachable — excluding it here is the dispatch twin of the chat
+  // "offline" bug. We filter by availability in JS instead. Pagination is
+  // unnecessary: agent counts per workspace are O(10s).
   const agents = await tx.agent.findMany({
     where: {
       workspaceId: issue.workspaceId,
       archivedAt: null,
-      status: { not: AgentStatus.OFFLINE },
     },
     select: {
       id: true,
@@ -120,6 +124,14 @@ export async function maybeAutoDispatch(
       capabilities: true,
       maxConcurrent: true,
       lastDispatchedAt: true,
+      // Availability inputs (cheap base columns) + disabled-runtime guard.
+      status: true,
+      provider: true,
+      runtimeMode: true,
+      lastHeartbeatAt: true,
+      webhookUrl: true,
+      runtimeId: true,
+      runtime: { select: { disabledAt: true } },
       _count: {
         select: {
           // Active = anything not terminal. We filter by status category on
@@ -135,10 +147,13 @@ export async function maybeAutoDispatch(
     },
   });
 
-  // Respect maxConcurrent: 0 means unlimited; otherwise active < cap.
-  // Track eligibility per-agent so we can surface filtered-out agents in
-  // the dispatch provenance payload (not just the winners).
+  // Eligible = reachable + under cap + not behind a disabled runtime.
+  // Reachable: a heartbeat-tracked agent must be non-OFFLINE; an on-demand /
+  // session agent is reachable regardless of heartbeat status.
   const isEligible = (a: (typeof agents)[number]): boolean => {
+    if (a.runtime?.disabledAt) return false;
+    const availability = presenceAvailability(a);
+    if (availability === "heartbeat" && a.status === AgentStatus.OFFLINE) return false;
     if (a.maxConcurrent === 0) return true;
     return a._count.assignedIssues < a.maxConcurrent;
   };

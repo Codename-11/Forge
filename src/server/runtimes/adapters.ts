@@ -245,7 +245,7 @@ SESSION key — it auto-expires.`,
   {
     key: "claude-desktop",
     title: "Claude Desktop",
-    tagline: "Persistent Claude Desktop with MCP. Pull/act connection, key persists.",
+    tagline: "Claude Desktop over MCP. Pull/act session; the linked key persists.",
     iconKey: "MonitorPlay",
     managed: false,
     multiAgent: false,
@@ -253,7 +253,11 @@ SESSION key — it auto-expires.`,
     chatMode: "none",
     providers: ["CLAUDE"],
     defaultRunEngine: "COMPLETIONS",
-    defaultRuntimeMode: "PERSISTENT",
+    // Pull/act MCP client — not push-reachable and not heartbeat-tracked, so
+    // its presence is session-based. Keep runtimeMode EPHEMERAL to stay
+    // coherent with `presence: "session"` (a PERSISTENT default here would
+    // resolve to heartbeat presence and read as a permanent "offline").
+    defaultRuntimeMode: "EPHEMERAL",
     defaultKeyKind: "PERSONAL",
     capabilities: { streaming: false, approvals: false, presence: "session" },
     autoProvisionable: true,

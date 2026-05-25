@@ -99,7 +99,7 @@ export function AgentActivityTile({ slug }: { slug: string }) {
               className="group flex items-center gap-2 px-4 py-2 text-[0.75rem] hover:bg-subtle/40"
               title={`Open ${a.name}`}
             >
-              <AgentPresenceDot status={a.status} size="sm" />
+              <AgentPresenceDot status={a.status} availability={a.availability} size="sm" />
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-subtle text-[0.6875rem]">
                 {a.avatar ?? a.name.slice(0, 1).toUpperCase()}
               </span>

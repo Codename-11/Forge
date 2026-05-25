@@ -186,3 +186,80 @@ export async function recordAgentReachable(
     logger.warn({ err, agentId }, "recordAgentReachable failed");
   }
 }
+
+/**
+ * Propagate a managed runtime's heartbeat onto the agents it hosts.
+ *
+ * A `runtime-heartbeat` runtime (the Forge local daemon today) proves it's
+ * alive by calling `runtimes.heartbeat` on an interval. Its **persistent**
+ * agents have no heartbeat of their own — without this they'd read a
+ * permanent "on-demand". Mirroring the runtime heartbeat onto each agent's
+ * `lastHeartbeatAt` (and flipping OFFLINE → ONLINE) makes them resolve to
+ * real online/offline presence — and `sweepIdleAgents` flips them back to
+ * OFFLINE once the runtime stops heartbeating (its agents go stale together).
+ *
+ * Only PERSISTENT agents are touched: an EPHEMERAL (session) agent on the
+ * same runtime keeps its session presence. BUSY agents keep their status and
+ * just get a fresh heartbeat so the sweep doesn't reap them mid-task.
+ *
+ * Best-effort and idempotent: called every heartbeat tick, so the no-change
+ * path (already ONLINE) is a single cheap bump with no event.
+ */
+export async function recordRuntimeHeartbeatPresence(
+  runtimeId: string,
+  now: Date,
+  client: PrismaClient | Prisma.TransactionClient = db,
+): Promise<void> {
+  try {
+    const agents = await client.agent.findMany({
+      where: {
+        runtimeId,
+        runtimeMode: "PERSISTENT",
+        archivedAt: null,
+      },
+      select: { id: true, status: true, workspaceId: true, profileKey: true },
+    });
+
+    for (const agent of agents) {
+      // ONLINE / BUSY → just refresh the heartbeat (preserve a working agent's
+      // BUSY status; the sweep treats both as live).
+      if (
+        agent.status === AgentStatus.ONLINE ||
+        agent.status === AgentStatus.BUSY
+      ) {
+        await client.agent.update({
+          where: { id: agent.id },
+          data: { lastHeartbeatAt: now },
+        });
+        continue;
+      }
+
+      // OFFLINE → ONLINE transition with an audit + event (matches the
+      // delivery-presence path so the timeline/uptime ribbon pick it up).
+      await client.agent.update({
+        where: { id: agent.id },
+        data: { lastHeartbeatAt: now, status: AgentStatus.ONLINE },
+      });
+      await recordChange(client, {
+        workspaceId: agent.workspaceId,
+        actorId: null,
+        entity: "Agent",
+        entityId: agent.id,
+        action: "runtime-online",
+        before: { status: agent.status },
+        after: { status: AgentStatus.ONLINE },
+        eventKind: EventKind.AGENT_STATUS_CHANGED,
+        subjectType: "agent",
+        subjectId: agent.id,
+        payload: {
+          profileKey: agent.profileKey,
+          from: agent.status,
+          to: AgentStatus.ONLINE,
+          reason: "runtime-heartbeat",
+        },
+      });
+    }
+  } catch (err) {
+    logger.warn({ err, runtimeId }, "recordRuntimeHeartbeatPresence failed");
+  }
+}
