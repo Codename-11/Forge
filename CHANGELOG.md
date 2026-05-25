@@ -15,6 +15,10 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Command Center asks can now set the issue's status inline.** When an agent
+  asks for you on an issue, a "Set status…" control on the card moves the issue
+  (e.g. straight to Done) without accepting or declining the ask — so closing an
+  issue never records a decline resolution.
 - **Settings now has a left sidebar** with grouped sections, short descriptions,
   admin tags, and a search box (press `/`) — replacing the cramped top tab bar.
 - **Status icons** across issues now show their true shape (backlog, started,
