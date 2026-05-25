@@ -8,10 +8,12 @@ import {
   CalendarClock,
   Inbox,
   MessageSquare,
+  Plus,
   Tag,
   UserCircle2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { LabelChip } from "@/components/ui/label-chip";
 import { Avatar } from "@/components/ui/avatar";
 import { StatusDot } from "@/components/ui/status-dot";
 import { PriorityGlyph } from "@/components/ui/priority-glyph";
@@ -453,6 +455,27 @@ export function IssueList({
             <span className="text-meta tabular-nums text-muted-foreground">
               {group.issues.length}
             </span>
+            {/* Per-group quick-add. Fires the shared new-issue flow; the
+                `forge:quick-create` event detail only supports a `projectId`
+                prefill (carried through here when the list is project-
+                scoped), NOT a `statusId`, so the new issue lands in the
+                workspace default status rather than this group's status. */}
+            <button
+              type="button"
+              title="Add issue"
+              aria-label={`Add issue in ${group.status.name}`}
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("forge:quick-create", {
+                    detail: projectId ? { projectId } : {},
+                  }),
+                )
+              }
+              className="focus-ring ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:text-ember"
+            >
+              <Plus className="h-3 w-3" />
+              Add issue
+            </button>
           </div>
           <div className="divide-y divide-border">
             {group.issues.map((issue) => {
@@ -554,9 +577,7 @@ export function IssueList({
                 {issue.labels.length > 0 && (
                   <div className="hidden shrink-0 items-center gap-1 md:flex">
                     {issue.labels.slice(0, 2).map((l) => (
-                      <Badge key={l.labelId} color={l.label.color}>
-                        {l.label.name}
-                      </Badge>
+                      <LabelChip key={l.labelId} label={l.label} />
                     ))}
                   </div>
                 )}

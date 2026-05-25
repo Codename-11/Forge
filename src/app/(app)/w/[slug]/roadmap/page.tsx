@@ -1,7 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Map as MapIcon } from "lucide-react";
+import { Filter, Map as MapIcon } from "lucide-react";
 import { CycleStatus, InitiativeStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -174,23 +174,34 @@ export default function RoadmapPage() {
         title="Roadmap"
         subtitle={`${ticks[0]?.label ?? ""} → ${ticks[ticks.length - 1]?.label ?? ""}`}
         actions={
-          <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
+          <div className="flex items-center gap-2">
             <Button
-              variant={grain === "week" ? "subtle" : "ghost"}
+              variant="outline"
               size="sm"
-              onClick={() => setGrain("week")}
-              className="h-6 px-2 text-[0.6875rem]"
+              className="h-7"
+              title="Filter (coming soon)"
             >
-              Week
+              <Filter className="h-3.5 w-3.5" />
+              Filter
             </Button>
-            <Button
-              variant={grain === "month" ? "subtle" : "ghost"}
-              size="sm"
-              onClick={() => setGrain("month")}
-              className="h-6 px-2 text-[0.6875rem]"
-            >
-              Month
-            </Button>
+            <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
+              <Button
+                variant={grain === "week" ? "subtle" : "ghost"}
+                size="sm"
+                onClick={() => setGrain("week")}
+                className="h-6 px-2 text-[0.6875rem]"
+              >
+                Week
+              </Button>
+              <Button
+                variant={grain === "month" ? "subtle" : "ghost"}
+                size="sm"
+                onClick={() => setGrain("month")}
+                className="h-6 px-2 text-[0.6875rem]"
+              >
+                Month
+              </Button>
+            </div>
           </div>
         }
       />
@@ -394,6 +405,9 @@ function RoadmapRow({
             </span>
           </div>
         )}
+        <div className="text-meta ml-5 mt-0.5 text-muted-foreground">
+          {projects.length} {projects.length === 1 ? "project" : "projects"}
+        </div>
       </div>
       <div className="relative min-h-[32px]">
         {projects.length === 0 && (

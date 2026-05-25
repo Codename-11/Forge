@@ -51,6 +51,24 @@ export function CycleSummaryCard({
   const remainingIssues = total - done;
   const series = burndownSeries(startsAt, endsAt, issues);
 
+  // On-pace caption — derived cheaply from the burndown series we already
+  // computed. Compare actual-remaining vs the ideal line at the latest
+  // plotted (non-future) day. Behind = real remaining exceeds the ideal
+  // remaining; ahead = under it. Rounded to whole issues.
+  const plotted = series.actual
+    .map((v, i) => ({ v, i }))
+    .filter((p) => !Number.isNaN(p.v));
+  const last = plotted[plotted.length - 1];
+  const paceCaption =
+    total === 0 || !last
+      ? null
+      : (() => {
+          const idealRemaining = series.ideal[last.i] ?? 0;
+          const delta = Math.round(last.v - idealRemaining);
+          if (delta <= 0) return { text: "On pace", behind: false };
+          return { text: `${delta} behind`, behind: true };
+        })();
+
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-card/40 p-4 md:flex-row md:items-start">
       <div className="min-w-0 flex-1">
@@ -94,6 +112,16 @@ export function CycleSummaryCard({
 
       <div className="flex shrink-0 flex-col items-end gap-2">
         <BurndownSparkline actual={series.actual} ideal={series.ideal} />
+        {paceCaption && (
+          <span
+            className={cn(
+              "text-meta tabular-nums",
+              paceCaption.behind ? "text-ember" : "text-muted-foreground",
+            )}
+          >
+            {paceCaption.text}
+          </span>
+        )}
         {onRollover && finalDay && cycle.status === CycleStatus.ACTIVE && (
           <Button
             size="sm"

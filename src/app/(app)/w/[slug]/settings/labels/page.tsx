@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Tags } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
+import { LabelChip } from "@/components/ui/label-chip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
@@ -83,33 +84,35 @@ export default function LabelsPage() {
             <Card>
               {(labels ?? []).map((l) => (
                 <li key={l.id} className="group flex items-center gap-3 px-4 py-3">
-                  <Badge color={l.color}>{l.name}</Badge>
+                  <LabelChip label={{ name: l.name, color: l.color }} />
                   <span className="text-[0.6875rem] text-muted-foreground">
                     {l._count.issues} issue{l._count.issues === 1 ? "" : "s"}
                   </span>
                   <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
                     {l.color}
                   </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setEditing({ id: l.id, name: l.name, color: l.color })}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      setDeleteTarget({
-                        id: l.id,
-                        name: l.name,
-                        attached: l._count.issues,
-                      })
-                    }
-                  >
-                    Delete
-                  </Button>
+                  <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setEditing({ id: l.id, name: l.name, color: l.color })}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setDeleteTarget({
+                          id: l.id,
+                          name: l.name,
+                          attached: l._count.issues,
+                        })
+                      }
+                    >
+                      Delete
+                    </Button>
+                  </div>
                 </li>
               ))}
               {labels?.length === 0 && (

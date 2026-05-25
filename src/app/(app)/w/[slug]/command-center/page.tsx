@@ -361,7 +361,11 @@ type CCActionRequest = {
     title: string;
     workspace: { slug: string; key: string };
   } | null;
-  requestedByAgent: { profileKey: string } | null;
+  requestedByAgent: {
+    profileKey: string;
+    name?: string | null;
+    avatar?: string | null;
+  } | null;
   requestedByUser: { name: string | null } | null;
 };
 
@@ -415,6 +419,23 @@ function ActionRequestDecisionCard({
 
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-border bg-card/40 p-2">
+      {request.requestedByAgent ? (
+        <div className="flex items-center gap-1.5 text-meta text-muted-foreground">
+          <span
+            aria-hidden
+            className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-subtle text-[0.625rem]"
+            title={request.requestedByAgent.name ?? request.requestedByAgent.profileKey}
+          >
+            {request.requestedByAgent.avatar ?? (
+              <Bot className="h-2.5 w-2.5 text-muted-foreground" />
+            )}
+          </span>
+          <span className="text-id text-muted-foreground">
+            @{request.requestedByAgent.profileKey}
+          </span>
+          <span className="text-muted-foreground/70">asks</span>
+        </div>
+      ) : null}
       <div className="flex items-start justify-between gap-2">
         {request.issue ? (
           <Link

@@ -1,51 +1,194 @@
 "use client";
 import Link from "next/link";
-import { ArrowRight, Inbox, Shield, Zap } from "lucide-react";
+import { ArrowRight, AtSign, Inbox, Shield } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 
 /**
  * "Needs you" — the dashboard's nudge toward decisions waiting on the
- * operator: open action requests (incl. unassigned plan-approval asks)
- * and pending review gates. Links to the Command Center where they're
- * acted on. Renders nothing when the queue is empty, so it only ever
- * appears as a real prompt (no "all clear" clutter).
+ * operator. Renders the top few open action-requests (incl. unassigned
+ * plan-approval asks) and pending review gates as inline decision cards:
+ * requester agent avatar/@handle + the quoted ask + a Resolve / Review
+ * action.
+ *
+ * Resolve/Review deep-link to where the item is acted on rather than
+ * mutating inline — the full accept/decline/answer + gate-resolve flows
+ * live on the Command Center (action requests) and the gate target page
+ * (review gates). Pulling the small list (cap ~3) here keeps the tile a
+ * real prompt; the "View all" link carries the operator to the Command
+ * Center for everything else.
+ *
+ * Renders nothing when the queue is empty, so it only ever appears as a
+ * real prompt (no "all clear" clutter).
  */
-export function NeedsYouTile({ slug }: { slug: string }) {
-  const { data } = trpc.commandCenter.decisionsCount.useQuery(undefined, {
-    refetchOnWindowFocus: true,
-    staleTime: 60_000,
-  });
+const INLINE_CAP = 3;
 
-  if (!data || data.total === 0) return null;
+export function NeedsYouTile({ slug }: { slug: string }) {
+  // Reuse the same query Command Center renders from. `limit` caps the
+  // server fetch; we slice to INLINE_CAP across both buckets below.
+  const { data } = trpc.commandCenter.summary.useQuery(
+    { limit: INLINE_CAP },
+    { refetchOnWindowFocus: true, staleTime: 60_000 },
+  );
+
+  if (!data) return null;
+
+  const actionRequests = data.actionRequests;
+  const reviewGates = data.reviewGates;
+  const total = data.counts.actionRequests + data.counts.reviewGates;
+  if (total === 0) return null;
+
+  // Build a single ordered list of inline cards: asks first, then gates,
+  // capped at INLINE_CAP so the dashboard stays a glance, not a queue.
+  type Card =
+    | {
+        kind: "ask";
+        id: string;
+        title: string;
+        handle: string | null;
+        avatar: string | null;
+        issueLabel: string | null;
+      }
+    | {
+        kind: "gate";
+        id: string;
+        prompt: string;
+        targetType: string;
+        href: string | null;
+      };
+
+  const cards: Card[] = [];
+  for (const r of actionRequests) {
+    cards.push({
+      kind: "ask",
+      id: r.id,
+      title: r.title,
+      handle: r.requestedByAgent?.profileKey ?? null,
+      avatar: r.requestedByAgent?.avatar ?? null,
+      issueLabel: r.issue
+        ? `${r.issue.workspace.key}-${r.issue.number}`
+        : null,
+    });
+  }
+  for (const g of reviewGates) {
+    cards.push({
+      kind: "gate",
+      id: g.id,
+      prompt: g.prompt,
+      targetType: g.targetType,
+      href: gateTargetHref(slug, g.targetType, g.targetId),
+    });
+  }
+  const shown = cards.slice(0, INLINE_CAP);
+
+  const commandCenterHref = `/w/${slug}/command-center`;
 
   return (
-    <Link
-      href={`/w/${slug}/command-center`}
-      className="group flex items-center gap-3 rounded-lg border border-ember/30 bg-ember/5 p-4 transition hover:border-ember/50 hover:bg-ember/10"
-    >
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ember/15 text-ember">
-        <Zap className="h-4 w-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium">
-          {data.total} {data.total === 1 ? "thing needs" : "things need"} your decision
-        </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-meta text-muted-foreground">
-          {data.actionRequests > 0 ? (
-            <span className="flex items-center gap-1">
-              <Inbox className="h-3 w-3" />
-              {data.actionRequests} ask{data.actionRequests === 1 ? "" : "s"}
-            </span>
-          ) : null}
-          {data.reviewGates > 0 ? (
-            <span className="flex items-center gap-1">
-              <Shield className="h-3 w-3" />
-              {data.reviewGates} review gate{data.reviewGates === 1 ? "" : "s"}
-            </span>
-          ) : null}
-        </div>
-      </div>
-      <ArrowRight className="h-4 w-4 shrink-0 text-ember opacity-0 transition-opacity group-hover:opacity-100" />
-    </Link>
+    <section className="rounded-lg border border-ember/30 bg-ember/5 p-4">
+      <header className="mb-3 flex items-center gap-2">
+        <Inbox className="h-3.5 w-3.5 text-ember" />
+        <h3 className="text-sm font-semibold">Needs you</h3>
+        <Badge className="bg-ember/15 text-ember">
+          {total} {total === 1 ? "decision" : "decisions"}
+        </Badge>
+        <Link
+          href={commandCenterHref}
+          className="focus-ring ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:text-foreground"
+        >
+          View all
+          <ArrowRight className="h-3 w-3" />
+        </Link>
+      </header>
+      <ul className="flex flex-col gap-1.5">
+        {shown.map((card) =>
+          card.kind === "ask" ? (
+            <li
+              key={`ask-${card.id}`}
+              className="flex items-start gap-2 rounded-md border border-border bg-background p-2"
+            >
+              {card.avatar ? (
+                <span className="mt-0.5 text-[0.875rem] leading-none">
+                  {card.avatar}
+                </span>
+              ) : (
+                <AtSign className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ember" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm">
+                  {card.handle ? (
+                    <span className="font-medium text-foreground">
+                      @{card.handle}
+                    </span>
+                  ) : (
+                    <span className="font-medium text-foreground">An agent</span>
+                  )}{" "}
+                  asks:{" "}
+                  <span className="text-muted-foreground">
+                    &ldquo;{card.title}&rdquo;
+                  </span>
+                </div>
+                <div className="mt-0.5 text-meta text-muted-foreground">
+                  {card.issueLabel ? (
+                    <span className="text-id">{card.issueLabel}</span>
+                  ) : null}
+                  {card.issueLabel ? " · " : ""}action request
+                </div>
+              </div>
+              <Link href={commandCenterHref}>
+                <Button variant="ember" size="sm">
+                  Resolve
+                </Button>
+              </Link>
+            </li>
+          ) : (
+            <li
+              key={`gate-${card.id}`}
+              className="flex items-start gap-2 rounded-md border border-border bg-background p-2"
+            >
+              <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ember" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm">
+                  Review gate ·{" "}
+                  <span className="text-muted-foreground">
+                    {card.prompt.slice(0, 80)}
+                  </span>
+                </div>
+                <div className="mt-0.5 text-meta text-muted-foreground">
+                  {card.targetType.replace(/-/g, " ")} · awaiting your sign-off
+                </div>
+              </div>
+              <Link href={card.href ?? commandCenterHref}>
+                <Button variant="outline" size="sm">
+                  Review
+                </Button>
+              </Link>
+            </li>
+          ),
+        )}
+      </ul>
+    </section>
   );
+}
+
+/**
+ * Resolve a review-gate target to a deep link where it can be acted on.
+ * Mirrors the Command Center's resolver; returns null for target types we
+ * can't route from id alone (those fall back to the Command Center link).
+ */
+function gateTargetHref(
+  slug: string,
+  targetType: string,
+  targetId: string,
+): string | null {
+  switch (targetType) {
+    case "execution-plan":
+      return `/w/${slug}/plans/${targetId}`;
+    case "goal":
+      return `/w/${slug}/goals/${targetId}`;
+    case "issue":
+      return `/w/${slug}/issues/${targetId}`;
+    default:
+      return null;
+  }
 }

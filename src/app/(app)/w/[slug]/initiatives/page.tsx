@@ -1,17 +1,21 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { toast } from "sonner";
-import { Target, Plus } from "lucide-react";
+import { Map as MapIcon, Target, Plus } from "lucide-react";
 import { InitiativeStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { EmptyState, Kbd, SkeletonList } from "@/components/ui";
 import { InitiativeCard } from "@/components/initiatives/initiative-card";
 import { NewInitiativeDialog } from "@/components/initiatives/new-initiative-dialog";
 import { trpc } from "@/lib/trpc";
+import { useWorkspace } from "@/hooks/use-workspace";
 
 export default function InitiativesPage() {
+  const ws = useWorkspace();
   const utils = trpc.useUtils();
   const router = useRouter();
   const pathname = usePathname();
@@ -96,14 +100,22 @@ export default function InitiativesPage() {
         title="Initiatives"
         subtitle={data ? `${active.length} active` : undefined}
         actions={
-          <Button
-            variant="ember"
-            size="sm"
-            onClick={() => setCreateOpen(true)}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            New initiative
-          </Button>
+          <div className="flex items-center gap-2">
+            <Link href={`/w/${ws.slug}/roadmap`}>
+              <Button variant="outline" size="sm">
+                <MapIcon className="h-3.5 w-3.5" />
+                Roadmap view
+              </Button>
+            </Link>
+            <Button
+              variant="ember"
+              size="sm"
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New initiative
+            </Button>
+          </div>
         }
       />
 
@@ -135,6 +147,15 @@ export default function InitiativesPage() {
           />
         ) : (
           <>
+            {active.length > 0 && (
+              <header className="mb-2 flex items-center gap-2">
+                <h3 className="text-sm font-semibold">Active</h3>
+                <Badge>{active.length}</Badge>
+                <span className="text-meta ml-auto text-muted-foreground">
+                  drag to reorder
+                </span>
+              </header>
+            )}
             <ul
               className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3"
               onDragOver={onDragOver}

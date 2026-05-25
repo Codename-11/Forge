@@ -40,6 +40,7 @@ import { IdeasTile } from "@/components/dashboard/ideas-tile";
 import { WhatsNewTile } from "@/components/dashboard/whats-new-tile";
 import { AgentActivityTile } from "@/components/dashboard/agent-activity-tile";
 import { NeedsYouTile } from "@/components/dashboard/needs-you-tile";
+import { PulseTile } from "@/components/dashboard/pulse-tile";
 import { ResumeTile } from "@/components/dashboard/resume-tile";
 import {
   DashboardStack,
@@ -182,6 +183,7 @@ export default function DashboardPage() {
         title: "Today",
         node: <TodayWidget slug={slug} workspaceKey={workspaceKey} />,
       },
+      { id: "pulse", title: "Pulse", node: <PulseTile slug={slug} /> },
       { id: "resume", title: "Pick up where you left off", node: <ResumeTile slug={slug} /> },
       { id: "agent-activity", title: "Agent activity", node: <AgentActivityTile slug={slug} /> },
       { id: "ideas", title: "Ideas", node: <IdeasTile slug={slug} /> },

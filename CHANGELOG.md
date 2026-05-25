@@ -31,6 +31,17 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 - **Plans** cards show their step DAG and owner; **Roadmap** bars show a progress
   fill and project key; **Goals** keeps the loop guide visible above the list;
   the **sprint backlog** reads as a dashed "drag → plan" tray.
+- **Dashboard** "Needs you" now lists the actual asks inline (with the agent and
+  a Resolve/Review action) and gained a **Pulse** widget (open / in-progress /
+  done-this-week / sprint).
+- Chips/badges use a consistent rounded style; **labels** render as bordered
+  chips. Per-status groups on the issues list have an inline **+ Add issue**.
+- **Sprints** header has a sprint switcher + always-available "Rollover
+  incomplete"; the burndown notes whether you're on pace.
+- Smaller polish: roadmap Filter + per-row project counts, artifacts "updated"
+  timestamps, an initiatives "Roadmap view" shortcut, Command Center shows who's
+  asking, an inbox "Mark read" (M), and the new-API-key dialog recaps the key
+  details behind an "I've saved it" confirm.
 
 ## [2026-05-24] — Choose your background, richer agent & plan cards, plugin pages
 

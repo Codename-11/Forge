@@ -91,26 +91,54 @@ export default function CyclesPage() {
         }
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={activeIdx <= 0}
-              onClick={() => setSelectedIdx(Math.max(0, activeIdx - 1))}
-              aria-label="Previous sprint"
-              title="Previous sprint"
-            >
-              <ChevronLeft className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={activeIdx >= ordered.length - 1}
-              onClick={() => setSelectedIdx(Math.min(ordered.length - 1, activeIdx + 1))}
-              aria-label="Next sprint"
-              title="Next sprint"
-            >
-              <ChevronRight className="h-3.5 w-3.5" />
-            </Button>
+            {/* Segmented sprint pager: [‹ | Sprint name | ›] with the
+                current sprint name shown between the chevrons. */}
+            {cycle && (
+              <div className="flex items-center rounded-md border border-border">
+                <button
+                  type="button"
+                  disabled={activeIdx <= 0}
+                  onClick={() => setSelectedIdx(Math.max(0, activeIdx - 1))}
+                  aria-label="Previous sprint"
+                  title="Previous sprint"
+                  className="focus-ring flex h-7 w-7 items-center justify-center rounded-l-md text-muted-foreground hover:bg-subtle hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <span className="border-x border-border px-2.5 text-xs font-medium tabular-nums">
+                  {cycle.name}
+                </span>
+                <button
+                  type="button"
+                  disabled={activeIdx >= ordered.length - 1}
+                  onClick={() => setSelectedIdx(Math.min(ordered.length - 1, activeIdx + 1))}
+                  aria-label="Next sprint"
+                  title="Next sprint"
+                  className="focus-ring flex h-7 w-7 items-center justify-center rounded-r-md text-muted-foreground hover:bg-subtle hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+            {/* Always-available rollover. Reuses the same mutation the
+                summary card fires. The server enforces the active-sprint
+                gate, so we disable + retitle when it isn't applicable
+                rather than hiding the button. */}
+            {cycle && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={cycle.status !== CycleStatus.ACTIVE || rollover.isPending}
+                title={
+                  cycle.status !== CycleStatus.ACTIVE
+                    ? "Rollover is only available for the active sprint"
+                    : "Move incomplete issues into the next sprint"
+                }
+                onClick={() => rollover.mutate({ fromCycleId: cycle.id })}
+              >
+                {rollover.isPending ? "Rolling over…" : "Rollover incomplete"}
+              </Button>
+            )}
             <Button variant="ember" size="sm" onClick={() => setCreateOpen(true)}>
               <Plus className="h-3.5 w-3.5" />
               New sprint
