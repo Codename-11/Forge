@@ -26,6 +26,7 @@ import { Confirm, QuickForm } from "@/components/ui/modal";
 import { EmptyState, Skeleton } from "@/components/ui";
 import { InitiativeChip } from "@/components/initiative-chip";
 import { CycleChip } from "@/components/cycle-chip";
+import { StatusDot } from "@/components/ui/status-dot";
 import { PinButton } from "@/components/pins/pin-button";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
@@ -306,8 +307,37 @@ function OverviewTab({
     },
   ];
 
+  const completionPct =
+    counts.total > 0 ? Math.round((counts.done / counts.total) * 100) : 0;
+
+  // Per-bucket breakdown for the Progress card. The overview payload only
+  // exposes category-bucket counts (not per-Status rows), so the breakdown
+  // mirrors those buckets. StatusDot is category-aware; colors are token
+  // driven via `hsl(var(--…))`.
+  const breakdown: Array<{ label: string; category: string; color: string; count: number }> = [
+    { label: "In progress", category: "IN_PROGRESS", color: "hsl(var(--ember))", count: counts.inProgress },
+    {
+      label: "Open",
+      category: "TODO",
+      color: "hsl(var(--muted-foreground))",
+      // open excludes in-progress so the rows don't double-count.
+      count: Math.max(counts.open - counts.inProgress, 0),
+    },
+    { label: "Done", category: "DONE", color: "hsl(var(--success))", count: counts.done },
+  ];
+  if (counts.blocked > 0) {
+    breakdown.push({
+      label: "Blocked",
+      category: "BLOCKED",
+      color: "hsl(var(--warning))",
+      count: counts.blocked,
+    });
+  }
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
+    <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 p-6 lg:grid-cols-[1fr_320px]">
+      {/* Left column — primary content (preserved live sections). */}
+      <div className="min-w-0 space-y-6">
       {/* Header — name + description (inline edit). Edit/avatar/etc. live
           on the page Topbar so they're consistent across tabs. */}
       <header className="space-y-2">
@@ -403,24 +433,6 @@ function OverviewTab({
         ))}
       </section>
 
-      {/* Linked initiative */}
-      <section aria-label="Initiative">
-        <SectionEyebrow>Part of</SectionEyebrow>
-        {linkedInitiative ? (
-          <div className="mt-2 flex items-center gap-2">
-            <InitiativeChip
-              initiative={linkedInitiative}
-              slug={workspaceSlug}
-            />
-            <span className="text-meta text-muted-foreground">
-              {linkedInitiative.status.toLowerCase().replace(/_/g, " ")}
-            </span>
-          </div>
-        ) : (
-          <LinkInitiativeCta projectId={project.id} onLinked={() => refetch()} />
-        )}
-      </section>
-
       {/* Current sprint slice */}
       {currentCycleSlice && (
         <section aria-label="Current sprint">
@@ -469,42 +481,6 @@ function OverviewTab({
         </section>
       )}
 
-      {/* Members */}
-      <section aria-label="Members">
-        <div className="mb-2 flex items-baseline justify-between">
-          <SectionEyebrow>Members</SectionEyebrow>
-          <span className="text-meta text-muted-foreground">
-            {members.length} active
-          </span>
-        </div>
-        {members.length === 0 ? (
-          <p className="text-meta text-muted-foreground">
-            No members with open issues yet.
-          </p>
-        ) : (
-          <ul className="flex flex-wrap items-center gap-2">
-            {members.map((m) => (
-              <li key={m.userId}>
-                <span
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card/40 py-0.5 pl-0.5 pr-2"
-                  title={
-                    m.openCount > 0
-                      ? `${m.name ?? m.handle ?? "member"} — ${m.openCount} open`
-                      : (m.name ?? m.handle ?? "member")
-                  }
-                >
-                  <Avatar name={m.name} image={m.avatarUrl} size={20} />
-                  <span className="text-xs">{m.name ?? m.handle ?? "—"}</span>
-                  <span className="text-id text-muted-foreground">
-                    {m.openCount}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
       {/* Recent activity */}
       <section aria-label="Recent activity">
         <SectionEyebrow>Recent activity</SectionEyebrow>
@@ -545,6 +521,149 @@ function OverviewTab({
           )}
         </div>
       </section>
+      </div>
+
+      {/* Right rail — Properties / Progress / Contributors. Only fields
+          present in the overview payload render; Lead and agent
+          contributors are absent from the query, so they're omitted. */}
+      <aside className="min-w-0 space-y-6">
+        {/* Properties */}
+        <section aria-label="Properties">
+          <SectionEyebrow>Properties</SectionEyebrow>
+          <dl className="mt-2 grid grid-cols-[88px_1fr] gap-y-2.5 text-sm">
+            {linkedInitiative && (
+              <>
+                <dt className="text-meta self-center text-muted-foreground">
+                  Status
+                </dt>
+                <dd className="text-meta self-center text-muted-foreground">
+                  {linkedInitiative.status.toLowerCase().replace(/_/g, " ")}
+                </dd>
+              </>
+            )}
+
+            <dt className="text-meta self-center text-muted-foreground">
+              Initiative
+            </dt>
+            <dd className="min-w-0">
+              {linkedInitiative ? (
+                <InitiativeChip
+                  initiative={linkedInitiative}
+                  slug={workspaceSlug}
+                />
+              ) : (
+                <LinkInitiativeCta
+                  projectId={project.id}
+                  onLinked={() => refetch()}
+                />
+              )}
+            </dd>
+
+            {project.startDate && (
+              <>
+                <dt className="text-meta self-center text-muted-foreground">
+                  Starts
+                </dt>
+                <dd className="text-meta self-center text-muted-foreground">
+                  {relativeTime(project.startDate)}
+                </dd>
+              </>
+            )}
+
+            {project.targetDate && (
+              <>
+                <dt className="text-meta self-center text-muted-foreground">
+                  Target
+                </dt>
+                <dd className="text-meta self-center text-muted-foreground">
+                  {relativeTime(project.targetDate)}
+                </dd>
+              </>
+            )}
+
+            <dt className="text-meta self-center text-muted-foreground">
+              Created
+            </dt>
+            <dd className="text-meta self-center text-muted-foreground">
+              {relativeTime(project.createdAt)}
+            </dd>
+
+            <dt className="text-meta self-center text-muted-foreground">
+              Updated
+            </dt>
+            <dd className="text-meta self-center text-muted-foreground">
+              {relativeTime(project.updatedAt)}
+            </dd>
+          </dl>
+        </section>
+
+        {/* Progress */}
+        <section aria-label="Progress">
+          <SectionEyebrow>Progress</SectionEyebrow>
+          <div className="mt-2 rounded-lg border border-border bg-card/40 p-3">
+            <div className="flex items-baseline justify-between">
+              <span className="text-2xl font-semibold tabular-nums tracking-tight">
+                {completionPct}%
+              </span>
+              <span className="text-meta text-muted-foreground">
+                {counts.done} / {counts.total} done
+              </span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-subtle">
+              <div
+                className="h-full rounded-full bg-ember"
+                style={{ width: `${completionPct}%` }}
+              />
+            </div>
+            <ul className="mt-3 flex flex-col gap-1.5">
+              {breakdown.map((b) => (
+                <li
+                  key={b.category}
+                  className="flex items-center gap-2 text-meta"
+                >
+                  <StatusDot
+                    status={{ category: b.category, color: b.color }}
+                  />
+                  <span>{b.label}</span>
+                  <span className="ml-auto tabular-nums text-muted-foreground">
+                    {b.count}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        {/* Contributors — reuses the members list. Agents aren't in the
+            overview payload, so only human members render. */}
+        <section aria-label="Contributors">
+          <div className="mb-2 flex items-baseline justify-between">
+            <SectionEyebrow>Contributors</SectionEyebrow>
+            <span className="text-meta text-muted-foreground">
+              {members.length}
+            </span>
+          </div>
+          {members.length === 0 ? (
+            <p className="text-meta text-muted-foreground">
+              No contributors yet.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1.5">
+              {members.map((m) => (
+                <li key={m.userId} className="flex items-center gap-2">
+                  <Avatar name={m.name} image={m.avatarUrl} size={20} />
+                  <span className="min-w-0 flex-1 truncate text-sm">
+                    {m.name ?? m.handle ?? "—"}
+                  </span>
+                  <span className="text-meta tabular-nums text-muted-foreground">
+                    {m.openCount}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </aside>
     </div>
   );
 }

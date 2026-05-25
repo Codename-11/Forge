@@ -10,7 +10,13 @@ import { writeAppearanceCookie } from "@/lib/appearance-cookie";
 type Density = "compact" | "comfortable";
 type TextSize = "default" | "larger";
 type Motion = "full" | "reduced";
-type Background = "grid" | "glow" | "dots" | "none";
+type Background =
+  | "grid"
+  | "glow"
+  | "dots"
+  | "reactive"
+  | "particles"
+  | "none";
 
 /**
  * Appearance settings — per-user, server-saved.
@@ -52,6 +58,8 @@ export default function AppearancePage() {
     setBackground(
       me.backgroundStyle === "glow" ||
         me.backgroundStyle === "dots" ||
+        me.backgroundStyle === "reactive" ||
+        me.backgroundStyle === "particles" ||
         me.backgroundStyle === "none"
         ? me.backgroundStyle
         : "grid",
@@ -287,6 +295,20 @@ export default function AppearancePage() {
                 sample={<BackgroundSample variant="dots" />}
               />
               <ChoiceCard
+                active={background === "reactive"}
+                onClick={() => chooseBackground("reactive")}
+                title="Reactive dot grid"
+                blurb="Live canvas. Dots near the cursor scale and brighten toward ember as you move."
+                sample={<BackgroundSample variant="reactive" />}
+              />
+              <ChoiceCard
+                active={background === "particles"}
+                onClick={() => chooseBackground("particles")}
+                title="Particles"
+                blurb="Free-floating embers that drift and lean toward the cursor. Live canvas."
+                sample={<BackgroundSample variant="particles" />}
+              />
+              <ChoiceCard
                 active={background === "none"}
                 onClick={() => chooseBackground("none")}
                 title="None"
@@ -355,13 +377,55 @@ function ChoiceCard({
 function BackgroundSample({
   variant,
 }: {
-  variant: "grid" | "glow" | "dots" | "none";
+  variant: Background;
 }) {
   // Honest, self-contained preview of each background (doesn't depend on
   // the user's current data-bg). Small static swatch.
   const common = "h-12 w-full overflow-hidden rounded-md border border-border/70";
   if (variant === "none") {
     return <div className={`${common} bg-background`} />;
+  }
+  if (variant === "reactive") {
+    // Static hint of the live canvas: dot field with a brightened,
+    // ember-tinted hot spot to suggest the cursor falloff.
+    return (
+      <div
+        className={`${common} relative bg-background`}
+        style={{
+          backgroundImage:
+            "radial-gradient(hsl(var(--foreground) / 0.16) 1px, transparent 1.5px)",
+          backgroundSize: "10px 10px",
+        }}
+      >
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(circle at 38% 50%, hsl(var(--ember) / 0.45) 0%, transparent 42%)",
+            mixBlendMode: "plus-lighter",
+          }}
+        />
+      </div>
+    );
+  }
+  if (variant === "particles") {
+    // Static hint: scattered foreground dots with a couple of ember
+    // accents floating in the field.
+    return (
+      <div
+        className={`${common} relative bg-background`}
+        style={{
+          backgroundImage: [
+            "radial-gradient(circle at 18% 30%, hsl(var(--foreground) / 0.35) 1px, transparent 2px)",
+            "radial-gradient(circle at 62% 22%, hsl(var(--foreground) / 0.25) 1px, transparent 2px)",
+            "radial-gradient(circle at 80% 64%, hsl(var(--ember) / 0.7) 1.5px, transparent 3px)",
+            "radial-gradient(circle at 44% 72%, hsl(var(--foreground) / 0.3) 1px, transparent 2px)",
+            "radial-gradient(circle at 30% 58%, hsl(var(--ember) / 0.6) 1.5px, transparent 3px)",
+            "radial-gradient(circle at 90% 34%, hsl(var(--foreground) / 0.2) 1px, transparent 2px)",
+          ].join(","),
+        }}
+      />
+    );
   }
   if (variant === "grid") {
     return (

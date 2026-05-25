@@ -12,6 +12,7 @@ import { TrpcProvider } from "@/lib/trpc-provider";
 import { WorkspaceProvider } from "@/components/workspace-provider";
 import { WorkspaceCookieSync } from "@/components/workspace-cookie-sync";
 import { AppearanceProvider } from "@/components/appearance-provider";
+import { ForgeBackgroundCanvasGate } from "@/components/forge-background-canvas";
 import { TimeTrackerWidget } from "@/components/time-tracker/time-tracker-widget";
 import { MissionControl } from "@/components/mission-control/mission-control";
 import { AttachmentLightboxProvider } from "@/components/attachments/attachment-lightbox";
@@ -137,6 +138,11 @@ export default async function WorkspaceShellLayout({
                 Lives in the non-scrolling <main> so it always covers the
                 visible area and animates smoothly (see .forge-page-bg). */}
             <div aria-hidden className="forge-page-bg" />
+            {/* Canvas-backed ambient variants (reactive / particles).
+                Self-gates on <html data-bg>; renders nothing otherwise.
+                When active, the CSS below hides .forge-page-bg so the two
+                layers never stack. */}
+            <ForgeBackgroundCanvasGate />
             <TopBar
               user={{
                 name: session.user.name,

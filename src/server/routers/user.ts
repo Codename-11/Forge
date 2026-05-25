@@ -71,7 +71,7 @@ export const userRouter = router({
         textSize: z.enum(["default", "larger"]).nullable().optional(),
         motion: z.enum(["full", "reduced"]).nullable().optional(),
         backgroundStyle: z
-          .enum(["grid", "glow", "dots", "none"])
+          .enum(["grid", "glow", "dots", "reactive", "particles", "none"])
           .nullable()
           .optional(),
         theme: z.enum(["light", "dark", "system"]).nullable().optional(),

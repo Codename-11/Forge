@@ -18,6 +18,7 @@ import {
   CalendarClock,
   Eye,
   UserCircle2,
+  UsersRound,
   X,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
@@ -362,7 +363,7 @@ export default function InboxPage() {
           <BulkBar
             count={selected.size}
             onClear={clearSelection}
-            contentClassName="mx-auto max-w-5xl"
+            contentClassName="mx-auto max-w-7xl"
             actions={inboxBulkActions({
               count: selected.size,
               disabled:
@@ -380,7 +381,9 @@ export default function InboxPage() {
         {/* Ambient background now lives once in the app shell <main>
             (.forge-page-bg, driven by the per-user data-bg pref). */}
         <div className="relative isolate">
-          <div className="mx-auto max-w-5xl space-y-8 p-5">
+          <div className="mx-auto grid max-w-7xl grid-cols-1 gap-6 p-5 xl:grid-cols-[1fr_360px]">
+          {/* Left column — rollups + all existing inbox buckets/rollups. */}
+          <div className="min-w-0 space-y-8">
           {/* Rollups — always render so the page doesn't jump while loading. */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <FocusRollup
@@ -396,19 +399,6 @@ export default function InboxPage() {
               slug={workspace.slug}
             />
           </div>
-
-          {!allWorkspaces && (
-            <AgentQueueSection
-              rows={queueRows}
-              loading={queueLoading}
-              workspaceKey={workspace.key}
-              slug={workspace.slug}
-              ready={readyAgentIssues}
-              claimed={claimedAgentIssues}
-              assigned={assignedAgentIssues}
-              onlineAgents={onlineAgents}
-            />
-          )}
 
           {isLoading || !data ? (
             <div className="space-y-4">
@@ -661,6 +651,27 @@ export default function InboxPage() {
                 </Section>
               )}
             </>
+          )}
+          </div>
+
+          {/* Right rail — agent queue + online roster. Sticky on xl+,
+              drops below the buckets on smaller viewports. */}
+          {!allWorkspaces && (
+            <aside className="hidden min-w-0 xl:block">
+              <div className="sticky top-5 space-y-6">
+                <AgentQueueRail
+                  rows={queueRows}
+                  loading={queueLoading}
+                  workspaceKey={workspace.key}
+                  slug={workspace.slug}
+                  ready={readyAgentIssues}
+                  claimed={claimedAgentIssues}
+                  assigned={assignedAgentIssues}
+                  onlineAgents={onlineAgents}
+                />
+                <AgentsOnlineRail agents={agents ?? []} />
+              </div>
+            </aside>
           )}
           </div>
         </div>
@@ -1655,7 +1666,7 @@ type AgentQueueIssue = {
   } | null;
 };
 
-function AgentQueueSection({
+function AgentQueueRail({
   rows,
   loading,
   workspaceKey,
@@ -1746,6 +1757,91 @@ function AgentQueueSection({
                   <span>claim expires {relativeTime(issue.claimExpiresAt)}</span>
                 )}
               </div>
+            </li>
+          ))
+        )}
+      </Card>
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agents online roster — right-rail companion to the agent queue. Lists
+// every active agent with avatar/emoji, @profileKey, capabilities, and a
+// shared presence dot + status. Sourced from the already-fetched
+// `agent.list` payload (no extra query).
+// ---------------------------------------------------------------------------
+
+type RosterAgent = {
+  id: string;
+  name: string;
+  profileKey: string;
+  avatar: string | null;
+  capabilities: string[];
+  status: AgentStatus;
+  runtimeMode?: string | null;
+  lastHeartbeatAt?: Date | string | null;
+  webhookUrl?: string | null;
+  runtimeId?: string | null;
+  provider?: string | null;
+};
+
+function AgentsOnlineRail({ agents }: { agents: RosterAgent[] }) {
+  return (
+    <Section
+      title={
+        <span className="flex items-center gap-2">
+          <UsersRound className="h-3.5 w-3.5 text-muted-foreground" />
+          Agents online
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">
+            {agents.length}
+          </span>
+        </span>
+      }
+      hint="Every active agent in this workspace and what it can pick up."
+    >
+      <Card as="ul">
+        {agents.length === 0 ? (
+          <EmptyState
+            as="li"
+            variant="card"
+            icon={<Bot />}
+            title="No agents yet."
+            description="Register an agent from Settings to see it here."
+          />
+        ) : (
+          agents.map((a) => (
+            <li
+              key={a.id}
+              className="flex items-center gap-2 px-3 py-2 text-[0.75rem] hover:bg-subtle/40"
+            >
+              <span
+                aria-hidden
+                className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-subtle text-id"
+                title={a.name}
+              >
+                {a.avatar ?? (
+                  <span className="font-medium text-muted-foreground">
+                    {a.name.slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-id font-medium">@{a.profileKey}</div>
+                {a.capabilities.length > 0 && (
+                  <div className="text-meta truncate text-muted-foreground">
+                    {a.capabilities.join(" · ")}
+                  </div>
+                )}
+              </div>
+              <AgentPresenceDot
+                status={a.status}
+                size="sm"
+                availability={presenceAvailability(a)}
+              />
+              <span className="text-meta shrink-0 text-muted-foreground">
+                {a.status.toLowerCase()}
+              </span>
             </li>
           ))
         )}

@@ -3,7 +3,13 @@ export const APPEARANCE_COOKIE = "forge.appearance";
 export type AppearanceDensity = "compact" | "comfortable";
 export type AppearanceTextSize = "default" | "larger";
 export type AppearanceMotion = "full" | "reduced";
-export type AppearanceBackground = "grid" | "glow" | "dots" | "none";
+export type AppearanceBackground =
+  | "grid"
+  | "glow"
+  | "dots"
+  | "reactive"
+  | "particles"
+  | "none";
 export interface AppearancePrefs {
   density: AppearanceDensity;
   textSize: AppearanceTextSize;

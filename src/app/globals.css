@@ -682,6 +682,13 @@ html:not([data-bg]) .forge-page-bg::before {
   display: none;
 }
 
+/* Canvas-backed variants own the ambient layer themselves
+ * (ForgeBackgroundCanvasGate) — hide the CSS layer so they don't stack. */
+[data-bg="reactive"] .forge-page-bg,
+[data-bg="particles"] .forge-page-bg {
+  display: none;
+}
+
 @layer utilities {
   .scrollbar-none {
     scrollbar-width: none;
