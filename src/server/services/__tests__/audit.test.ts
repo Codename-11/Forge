@@ -209,3 +209,203 @@ describe("audit.ts — AGENT_ASSIGNED system comment", () => {
     expect(sys.body).toContain("unknown");
   });
 });
+
+describe("audit.ts — watcher fan-out", () => {
+  it("does not open canonical agent work for low-signal issue status changes", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "WF1" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: `wf1-victor-${Date.now()}`,
+        webhookUrl: "https://example.invalid/webhook",
+        webhookSecret: "test-secret",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issueWatcher.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+      },
+    });
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      entity: "Issue",
+      entityId: issue.id,
+      action: "transition",
+      eventKind: EventKind.ISSUE_STATUS_CHANGED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: { from: "TODO", to: "IN_PROGRESS" },
+    });
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.ISSUE_STATUS_CHANGED,
+        subjectId: issue.id,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const runs = await prisma.agentRun.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        triggerEventId: event.id,
+      },
+    });
+    expect(runs).toHaveLength(0);
+
+    const deliveries = await prisma.webhookDelivery.findMany({
+      where: {
+        eventId: event.id,
+        webhook: {
+          workspaceId: fixture.workspace.id,
+          url: { startsWith: "agent:dispatch" },
+        },
+      },
+    });
+    expect(deliveries).toHaveLength(0);
+  });
+
+  it("does not re-page watchers for rolling STATUS comment updates", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "WF2" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: `wf2-victor-${Date.now()}`,
+        webhookUrl: "https://example.invalid/webhook",
+        webhookSecret: "test-secret",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issueWatcher.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+      },
+    });
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      actorAgentId: agent.id,
+      entity: "Comment",
+      entityId: "status-comment-id",
+      action: "update-status",
+      eventKind: EventKind.COMMENT_UPDATED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: {
+        commentId: "status-comment-id",
+        issueId: issue.id,
+        kind: "STATUS",
+        currentStep: "still verifying",
+      },
+    });
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.COMMENT_UPDATED,
+        subjectId: issue.id,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const runs = await prisma.agentRun.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        triggerEventId: event.id,
+      },
+    });
+    expect(runs).toHaveLength(0);
+
+    const deliveries = await prisma.webhookDelivery.findMany({
+      where: {
+        eventId: event.id,
+        webhook: {
+          workspaceId: fixture.workspace.id,
+          url: { startsWith: "agent:dispatch" },
+        },
+      },
+    });
+    expect(deliveries).toHaveLength(0);
+  });
+
+  it("still opens canonical work for watched body comments", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "WF3" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: `wf3-victor-${Date.now()}`,
+        webhookUrl: "https://example.invalid/webhook",
+        webhookSecret: "test-secret",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issueWatcher.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+      },
+    });
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      entity: "Comment",
+      entityId: "body-comment-id",
+      action: "create",
+      eventKind: EventKind.COMMENT_CREATED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: {
+        commentId: "body-comment-id",
+        issueId: issue.id,
+        kind: "BODY",
+      },
+    });
+
+    const run = await prisma.agentRun.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+      },
+    });
+    expect(run).toBeTruthy();
+    expect(run?.triggerKind).toBe(EventKind.COMMENT_CREATED);
+
+    const deliveries = await prisma.webhookDelivery.findMany({
+      where: {
+        webhook: {
+          workspaceId: fixture.workspace.id,
+          url: { startsWith: "agent:dispatch" },
+        },
+      },
+    });
+    expect(deliveries).toHaveLength(1);
+  });
+});

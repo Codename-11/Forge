@@ -2651,6 +2651,19 @@ describe("mcp runs.complete + completion contract", () => {
     expect(result.producedArtifactIds).toEqual([artifact.id]);
     expect(result.verificationResult).toBeTruthy();
     expect(result.followUps).toBeTruthy();
+
+    const completed = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(completed.status).toBe("COMPLETED");
+    expect(completed.finishedAt).not.toBeNull();
+    expect(completed.summary).toBe("Migration shipped.");
+    const completionEvents = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_RUN_COMPLETED,
+        subjectId: run.id,
+      },
+    });
+    expect(completionEvents).toHaveLength(1);
   });
 });
 
