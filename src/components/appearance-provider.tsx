@@ -32,6 +32,8 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     const background =
       data.backgroundStyle === "glow" ||
       data.backgroundStyle === "dots" ||
+      data.backgroundStyle === "reactive" ||
+      data.backgroundStyle === "particles" ||
       data.backgroundStyle === "none"
         ? data.backgroundStyle
         : "grid";

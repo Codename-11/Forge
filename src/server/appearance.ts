@@ -6,7 +6,13 @@ export const APPEARANCE_COOKIE = "forge.appearance";
 export type AppearanceDensity = "compact" | "comfortable";
 export type AppearanceTextSize = "default" | "larger";
 export type AppearanceMotion = "full" | "reduced";
-export type AppearanceBackground = "grid" | "glow" | "dots" | "none";
+export type AppearanceBackground =
+  | "grid"
+  | "glow"
+  | "dots"
+  | "reactive"
+  | "particles"
+  | "none";
 export interface AppearancePrefs {
   density: AppearanceDensity;
   textSize: AppearanceTextSize;
@@ -22,7 +28,13 @@ export const DEFAULT_APPEARANCE: AppearancePrefs = {
 };
 
 function parseBackground(v: unknown): AppearanceBackground {
-  return v === "glow" || v === "dots" || v === "none" ? v : "grid";
+  return v === "glow" ||
+    v === "dots" ||
+    v === "reactive" ||
+    v === "particles" ||
+    v === "none"
+    ? v
+    : "grid";
 }
 
 /**

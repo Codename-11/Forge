@@ -47,6 +47,10 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   who's valid / already a member, pick a role, add a note, send in one go.
 - **Plugin** detail pages are organized into Overview / Permissions /
   Configuration / Activity tabs.
+- Two new **interactive backgrounds** in Appearance — a cursor-reactive dot grid
+  and a drifting particle field (both respect Reduced Motion).
+- **Project** overview now has a Properties / Progress / Contributors side rail,
+  and the **Inbox** gained an agent-queue + "agents online" side rail.
 
 ## [2026-05-24] — Choose your background, richer agent & plan cards, plugin pages
 
