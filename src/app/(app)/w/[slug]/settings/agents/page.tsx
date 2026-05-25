@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState, type ComponentType, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -150,6 +150,27 @@ const PROVIDERS: Array<{
 ];
 
 const PROVIDER_LABEL = new Map(PROVIDERS.map((p) => [p.id, p.label]));
+
+/**
+ * Derive the "We'll set up …" preview bullets for a provider card on the
+ * Provider step, straight from the provider's defaults. Webhook providers
+ * advertise signed push; MCP providers advertise an MCP key; everyone gets a
+ * profile + first key. Purely presentational — does not drive any mutation.
+ */
+function providerSetupPreview(p: (typeof PROVIDERS)[number]): string[] {
+  const items = ["Profile row + first API key"];
+  if (p.defaultConnectionMode === "webhook") {
+    items.push("Signed push webhook + MCP callbacks");
+  } else {
+    items.push("MCP key with agent scope");
+  }
+  if (p.defaultRuntimeMode === "PERSISTENT") {
+    items.push("Persistent presence");
+  } else {
+    items.push("Single-session presence");
+  }
+  return items;
+}
 
 const EMPTY_EDITING: EditingState = {
   name: "",
@@ -1047,8 +1068,9 @@ export default function AgentsPage() {
         }
       >
         {editing && (
-          <div className="grid gap-5 lg:grid-cols-[190px_1fr]">
-            <Stepper steps={STEPS} current={step} onSelect={setStep} />
+          <div className="space-y-4">
+            <WizardStepDots steps={STEPS} current={step} onSelect={setStep} />
+            {step > 0 && <WizardSummary editing={editing} step={step} />}
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -1062,6 +1084,8 @@ export default function AgentsPage() {
                   <div className="grid gap-2 md:grid-cols-2">
                     {PROVIDERS.map((p) => {
                       const selected = editing.provider === p.id;
+                      const recommended = p.eyebrow === "first-class";
+                      const setupItems = providerSetupPreview(p);
                       return (
                         <button
                           key={p.id}
@@ -1075,7 +1099,7 @@ export default function AgentsPage() {
                             })
                           }
                           className={
-                            "focus-ring min-h-32 rounded-lg border p-3 text-left transition-colors " +
+                            "focus-ring flex min-h-32 flex-col gap-3 rounded-lg border p-3 text-left transition-colors " +
                             (selected
                               ? "border-ember/50 bg-ember/10"
                               : "border-border bg-background/50 hover:bg-subtle/60")
@@ -1086,13 +1110,33 @@ export default function AgentsPage() {
                               <p.Icon className="h-4 w-4 text-ember" />
                               <span className="text-sm font-medium">{p.label}</span>
                             </div>
-                            <span className="rounded-sm border border-border px-1.5 py-0.5 text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-                              {p.eyebrow}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {recommended && (
+                                <span className="rounded-md bg-ember/15 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wider text-ember">
+                                  Recommended
+                                </span>
+                              )}
+                              <span className="rounded-sm border border-border px-1.5 py-0.5 text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                                {p.eyebrow}
+                              </span>
+                            </div>
                           </div>
-                          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                          <p className="text-xs leading-relaxed text-muted-foreground">
                             {p.description}
                           </p>
+                          <div className="mt-auto rounded-md border border-border/60 bg-background/60 px-2 py-2">
+                            <div className="text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                              We&apos;ll set up
+                            </div>
+                            <ul className="mt-1 space-y-0.5 text-[0.6875rem] text-muted-foreground">
+                              {setupItems.map((s) => (
+                                <li key={s} className="flex items-baseline gap-1.5">
+                                  <CheckCircle2 className="h-3 w-3 shrink-0 translate-y-0.5 text-emerald-600 dark:text-emerald-400" />
+                                  <span>{s}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
                         </button>
                       );
                     })}
@@ -1688,7 +1732,13 @@ export default function AgentsPage() {
   );
 }
 
-function Stepper({
+/**
+ * Horizontal step-dots indicator for the onboarding wizard header. Shows
+ * "Step N of M · {label}" above a clickable row of numbered/segment dots so
+ * the operator can jump between visited steps. Replaces the old vertical
+ * sidebar Stepper; step navigation still flows through `onSelect`.
+ */
+function WizardStepDots({
   steps,
   current,
   onSelect,
@@ -1697,36 +1747,89 @@ function Stepper({
   current: number;
   onSelect: (step: number) => void;
 }) {
+  const total = steps.length;
   return (
-    <ol className="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
-      {steps.map((s, i) => {
-        const done = i < current;
-        const active = i === current;
-        return (
-          <li key={s} className="shrink-0 lg:shrink">
-            <button
-              type="button"
-              onClick={() => onSelect(i)}
-              className={
-                "focus-ring flex w-36 items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition-colors lg:w-full " +
-                (active
-                  ? "bg-subtle text-foreground"
-                  : "text-muted-foreground hover:bg-subtle/70 hover:text-foreground")
-              }
-            >
-              {done ? (
-                <CheckCircle2 className="h-3.5 w-3.5 text-ember" />
-              ) : (
-                <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full border border-border text-[0.625rem]">
-                  {i + 1}
-                </span>
+    <div className="space-y-2">
+      <div className="text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
+        Step {current + 1} of {total} ·{" "}
+        <span className="text-foreground">{steps[current]}</span>
+      </div>
+      <ol className="flex items-center gap-1">
+        {steps.map((s, i) => {
+          const done = i < current;
+          const active = i === current;
+          return (
+            <Fragment key={s}>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => onSelect(i)}
+                  aria-current={active ? "step" : undefined}
+                  title={`Step ${i + 1}: ${s}`}
+                  className={
+                    "focus-ring grid h-6 min-w-6 place-items-center rounded-full px-1.5 text-[0.6875rem] font-medium tabular-nums transition-colors " +
+                    (done
+                      ? "bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-300"
+                      : active
+                        ? "bg-ember/15 text-ember"
+                        : "bg-subtle text-muted-foreground hover:text-foreground")
+                  }
+                >
+                  {done ? <CheckCircle2 className="h-3.5 w-3.5" /> : i + 1}
+                </button>
+              </li>
+              {i < total - 1 && (
+                <li aria-hidden className="flex-1">
+                  <span
+                    className={
+                      "block h-px w-full " + (done ? "bg-emerald-500/40" : "bg-border")
+                    }
+                  />
+                </li>
               )}
-              <span className="truncate">{s}</span>
-            </button>
-          </li>
-        );
-      })}
-    </ol>
+            </Fragment>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+/**
+ * Compact recap of the choices made so far, shown above the form on steps
+ * after Provider. Read-only mirror of `editing` — no mutations.
+ */
+function WizardSummary({ editing, step }: { editing: EditingState; step: number }) {
+  const chips: Array<{ label: string; value: string }> = [
+    { label: "Provider", value: PROVIDER_LABEL.get(editing.provider) ?? editing.provider },
+    {
+      label: "Runtime",
+      value: editing.runtimeMode === "PERSISTENT" ? "Persistent" : "Single session",
+    },
+  ];
+  if (step > 1 && editing.profileKey) {
+    chips.push({ label: "Handle", value: `@${editing.profileKey}` });
+  }
+  if (step > 2) {
+    chips.push({
+      label: "Connection",
+      value: editing.connectionMode === "webhook" ? "Webhook + MCP" : "MCP-only",
+    });
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border/60 bg-background/40 px-2.5 py-1.5">
+      {chips.map((c) => (
+        <span
+          key={c.label}
+          className="inline-flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground"
+        >
+          <span className="uppercase tracking-wider text-muted-foreground/70">
+            {c.label}
+          </span>
+          <span className="font-medium text-foreground">{c.value}</span>
+        </span>
+      ))}
+    </div>
   );
 }
 

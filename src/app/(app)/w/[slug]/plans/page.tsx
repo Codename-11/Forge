@@ -22,6 +22,28 @@ const STATUS_TONE: Record<ExecutionPlanStatus, string> = {
   CANCELED: "bg-muted/40 text-muted-foreground line-through",
 };
 
+// Status-legend dot color, mirroring STATUS_TONE's semantic intent.
+const STATUS_DOT: Record<ExecutionPlanStatus, string> = {
+  DRAFT: "bg-muted-foreground/40",
+  APPROVED: "bg-emerald-500",
+  RUNNING: "bg-ember",
+  BLOCKED: "bg-warning",
+  COMPLETED: "bg-emerald-500",
+  CANCELED: "bg-muted-foreground/30",
+};
+
+// Plain-language gloss per status — the right-rail legend reads off the
+// same enum the cards render. Ordered DRAFT → CANCELED to match a plan's
+// natural lifecycle.
+const STATUS_LEGEND: { status: ExecutionPlanStatus; gloss: string }[] = [
+  { status: "DRAFT", gloss: "pre-decisional" },
+  { status: "APPROVED", gloss: "ready to run" },
+  { status: "RUNNING", gloss: "agent + human moving" },
+  { status: "BLOCKED", gloss: "needs you" },
+  { status: "COMPLETED", gloss: "done" },
+  { status: "CANCELED", gloss: "abandoned" },
+];
+
 interface TemplateStep {
   title: string;
   body?: string;
@@ -267,6 +289,14 @@ export default function PlansPage() {
     void utils.executionPlan.list.invalidate();
   };
 
+  // Open the New-plan modal pre-selected to a template. Reuses the same
+  // modal + templateId state the <select> drives — the rail cards are
+  // just another trigger.
+  const openCreate = (presetTemplateId = "blank") => {
+    setTemplateId(presetTemplateId);
+    setCreating(true);
+  };
+
   const addStep = trpc.executionPlan.addStep.useMutation();
   const create = trpc.executionPlan.create.useMutation({
     onError: (e) => toast.error(e.message),
@@ -371,6 +401,8 @@ export default function PlansPage() {
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_300px]">
+          <div className="min-w-0">
         <div className="mb-3 inline-flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5">
           <button
             type="button"
@@ -508,6 +540,63 @@ export default function PlansPage() {
             ))}
           </ul>
         )}
+          </div>
+
+          {/* Right rail — template launcher + status legend. Hidden
+              below xl; sticky so it tracks the scrolling card grid. */}
+          <aside className="hidden xl:block">
+            <div className="sticky top-0 flex flex-col gap-5">
+              <section>
+                <h3 className="mb-2 text-sm font-semibold">Start from a template</h3>
+                <ul className="flex flex-col gap-2">
+                  {PLAN_TEMPLATES.map((t) => (
+                    <li key={t.id}>
+                      <button
+                        type="button"
+                        onClick={() => openCreate(t.id)}
+                        className="group block w-full rounded-md border border-border bg-card/40 p-3 text-left transition hover:border-ember/40 hover:bg-subtle"
+                      >
+                        <div className="flex items-center gap-2">
+                          <ListChecks className="h-3 w-3 text-ember" />
+                          <span className="text-sm font-semibold text-foreground group-hover:text-ember">
+                            {t.label}
+                          </span>
+                          <span className="ml-auto text-muted-foreground transition group-hover:text-ember">
+                            →
+                          </span>
+                        </div>
+                        <p className="mt-1 text-meta text-muted-foreground">{t.blurb}</p>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <section>
+                <h3 className="mb-2 text-sm font-semibold">Status legend</h3>
+                <ul className="flex flex-col gap-1.5 text-meta">
+                  {STATUS_LEGEND.map(({ status, gloss }) => (
+                    <li key={status} className="flex items-center gap-2">
+                      <span
+                        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATUS_DOT[status])}
+                        aria-hidden
+                      />
+                      <span
+                        className={cn(
+                          "rounded px-1.5 py-0.5 text-[10px] uppercase",
+                          STATUS_TONE[status],
+                        )}
+                      >
+                        {status.toLowerCase()}
+                      </span>
+                      <span className="text-muted-foreground">{gloss}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </div>
+          </aside>
+        </div>
       </div>
 
       {creating && (

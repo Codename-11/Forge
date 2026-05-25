@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
   CheckCircle2,
   CircleSlash,
+  LinkIcon,
   PlugZap,
   Radio,
   RefreshCw,
@@ -15,12 +16,18 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
-import { cn } from "@/lib/utils";
+import { cn, formatIssueId } from "@/lib/utils";
 import { TransportChip } from "@/components/agents/transport-chip";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { StatusDot } from "@/components/ui/status-dot";
+import { ProjectChip } from "@/components/project-chip";
+import { presenceAvailability } from "@/lib/transport-display";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
 /**
  * Right-hand status rail for a chat thread. Surfaces, top to bottom:
@@ -74,6 +81,7 @@ function runtimeKindLabel(kind: string | null | undefined): string {
 
 export function ChatStatusRail({
   workspaceSlug,
+  workspaceKey,
   threadId,
   agentId,
   context,
@@ -82,6 +90,11 @@ export function ChatStatusRail({
   onDeleted,
 }: {
   workspaceSlug: string;
+  /**
+   * Workspace issue-id prefix (e.g. `AXI`), used to format linked-work ids.
+   * Optional — falls back to the workspace context when omitted.
+   */
+  workspaceKey?: string;
   threadId: string | null;
   agentId: string | null;
   /** Context-policy fields for the Context card (full variant only). */
@@ -91,6 +104,8 @@ export function ChatStatusRail({
   onDeleted?: () => void;
 }) {
   const utils = trpc.useUtils();
+  const ws = useMaybeWorkspace();
+  const issuePrefix = workspaceKey ?? ws?.key ?? "";
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const { data: diagnostics } = trpc.chat.threadDiagnostics.useQuery(
@@ -104,6 +119,34 @@ export function ChatStatusRail({
   const { data: readiness } = trpc.chat.chatReadiness.useQuery(
     { agentId: agentId ?? "", threadId: threadId ?? undefined },
     { enabled: Boolean(agentId), staleTime: 30_000 },
+  );
+  // Human participant — the current operator owns the thread (chat.threads is
+  // scoped to userId), so "me" is the human side of every conversation here.
+  const { data: me } = trpc.user.me.useQuery(undefined, { staleTime: 60_000 });
+  // Linked work is derived honestly from the thread's message contextSnapshots:
+  // the most-recent message that carried an `issueId` is the thread's current
+  // issue context. We do NOT invent issues — no snapshot id ⇒ no card.
+  const { data: thread } = trpc.chat.getThread.useQuery(
+    { threadId: threadId ?? "" },
+    { enabled: Boolean(threadId), staleTime: 15_000 },
+  );
+  const linkedIssueId = useMemo(() => {
+    // `getThread` selects `contextSnapshot` at runtime, but the shared message
+    // type narrows it away — read it through an indexed cast rather than
+    // widening the server type (which the threads-list path doesn't select).
+    const messages = (thread?.messages ?? []) as Array<{
+      contextSnapshot?: { issueId?: unknown } | null;
+    }>;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const snapshot = messages[i]?.contextSnapshot ?? null;
+      const id = snapshot && typeof snapshot.issueId === "string" ? snapshot.issueId : null;
+      if (id) return id;
+    }
+    return null;
+  }, [thread?.messages]);
+  const { data: linkedIssue } = trpc.issue.byId.useQuery(
+    { id: linkedIssueId ?? "" },
+    { enabled: Boolean(linkedIssueId), staleTime: 30_000 },
   );
 
   const invalidate = async () => {
@@ -205,7 +248,98 @@ export function ChatStatusRail({
         compactLayout ? "p-3" : "p-4",
       )}
     >
+      {/* Members — the agent + the human operator who owns this thread. Both
+          identities are known from thread/workspace context; nothing fabricated. */}
       <div>
+        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Users className="h-3.5 w-3.5 text-muted-foreground" /> Members
+        </div>
+        <ul className="mt-2 flex flex-col gap-0.5">
+          {agent && (
+            <li className="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-subtle/60">
+              <AgentPresenceDot
+                status={agent.status}
+                size="md"
+                availability={presenceAvailability(agent)}
+                lastHeartbeatAt={agent.lastHeartbeatAt}
+              />
+              <Link
+                href={`/w/${workspaceSlug}/agents/${agent.profileKey}`}
+                className="text-id truncate font-mono text-foreground/90 hover:text-foreground"
+              >
+                @{agent.profileKey}
+              </Link>
+              <span className="ml-auto rounded border border-ember/30 bg-ember/10 px-1 py-0 text-[0.625rem] uppercase tracking-wider text-ember">
+                {(agent.role ?? "agent").toLowerCase()}
+              </span>
+            </li>
+          )}
+          {me && (
+            <li className="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-subtle/60">
+              {me.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={me.image}
+                  alt=""
+                  className="h-4 w-4 shrink-0 rounded-full object-cover"
+                />
+              ) : (
+                <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-subtle text-[0.625rem] text-muted-foreground">
+                  {(me.name ?? me.email ?? "?").slice(0, 1).toUpperCase()}
+                </span>
+              )}
+              <span className="truncate text-sm text-foreground">
+                {me.name ?? me.email ?? "You"}
+              </span>
+              <span className="ml-auto text-meta text-muted-foreground">you</span>
+            </li>
+          )}
+        </ul>
+      </div>
+
+      {/* Linked work — derived from the thread's message contextSnapshots. Only
+          rendered when a snapshot actually carried an issue id; otherwise a quiet
+          empty state. No invented issues. */}
+      <div>
+        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <LinkIcon className="h-3.5 w-3.5 text-muted-foreground" /> Linked work
+        </div>
+        {linkedIssue ? (
+          // Not a single wrapping anchor — ProjectChip renders its own link, so
+          // the card is a div and the issue id carries the issue link (no
+          // nested <a>, which is invalid HTML).
+          <div className="mt-2 rounded-md border border-border bg-card/40 p-2 transition-colors hover:border-border">
+            <div className="flex items-center gap-1.5 text-meta text-muted-foreground">
+              <StatusDot status={linkedIssue.status} />
+              <Link
+                href={`/w/${workspaceSlug}/issues/${linkedIssue.id}`}
+                className="text-id font-mono text-foreground/90 hover:text-foreground"
+              >
+                {formatIssueId(issuePrefix, linkedIssue.number)}
+              </Link>
+              {linkedIssue.project && (
+                <ProjectChip
+                  project={linkedIssue.project}
+                  slug={workspaceSlug}
+                  className="ml-auto px-1 py-0.5"
+                />
+              )}
+            </div>
+            <Link
+              href={`/w/${workspaceSlug}/issues/${linkedIssue.id}`}
+              className="mt-1 line-clamp-2 block text-sm text-foreground hover:text-ember"
+            >
+              {linkedIssue.title}
+            </Link>
+          </div>
+        ) : (
+          <p className="mt-2 rounded-md border border-dashed border-border/60 bg-background/40 px-2 py-1.5 text-meta text-muted-foreground">
+            No linked work for this conversation.
+          </p>
+        )}
+      </div>
+
+      <div className="border-t border-border/60 pt-3">
         <div className="text-sm font-semibold text-foreground">Status</div>
         <p className="mt-1 text-meta text-muted-foreground">
           Connection and operational state for this conversation.
