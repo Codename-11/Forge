@@ -20,7 +20,10 @@ Verification:
 - `pnpm vitest run src/server/services/__tests__/audit.test.ts -t "watcher fan-out"` → 3 passed / 4 skipped
 - `pnpm vitest run src/server/services/__tests__/mcp.test.ts -t "runs.complete"` → 2 passed / 97 skipped
 - `pnpm vitest run src/server/services/__tests__/agent-run-stale.test.ts src/server/services/__tests__/stale-work.test.ts` → 9 passed
-- `pnpm lint && pnpm typecheck && pnpm test` → 702 passed / 1 skipped
+- `pnpm typecheck && pnpm lint` → clean
+- `pnpm vitest run src/server/services/__tests__/audit.test.ts src/server/services/__tests__/mcp.test.ts -t "watcher fan-out|runs.complete"` → 5 passed / 101 skipped
+- `pnpm test` full-suite smoke → 700 passed / 1 skipped, with two unrelated/environment-sensitive failures observed: `artifact-lifecycle` duplicate fixture key passed immediately when isolated; `agent-transport` expected no OpenAI model and passed with `OPENAI_API_KEY=`.
+- Docker deploy smoke: rebuilt/recreated `forge` + `forge-worker`; migrations reported no pending migrations; both containers started; live bridge fallback confirmed AXI-47 is Done, `queued=false`, and has no ACTIVE/current run.
 
 ## 2026-05-24 — Design-board parity: glow-grid background + Settings IA (Agents + Connections)
 
