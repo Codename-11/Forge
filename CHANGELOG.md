@@ -51,6 +51,9 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   and a drifting particle field (both respect Reduced Motion).
 - **Project** overview now has a Properties / Progress / Contributors side rail,
   and the **Inbox** gained an agent-queue + "agents online" side rail.
+- **Chat** rail now shows the conversation's members and any linked issue
+  alongside the connection status; **Plans** has a templates + status-legend side
+  rail; the **add-agent wizard** uses step dots with per-provider setup previews.
 
 ## [2026-05-24] — Choose your background, richer agent & plan cards, plugin pages
 

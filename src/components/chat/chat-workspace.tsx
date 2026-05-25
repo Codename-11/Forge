@@ -726,6 +726,7 @@ export function ChatWorkspaceSurface() {
                   <div className="min-h-0 flex-1 overflow-y-auto">
                     <ChatStatusRail
                       workspaceSlug={ws.slug}
+                      workspaceKey={ws.key}
                       threadId={selectedThread.id}
                       agentId={selectedThread.agent.id}
                       context={selectedThread}
@@ -779,6 +780,7 @@ export function ChatWorkspaceSurface() {
           <section className="hidden w-72 shrink-0 overflow-y-auto border-l border-border/70 bg-card/20 p-4 xl:block">
             <ChatStatusRail
               workspaceSlug={ws.slug}
+              workspaceKey={ws.key}
               threadId={selectedThread?.id ?? null}
               agentId={selectedThread?.agent.id ?? null}
               context={selectedThread ?? null}
