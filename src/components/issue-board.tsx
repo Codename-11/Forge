@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { presenceAvailability } from "@/lib/transport-display";
 import { AgentHoverPreview } from "@/components/agent-hover-preview";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import type { SavedViewFilters } from "@/lib/saved-view-filters";
@@ -134,6 +135,7 @@ export function IssueBoard({
                           <AgentPresenceDot
                             status={i.assignedAgent.status}
                             size="sm"
+                            availability={presenceAvailability(i.assignedAgent)}
                           />
                           <span className="text-id">
                             @{i.assignedAgent.profileKey}

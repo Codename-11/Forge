@@ -448,6 +448,10 @@ export const agentRouter = router({
           capabilities: true,
           lastHeartbeatAt: true,
           maxConcurrent: true,
+          // Presence inputs so the hover card reads on-demand agents correctly.
+          runtimeMode: true,
+          runtimeId: true,
+          webhookUrl: true,
         },
       });
       if (!agent) throw new TRPCError({ code: "NOT_FOUND" });

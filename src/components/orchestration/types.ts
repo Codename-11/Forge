@@ -11,6 +11,8 @@
  * adds a field, add it here as optional and the components pick it up.
  */
 
+import type { AvailabilityModel } from "@/lib/transport-display";
+
 export type StepStatus =
   | "TODO"
   | "READY"
@@ -34,6 +36,8 @@ export type DagAgent = {
   profileKey: string;
   status?: "ONLINE" | "BUSY" | "OFFLINE";
   avatar?: string | null;
+  /** Availability model so on-demand agents read "on-demand", not "offline". */
+  availability?: AvailabilityModel;
 };
 
 export type DagStep = {

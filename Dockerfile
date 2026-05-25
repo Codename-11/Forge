@@ -33,6 +33,13 @@ FROM base AS worker
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+# Build identity — same stamp as the runner stage so the worker can report
+# which commit it's running (and so a blank stamp isn't mistaken for a stale
+# build). Passed at `docker compose build`; blank in a bare `docker build`.
+ARG GIT_SHA=""
+ARG BUILD_TIME=""
+ENV FORGE_GIT_SHA=$GIT_SHA
+ENV FORGE_BUILD_TIME=$BUILD_TIME
 COPY --from=build /app ./
 CMD ["pnpm", "worker"]
 

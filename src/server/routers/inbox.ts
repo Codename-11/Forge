@@ -262,6 +262,12 @@ export const inboxRouter = router({
               profileKey: true,
               avatar: true,
               status: true,
+              // On-demand availability signals (assignee chips).
+              provider: true,
+              runtimeMode: true,
+              lastHeartbeatAt: true,
+              webhookUrl: true,
+              runtimeId: true,
             },
           },
         },

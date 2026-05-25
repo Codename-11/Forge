@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { presenceAvailability } from "@/lib/transport-display";
 import { HoverPreviewPortal } from "@/components/ui/hover-preview-portal";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -197,6 +198,7 @@ function IssueHoverCard({
               <AgentPresenceDot
                 status={data.assignedAgent.status}
                 size="sm"
+                availability={presenceAvailability(data.assignedAgent)}
               />
               <Bot className="h-3 w-3" />
               <span className="font-mono text-[0.6875rem]">

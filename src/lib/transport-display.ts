@@ -83,6 +83,35 @@ export function agentAvailabilityModel(input: {
   return "heartbeat";
 }
 
+/**
+ * Cheap, client-safe availability derivation from an agent's **base columns**
+ * (no transport resolve needed) — for the many presence surfaces (rosters,
+ * pickers, mentions, sidebars) that shouldn't pay for a full readiness query
+ * per agent. Mirrors `agentAvailabilityModel` but infers "has a chat path"
+ * from runtime/webhook presence instead of a resolved transport:
+ *   - EPHEMERAL → session
+ *   - Hermes or has-ever-heartbeat → heartbeat (online/offline is meaningful)
+ *   - has a runtime or webhook (non-Hermes) → on-demand (reached when sent)
+ *   - otherwise → heartbeat (unconfigured; show its raw status)
+ */
+export function presenceAvailability(input: {
+  provider?: string | null;
+  runtimeMode?: string | null;
+  lastHeartbeatAt?: Date | string | null;
+  webhookUrl?: string | null;
+  runtimeId?: string | null;
+  // Accepted-but-ignored identity fields so any agent-like object (even a
+  // minimal `{ status }` picker row) is assignable here without a TS2559
+  // "no properties in common" error — the function only reads the fields above.
+  id?: string;
+  status?: string | null;
+}): AvailabilityModel {
+  if (input.runtimeMode === "EPHEMERAL") return "session";
+  if (input.provider === "HERMES" || input.lastHeartbeatAt) return "heartbeat";
+  if (input.runtimeId || input.webhookUrl) return "on-demand";
+  return "heartbeat";
+}
+
 /** One-word qualifier for compact surfaces (roster rows, etc.). */
 export function transportModeWord(mode: TransportMode): string {
   switch (mode) {

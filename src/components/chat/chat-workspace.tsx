@@ -29,6 +29,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { ChatStatusRail } from "@/components/chat/chat-status-rail";
+import { presenceAvailability } from "@/lib/transport-display";
 
 type AgentLite = {
   id: string;
@@ -39,6 +40,9 @@ type AgentLite = {
   role?: string | null;
   runtimeMode?: string | null;
   lastHeartbeatAt?: Date | string | null;
+  provider?: string | null;
+  webhookUrl?: string | null;
+  runtimeId?: string | null;
 };
 
 function relativeTime(input: Date | string | null | undefined): string {
@@ -81,6 +85,11 @@ function statusMeta(input: {
   }
   if (input.agent.status === "BUSY") return { label: "busy", tone: "ember" as const };
   if (input.agent.status === "ONLINE") return { label: "online", tone: "green" as const };
+  // On-demand agents (managed app server / completions / dispatch) aren't
+  // heartbeat-tracked, so "offline" is misleading — they connect when sent.
+  if (presenceAvailability(input.agent) === "on-demand") {
+    return { label: "on-demand", tone: "sky" as const };
+  }
   return { label: "offline", tone: "muted" as const };
 }
 
@@ -548,7 +557,9 @@ export function ChatWorkspaceSurface() {
                                       ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                                       : meta.tone === "ember"
                                         ? "bg-ember/15 text-ember"
-                                        : "bg-subtle text-muted-foreground",
+                                        : meta.tone === "sky"
+                                          ? "bg-sky-500/10 text-sky-600 dark:text-sky-400"
+                                          : "bg-subtle text-muted-foreground",
                                   )}
                                 >
                                   {meta.label}

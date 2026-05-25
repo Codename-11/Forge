@@ -623,9 +623,12 @@ model Workspace {
   /// When true, assigning (manually or auto) immediately pushes the agent
   /// webhook to start work; when false, the issue sits in the agent queue.
   autoStartOnAssign             Boolean          @default(false)
-  /// If a claimed issue sees no activity (comments/transitions) within this
-  /// window, it is auto-released back to the pool. 0 = disabled.
-  agentIdleTimeoutMinutes       Int              @default(0)
+  /// Heartbeat idle timeout: a heartbeat-tracked agent (Hermes, local daemon,
+  /// or a health-probed app server) flips to OFFLINE once its last heartbeat
+  /// is older than this window (see `sweepIdleAgents`). 0 = disabled (the
+  /// agent never auto-offlines). Default 15 so true presence works out of the
+  /// box — well above the 60s heartbeat/probe cadence.
+  agentIdleTimeoutMinutes       Int              @default(15)
   /// Gated dispatch — assignment lands in queue but agent does not start
   /// work until a human approves.
   requireApprovalBeforeStart    Boolean          @default(false)

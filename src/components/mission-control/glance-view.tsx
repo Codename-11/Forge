@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Bot, ChevronUp, GripHorizontal, ChevronDown, ExternalLink } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { presenceAvailability } from "@/lib/transport-display";
 import { STALE_RUN_MS } from "@/lib/agent-stale";
 
 /**
@@ -147,19 +148,22 @@ export function GlanceView({
           const atCap = cap > 0 && load >= cap;
           const isOnline = a.status === "ONLINE";
           const isBusy = a.status === "BUSY";
+          const availability = presenceAvailability(a);
           const heartbeatLabel =
-            isOnline || isBusy
-              ? `seen ${relativeTime(a.lastHeartbeatAt)}`
-              : a.lastHeartbeatAt
-                ? `offline · last ${relativeTime(a.lastHeartbeatAt)}`
-                : "never seen";
+            availability === "on-demand"
+              ? "on-demand · connects on send"
+              : isOnline || isBusy
+                ? `seen ${relativeTime(a.lastHeartbeatAt)}`
+                : a.lastHeartbeatAt
+                  ? `offline · last ${relativeTime(a.lastHeartbeatAt)}`
+                  : "never seen";
           return (
             <Link
               key={a.id}
               href={`/w/${slug}/agents/${a.profileKey}`}
               className="group flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem] hover:border-ember/40"
             >
-              <PresenceDot status={a.status} />
+              <PresenceDot status={a.status} availability={availability} />
               <Bot className="h-3.5 w-3.5 shrink-0 text-ember" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-1.5">
@@ -246,7 +250,15 @@ export function GlanceView({
  * the radial ping (so a busy agent reads as "occupied, not idle"),
  * OFFLINE is a flat dim disc.
  */
-function PresenceDot({ status }: { status: string }) {
+function PresenceDot({ status, availability }: { status: string; availability?: string }) {
+  if (availability === "on-demand") {
+    return (
+      <span
+        className="h-2 w-2 shrink-0 rounded-full bg-sky-500"
+        title="on-demand — connects when work is sent"
+      />
+    );
+  }
   if (status === "ONLINE") {
     return (
       <span className="relative flex h-2 w-2 shrink-0">

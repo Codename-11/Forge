@@ -4,6 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { presenceAvailability } from "@/lib/transport-display";
 import { relativeTime, cn } from "@/lib/utils";
 
 /**
@@ -22,6 +23,12 @@ type PanelAgent = {
   profileKey: string;
   avatar: string | null;
   status: AgentStatus;
+  // On-demand availability signals (optional — present on enriched queries).
+  provider?: string | null;
+  runtimeMode?: string | null;
+  lastHeartbeatAt?: Date | string | null;
+  webhookUrl?: string | null;
+  runtimeId?: string | null;
 };
 
 export function IssueAgentPanel({
@@ -64,7 +71,11 @@ export function IssueAgentPanel({
         <span className="relative inline-flex shrink-0">
           <AgentAvatar agent={agent} size="sm" shape="circle" active={active} />
           <span className="absolute -bottom-0.5 -right-0.5">
-            <AgentPresenceDot status={agent.status} size="sm" />
+            <AgentPresenceDot
+              status={agent.status}
+              size="sm"
+              availability={presenceAvailability(agent)}
+            />
           </span>
         </span>
         <div className="min-w-0 flex-1">

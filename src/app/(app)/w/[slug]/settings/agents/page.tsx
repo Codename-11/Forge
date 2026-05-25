@@ -20,6 +20,7 @@ import { Topbar } from "@/components/topbar";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { TransportChip } from "@/components/agents/transport-chip";
 import { FleetChecklist } from "@/components/agents/fleet-checklist";
+import { presenceAvailability } from "@/lib/transport-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,8 +39,9 @@ import { relativeTime } from "@/lib/utils";
 /**
  * Workspace-scoped agent registry.
  *
- * Agents are MCP-first actors that may be persistent webhook receivers
- * (Hermes/custom bridges) or single-session MCP clients (Claude/Codex today).
+ * Agents are MCP-first actors that may be persistent (Hermes/custom bridges,
+ * or Codex via its managed app-server runtime) or single-session MCP clients
+ * (Claude, Codex CLI).
  * This admin surface registers the row, optionally issues a linked MCP key,
  * and keeps push webhooks optional instead of implied.
  */
@@ -63,6 +65,17 @@ type AgentProviderId = "HERMES" | "CLAUDE" | "CODEX" | "CUSTOM";
 type RuntimeMode = "PERSISTENT" | "EPHEMERAL";
 type ConnectionMode = "mcp" | "webhook";
 type KeyPreset = "agent" | "read" | "full";
+
+// Managed runtime adapters that host a persistent, self-chatting agent (chats
+// as itself, like Hermes) — these support PERSISTENT mode for Claude/Codex,
+// unlike thin MCP/CLI sessions. Mirrors `managed && transport: "app-server"`
+// in src/server/runtimes/adapters.ts. Keep in sync if a new managed runs
+// runtime ships. (The page can't import the server-only manifest directly.)
+const MANAGED_PERSISTENT_ADAPTER_KEYS = new Set([
+  "codex-app-server",
+  "local-daemon",
+  "hermes",
+]);
 
 type EditingState = {
   id?: string;
@@ -349,11 +362,21 @@ export default function AgentsPage() {
     if (e.connectionMode === "webhook" && !e.webhookUrl.trim()) {
       return "Webhook URL is required for push delivery. Choose MCP-only if this agent pulls work.";
     }
+    // Persistent presence requires a managed runtime that actually hosts the
+    // agent (so presence resolves to "on-demand" rather than a misleading
+    // "offline"). Claude/Codex have no native always-on transport, so they
+    // need one attached — the Codex app server, or the Forge local daemon.
+    // (Hermes/Custom carry their own delivery path, so they're unrestricted.)
+    // The server has no gate — this is UX guidance, enforced at Review once
+    // the runtime attachment is known.
     if (
-      (e.provider === "CLAUDE" || e.provider === "CODEX") &&
-      e.runtimeMode === "PERSISTENT"
+      e.runtimeMode === "PERSISTENT" &&
+      (e.provider === "CLAUDE" || e.provider === "CODEX")
     ) {
-      return "Persistent Claude and Codex agents are on the roadmap. Use single-session mode for now.";
+      const rt = (runtimes ?? []).find((r) => r.id === e.runtimeId);
+      if (!rt || !MANAGED_PERSISTENT_ADAPTER_KEYS.has(rt.adapterKey ?? "")) {
+        return "Persistent mode needs a managed runtime attached (Connection step) — the Codex app server or the Forge local daemon. Attach one, or use single-session mode.";
+      }
     }
     if (!Number.isFinite(e.maxConcurrent) || e.maxConcurrent < 0)
       return "Max concurrent must be >= 0.";
@@ -605,8 +628,13 @@ export default function AgentsPage() {
                               size="sm"
                               pulse
                               lastHeartbeatAt={a.lastHeartbeatAt}
+                              availability={presenceAvailability(a)}
                             />
-                            <span className="text-muted-foreground">{a.status.toLowerCase()}</span>
+                            <span className="text-muted-foreground">
+                              {presenceAvailability(a) === "on-demand"
+                                ? "on-demand"
+                                : a.status.toLowerCase()}
+                            </span>
                           </span>
                           <span className="text-meta text-muted-foreground/70">·</span>
                           <span className="text-meta text-muted-foreground tabular-nums">
@@ -932,7 +960,9 @@ export default function AgentsPage() {
             <div className="text-[0.6875rem] text-muted-foreground">
               {editing?.provider === "HERMES"
                 ? "Hermes supports persistent webhook dispatch plus MCP callbacks."
-                : "Claude and Codex use single-session MCP today; persistent runners are tracked as roadmap."}
+                : editing?.provider === "CODEX"
+                  ? "Codex runs single-session over MCP, or persistent via the Codex app server / local daemon."
+                  : "Claude runs single-session over MCP, or persistent via the Forge local daemon."}
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -1040,10 +1070,9 @@ export default function AgentsPage() {
                       title="Persistent runtime"
                       hint={
                         editing.provider === "CLAUDE" || editing.provider === "CODEX"
-                          ? "Roadmap for Claude and Codex. Use single-session until a daemon bridge exists."
+                          ? "Attach a managed runtime (Connection step) — the Codex app server or the Forge local daemon — so the agent is reachable on demand."
                           : "Best for Hermes or a custom always-on bridge that can receive webhooks."
                       }
-                      disabled={editing.provider === "CLAUDE" || editing.provider === "CODEX"}
                       onClick={() => setEditing({ ...editing, runtimeMode: "PERSISTENT" })}
                     />
                   </div>
