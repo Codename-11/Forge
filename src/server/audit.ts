@@ -32,6 +32,14 @@ export function agentDispatchUrlFor(agentId: string): string {
   return `${AGENT_DISPATCH_WEBHOOK_URL_PREFIX}${agentId}`;
 }
 
+const AGENT_WATCHER_FANOUT_EVENT_KINDS = new Set<EventKind>([
+  EventKind.COMMENT_CREATED,
+  EventKind.ISSUE_PRIORITY_CHANGED,
+  EventKind.ISSUE_STALLED,
+  EventKind.ISSUE_SLA_BREACH,
+  EventKind.ISSUE_NUDGED,
+]);
+
 /**
  * Hydrate the small `issueSnapshot` blob we attach to every AGENT_ASSIGNED
  * event payload — see `recordChange` for the wiring. Kept narrow on purpose:
@@ -164,6 +172,9 @@ async function upsertAgentDispatchWebhook(
         EventKind.ISSUE_QUEUED,
         EventKind.COMMENT_CREATED,
         EventKind.ISSUE_PRIORITY_CHANGED,
+        EventKind.ISSUE_STALLED,
+        EventKind.ISSUE_SLA_BREACH,
+        EventKind.ISSUE_NUDGED,
         EventKind.CHAT_MESSAGE_POSTED,
         EventKind.AGENT_RUN_BLOCKED,
       ],
@@ -651,12 +662,18 @@ export async function recordChange(
     }
   }
 
-  // (e) Watchers — for any issue-subject event, fan out to every
+  // (e) Watchers — for actionable issue-subject events, fan out to every
   //     subscribed agent watcher whose webhook is configured. Skip
   //     the actor's own row to avoid self-paging. Human watchers
   //     don't need a synthetic webhook — they're served by the
   //     inbox / notification surfaces. Agent watchers are routed
-  //     through the same per-agent shim used for comment @-mentions.
+  //     through the same per-agent shim used for comment @mentions.
+  //
+  //     Deliberately exclude low-signal lifecycle/status churn from the
+  //     durable agent inbox. A watched issue transitioning status or a
+  //     rolling STATUS comment update may be useful UI timeline context,
+  //     but it is not new work for the agent; opening/touching an
+  //     AgentRun here makes completed/no-op turns age into "stalled".
   //
   //     ISSUE_WATCHED / ISSUE_UNWATCHED would create a self-feedback
   //     loop, so they're explicitly excluded if added later. (Today
@@ -665,11 +682,22 @@ export async function recordChange(
   // A body edit (COMMENT_UPDATED with `edited: true`) deliberately does
   // NOT fan out to all watchers — that would re-page every stakeholder
   // on a typo fix. Edits route ONLY through branch (c)'s mention DIFF,
-  // so just the agents newly @-mentioned by the edit are triggered.
+  // so just the agents newly @mentioned by the edit are triggered.
+  const watcherPayload = params.payload as
+    | { edited?: boolean; kind?: string; agentId?: string }
+    | undefined;
   const isCommentEdit =
-    params.eventKind === EventKind.COMMENT_UPDATED &&
-    (params.payload as { edited?: boolean } | undefined)?.edited === true;
-  if (params.subjectType === "issue" && !isCommentEdit) {
+    params.eventKind === EventKind.COMMENT_UPDATED && watcherPayload?.edited === true;
+  const isRollingStatusComment =
+    (params.eventKind === EventKind.COMMENT_CREATED ||
+      params.eventKind === EventKind.COMMENT_UPDATED) &&
+    watcherPayload?.kind === "STATUS";
+  const isAgentWatcherFanoutEvent =
+    params.subjectType === "issue" &&
+    AGENT_WATCHER_FANOUT_EVENT_KINDS.has(params.eventKind) &&
+    !isCommentEdit &&
+    !isRollingStatusComment;
+  if (isAgentWatcherFanoutEvent) {
     const watchers = await tx.issueWatcher.findMany({
       where: {
         workspaceId: params.workspaceId,

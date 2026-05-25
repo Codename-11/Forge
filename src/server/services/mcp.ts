@@ -24,7 +24,12 @@ import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
-import { openOrTouchRun, appendRunEvent, finishRunsForIssue } from "@/server/services/agent-run";
+import {
+  openOrTouchRun,
+  appendRunEvent,
+  finishRun,
+  finishRunsForIssue,
+} from "@/server/services/agent-run";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { buildChatContextBundle } from "@/server/services/chat-context";
@@ -4816,9 +4821,12 @@ export const mcpTools = {
    *   - `followUps`         — array of follow-up items the operator can
    *                            triage later
    *
-   * The tool only sets the AgentRun fields; lifecycle transitions
-   * (status COMPLETED, finishedAt) stay with the existing run.complete
-   * path so the audit trail and webhook fan-out remain unchanged.
+   * `runs.complete` is the agent-owned lifecycle close for issue runs:
+   * it stores the completion contract fields, marks the AgentRun
+   * COMPLETED with `finishedAt`, and emits the standard
+   * AGENT_RUN_COMPLETED audit/activity event via `finishRun()`. The
+   * issue itself is not transitioned; an agent can finish its response
+   * on an issue that should remain open for the human/operator.
    */
   "runs.complete": {
     scopes: ["WRITE_ISSUES"] as const,
@@ -4898,16 +4906,36 @@ export const mcpTools = {
       if (input.followUps !== undefined) {
         data.followUps = input.followUps as Prisma.InputJsonValue;
       }
-      return db.agentRun.update({
-        where: { id: run.id },
-        data,
-        select: {
-          id: true,
-          summary: true,
-          producedArtifactIds: true,
-          verificationResult: true,
-          followUps: true,
-        },
+      return db.$transaction(async (tx) => {
+        await tx.agentRun.update({
+          where: { id: run.id },
+          data,
+        });
+
+        // Close the lifecycle row through the shared service so the
+        // active-run strip/inbox stop treating a completed no-op response
+        // as idle work, while preserving audit + ActivityEvent fan-out.
+        await finishRun(tx, {
+          runId: run.id,
+          workspaceId: ctx.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          status: "COMPLETED",
+          summary: input.summary,
+          actorId: ctx.userId,
+        });
+        return tx.agentRun.findUniqueOrThrow({
+          where: { id: run.id },
+          select: {
+            id: true,
+            status: true,
+            finishedAt: true,
+            summary: true,
+            producedArtifactIds: true,
+            verificationResult: true,
+            followUps: true,
+          },
+        });
       });
     },
   },
