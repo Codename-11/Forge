@@ -17,11 +17,11 @@ STATUS comment updates do not create/touch canonical agent work; BODY comments,
 stalls, SLA breaches, nudges, and priority changes still page watchers.
 
 Verification:
-- `pnpm vitest run src/server/services/__tests__/audit.test.ts src/server/services/__tests__/mcp.test.ts -t "watcher fan-out|runs.complete"` → 5 passed / 101 skipped
-- `pnpm vitest run src/server/services/__tests__/mcp.test.ts src/server/services/__tests__/agent-run-stale.test.ts src/server/services/__tests__/agent-dispatch-inbox.test.ts` → 113 passed
-- `pnpm typecheck`
-- `pnpm lint`
-- `pnpm test` → 702 passed / 1 skipped
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts` → 99 passed
+- `pnpm vitest run src/server/services/__tests__/audit.test.ts --reporter=verbose` → 7 passed
+- `pnpm vitest run src/server/services/__tests__/audit.test.ts src/server/services/__tests__/mcp.test.ts --no-cache --reporter=verbose` → 106 passed
+- `pnpm vitest run --no-cache` → 702 passed / 1 skipped
+- `pnpm typecheck && pnpm lint`
 
 ## 2026-05-24 — Design-board parity: glow-grid background + Settings IA (Agents + Connections)
 
