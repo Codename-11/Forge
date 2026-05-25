@@ -8,13 +8,13 @@ import { Topbar } from "@/components/topbar";
 import { Card } from "@/components/settings/card";
 import { Button } from "@/components/ui/button";
 import {
+  INBOUND,
+  OUTBOUND,
+  type ConnectionRow,
+} from "@/lib/connections-registry";
+import {
   Sparkles,
   ArrowRight,
-  GitBranch,
-  MessageSquare,
-  Inbox as InboxIcon,
-  AlertTriangle,
-  PlugZap,
   Mail,
   KeyRound,
   Copy,
@@ -34,86 +34,6 @@ import {
  * (`/api/ingest/email`); the remaining cards describe the contract and
  * read as "available" until their upstream wiring ships.
  */
-
-type ConnectionRow = {
-  key: string;
-  title: string;
-  blurb: string;
-  icon: typeof GitBranch;
-  transport: string;
-  status: "connected" | "available" | "needs auth";
-  scope?: string | null;
-  beta?: boolean;
-};
-
-const INBOUND: ConnectionRow[] = [
-  {
-    key: "github",
-    title: "GitHub",
-    blurb: "Two-way sync: issues, PR status, mentions.",
-    icon: GitBranch,
-    transport: "OAuth",
-    status: "available",
-    scope: null,
-  },
-  {
-    key: "slack-cmd",
-    title: "Slack commands",
-    blurb: "Slash-commands and mentions from a Slack workspace.",
-    icon: MessageSquare,
-    transport: "OAuth",
-    status: "available",
-    scope: null,
-  },
-  {
-    key: "linear-import",
-    title: "Linear import",
-    blurb: "One-shot import from a Linear workspace.",
-    icon: InboxIcon,
-    transport: "API key",
-    status: "available",
-    scope: null,
-  },
-];
-
-const OUTBOUND: ConnectionRow[] = [
-  {
-    key: "slack-notif",
-    title: "Slack notifications",
-    blurb: "Mirror inbox to a channel. One-way write.",
-    icon: MessageSquare,
-    transport: "OAuth",
-    status: "available",
-    scope: null,
-  },
-  {
-    key: "discord",
-    title: "Discord webhook",
-    blurb: "Post issue events to a Discord channel.",
-    icon: MessageSquare,
-    transport: "Webhook URL",
-    status: "available",
-    scope: null,
-  },
-  {
-    key: "pagerduty",
-    title: "PagerDuty",
-    blurb: "Route URGENT issues to a PagerDuty service.",
-    icon: AlertTriangle,
-    transport: "Service key",
-    status: "available",
-    scope: null,
-  },
-  {
-    key: "custom-webhook",
-    title: "Custom webhook",
-    blurb: "Any HTTPS endpoint. Signed payloads, retries built-in.",
-    icon: PlugZap,
-    transport: "Webhook URL",
-    status: "available",
-    scope: null,
-  },
-];
 
 const EVENTS = [
   "issue.created",
@@ -247,6 +167,7 @@ function ConnectionCard({
   c: ConnectionRow;
   direction: "in" | "out";
 }) {
+  const ws = useWorkspace();
   const Icon = c.icon;
   return (
     <li className="flex items-start gap-3 rounded-lg border border-border bg-card/40 p-3 hover:border-ember/40">
@@ -291,14 +212,12 @@ function ConnectionCard({
       </div>
       <div className="flex flex-col items-end gap-1">
         <StatusBadge status={c.status} />
-        <button
-          type="button"
-          disabled
-          title="Upstream wiring lands in a future run."
-          className="inline-flex h-6 cursor-default items-center rounded-md px-2 text-meta text-muted-foreground/60"
+        <Link
+          href={`/w/${ws.slug}/settings/connections/${c.key}`}
+          className="inline-flex h-6 items-center rounded-md px-2 text-meta text-muted-foreground hover:text-foreground"
         >
           {c.status === "available" ? "Connect →" : "Configure →"}
-        </button>
+        </Link>
       </div>
     </li>
   );

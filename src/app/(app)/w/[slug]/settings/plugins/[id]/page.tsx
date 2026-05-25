@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { notFound, useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import {
   Webhook,
   Zap,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,14 @@ const statusTone: Record<string, string> = {
   SUSPENDED: "#d97706",
   REVOKED: "#be185d",
 };
+
+type TabId = "overview" | "permissions" | "configuration" | "activity";
+const TABS: { id: TabId; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "permissions", label: "Permissions" },
+  { id: "configuration", label: "Configuration" },
+  { id: "activity", label: "Activity" },
+];
 
 /**
  * Generic, manifest-driven plugin detail. Renders whatever scopes,
@@ -55,6 +64,29 @@ export default function PluginDetailPage() {
   );
 
   const [removeOpen, setRemoveOpen] = useState(false);
+  const [tab, setTab] = useState<TabId>("overview");
+
+  // 1 / 2 / 3 / 4 switch tabs — mirrors the issue-detail rail pattern.
+  // Bail out while typing or with modifier keys held.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable
+      )
+        return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const idx = ["1", "2", "3", "4"].indexOf(e.key);
+      if (idx >= 0) {
+        e.preventDefault();
+        setTab(TABS[idx].id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const approve = trpc.plugin.approve.useMutation({
     onSuccess: () => {
@@ -231,6 +263,60 @@ export default function PluginDetailPage() {
                 </div>
               </Card>
 
+              {/* Tab strip — underline-active, ember underline. Mirrors the
+                  issue-detail rail. Keys 1/2/3/4 switch tabs. The design's
+                  "vX wants new permissions" version-bump banner is intentionally
+                  omitted: it needs a plugin-upgrade model (pending version +
+                  requestedScopes) that the Plugin row doesn't expose today.
+                  Wire it in here once such a field lands. */}
+              <div
+                role="tablist"
+                aria-label="Plugin detail sections"
+                className="flex items-center gap-1 border-b border-border text-xs"
+              >
+                {TABS.map((t) => {
+                  const selected = tab === t.id;
+                  const count =
+                    t.id === "permissions"
+                      ? plugin.scopes.length
+                      : t.id === "activity"
+                        ? plugin.webhooks.length
+                        : undefined;
+                  return (
+                    <button
+                      key={t.id}
+                      role="tab"
+                      type="button"
+                      aria-selected={selected}
+                      onClick={() => setTab(t.id)}
+                      title={`${t.label} — ${TABS.indexOf(t) + 1}`}
+                      className={cn(
+                        "focus-ring relative h-8 px-3",
+                        selected
+                          ? "text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {t.label}
+                      {typeof count === "number" && (
+                        <span className="ml-1 text-meta tabular-nums">
+                          {count}
+                        </span>
+                      )}
+                      {selected && (
+                        <span
+                          aria-hidden
+                          className="absolute inset-x-2 -bottom-px h-0.5 bg-ember"
+                        />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* ───────────────────────── Overview ───────────────────────── */}
+              {tab === "overview" && (
+                <>
               {/* What this plugin does */}
               <Section
                 title="What this plugin does"
@@ -243,35 +329,6 @@ export default function PluginDetailPage() {
                     <p className="text-muted-foreground">
                       The manifest didn&apos;t include a description.
                     </p>
-                  )}
-                </Card>
-              </Section>
-
-              {/* Approved scopes */}
-              <Section
-                title="Approved scopes"
-                hint="What the plugin can read or write. Tighter is safer — approve the smallest set that does the job."
-              >
-                <Card as="div" className="divide-y-0 p-0">
-                  {plugin.scopes.length === 0 ? (
-                    <div className="px-4 py-6 text-meta text-muted-foreground">
-                      No scopes declared.
-                    </div>
-                  ) : (
-                    <ul className="divide-y divide-border/60">
-                      {plugin.scopes.map((scope) => (
-                        <li
-                          key={scope}
-                          className="flex items-center gap-3 px-4 py-2.5"
-                        >
-                          <Check className="h-3 w-3 shrink-0 text-success" />
-                          <span className="text-id text-foreground">{scope}</span>
-                          <span className="text-meta text-muted-foreground">
-                            {PLUGIN_SCOPE_HELP[scope] ?? "Scoped access."}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
                   )}
                 </Card>
               </Section>
@@ -411,19 +468,60 @@ export default function PluginDetailPage() {
                 </Card>
               </Section>
 
-              {/* Recent activity — honest: per-webhook subscriptions, not
-                  fabricated delivery rows (deliveries aren't loaded here). */}
+                </>
+              )}
+
+              {/* ──────────────────────── Permissions ──────────────────────── */}
+              {tab === "permissions" && (
+                <Section
+                  title="Approved scopes"
+                  hint="What the plugin can read or write. Tighter is safer — approve the smallest set that does the job."
+                >
+                  <Card as="div" className="divide-y-0 p-0">
+                    {plugin.scopes.length === 0 ? (
+                      <div className="px-4 py-6 text-meta text-muted-foreground">
+                        No scopes declared.
+                      </div>
+                    ) : (
+                      <ul className="divide-y divide-border/60">
+                        {plugin.scopes.map((scope) => (
+                          <li
+                            key={scope}
+                            className="flex items-center gap-3 px-4 py-2.5"
+                          >
+                            <Check className="h-3 w-3 shrink-0 text-success" />
+                            <span className="text-id text-foreground">
+                              {scope}
+                            </span>
+                            <span className="text-meta text-muted-foreground">
+                              {PLUGIN_SCOPE_HELP[scope] ?? "Scoped access."}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </Card>
+                </Section>
+              )}
+
+              {/* ─────────────────────── Configuration ─────────────────────── */}
+              {tab === "configuration" && (
+                <>
+              {/* Webhook configuration — honest about what config exists. The
+                  manifest carries no free-form config block today, so we show
+                  the signing-secret rotation + webhook endpoints here, plus a
+                  legacy webhook-url note when present. */}
               <Section
                 title={
                   <span className="flex items-center gap-2">
                     <Webhook className="h-3.5 w-3.5 text-muted-foreground" />
-                    Webhooks &amp; activity
+                    Webhook delivery
                     <span className="font-mono text-meta text-muted-foreground">
                       {plugin.webhooks.length}
                     </span>
                   </span>
                 }
-                hint="Outbound endpoints and the events each one receives. Delivery history isn't loaded on this page."
+                hint="Outbound endpoints the plugin is configured to receive on. The signing secret is rotated from the danger zone below."
               >
                 <Card as="div" className="divide-y-0 p-0">
                   {plugin.webhooks.length === 0 ? (
@@ -458,18 +556,6 @@ export default function PluginDetailPage() {
                               {w.active ? "active" : "paused"}
                             </span>
                           </div>
-                          {w.events.length > 0 && (
-                            <div className="mt-1 flex flex-wrap gap-1.5">
-                              {w.events.map((e) => (
-                                <span
-                                  key={e}
-                                  className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
-                                >
-                                  {e}
-                                </span>
-                              ))}
-                            </div>
-                          )}
                         </li>
                       ))}
                     </ul>
@@ -477,7 +563,8 @@ export default function PluginDetailPage() {
                 </Card>
               </Section>
 
-              {/* Danger zone */}
+              {/* Danger zone — destructive config lives here, matching the
+                  design's danger zone placement. */}
               <Section
                 title={
                   <span className="flex items-center gap-2">
@@ -547,6 +634,77 @@ export default function PluginDetailPage() {
                   </div>
                 </Card>
               </Section>
+                </>
+              )}
+
+              {/* ───────────────────────── Activity ───────────────────────── */}
+              {tab === "activity" && (
+              /* Honest: per-webhook subscriptions, not fabricated delivery
+                 rows (deliveries aren't loaded here). */
+              <Section
+                title={
+                  <span className="flex items-center gap-2">
+                    <Webhook className="h-3.5 w-3.5 text-muted-foreground" />
+                    Webhooks &amp; activity
+                    <span className="font-mono text-meta text-muted-foreground">
+                      {plugin.webhooks.length}
+                    </span>
+                  </span>
+                }
+                hint="Outbound endpoints and the events each one receives. Delivery history isn't loaded on this page."
+              >
+                <Card as="div" className="divide-y-0 p-0">
+                  {plugin.webhooks.length === 0 ? (
+                    <div className="px-4 py-6 text-meta text-muted-foreground">
+                      No webhooks configured.
+                      {plugin.webhookUrl && (
+                        <>
+                          {" "}
+                          Legacy webhook URL on the plugin row:{" "}
+                          <span className="font-mono text-foreground/80">
+                            {plugin.webhookUrl}
+                          </span>
+                          .
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <ul className="divide-y divide-border/60">
+                      {plugin.webhooks.map((w) => (
+                        <li key={w.id} className="px-4 py-2.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-id text-foreground">
+                              {w.url}
+                            </span>
+                            <span
+                              className={
+                                w.active
+                                  ? "rounded-md bg-success/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-success"
+                                  : "rounded-md bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+                              }
+                            >
+                              {w.active ? "active" : "paused"}
+                            </span>
+                          </div>
+                          {w.events.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1.5">
+                              {w.events.map((e) => (
+                                <span
+                                  key={e}
+                                  className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+                                >
+                                  {e}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Card>
+              </Section>
+              )}
             </>
           )}
         </div>
