@@ -129,6 +129,9 @@ type RevealKeyState = {
   scopes: Scope[];
   context: "created" | "rotated";
   provider: McpOnboardingProvider;
+  linkedAgentId?: string | null;
+  createdAt?: Date | string | null;
+  expiresAt?: Date | string | null;
 };
 
 export default function AccessPage() {
@@ -161,6 +164,7 @@ export default function AccessPage() {
 
   // ── Shared reveal / confirm states ────────────────────────────────────────
   const [revealKey, setRevealKey] = useState<RevealKeyState | null>(null);
+  const [savedAck, setSavedAck] = useState(false);
   const [mcpTest, setMcpTest] = useState<{
     state: "idle" | "pending" | "ok" | "error";
     message: string;
@@ -237,6 +241,9 @@ export default function AccessPage() {
         scopes: k.scopes as Scope[],
         context: "created",
         provider,
+        linkedAgentId: k.linkedAgentId,
+        createdAt: k.createdAt,
+        expiresAt: k.expiresAt,
       });
       setCreateOpen(false);
       void refetch();
@@ -276,6 +283,9 @@ export default function AccessPage() {
         scopes: k.scopes as Scope[],
         context: "created",
         provider: "custom",
+        linkedAgentId: k.linkedAgentId,
+        createdAt: k.createdAt,
+        expiresAt: k.expiresAt,
       });
       setPersonalOpen(false);
       void refetch();
@@ -324,6 +334,9 @@ export default function AccessPage() {
         scopes: k.scopes as Scope[],
         context: "created",
         provider: "custom",
+        linkedAgentId: k.linkedAgentId,
+        createdAt: k.createdAt,
+        expiresAt: k.expiresAt,
       });
       setSessionOpen(false);
       void refetch();
@@ -378,6 +391,9 @@ export default function AccessPage() {
         scopes: k.scopes as Scope[],
         context: "rotated",
         provider: "custom",
+        linkedAgentId: k.linkedAgentId,
+        createdAt: k.createdAt,
+        expiresAt: k.expiresAt,
       });
       void refetch();
     },
@@ -999,6 +1015,7 @@ export default function AccessPage() {
           if (!open) {
             setRevealKey(null);
             setMcpTest({ state: "idle", message: "" });
+            setSavedAck(false);
           }
         }}
         size="lg"
@@ -1032,12 +1049,14 @@ export default function AccessPage() {
                 type="button"
                 variant="ember"
                 size="sm"
+                disabled={!savedAck}
                 onClick={() => {
                   setRevealKey(null);
                   setMcpTest({ state: "idle", message: "" });
+                  setSavedAck(false);
                 }}
               >
-                I&apos;ve stored it
+                Done
               </Button>
             </div>
           </div>
@@ -1046,11 +1065,65 @@ export default function AccessPage() {
         {revealKey && (
           <div className="space-y-4">
             <CodeBlock label={`${revealKey.name} raw key`} code={revealKey.rawKey} />
+
+            {/* Recap of what was just issued, so the operator can confirm
+                scope/binding before they store the secret. */}
+            <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 rounded-lg border border-border bg-background/50 p-3 text-xs">
+              <dt className="text-muted-foreground">Name</dt>
+              <dd className="font-medium text-foreground">{revealKey.name}</dd>
+
+              <dt className="text-muted-foreground">Bound to</dt>
+              <dd>
+                {revealKey.linkedAgentId ? (
+                  <span className="font-mono text-foreground">
+                    @
+                    {agents?.find((a) => a.id === revealKey.linkedAgentId)
+                      ?.profileKey ?? "agent"}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">No linked agent</span>
+                )}
+              </dd>
+
+              <dt className="text-muted-foreground">Scopes</dt>
+              <dd className="flex flex-wrap gap-1">
+                {revealKey.scopes.length > 0 ? (
+                  revealKey.scopes.map((s) => <Badge key={s}>{s}</Badge>)
+                ) : (
+                  <span className="text-muted-foreground">none</span>
+                )}
+              </dd>
+
+              <dt className="text-muted-foreground">Expires</dt>
+              <dd className="text-foreground">
+                {revealKey.expiresAt
+                  ? new Date(revealKey.expiresAt).toLocaleString()
+                  : "Never"}
+              </dd>
+
+              <dt className="text-muted-foreground">Created</dt>
+              <dd className="text-foreground">
+                {revealKey.createdAt
+                  ? new Date(revealKey.createdAt).toLocaleString()
+                  : "just now"}
+              </dd>
+            </dl>
+
             <McpIntegrationBlocks
               baseUrl={baseUrl}
               rawKey={revealKey.rawKey}
               preferredProvider={revealKey.provider}
             />
+
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={savedAck}
+                onChange={(e) => setSavedAck(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-border"
+              />
+              I&apos;ve saved the key somewhere secure.
+            </label>
           </div>
         )}
       </CenterModal>

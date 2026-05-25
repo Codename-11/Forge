@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Avatar } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { Badge, Card, EmptyState, Kbd, MOTION, Section, SkeletonList } from "@/components/ui";
 import { Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
@@ -254,6 +255,16 @@ export default function InboxPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  // `m` marks the whole inbox read (re-anchors the unread cutoff to now),
+  // mirroring the bulk bar's mark-read action.
+  useHotkey(
+    "m",
+    () => {
+      if (!markReadM.isPending) markReadM.mutate();
+    },
+    [markReadM],
+  );
+
   // ---- Bulk picker open state --------------------------------------------
   const [reassignPickerOpen, setReassignPickerOpen] = useState(false);
   const selectedArray = useMemo(() => Array.from(selected), [selected]);
@@ -295,6 +306,18 @@ export default function InboxPage() {
         subtitle="Your work — assignments, mentions, stalled, watching."
         actions={
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7"
+              disabled={markReadM.isPending}
+              onClick={() => markReadM.mutate()}
+              title="Mark inbox read"
+            >
+              <CheckCheck className="h-3.5 w-3.5" />
+              Mark read
+              <Kbd className="ml-1">M</Kbd>
+            </Button>
             <div className="flex items-center gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
               <button
                 type="button"

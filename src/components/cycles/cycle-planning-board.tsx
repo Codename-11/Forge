@@ -42,6 +42,9 @@ export function CyclePlanningBoard({
   });
 
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  // Client-side "All projects" filter. Derived from the projects present
+  // on the sprint's own issues (no extra query) — `null` = show all.
+  const [projectFilter, setProjectFilter] = useState<string | null>(null);
 
   const update = trpc.issue.update.useMutation({
     onMutate: async ({ id, statusId }) => {
@@ -76,16 +79,32 @@ export function CyclePlanningBoard({
     onSettled: () => utils.issue.list.invalidate(),
   });
 
+  // Distinct projects on this sprint's issues, for the filter menu.
+  const projectOptions = useMemo(() => {
+    const seen = new Map<string, { id: string; key: string; color: string | null }>();
+    for (const i of issues?.items ?? []) {
+      if (i.project && !seen.has(i.project.id)) {
+        seen.set(i.project.id, {
+          id: i.project.id,
+          key: i.project.key,
+          color: i.project.color ?? null,
+        });
+      }
+    }
+    return [...seen.values()].sort((a, b) => a.key.localeCompare(b.key));
+  }, [issues]);
+
   const byStatus = useMemo(() => {
     const map = new Map<string, NonNullable<typeof issues>["items"]>();
     for (const s of statuses ?? []) map.set(s.id, []);
     for (const i of issues?.items ?? []) {
+      if (projectFilter && i.project?.id !== projectFilter) continue;
       const arr = map.get(i.statusId) ?? [];
       arr.push(i);
       map.set(i.statusId, arr);
     }
     return map;
-  }, [statuses, issues]);
+  }, [statuses, issues, projectFilter]);
 
   function handleDrop(statusId: string, payload: DragPayload) {
     if (payload.kind === "backlog") {
@@ -107,6 +126,31 @@ export function CyclePlanningBoard({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      {/* Board header: reorder/retransition hint + an "All projects"
+          filter. The filter is client-side over the sprint's own issues,
+          so it never touches the drag-drop transitions below. */}
+      <div className="flex shrink-0 items-center gap-3 px-3 pt-3 pb-1">
+        <span className="text-meta text-muted-foreground/70">
+          Drag to reorder · drag across columns to retransition
+        </span>
+        {projectOptions.length > 0 && (
+          <label className="ml-auto flex items-center gap-1.5 text-meta text-muted-foreground">
+            <span className="sr-only">Filter by project</span>
+            <select
+              value={projectFilter ?? ""}
+              onChange={(e) => setProjectFilter(e.target.value || null)}
+              className="focus-ring rounded-md border border-border bg-transparent px-2 py-0.5 text-xs text-foreground"
+            >
+              <option value="">All projects</option>
+              {projectOptions.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.key}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
       {hasNoSprintIssues && (
         <div className="shrink-0 px-3 pt-3">
           <div className="rounded-lg border border-dashed border-border bg-card/30">

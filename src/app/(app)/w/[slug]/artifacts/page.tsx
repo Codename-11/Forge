@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Archive,
+  Clock,
   Copy,
   FileText,
   MoreHorizontal,
@@ -18,7 +19,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { Confirm } from "@/components/ui/modal";
-import { cn } from "@/lib/utils";
+import { cn, relativeTime } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -48,6 +49,7 @@ type ArtifactRow = {
   status: ArtifactStatus;
   summary: string | null;
   sourceType: string | null;
+  updatedAt: Date | string;
 };
 
 type Tab = "active" | "archived";
@@ -293,11 +295,21 @@ export default function ArtifactsPage() {
                       {row.summary}
                     </p>
                   ) : null}
-                  {row.sourceType ? (
-                    <p className="mt-auto inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-                      <Sparkles className="h-3 w-3" /> from {row.sourceType.replace("-", " ")}
-                    </p>
-                  ) : null}
+                  <div className="mt-auto flex items-center gap-2 pt-1 text-[10px] text-muted-foreground">
+                    {row.sourceType ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Sparkles className="h-3 w-3" /> from{" "}
+                        {row.sourceType.replace("-", " ")}
+                      </span>
+                    ) : null}
+                    <span
+                      className="ml-auto inline-flex items-center gap-1"
+                      title={new Date(row.updatedAt).toLocaleString()}
+                    >
+                      <Clock className="h-3 w-3" />
+                      {relativeTime(row.updatedAt)}
+                    </span>
+                  </div>
                 </Link>
                 <RowMenu
                   tab={tab}
