@@ -9,6 +9,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { Section } from "@/components/settings/section";
 import { trpc } from "@/lib/trpc";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
@@ -72,7 +73,11 @@ export function IssueTemplatesPanel() {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 px-6 pb-6">
+        <div className="mx-auto max-w-3xl space-y-8 px-6 pb-6">
+          <Section
+            title="Issue templates"
+            hint="Reusable starting points for new issues. A template pre-fills the title, description, project, priority, and labels — so a recurring kind of work (bug report, feature request, design review) starts with structure instead of a blank page. Pick a template when creating an issue and Forge fills in the rest."
+          >
           <Card>
             {(templates ?? []).map((t) => (
               <li key={t.id} className="flex flex-wrap items-start gap-3 px-4 py-3">
@@ -117,11 +122,17 @@ export function IssueTemplatesPanel() {
             {templates?.length === 0 && (
               <EmptyState
                 icon={FileText}
-                title="No templates yet"
-                hint="Create one so new issues start with structure instead of a blank page."
+                title="No issue templates yet"
+                hint="Capture the shape of a recurring issue once — a bug report with steps-to-reproduce, a feature request with problem/proposal — and reach for it every time instead of starting from a blank page."
+                action={
+                  <Button variant="ember" size="sm" onClick={() => setEditing({ ...empty })}>
+                    New template
+                  </Button>
+                }
               />
             )}
           </Card>
+          </Section>
         </div>
       </div>
 

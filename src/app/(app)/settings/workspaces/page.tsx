@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Plus, ArrowRight } from "lucide-react";
+import { Plus, ArrowRight, AlertTriangle } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -118,6 +118,46 @@ export default function WorkspacesPage() {
             </Card>
             )}
           </Section>
+
+          {/* Danger zone — leaving / archiving / deleting a workspace is a
+              workspace-scoped, admin-gated action. This account-level page
+              can't self-leave (no account-scoped mutation), so we group the
+              destructive actions here and route each workspace to its own
+              manage page where the real mutations live. */}
+          {(workspaces?.length ?? 0) > 0 && (
+            <section className="overflow-hidden rounded-lg border border-danger/30 bg-danger/[0.03]">
+              <header className="flex items-center gap-2 border-b border-danger/20 bg-danger/5 px-4 py-2.5">
+                <AlertTriangle className="h-3.5 w-3.5 text-danger" />
+                <h2 className="text-sm font-semibold text-danger">Danger zone</h2>
+                <span className="text-[0.6875rem] text-danger/80">
+                  Leaving a workspace removes you for yourself only. Reversible only by an admin re-inviting you.
+                </span>
+              </header>
+              <ul className="divide-y divide-danger/15">
+                {workspaces?.map((w) => (
+                  <li key={w.id} className="flex items-center gap-4 px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium">{w.name}</span>
+                        <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                          {w.key}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">
+                        Leave, archive, or delete this workspace from its own settings.
+                      </div>
+                    </div>
+                    <Link
+                      href={`/w/${w.slug}/settings/workspace`}
+                      className="focus-ring inline-flex h-7 items-center rounded-md border border-danger/40 bg-background px-3 text-xs font-medium text-danger hover:bg-danger/10"
+                    >
+                      Manage
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
         </div>
       </div>
 

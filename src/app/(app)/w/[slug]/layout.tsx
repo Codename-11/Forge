@@ -131,7 +131,12 @@ export default async function WorkspaceShellLayout({
               email: session.user.email,
             }}
           />
-          <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+          <main className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+            {/* Ambient background — one viewport-sized layer behind all page
+                content, driven by the per-user `data-bg` appearance pref.
+                Lives in the non-scrolling <main> so it always covers the
+                visible area and animates smoothly (see .forge-page-bg). */}
+            <div aria-hidden className="forge-page-bg" />
             <TopBar
               user={{
                 name: session.user.name,

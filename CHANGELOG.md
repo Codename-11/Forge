@@ -11,6 +11,99 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-05-24] — Choose your background, richer agent & plan cards, plugin pages
+
+### Added
+
+- **Background style is now yours to pick** (Settings → Appearance):
+  **Grid** (default), **Glow** (a drifting ember bloom over a dot field),
+  **Dots**, or **None**. Applies instantly and follows you across workspaces.
+- **Agent cards** now show provider, runtime, connection, heartbeat, capabilities,
+  and a workload bar at a glance, with an **Infrastructure** panel for the wiring.
+- **Plugin pages** — each plugin now has its own detail page (scopes explained,
+  skills, webhooks, events) with approve / suspend / rotate-secret / remove —
+  groundwork for first-class integrations like a GitHub bridge.
+- **More signal on cards**: projects show a progress bar + initiative; initiatives
+  list their projects with done/total; plans show a step strip + owner; goals and
+  Command Center show step progress.
+
+### Fixed
+
+- The ambient **grid background no longer stutters** on long pages and now always
+  fills the full height of scrollable pages (it's one fixed layer behind the app
+  instead of a per-page layer that lagged or cut off mid-scroll).
+
+## [2026-05-24] — Settings, redesigned
+
+### Added
+
+- **Agents** now show as one card per agent with provider, runtime, connection,
+  and last heartbeat inline, a workload bar, and a collapsible **Infrastructure**
+  panel — no more hopping between Agents, Runtimes, and Integrations to see how
+  an agent is wired.
+- **Plugins** gained a **Permission reference** explaining what each scope grants,
+  so you can approve the smallest set that does the job.
+- Settings pages across the board now **group related controls**, put **help text
+  under fields** instead of in tooltips, teach you what a feature does when a list
+  is empty, and isolate destructive actions in a clearly-marked **danger zone**.
+- **Workspace · General** got a sticky **save bar** that appears only when you
+  have unsaved changes (with a pending-count and ⌘S).
+
+### Changed
+
+- **Members**, **Statuses**, **Labels**, **Dispatch rules**, **Saved views**,
+  **Recurring**, **Templates**, **Data export/import**, **Admin**, and the
+  **account** pages were reorganized for less clutter and more breathing room.
+
+## [2026-05-24] — More signal on the planning & work screens
+
+### Added
+
+- **Issues list now groups by status** with sticky section headers (count per
+  status), Linear-style — plus inline label chips and a comment-count on each
+  row. Select-all, bulk actions, and previews all still work.
+- **Sprint summary** shows a four-up breakdown — Scope / Done / In progress /
+  Remaining — instead of three numbers.
+- **Goal cards** gained a step-ladder, a budget meter (turns amber as you near
+  the cap), and the owning crew at a glance.
+- **Roadmap** bars show the project key and a clearer legend; active sprints are
+  tinted more strongly than planned ones.
+- **Artifacts** can be filtered by type and searched.
+- **Dashboard** "By status" rows now draw a proportional bar so you can eyeball
+  the mix.
+- **Command Center** live-goal cards show budget used vs cap.
+- A **"+" on each board column** to add an issue straight into that column, and
+  a live presence dot in the chat conversation header.
+
+## [2026-05-24] — Settings cleanup: one home for agents, a clearer Connections page
+
+### Added
+
+- **Connections** (Settings → Connections) — a focused page for systems that
+  talk *to* Forge or receive events *from* it: GitHub, Slack, email-to-issue,
+  custom webhooks, split into Inbound and Outbound. Replaces the old
+  Integrations page.
+- **Add-an-agent gallery + provider matrix** on Settings → Agents — pick a
+  provider recipe (Hermes, Claude, Codex, Custom) to start onboarding with the
+  right connection and runtime preset, and see at a glance which connection
+  mode each provider uses.
+- A **drifting glow-grid background** style (warm ambient lights moving through
+  a dot grid; respects Reduced Motion).
+
+### Changed
+
+- **Agents is now the one place to configure agents** — provider, runtime, and
+  connection all live here instead of being scattered across Agents, Runtimes,
+  and Integrations.
+- **Integrations was renamed Connections** and scoped to external I/O only.
+  Old `/settings/integrations` links redirect automatically.
+
+### Removed
+
+- The standalone **Runtimes** entry in the settings sidebar — runtime setup now
+  happens during agent onboarding (the advanced runtime editor is still
+  reachable for power users).
+
 ## [2026-05-24] — Agent runtimes & chat clarity
 
 ### Added

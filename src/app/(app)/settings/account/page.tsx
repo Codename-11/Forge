@@ -154,23 +154,30 @@ export default function AccountPage() {
 
   return (
     <>
-      <Topbar title="Account" subtitle="Profile, timezone, locale, and theme." />
+      <Topbar
+        title="Account"
+        subtitle="Profile, timezone, locale, and theme — tied to your login and shared across all workspaces."
+      />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-2xl space-y-6 p-6">
-          <Section title="Profile">
+          <Section
+            title="Identity"
+            hint="How you appear to teammates. Email is read-only — it's set by your sign-in provider."
+          >
             <div className="grid grid-cols-1 gap-3 rounded-lg border border-border bg-card/40 p-4 sm:grid-cols-2">
               <Field label="Name">
                 <Input value={name} onChange={(e) => setName(e.target.value)} />
               </Field>
-              <Field label="Handle">
+              <Field label="Handle" hint="Lowercase, used for @mentions.">
                 <Input
                   value={handle}
                   onChange={(e) => setHandle(e.target.value.replace(/[^a-z0-9_-]/gi, ""))}
                   placeholder="alice"
+                  className="font-mono"
                 />
               </Field>
-              <Field label="Email">
-                <Input value={me?.user.email ?? ""} disabled />
+              <Field label="Email" hint="Tied to your login — managed by your sign-in provider.">
+                <Input value={me?.user.email ?? ""} disabled className="font-mono" />
               </Field>
               <Field label="Platform">
                 <div className="flex h-8 items-center gap-2 rounded-md border border-input bg-background/60 px-2 text-sm">
@@ -438,12 +445,23 @@ const ONBOARDING_STEP_LABELS: Record<string, string> = {
   member: "Invite a teammate",
 };
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
       <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
+      {hint && (
+        <p className="mb-1.5 -mt-0.5 text-[0.6875rem] text-muted-foreground/80">{hint}</p>
+      )}
       {children}
     </div>
   );

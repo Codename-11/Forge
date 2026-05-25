@@ -109,14 +109,10 @@ export default function CommandCenterPage() {
             : "Decisions & live agent ops"
         }
       />
-      <div className="relative isolate min-h-0 flex-1 overflow-y-auto p-4">
-        {/* M1 (design spec): ambient animated paper grid, matching the
-            dashboard. `isolate` forms a stacking context so the `-z-10`
-            grid paints above <main>'s opaque bg-background. */}
-        <div
-          aria-hidden
-          className="forge-grid-bg pointer-events-none absolute inset-0 -z-10 opacity-40"
-        />
+      {/* Ambient background now lives once in the app shell <main>
+          (.forge-page-bg) — previously this page mounted the grid on the
+          scroll container itself, so it only covered the first viewport. */}
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {isLoading ? (
           <SkeletonList rows={6} />
         ) : !data ? (
@@ -161,10 +157,45 @@ export default function CommandCenterPage() {
                       {row.status.toLowerCase()}
                     </span>
                   </div>
-                  <span className="text-meta text-muted-foreground">
-                    {row.crew ? `${row.crew.name} · ` : ""}
-                    {row._count.plans} plan{row._count.plans === 1 ? "" : "s"}
-                  </span>
+                  <div className="flex items-center gap-2 text-meta text-muted-foreground">
+                    <span className="truncate">
+                      {row.crew ? `${row.crew.name} · ` : ""}
+                      {row._count.plans} plan{row._count.plans === 1 ? "" : "s"}
+                    </span>
+                    {row.maxTotalCostUsd != null && (
+                      <span className="ml-auto shrink-0 font-mono tabular-nums">
+                        ${row.totalCostUsd.toFixed(2)} / ${row.maxTotalCostUsd.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                  {row.maxTotalCostUsd != null && row.maxTotalCostUsd > 0 && (
+                    <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-subtle">
+                      <div
+                        className="h-full rounded-full bg-ember"
+                        style={{
+                          width: `${Math.min(100, (row.totalCostUsd / row.maxTotalCostUsd) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  )}
+                  {row.totalSteps > 0 && (
+                    <>
+                      <div className="flex items-center justify-between text-meta text-muted-foreground">
+                        <span>steps</span>
+                        <span className="font-mono tabular-nums">
+                          {row.doneSteps}/{row.totalSteps} steps
+                        </span>
+                      </div>
+                      <div className="h-1 overflow-hidden rounded-full bg-subtle">
+                        <div
+                          className="h-full rounded-full bg-ember"
+                          style={{
+                            width: `${Math.min(100, (row.doneSteps / row.totalSteps) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                    </>
+                  )}
                 </Link>
               ))}
             </Section>

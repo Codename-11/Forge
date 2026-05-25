@@ -10,6 +10,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { Section } from "@/components/settings/section";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 
@@ -92,7 +93,11 @@ export default function RecurringPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
+        <div className="mx-auto max-w-3xl space-y-8 p-6">
+          <Section
+            title="Schedules"
+            hint="Each schedule creates a fresh issue on its own cadence — daily standups, weekly reviews, monthly retros. A background ticker scans every 5 minutes and creates an issue whenever a schedule's next run is due, then advances it by the interval. Pause one to stop it without deleting it; “Run now” creates an issue immediately for a one-off."
+          >
           <Card>
             {(rows ?? []).map((r) => (
               <li key={r.id} className="flex flex-wrap items-start gap-3 px-4 py-3">
@@ -153,10 +158,16 @@ export default function RecurringPage() {
               <EmptyState
                 icon={Clock}
                 title="No recurring schedules yet"
-                hint="The ticker scans every 5 minutes — add a schedule to auto-create issues on a cadence."
+                hint="Set up a schedule and Forge will auto-create the same issue on a cadence — a standup every morning, a retro every Friday — so routine work never falls off the radar. The ticker scans every 5 minutes and files the next issue when a schedule comes due."
+                action={
+                  <Button variant="ember" size="sm" onClick={() => setEditing(defaultForm())}>
+                    New schedule
+                  </Button>
+                }
               />
             )}
           </Card>
+          </Section>
         </div>
       </div>
 

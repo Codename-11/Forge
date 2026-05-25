@@ -432,6 +432,9 @@ model User {
   /// stamps `data-motion="off"` on <html>, freezing the forge-* motion
   /// layer to its static fallbacks (independent of OS reduced-motion).
   motion                 String?
+  /// Ambient page background. "grid" (default) | "glow" | "dots" | "none".
+  /// Stamps `data-bg` on <html>; the shell mounts one fixed background layer.
+  backgroundStyle        String?
   /// Default Mission Control tab. One of MissionControlTab values
   /// ("live" | "queue" | "agents" | "history" | "chat"). Null = "live".
   /// When set, the overlay opens to this tab if no per-workspace

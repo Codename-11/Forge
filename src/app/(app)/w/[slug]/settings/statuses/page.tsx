@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { Section } from "@/components/settings/section";
 import { trpc } from "@/lib/trpc";
 
 const CATEGORIES = [
@@ -20,6 +21,15 @@ const CATEGORIES = [
   "CANCELED",
 ] as const;
 type Category = (typeof CATEGORIES)[number];
+
+const CATEGORY_HELP: Record<Category, string> = {
+  BACKLOG: "Not committed yet. Lives in the backlog and rail.",
+  TODO: "Committed for the sprint but not started.",
+  IN_PROGRESS: "Active work. Counts toward burndown.",
+  IN_REVIEW: "Awaiting sign-off. Surfaces in review gates.",
+  DONE: "Closed cleanly. Burned down.",
+  CANCELED: "Closed without shipping. Not counted toward velocity.",
+};
 
 type Row = {
   id: string;
@@ -99,46 +109,75 @@ export default function StatusesPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
-          <Card onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
-            {rows.map((s) => (
-              <li
-                key={s.id}
-                draggable
-                onDragStart={() => onDragStart(s.id)}
-                onDragOver={(e) => onDragOver(s.id, e)}
-                onDragEnd={() => setDragId(null)}
-                className={
-                  "flex cursor-grab items-center gap-3 px-4 py-3 active:cursor-grabbing " +
-                  (dragId === s.id ? "opacity-50" : "")
-                }
-              >
-                <span
-                  className="grid h-5 w-5 shrink-0 place-items-center text-muted-foreground"
-                  aria-hidden
+        <div className="mx-auto max-w-3xl space-y-8 p-6">
+          <Section
+            title="Pipeline"
+            hint="Drag the handles to reorder. The order here is the order statuses appear on the board and in dropdowns. Each status belongs to a fixed category that drives how Forge groups, charts, and counts work."
+          >
+            <Card onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+              {rows.map((s) => (
+                <li
+                  key={s.id}
+                  draggable
+                  onDragStart={() => onDragStart(s.id)}
+                  onDragOver={(e) => onDragOver(s.id, e)}
+                  onDragEnd={() => setDragId(null)}
+                  className={
+                    "flex cursor-grab items-center gap-3 px-4 py-3 active:cursor-grabbing " +
+                    (dragId === s.id ? "opacity-50" : "")
+                  }
                 >
-                  ⋮⋮
-                </span>
-                <span
-                  className="inline-block h-3 w-3 rounded-sm"
-                  style={{ backgroundColor: s.color }}
+                  <span
+                    className="grid h-5 w-5 shrink-0 place-items-center text-muted-foreground"
+                    aria-hidden
+                  >
+                    ⋮⋮
+                  </span>
+                  <span
+                    className="inline-block h-3 w-3 rounded-sm"
+                    style={{ backgroundColor: s.color }}
+                  />
+                  <span className="font-medium">{s.name}</span>
+                  <Badge>{s.category}</Badge>
+                  {s.isDefault && <Badge color="#d97706">default</Badge>}
+                  <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+                    {s.color}
+                  </span>
+                  <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                    pos {s.position}
+                  </span>
+                </li>
+              ))}
+              {rows.length === 0 && (
+                <EmptyState
+                  icon={Columns3}
+                  title="No statuses configured"
+                  hint="Statuses are the workflow columns issues move through — from backlog to done. Add your first one to define the pipeline."
+                  action={
+                    <Button variant="ember" size="sm" onClick={() => setOpen(true)}>
+                      Add status
+                    </Button>
+                  }
                 />
-                <span className="font-medium">{s.name}</span>
-                <Badge>{s.category}</Badge>
-                {s.isDefault && <Badge color="#d97706">default</Badge>}
-                <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
-                  pos {s.position}
-                </span>
-              </li>
-            ))}
-            {rows.length === 0 && (
-              <EmptyState
-                icon={Columns3}
-                title="No statuses configured"
-                hint="Add a status to define a workflow column for issues."
-              />
-            )}
-          </Card>
+              )}
+            </Card>
+          </Section>
+
+          <Section
+            title="Categories"
+            hint="Read-only reference. Every status maps onto one of six lifecycle categories — that mapping is fixed and is what lets the rest of Forge understand where an issue is in its lifecycle."
+          >
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {CATEGORIES.map((c) => (
+                <div key={c} className="rounded-md border border-border bg-card/40 p-3">
+                  <div className="font-mono text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+                    {c}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{CATEGORY_HELP[c]}</p>
+                </div>
+              ))}
+            </div>
+          </Section>
         </div>
       </div>
 

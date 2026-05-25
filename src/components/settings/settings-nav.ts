@@ -11,7 +11,6 @@ import {
   PlugZap,
   Repeat,
   Send,
-  Server,
   Settings as SettingsIcon,
   Shield,
   Tag,
@@ -123,7 +122,7 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
         label: "Agents",
         icon: Bot,
         description:
-          "MCP-first actors that hold keys and receive work. Register Hermes, Claude, Codex, or custom profiles.",
+          "MCP-first actors that hold keys and receive work. Profile, provider, runtime, and connection in one place.",
       },
       {
         path: "/dispatch-rules",
@@ -135,15 +134,16 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
     ],
   },
   {
-    id: "integrations",
-    label: "Integrations",
+    id: "connections",
+    label: "Connections",
+    hint: "Inbound + outbound I/O. For agents and their runtimes, see Automation → Agents.",
     items: [
       {
-        path: "/integrations",
-        label: "Integrations",
+        path: "/connections",
+        label: "Connections",
         icon: PlugZap,
         description:
-          "Connect external services. Browse available integrations and manage active connections.",
+          "Inbound and outbound I/O — GitHub, Slack, email-to-issue, custom webhooks. For agents, see Automation.",
       },
       {
         path: "/plugins",
@@ -151,13 +151,6 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
         icon: Plug,
         description:
           "Manifest-based extensions with scoped access. Register, approve, or suspend installed plugins.",
-      },
-      {
-        path: "/runtimes",
-        label: "Runtimes",
-        icon: Server,
-        description:
-          "Compute environments that host agents — local daemons, remote HTTP endpoints, and cloud runtimes.",
       },
       {
         path: "/deliveries",

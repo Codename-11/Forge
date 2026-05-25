@@ -2,6 +2,227 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-24 — Design-board parity: glow-grid background + Settings IA (Agents + Connections)
+
+Implemented the "Forge Screens Board" design handoff (claude.ai/design bundle).
+Two pillars: theme/chrome token parity, and the settings information-architecture
+the board landed on after the operator agreed to "replace existing mockups."
+
+**Theme/chrome parity.** Live shell already mirrored the board (sidebar-nav.ts
+is byte-identical to the design's reference copy), so the deltas were small:
+
+- **`.forge-glow-grid*` family** added to `globals.css` (BG3 — the Atlas
+  dashboard background ported to Forge tokens): static dot grid + two soft
+  radial "lights" drifting on non-syncing 28s/36s paths, `mix-blend-mode:
+  plus-lighter` so they add luminance to the dots beneath. Blob B uses ember
+  for the single warm-accent bias. Transform-only, gated on `[data-motion="on"]`
+  + reduced-motion. Registered `forge-glow-drift-a/-b` keyframes + animations in
+  `tailwind.config.ts`. Did NOT regress `.forge-grid-bg` — live's `::before`
+  translate3d version is the intentionally-smoother one vs the design's
+  background-position form.
+- `topbar.tsx` gained `bg-background` for strict parity with the board's
+  `PageTopbar`.
+- Sidebar `NavRow` badge colour split: decisions → ember accent, inbox → quiet
+  subtle/foreground (matches the design `NavRow`; live had everything ember).
+
+**Settings IA refactor (Agents + Connections).** The board collapsed the three
+overlapping agentic-config surfaces (Agents / Runtimes / Integrations) into two:
+
+- `settings-nav.ts`: renamed the `integrations` group → `connections`
+  (`/integrations` item → `/connections`, new copy), removed the standalone
+  `/runtimes` nav item, refreshed the Agents description. The settings index
+  + compact navbar render from this list, so both auto-reflect the change.
+- **New `/settings/connections`** page — strict inbound/outbound external I/O.
+  Banner explains where Hermes/Claude/Codex went. The one real backend
+  (Email-to-issue, `/api/ingest/email` + HMAC) is fully preserved as the wired
+  inbound card; GitHub/Slack/Linear/PagerDuty/Discord/custom-webhook show as
+  honest "available" cards (no OAuth backend exists yet). Event-vocabulary grid
+  links to Webhook deliveries.
+- `/settings/integrations` → server redirect to `/settings/connections`
+  (preserves query string, mirrors the existing `integrations/deliveries`
+  redirect shim).
+- **Agents page** absorbed the old first-class integration adapter cards as an
+  "Add an agent" recipe gallery (provider recipes that pre-seed the onboarding
+  wizard via `openNewWithProvider`) + a read-only "Provider matrix" reference.
+  Reworded the wizard's stale "Settings → Runtimes" hint.
+- **Runtimes route kept alive** (not in the rail) as the advanced editor, since
+  it owns real CRUD the board's Infrastructure accordion doesn't cover (adapter
+  picker, Codex sandbox/approval policy, planned adapters, tier explainer).
+  Reachable via the provider-matrix "runtime editor" deep link + existing
+  runtime-detail links from mission-control / chat-status-rail / agent detail.
+  The runtime-management + accessibility e2e specs still target it, so they pass.
+- Repointed the two functional `/settings/integrations` links (fleet-checklist
+  chat-ready step → `/settings/agents`; chat-thread "Integrations →" →
+  "Connections →" `/settings/connections`) and the workspace.ts comment.
+
+`pnpm lint` + `pnpm typecheck` clean. `pnpm test` = 689 pass (the only 4
+failures are a pre-existing `AUTH_SECRET`-not-set env issue in
+`provider-credentials.test.ts`, untouched by this work — pass with the secret
+set). Done in worktree `worktree-design-parity`.
+
+**Per-screen parity sweep (all 13 Screens-Board artboards).** Diffed every
+board artboard against its live page. Finding: live is consistently a
+*superset* of the mock (the board was built *from* live, then live grew
+further — customizable dashboard widgets, the chat diagnostics rail, inbox
+extras). So "parity" = porting the design's *additive* signal elements live was
+missing, NOT regressing live to the simpler mock. Implemented (add-only,
+verified data exists first — skipped anything that would need a new tRPC field
+or a router change):
+
+- **Cycles summary card** — 3 stats → 4-up bordered metric tiles
+  (Scope / Done / In progress / Remaining); in-progress from
+  `status.category === "IN_PROGRESS"`, remaining = total − done. Kept the
+  timeline bar + burndown sparkline.
+- **Goals card** — segmented step-ladder (done/current/todo), crew + plan-count
+  meta row, labeled budget meter (turns warning past 80%). All from already
+  computed `stepsDone/stepsTotal/planCount` + `totalCostUsd/maxTotalCostUsd`.
+- **Command Center** live-goals card — `$used / $cap` budget figure + ember
+  budget bar (rendered only when a cap exists). Step bar skipped (no step
+  counts on that row).
+- **Artifacts** — client-side type-filter chip row (only types present) +
+  search over title/summary; resets stale filter on tab switch. Kept the
+  Active/Archived tabs.
+- **Roadmap** — visible mono project KEY chip on each bar, legend strip
+  (Active sprint / Planned sprint / Project bar / Today), status-aware sprint
+  band tint (ACTIVE ember/0.18 vs planned ember/0.05). Per-project progress
+  fill skipped (`project.list` has no done split).
+- **Issues list** (`issue-list.tsx`) — Linear-style **status grouping** with
+  sticky per-status headers (dot + name + count) over the flat list. Grouping
+  is purely visual: the flat selection model / select-all toolbar / Shift-range
+  / `x`-hotkey / hover previews / unread dots / snooze all preserved. Plus up to
+  2 label chips + a comment-count icon per row (both already on `issue.list`).
+- **Issues board** — "+" add-issue button per column header (fires the existing
+  `forge:quick-create`, passes `projectId` when project-scoped; status prefill
+  not supported by quick-create, noted in a comment).
+- **Plans card** — "Updated {relative}" footer (`updatedAt` was on the row).
+  DAG step strip skipped — `executionPlan.list` exposes only `_count.steps`, no
+  per-step status / done count / owner relation.
+- **Dashboard** "By status" — inline horizontal bars scaled to count (status
+  color over bg-subtle), kept the dot + CountUp.
+- **Chat** stream header — `.forge-breath` live presence dot, gated on the
+  existing reachability derivation so it never falsely claims liveness.
+
+Deliberately NOT regressed (live is the newer intent): chat right-rail
+diagnostics (design wanted Linked-work + Members), inbox single-column vs the
+mock's 2-pane agent rail, dashboard widget system vs the mock's fixed
+`grid-cols-12`, project-detail single-column Overview vs the mock's 2-col rail,
+Plans tabbed grid vs the mock's template-rail split. Skipped for missing data:
+Initiatives per-project nested list, Projects-list per-card progress bar +
+initiative chip, issue-detail Reassign/Release affordance (no `issue.reassign`
+mutation). All flagged in the parity reports.
+
+Final: `pnpm typecheck` + `pnpm lint` clean; `pnpm test` 688 pass / 1 skip
+(with `AUTH_SECRET` set).
+
+**Settings-page redesign sweep (the "specifically designed" settings screens).**
+The second design bundle (`iCVaz0otBlYcWUMr4POAdA`) is byte-identical to the
+first; the operator re-pointed at it to flag that the prior passes did the
+settings *IA* but not the per-subpage *internal* redesigns. Brought the live
+settings pages up to the design's vocabulary (SettingsLayout / FormSection +
+hints / DangerZone / SaveBar / TeachEmpty / FormSegmented) — add-only, every
+input + tRPC mutation + handler preserved (the design's FormInput/Select are
+display stubs; we reorganized live's *functional* controls, never replaced
+them):
+
+- **Agents** — replaced the flat list rows with the design's **AgentMergedCard**:
+  header strip (avatar / @key / presence dot / N-of-capacity concurrent /
+  description), an inline **provider · runtime · connection · last-heartbeat**
+  4-col strip, a capabilities + workload-bar row, and a collapsible
+  **Infrastructure** accordion (runtime kind / endpoint / heartbeat read-only +
+  "Open runtime editor →" deep link). All real data from `agent.list` ⨝
+  `runtime`; all actions (QuickActions / View / Edit-wizard / Archive / Delete)
+  preserved. (Gallery + provider matrix from the earlier pass kept.)
+- **Plugins** — added the **Permission reference** grid built from the *real*
+  `PluginScope` enum (not the mock's invented scopes), a "scopes" label, and
+  aligned subtitle.
+- **Workspace · General** — split one long form into Identity / Sprint cadence /
+  Tracking & storage / Agent SLA / Auto-transition / AI provider; pill toggles;
+  red **Danger zone** (archive/delete, type-to-confirm) wired to existing
+  Confirms; sticky **Save bar** that diffs against the server snapshot for an
+  accurate pending count + ⌘S.
+- **Members** — Roster section + a Roles teach card (OWNER/ADMIN/MEMBER/GUEST).
+  **Dispatch rules** — Routing-matrix section + "How rules resolve" walkthrough
+  + teach-empty (drag-reorder + first-match-wins preserved).
+- **Statuses** — Pipeline section + read-only Categories reference + hex chips.
+  **Labels** — Labels section + Palette reference + hex chips.
+- **Saved views** — Yours / Shared split + teach-empty. **Recurring** — Schedules
+  section + teach-empty (skipped a template-variable reference card — the
+  backend does no `{{var}}` substitution, would be a false promise).
+  **Templates** — section-wrapped issue/project partials + teach-empty.
+- **Data** — Export / Import as separated groups + "What's portable" ✓/✗ lists +
+  drop-zone framing. **Admin** — section hints + teach-empty streams.
+  **Deliveries** — status-aware teach-empty (queue already matched).
+- **Account pages** — Profile (inline help, Identity), Auth (admin-only banner +
+  "what you can connect" + counts), Workspaces (danger zone routing to
+  per-workspace settings — no account-scoped self-leave mutation exists, so we
+  route rather than wire a phantom). Appearance + Developer access already
+  matched the design — left as-is.
+- **Onboarding** — live's 5-step add-agent wizard already implements the design's
+  flow; now entered via the provider gallery. Connection/plugin *detail* flows
+  from the mock (GitHub etc.) are aspirational with no backend — not built.
+
+Validation: `pnpm typecheck` clean · `pnpm lint` clean · `pnpm test` 688 pass /
+1 skip (AUTH_SECRET set) · **`pnpm build` succeeds** across all settings routes.
+
+## 2026-05-24 — Agent merged card, data-backed deltas, plugin detail route, user-set backgrounds
+
+Follow-up pass completing the operator's punch-list (second design bundle
+`iCVaz0otBlYcWUMr4POAdA` — byte-identical to the first).
+
+**Agent merged card (the centerpiece).** Replaced the flat agent-list rows on
+`/settings/agents` with the design's `AgentMergedCard`: header (avatar / @key /
+presence dot / N-of-capacity / description) → inline **provider · runtime ·
+connection · last-heartbeat** strip → capabilities + workload bar →
+collapsible **Infrastructure** accordion (runtime kind / endpoint / heartbeat
+read-only + "Open runtime editor →"). Real `agent.list ⨝ runtime` data; all
+actions (QuickActions / View / Edit-wizard / Archive / Delete) preserved.
+Agent reassign/release already existed (AgentChip → AgentPickerModal w/ Unassign,
+via `issue.update({ assignedAgentId })`).
+
+**Data-backed deltas (added the data paths, then the UI — all query-side, no
+schema change).**
+- Projects list: `project.list` now includes `initiative` + a groupBy-computed
+  `_count.doneIssues`; cards show a done/total progress bar + initiative chip.
+- Initiatives: `initiative.list` now carries per-project `{key,name,color,done,
+  total}`; card renders the nested project list (cap 4 + "+N more").
+- Plans: `executionPlan.list` now includes `steps{position,status}` +
+  `createdBy`/`createdByAgent` + `doneSteps`; card renders a DAG step strip
+  (color-by-status pips + connectors, cap 12) + owner footer.
+- Command Center: `liveGoals` aggregates `plans[].steps` → `doneSteps/totalSteps`;
+  goal card adds a step-progress bar (budget bar was already there).
+
+**Plugin detail route (prep for real plugin support, e.g. GitHub).** Added
+`plugin.byId` (workspace-scoped, includes skills/active apiKeys/webhooks, strips
+`secret`) + `remove` + `rotateSecret` (admin). New manifest-driven route
+`/settings/plugins/[id]` (identity header, "what it does", approved-scopes with
+shared blurbs, events, skills, webhooks/activity, danger zone with
+type-to-confirm REMOVE). Extracted `src/lib/plugin-scopes.ts`
+(`PLUGIN_SCOPE_HELP` from the real `PluginScope` enum) shared by list + detail;
+list rows now link to the detail.
+
+**Backgrounds as a user setting + grid fix.** New `User.backgroundStyle`
+(migration `0063`, additive nullable; "grid" default | "glow" | "dots" |
+"none") wired through `user.updateAppearance` + `ME_SELECT`, the cookie bridge,
+`AppearanceProvider`, and the root `<html data-bg>` SSR stamp. New Background
+section on `/settings/appearance` with live-swap + honest preview swatches.
+**Grid audit fixes:** consolidated the three per-page `.forge-grid-bg` mounts
+(dashboard/inbox/command-center) into ONE `.forge-page-bg` layer mounted once in
+the app-shell `<main>` (`relative isolate`, `absolute inset-0 -z-10`). Because
+`<main>` is the non-scrolling viewport-height flex parent, the layer always
+covers the visible area (fixes command-center's "only first viewport" bug where
+the grid sat on the scroll container) and the animated compositor layer is one
+viewport tall instead of full-scroll-height (fixes the lag on tall pages).
+`data-bg` selectors drive grid/dots/glow variants; `none` hides it.
+
+Sign-in confirmed already live (`(auth)/signin`, LiveStatusPanel split) — no
+work needed. Connection-detail pages (#10) deferred (need real GitHub/Slack
+backends). Add-agent wizard 1:1 styling (#13) + canvas-interactive backgrounds
+B1/B2 remain optional follow-ups.
+
+Validation: applied `0063` to the local `:55432` dev stack; `pnpm typecheck` +
+`pnpm lint` clean · `pnpm test` **688 pass / 1 skip** · **`pnpm build` succeeds**
+(incl. new `/settings/plugins/[id]`). NOTE: deploy must run the `0063` migration.
+
 ## 2026-05-23 — Chat session management: delete, stop runtime run, connector-aware status rail
 
 Closing the gaps in chat session/thread management on top of the in-progress

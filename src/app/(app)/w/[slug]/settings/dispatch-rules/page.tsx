@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { Section } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 
 /**
@@ -51,6 +52,13 @@ const EMPTY_EDITING: EditingState = {
   projectId: null,
   targetAgentId: "",
 };
+
+const RESOLUTION_HELP = [
+  "An issue enters the dispatch queue without an assigned agent.",
+  "Forge walks the enabled rules top-to-bottom. A rule matches only if every non-'any' condition (priority, label, project) matches the issue.",
+  "The first matching rule's target agent claims the issue — even if that agent isn't otherwise eligible under the workspace mode.",
+  "If no rule matches, the issue falls through to the workspace's auto-dispatch mode (set under Settings → Workspace).",
+];
 
 type RuleRow = {
   id: string;
@@ -241,12 +249,56 @@ export default function DispatchRulesPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
-          <Card
-            onDrop={onDrop}
-            onDragOver={(e: React.DragEvent) => e.preventDefault()}
-          >
-            {rows.map((r) => {
+        <div className="mx-auto max-w-3xl space-y-8 p-6">
+          {!isLoading && rows.length === 0 ? (
+            <Section
+              title="Routing matrix"
+              hint="Pin specific work to specific agents. Each rule maps a condition — priority, label, and/or project — to a target agent."
+            >
+              <EmptyState
+                as="div"
+                icon={Route}
+                title="No dispatch rules yet"
+                hint="Dispatch rules route incoming issues to a chosen agent before the workspace's auto-dispatch mode runs. A rule matches on priority, label, and/or project (any field left as 'any' is a wildcard); the first enabled rule that matches claims the issue. Unmatched issues fall through to the workspace dispatch mode."
+                action={
+                  <Button
+                    variant="ember"
+                    size="sm"
+                    onClick={() => setEditing({ ...EMPTY_EDITING })}
+                    disabled={activeAgents.length === 0}
+                    title={
+                      activeAgents.length === 0
+                        ? "Register an agent first."
+                        : undefined
+                    }
+                  >
+                    Create your first rule
+                  </Button>
+                }
+              />
+              {activeAgents.length === 0 && (
+                <p className="mt-2 text-center text-[0.6875rem] text-muted-foreground">
+                  Register an agent under Settings → Agents before adding a rule.
+                </p>
+              )}
+            </Section>
+          ) : (
+            <Section
+              title="Routing matrix"
+              hint="Read top-to-bottom — the first enabled rule that matches an issue claims it. Drag a row to reorder priority. Toggle a rule off to keep it without firing."
+              actions={
+                rows.length > 0 ? (
+                  <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
+                    {rows.length} rule{rows.length === 1 ? "" : "s"}
+                  </span>
+                ) : undefined
+              }
+            >
+              <Card
+                onDrop={onDrop}
+                onDragOver={(e: React.DragEvent) => e.preventDefault()}
+              >
+                {rows.map((r) => {
               const label = r.label ?? (r.labelId ? labelsById.get(r.labelId) ?? null : null);
               const project =
                 r.project ??
@@ -338,25 +390,28 @@ export default function DispatchRulesPage() {
                   </div>
                 </li>
               );
-            })}
-            {!isLoading && rows.length === 0 && (
-              <EmptyState
-                icon={Route}
-                title="No dispatch rules"
-                hint="Add a rule to pin an agent by priority, label, or project. Rules run before the mode-based picker."
-                action={
-                  <Button
-                    variant="ember"
-                    size="sm"
-                    onClick={() => setEditing({ ...EMPTY_EDITING })}
-                    disabled={activeAgents.length === 0}
-                  >
-                    Create your first rule
-                  </Button>
-                }
-              />
-            )}
-          </Card>
+                })}
+              </Card>
+            </Section>
+          )}
+
+          <Section
+            title="How rules resolve"
+            hint="The order rules and auto-dispatch interact when a new issue needs an owner."
+          >
+            <Card as="div" className="divide-y divide-border">
+              {RESOLUTION_HELP.map((step, i) => (
+                <div key={i} className="flex gap-3 px-4 py-3">
+                  <span className="mt-px grid h-4 w-4 shrink-0 place-items-center rounded-full bg-subtle font-mono text-[0.625rem] text-muted-foreground">
+                    {i + 1}
+                  </span>
+                  <span className="text-[0.6875rem] text-muted-foreground">
+                    {step}
+                  </span>
+                </div>
+              ))}
+            </Card>
+          </Section>
         </div>
       </div>
 

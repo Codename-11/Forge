@@ -24,11 +24,58 @@ export const projectRouter = router({
         take: input.limit + 1,
         cursor: input.cursor ? { id: input.cursor } : undefined,
         orderBy: { updatedAt: "desc" },
-        include: { _count: { select: { issues: true } } },
+        include: {
+          _count: { select: { issues: true } },
+          initiative: { select: { id: true, name: true, slug: true, color: true } },
+        },
       });
       let nextCursor: string | undefined;
       if (rows.length > input.limit) nextCursor = rows.pop()!.id;
-      return { items: rows, nextCursor };
+
+      // Per-project done/total tally. Prisma's relation `_count` can't
+      // filter on `status.category`, so group issues by status and bucket
+      // terminal statuses (DONE / CANCELED) into the done count in JS.
+      const projectIds = rows.map((p) => p.id);
+      const grouped = projectIds.length
+        ? await ctx.db.issue.groupBy({
+            by: ["projectId", "statusId"],
+            where: {
+              workspaceId: ctx.workspaceId,
+              deletedAt: null,
+              projectId: { in: projectIds },
+            },
+            _count: { _all: true },
+          })
+        : [];
+      const statusIds = Array.from(new Set(grouped.map((g) => g.statusId)));
+      const statuses = statusIds.length
+        ? await ctx.db.status.findMany({
+            where: { id: { in: statusIds }, workspaceId: ctx.workspaceId },
+            select: { id: true, category: true },
+          })
+        : [];
+      const isTerminal = new Map(
+        statuses.map(
+          (s) => [s.id, s.category === "DONE" || s.category === "CANCELED"] as const,
+        ),
+      );
+      const totals = new Map<string, { total: number; done: number }>();
+      for (const g of grouped) {
+        if (!g.projectId) continue;
+        const c = totals.get(g.projectId) ?? { total: 0, done: 0 };
+        c.total += g._count._all;
+        if (isTerminal.get(g.statusId)) c.done += g._count._all;
+        totals.set(g.projectId, c);
+      }
+
+      const items = rows.map((p) => ({
+        ...p,
+        _count: {
+          ...p._count,
+          doneIssues: totals.get(p.id)?.done ?? 0,
+        },
+      }));
+      return { items, nextCursor };
     }),
 
   byId: workspaceProcedure.input(z.object({ id: z.string().cuid() })).query(async ({ ctx, input }) => {

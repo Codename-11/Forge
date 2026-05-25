@@ -29,11 +29,18 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     const density = data.density === "comfortable" ? "comfortable" : "compact";
     const textSize = data.textSize === "larger" ? "larger" : "default";
     const motion = data.motion === "reduced" ? "reduced" : "full";
+    const background =
+      data.backgroundStyle === "glow" ||
+      data.backgroundStyle === "dots" ||
+      data.backgroundStyle === "none"
+        ? data.backgroundStyle
+        : "grid";
     html.setAttribute("data-density", density);
     html.setAttribute("data-textsize", textSize);
     html.setAttribute("data-motion", motion === "reduced" ? "off" : "on");
-    writeAppearanceCookie({ density, textSize, motion });
-  }, [data?.density, data?.textSize, data?.motion, data]);
+    html.setAttribute("data-bg", background);
+    writeAppearanceCookie({ density, textSize, motion, background });
+  }, [data?.density, data?.textSize, data?.motion, data?.backgroundStyle, data]);
 
   return <>{children}</>;
 }

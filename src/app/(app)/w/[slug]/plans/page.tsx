@@ -3,13 +3,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ExecutionPlanStatus } from "@prisma/client";
-import { Archive, Copy, ListChecks, MoreHorizontal, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, Clock, Copy, ListChecks, MoreHorizontal, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { Confirm } from "@/components/ui/modal";
-import { cn } from "@/lib/utils";
+import { cn, relativeTime } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -128,6 +128,7 @@ type PlanRow = {
   title: string;
   description: string | null;
   status: ExecutionPlanStatus;
+  updatedAt: Date | string;
   _count: { steps: number };
 };
 
@@ -358,9 +359,17 @@ export default function PlansPage() {
                       {row.description}
                     </p>
                   ) : null}
-                  <p className="mt-auto text-meta text-muted-foreground">
-                    {row._count.steps} step{row._count.steps === 1 ? "" : "s"}
-                  </p>
+                  <div className="mt-auto flex items-center gap-2 text-meta text-muted-foreground">
+                    <span>
+                      {row._count.steps} step{row._count.steps === 1 ? "" : "s"}
+                    </span>
+                    {row.updatedAt ? (
+                      <span className="ml-auto inline-flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        Updated {relativeTime(row.updatedAt)}
+                      </span>
+                    ) : null}
+                  </div>
                 </Link>
                 <RowMenu
                   align="right"

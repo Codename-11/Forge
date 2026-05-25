@@ -61,7 +61,7 @@ export function FleetChecklist({ slug }: { slug: string }) {
       hint: chatReady
         ? "At least one agent resolves a chat transport."
         : "No agent can serve chat yet — attach a runtime or configure a model.",
-      href: `/w/${slug}/settings/integrations`,
+      href: `/w/${slug}/settings/agents`,
     },
   ];
 

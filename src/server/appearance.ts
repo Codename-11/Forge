@@ -6,17 +6,24 @@ export const APPEARANCE_COOKIE = "forge.appearance";
 export type AppearanceDensity = "compact" | "comfortable";
 export type AppearanceTextSize = "default" | "larger";
 export type AppearanceMotion = "full" | "reduced";
+export type AppearanceBackground = "grid" | "glow" | "dots" | "none";
 export interface AppearancePrefs {
   density: AppearanceDensity;
   textSize: AppearanceTextSize;
   motion: AppearanceMotion;
+  background: AppearanceBackground;
 }
 
 export const DEFAULT_APPEARANCE: AppearancePrefs = {
   density: "compact",
   textSize: "default",
   motion: "full",
+  background: "grid",
 };
+
+function parseBackground(v: unknown): AppearanceBackground {
+  return v === "glow" || v === "dots" || v === "none" ? v : "grid";
+}
 
 /**
  * Read the operator's appearance preferences from the cookie bridge so
@@ -37,6 +44,7 @@ export async function readAppearance(): Promise<AppearancePrefs> {
       density: parsed.density === "comfortable" ? "comfortable" : "compact",
       textSize: parsed.textSize === "larger" ? "larger" : "default",
       motion: parsed.motion === "reduced" ? "reduced" : "full",
+      background: parseBackground(parsed.background),
     };
   } catch {
     return DEFAULT_APPEARANCE;

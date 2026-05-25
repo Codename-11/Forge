@@ -69,9 +69,25 @@ export const executionPlanRouter = router({
         },
         orderBy: { updatedAt: "desc" },
         take: input.limit,
-        include: { _count: { select: { steps: true } } },
+        include: {
+          _count: { select: { steps: true } },
+          steps: {
+            orderBy: { position: "asc" },
+            select: { id: true, position: true, status: true },
+          },
+          createdBy: { select: { id: true, name: true, image: true } },
+          createdByAgent: {
+            select: { id: true, profileKey: true, name: true, avatar: true },
+          },
+        },
       });
-      return { items: rows };
+      const items = rows.map((row) => ({
+        ...row,
+        doneSteps: row.steps.filter(
+          (s) => s.status === ExecutionStepStatus.DONE,
+        ).length,
+      }));
+      return { items };
     }),
 
   get: workspaceProcedure

@@ -1,10 +1,12 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { AlertTriangle } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Kbd } from "@/components/ui/kbd";
 import { Confirm } from "@/components/ui/modal";
 import { Section } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
@@ -51,7 +53,9 @@ export default function WorkspaceSettingsPage() {
     onError: (e) => toast.error(e.message),
   });
 
-  useEffect(() => {
+  // Reset all local form state from the server snapshot. Used on load and
+  // when the operator discards pending edits.
+  const resetFromCurrent = useCallback(() => {
     if (!current) return;
     setName(current.name);
     setAvatarUrl(current.avatarUrl ?? "");
@@ -76,6 +80,10 @@ export default function WorkspaceSettingsPage() {
     setAiModel(current.aiModel ?? "");
     setStartedStatusId(current.startedStatusId ?? null);
   }, [current]);
+
+  useEffect(() => {
+    resetFromCurrent();
+  }, [resetFromCurrent]);
 
   const update = trpc.workspace.update.useMutation({
     onSuccess: () => {
@@ -111,69 +119,180 @@ export default function WorkspaceSettingsPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
 
+  // Field-by-field diff against the server snapshot. Drives the save bar's
+  // pending count and the dirty gate, so we only push when something moved.
+  const dirtyFields = useMemo(() => {
+    if (!current) return [] as string[];
+    const fields: Array<[string, boolean]> = [
+      ["name", name.trim() !== current.name],
+      ["avatarUrl", (avatarUrl.trim() || "") !== (current.avatarUrl ?? "")],
+      ["cycleLengthDays", cycleLengthDays !== current.cycleLengthDays],
+      ["cycleCooldownDays", cycleCooldownDays !== current.cycleCooldownDays],
+      ["timeTrackingEnabled", timeTrackingEnabled !== current.timeTrackingEnabled],
+      ["attachmentQuotaMb", attachmentQuotaMb !== current.attachmentQuotaMb],
+      ["agentIdleTimeoutMinutes", agentIdleTimeoutMinutes !== current.agentIdleTimeoutMinutes],
+      ["assignmentSlaMinutes", assignmentSlaMinutes !== current.assignmentSlaMinutes],
+      ["agentRunStaleMinutes", agentRunStaleMinutes !== current.agentRunStaleMinutes],
+      ["autoRedispatchOnStall", autoRedispatchOnStall !== current.autoRedispatchOnStall],
+      ["requiredAckSeconds", requiredAckSeconds !== current.requiredAckSeconds],
+      ["autoRedispatchOnNoack", autoRedispatchOnNoack !== current.autoRedispatchOnNoack],
+      ["slaEnforcementEnabled", slaEnforcementEnabled !== current.slaEnforcementEnabled],
+      ["aiEnabled", aiEnabled !== current.aiEnabled],
+      ["aiTriageOnCreate", aiTriageOnCreate !== current.aiTriageOnCreate],
+      ["aiCoachEnabled", aiCoachEnabled !== current.aiCoachEnabled],
+      ["aiProvider", aiProvider !== (current.aiProvider ?? "hermes")],
+      ["aiModel", (aiModel.trim() || "") !== (current.aiModel ?? "")],
+      ["startedStatusId", (startedStatusId ?? null) !== (current.startedStatusId ?? null)],
+    ];
+    return fields.filter(([, changed]) => changed).map(([k]) => k);
+  }, [
+    current,
+    name,
+    avatarUrl,
+    cycleLengthDays,
+    cycleCooldownDays,
+    timeTrackingEnabled,
+    attachmentQuotaMb,
+    agentIdleTimeoutMinutes,
+    assignmentSlaMinutes,
+    agentRunStaleMinutes,
+    autoRedispatchOnStall,
+    requiredAckSeconds,
+    autoRedispatchOnNoack,
+    slaEnforcementEnabled,
+    aiEnabled,
+    aiTriageOnCreate,
+    aiCoachEnabled,
+    aiProvider,
+    aiModel,
+    startedStatusId,
+  ]);
+
+  const pending = dirtyFields.length;
+  const dirty = pending > 0;
+
+  const save = useCallback(() => {
+    if (!canEdit || !dirty || update.isPending) return;
+    update.mutate({
+      name: name.trim() || undefined,
+      avatarUrl: avatarUrl.trim() ? avatarUrl.trim() : null,
+      cycleLengthDays,
+      cycleCooldownDays,
+      timeTrackingEnabled,
+      attachmentQuotaMb,
+      agentIdleTimeoutMinutes,
+      assignmentSlaMinutes,
+      agentRunStaleMinutes,
+      autoRedispatchOnStall,
+      requiredAckSeconds,
+      autoRedispatchOnNoack,
+      slaEnforcementEnabled,
+      aiEnabled,
+      aiTriageOnCreate,
+      aiCoachEnabled,
+      aiProvider,
+      aiModel: aiModel.trim() ? aiModel.trim() : null,
+      startedStatusId,
+    });
+  }, [
+    canEdit,
+    dirty,
+    update,
+    name,
+    avatarUrl,
+    cycleLengthDays,
+    cycleCooldownDays,
+    timeTrackingEnabled,
+    attachmentQuotaMb,
+    agentIdleTimeoutMinutes,
+    assignmentSlaMinutes,
+    agentRunStaleMinutes,
+    autoRedispatchOnStall,
+    requiredAckSeconds,
+    autoRedispatchOnNoack,
+    slaEnforcementEnabled,
+    aiEnabled,
+    aiTriageOnCreate,
+    aiCoachEnabled,
+    aiProvider,
+    aiModel,
+    startedStatusId,
+  ]);
+
+  // ⌘S / Ctrl+S saves when there are pending changes.
+  useEffect(() => {
+    if (!canEdit) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        save();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canEdit, save]);
+
   return (
     <>
       <Topbar title="Workspace" subtitle={ws.name} />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl space-y-6 p-6">
-          <Section title="Identity">
-            <div className="flex items-center gap-4 rounded-lg border border-border bg-card/40 p-4">
-              <span
-                className="grid h-12 w-12 shrink-0 place-items-center rounded-md font-mono text-base font-semibold"
-                style={{
-                  backgroundColor: badge.bg,
-                  color: badge.fg,
-                  boxShadow: `inset 0 0 0 1px ${badge.ring}`,
-                }}
-              >
-                {ws.key.slice(0, 3)}
-              </span>
-              <div className="min-w-0 flex-1 space-y-2">
-                <Field label="Name">
-                  <Input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    disabled={!canEdit}
-                    maxLength={80}
-                  />
-                </Field>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Key">
-                    <Input value={ws.key} disabled readOnly />
+        <div className="mx-auto max-w-2xl space-y-10 p-6 pb-24">
+          <Section
+            title="Identity"
+            hint="Visible to everyone in this workspace. The key is immutable once set."
+          >
+            <FormCard className="p-5">
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-[64px_1fr]">
+                <span
+                  className="grid h-16 w-16 shrink-0 place-items-center rounded-md font-mono text-xl font-semibold"
+                  style={{
+                    backgroundColor: badge.bg,
+                    color: badge.fg,
+                    boxShadow: `inset 0 0 0 1px ${badge.ring}`,
+                  }}
+                >
+                  {ws.key.slice(0, 3)}
+                </span>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Field label="Name" hint="Shown in the workspace switcher.">
+                    <Input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      disabled={!canEdit}
+                      maxLength={80}
+                    />
                   </Field>
-                  <Field label="Slug">
-                    <Input value={ws.slug} disabled readOnly />
+                  <Field
+                    label="Avatar URL"
+                    optional
+                    hint="Leave empty for the auto color badge."
+                  >
+                    <Input
+                      value={avatarUrl}
+                      onChange={(e) => setAvatarUrl(e.target.value)}
+                      placeholder="https://example.com/avatar.png"
+                      disabled={!canEdit}
+                    />
+                  </Field>
+                  <Field
+                    label="Key"
+                    hint="Used in issue ids like FRG-42. Can't be changed."
+                  >
+                    <Input value={ws.key} className="font-mono" disabled readOnly />
+                  </Field>
+                  <Field label="Slug" hint="Appears in URLs.">
+                    <Input value={ws.slug} className="font-mono" disabled readOnly />
                   </Field>
                 </div>
-                <p className="text-[0.6875rem] text-muted-foreground">
-                  Keys are immutable once created; slug changes would require a
-                  data migration and aren&apos;t supported from the UI.
-                </p>
               </div>
-            </div>
-          </Section>
-
-          <Section title="Appearance">
-            <div className="grid grid-cols-1 gap-3 rounded-lg border border-border bg-card/40 p-4">
-              <Field
-                label="Avatar URL"
-                hint="Used in the switcher and top-left badge. Leave empty for the auto color badge."
-              >
-                <Input
-                  value={avatarUrl}
-                  onChange={(e) => setAvatarUrl(e.target.value)}
-                  placeholder="https://example.com/avatar.png"
-                  disabled={!canEdit}
-                />
-              </Field>
-            </div>
+            </FormCard>
           </Section>
 
           <Section
-            title="Sprints"
-            hint="Default iteration cadence. Each sprint can still override on create."
+            title="Sprint cadence"
+            hint="Default iteration cadence. Each sprint can still override on create; rollover uses these."
           >
-            <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-card/40 p-4">
+            <FormCard className="grid grid-cols-2 gap-5 p-5">
               <Field
                 label="Sprint length (days)"
                 hint="How long a sprint runs by default. Used when rollover creates the next sprint."
@@ -200,112 +319,90 @@ export default function WorkspaceSettingsPage() {
                   disabled={!canEdit}
                 />
               </Field>
-            </div>
+            </FormCard>
           </Section>
 
           <Section
-            title="Features"
-            hint="Settings-driven toggles. No magic numbers baked into handlers."
+            title="Tracking & storage"
+            hint="Settings-driven toggles and quotas. No magic numbers baked into handlers."
           >
-            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
-              <label className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">Time tracking</div>
-                  <div className="text-xs text-muted-foreground">
-                    Exposes start/stop timers and the time-entry report.
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={timeTrackingEnabled}
-                  onChange={(e) => setTimeTrackingEnabled(e.target.checked)}
-                  disabled={!canEdit}
-                  className="h-4 w-4"
-                />
-              </label>
-              <Field
-                label="Attachment quota (MB)"
-                hint="MB per workspace. Counts file size of finalized attachments only — drafts and aborted uploads don't count."
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  value={attachmentQuotaMb}
-                  onChange={(e) => setAttachmentQuotaMb(Number(e.target.value) || 0)}
-                  disabled={!canEdit}
-                />
-              </Field>
-              <Field
-                label="Agent idle timeout (minutes)"
-                hint="Flip an agent to OFFLINE when no signal has been received for this long. Signals = successful webhook deliveries to the agent's URL (push-dispatch model — every delivered AGENT_ASSIGNED / COMMENT_CREATED counts) plus any explicit agents.heartbeat MCP call. 0 disables the sweep entirely; 15 is a good default if your agents receive regular event traffic, higher if quiet hours are common."
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  max={1440}
-                  value={agentIdleTimeoutMinutes}
-                  onChange={(e) =>
-                    setAgentIdleTimeoutMinutes(Number(e.target.value) || 0)
-                  }
-                  disabled={!canEdit}
-                />
-              </Field>
-            </div>
+            <FormCard className="space-y-5 p-5">
+              <FormToggle
+                checked={timeTrackingEnabled}
+                onChange={setTimeTrackingEnabled}
+                disabled={!canEdit}
+                label="Enable time tracking"
+                hint="Exposes per-issue start/stop timers in the issue rail and the aggregated time-entry report."
+              />
+              <div className="grid grid-cols-2 gap-5 border-t border-border/60 pt-5">
+                <Field
+                  label="Attachment quota (MB)"
+                  hint="MB per workspace. Counts file size of finalized attachments only — drafts and aborted uploads don't count."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    value={attachmentQuotaMb}
+                    onChange={(e) => setAttachmentQuotaMb(Number(e.target.value) || 0)}
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="Agent idle timeout (minutes)"
+                  hint="Flip an agent to OFFLINE when no signal arrives for this long. Signals = delivered webhooks (AGENT_ASSIGNED / COMMENT_CREATED) plus any agents.heartbeat call. 0 disables the sweep; 15 is a good default."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1440}
+                    value={agentIdleTimeoutMinutes}
+                    onChange={(e) =>
+                      setAgentIdleTimeoutMinutes(Number(e.target.value) || 0)
+                    }
+                    disabled={!canEdit}
+                  />
+                </Field>
+              </div>
+            </FormCard>
           </Section>
 
           <Section
             title="Agent SLA"
-            hint="Watchdog for assignments where the agent woke up but never moved the issue. Pure follow-through reliability — no priority changes."
+            hint="Watchdog for assignments where the agent woke up but never moved the issue. Pure follow-through reliability — no priority changes. Lower = louder."
           >
-            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
-              <Field
-                label="Agent SLA (minutes)"
-                hint="Flip an issue to STALLED when an assigned agent hasn't moved it out of BACKLOG/TODO within this window. 0 disables. 30 is a reasonable starting point."
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  max={10080}
-                  value={assignmentSlaMinutes}
-                  onChange={(e) =>
-                    setAssignmentSlaMinutes(Number(e.target.value) || 0)
-                  }
-                  disabled={!canEdit}
-                />
-              </Field>
-              <Field
-                label="Agent run stale timeout (minutes)"
-                hint="Close ACTIVE agent runs as STALLED when their last run event is older than this window. 0 disables auto-close; the UI can still surface runs as stale earlier for operator attention."
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  max={10080}
-                  value={agentRunStaleMinutes}
-                  onChange={(e) =>
-                    setAgentRunStaleMinutes(Number(e.target.value) || 0)
-                  }
-                  disabled={!canEdit}
-                />
-              </Field>
-              <label className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">
-                    Auto-redispatch on stall
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    When checked, also clears assignedAgentId so the
-                    auto-dispatcher re-picks. Off = event-only (operator-driven).
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={autoRedispatchOnStall}
-                  onChange={(e) => setAutoRedispatchOnStall(e.target.checked)}
-                  disabled={!canEdit}
-                  className="h-4 w-4"
-                />
-              </label>
+            <FormCard className="space-y-5 p-5">
+              <div className="grid grid-cols-2 gap-5">
+                <Field
+                  label="Stalled SLA (minutes)"
+                  hint="Flip an issue to STALLED when an assigned agent hasn't moved it out of BACKLOG/TODO within this window. 0 disables. 30 is a reasonable start."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10080}
+                    value={assignmentSlaMinutes}
+                    onChange={(e) =>
+                      setAssignmentSlaMinutes(Number(e.target.value) || 0)
+                    }
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="Run stale timeout (minutes)"
+                  hint="Close ACTIVE agent runs as STALLED when their last run event is older than this. 0 disables auto-close; the UI can still surface runs as stale earlier."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10080}
+                    value={agentRunStaleMinutes}
+                    onChange={(e) =>
+                      setAgentRunStaleMinutes(Number(e.target.value) || 0)
+                    }
+                    disabled={!canEdit}
+                  />
+                </Field>
+              </div>
               <Field
                 label="Required ack (seconds)"
                 hint="How long an agent has to comment or transition an issue after assignment before AGENT_NOACK fires. 0 disables. 60–180s is typical."
@@ -321,62 +418,40 @@ export default function WorkspaceSettingsPage() {
                   disabled={!canEdit}
                 />
               </Field>
-              <label className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">
-                    Auto-redispatch on no-ack
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    When checked, AGENT_NOACK also clears assignedAgentId so
-                    the auto-dispatcher re-picks. Mirrors the stall toggle.
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
+              <div className="space-y-4 border-t border-border/60 pt-5">
+                <FormToggle
+                  checked={autoRedispatchOnStall}
+                  onChange={setAutoRedispatchOnStall}
+                  disabled={!canEdit}
+                  label="Auto-redispatch on stall"
+                  hint="When on, a stall also clears assignedAgentId so the auto-dispatcher re-picks. Off = event-only (operator-driven)."
+                />
+                <FormToggle
                   checked={autoRedispatchOnNoack}
-                  onChange={(e) => setAutoRedispatchOnNoack(e.target.checked)}
+                  onChange={setAutoRedispatchOnNoack}
                   disabled={!canEdit}
-                  className="h-4 w-4"
+                  label="Auto-redispatch on no-ack"
+                  hint="When on, AGENT_NOACK also clears assignedAgentId so the auto-dispatcher re-picks. Mirrors the stall toggle."
                 />
-              </label>
-            </div>
-          </Section>
-
-          <Section
-            title="Issue SLA"
-            hint="Per-issue SLA enforcement. Set slaMinutes from issue detail; this toggle controls workspace-wide enforcement."
-          >
-            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
-              <label className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">
-                    Enforce per-issue SLA
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    When checked, scans for issues past their slaMinutes
-                    target and emits ISSUE_SLA_BREACH. Set per-issue
-                    slaMinutes from issue detail.
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
+                <FormToggle
                   checked={slaEnforcementEnabled}
-                  onChange={(e) => setSlaEnforcementEnabled(e.target.checked)}
+                  onChange={setSlaEnforcementEnabled}
                   disabled={!canEdit}
-                  className="h-4 w-4"
+                  label="Enforce per-issue SLA"
+                  hint="When on, scans for issues past their slaMinutes target and emits ISSUE_SLA_BREACH. Set per-issue slaMinutes from issue detail."
                 />
-              </label>
-            </div>
+              </div>
+            </FormCard>
           </Section>
 
           <Section
             title="Auto-transition on assignment"
-            hint="When an agent is assigned to a queued/backlog issue, the server can flip the issue into a chosen IN_PROGRESS status atomically with the AGENT_ASSIGNED event. Lets agents skip the statuses.list + issues.transition round-trip on every dispatch."
+            hint="When an agent is assigned a queued/backlog issue, the server can flip it into a chosen IN_PROGRESS status atomically with AGENT_ASSIGNED — letting agents skip the statuses.list + issues.transition round-trip on every dispatch."
           >
-            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+            <FormCard className="space-y-4 p-5">
               <Field
                 label="Started status"
-                hint="Pick the IN_PROGRESS-category status to transition into. Off = no auto-transition (agents handle it client-side). The transition is skipped when the issue is already in IN_PROGRESS / IN_REVIEW or in DONE / CANCELED."
+                hint="The IN_PROGRESS-category status to transition into. Off = no auto-transition (agents handle it client-side). Skipped when the issue is already IN_PROGRESS / IN_REVIEW or in DONE / CANCELED."
               >
                 <select
                   value={startedStatusId ?? ""}
@@ -386,7 +461,7 @@ export default function WorkspaceSettingsPage() {
                     )
                   }
                   disabled={!canEdit}
-                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
+                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
                 >
                   <option value="">Off — agents handle transition client-side</option>
                   {(current?.statuses ?? [])
@@ -399,22 +474,22 @@ export default function WorkspaceSettingsPage() {
                 </select>
               </Field>
               {startedStatusId && (
-                <div className="rounded-md border border-border bg-background/40 px-3 py-2 text-[0.6875rem] text-muted-foreground">
-                  When AGENT_ASSIGNED fires, the issue auto-transitions
-                  to this status. The event payload gains an{" "}
+                <div className="rounded-md border border-border bg-background/40 px-3 py-2 text-meta text-muted-foreground">
+                  When AGENT_ASSIGNED fires, the issue auto-transitions to this
+                  status. The event payload gains an{" "}
                   <code>autoTransitionedTo</code> field so receivers can
-                  distinguish a server-driven transition from a
-                  pre-existing status.
+                  distinguish a server-driven transition from a pre-existing
+                  status.
                 </div>
               )}
-            </div>
+            </FormCard>
           </Section>
 
           <Section
-            title="AI"
-            hint="Forge-internal AI features. Calls Anthropic directly; no cross-system data sharing. Off by default."
+            title="AI provider"
+            hint="Forge-internal AI features. Calls the chosen provider directly; no cross-system data sharing. Off by default."
           >
-            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+            <FormCard className="space-y-5 p-5">
               <Field
                 label="Provider"
                 hint="Hermes is the default — it routes through your model-router plugin so you don't need a direct API key. Switch to another provider for direct calls."
@@ -431,7 +506,7 @@ export default function WorkspaceSettingsPage() {
                     )
                   }
                   disabled={!canEdit}
-                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
+                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
                 >
                   {(aiStatus?.providers ?? []).map((p) => (
                     <option key={p.id} value={p.id}>
@@ -444,64 +519,15 @@ export default function WorkspaceSettingsPage() {
               {aiStatus &&
                 !aiStatus.activeProviderAvailable &&
                 aiStatus.activeProviderReason && (
-                  <div className="rounded-md border border-amber-300/30 bg-amber-300/[0.05] px-3 py-2 text-[0.6875rem] text-amber-200/90">
+                  <div className="rounded-md border border-amber-300/30 bg-amber-300/[0.05] px-3 py-2 text-meta text-amber-200/90">
                     <span className="font-medium">Provider unavailable.</span>{" "}
                     {aiStatus.activeProviderReason} — calls will be skipped
                     until env is set.
                   </div>
                 )}
-              <label className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">Enable AI features</div>
-                  <div className="text-xs text-muted-foreground">
-                    Master toggle. When off, no AI calls are made regardless
-                    of the sub-toggles below.
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={aiEnabled}
-                  onChange={(e) => setAiEnabled(e.target.checked)}
-                  disabled={!canEdit}
-                  className="h-4 w-4"
-                />
-              </label>
-              <label className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">Triage on create</div>
-                  <div className="text-xs text-muted-foreground">
-                    When a human creates an issue, run a one-shot AI
-                    classification (priority, labels, agent) and surface
-                    it as an apply/dismiss chip on the issue page.
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={aiTriageOnCreate}
-                  onChange={(e) => setAiTriageOnCreate(e.target.checked)}
-                  disabled={!canEdit || !aiEnabled}
-                  className="h-4 w-4"
-                />
-              </label>
-              <label className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">Coach comments</div>
-                  <div className="text-xs text-muted-foreground">
-                    When an issue stalls, an agent misses an ack, or an SLA
-                    is breached, post a short diagnostic comment as the
-                    Coach agent. Requires the Coach agent below.
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={aiCoachEnabled}
-                  onChange={(e) => setAiCoachEnabled(e.target.checked)}
-                  disabled={!canEdit || !aiEnabled}
-                  className="h-4 w-4"
-                />
-              </label>
               <Field
                 label="Model"
+                optional
                 hint="Override the provider's default. Leave blank to use the provider default (Hermes resolves via your session model)."
               >
                 <Input
@@ -511,16 +537,43 @@ export default function WorkspaceSettingsPage() {
                     aiStatus?.providers.find((p) => p.id === aiProvider)
                       ?.defaultModel ?? "(provider default)"
                   }
+                  className="font-mono"
                   disabled={!canEdit || !aiEnabled}
                 />
               </Field>
 
-              <ModelCredentials canEdit={canEdit} />
+              <div className="space-y-4 border-t border-border/60 pt-5">
+                <FormToggle
+                  checked={aiEnabled}
+                  onChange={setAiEnabled}
+                  disabled={!canEdit}
+                  label="Enable AI features"
+                  hint="Master toggle. When off, no AI calls are made regardless of the sub-toggles below."
+                />
+                <FormToggle
+                  checked={aiTriageOnCreate}
+                  onChange={setAiTriageOnCreate}
+                  disabled={!canEdit || !aiEnabled}
+                  label="Triage on create"
+                  hint="When a human creates an issue, run a one-shot AI classification (priority, labels, agent) and surface it as an apply/dismiss chip on the issue page."
+                />
+                <FormToggle
+                  checked={aiCoachEnabled}
+                  onChange={setAiCoachEnabled}
+                  disabled={!canEdit || !aiEnabled}
+                  label="Coach comments"
+                  hint="When an issue stalls, an agent misses an ack, or an SLA is breached, post a short diagnostic comment as the Coach agent. Requires the Coach agent below."
+                />
+              </div>
 
-              <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/40 px-3 py-2">
+              <div className="border-t border-border/60 pt-5">
+                <ModelCredentials canEdit={canEdit} />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/40 px-3 py-2.5">
                 <div className="min-w-0">
                   <div className="text-sm font-medium">Coach agent</div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="text-meta text-muted-foreground">
                     {aiStatus?.coach
                       ? `Active — @${aiStatus.coach.profileKey} (${aiStatus.coach.name})`
                       : "Not yet set up. Coach is a non-claiming agent that posts diagnostic comments."}
@@ -537,73 +590,37 @@ export default function WorkspaceSettingsPage() {
                   </Button>
                 )}
               </div>
-            </div>
+            </FormCard>
           </Section>
 
-          {canEdit && (
-            <div className="flex justify-end">
-              <Button
-                variant="ember"
-                disabled={update.isPending}
-                onClick={() =>
-                  update.mutate({
-                    name: name.trim() || undefined,
-                    avatarUrl: avatarUrl.trim() ? avatarUrl.trim() : null,
-                    cycleLengthDays,
-                    cycleCooldownDays,
-                    timeTrackingEnabled,
-                    attachmentQuotaMb,
-                    agentIdleTimeoutMinutes,
-                    assignmentSlaMinutes,
-                    agentRunStaleMinutes,
-                    autoRedispatchOnStall,
-                    requiredAckSeconds,
-                    autoRedispatchOnNoack,
-                    slaEnforcementEnabled,
-                    aiEnabled,
-                    aiTriageOnCreate,
-                    aiCoachEnabled,
-                    aiProvider,
-                    aiModel: aiModel.trim() ? aiModel.trim() : null,
-                    startedStatusId,
-                  })
-                }
-              >
-                {update.isPending ? "Saving…" : "Save changes"}
-              </Button>
-            </div>
-          )}
-
           {canDelete && (
-            <Section title="Danger zone" hint="These actions cannot be undone.">
-              <div className="divide-y divide-border rounded-lg border border-danger/30 bg-danger/5">
-                <div className="flex items-center justify-between gap-3 p-4">
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium">Archive workspace</div>
-                    <div className="text-xs text-muted-foreground">
-                      Hides the workspace from members without deleting data.
-                    </div>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={() => setArchiveOpen(true)}>
-                    Archive
-                  </Button>
-                </div>
-                <div className="flex items-center justify-between gap-3 p-4">
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium">Delete workspace</div>
-                    <div className="text-xs text-muted-foreground">
-                      Permanently removes all issues, projects, and history.
-                    </div>
-                  </div>
-                  <Button variant="danger" size="sm" onClick={() => setDeleteOpen(true)}>
-                    Delete…
-                  </Button>
-                </div>
-              </div>
-            </Section>
+            <DangerZone>
+              <DangerRow
+                title="Archive workspace"
+                blurb="Members lose access until restored. Data is retained — you can reactivate later from Settings → Workspaces."
+                ctaLabel="Archive"
+                onClick={() => setArchiveOpen(true)}
+              />
+              <DangerRow
+                title="Delete workspace"
+                blurb="Permanently removes all issues, projects, sprints, attachments, and events. Cannot be undone."
+                ctaLabel="Delete…"
+                confirmHint={`Type ${ws.name}`}
+                onClick={() => setDeleteOpen(true)}
+              />
+            </DangerZone>
           )}
         </div>
       </div>
+
+      {canEdit && (
+        <SaveBar
+          pending={pending}
+          saving={update.isPending}
+          onSave={save}
+          onDiscard={resetFromCurrent}
+        />
+      )}
 
       <Confirm
         open={archiveOpen}
@@ -629,26 +646,191 @@ export default function WorkspaceSettingsPage() {
   );
 }
 
-function Field({
-  label,
-  hint,
+/* ────────────────────────── Local layout helpers ────────────────────────── */
+
+/** Sectioned card surface — bg-card/40 with a hairline border. */
+function FormCard({
   children,
+  className = "",
 }: {
-  label: string;
-  hint?: string;
   children: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <div>
-      <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
+    <div className={`rounded-lg border border-border bg-card/40 ${className}`}>
       {children}
-      {hint && <div className="mt-1 text-[0.6875rem] text-muted-foreground">{hint}</div>}
     </div>
   );
 }
 
+/** Labeled field with inline help text under the label (no tooltips). */
+function Field({
+  label,
+  hint,
+  optional,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  optional?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-[0.8125rem] font-medium tracking-tight text-foreground">
+          {label}
+        </span>
+        {optional && (
+          <span className="text-meta text-muted-foreground/70">optional</span>
+        )}
+      </div>
+      {hint && (
+        <p className="mt-0.5 max-w-[480px] text-meta text-muted-foreground">
+          {hint}
+        </p>
+      )}
+      <div className="mt-2">{children}</div>
+    </div>
+  );
+}
+
+/** Pill toggle with a label + inline help, matching the design vocabulary. */
+function FormToggle({
+  checked,
+  onChange,
+  disabled,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  label: string;
+  hint?: string;
+}) {
+  return (
+    <label
+      className={`flex items-start gap-3 ${disabled ? "opacity-60" : "cursor-pointer"}`}
+    >
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        disabled={disabled}
+        onClick={() => !disabled && onChange(!checked)}
+        className={`focus-ring mt-0.5 inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
+          checked ? "bg-ember" : "bg-subtle"
+        }`}
+      >
+        <span
+          className={`inline-block h-3 w-3 rounded-full bg-background transition-transform ${
+            checked ? "translate-x-3.5" : "translate-x-0.5"
+          }`}
+        />
+      </button>
+      <span className="min-w-0">
+        <span className="block text-[0.8125rem] font-medium">{label}</span>
+        {hint && (
+          <span className="mt-0.5 block max-w-[460px] text-meta text-muted-foreground">
+            {hint}
+          </span>
+        )}
+      </span>
+    </label>
+  );
+}
+
+/** Red-washed danger zone container. */
+function DangerZone({ children }: { children: React.ReactNode }) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-danger/30 bg-danger/[0.03]">
+      <header className="flex flex-wrap items-center gap-2 border-b border-danger/20 bg-danger/5 px-4 py-2.5">
+        <AlertTriangle size={13} className="text-danger" />
+        <h2 className="text-sm font-semibold text-danger">Danger zone</h2>
+        <span className="text-meta text-danger/80">
+          Irreversible. Confirm before continuing.
+        </span>
+      </header>
+      <div className="divide-y divide-danger/15">{children}</div>
+    </section>
+  );
+}
+
+function DangerRow({
+  title,
+  blurb,
+  ctaLabel,
+  confirmHint,
+  onClick,
+}: {
+  title: string;
+  blurb: string;
+  ctaLabel: string;
+  confirmHint?: string;
+  onClick: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-4 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium">{title}</div>
+        <div className="mt-0.5 max-w-[520px] text-meta text-muted-foreground">
+          {blurb}
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {confirmHint && (
+          <span className="hidden h-7 items-center rounded-md border border-danger/40 bg-background px-2 font-mono text-xs text-muted-foreground/70 sm:flex">
+            {confirmHint}
+          </span>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onClick}
+          className="border-danger/40 text-danger hover:bg-danger/10"
+        >
+          {ctaLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Sticky save bar — appears only when the form is dirty. */
+function SaveBar({
+  pending,
+  saving,
+  onSave,
+  onDiscard,
+}: {
+  pending: number;
+  saving: boolean;
+  onSave: () => void;
+  onDiscard: () => void;
+}) {
+  if (!pending) return null;
+  return (
+    <div className="sticky bottom-0 z-10 flex items-center gap-3 border-t border-border bg-background/95 px-6 py-3 backdrop-blur">
+      <div className="flex items-center gap-2 text-meta text-muted-foreground">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-ember forge-breath" />
+        <span>
+          {pending} pending change{pending === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="ml-auto flex items-center gap-2">
+        <Button variant="ghost" size="sm" onClick={onDiscard} disabled={saving}>
+          Discard
+        </Button>
+        <Button variant="ember" size="sm" onClick={onSave} disabled={saving}>
+          {saving ? "Saving…" : "Save changes"}
+          <Kbd className="ml-1.5">⌘S</Kbd>
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 /**
  * Per-workspace chat-model credentials (DB-backed, key encrypted). Lets the
@@ -688,7 +870,7 @@ function ModelCredentials({ canEdit }: { canEdit: boolean }) {
     <div className="space-y-2 rounded-md border border-border/60 bg-background/40 p-3">
       <div>
         <div className="text-sm font-medium">Model credentials</div>
-        <div className="text-xs text-muted-foreground">
+        <div className="text-meta text-muted-foreground">
           Store a chat-model key per provider so the Streaming engine and AI
           features work without environment variables. Keys are encrypted at
           rest and never shown again. A stored key overrides any env var.

@@ -83,7 +83,14 @@ export const initiativeRouter = router({
         ...(input.status ? { status: input.status } : {}),
       },
       orderBy: [{ position: "asc" }, { createdAt: "asc" }],
-      include: { _count: { select: { projects: true } } },
+      include: {
+        _count: { select: { projects: true } },
+        projects: {
+          where: { deletedAt: null },
+          orderBy: { updatedAt: "desc" },
+          select: { id: true, key: true, name: true, color: true },
+        },
+      },
     });
     if (initiatives.length === 0) return [];
 
@@ -132,8 +139,15 @@ export const initiativeRouter = router({
     );
 
     const totals = new Map<string, { total: number; done: number }>();
+    // Per-project tally, reusing the same grouped rows + isTerminal map.
+    const projectTally = new Map<string, { total: number; done: number }>();
     for (const row of grouped) {
       if (!row.projectId) continue;
+      const pCell = projectTally.get(row.projectId) ?? { total: 0, done: 0 };
+      pCell.total += row._count._all;
+      if (isTerminal.get(row.statusId)) pCell.done += row._count._all;
+      projectTally.set(row.projectId, pCell);
+
       const initiativeId = projectInitiative.get(row.projectId);
       if (!initiativeId) continue;
       const cell = totals.get(initiativeId) ?? { total: 0, done: 0 };
@@ -146,6 +160,10 @@ export const initiativeRouter = router({
       const t = totals.get(i.id) ?? { total: 0, done: 0 };
       return {
         ...i,
+        projects: i.projects.map((p) => {
+          const pt = projectTally.get(p.id) ?? { total: 0, done: 0 };
+          return { ...p, done: pt.done, total: pt.total };
+        }),
         _count: {
           ...i._count,
           issues: t.total,

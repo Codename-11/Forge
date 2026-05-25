@@ -11,6 +11,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { Section } from "@/components/settings/section";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -74,6 +75,41 @@ export default function ViewsPage() {
     return q.toString();
   }
 
+  const allViews = views ?? [];
+  const personalViews = allViews.filter((v) => v.userId);
+  const sharedViews = allViews.filter((v) => !v.userId);
+
+  function ViewRow({ v }: { v: (typeof allViews)[number] }) {
+    const f = v.filters as Record<string, unknown>;
+    const qs = toQuery(f);
+    return (
+      <li key={v.id} className="flex items-center gap-3 px-4 py-3">
+        <Bookmark className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/w/${slug}/issues${qs ? `?${qs}` : ""}`}
+              className="font-medium hover:text-ember"
+            >
+              {v.name}
+            </Link>
+            {v.userId ? <Badge>personal</Badge> : <Badge color="#7c3aed">shared</Badge>}
+          </div>
+          <div className="mt-0.5 truncate font-mono text-[0.6875rem] text-muted-foreground">
+            {qs || "no filters"}
+          </div>
+        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setDeleteTarget({ id: v.id, name: v.name })}
+        >
+          Delete
+        </Button>
+      </li>
+    );
+  }
+
   return (
     <>
       <Topbar
@@ -86,45 +122,60 @@ export default function ViewsPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
-          <Card>
-            {(views ?? []).map((v) => {
-              const f = v.filters as Record<string, unknown>;
-              const qs = toQuery(f);
-              return (
-                <li key={v.id} className="flex items-center gap-3 px-4 py-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <Link
-                        href={`/w/${slug}/issues${qs ? `?${qs}` : ""}`}
-                        className="font-medium hover:text-ember"
-                      >
-                        {v.name}
-                      </Link>
-                      {v.userId ? <Badge>personal</Badge> : <Badge color="#7c3aed">shared</Badge>}
-                    </div>
-                    <div className="mt-0.5 truncate font-mono text-[0.6875rem] text-muted-foreground">
-                      {qs || "no filters"}
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setDeleteTarget({ id: v.id, name: v.name })}
-                  >
-                    Delete
-                  </Button>
-                </li>
-              );
-            })}
-            {views?.length === 0 && (
+        <div className="mx-auto max-w-3xl space-y-8 p-6">
+          {allViews.length === 0 ? (
+            <Card as="div">
               <EmptyState
+                as="div"
                 icon={Bookmark}
                 title="No saved views yet"
-                hint="Save a filter combo you reach for often — personal or shared with the workspace."
+                hint="A saved view bookmarks a filter combo — project, status, priority, search — so you can jump straight back to a slice of work without rebuilding the filters each time. Keep one personal, or share it so the whole workspace sees the same list."
+                action={
+                  <Button variant="ember" size="sm" onClick={() => setOpen(true)}>
+                    New view
+                  </Button>
+                }
               />
-            )}
-          </Card>
+            </Card>
+          ) : (
+            <>
+              <Section
+                title="Yours"
+                hint="Personal views — only you see these. Click a name to open it in the issues list."
+              >
+                <Card>
+                  {personalViews.map((v) => (
+                    <ViewRow key={v.id} v={v} />
+                  ))}
+                  {personalViews.length === 0 && (
+                    <EmptyState
+                      icon={Bookmark}
+                      title="No personal views"
+                      hint="Save a filter combo you reach for often. Leave “shared” unchecked to keep it to yourself."
+                    />
+                  )}
+                </Card>
+              </Section>
+
+              <Section
+                title="Shared with workspace"
+                hint="Visible to everyone in the workspace — useful for team queues like “Bugs” or “Awaiting review.”"
+              >
+                <Card>
+                  {sharedViews.map((v) => (
+                    <ViewRow key={v.id} v={v} />
+                  ))}
+                  {sharedViews.length === 0 && (
+                    <EmptyState
+                      icon={Bookmark}
+                      title="Nothing shared yet"
+                      hint="Check “shared” when saving a view to surface it for the whole workspace."
+                    />
+                  )}
+                </Card>
+              </Section>
+            </>
+          )}
         </div>
       </div>
 

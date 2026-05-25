@@ -7,6 +7,7 @@ import {
   Archive,
   CalendarClock,
   Inbox,
+  MessageSquare,
   Tag,
   UserCircle2,
 } from "lucide-react";
@@ -111,6 +112,54 @@ export function IssueList({
   const filtered = authorId ? items.filter((i) => i.authorId === authorId) : items;
   const density = useDensity();
   const compact = density === "compact";
+
+  // Status grouping (Linear-style). Group the visible rows by status,
+  // ordered by the workspace status `position` (status.list is already
+  // position-sorted). Each group renders a sticky header before its rows.
+  // The flat selection/ordering refs (orderedIdsRef etc.) still see the
+  // rows in `filtered` order, so Shift+Click ranges + select-all are
+  // unaffected by the visual grouping.
+  type IssueRow = (typeof filtered)[number];
+  const statusGroups = useMemo(() => {
+    const byStatus = new Map<string, IssueRow[]>();
+    for (const issue of filtered) {
+      const arr = byStatus.get(issue.statusId);
+      if (arr) arr.push(issue);
+      else byStatus.set(issue.statusId, [issue]);
+    }
+    const ordered: Array<{
+      status: { id: string; name: string; color: string };
+      issues: IssueRow[];
+    }> = [];
+    const seen = new Set<string>();
+    // First, statuses in their workspace-defined order.
+    for (const s of statuses ?? []) {
+      const group = byStatus.get(s.id);
+      if (group && group.length > 0) {
+        ordered.push({
+          status: { id: s.id, name: s.name, color: s.color },
+          issues: group,
+        });
+        seen.add(s.id);
+      }
+    }
+    // Then any status present on a row but missing from status.list
+    // (shouldn't happen, but never drop rows). Use the row's own status.
+    for (const issue of filtered) {
+      if (seen.has(issue.statusId)) continue;
+      seen.add(issue.statusId);
+      const group = byStatus.get(issue.statusId) ?? [];
+      ordered.push({
+        status: {
+          id: issue.status.id,
+          name: issue.status.name,
+          color: issue.status.color,
+        },
+        issues: group,
+      });
+    }
+    return ordered;
+  }, [filtered, statuses]);
 
   // M4 (design spec): stagger the row fade-in-up, but only on the first
   // render that has rows — not on every refetch / filter change (which
@@ -400,8 +449,22 @@ export function IssueList({
           </span>
         </div>
       )}
-      <div className="divide-y divide-border">
-        {filtered.map((issue, i) => {
+      {statusGroups.map((group) => (
+        <div key={group.status.id}>
+          <div className="sticky top-0 z-[5] flex items-center gap-2 border-b border-border bg-card/80 px-5 py-1.5 backdrop-blur">
+            <span
+              aria-hidden
+              className="inline-block h-2 w-2 shrink-0 rounded-full"
+              style={{ backgroundColor: group.status.color }}
+            />
+            <span className="text-xs font-medium">{group.status.name}</span>
+            <span className="text-meta tabular-nums text-muted-foreground">
+              {group.issues.length}
+            </span>
+          </div>
+          <div className="divide-y divide-border">
+            {group.issues.map((issue) => {
+          const i = orderedIdsRef.current.indexOf(issue.id);
           const on = selected.has(issue.id);
           const isUnread = unreadSet.has(issue.id);
           const isSnoozed =
@@ -491,12 +554,32 @@ export function IssueList({
                 >
                   {issue.title}
                 </IssueHoverPreview>
+                {/* Up to 2 label chips — hidden on narrow viewports so the
+                    title + key never get crowded out. */}
+                {issue.labels.length > 0 && (
+                  <div className="hidden shrink-0 items-center gap-1 md:flex">
+                    {issue.labels.slice(0, 2).map((l) => (
+                      <Badge key={l.labelId} color={l.label.color}>
+                        {l.label.name}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
                 {issue.project && (
                   <Badge className="ml-2 shrink-0" color={issue.project.color ?? undefined}>
                     {issue.project.key}
                   </Badge>
                 )}
                 <div className="ml-auto flex items-center gap-3">
+                  {issue._count.comments > 0 && (
+                    <span
+                      className="inline-flex items-center gap-1 text-meta text-muted-foreground"
+                      title={`${issue._count.comments} comment${issue._count.comments === 1 ? "" : "s"}`}
+                    >
+                      <MessageSquare className="h-3 w-3" />
+                      <span className="tabular-nums">{issue._count.comments}</span>
+                    </span>
+                  )}
                   {isSnoozed && (
                     <span
                       className="inline-flex items-center gap-1 text-meta text-muted-foreground"
@@ -540,8 +623,10 @@ export function IssueList({
               </Link>
             </div>
           );
-        })}
-      </div>
+            })}
+          </div>
+        </div>
+      ))}
 
       <Confirm
         open={bulkArchiveOpen}

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "sonner";
-import { Folder, Plus } from "lucide-react";
+import { Compass, Folder, Plus } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -231,8 +231,24 @@ export default function ProjectsPage() {
                       {p.description}
                     </div>
                   )}
+                  {p._count.issues > 0 && (
+                    <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-subtle">
+                      <div
+                        className="h-full rounded-full bg-ember"
+                        style={{
+                          width: `${Math.round((p._count.doneIssues / p._count.issues) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  )}
                   <div className="mt-3 flex items-center gap-2 text-meta text-muted-foreground">
                     <span>Updated {relativeTime(p.updatedAt)}</span>
+                    {p.initiative && (
+                      <span className="inline-flex items-center gap-1 truncate">
+                        <Compass className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{p.initiative.name}</span>
+                      </span>
+                    )}
                     {p.archived && <Badge>archived</Badge>}
                   </div>
                 </Link>

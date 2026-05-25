@@ -20,7 +20,7 @@ export function Topbar({
   actions?: ReactNode;
 }) {
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-5">
+    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-5">
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold tracking-tight">{title}</div>
         {subtitle && <div className="truncate text-subtitle text-muted-foreground">{subtitle}</div>}

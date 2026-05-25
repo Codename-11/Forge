@@ -9,6 +9,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { Section } from "@/components/settings/section";
 import { trpc } from "@/lib/trpc";
 
 const DEFAULT_COLORS = [
@@ -69,7 +70,11 @@ export function ProjectTemplatesPanel() {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 px-6 pb-6">
+        <div className="mx-auto max-w-3xl space-y-8 px-6 pb-6">
+          <Section
+            title="Project templates"
+            hint="Pre-configured starting points for new projects — a name, an issue-id key, a color, and an icon — so spinning up a new project doesn't mean re-deciding the basics each time."
+          >
           <Card>
             {(rows ?? []).map((r) => (
               <li key={r.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
@@ -117,11 +122,17 @@ export function ProjectTemplatesPanel() {
             {rows?.length === 0 && (
               <EmptyState
                 icon={LayoutTemplate}
-                title="No project templates"
-                hint="Add a starter so new projects begin with a name, key, and color."
+                title="No project templates yet"
+                hint="Define a starter once — name, suggested key, color, icon — and new projects begin half-configured instead of empty. Handy when you spin up similar projects often."
+                action={
+                  <Button variant="ember" size="sm" onClick={() => setEditing({ ...empty })}>
+                    New template
+                  </Button>
+                }
               />
             )}
           </Card>
+          </Section>
         </div>
       </div>
 

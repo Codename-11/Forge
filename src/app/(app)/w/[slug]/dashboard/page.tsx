@@ -134,6 +134,11 @@ export default function DashboardPage() {
       .map((s) => ({ status: s, count: map.get(s.id) ?? 0 }));
   }, [active.data, statuses]);
 
+  const statusMax = useMemo(
+    () => Math.max(1, ...statusRows.map((r) => r.count)),
+    [statusRows],
+  );
+
   const stalled = stalledQ.data?.items ?? [];
   const stalledThresholdDays = stalledQ.data?.stalledThresholdDays ?? null;
 
@@ -248,18 +253,9 @@ export default function DashboardPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* M1 (design spec): ambient animated paper grid. Lives on a
-            full-width relative wrapper (not the centered max-w column) so it
-            spans the entire main area while still growing to the full scroll
-            height. `isolate` forms a stacking context so the `-z-10` grid
-            paints above <main>'s opaque bg-background (without it the grid
-            hides behind the shell). Reduced-motion / motion-off renders a
-            static grid. */}
+        {/* Ambient background now lives once in the app shell <main>
+            (.forge-page-bg, driven by the per-user data-bg pref). */}
         <div className="relative isolate">
-          <div
-            aria-hidden
-            className="forge-grid-bg pointer-events-none absolute inset-0 -z-10 opacity-40"
-          />
           <div className="mx-auto max-w-6xl space-y-6 p-6">
           <GreetingBar
             greeting={greeting}
@@ -371,9 +367,18 @@ export default function DashboardPage() {
                         style={{ backgroundColor: status.color }}
                       />
                       <span className="truncate">{status.name}</span>
+                      <div className="mx-1 h-1.5 flex-1 overflow-hidden rounded-full bg-subtle">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${Math.min(100, (count / statusMax) * 100)}%`,
+                            backgroundColor: status.color,
+                          }}
+                        />
+                      </div>
                       <CountUp
                         value={count}
-                        className="ml-auto font-mono tabular-nums text-muted-foreground"
+                        className="font-mono tabular-nums text-muted-foreground"
                       />
                     </Link>
                   </li>

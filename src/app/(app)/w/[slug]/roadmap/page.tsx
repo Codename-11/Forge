@@ -2,7 +2,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Map as MapIcon } from "lucide-react";
-import { InitiativeStatus } from "@prisma/client";
+import { CycleStatus, InitiativeStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, MOTION, Skeleton } from "@/components/ui";
@@ -221,7 +221,7 @@ export default function RoadmapPage() {
             )}
           </div>
 
-          {/* Cycle markers */}
+          {/* Cycle markers — active sprints tint stronger than planned. */}
           <div className="relative h-2 border-b border-border bg-card/20">
             {(cycles ?? []).map((c) => {
               const left = pct(dayOffset(new Date(c.startsAt)));
@@ -229,10 +229,14 @@ export default function RoadmapPage() {
               return (
                 <div
                   key={c.id}
-                  className="absolute top-0 h-full bg-ember/10"
+                  className="absolute top-0 h-full"
                   style={{
                     left: `${left}%`,
                     width: `${Math.max(0.2, end - left)}%`,
+                    background:
+                      c.status === CycleStatus.ACTIVE
+                        ? "hsl(var(--ember) / 0.18)"
+                        : "hsl(var(--ember) / 0.05)",
                   }}
                   title={`${c.name} (${c.status})`}
                 />
@@ -289,6 +293,38 @@ export default function RoadmapPage() {
               ));
             })}
           </div>
+        </div>
+
+        {/* Legend */}
+        <div className="mt-3 flex min-w-[960px] flex-wrap items-center gap-3 text-meta text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="h-3 w-4 rounded-sm"
+              style={{ background: "hsl(var(--ember) / 0.18)" }}
+            />
+            Active sprint
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="h-3 w-4 rounded-sm"
+              style={{ background: "hsl(var(--ember) / 0.05)" }}
+            />
+            Planned sprint
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="inline-block h-3 w-4 rounded-full"
+              style={{ backgroundColor: "#78716c" }}
+            />
+            Project bar
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden="true" className="h-3 w-px bg-ember" />
+            Today
+          </span>
         </div>
       </div>
     </>
@@ -389,7 +425,12 @@ function RoadmapRow({
               }}
               title={`${p.key} · ${p.name}`}
             >
-              <span className="truncate px-2">{p.name}</span>
+              <span className="flex min-w-0 items-center gap-1.5 px-2">
+                <span className="text-id shrink-0 font-mono tabular-nums opacity-80">
+                  {p.key}
+                </span>
+                <span className="truncate">{p.name}</span>
+              </span>
             </Link>
           );
         })}
