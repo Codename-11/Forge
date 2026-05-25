@@ -2,6 +2,27 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-25 — Agent run completion closes lifecycle rows
+
+Fixed the false-stalled-agent path where an agent could finish a no-op /
+comment-only response but leave its `AgentRun` ACTIVE. The MCP
+`runs.complete` tool already had the agent-facing completion contract and the
+regression expectation was clear: it should store summary/artifact/checklist
+metadata **and** close the run. Implementation now wraps the metadata write in a
+transaction and calls shared `finishRun()` with `COMPLETED`, preserving the
+standard `AGENT_RUN_COMPLETED` audit/activity event while leaving the Issue
+itself open for human/operator follow-up. Also narrowed watched-issue agent
+fan-out to actionable events only, so low-signal status changes and rolling
+STATUS comment updates do not create/touch canonical agent work; BODY comments,
+stalls, SLA breaches, nudges, and priority changes still page watchers.
+
+Verification:
+- `pnpm vitest run src/server/services/__tests__/audit.test.ts src/server/services/__tests__/mcp.test.ts -t "watcher fan-out|runs.complete"` → 5 passed / 101 skipped
+- `pnpm vitest run src/server/services/__tests__/mcp.test.ts src/server/services/__tests__/agent-run-stale.test.ts src/server/services/__tests__/agent-dispatch-inbox.test.ts` → 113 passed
+- `pnpm typecheck`
+- `pnpm lint`
+- `pnpm test` → 702 passed / 1 skipped
+
 ## 2026-05-24 — Design-board parity: glow-grid background + Settings IA (Agents + Connections)
 
 Implemented the "Forge Screens Board" design handoff (claude.ai/design bundle).
