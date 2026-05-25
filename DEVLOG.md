@@ -223,6 +223,38 @@ Validation: applied `0063` to the local `:55432` dev stack; `pnpm typecheck` +
 `pnpm lint` clean · `pnpm test` **688 pass / 1 skip** · **`pnpm build` succeeds**
 (incl. new `/settings/plugins/[id]`). NOTE: deploy must run the `0063` migration.
 
+## 2026-05-25 — Settings left rail + granular detail parity (status glyphs, dispatch matrix, dashed +Add)
+
+Post-deploy review pass — the operator flagged that the settings *shell* kept
+the horizontal navbar (design wanted a left rail) and that lots of small details
+didn't match. Ran a granular detail audit and closed the HIGH items.
+
+- **Settings shell → 244px left rail.** Replaced `SettingsNavbar` (horizontal)
+  with `SettingsRail` (`components/settings/settings-rail.tsx`): grouped nav with
+  per-item hint subtitles + admin pills, ember-tinted active row, a "Search
+  settings" box with `/` focus shortcut. Wired into both the workspace and
+  account settings shells; deleted `settings-navbar.tsx`.
+- **Shared status/priority primitives** (the audit's high-leverage fix): new
+  `ui/status-dot.tsx` (category-aware SVG glyph: backlog hollow-dashed /
+  in-progress half-fill / done check / blocked diagonal / canceled line) and
+  `ui/priority-glyph.tsx` (`!!!`/`!!`/… with per-priority tone). Wired into
+  issue-list, issue-board, issue-hover-preview; de-duped the local glyph maps.
+- **Dispatch rules → routing matrix.** Rewrote the page from a one-line badge
+  sentence to the columnar matrix (On / Name / Priority / Label / Project /
+  Target agent) + ember toggle switch + PriorityGlyph + bordered LabelChip +
+  project color square + key + GripVertical handle + kebab. Read-only
+  Fall-through indicator (autoDispatchMode editable would need a backend field).
+- **Dashed "+ Add" affordances**: agents merged card capabilities + Providers
+  field in the Infrastructure accordion; issue-rail labels as inline chips +
+  dashed "+ Add" + a dashed Bot "Assign agent" button; sprint backlog rail in a
+  dashed border + Inbox icon + "drag → plan" hint.
+- **Missed card deltas finished on standalone pages**: `/plans` DAG step strip +
+  owner footer; roadmap bars got the left-accent + interior done-so-far fill;
+  goals loop explainer now a slim always-on variant above the list.
+
+Validation: `pnpm typecheck` + `pnpm lint` clean · `pnpm test` **699 pass / 1
+skip** · **`pnpm build` succeeds**.
+
 ## 2026-05-23 — Chat session management: delete, stop runtime run, connector-aware status rail
 
 Closing the gaps in chat session/thread management on top of the in-progress

@@ -104,13 +104,26 @@ export function GoalLoopExplainer({ className }: { className?: string }) {
 }
 
 /**
- * Collapsible variant for detail pages — a one-line "How this runs"
- * affordance that expands to the full explainer. Defaults collapsed.
+ * One-line slug summarising the loop phases. Derived from
+ * GOAL_LOOP_PHASES so it can't drift from the canonical copy.
+ */
+const GOAL_LOOP_SLUG = GOAL_LOOP_PHASES.map((p) => p.title).join(" → ");
+
+/**
+ * Collapsible variant — a one-line affordance that expands to the full
+ * explainer. Defaults collapsed. Used both on detail pages ("How this
+ * goal runs") and as a slim always-on header above the goals grid
+ * (`label="Goal loop"`, `slug` shows the phase chain).
  */
 export function GoalLoopExplainerCollapsible({
   className,
+  label = "How this goal runs",
+  slug = false,
 }: {
   className?: string;
+  label?: string;
+  /** Show the "Decompose → Plan → …" phase chain after the label. */
+  slug?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -120,10 +133,18 @@ export function GoalLoopExplainerCollapsible({
         onClick={() => setOpen((v) => !v)}
         className="focus-ring flex w-full items-center gap-2 rounded-lg border border-border bg-card/40 px-3 py-2 text-meta text-muted-foreground transition hover:bg-subtle"
       >
-        <Info className="h-3.5 w-3.5 text-ember" />
-        <span className="flex-1 text-left">How this goal runs</span>
+        <Info className="h-3.5 w-3.5 shrink-0 text-ember" />
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+          <span className="shrink-0 text-foreground">{label}</span>
+          {slug ? (
+            <>
+              <span className="shrink-0 text-muted-foreground/60">·</span>
+              <span className="truncate">{GOAL_LOOP_SLUG}</span>
+            </>
+          ) : null}
+        </span>
         <ChevronDown
-          className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")}
+          className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-180")}
         />
       </button>
       {open ? <GoalLoopExplainer className="mt-2" /> : null}

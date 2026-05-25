@@ -11,6 +11,27 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-05-25] — Settings sidebar + sharper status, dispatch, and detail styling
+
+### Added
+
+- **Settings now has a left sidebar** with grouped sections, short descriptions,
+  admin tags, and a search box (press `/`) — replacing the cramped top tab bar.
+- **Status icons** across issues now show their true shape (backlog, started,
+  in-review, done, blocked, canceled) instead of a plain dot, and **priority**
+  marks are colour-coded (urgent reads red, high amber).
+- **`+ Add`** affordances (capabilities, labels, assign-agent, providers) now use
+  the dashed-outline style from the design.
+
+### Changed
+
+- **Dispatch rules** is now a proper routing table — On / Name / Priority /
+  Label / Project / Target agent columns with a real toggle — instead of a
+  one-line sentence per rule.
+- **Plans** cards show their step DAG and owner; **Roadmap** bars show a progress
+  fill and project key; **Goals** keeps the loop guide visible above the list;
+  the **sprint backlog** reads as a dashed "drag → plan" tray.
+
 ## [2026-05-24] — Choose your background, richer agent & plan cards, plugin pages
 
 ### Added

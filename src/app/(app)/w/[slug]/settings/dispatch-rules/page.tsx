@@ -1,11 +1,11 @@
 "use client";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Route } from "lucide-react";
+import { Route, GripVertical, MoreHorizontal } from "lucide-react";
 import { Priority } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PriorityGlyph } from "@/components/ui/priority-glyph";
 import { Input } from "@/components/ui/input";
 import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
@@ -53,6 +53,19 @@ const EMPTY_EDITING: EditingState = {
   targetAgentId: "",
 };
 
+// Human-readable labels for the workspace auto-dispatch (fall-through)
+// modes. The page can read the current mode from `workspace.current`,
+// but the `workspace.update` mutation does not (yet) accept
+// `autoDispatchMode`, so the fall-through control is rendered read-only
+// — see the "Fall-through" section below. Setting it lives under
+// Settings → Workspace.
+const FALL_THROUGH_OPTIONS: { value: string; label: string }[] = [
+  { value: "ROUND_ROBIN", label: "Round robin" },
+  { value: "CAPABILITY_MATCH", label: "Capability match" },
+  { value: "PRIORITY_MATCH", label: "Priority match" },
+  { value: "MANUAL_ONLY", label: "Manual only" },
+];
+
 const RESOLUTION_HELP = [
   "An issue enters the dispatch queue without an assigned agent.",
   "Forge walks the enabled rules top-to-bottom. A rule matches only if every non-'any' condition (priority, label, project) matches the issue.",
@@ -90,10 +103,12 @@ export default function DispatchRulesPage() {
     archived: false,
     limit: 500,
   });
+  const { data: workspace } = trpc.workspace.current.useQuery();
 
   // Local mirror of the rule list so drag reorder can be optimistic.
   const [rows, setRows] = useState<RuleRow[]>([]);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
     id: string;
@@ -103,6 +118,21 @@ export default function DispatchRulesPage() {
   useEffect(() => {
     if (rules) setRows(rules as RuleRow[]);
   }, [rules]);
+
+  // Close the per-row kebab menu on any outside click / Escape.
+  useEffect(() => {
+    if (!openMenuId) return;
+    const close = () => setOpenMenuId(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenMenuId(null);
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [openMenuId]);
 
   const invalidate = () => {
     utils.dispatchRule.list.invalidate();
@@ -294,106 +324,229 @@ export default function DispatchRulesPage() {
                 ) : undefined
               }
             >
-              <Card
-                onDrop={onDrop}
-                onDragOver={(e: React.DragEvent) => e.preventDefault()}
-              >
-                {rows.map((r) => {
-              const label = r.label ?? (r.labelId ? labelsById.get(r.labelId) ?? null : null);
-              const project =
-                r.project ??
-                (r.projectId ? projectsById.get(r.projectId) ?? null : null);
-              return (
-                <li
-                  key={r.id}
-                  draggable
-                  onDragStart={() => onDragStart(r.id)}
-                  onDragOver={(e) => onDragOver(r.id, e)}
-                  onDragEnd={() => setDragId(null)}
-                  className={
-                    "flex flex-wrap items-center gap-3 px-4 py-3 " +
-                    (dragId === r.id
-                      ? "cursor-grabbing opacity-50"
-                      : "cursor-grab")
-                  }
+              <Card as="div" className="overflow-hidden">
+                {/* Columnar header row. Grid template is shared with each
+                    rule row below so columns line up. */}
+                <div className="grid grid-cols-[28px_28px_1fr_120px_140px_120px_180px_36px] gap-3 border-b border-border bg-card/30 px-4 py-2 text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                  <span aria-hidden />
+                  <span>On</span>
+                  <span>Name</span>
+                  <span>Priority</span>
+                  <span>Label</span>
+                  <span>Project</span>
+                  <span>Target agent</span>
+                  <span aria-hidden />
+                </div>
+                <ul
+                  className="divide-y divide-border/60"
+                  onDrop={onDrop}
+                  onDragOver={(e: React.DragEvent) => e.preventDefault()}
                 >
-                  <span
-                    className="grid h-5 w-5 shrink-0 place-items-center text-muted-foreground"
-                    aria-hidden
-                  >
-                    ⋮⋮
-                  </span>
-                  <span className="font-mono text-[0.6875rem] text-muted-foreground">
-                    {String(r.order).padStart(2, "0")}
-                  </span>
-                  <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      checked={r.enabled}
-                      onChange={(e) =>
-                        toggle.mutate({ id: r.id, enabled: e.target.checked })
-                      }
-                      className="focus-ring h-3.5 w-3.5 cursor-pointer"
-                    />
-                    <span>{r.enabled ? "on" : "off"}</span>
-                  </label>
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="truncate text-sm font-medium">
-                      {r.name}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
-                      <span>if</span>
-                      <Badge>
-                        priority={" "}
-                        <span className="font-mono">
-                          {r.priority ?? "any"}
+                  {rows.map((r) => {
+                    const label =
+                      r.label ??
+                      (r.labelId ? labelsById.get(r.labelId) ?? null : null);
+                    const project =
+                      r.project ??
+                      (r.projectId
+                        ? projectsById.get(r.projectId) ?? null
+                        : null);
+                    return (
+                      <li
+                        key={r.id}
+                        draggable
+                        onDragStart={() => onDragStart(r.id)}
+                        onDragOver={(e) => onDragOver(r.id, e)}
+                        onDragEnd={() => setDragId(null)}
+                        className={
+                          "group grid grid-cols-[28px_28px_1fr_120px_140px_120px_180px_36px] items-center gap-3 px-4 py-2.5 " +
+                          (dragId === r.id ? "opacity-50" : "")
+                        }
+                      >
+                        {/* Drag handle */}
+                        <GripVertical
+                          size={13}
+                          aria-hidden
+                          className="cursor-grab text-muted-foreground/50 opacity-0 group-hover:opacity-100"
+                        />
+                        {/* Ember toggle switch — same enable mutation */}
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={r.enabled}
+                          aria-label={
+                            r.enabled ? "Disable rule" : "Enable rule"
+                          }
+                          onClick={() =>
+                            toggle.mutate({ id: r.id, enabled: !r.enabled })
+                          }
+                          className={
+                            "focus-ring inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors " +
+                            (r.enabled ? "bg-ember" : "bg-subtle")
+                          }
+                        >
+                          <span
+                            className={
+                              "inline-block h-3 w-3 rounded-full bg-background transition-transform " +
+                              (r.enabled
+                                ? "translate-x-3.5"
+                                : "translate-x-0.5")
+                            }
+                          />
+                        </button>
+                        {/* Name */}
+                        <span className="truncate text-sm" title={r.name}>
+                          {r.name}
                         </span>
-                      </Badge>
-                      <Badge color={label?.color}>
-                        label={" "}
-                        <span className="font-mono">
-                          {label?.name ?? "any"}
+                        {/* Priority */}
+                        <span className="text-meta">
+                          {r.priority ? (
+                            <span className="inline-flex items-center gap-1">
+                              <PriorityGlyph priority={r.priority} />{" "}
+                              {r.priority.toLowerCase()}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">any</span>
+                          )}
                         </span>
-                      </Badge>
-                      <Badge>
-                        project={" "}
-                        <span className="font-mono">
-                          {project?.key ?? "any"}
+                        {/* Label chip */}
+                        <span className="text-meta">
+                          {label ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-1.5 py-0.5 text-meta">
+                              <span
+                                aria-hidden
+                                className="inline-block h-2 w-2 rounded-full"
+                                style={{ background: label.color }}
+                              />
+                              <span className="truncate">{label.name}</span>
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">any</span>
+                          )}
                         </span>
-                      </Badge>
-                      <span>→</span>
-                      <Badge>
-                        {r.targetAgent.avatar ? `${r.targetAgent.avatar} ` : ""}
-                        <span className="font-mono">
-                          @{r.targetAgent.profileKey}
+                        {/* Project */}
+                        <span className="text-meta">
+                          {project ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span
+                                aria-hidden
+                                className="inline-block h-2 w-2 rounded-sm bg-muted-foreground/60"
+                              />
+                              <span className="font-mono">{project.key}</span>
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">any</span>
+                          )}
                         </span>
-                      </Badge>
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => openEdit(r)}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        setDeleteTarget({ id: r.id, name: r.name })
-                      }
-                    >
-                      Delete
-                    </Button>
-                  </div>
-                </li>
-              );
-                })}
+                        {/* Target agent */}
+                        <span className="flex items-center gap-1.5 text-meta">
+                          {r.targetAgent.avatar ? (
+                            <span style={{ fontSize: 12 }}>
+                              {r.targetAgent.avatar}
+                            </span>
+                          ) : null}
+                          <span className="truncate font-mono">
+                            @{r.targetAgent.profileKey}
+                          </span>
+                        </span>
+                        {/* Kebab — edit / delete */}
+                        <div className="relative">
+                          <button
+                            type="button"
+                            aria-label="Rule actions"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenMenuId((id) =>
+                                id === r.id ? null : r.id,
+                              );
+                            }}
+                            className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-subtle hover:text-foreground group-hover:opacity-100 data-[open=true]:opacity-100"
+                            data-open={openMenuId === r.id}
+                          >
+                            <MoreHorizontal size={12} />
+                          </button>
+                          {openMenuId === r.id && (
+                            <div
+                              role="menu"
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute right-0 top-7 z-10 w-32 overflow-hidden rounded-md border border-border bg-card py-1 shadow-md"
+                            >
+                              <button
+                                role="menuitem"
+                                type="button"
+                                onClick={() => {
+                                  setOpenMenuId(null);
+                                  openEdit(r);
+                                }}
+                                className="flex w-full items-center px-3 py-1.5 text-left text-sm hover:bg-subtle"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                role="menuitem"
+                                type="button"
+                                onClick={() => {
+                                  setOpenMenuId(null);
+                                  setDeleteTarget({ id: r.id, name: r.name });
+                                }}
+                                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-danger hover:bg-subtle"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
               </Card>
             </Section>
           )}
+
+          {/* Fall-through mode. The current value comes from
+              `workspace.current` (which exposes `autoDispatchMode`), but
+              `workspace.update` does not accept `autoDispatchMode`, so this
+              is rendered read-only — changing it lives under Settings →
+              Workspace. Wiring an inline mutation would require a new
+              backend field, which is out of scope here. */}
+          <Section
+            title="Fall-through"
+            hint="What happens when no rule matches. Set the mode under Settings → Workspace."
+          >
+            <Card as="div" className="space-y-2 p-5">
+              <div
+                role="radiogroup"
+                aria-label="Fall-through mode (read-only)"
+                aria-readonly="true"
+                className="inline-flex rounded-md border border-border bg-card/30 p-0.5"
+              >
+                {FALL_THROUGH_OPTIONS.map((o) => {
+                  const active = workspace?.autoDispatchMode === o.value;
+                  return (
+                    <span
+                      key={o.value}
+                      role="radio"
+                      aria-checked={active}
+                      className={
+                        "rounded-[0.3125rem] px-3 py-1 text-xs transition-colors " +
+                        (active
+                          ? "bg-ember text-ember-foreground"
+                          : "text-muted-foreground")
+                      }
+                    >
+                      {o.label}
+                    </span>
+                  );
+                })}
+              </div>
+              <p className="text-meta text-muted-foreground">
+                Unmatched issues fall through to the workspace&rsquo;s
+                auto-dispatch mode. This reflects the current setting; change
+                it under Settings &rarr; Workspace.
+              </p>
+            </Card>
+          </Section>
 
           <Section
             title="How rules resolve"

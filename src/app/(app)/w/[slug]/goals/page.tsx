@@ -17,7 +17,10 @@ import {
   type GoalStatus,
 } from "@/components/orchestration-ui/status";
 import { fmtUsd } from "@/components/orchestration-ui/budget-meter";
-import { GoalLoopExplainer } from "@/components/orchestration/goal-loop-explainer";
+import {
+  GoalLoopExplainer,
+  GoalLoopExplainerCollapsible,
+} from "@/components/orchestration/goal-loop-explainer";
 import { trpc } from "@/lib/trpc";
 import { useGoalRouter, type GoalRow } from "@/components/orchestration-ui/use-goal-trpc";
 
@@ -165,13 +168,24 @@ export default function GoalsPage() {
             <GoalLoopExplainer className="w-full" />
           </div>
         ) : (
-          <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
-            {items.map((goal) => (
-              <li key={goal.id}>
-                <GoalCard goal={goal} slug={ws.slug} />
-              </li>
-            ))}
-          </ul>
+          <>
+            {/* Slim always-on loop explainer pinned above the grid:
+                "Goal loop · Decompose → Plan → …" expands to the full
+                phase callout. Keeps the loop legible without re-teaching
+                the empty state. */}
+            <GoalLoopExplainerCollapsible
+              className="mb-3"
+              label="Goal loop"
+              slug
+            />
+            <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+              {items.map((goal) => (
+                <li key={goal.id}>
+                  <GoalCard goal={goal} slug={ws.slug} />
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </div>
 

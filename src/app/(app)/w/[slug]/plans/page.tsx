@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ExecutionPlanStatus } from "@prisma/client";
+import type { ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
 import { Archive, Clock, Copy, ListChecks, MoreHorizontal, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
@@ -123,6 +123,25 @@ const PLAN_TEMPLATES: PlanTemplate[] = [
   },
 ];
 
+type PlanStripStep = {
+  id: string;
+  position: number;
+  status: ExecutionStepStatus;
+};
+
+type PlanOwnerUser = {
+  id: string;
+  name: string | null;
+  image: string | null;
+} | null;
+
+type PlanOwnerAgent = {
+  id: string;
+  profileKey: string;
+  name: string | null;
+  avatar: string | null;
+} | null;
+
 type PlanRow = {
   id: string;
   title: string;
@@ -130,9 +149,91 @@ type PlanRow = {
   status: ExecutionPlanStatus;
   updatedAt: Date | string;
   _count: { steps: number };
+  steps?: PlanStripStep[];
+  doneSteps?: number;
+  createdBy?: PlanOwnerUser;
+  createdByAgent?: PlanOwnerAgent;
 };
 
 type Tab = "active" | "archived";
+
+const STRIP_MAX_PIPS = 12;
+
+// Collapsed-row pip color by step status. Tokens only — DONE success,
+// RUNNING ember (pulses), BLOCKED danger, REVIEW warning, the rest fade
+// to subtle so the strip reads as a progress glance. Mirrors the
+// Mission Control plans-tab strip.
+function pipClass(status: ExecutionStepStatus): string {
+  switch (status) {
+    case "DONE":
+      return "bg-success";
+    case "RUNNING":
+      return "bg-ember forge-active-node";
+    case "BLOCKED":
+      return "bg-danger";
+    case "REVIEW":
+      return "bg-warning";
+    case "READY":
+      return "bg-ember/50";
+    default:
+      return "bg-muted-foreground/30";
+  }
+}
+
+function StepStrip({ steps }: { steps: PlanStripStep[] }) {
+  if (steps.length === 0) return null;
+  const shown = steps.slice(0, STRIP_MAX_PIPS);
+  const overflow = steps.length - shown.length;
+  return (
+    <div className="flex min-w-0 items-center gap-0.5">
+      {shown.map((s, i) => (
+        <span key={s.id} className="flex items-center gap-0.5">
+          {i > 0 && <span className="h-px w-1 bg-border" aria-hidden />}
+          <span
+            className={cn("h-1.5 w-1.5 rounded-full", pipClass(s.status))}
+            title={`Step ${s.position + 1}: ${s.status.toLowerCase()}`}
+          />
+        </span>
+      ))}
+      {overflow > 0 && (
+        <span className="ml-1 font-mono text-[0.625rem] text-muted-foreground">
+          +{overflow}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function PlanOwner({
+  createdBy,
+  createdByAgent,
+}: {
+  createdBy?: PlanOwnerUser;
+  createdByAgent?: PlanOwnerAgent;
+}) {
+  const agentName = createdByAgent?.name ?? createdByAgent?.profileKey ?? null;
+  const name = agentName ?? createdBy?.name ?? null;
+  if (!name) return null;
+  const image = createdByAgent ? createdByAgent.avatar : (createdBy?.image ?? null);
+  const initial = name.charAt(0).toUpperCase();
+  return (
+    <span className="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted-foreground">
+      {image ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={image}
+          alt=""
+          className="h-3.5 w-3.5 shrink-0 rounded-full object-cover"
+        />
+      ) : (
+        <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-subtle font-mono text-[0.5rem] text-muted-foreground">
+          {initial}
+        </span>
+      )}
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
 
 /**
  * Execution plans index. Active tab lists non-archived plans (the
@@ -359,15 +460,33 @@ export default function PlansPage() {
                       {row.description}
                     </p>
                   ) : null}
-                  <div className="mt-auto flex items-center gap-2 text-meta text-muted-foreground">
-                    <span>
-                      {row._count.steps} step{row._count.steps === 1 ? "" : "s"}
-                    </span>
-                    {row.updatedAt ? (
-                      <span className="ml-auto inline-flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
-                        Updated {relativeTime(row.updatedAt)}
+                  <div className="mt-auto flex flex-col gap-2">
+                    {/* DAG step strip — one pip per step in position
+                        order, colored by status (capped, with +N). */}
+                    {row.steps && row.steps.length > 0 ? (
+                      <StepStrip steps={row.steps} />
+                    ) : null}
+                    <div className="flex items-center gap-2 text-meta text-muted-foreground">
+                      <span>
+                        {row._count.steps > 0
+                          ? `${row.doneSteps ?? 0}/${row._count.steps} steps`
+                          : "0 steps"}
                       </span>
+                      {row.updatedAt ? (
+                        <span className="ml-auto inline-flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          Updated {relativeTime(row.updatedAt)}
+                        </span>
+                      ) : null}
+                    </div>
+                    {/* Owner footer — authoring agent preferred over user. */}
+                    {row.createdByAgent || row.createdBy ? (
+                      <div className="flex items-center border-t border-border/60 pt-2">
+                        <PlanOwner
+                          createdBy={row.createdBy}
+                          createdByAgent={row.createdByAgent}
+                        />
+                      </div>
                     ) : null}
                   </div>
                 </Link>

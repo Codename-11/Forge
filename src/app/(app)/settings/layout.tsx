@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/server/auth";
 import { db } from "@/server/db";
-import { SettingsNavbar } from "@/components/settings/settings-navbar";
+import { SettingsRail } from "@/components/settings/settings-rail";
 
 /**
  * Account-level settings shell.
@@ -44,8 +44,8 @@ export default async function AccountSettingsLayout({
   if (!backSlug) backSlug = active[0]?.slug ?? null;
 
   return (
-    <div className="flex h-svh flex-col overflow-hidden bg-background">
-      <SettingsNavbar
+    <div className="flex h-svh overflow-hidden bg-background">
+      <SettingsRail
         scope="account"
         backHref={backSlug ? `/w/${backSlug}/inbox` : "/"}
         backLabel={backSlug ? "Back to workspace" : "Home"}

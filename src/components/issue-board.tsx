@@ -5,6 +5,7 @@ import { Plus } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
+import { StatusDot } from "@/components/ui/status-dot";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { presenceAvailability } from "@/lib/transport-display";
 import { AgentHoverPreview } from "@/components/agent-hover-preview";
@@ -71,7 +72,7 @@ export function IssueBoard({
             className="flex w-72 shrink-0 flex-col rounded-lg border border-border bg-card/40"
           >
             <header className="flex h-9 items-center gap-2 border-b border-border px-3">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: s.color }} />
+              <StatusDot status={s} size={12} />
               <span className="text-xs font-medium">{s.name}</span>
               <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
                 {column.length}

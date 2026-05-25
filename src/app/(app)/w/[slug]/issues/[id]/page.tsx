@@ -3,7 +3,7 @@ import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { AgentStatus } from "@prisma/client";
-import { Paperclip } from "lucide-react";
+import { Bot, Paperclip, Plus } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
@@ -781,22 +781,30 @@ function LabelPicker({
 
   return (
     <div className="relative w-full">
-      <button
-        type="button"
-        onClick={() => setOpen((x) => !x)}
-        className="focus-ring flex w-full flex-wrap items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-left text-xs hover:bg-subtle"
-      >
-        {current.length === 0 ? (
-          <span className="text-muted-foreground">None</span>
-        ) : (
-          current.map((l) => (
-            <Badge key={l.id} color={l.color}>
-              {l.name}
-            </Badge>
-          ))
-        )}
-        <span className="ml-auto text-muted-foreground">▾</span>
-      </button>
+      <div className="flex flex-wrap items-center gap-1">
+        {current.map((l) => (
+          <button
+            key={l.id}
+            type="button"
+            onClick={() => toggle(l.id)}
+            title="Remove label"
+            className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-xs text-foreground hover:bg-subtle"
+          >
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: l.color }}
+            />
+            {l.name}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setOpen((x) => !x)}
+          className="focus-ring inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-meta text-muted-foreground hover:text-foreground"
+        >
+          <Plus className="h-[9px] w-[9px]" /> Add
+        </button>
+      </div>
       {open && (
         <div
           className="absolute z-20 mt-1 w-full rounded-md border border-border bg-card shadow-lg"
@@ -928,7 +936,12 @@ function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => 
       type="button"
       onClick={onOpen}
       title="Assign agent (shift+a)"
-      className="focus-ring flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-left text-[0.6875rem] hover:bg-subtle"
+      className={
+        "focus-ring flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-left text-[0.6875rem] hover:bg-subtle " +
+        (current
+          ? "border-border"
+          : "border-dashed border-border text-muted-foreground")
+      }
     >
       {current ? (
         <>
@@ -950,7 +963,10 @@ function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => 
           <span className="font-mono text-[0.6875rem] text-muted-foreground">@{current.profileKey}</span>
         </>
       ) : (
-        <span className="text-muted-foreground">Assign agent</span>
+        <>
+          <Bot className="h-[11px] w-[11px]" />
+          <span>Assign agent</span>
+        </>
       )}
       <span className="ml-auto text-muted-foreground">▾</span>
     </button>
