@@ -3474,6 +3474,30 @@ describe("mcp — orchestration loop tools", () => {
     )) as { stepIds: string[] };
     expect(added.stepIds).toHaveLength(2);
 
+    // executionPlans.create should accept the same index-based dependency
+    // shape as plans.addSteps so a hand-authored plan can be created as a DAG
+    // in one call.
+    const handAuthored = (await call(
+      "executionPlans.create",
+      {
+        title: "Hand-authored DAG",
+        steps: [
+          { title: "root" },
+          { title: "child", dependsOnStepIndexes: [0] },
+        ],
+      },
+      ctx,
+    )) as { id: string };
+    const child = await prisma.executionStep.findFirstOrThrow({
+      where: { planId: handAuthored.id, position: 1 },
+      select: { dependsOnStepIds: true },
+    });
+    const root = await prisma.executionStep.findFirstOrThrow({
+      where: { planId: handAuthored.id, position: 0 },
+      select: { id: true },
+    });
+    expect(child.dependsOnStepIds).toEqual([root.id]);
+
     const got = (await call("goals.get", { id: goal.id }, ctx)) as {
       status: string;
       plans: Array<{ id: string }>;

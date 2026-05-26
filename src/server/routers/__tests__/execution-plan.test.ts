@@ -41,7 +41,7 @@ describe("executionPlanRouter", () => {
       issueId: issue.id,
       steps: [
         { title: "Write migration", expectedOutput: "SQL committed" },
-        { title: "Apply + verify", expectedOutput: "All tests green" },
+        { title: "Apply + verify", expectedOutput: "All tests green", dependsOnStepIndexes: [0] },
       ],
     });
     const got = await caller.get({ id: created.id });
@@ -49,6 +49,7 @@ describe("executionPlanRouter", () => {
     expect(got.steps[0].title).toBe("Write migration");
     expect(got.steps[0].position).toBe(0);
     expect(got.steps[1].position).toBe(1);
+    expect(got.steps[1].dependsOnStepIds).toEqual([got.steps[0].id]);
     expect(got.status).toBe(ExecutionPlanStatus.DRAFT);
   });
 
