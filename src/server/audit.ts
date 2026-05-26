@@ -103,7 +103,12 @@ async function maybeAutoTransitionOnAssign(
   tx: PrismaClient | Prisma.TransactionClient,
   workspaceId: string,
   issueId: string,
+  engagementMode?: string,
 ): Promise<string | null> {
+  // Engagement modes (AXI-53): only EXECUTE auto-starts the issue. A RESEARCH /
+  // REVIEW / DISCUSS assignment must leave status alone. Absent = legacy
+  // EXECUTE behaviour.
+  if (engagementMode && engagementMode !== "EXECUTE") return null;
   const ws = await tx.workspace.findUnique({
     where: { id: workspaceId },
     select: { startedStatusId: true },
@@ -337,10 +342,15 @@ export async function recordChange(
     params.eventKind === EventKind.AGENT_ASSIGNED &&
     params.subjectType === "issue"
   ) {
+    const assignMode =
+      params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)
+        ? ((params.payload as Record<string, unknown>).engagementMode as string | undefined)
+        : undefined;
     const transitionedTo = await maybeAutoTransitionOnAssign(
       tx,
       params.workspaceId,
       params.subjectId,
+      assignMode,
     );
     const snapshot = await loadIssueSnapshot(tx, params.subjectId);
     if (snapshot) {

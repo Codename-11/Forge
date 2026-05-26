@@ -1541,12 +1541,23 @@ export const mcpTools = {
           .optional()
           .describe("Agent id (cuid). Pass null to unassign. Optional if profileKey given."),
         profileKey: z.string().optional().describe("Resolve agent by profileKey instead of id."),
+        mode: z
+          .enum(["EXECUTE", "RESEARCH", "REVIEW", "DISCUSS"])
+          .optional()
+          .describe(
+            "Engagement mode (work intent). EXECUTE=do it to completion; RESEARCH=investigate+report; REVIEW=critique; DISCUSS=weigh in. Defaults to the workspace assignment default (usually EXECUTE).",
+          ),
       })
       .refine((v) => v.agentId !== undefined || v.profileKey !== undefined, {
         message: "Provide agentId (or null) or profileKey.",
       }),
     async run(
-      input: { issueId: string; agentId?: string | null; profileKey?: string },
+      input: {
+        issueId: string;
+        agentId?: string | null;
+        profileKey?: string;
+        mode?: "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS";
+      },
       ctx: McpContext,
     ) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
@@ -1611,6 +1622,26 @@ export const mcpTools = {
         });
 
         if ((before.assignedAgentId ?? null) !== (targetAgentId ?? null)) {
+          // Resolve the engagement mode for this assignment (AXI-53). Only set
+          // on assign (not unassign). Stamped on the payload so the
+          // auto-transition gate + the opened run pick it up.
+          let engagementMode: string | undefined;
+          if (targetAgentId) {
+            const { resolveEngagementMode } = await import("@/server/services/engagement-mode");
+            const ws = await tx.workspace.findUniqueOrThrow({
+              where: { id: ctx.workspaceId },
+              select: {
+                assignmentEngagementMode: true,
+                mentionEngagementPolicy: true,
+                mentionDefaultMode: true,
+              },
+            });
+            engagementMode = resolveEngagementMode({
+              surface: "assignment",
+              explicit: input.mode ?? null,
+              workspace: ws,
+            }).mode;
+          }
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.userId,
@@ -1626,6 +1657,7 @@ export const mcpTools = {
             payload: {
               agentId: targetAgentId,
               previousAgentId: before.assignedAgentId,
+              ...(engagementMode ? { engagementMode } : {}),
             },
           });
           // Apply the new agent's template if the description is empty.

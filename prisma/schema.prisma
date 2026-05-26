@@ -283,6 +283,28 @@ enum AutoDispatchMode {
   CAPABILITY_MATCH
 }
 
+/// The *intent* of a dispatched agent turn — what the agent is asked to do,
+/// distinct from autoDispatchMode (which agent gets picked). EXECUTE = take it
+/// to completion; RESEARCH = investigate + report, no mutations; REVIEW =
+/// critique existing work; DISCUSS = answer in-thread, no work product.
+/// See docs/agents/engagement-modes.md.
+enum EngagementMode {
+  EXECUTE
+  RESEARCH
+  REVIEW
+  DISCUSS
+}
+
+/// How an @-mention with no explicit mode marker resolves. INFER = agent
+/// infers intent and asks before anything irreversible (default). FIXED =
+/// always use Workspace.mentionDefaultMode. REQUIRE_MARKER = no marker means
+/// DISCUSS — execution requires an explicit marker.
+enum MentionEngagementPolicy {
+  INFER
+  FIXED
+  REQUIRE_MARKER
+}
+
 /// Classifies the intended use of an ApiKey. AGENT keys are tied to a
 /// registered persistent agent (linkedAgentId is set, full scopes).
 /// PERSONAL keys are user-owned with no agent link — read-only or scoped,
@@ -620,6 +642,14 @@ model Workspace {
   autoDispatch                  Boolean          @default(false)
   /// Strategy used when autoDispatch is on. MANUAL_ONLY disables picking.
   autoDispatchMode              AutoDispatchMode @default(MANUAL_ONLY)
+  /// Default engagement mode for work dispatched via assignment / queue
+  /// (the "you're handing it over" surface). See docs/agents/engagement-modes.md.
+  assignmentEngagementMode      EngagementMode   @default(EXECUTE)
+  /// How an @-mention with no explicit mode marker resolves.
+  mentionEngagementPolicy       MentionEngagementPolicy @default(INFER)
+  /// Fallback mode for @-mentions under FIXED policy (or when INFER yields
+  /// nothing actionable). Mentions are conversational by default.
+  mentionDefaultMode            EngagementMode   @default(DISCUSS)
   /// When true, assigning (manually or auto) immediately pushes the agent
   /// webhook to start work; when false, the issue sits in the agent queue.
   autoStartOnAssign             Boolean          @default(false)
@@ -1925,6 +1955,11 @@ model AgentRun {
   /// turns are first-class observable runs (Mission Control / watchdog / cost)
   /// — not fire-and-forget webhooks. Null for direct-dispatch runs.
   executionStepId    String?
+  /// The engagement mode resolved for this run (AXI-53). Governs the
+  /// completion contract: only EXECUTE auto-transitions the issue, is held to
+  /// the SLA/watchdog "must move the issue" expectation, and enforces
+  /// artifact/verification gates. See docs/agents/engagement-modes.md.
+  engagementMode     EngagementMode  @default(EXECUTE)
 
   workspace          Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue              Issue           @relation(fields: [issueId], references: [id], onDelete: Cascade)

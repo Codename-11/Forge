@@ -4,6 +4,7 @@ import type { AgentProvider } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/agent-run";
+import { engagementInstruction } from "@/server/services/engagement-mode";
 import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from "./registry";
 
 /**
@@ -31,13 +32,17 @@ const ASSIGNMENT_LOOKBACK_MS = 15 * 60_000;
 const START_BATCH = 10;
 const POLL_BATCH = 25;
 
-function issueMessage(issue: {
-  key: string;
-  title: string;
-  description: string | null;
-}): string {
+function issueMessage(
+  issue: {
+    key: string;
+    title: string;
+    description: string | null;
+  },
+  engagementInstruction?: string | null,
+): string {
   const body = issue.description?.trim();
   return (
+    (engagementInstruction ? `${engagementInstruction}\n\n` : "") +
     `You are assigned Forge issue ${issue.key}: ${issue.title}.\n\n` +
     (body ? `${body}\n\n` : "") +
     `Work the issue using your tools, then summarise what you did.`
@@ -59,7 +64,7 @@ async function startNewRuns(): Promise<number> {
     },
     orderBy: { createdAt: "desc" },
     take: START_BATCH * 3,
-    select: { id: true, workspaceId: true, subjectId: true },
+    select: { id: true, workspaceId: true, subjectId: true, payload: true },
   });
 
   let started = 0;
@@ -110,13 +115,33 @@ async function startNewRuns(): Promise<number> {
     const connector = getRunsConnectorForAgent({ provider: agent.provider, runtime: agent.runtime });
     if (!connector) continue;
 
+    // Engagement mode (AXI-53): the assignment payload carries the resolved
+    // mode; inject its instruction block so the agent knows whether to execute,
+    // research, review, or just discuss. Default EXECUTE when absent (legacy).
+    const evtPayload =
+      evt.payload && typeof evt.payload === "object" && !Array.isArray(evt.payload)
+        ? (evt.payload as Record<string, unknown>)
+        : {};
+    const engagementMode =
+      (evtPayload.engagementMode as "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS" | undefined) ??
+      "EXECUTE";
+    const instruction = engagementInstruction({
+      mode: engagementMode,
+      source: "surface-default",
+      inferable: false,
+    });
+
     try {
       const { externalRunId } = await connector.startRun({
-        message: issueMessage({
-          key: issueKey(issue.workspace.key, issue.number),
-          title: issue.title,
-          description: issue.description,
-        }),
+        message: issueMessage(
+          {
+            key: issueKey(issue.workspace.key, issue.number),
+            title: issue.title,
+            description: issue.description,
+          },
+          instruction,
+        ),
+        instructions: instruction,
       });
       await db.$transaction(async (tx) => {
         const { run } = await openOrTouchRun(tx, {
@@ -125,6 +150,7 @@ async function startNewRuns(): Promise<number> {
           agentId: agent.id,
           assignmentEventId: evt.id,
           currentStep: "starting run",
+          engagementMode,
         });
         await tx.agentRun.update({
           where: { id: run.id },
