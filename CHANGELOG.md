@@ -13,9 +13,25 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Dependency graph on issues.** The Relations tab now has a **Graph** view (toggle
+  next to List) that maps the issue's place in its blocks/blocked-by chain *and*
+  parent/child sub-issue tree — an animated, themed DAG with the current issue
+  flagged "here". Click any node to jump to it.
+- **Move issues between projects and sprints in bulk.** The issues list and inbox
+  bulk bars gained **Project…** and **Sprint…** actions; select any number of issues
+  and move them in one go.
+- **"Part of" backlinks on issues.** An issue now shows the execution **plans** it's
+  the subject of, each with a step-progress bar (done / total) — alongside the
+  existing goals strip.
 - You can now link a hand-authored execution plan to a goal: `executionPlans.create`
   accepts a `goalId`, and a new `goals.attachPlan` action attaches an existing plan
   as the goal's active attempt — no need to go through the AI planner.
+
+### Changed
+
+- **Issue sidebar pickers are now searchable.** Project and a new **Sprint** field use
+  the command-palette picker; the project picker surfaces each project's initiative
+  inline so you can place work in the right bet at a glance.
 
 ### Changed
 

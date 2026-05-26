@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Activity, MessageCircleReply, Target } from "lucide-react";
+import { Activity, MessageCircleReply, Target, Workflow } from "lucide-react";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { Avatar } from "@/components/ui/avatar";
 import {
@@ -233,6 +233,7 @@ export function IssueMain({
     <div className="flex min-w-0 flex-col gap-8">
       <AgentRunStrip issueId={issueId} />
       <IssueGoalsStrip issueId={issueId} />
+      <IssuePlansStrip issueId={issueId} />
       <DescriptionBlock
         issueId={issueId}
         description={description}
@@ -280,6 +281,60 @@ function IssueGoalsStrip({ issueId }: { issueId: string }) {
           </span>
         </Link>
       ))}
+    </section>
+  );
+}
+
+/**
+ * Backlink strip: execution plans this issue is the subject of (via
+ * `ExecutionPlan.issueId`). Each chip shows the plan's step progress
+ * (done / total) with a thin fill bar so "where is the agent in the
+ * plan" reads at a glance. Renders nothing when the issue has no plans.
+ */
+function IssuePlansStrip({ issueId }: { issueId: string }) {
+  const ws = useWorkspace();
+  const { data } = trpc.executionPlan.list.useQuery(
+    { issueId, limit: 10 },
+    { staleTime: 30_000 },
+  );
+  const plans = data?.items ?? [];
+  if (plans.length === 0) return null;
+  return (
+    <section className="flex flex-wrap items-center gap-1.5">
+      <span className="flex items-center gap-1 text-meta uppercase tracking-wide text-muted-foreground">
+        <Workflow className="h-3 w-3" />
+        {plans.length === 1 ? "Plan" : "Plans"}
+      </span>
+      {plans.map((p) => {
+        const total = p._count.steps;
+        const pct = total > 0 ? Math.round((p.doneSteps / total) * 100) : 0;
+        return (
+          <Link
+            key={p.id}
+            href={`/w/${ws.slug}/plans/${p.id}`}
+            className="inline-flex items-center gap-2 rounded-md border border-border bg-card/40 px-2 py-1 text-meta transition hover:border-ember/40 hover:text-ember"
+            title={`${p.title} · ${p.doneSteps}/${total} steps · ${p.status.toLowerCase()}`}
+          >
+            <span className="max-w-[16rem] truncate">{p.title}</span>
+            {total > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="h-1 w-10 overflow-hidden rounded-full bg-subtle">
+                  <span
+                    className="block h-full rounded-full bg-ember"
+                    style={{ width: `${pct}%` }}
+                  />
+                </span>
+                <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                  {p.doneSteps}/{total}
+                </span>
+              </span>
+            )}
+            <span className="shrink-0 rounded bg-subtle px-1 py-0.5 text-[10px] uppercase text-muted-foreground">
+              {p.status.toLowerCase()}
+            </span>
+          </Link>
+        );
+      })}
     </section>
   );
 }

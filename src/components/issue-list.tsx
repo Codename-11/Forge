@@ -6,6 +6,8 @@ import {
   ArrowRightLeft,
   Archive,
   CalendarClock,
+  CalendarRange,
+  FolderInput,
   Inbox,
   MessageSquare,
   Plus,
@@ -24,6 +26,7 @@ import { presenceAvailability } from "@/lib/transport-display";
 import { AgentHoverPreview } from "@/components/agent-hover-preview";
 import { IssueHoverPreview } from "@/components/issue-hover-preview";
 import { BulkBar, type BulkBarAction } from "@/components/bulk-bar";
+import { BulkProjectPicker, BulkCyclePicker } from "@/components/bulk-move-pickers";
 import { SnoozeMenu } from "@/components/snooze-menu";
 import { trpc } from "@/lib/trpc";
 import { useHotkey } from "@/lib/keyboard";
@@ -244,7 +247,19 @@ export function IssueList({
   const [labelPickerOpen, setLabelPickerOpen] = useState(false);
   const [assigneePickerOpen, setAssigneePickerOpen] = useState(false);
   const [statusPickerOpen, setStatusPickerOpen] = useState(false);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  const [cyclePickerOpen, setCyclePickerOpen] = useState(false);
   const selectedArray = useMemo(() => Array.from(selected), [selected]);
+
+  // Lazily loaded only when bulk move pickers are opened.
+  const { data: projectsData } = trpc.project.list.useQuery(
+    { archived: false, limit: 100 },
+    { enabled: projectPickerOpen },
+  );
+  const { data: cyclesData } = trpc.cycle.list.useQuery(
+    {},
+    { enabled: cyclePickerOpen },
+  );
 
   // ---- Bulk mutations (Phase 0 procs) ----------------------------------
   const bulkTransition = trpc.issue.bulkTransition.useMutation({
@@ -309,6 +324,26 @@ export function IssueList({
     onError: (e) => toast.error(e.message),
   });
 
+  const bulkSetProjectM = trpc.issue.bulkSetProject.useMutation({
+    onSuccess: ({ updated }) => {
+      toast.success(`Moved ${updated} issue${updated === 1 ? "" : "s"}.`);
+      clearSelection();
+      setProjectPickerOpen(false);
+      utils.issue.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const bulkSetCycleM = trpc.issue.bulkSetCycle.useMutation({
+    onSuccess: ({ updated }) => {
+      toast.success(`Moved ${updated} issue${updated === 1 ? "" : "s"}.`);
+      clearSelection();
+      setCyclePickerOpen(false);
+      utils.issue.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const bulkPending =
     bulkTransition.isPending ||
     bulkAddLabel.isPending ||
@@ -316,7 +351,9 @@ export function IssueList({
     bulkAssign.isPending ||
     bulkAssignAgent.isPending ||
     snoozeManyM.isPending ||
-    bulkArchiveM.isPending;
+    bulkArchiveM.isPending ||
+    bulkSetProjectM.isPending ||
+    bulkSetCycleM.isPending;
 
   // Per-label presence count across the current selection. Used by the
   // label picker to show a mixed-state indicator when only some of the
@@ -348,6 +385,22 @@ export function IssueList({
       title: "Assign selected",
       disabled: bulkPending,
       onClick: () => setAssigneePickerOpen(true),
+    },
+    {
+      id: "project",
+      label: "Project…",
+      icon: <FolderInput className="h-3 w-3" />,
+      title: "Move to project",
+      disabled: bulkPending,
+      onClick: () => setProjectPickerOpen(true),
+    },
+    {
+      id: "sprint",
+      label: "Sprint…",
+      icon: <CalendarRange className="h-3 w-3" />,
+      title: "Move to sprint",
+      disabled: bulkPending,
+      onClick: () => setCyclePickerOpen(true),
     },
     {
       id: "snooze",
@@ -699,6 +752,28 @@ export function IssueList({
               issueIds: selectedArray,
               assignedAgentId: agentId,
             })
+          }
+        />
+      )}
+
+      {projectPickerOpen && (
+        <BulkProjectPicker
+          open={projectPickerOpen}
+          onOpenChange={setProjectPickerOpen}
+          projects={projectsData?.items ?? []}
+          onPick={(projectId) =>
+            bulkSetProjectM.mutate({ issueIds: selectedArray, projectId })
+          }
+        />
+      )}
+
+      {cyclePickerOpen && (
+        <BulkCyclePicker
+          open={cyclePickerOpen}
+          onOpenChange={setCyclePickerOpen}
+          cycles={cyclesData ?? []}
+          onPick={(cycleId) =>
+            bulkSetCycleM.mutate({ issueIds: selectedArray, cycleId })
           }
         />
       )}

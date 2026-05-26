@@ -847,6 +847,7 @@ export const issueRouter = router({
         statusId: z.string().cuid().optional(),
         priority: z.nativeEnum(Priority).optional(),
         projectId: z.string().cuid().nullable().optional(),
+        cycleId: z.string().cuid().nullable().optional(),
         assignedAgentId: agentIdSchema.nullable().optional(),
         dueDate: z.date().nullable().optional(),
         estimate: z.number().min(0).nullable().optional(),
@@ -891,6 +892,19 @@ export const issueRouter = router({
             throw new TRPCError({
               code: "BAD_REQUEST",
               message: "Project not found in this workspace.",
+            });
+          }
+        }
+        // Cross-tenant guard: cycle must live in this workspace when set.
+        if (patch.cycleId) {
+          const cyc = await tx.cycle.findFirst({
+            where: { id: patch.cycleId, workspaceId: ctx.workspaceId },
+            select: { id: true },
+          });
+          if (!cyc) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Sprint not found in this workspace.",
             });
           }
         }
@@ -1292,6 +1306,122 @@ export const issueRouter = router({
    * claim field) on every selected issue. `null` releases the claim.
    * Writes ISSUE_ASSIGNED audit+event per issue.
    */
+  /**
+   * Bulk move issues to a project (or clear it with `projectId: null`).
+   * Mirrors `bulkAssign`: validates the target lives in the workspace,
+   * updates only the rows that resolve, and emits one `ISSUE_UPDATED`
+   * per moved issue so boards / inbox / activity stay in sync.
+   */
+  bulkSetProject: workspaceProcedure
+    .input(
+      z.object({
+        issueIds: z.array(z.string().cuid()).max(500),
+        projectId: z.string().cuid().nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.issueIds.length === 0) return { updated: 0 };
+      if (input.projectId) {
+        const proj = await ctx.db.project.findFirst({
+          where: { id: input.projectId, workspaceId: ctx.workspaceId },
+          select: { id: true },
+        });
+        if (!proj) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Project not found in this workspace.",
+          });
+        }
+      }
+      return ctx.db.$transaction(async (tx) => {
+        const issues = await tx.issue.findMany({
+          where: { id: { in: input.issueIds }, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { id: true },
+        });
+        const validIds = issues.map((i) => i.id);
+        if (validIds.length === 0) return { updated: 0 };
+        await tx.issue.updateMany({
+          where: { id: { in: validIds }, workspaceId: ctx.workspaceId },
+          data: { projectId: input.projectId },
+        });
+        for (const issueId of validIds) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            entity: "Issue",
+            entityId: issueId,
+            action: "bulk-set-project",
+            after: { projectId: input.projectId },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "issue",
+            subjectId: issueId,
+            payload: { projectId: input.projectId },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
+        return { updated: validIds.length };
+      });
+    }),
+
+  /**
+   * Bulk move issues to a sprint/cycle (or remove with `cycleId: null`).
+   * Same shape as `bulkSetProject`.
+   */
+  bulkSetCycle: workspaceProcedure
+    .input(
+      z.object({
+        issueIds: z.array(z.string().cuid()).max(500),
+        cycleId: z.string().cuid().nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.issueIds.length === 0) return { updated: 0 };
+      if (input.cycleId) {
+        const cyc = await ctx.db.cycle.findFirst({
+          where: { id: input.cycleId, workspaceId: ctx.workspaceId },
+          select: { id: true },
+        });
+        if (!cyc) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Sprint not found in this workspace.",
+          });
+        }
+      }
+      return ctx.db.$transaction(async (tx) => {
+        const issues = await tx.issue.findMany({
+          where: { id: { in: input.issueIds }, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { id: true },
+        });
+        const validIds = issues.map((i) => i.id);
+        if (validIds.length === 0) return { updated: 0 };
+        await tx.issue.updateMany({
+          where: { id: { in: validIds }, workspaceId: ctx.workspaceId },
+          data: { cycleId: input.cycleId },
+        });
+        for (const issueId of validIds) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            entity: "Issue",
+            entityId: issueId,
+            action: "bulk-set-cycle",
+            after: { cycleId: input.cycleId },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "issue",
+            subjectId: issueId,
+            payload: { cycleId: input.cycleId },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
+        return { updated: validIds.length };
+      });
+    }),
+
   bulkAssign: workspaceProcedure
     .input(
       z.object({

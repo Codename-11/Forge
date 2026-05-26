@@ -7791,3 +7791,41 @@ inbox suites green. Committed accfe32; deployed (stamped GIT_SHA=accfe32, no
 pending migrations, Next.js Ready). This build also shipped the earlier
 command-center inline-status commit (5598221), since prod builds from the
 working tree.
+
+---
+
+## 2026-05-25 — Issue dependency DAG + project/sprint moves + plan backlinks
+
+Bailey asked for (1) a themed/animated DAG of an issue's relations showing its
+place in the path/tree, (2) better project/goal linking + proper project (and
+sprint) reassignment, and (3) other gaps. Scoped via AskUserQuestion: deps +
+sub-issues, graph-toggle-in-Relations-tab, all four gap fixes, keep UI clean.
+
+**Relations DAG.** New `relation.graphForIssue({ issueId, depth })` BFSes two
+directed edge dimensions out ~2 hops: `blocks` (reads only BLOCKS rows — each
+pair mirrored to BLOCKED_BY in add, so every dependency appears once in true
+direction) and `child` (Issue.parentId). Caps at GRAPH_MAX_NODES=60, drops
+edges to cap-truncated nodes. Client `IssueRelationsGraph` reuses the
+orchestration DagView's longest-path layered layout + SVG bezier edges +
+`.dag-edge-flow`/`.forge-active-node` theming; focus node flagged "here",
+child edges dashed, edges touching focus get the ember flow. List/Graph toggle
+added to `issue-relations-panel.tsx` (list stays the edit surface).
+
+**Project/sprint moves.** Added `cycleId` to `issue.update` (direct FK, mirrors
+projectId, with cross-tenant guard). Sidebar project `<select>` → shared
+searchable `Picker` showing each project's initiative; new Sprint picker.
+(Initiative stays transitive-via-project — surfaced in the project picker
+rather than a fake direct setter; a direct Issue→initiative link would need a
+schema change, deferred.) New `issue.bulkSetProject` / `bulkSetCycle` mutations
+(mirror bulkAssign: workspace-scope guard, per-issue ISSUE_UPDATED). Shared
+`bulk-move-pickers.tsx` (BulkProjectPicker/BulkCyclePicker) wired into both the
+issues-list and inbox bulk bars.
+
+**Plan backlinks.** `IssuePlansStrip` on the issue (executionPlan.list by
+issueId) shows plans the issue is the subject of with a done/total step bar +
+status; sits beside the existing goals strip.
+
+Tests: relation.test.ts +2 (blocks chain w/ focus flag; parent/child edges);
+new issue-bulk-move.test.ts (update cycleId set/clear + cross-ws reject;
+bulkSetProject/Cycle + cross-ws reject). Full suite 715 pass / 1 skip,
+typecheck + lint clean. Not yet committed/deployed.

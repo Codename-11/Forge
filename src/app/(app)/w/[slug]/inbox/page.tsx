@@ -16,7 +16,9 @@ import {
   Bot,
   CheckCheck,
   CalendarClock,
+  CalendarRange,
   Eye,
+  FolderInput,
   UserCircle2,
   UsersRound,
   X,
@@ -29,6 +31,7 @@ import { Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { presenceAvailability } from "@/lib/transport-display";
 import { BulkBar, type BulkBarAction } from "@/components/bulk-bar";
+import { BulkProjectPicker, BulkCyclePicker } from "@/components/bulk-move-pickers";
 import { ProjectChip } from "@/components/project-chip";
 import { RowQuickActions } from "@/components/row-quick-actions";
 import { SnoozeMenu } from "@/components/snooze-menu";
@@ -266,9 +269,40 @@ export default function InboxPage() {
     [markReadM],
   );
 
+  const bulkSetProjectM = trpc.issue.bulkSetProject.useMutation({
+    onSuccess: ({ updated }) => {
+      toast.success(`Moved ${updated} issue${updated === 1 ? "" : "s"}.`);
+      clearSelection();
+      setProjectPickerOpen(false);
+      void utils.inbox.get.invalidate();
+      void utils.inbox.badge.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const bulkSetCycleM = trpc.issue.bulkSetCycle.useMutation({
+    onSuccess: ({ updated }) => {
+      toast.success(`Moved ${updated} issue${updated === 1 ? "" : "s"}.`);
+      clearSelection();
+      setCyclePickerOpen(false);
+      void utils.inbox.get.invalidate();
+      void utils.inbox.badge.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   // ---- Bulk picker open state --------------------------------------------
   const [reassignPickerOpen, setReassignPickerOpen] = useState(false);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  const [cyclePickerOpen, setCyclePickerOpen] = useState(false);
   const selectedArray = useMemo(() => Array.from(selected), [selected]);
+  const { data: bulkProjects } = trpc.project.list.useQuery(
+    { archived: false, limit: 100 },
+    { enabled: projectPickerOpen },
+  );
+  const { data: bulkCycles } = trpc.cycle.list.useQuery(
+    {},
+    { enabled: cyclePickerOpen },
+  );
 
   // ---- Per-row inline picker state (status, assignee) --------------------
   const [statusPicker, setStatusPicker] = useState<{
@@ -370,11 +404,15 @@ export default function InboxPage() {
                 snoozeManyM.isPending ||
                 bulkAssignM.isPending ||
                 bulkAssignAgentM.isPending ||
+                bulkSetProjectM.isPending ||
+                bulkSetCycleM.isPending ||
                 markReadM.isPending,
               onMarkRead: () => markReadM.mutate(),
               onSnooze: (until) =>
                 snoozeManyM.mutate({ ids: selectedArray, until }),
               onReassign: () => setReassignPickerOpen(true),
+              onMoveProject: () => setProjectPickerOpen(true),
+              onMoveSprint: () => setCyclePickerOpen(true),
             })}
           />
         )}
@@ -734,6 +772,27 @@ export default function InboxPage() {
           }}
         />
       )}
+
+      {projectPickerOpen && (
+        <BulkProjectPicker
+          open={projectPickerOpen}
+          onOpenChange={setProjectPickerOpen}
+          projects={bulkProjects?.items ?? []}
+          onPick={(projectId) =>
+            bulkSetProjectM.mutate({ issueIds: selectedArray, projectId })
+          }
+        />
+      )}
+      {cyclePickerOpen && (
+        <BulkCyclePicker
+          open={cyclePickerOpen}
+          onOpenChange={setCyclePickerOpen}
+          cycles={bulkCycles ?? []}
+          onPick={(cycleId) =>
+            bulkSetCycleM.mutate({ issueIds: selectedArray, cycleId })
+          }
+        />
+      )}
     </>
   );
 }
@@ -752,12 +811,16 @@ function inboxBulkActions({
   onMarkRead,
   onSnooze,
   onReassign,
+  onMoveProject,
+  onMoveSprint,
 }: {
   count: number;
   disabled: boolean;
   onMarkRead: () => void;
   onSnooze: (until: Date | null) => void;
   onReassign: () => void;
+  onMoveProject: () => void;
+  onMoveSprint: () => void;
 }): BulkBarAction[] {
   return [
     {
@@ -767,6 +830,22 @@ function inboxBulkActions({
       title: "Mark read",
       disabled,
       onClick: onMarkRead,
+    },
+    {
+      id: "project",
+      label: "Project…",
+      icon: <FolderInput className="h-3 w-3" />,
+      title: "Move to project",
+      disabled,
+      onClick: onMoveProject,
+    },
+    {
+      id: "sprint",
+      label: "Sprint…",
+      icon: <CalendarRange className="h-3 w-3" />,
+      title: "Move to sprint",
+      disabled,
+      onClick: onMoveSprint,
     },
     {
       id: "snooze",
