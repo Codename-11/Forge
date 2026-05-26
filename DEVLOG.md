@@ -2,6 +2,39 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-26 — Forge MCP Orca integration contract
+
+Closed the Orca-facing MCP gaps in `src/server/services/mcp.ts`:
+
+- `issues.list` now accepts `orderBy` (`updatedAt`, `createdAt`, `priority`,
+  `identifier`, `title`), `order`, `cursor`, and `createdByViewer`, and returns
+  cursor envelopes with a stable Issue DTO (`identifier`, canonical URL, nested
+  status/project/assignedAgent/labels, dates, and legacy scalar ids for
+  compatibility).
+- `issues.list` keeps `projectId`, supports `statusCategories`, and treats
+  `includeDone:false` as "exclude DONE" without hiding CANCELED. `issues.assigned`
+  now also accepts `projectId` and returns the same Issue DTO envelope.
+- Added `workspaces.list` (`{id,name,slug}`) and narrowed `agents.list` to the
+  stable assignable shape (`{id,name,profileKey}`), both in `{data:[...]}` envelopes.
+- `comments.list` now returns `{data:[...], nextCursor?}`. Issue-returning parity
+  mutations (`issues.create`, `issues.update`, `issues.transition`, `issues.assign`,
+  `issues.setLabels`) now surface the same Issue DTO while preserving the legacy
+  scalar ids clients already used.
+- The REST MCP route now passes through tool-level `{data:...}` envelopes instead
+  of double-wrapping them.
+
+Coverage:
+- `DATABASE_URL=postgresql://forge:forge@localhost:55432/forge?schema=public REDIS_URL=redis://localhost:56379 pnpm test src/server/services/__tests__/mcp.test.ts` → 102 passed
+- `pnpm typecheck` → pass
+- `pnpm lint` → pass
+- `E2E_FORCE_BUILD=1 pnpm test:e2e` → 9 passed
+- Full `pnpm test` was also run with the dev Postgres/Redis; the MCP suite passed,
+  but the full run still has unrelated shared-dev-DB/env failures in
+  provider-credentials without `AUTH_SECRET`, plus existing chat hard-delete,
+  dispatch-rule, dispatcher, and heartbeat sweep tests. Re-running provider
+  credentials with `AUTH_SECRET=test-auth-secret-for-vitest` passes; the remaining
+  failures are outside this MCP contract path.
+
 ## 2026-05-26 — User-docs cleanup for the AXI-55 epic (convergence + modes)
 
 Post-ship doc pass. The CHANGELOG/What's-New entries were already correct, but
