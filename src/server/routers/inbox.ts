@@ -595,13 +595,25 @@ export const inboxRouter = router({
     const now = new Date();
     const me = await ctx.db.user.findUniqueOrThrow({
       where: { id: userId },
-      select: { name: true, handle: true, email: true },
+      select: { name: true, handle: true, email: true, lastInboxVisitAt: true },
     });
     const tokens = buildMentionHaystack(me.name, me.handle, me.email);
     const mentionCutoff = new Date(Date.now() - MENTION_WINDOW_MS);
     const notSnoozed: Prisma.IssueWhereInput = {
       OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }],
     };
+
+    // The badge is an *unread* signal, not a live backlog total: it counts
+    // only what's new since the user last looked (the same since-visit
+    // notion `inbox.get` reports as `unreadSinceVisit`). So visiting the
+    // Inbox / pressing "M" / opening+closing the bell — all of which bump
+    // `lastInboxVisitAt` via `inbox.visit` — drop the count to zero, and
+    // fresh activity re-raises it. A user who has never visited sees the
+    // full count (everything is "new").
+    const lastVisitAt = me.lastInboxVisitAt;
+    const sinceVisit: Prisma.IssueWhereInput = lastVisitAt
+      ? { updatedAt: { gt: lastVisitAt } }
+      : {};
 
     const [assignedCount, stalledCount, candidates] = await Promise.all([
       ctx.db.issue.count({
@@ -611,6 +623,7 @@ export const inboxRouter = router({
           assignees: { some: { userId } },
           status: { category: { notIn: ["DONE", "CANCELED"] } },
           ...notSnoozed,
+          ...sinceVisit,
         },
       }),
       ctx.db.issue.count({
@@ -618,7 +631,12 @@ export const inboxRouter = router({
           workspaceId: { in: workspaceIds },
           deletedAt: null,
           assignees: { some: { userId } },
-          updatedAt: { lt: stalledCutoff },
+          // Stalled = aged past the threshold; "new" stalled means it
+          // aged in after the last visit (gt lastVisit), so a recent
+          // visit empties this — you've already seen the stale set.
+          updatedAt: lastVisitAt
+            ? { lt: stalledCutoff, gt: lastVisitAt }
+            : { lt: stalledCutoff },
           status: { category: { notIn: ["DONE", "CANCELED"] } },
           ...notSnoozed,
         },
@@ -627,7 +645,9 @@ export const inboxRouter = router({
         where: {
           workspaceId: { in: workspaceIds },
           deletedAt: null,
-          createdAt: { gte: mentionCutoff },
+          createdAt: lastVisitAt
+            ? { gte: mentionCutoff, gt: lastVisitAt }
+            : { gte: mentionCutoff },
           authorId: { not: userId },
         },
         select: { body: true },
