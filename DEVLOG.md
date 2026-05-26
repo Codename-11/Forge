@@ -7905,4 +7905,6 @@ Tests: new issue-epic.test.ts (4: create/update kind, children rollup done/total
 kinds filter, cross-ws reject) — all pass; my touched suites 37/37. NOTE: full
 suite shows 1 pre-existing failure (heartbeat sweepIdleAgents) that fails on clean
 master too (shared/drifted local DB from the parallel session) — unrelated to this
-work. typecheck + lint clean. Not yet committed/deployed.
+work. typecheck + lint clean. Committed 9aa542d; deployed live (stamped
+GIT_SHA=9aa542d). Migration 0068 applied cleanly to prod — prod enum now
+EPIC,ISSUE,TASK; Next.js Ready.
