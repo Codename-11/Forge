@@ -13,6 +13,15 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Cross-workspace Mission Control.** A new home at `/` surfaces your work, agents,
+  runtimes, and live activity across every workspace you belong to — read-only, with a
+  workspace chip on each row and a Slack-style workspace switcher in the rail (also in
+  ⌘K and a dedicated **Settings → Workspaces** picker).
+- **Global agents, runtimes & connections.** Agent **profiles**, **runtimes** (the hosts
+  you've registered), and **connections** (your GitHub / Slack / OIDC identities) are now
+  defined once at the account level under **Settings**, then adopted per workspace.
+- **Instance admin area.** A dedicated, separately-styled `/admin` section (instance
+  admins only) for tenants, users, instance-wide runtimes, audit, and build/system info.
 - **Epics & sub-issues.** Issues now have a **type** — Epic, Issue, or Sub-task — set
   from a picker on the issue header (type glyphs show in lists). An **Epic** is an
   issue whose **sub-issues** are its scope: the issue page has a Sub-issues panel with
@@ -51,6 +60,16 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Changed
 
+- **Workspace Agents & Connections are now bindings, not definitions.** A workspace's
+  **Settings → Agents** is a catalog of globally-defined profiles you *bind* with
+  per-workspace policy (capacity, capability overrides, auto-dispatch eligibility);
+  **Settings → Connections** *maps* your global identities to repos / channels /
+  webhooks. Dispatch rules can only target agents bound to the workspace.
+- **"Mission Control" overlay is now "Activity."** The chord-`G 5` live-runs + chat dock
+  is renamed **Activity**; the name *Mission Control* now refers to the new
+  cross-workspace home at `/`.
+- **Removed the per-workspace "Personal" view** — its cross-workspace successor is
+  Mission Control at `/`.
 - **Issue sidebar pickers are now searchable.** Project and a new **Sprint** field use
   the command-palette picker; the project picker surfaces each project's initiative
   inline so you can place work in the right bet at a glance.
