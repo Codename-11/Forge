@@ -1920,9 +1920,16 @@ model AgentRun {
   /// run row survives membership churn.
   controlRequestedById String?
 
+  /// Optional ExecutionStep this run is executing (migration: AXI-57). Set
+  /// when the Goal-orchestration loop opens a run for a step, so orchestrated
+  /// turns are first-class observable runs (Mission Control / watchdog / cost)
+  /// — not fire-and-forget webhooks. Null for direct-dispatch runs.
+  executionStepId    String?
+
   workspace          Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue              Issue           @relation(fields: [issueId], references: [id], onDelete: Cascade)
   agent              Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  executionStep      ExecutionStep?  @relation("AgentRunStep", fields: [executionStepId], references: [id], onDelete: SetNull)
   controlRequestedBy User?           @relation("AgentRunControlRequester", fields: [controlRequestedById], references: [id], onDelete: SetNull)
   events             AgentRunEvent[]
   statusComment      Comment?        @relation("AgentRunStatusComment")
@@ -1935,6 +1942,7 @@ model AgentRun {
   @@index([workspaceId, agentId, acknowledgedAt, lastEventAt])
   /// Reverse lookup from an ActivityEvent to its canonical run.
   @@index([workspaceId, triggerEventId])
+  @@index([executionStepId])
 }
 
 /// Append-only timeline for an AgentRun. Drives the live pulse strip and
@@ -2505,6 +2513,7 @@ model ExecutionStep {
   assignedUser  User?         @relation("ExecutionStepUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
   issue         Issue?        @relation("ExecutionStepIssue", fields: [issueId], references: [id], onDelete: SetNull)
   comments      Comment[]     @relation("ExecutionStepComments")
+  runs          AgentRun[]    @relation("AgentRunStep")
 
   @@unique([planId, position])
   @@index([workspaceId, status])

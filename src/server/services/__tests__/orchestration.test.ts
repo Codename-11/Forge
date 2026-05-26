@@ -575,6 +575,54 @@ describe("orchestration: materialize step as issue (AXI-56)", () => {
   });
 });
 
+describe("orchestration: Goal loop opens observable runs (AXI-57)", () => {
+  it("activating a plan opens an AgentRun tagged with executionStepId on the step's issue", async () => {
+    const { fixture, prisma } = await setup();
+    const worker = await makeAgent(fixture.workspace.id, "worker");
+    const crew = await createAgentCrew(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      name: "Crew",
+      members: [{ agentId: worker.id, role: "WORKER" }],
+    });
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Goal",
+      crewId: crew.id,
+    });
+    const { planId } = await decomposeGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: goal.id,
+    });
+    const { stepIds } = await addStepsToPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      planId,
+      steps: [{ title: "root" }],
+    });
+    // Materialize the step so the run binds to the step's own issue (Phase 1).
+    const { issueId } = await materializeStepAsIssue(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      stepId: stepIds[0],
+    });
+
+    await prisma.$transaction((tx) =>
+      activatePlan(tx, { workspaceId: fixture.workspace.id, actorId: fixture.user.id, planId }),
+    );
+
+    const run = await prisma.agentRun.findFirstOrThrow({
+      where: { executionStepId: stepIds[0] },
+    });
+    expect(run.issueId).toBe(issueId);
+    expect(run.agentId).toBe(worker.id);
+    expect(run.status).toBe("ACTIVE");
+    expect(run.currentStep).toBe("root");
+  });
+});
+
 describe("orchestration: attach hand-authored plan to goal", () => {
   it("links a plan to a goal as its active attempt", async () => {
     const { fixture, prisma } = await setup();

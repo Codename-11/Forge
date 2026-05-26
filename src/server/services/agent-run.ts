@@ -100,6 +100,8 @@ export async function openOrTouchRun(
     actorId?: string | null;
     assignmentEventId?: string | null;
     currentStep?: string | null;
+    /** Set when the run executes a Goal-orchestration ExecutionStep (AXI-57). */
+    executionStepId?: string | null;
   },
 ): Promise<{ run: AgentRun; isNew: boolean }> {
   const existing = await findActiveRun(tx, {
@@ -134,6 +136,7 @@ export async function openOrTouchRun(
       status: AgentRunStatus.ACTIVE,
       assignmentEventId: params.assignmentEventId ?? null,
       currentStep: params.currentStep ?? null,
+      executionStepId: params.executionStepId ?? null,
     },
   });
 
