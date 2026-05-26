@@ -52,11 +52,16 @@ const credentialsProvider = Credentials({
 
       const user = await db.user.upsert({
         where: { email: adminEmail },
-        update: {},
+        // The bootstrap operator is the instance admin. Stamp it on both
+        // paths so an existing pre-restructure admin row self-heals to
+        // INSTANCE_ADMIN on next sign-in (the env-based fallback in
+        // trpc.ts covers the gap before that happens).
+        update: { instanceRole: "INSTANCE_ADMIN" },
         create: {
           email: adminEmail,
           name: process.env.ADMIN_NAME ?? "Admin",
           handle: (process.env.ADMIN_HANDLE ?? "admin").toLowerCase(),
+          instanceRole: "INSTANCE_ADMIN",
         },
       });
 

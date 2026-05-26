@@ -26,6 +26,14 @@ import { workspaceColor } from "@/lib/workspace-color";
 export default function WorkspacesPage() {
   const router = useRouter();
   const { data: workspaces, refetch, isLoading } = trpc.workspace.list.useQuery();
+  // Cross-workspace mini-stats (members / openIssues / agents / activeRuns),
+  // keyed by id so each row can show its tiles. Loads alongside the list;
+  // tiles render once it resolves (rows still work without it).
+  const { data: stats } = trpc.global.workspaces.useQuery();
+  const statsById = useMemo(
+    () => new Map((stats ?? []).map((s) => [s.id, s])),
+    [stats],
+  );
   const setLast = trpc.workspace.setLastWorkspace.useMutation();
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -73,6 +81,7 @@ export default function WorkspacesPage() {
               {workspaces?.map((w) => {
                 const c = workspaceColor(w.key);
                 const role = w.memberships[0]?.role ?? "MEMBER";
+                const st = statsById.get(w.id);
                 return (
                   <li key={w.id}>
                     <button
@@ -101,6 +110,14 @@ export default function WorkspacesPage() {
                           /{w.slug} · role {role.toLowerCase()}
                         </div>
                       </div>
+                      {st && (
+                        <div className="hidden shrink-0 items-center gap-4 sm:flex">
+                          <Stat label="members" value={st.members} />
+                          <Stat label="open" value={st.openIssues} />
+                          <Stat label="agents" value={st.agents} />
+                          <Stat label="live" value={st.activeRuns} ember={st.activeRuns > 0} />
+                        </div>
+                      )}
                       <div className="flex items-center gap-3">
                         <Link
                           href={`/w/${w.slug}/settings/workspace`}
@@ -349,6 +366,25 @@ function CreateDialog({
         </div>
       </form>
     </Dialog>
+  );
+}
+
+/** Compact per-workspace mini-stat tile (members / open / agents / live). */
+function Stat({ label, value, ember }: { label: string; value: number; ember?: boolean }) {
+  return (
+    <div className="text-center">
+      <div
+        className={cn(
+          "text-sm font-semibold tabular-nums leading-none",
+          ember && "text-ember",
+        )}
+      >
+        {value}
+      </div>
+      <div className="mt-0.5 text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+        {label}
+      </div>
+    </div>
   );
 }
 

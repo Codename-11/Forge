@@ -1,6 +1,11 @@
 import { router } from "@/server/trpc";
 import { actionRequestRouter } from "./action-request";
 import { agentRouter } from "./agent";
+import { agentProfileRouter } from "./agent-profile";
+import { agentBindingRouter } from "./agent-binding";
+import { connectionRouter } from "./connection";
+import { connectionMappingRouter } from "./connection-mapping";
+import { instanceAdminRouter } from "./instance-admin";
 import { agentCrewRouter, reviewGateRouter } from "./agent-crew";
 import { artifactRouter } from "./artifact";
 import { canvasRouter } from "./canvas";
@@ -35,6 +40,7 @@ import { dispatchRuleRouter } from "./dispatch-rule";
 import { embedRouter } from "./embed";
 import { eventRouter } from "./event";
 import { executionPlanRouter } from "./execution-plan";
+import { globalRouter } from "./global";
 import { goalRouter } from "./goal";
 import { inboxRouter } from "./inbox";
 import { initiativeRouter } from "./initiative";
@@ -54,8 +60,14 @@ export const appRouter = router({
   actionRequest: actionRequestRouter,
   admin: adminRouter,
   agent: agentRouter,
+  // Three-tier agent ownership (multi-workspace restructure):
+  // `agents.profiles.*` global definitions, `agents.bindings.*` workspace policy.
+  agents: router({ profiles: agentProfileRouter, bindings: agentBindingRouter }),
   agentCrew: agentCrewRouter,
   agentRun: agentRunRouter,
+  connection: connectionRouter,
+  connectionMapping: connectionMappingRouter,
+  instanceAdmin: instanceAdminRouter,
   artifact: artifactRouter,
   canvas: canvasRouter,
   reviewGate: reviewGateRouter,
@@ -73,6 +85,7 @@ export const appRouter = router({
   embed: embedRouter,
   event: eventRouter,
   executionPlan: executionPlanRouter,
+  global: globalRouter,
   goal: goalRouter,
   inbox: inboxRouter,
   initiative: initiativeRouter,

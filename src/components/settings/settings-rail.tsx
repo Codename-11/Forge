@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowLeft, Search } from "lucide-react";
+import { ArrowLeft, Bot, PlugZap, Search, Server } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   ACCOUNT_SETTINGS_GROUP,
@@ -188,20 +188,54 @@ function workspaceGroups(slug: string): RailGroup[] {
   }));
 }
 
+/**
+ * Cross-workspace items that live at the bare `/settings/*` root alongside
+ * the account group: global agent **profiles**, the runtimes (hosts)
+ * you've registered, and your OAuth connections. Added by the
+ * multi-workspace restructure — they travel with your account, not a
+ * workspace, so they belong in the account-scope rail.
+ */
+const GLOBAL_RAIL_ITEMS: RailItem[] = [
+  {
+    href: "/settings/agents",
+    label: "Agents",
+    icon: Bot,
+    hint: "Profiles (definitions)",
+    adminOnly: false,
+  },
+  {
+    href: "/settings/runtimes",
+    label: "Runtimes",
+    icon: Server,
+    hint: "Hosts I've registered",
+    adminOnly: false,
+  },
+  {
+    href: "/settings/connections",
+    label: "Connections",
+    icon: PlugZap,
+    hint: "OAuth identities",
+    adminOnly: false,
+  },
+];
+
 function accountGroups(): RailGroup[] {
   return [
     {
       id: ACCOUNT_SETTINGS_GROUP.id,
       label: ACCOUNT_SETTINGS_GROUP.label,
       hint: ACCOUNT_SETTINGS_GROUP.hint,
-      items: ACCOUNT_SETTINGS_GROUP.items.map((item) => ({
-        // Account paths are already rooted at `/settings`.
-        href: item.path,
-        label: item.label,
-        icon: item.icon,
-        hint: item.description,
-        adminOnly: (item.badge ?? "").toLowerCase().includes("admin"),
-      })),
+      items: [
+        ...GLOBAL_RAIL_ITEMS,
+        ...ACCOUNT_SETTINGS_GROUP.items.map((item) => ({
+          // Account paths are already rooted at `/settings`.
+          href: item.path,
+          label: item.label,
+          icon: item.icon,
+          hint: item.description,
+          adminOnly: (item.badge ?? "").toLowerCase().includes("admin"),
+        })),
+      ],
     },
   ];
 }

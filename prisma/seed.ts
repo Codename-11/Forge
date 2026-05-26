@@ -27,6 +27,8 @@ import {
   AgentStatus,
   RuntimeKind,
   RunEngine,
+  ConnectionProvider,
+  ConnectionStatus,
 } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -37,8 +39,8 @@ async function main() {
   // ---- People --------------------------------------------------------
   const owner = await prisma.user.upsert({
     where: { email: "owner@forge.local" },
-    update: {},
-    create: { email: "owner@forge.local", name: "Forge Owner", handle: "owner" },
+    update: { instanceRole: "INSTANCE_ADMIN" },
+    create: { email: "owner@forge.local", name: "Forge Owner", handle: "owner", instanceRole: "INSTANCE_ADMIN" },
   });
   const dev = await prisma.user.upsert({
     where: { email: "dev@forge.local" },
@@ -218,6 +220,73 @@ async function main() {
       status: AgentStatus.OFFLINE,
       capabilities: ["frontend", "design"],
       maxConcurrent: 1,
+    },
+  });
+
+  // ---- Global agent profiles (three-tier ownership) -----------------
+  // Definitions live at the user (owner) level; the victor/mizu Agent rows
+  // above are the per-workspace *bindings*. Link them, and add one extra
+  // unbound, instance-shared profile so the workspace bind-catalog + global
+  // agents page have something to show. Idempotent (unique ownerId+key).
+  const victorProfile = await prisma.agentProfile.upsert({
+    where: { ownerId_profileKey: { ownerId: owner.id, profileKey: "victor" } },
+    update: {},
+    create: {
+      ownerId: owner.id,
+      profileKey: "victor",
+      name: "Victor",
+      description: "Lead engineering agent — architecture & backend.",
+      avatar: "🔷",
+      provider: AgentProvider.HERMES,
+      baseCapabilities: ["backend", "feature", "code-review", "architecture"],
+      instanceShared: true,
+    },
+  });
+  const mizuProfile = await prisma.agentProfile.upsert({
+    where: { ownerId_profileKey: { ownerId: owner.id, profileKey: "mizu" } },
+    update: {},
+    create: {
+      ownerId: owner.id,
+      profileKey: "mizu",
+      name: "Mizu",
+      description: "Growth & frontend agent.",
+      avatar: "💧",
+      provider: AgentProvider.HERMES,
+      baseCapabilities: ["frontend", "design", "copy"],
+      instanceShared: true,
+    },
+  });
+  await prisma.agent.update({ where: { id: victor.id }, data: { profileId: victorProfile.id } });
+  await prisma.agent.update({ where: { id: mizu.id }, data: { profileId: mizuProfile.id } });
+  // Unbound, instance-shared profile — appears in the bind catalog.
+  await prisma.agentProfile.upsert({
+    where: { ownerId_profileKey: { ownerId: owner.id, profileKey: "atlas" } },
+    update: {},
+    create: {
+      ownerId: owner.id,
+      profileKey: "atlas",
+      name: "Atlas",
+      description: "Research & planning sub-agent (not yet bound anywhere).",
+      avatar: "📚",
+      provider: AgentProvider.CODEX,
+      runEngine: RunEngine.RUNS,
+      baseCapabilities: ["research", "planning", "spec"],
+      instanceShared: true,
+    },
+  });
+
+  // ---- A sample global connection (user-owned OAuth identity) --------
+  await prisma.connection.upsert({
+    where: { id: "seed-conn-github" },
+    update: {},
+    create: {
+      id: "seed-conn-github",
+      ownerId: owner.id,
+      provider: ConnectionProvider.GITHUB,
+      label: "github.com/forge-owner",
+      account: "forge-owner",
+      status: ConnectionStatus.CONNECTED,
+      scopes: ["repo", "read:user", "read:org"],
     },
   });
 

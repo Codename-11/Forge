@@ -220,7 +220,10 @@ describe("heartbeat — sweepIdleAgents", () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "HBE" });
     fixtures.push(fixture);
     const prisma = getPrisma();
-    // Do NOT set a timeout — default is 0.
+    // Explicitly disable the idle sweep for this workspace. The schema
+    // default became 15 in migration 0063, so the old "default is 0"
+    // assumption no longer holds — set 0 to exercise the disabled path.
+    await setIdleTimeout(fixture.workspace.id, 0);
     const stale = new Date(Date.now() - 60 * 60_000);
     const agent = await createAgent(fixture.workspace.id, {
       profileKey: "hbe-disabled",
