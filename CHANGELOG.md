@@ -46,6 +46,8 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 - You can now link a hand-authored execution plan to a goal: `executionPlans.create`
   accepts a `goalId`, and a new `goals.attachPlan` action attaches an existing plan
   as the goal's active attempt — no need to go through the AI planner.
+- `executionPlans.create` can now seed a step DAG in one call using
+  `steps[].dependsOnStepIndexes`, matching `plans.addSteps` for hand-authored plans.
 
 ### Changed
 

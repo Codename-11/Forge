@@ -140,10 +140,10 @@ export interface CreateExecutionPlanInput {
     verification?: Prisma.InputJsonValue | null;
     dependsOnStepIds?: string[];
     /**
-     * Dependencies by 0-based position within THIS steps array (AXI-54 gap 2).
-     * Resolved to real step ids in the same transaction — the only way to
-     * author a DAG at create time, mirroring plans.addSteps. Takes precedence
-     * over `dependsOnStepIds` (which can't reference not-yet-created ids).
+     * Optional dependencies by 0-based index within the `steps` array (AXI-54
+     * gap 2). Mirrors `plans.addSteps` so callers can seed a hand-authored DAG
+     * in one create call before real step ids exist. Resolved to real ids in
+     * the same transaction; merged (union) with any explicit `dependsOnStepIds`.
      */
     dependsOnStepIndexes?: number[];
   }>;
@@ -247,15 +247,21 @@ export async function createExecutionPlan(
         });
         createdIds.push(created.id);
       }
-      // Second pass: resolve dependsOnStepIndexes → real ids (drop out-of-range
-      // / self-referential), mirroring addStepsToPlan.
+      // Second pass: resolve index-based deps to real step ids. Indexes are
+      // scoped to this create call's steps array; invalid/self references are
+      // ignored defensively. Explicit dependsOnStepIds are preserved and
+      // de-duped with resolved ids.
       for (let i = 0; i < input.steps.length; i++) {
-        const idxs = input.steps[i].dependsOnStepIndexes;
-        if (!idxs?.length) continue;
-        const dependsOnStepIds = idxs
+        const step = input.steps[i];
+        const idxs = step.dependsOnStepIndexes ?? [];
+        if (!idxs.length) continue;
+        const resolvedIds = idxs
           .filter((idx) => idx >= 0 && idx < createdIds.length && idx !== i)
           .map((idx) => createdIds[idx]);
-        if (!dependsOnStepIds.length) continue;
+        if (resolvedIds.length === 0) continue;
+        const dependsOnStepIds = Array.from(
+          new Set([...(step.dependsOnStepIds ?? []), ...resolvedIds]),
+        );
         await tx.executionStep.update({
           where: { id: createdIds[i] },
           data: { dependsOnStepIds },
