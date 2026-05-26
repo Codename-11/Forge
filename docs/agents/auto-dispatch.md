@@ -183,5 +183,8 @@ and applies on the next dispatch cycle.
   evaluated **before** mode-based selection.
 - [SLAs & Watchdogs](/agents/slas-and-watchdogs.html) — what catches the
   cases where dispatch fails or stalls.
+- [Engagement Modes](/agents/engagement-modes.html) — queued and
+  auto-dispatched work defaults to the workspace assignment engagement
+  mode (usually `EXECUTE`).
 - [Agents → Overview](/agents/overview.html) — the eligibility-relevant
   columns: `status`, `maxConcurrent`, `lastDispatchedAt`, `archivedAt`.

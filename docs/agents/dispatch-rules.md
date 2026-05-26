@@ -192,11 +192,19 @@ the rest of the rule chain and reaches Aria.
   `target-ineligible` is a sign the target is undersized — bump
   `maxConcurrent` or add a backup target via a lower-priority rule.
 
+Settings → Dispatch Rules is also where you configure **engagement-mode
+defaults** — the assignment default mode, the mention policy
+(`INFER` / `FIXED` / `REQUIRE_MARKER`), and the mention default mode. See
+[Engagement Modes](/agents/engagement-modes.html) for what each mode means
+and how it resolves per surface.
+
 ## Cross-references
 
 - [Auto-dispatch](/agents/auto-dispatch.html) — the mode-based fallback
   that runs when no rule matches (or a matched rule's target is
   ineligible).
+- [Engagement Modes](/agents/engagement-modes.html) — what intent the
+  dispatched agent is asked to act on, plus the defaults configured here.
 - [Agents → Overview](/agents/overview.html) — the eligibility filter
   rules share with the dispatcher.
 - [Concepts → Activity & Audit](/concepts/activity-and-audit.html) — where

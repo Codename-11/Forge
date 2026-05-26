@@ -1,8 +1,8 @@
 # Engagement Modes
 
-> **Status: SPEC (not yet implemented).** This document is the design for a
-> proposed feature. It describes intended behaviour so we can critique the
-> shape before building. Once shipped, this file becomes the user doc.
+> **Status: shipped (2026-05-26).** Set a mode when you assign or mention an
+> agent; configure defaults in **Settings → Dispatch Rules**. Modes ride on the
+> `AgentRun` and are surfaced as a chip on the run strip + Mission Control.
 
 ## The problem
 

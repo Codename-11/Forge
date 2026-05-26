@@ -100,6 +100,21 @@ selection when an issue hits the queue unassigned. Modes:
 `autoStartOnAssign` determines whether AGENT_ASSIGNED fires a webhook on
 assignment (vs just filling the agent's queue).
 
+`AgentRun.engagementMode` (EXECUTE | RESEARCH | REVIEW | DISCUSS)
+governs the *work intent* of a dispatch — distinct from `autoDispatchMode`
+(which agent gets picked). It's resolved per surface by
+`resolveEngagementMode()` (mirrors `resolveRunEngine()`): explicit inline
+marker → policy → surface default → workspace master. Configurable via
+`Workspace.assignmentEngagementMode` (default EXECUTE),
+`mentionEngagementPolicy` (INFER | FIXED | REQUIRE_MARKER), and
+`mentionDefaultMode` (default DISCUSS). Auto-transition-to-started,
+SLA "must move the issue", and `artifactRequired` /
+`verificationChecklist` gates apply **only to EXECUTE**; chat defaults to
+DISCUSS (no heavyweight run). `ExecutionStep.issueId` +
+`AgentRun.executionStepId` link orchestration to issues/runs
+(materialize-step-as-issue; the Goal loop opens observable runs). See
+`docs/agents/engagement-modes.md`.
+
 ## Configurability
 
 Bailey's system-wide value: **prefer settings-driven values over
