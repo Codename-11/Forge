@@ -13,6 +13,7 @@ import { nanoid } from "nanoid";
 import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import { openReviewGateTx } from "@/server/services/agent-crew-service";
 import { createActionRequest } from "@/server/services/action-request-service";
+import { openOrTouchRun } from "@/server/services/agent-run";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
@@ -734,8 +735,9 @@ async function transitionStepToReady(
       lastFeedback: true,
       retryCount: true,
       status: true,
+      issueId: true,
       plan: {
-        select: { id: true, crewId: true, contextSetId: true },
+        select: { id: true, crewId: true, contextSetId: true, issueId: true },
       },
     },
   });
@@ -792,6 +794,24 @@ async function transitionStepToReady(
     },
   });
   if (workerAgentId) {
+    // Open an observable AgentRun for this step (AXI-57) so orchestrated turns
+    // show up in Mission Control / the watchdog / cost — instead of being
+    // fire-and-forget. Bind to the step's own issue when materialized,
+    // otherwise the plan's anchor issue; tag it with executionStepId so the
+    // run is traceable to the step either way. AgentRun.issueId is required,
+    // so skip the run (but keep the webhook dispatch) when no issue exists.
+    const runIssueId = step.issueId ?? step.plan.issueId ?? null;
+    if (runIssueId) {
+      await openOrTouchRun(tx, {
+        workspaceId: params.workspaceId,
+        issueId: runIssueId,
+        agentId: workerAgentId,
+        actorId: params.actorId,
+        assignmentEventId: event.id,
+        currentStep: step.title,
+        executionStepId: step.id,
+      });
+    }
     await queueAgentDispatch(tx, {
       workspaceId: params.workspaceId,
       agentId: workerAgentId,
@@ -1284,11 +1304,24 @@ export async function applyRunCostToPlan(
   },
 ): Promise<{ planId: string | null; breached: boolean }> {
   if (params.costDelta === 0) return { planId: null, breached: false };
-  // Find the plan step whose sourceRunId is this run.
-  const step = await db.executionStep.findFirst({
-    where: { workspaceId: params.workspaceId, sourceRunId: params.runId },
-    select: { id: true, planId: true },
+  // Resolve the step this run executed. Prefer the AgentRun.executionStepId FK
+  // (AXI-57); fall back to the legacy ExecutionStep.sourceRunId reverse-lookup
+  // for runs created before the FK existed.
+  const run = await db.agentRun.findFirst({
+    where: { id: params.runId, workspaceId: params.workspaceId },
+    select: { executionStepId: true },
   });
+  const step =
+    (run?.executionStepId
+      ? await db.executionStep.findFirst({
+          where: { id: run.executionStepId, workspaceId: params.workspaceId },
+          select: { id: true, planId: true },
+        })
+      : null) ??
+    (await db.executionStep.findFirst({
+      where: { workspaceId: params.workspaceId, sourceRunId: params.runId },
+      select: { id: true, planId: true },
+    }));
   if (!step) return { planId: null, breached: false };
 
   let breached = false;
