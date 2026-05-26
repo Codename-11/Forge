@@ -58,6 +58,34 @@ Tests: orchestration suite 10→17, new engagement-mode suite (9), all green; li
 typecheck clean. SLA/watchdog mode-gating left as a follow-up (the run carries the
 mode; no behavior regression — only auto-transition is gated so far).
 
+## 2026-05-25 — ExecutionPlan create supports indexed step deps (AXI-54 gap 2)
+
+Closed Gap 2 of AXI-54: `executionPlans.create` can now seed a step DAG in the
+same call using `steps[].dependsOnStepIndexes`, matching the already-working
+`plans.addSteps` authoring shape. `createExecutionPlan` now creates seeded steps
+in a first pass, records their real ids, then resolves index dependencies in a
+second pass inside the same transaction. Explicit `dependsOnStepIds` remain
+supported and are de-duped with resolved index deps.
+
+Surface updates:
+- Service input accepts `dependsOnStepIndexes` on seeded steps.
+- tRPC `executionPlans.create` schema forwards `dependsOnStepIndexes` and router
+  coverage verifies the seeded child receives the resolved parent id.
+- MCP `executionPlans.create` schema forwards `dependsOnStepIndexes`, so agents
+  can hand-author a goal-linked DAG without falling back to `plans.addSteps`.
+- Changelog updated under Unreleased.
+
+Verification:
+- RED confirmed first: new service test failed with `dependsOnStepIds` still
+  empty for child steps.
+- `pnpm test src/server/services/__tests__/orchestration.test.ts -t "createExecutionPlan resolves seeded step dependencies by input index"` → pass
+- `pnpm test src/server/services/__tests__/mcp.test.ts -t "orchestration loop tools"` → pass
+- `pnpm test src/server/routers/__tests__/execution-plan.test.ts -t "creates a plan with ordered steps"` → pass
+- `pnpm test src/server/routers/__tests__/execution-plan.test.ts src/server/services/__tests__/orchestration.test.ts src/server/services/__tests__/mcp.test.ts` → 124 passed
+- `pnpm typecheck` → pass
+- `pnpm lint` → pass
+- `env -u OPENAI_API_KEY pnpm test` → 703 passed / 1 skipped, with 3 unrelated dispatcher/heartbeat failures when run against the shared `/home/bailey/forge/.env` database. The changed execution-plan/orchestration/MCP suites are green; the failures are in dispatch-rule/dispatcher/heartbeat selection tests and do not touch this code path.
+
 ## 2026-05-25 — Link hand-authored ExecutionPlans to Goals (AXI-54 gap 1)
 
 Closed Gap 1 of AXI-54: there was no API path to attach a hand-authored
@@ -7887,3 +7915,47 @@ bulkSetProject/Cycle + cross-ws reject). Full suite 715 pass / 1 skip,
 typecheck + lint clean. Committed 08622c3; deployed live (stamped
 GIT_SHA=08622c3, no pending migrations — cycleId was input-schema only,
 Next.js Ready).
+
+---
+
+## 2026-05-26 — Epics as WorkItemKind + sub-issue tree UI
+
+Bailey asked whether to add a direct Issue→initiative link and to consider
+Epics + proper linking. Recommendation (given the convergence vision — steps→
+issues, runs→issues, one work substrate): **no direct initiative FK** (it forks
+rollups against Project.initiativeId; keep transitive), and **Epics as
+WorkItemKind.EPIC**, not a new table — an Epic is an Issue whose children are its
+scope, reusing parent/child + relations DAG + cycles + runs. Approved full pass:
+EPIC/ISSUE/SUB-TASK ladder (TASK = "Sub-task" in UI).
+
+Found: `WorkItemKind` enum (ISSUE|TASK) already existed on Issue, used in
+issue.create + data-portability, but never surfaced in UI and no EPIC. parent/
+child already in schema + returned by issue.byId, also unrendered. So this was
+mostly lighting up dormant plumbing.
+
+- **Schema**: added EPIC to WorkItemKind (migration 0068, ALTER TYPE ADD VALUE
+  BEFORE ISSUE). Local dev DB was drifted (parallel session db-push'd 0064-0067
+  columns without ledger rows), so migrate deploy was blocked on unrelated 0064;
+  applied just the enum addition directly via psql to the local stack (idempotent,
+  non-destructive). Committed migration handles prod cleanly (prod DB in sync).
+- **kind UI**: shared `work-item-kind-glyph.tsx` (glyph/label/KindChip, ember tint
+  for EPIC) mirroring engagement-mode-glyph. KindPicker on the issue header;
+  glyph in issue-list rows (shown only for non-ISSUE). Added `kind` to issue.update
+  input (spreads generically).
+- **Sub-issues**: new `issue.children` query (lean, status+kind+done/total rollup).
+  `sub-issues-panel.tsx` — SubIssuesPanel (rollup bar + inline create-child that
+  inherits parent project; Epic→Issue, Issue→Sub-task) + ParentIssueBacklink
+  ("↑ part of EPIC-…"). Wired into IssueMain (new props kind/projectId/parent).
+- **Epics view**: `kinds[]` filter on filterSchema + issue.list where-clause;
+  `kinds` added to SavedViewFiltersSchema; "Epics" quick-filter chip. Deliberately
+  did NOT add group-by-kind to the issues list — it's status-grouped (sticky
+  headers); the Epics chip + glyph + sub-issue drill-down deliver the view without
+  a second grouping axis.
+
+Tests: new issue-epic.test.ts (4: create/update kind, children rollup done/total,
+kinds filter, cross-ws reject) — all pass; my touched suites 37/37. NOTE: full
+suite shows 1 pre-existing failure (heartbeat sweepIdleAgents) that fails on clean
+master too (shared/drifted local DB from the parallel session) — unrelated to this
+work. typecheck + lint clean. Committed 9aa542d; deployed live (stamped
+GIT_SHA=9aa542d). Migration 0068 applied cleanly to prod — prod enum now
+EPIC,ISSUE,TASK; Next.js Ready.
