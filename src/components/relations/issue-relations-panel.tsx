@@ -3,11 +3,13 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { RelationKind } from "@prisma/client";
+import { List, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { IssueRelationsGraph } from "./issue-relations-graph";
 
 /**
  * Relations panel for the issue detail page. Groups outgoing relations by
@@ -47,6 +49,7 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.relation.listForIssue.useQuery({ issueId });
   const [adding, setAdding] = useState(false);
+  const [view, setView] = useState<"list" | "graph">("list");
 
   const remove = trpc.relation.remove.useMutation({
     onSuccess: () => {
@@ -70,17 +73,53 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
         <span className="font-mono text-[0.6875rem] text-muted-foreground">
           {totalCount}
         </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="ml-auto h-6 px-2 text-[0.6875rem]"
-          onClick={() => setAdding((v) => !v)}
-        >
-          {adding ? "Cancel" : "Add relation"}
-        </Button>
+        {/* List / Graph view toggle — the graph maps the issue's place in
+            its blocks + sub-issue dependency path; the list stays the
+            editing surface. */}
+        <div className="ml-auto flex items-center rounded-md border border-border p-0.5">
+          {(
+            [
+              { id: "list" as const, label: "List", Icon: List },
+              { id: "graph" as const, label: "Graph", Icon: Workflow },
+            ]
+          ).map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setView(id)}
+              aria-pressed={view === id}
+              title={`${label} view`}
+              className={cn(
+                "inline-flex h-5 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors",
+                view === id
+                  ? "bg-ember/15 text-ember"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon className="h-3 w-3" />
+              {label}
+            </button>
+          ))}
+        </div>
+        {view === "list" && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[0.6875rem]"
+            onClick={() => setAdding((v) => !v)}
+          >
+            {adding ? "Cancel" : "Add relation"}
+          </Button>
+        )}
       </header>
 
+      {view === "graph" ? (
+        <div className="p-3">
+          <IssueRelationsGraph issueId={issueId} />
+        </div>
+      ) : (
+        <>
       {adding && (
         <AddRelationForm
           issueId={issueId}
@@ -151,6 +190,8 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
           </div>
         )}
       </div>
+        </>
+      )}
     </section>
   );
 }

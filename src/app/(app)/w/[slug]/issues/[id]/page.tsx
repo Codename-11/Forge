@@ -74,6 +74,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const { data: statuses } = trpc.status.list.useQuery();
   const { data: members } = trpc.workspace.members.useQuery();
   const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
+  const { data: cycles } = trpc.cycle.list.useQuery({});
   const { data: allLabels } = trpc.label.list.useQuery();
   // Pre-loaded for the reassign confirmation toast — both the agent
   // list (for the new-assignee display name) and a cap-50 activity
@@ -487,23 +488,22 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                       assignedAgent={issue.assignedAgent ?? null}
                     />
                     <SidebarField label="Project">
-                      <select
-                        value={issue.projectId ?? ""}
-                        onChange={(e) =>
-                          update.mutate({
-                            id: issue.id,
-                            projectId: e.target.value || null,
-                          })
+                      <ProjectPickerField
+                        value={issue.projectId ?? null}
+                        projects={projects?.items ?? []}
+                        onChange={(projectId) =>
+                          update.mutate({ id: issue.id, projectId })
                         }
-                        className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
-                      >
-                        <option value="">— none —</option>
-                        {projects?.items.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
+                      />
+                    </SidebarField>
+                    <SidebarField label="Sprint">
+                      <CyclePickerField
+                        value={issue.cycleId ?? null}
+                        cycles={cycles ?? []}
+                        onChange={(cycleId) =>
+                          update.mutate({ id: issue.id, cycleId })
+                        }
+                      />
                     </SidebarField>
                     <SidebarField label="Labels">
                       <LabelPicker
@@ -757,6 +757,236 @@ function SidebarField({ label, children }: { label: string; children: React.Reac
       <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">{label}</div>
       {children}
     </div>
+  );
+}
+
+/** Shared trigger styling for the sidebar's searchable property pickers. */
+function PickerTrigger({
+  onClick,
+  children,
+  placeholder,
+}: {
+  onClick: () => void;
+  children?: React.ReactNode;
+  placeholder: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="focus-ring flex w-full items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-left text-xs hover:bg-subtle"
+    >
+      {children ?? <span className="text-muted-foreground">{placeholder}</span>}
+      <span className="ml-auto text-muted-foreground">▾</span>
+    </button>
+  );
+}
+
+type ProjectRow =
+  | { kind: "none"; key: string }
+  | {
+      kind: "project";
+      key: string;
+      id: string;
+      name: string;
+      color: string | null;
+      icon: string | null;
+      initiativeName: string | null;
+      issueCount: number;
+    };
+
+/**
+ * Searchable project picker for the issue sidebar. Replaces the native
+ * `<select>` — each row surfaces the project's owning **initiative** (the
+ * issue→initiative link is transitive via project, so this is where you
+ * act on it) plus its issue count.
+ */
+function ProjectPickerField({
+  value,
+  projects,
+  onChange,
+}: {
+  value: string | null;
+  projects: Array<{
+    id: string;
+    name: string;
+    color?: string | null;
+    icon?: string | null;
+    initiative?: { name: string } | null;
+    _count?: { issues: number };
+  }>;
+  onChange: (projectId: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const current = projects.find((p) => p.id === value) ?? null;
+  const q = query.trim().toLowerCase();
+  const filtered = projects.filter(
+    (p) =>
+      !q ||
+      p.name.toLowerCase().includes(q) ||
+      (p.initiative?.name.toLowerCase().includes(q) ?? false),
+  );
+  const items: ProjectRow[] = [
+    { kind: "none", key: "__none" },
+    ...filtered.map((p) => ({
+      kind: "project" as const,
+      key: p.id,
+      id: p.id,
+      name: p.name,
+      color: p.color ?? null,
+      icon: p.icon ?? null,
+      initiativeName: p.initiative?.name ?? null,
+      issueCount: p._count?.issues ?? 0,
+    })),
+  ];
+  return (
+    <>
+      <PickerTrigger onClick={() => setOpen(true)} placeholder="— none —">
+        {current && (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span
+              aria-hidden
+              className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
+              style={{ backgroundColor: current.color ?? "var(--muted)" }}
+            />
+            <span className="truncate">{current.name}</span>
+            {current.initiative?.name && (
+              <span className="shrink-0 rounded bg-subtle px-1 text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                {current.initiative.name}
+              </span>
+            )}
+          </span>
+        )}
+      </PickerTrigger>
+      <Picker<ProjectRow>
+        open={open}
+        onOpenChange={setOpen}
+        placeholder="Move to project… (name or initiative)"
+        items={items}
+        getKey={(it) => it.key}
+        onQueryChange={setQuery}
+        emptyLabel="No projects match."
+        onSelect={(it) => onChange(it.kind === "none" ? null : it.id)}
+        renderItem={(it) => {
+          if (it.kind === "none") {
+            return (
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-2.5 w-2.5 rounded-sm bg-muted" />
+                <span className="text-muted-foreground">No project</span>
+                {value === null && (
+                  <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">current</span>
+                )}
+              </div>
+            );
+          }
+          return (
+            <div className="flex items-center gap-2">
+              <span
+                aria-hidden
+                className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
+                style={{ backgroundColor: it.color ?? "var(--muted)" }}
+              />
+              <span className="truncate">{it.name}</span>
+              {it.initiativeName && (
+                <span className="shrink-0 rounded bg-subtle px-1 text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                  {it.initiativeName}
+                </span>
+              )}
+              <span className="ml-auto shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
+                {value === it.id ? "current" : `${it.issueCount}`}
+              </span>
+            </div>
+          );
+        }}
+      />
+    </>
+  );
+}
+
+type CycleRow =
+  | { kind: "none"; key: string }
+  | {
+      kind: "cycle";
+      key: string;
+      id: string;
+      name: string;
+      status: string;
+      issueCount: number;
+    };
+
+/** Searchable Sprint (cycle) picker for the issue sidebar. */
+function CyclePickerField({
+  value,
+  cycles,
+  onChange,
+}: {
+  value: string | null;
+  cycles: Array<{ id: string; name: string; status: string; _count?: { issues: number } }>;
+  onChange: (cycleId: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const current = cycles.find((c) => c.id === value) ?? null;
+  const q = query.trim().toLowerCase();
+  const filtered = cycles.filter((c) => !q || c.name.toLowerCase().includes(q));
+  const items: CycleRow[] = [
+    { kind: "none", key: "__none" },
+    ...filtered.map((c) => ({
+      kind: "cycle" as const,
+      key: c.id,
+      id: c.id,
+      name: c.name,
+      status: c.status,
+      issueCount: c._count?.issues ?? 0,
+    })),
+  ];
+  return (
+    <>
+      <PickerTrigger onClick={() => setOpen(true)} placeholder="— no sprint —">
+        {current && (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate">{current.name}</span>
+            <span className="shrink-0 rounded bg-subtle px-1 text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+              {current.status.toLowerCase()}
+            </span>
+          </span>
+        )}
+      </PickerTrigger>
+      <Picker<CycleRow>
+        open={open}
+        onOpenChange={setOpen}
+        placeholder="Move to sprint…"
+        items={items}
+        getKey={(it) => it.key}
+        onQueryChange={setQuery}
+        emptyLabel="No sprints match."
+        onSelect={(it) => onChange(it.kind === "none" ? null : it.id)}
+        renderItem={(it) => {
+          if (it.kind === "none") {
+            return (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">No sprint</span>
+                {value === null && (
+                  <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">current</span>
+                )}
+              </div>
+            );
+          }
+          return (
+            <div className="flex items-center gap-2">
+              <span className="truncate">{it.name}</span>
+              <span className="shrink-0 rounded bg-subtle px-1 text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                {it.status.toLowerCase()}
+              </span>
+              <span className="ml-auto shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
+                {value === it.id ? "current" : `${it.issueCount}`}
+              </span>
+            </div>
+          );
+        }}
+      />
+    </>
   );
 }
 

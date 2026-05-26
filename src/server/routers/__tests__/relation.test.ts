@@ -131,4 +131,47 @@ describe("relationRouter", () => {
     expect(forB.BLOCKED_BY).toHaveLength(1);
     expect(forB.BLOCKED_BY[0].target.id).toBe(a.id);
   });
+
+  it("graphForIssue() maps the blocks chain with the focus flagged", async () => {
+    const { caller, fixture } = await setup();
+    const a = await createIssue(fixture, { title: "A" });
+    const b = await createIssue(fixture, { title: "B" });
+    const c = await createIssue(fixture, { title: "C" });
+    // a blocks b, b blocks c → directed chain a → b → c.
+    await caller.add({ fromIssueId: a.id, toIssueId: b.id, kind: RelationKind.BLOCKS });
+    await caller.add({ fromIssueId: b.id, toIssueId: c.id, kind: RelationKind.BLOCKS });
+
+    const g = await caller.graphForIssue({ issueId: b.id, depth: 2 });
+    const ids = g.nodes.map((n) => n.id).sort();
+    expect(ids).toEqual([a.id, b.id, c.id].sort());
+    expect(g.nodes.find((n) => n.id === b.id)?.isCurrent).toBe(true);
+    expect(g.nodes.filter((n) => n.isCurrent)).toHaveLength(1);
+
+    const blocks = g.edges.filter((e) => e.kind === "blocks");
+    expect(blocks).toContainEqual(
+      expect.objectContaining({ from: a.id, to: b.id, kind: "blocks" }),
+    );
+    expect(blocks).toContainEqual(
+      expect.objectContaining({ from: b.id, to: c.id, kind: "blocks" }),
+    );
+  });
+
+  it("graphForIssue() includes parent/child sub-issue edges", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const parent = await createIssue(fixture, { title: "Parent" });
+    const focus = await createIssue(fixture, { title: "Focus" });
+    const child = await createIssue(fixture, { title: "Child" });
+    await prisma.issue.update({ where: { id: focus.id }, data: { parentId: parent.id } });
+    await prisma.issue.update({ where: { id: child.id }, data: { parentId: focus.id } });
+
+    const g = await caller.graphForIssue({ issueId: focus.id, depth: 2 });
+    const childEdges = g.edges.filter((e) => e.kind === "child");
+    expect(childEdges).toContainEqual(
+      expect.objectContaining({ from: parent.id, to: focus.id, kind: "child" }),
+    );
+    expect(childEdges).toContainEqual(
+      expect.objectContaining({ from: focus.id, to: child.id, kind: "child" }),
+    );
+  });
 });
