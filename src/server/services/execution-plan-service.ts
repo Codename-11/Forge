@@ -31,6 +31,12 @@ export interface CreateExecutionPlanInput {
     expectedOutput?: string | null;
     verification?: Prisma.InputJsonValue | null;
     dependsOnStepIds?: string[];
+    /**
+     * Optional dependencies by 0-based index within the `steps` array. This
+     * mirrors `plans.addSteps` so callers can seed a hand-authored DAG in one
+     * create call before real step ids exist.
+     */
+    dependsOnStepIndexes?: number[];
   }>;
 }
 
@@ -108,9 +114,10 @@ export async function createExecutionPlan(
       },
     });
     if (input.steps && input.steps.length) {
+      const createdIds: string[] = [];
       for (let i = 0; i < input.steps.length; i++) {
         const step = input.steps[i];
-        await tx.executionStep.create({
+        const created = await tx.executionStep.create({
           data: {
             workspaceId: input.workspaceId,
             planId: plan.id,
@@ -125,6 +132,28 @@ export async function createExecutionPlan(
               : step.verification,
             dependsOnStepIds: step.dependsOnStepIds ?? [],
           },
+          select: { id: true },
+        });
+        createdIds.push(created.id);
+      }
+      // Second pass: resolve index-based deps to real step ids. Indexes are
+      // scoped to this create call's steps array; invalid/self references are
+      // ignored defensively. Explicit dependsOnStepIds are preserved and
+      // de-duped with resolved ids.
+      for (let i = 0; i < input.steps.length; i++) {
+        const step = input.steps[i];
+        const idxs = step.dependsOnStepIndexes ?? [];
+        if (!idxs.length) continue;
+        const resolvedIds = idxs
+          .filter((idx) => idx >= 0 && idx < createdIds.length && idx !== i)
+          .map((idx) => createdIds[idx]);
+        if (resolvedIds.length === 0) continue;
+        const dependsOnStepIds = Array.from(
+          new Set([...(step.dependsOnStepIds ?? []), ...resolvedIds]),
+        );
+        await tx.executionStep.update({
+          where: { id: createdIds[i] },
+          data: { dependsOnStepIds },
         });
       }
     }

@@ -6380,6 +6380,7 @@ export const mcpTools = {
             assignedUserId: z.string().cuid().nullable().optional(),
             expectedOutput: z.string().max(50_000).nullable().optional(),
             dependsOnStepIds: z.array(z.string()).max(50).optional(),
+            dependsOnStepIndexes: z.array(z.number().int().min(0)).max(50).optional(),
           }),
         )
         .max(50)
@@ -6401,6 +6402,7 @@ export const mcpTools = {
           assignedUserId?: string | null;
           expectedOutput?: string | null;
           dependsOnStepIds?: string[];
+          dependsOnStepIndexes?: number[];
         }>;
       },
       ctx: McpContext,
@@ -6424,6 +6426,7 @@ export const mcpTools = {
           assignedUserId: s.assignedUserId ?? null,
           expectedOutput: s.expectedOutput ?? null,
           dependsOnStepIds: s.dependsOnStepIds ?? [],
+          dependsOnStepIndexes: s.dependsOnStepIndexes ?? [],
         })),
       });
     },
