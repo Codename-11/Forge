@@ -15,7 +15,9 @@ DAG, AgentCrew, ContextSet, ReviewGate, ActionRequest). It adds the
   attempts; exactly one is `isActiveAttempt`. Status:
   `OPEN → PLANNING → ACTIVE → ACHIEVED` (or `ABANDONED`). Carries optional
   budgets `maxTotalCostUsd` / `maxWallTimeMinutes` and accumulated
-  `totalCostUsd`.
+  `totalCostUsd`. Optionally sits under an **Initiative** via nullable
+  `initiativeId`, so a quarterly bet can group the goals that pursue it
+  alongside its projects.
 - **ExecutionPlan** — a decompose attempt for a goal. New loop columns:
   `goalId`, `maxStepRetries` (default 2), `maxTotalCostUsd`,
   `maxWallTimeMinutes`, `totalCostUsd`, `isActiveAttempt`, `autoJudge`
@@ -56,6 +58,34 @@ and time caps you set.
   bounce back with feedback and retry automatically until they pass.
 - A **one-off goal kicked off from an issue** via `/goal <objective>` in
   the issue, when you don't need a standing crew.
+
+## Steps, runs, and issues
+
+A Goal is one of [**two ways to run agent work**](/agents/overview.html) — the
+autonomous one. The other is direct dispatch (assign an agent to an issue). The
+two are different ways to *start* work, but they share the same observable
+substrate, so orchestrated work isn't a black box:
+
+- **Each step that starts running opens a real `AgentRun`.** When a step
+  becomes `READY` and a worker is dispatched, the loop opens (or touches) an
+  `AgentRun` linked to the step via `AgentRun.executionStepId`. That means a
+  Goal's work shows up in Mission Control, counts toward the agent's load, gets
+  a [engagement-mode](/agents/engagement-modes.html) chip, and is watched by the
+  same stalled-run / cost logic as any directly-dispatched run. (Earlier, Goal
+  steps dispatched a fire-and-forget webhook and were invisible to all of that.)
+
+- **A step can be materialized into a real Issue.** Any plan step can be turned
+  into a tracked `Issue` (`ExecutionStep.issueId`), carrying its `expectedOutput`
+  and verification checklist across. The issue then lives on the board and in
+  the sprint like any other work, while still belonging to the plan. This is the
+  "Plan if you want to" path: keep a step as pure plan scaffolding, or promote it
+  to a first-class issue when you want it tracked, assignable, and visible
+  outside the plan view. Materializing is idempotent — a step points at exactly
+  one issue.
+
+So planning, issues, and runs are one connected graph: a Goal owns a plan, a
+plan's steps can become issues, and running a step opens a run — all linked, all
+visible in the same surfaces.
 
 ## The loop
 
@@ -169,7 +199,8 @@ crew's `WORKER`). The event payload carries:
 ### Budgets + watchdog
 
 Each `runs.recordUsage` call that records a `costUsd` and is tied to a
-plan step (`ExecutionStep.sourceRunId`) folds the cost delta into the
+plan step (resolved via the run's `executionStepId` FK, falling back to
+the older `ExecutionStep.sourceRunId`) folds the cost delta into the
 step's `plan.totalCostUsd` **and** the `goal.totalCostUsd`. When a
 RUNNING plan exceeds `maxTotalCostUsd` or `maxWallTimeMinutes`, the plan
 flips to `BLOCKED`, emits `PLAN_BUDGET_EXCEEDED`, and opens a ReviewGate
