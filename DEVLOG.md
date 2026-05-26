@@ -7861,4 +7861,6 @@ status; sits beside the existing goals strip.
 Tests: relation.test.ts +2 (blocks chain w/ focus flag; parent/child edges);
 new issue-bulk-move.test.ts (update cycleId set/clear + cross-ws reject;
 bulkSetProject/Cycle + cross-ws reject). Full suite 715 pass / 1 skip,
-typecheck + lint clean. Not yet committed/deployed.
+typecheck + lint clean. Committed 08622c3; deployed live (stamped
+GIT_SHA=08622c3, no pending migrations — cycleId was input-schema only,
+Next.js Ready).
