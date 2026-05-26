@@ -37,6 +37,7 @@ const stepInputSchema = z.object({
   expectedOutput: z.string().max(50_000).nullable().optional(),
   verification: verificationSchema.nullable().optional(),
   dependsOnStepIds: z.array(z.string()).max(50).optional(),
+  dependsOnStepIndexes: z.array(z.number().int().min(0)).max(50).optional(),
 });
 
 export const executionPlanRouter = router({
@@ -174,6 +175,7 @@ export const executionPlanRouter = router({
           expectedOutput: s.expectedOutput ?? null,
           verification: s.verification ?? null,
           dependsOnStepIds: s.dependsOnStepIds ?? [],
+          dependsOnStepIndexes: s.dependsOnStepIndexes ?? [],
         })),
       });
       return result;
