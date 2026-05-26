@@ -13,6 +13,12 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Epics & sub-issues.** Issues now have a **type** — Epic, Issue, or Sub-task — set
+  from a picker on the issue header (type glyphs show in lists). An **Epic** is an
+  issue whose **sub-issues** are its scope: the issue page has a Sub-issues panel with
+  a done/total progress bar and inline "add sub-issue", a "↑ part of EPIC-…" backlink
+  on children, and an **Epics** quick-filter on the issues list. Sub-issues reuse the
+  same parent/child tree the relations graph already draws.
 - **Engagement modes for agent work.** When you assign or mention an agent you can
   now say *what* you want — **Execute** (take it to done), **Research** (investigate
   & report, no changes), **Review** (critique only), or **Discuss** (just weigh in).

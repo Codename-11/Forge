@@ -7864,3 +7864,45 @@ bulkSetProject/Cycle + cross-ws reject). Full suite 715 pass / 1 skip,
 typecheck + lint clean. Committed 08622c3; deployed live (stamped
 GIT_SHA=08622c3, no pending migrations — cycleId was input-schema only,
 Next.js Ready).
+
+---
+
+## 2026-05-26 — Epics as WorkItemKind + sub-issue tree UI
+
+Bailey asked whether to add a direct Issue→initiative link and to consider
+Epics + proper linking. Recommendation (given the convergence vision — steps→
+issues, runs→issues, one work substrate): **no direct initiative FK** (it forks
+rollups against Project.initiativeId; keep transitive), and **Epics as
+WorkItemKind.EPIC**, not a new table — an Epic is an Issue whose children are its
+scope, reusing parent/child + relations DAG + cycles + runs. Approved full pass:
+EPIC/ISSUE/SUB-TASK ladder (TASK = "Sub-task" in UI).
+
+Found: `WorkItemKind` enum (ISSUE|TASK) already existed on Issue, used in
+issue.create + data-portability, but never surfaced in UI and no EPIC. parent/
+child already in schema + returned by issue.byId, also unrendered. So this was
+mostly lighting up dormant plumbing.
+
+- **Schema**: added EPIC to WorkItemKind (migration 0068, ALTER TYPE ADD VALUE
+  BEFORE ISSUE). Local dev DB was drifted (parallel session db-push'd 0064-0067
+  columns without ledger rows), so migrate deploy was blocked on unrelated 0064;
+  applied just the enum addition directly via psql to the local stack (idempotent,
+  non-destructive). Committed migration handles prod cleanly (prod DB in sync).
+- **kind UI**: shared `work-item-kind-glyph.tsx` (glyph/label/KindChip, ember tint
+  for EPIC) mirroring engagement-mode-glyph. KindPicker on the issue header;
+  glyph in issue-list rows (shown only for non-ISSUE). Added `kind` to issue.update
+  input (spreads generically).
+- **Sub-issues**: new `issue.children` query (lean, status+kind+done/total rollup).
+  `sub-issues-panel.tsx` — SubIssuesPanel (rollup bar + inline create-child that
+  inherits parent project; Epic→Issue, Issue→Sub-task) + ParentIssueBacklink
+  ("↑ part of EPIC-…"). Wired into IssueMain (new props kind/projectId/parent).
+- **Epics view**: `kinds[]` filter on filterSchema + issue.list where-clause;
+  `kinds` added to SavedViewFiltersSchema; "Epics" quick-filter chip. Deliberately
+  did NOT add group-by-kind to the issues list — it's status-grouped (sticky
+  headers); the Epics chip + glyph + sub-issue drill-down deliver the view without
+  a second grouping axis.
+
+Tests: new issue-epic.test.ts (4: create/update kind, children rollup done/total,
+kinds filter, cross-ws reject) — all pass; my touched suites 37/37. NOTE: full
+suite shows 1 pre-existing failure (heartbeat sweepIdleAgents) that fails on clean
+master too (shared/drifted local DB from the parallel session) — unrelated to this
+work. typecheck + lint clean. Not yet committed/deployed.

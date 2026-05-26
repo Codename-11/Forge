@@ -1,5 +1,5 @@
 "use client";
-import { CircleSlash, Inbox, ShieldAlert, Sparkles } from "lucide-react";
+import { CircleSlash, Inbox, Layers, ShieldAlert, Sparkles } from "lucide-react";
 import { StatusCategory } from "@prisma/client";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -107,6 +107,12 @@ export function QuickFilterChips({
     });
   };
 
+  // Epics — pin kinds to [EPIC] to see just the top-level parents.
+  const epicsActive = filters.kinds?.includes("EPIC") ?? false;
+  const toggleEpics = () => {
+    onChange({ ...filters, kinds: epicsActive ? undefined : ["EPIC"] });
+  };
+
   return (
     <ul className="flex flex-wrap items-center gap-1.5">
       <li>
@@ -147,6 +153,14 @@ export function QuickFilterChips({
           onClick={toggleUpdated}
           icon={<Sparkles className="h-3 w-3" aria-hidden />}
           label="Recently updated"
+        />
+      </li>
+      <li>
+        <Chip
+          active={epicsActive}
+          onClick={toggleEpics}
+          icon={<Layers className="h-3 w-3" aria-hidden />}
+          label="Epics"
         />
       </li>
     </ul>

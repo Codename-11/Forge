@@ -2,13 +2,20 @@
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import type { AgentStatus } from "@prisma/client";
+import type { AgentStatus, WorkItemKind } from "@prisma/client";
 import { Bot, Paperclip, Plus, Workflow } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Confirm, Picker } from "@/components/ui/modal";
+import {
+  WorkItemKindGlyph,
+  KIND_LABEL,
+  KIND_SUBTITLE,
+  KIND_ORDER,
+  type WorkItemKindValue,
+} from "@/components/ui/work-item-kind-glyph";
 import {
   EngagementModeGlyph,
   MODE_LABEL,
@@ -294,6 +301,10 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         left={
           <>
             <span className="text-id shrink-0 text-muted-foreground">{issueKey}</span>
+            <KindPicker
+              value={issue.kind}
+              onChange={(kind) => update.mutate({ id: issue.id, kind })}
+            />
             {issue.attachments.length > 0 && (
               <button
                 type="button"
@@ -464,6 +475,9 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               issueId={issue.id}
               description={issue.description}
               comments={issue.comments}
+              kind={issue.kind}
+              projectId={issue.projectId ?? null}
+              parent={issue.parent ?? null}
               onDescriptionSave={(next) => update.mutate({ id: issue.id, description: next })}
               canResolveActions={(() => {
                 if (!me?.id) return false;
@@ -782,6 +796,60 @@ function InlinePriority({
         ))}
       </select>
     </label>
+  );
+}
+
+/**
+ * Inline work-item-kind picker (Epic / Issue / Sub-task) for the issue
+ * topbar. A bare glyph+label control that opens the shared `Picker`;
+ * matches the InlineStatus / InlinePriority affordances beside it.
+ */
+function KindPicker({
+  value,
+  onChange,
+}: {
+  value: WorkItemKind | string;
+  onChange: (kind: WorkItemKind) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const v = (value ?? "ISSUE") as WorkItemKindValue;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title={`Type: ${KIND_LABEL[v]} — click to change`}
+        className="focus-ring inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-background px-1.5 py-1 text-[0.6875rem] hover:bg-subtle"
+      >
+        <WorkItemKindGlyph kind={v} size={12} />
+        <span className={v === "EPIC" ? "text-ember" : "text-muted-foreground"}>
+          {KIND_LABEL[v]}
+        </span>
+      </button>
+      <Picker<WorkItemKindValue>
+        open={open}
+        onOpenChange={setOpen}
+        placeholder="Set work item type…"
+        items={KIND_ORDER}
+        getKey={(k) => k}
+        emptyLabel="No types."
+        onSelect={(k) => onChange(k as WorkItemKind)}
+        renderItem={(k) => (
+          <div className="flex items-center gap-2">
+            <WorkItemKindGlyph kind={k} size={14} />
+            <span>{KIND_LABEL[k]}</span>
+            <span className="ml-auto text-[0.6875rem] text-muted-foreground">
+              {KIND_SUBTITLE[k]}
+            </span>
+            {v === k && (
+              <span className="ml-2 font-mono text-[0.6875rem] text-muted-foreground">
+                current
+              </span>
+            )}
+          </div>
+        )}
+      />
+    </>
   );
 }
 
