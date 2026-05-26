@@ -7787,4 +7787,7 @@ behaviors *felt* broken; Bailey okayed fixing all three.
 
 New test: `inbox-badge.test.ts` (3 cases — counts when never-visited, zeroes
 after visit, re-raises on post-visit update). typecheck + lint + notification/
-inbox suites green. Not deployed.
+inbox suites green. Committed accfe32; deployed (stamped GIT_SHA=accfe32, no
+pending migrations, Next.js Ready). This build also shipped the earlier
+command-center inline-status commit (5598221), since prod builds from the
+working tree.
