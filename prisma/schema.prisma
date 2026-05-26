@@ -968,6 +968,7 @@ model Issue {
   watchers       IssueWatcher[]
   artifacts      Artifact[]
   executionPlans ExecutionPlan[]
+  executionSteps ExecutionStep[] @relation("ExecutionStepIssue")
   goals          Goal[]
   actionRequests ActionRequest[]
 
@@ -2490,6 +2491,11 @@ model ExecutionStep {
   /// When this step was decomposed into a nested child ExecutionPlan,
   /// points at that child plan's id.
   childPlanId      String?
+  /// Optional Issue this step has been materialized into (migration: AXI-56).
+  /// Null = pure orchestration scaffolding ("Plan if desired"). When set, the
+  /// step is a first-class tracked work item (board/cycle/project) and its
+  /// worker run binds to this issue rather than the plan's anchor.
+  issueId          String?
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
@@ -2497,12 +2503,14 @@ model ExecutionStep {
   plan          ExecutionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
   assignedAgent Agent?        @relation("ExecutionStepAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
   assignedUser  User?         @relation("ExecutionStepUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  issue         Issue?        @relation("ExecutionStepIssue", fields: [issueId], references: [id], onDelete: SetNull)
   comments      Comment[]     @relation("ExecutionStepComments")
 
   @@unique([planId, position])
   @@index([workspaceId, status])
   @@index([assignedAgentId, status])
   @@index([assignedUserId, status])
+  @@index([issueId])
 }
 
 // ----------------------------------------------------------------------------

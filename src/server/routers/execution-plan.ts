@@ -13,6 +13,7 @@ import { extractMentions } from "@/server/services/mentions";
 import {
   addExecutionStep,
   createExecutionPlan,
+  materializeStepAsIssue,
   updateExecutionPlan,
   updateExecutionStep,
 } from "@/server/services/execution-plan-service";
@@ -200,6 +201,17 @@ export const executionPlanRouter = router({
         contextSetId: input.contextSetId === undefined ? undefined : input.contextSetId,
       });
       return { ok: true };
+    }),
+
+  materializeStep: workspaceProcedure
+    .input(z.object({ stepId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      return materializeStepAsIssue(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session?.user?.id ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        stepId: input.stepId,
+      });
     }),
 
   archive: workspaceProcedure
