@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, Prisma, Priority, RelationKind, StatusCategory, WorkItemKind } from "@prisma/client";
+import { EngagementMode, EventKind, Prisma, Priority, RelationKind, StatusCategory, WorkItemKind } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -510,6 +510,17 @@ export const issueRouter = router({
             orderBy: { number: "asc" },
           },
           parent: { select: { id: true, number: true, title: true } },
+          // Plan-step provenance (AXI-56): when this issue was materialized
+          // from an ExecutionStep, surface the originating step + plan so the
+          // issue can deep-link back to its plan.
+          executionSteps: {
+            select: {
+              id: true,
+              title: true,
+              position: true,
+              plan: { select: { id: true, title: true } },
+            },
+          },
         },
       });
       if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
@@ -849,6 +860,14 @@ export const issueRouter = router({
         projectId: z.string().cuid().nullable().optional(),
         cycleId: z.string().cuid().nullable().optional(),
         assignedAgentId: agentIdSchema.nullable().optional(),
+        /**
+         * Engagement mode for this assignment (AXI-53). Only meaningful
+         * alongside a non-null `assignedAgentId`. When omitted, the
+         * workspace `assignmentEngagementMode` default is resolved server
+         * side. Stamped on the AGENT_ASSIGNED payload so the dispatcher /
+         * opened run pick it up — mirrors the MCP `issues.assign` path.
+         */
+        mode: z.nativeEnum(EngagementMode).optional(),
         dueDate: z.date().nullable().optional(),
         estimate: z.number().min(0).nullable().optional(),
         /**
@@ -874,7 +893,10 @@ export const issueRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { id, ...patch } = input;
+      // `mode` is dispatch metadata, not an Issue column — pull it out of
+      // the patch so it never reaches `issue.update`'s data payload. It's
+      // resolved + stamped on the AGENT_ASSIGNED event below.
+      const { id, mode: explicitMode, ...patch } = input;
       return ctx.db.$transaction(async (tx) => {
         const before = await tx.issue.findFirstOrThrow({
           where: { id, workspaceId: ctx.workspaceId },
@@ -1045,10 +1067,33 @@ export const issueRouter = router({
               data: { dispatchReason: Prisma.JsonNull },
             });
           }
+          // Resolve the engagement mode for this assignment (AXI-53) —
+          // explicit override > workspace assignment default. Only on
+          // assign (not unassign). Mirrors the MCP `issues.assign` path.
+          let engagementMode: EngagementMode | undefined;
+          if (patch.assignedAgentId) {
+            const { resolveEngagementMode } = await import(
+              "@/server/services/engagement-mode"
+            );
+            const ws = await tx.workspace.findUniqueOrThrow({
+              where: { id: ctx.workspaceId },
+              select: {
+                assignmentEngagementMode: true,
+                mentionEngagementPolicy: true,
+                mentionDefaultMode: true,
+              },
+            });
+            engagementMode = resolveEngagementMode({
+              surface: "assignment",
+              explicit: explicitMode ?? null,
+              workspace: ws,
+            }).mode;
+          }
           const assignmentPayload: Prisma.InputJsonObject = {
             agentId: patch.assignedAgentId ?? null,
             previousAgentId: before.assignedAgentId,
             ...(manualReason ? { dispatchReason: manualReason as Prisma.InputJsonObject } : {}),
+            ...(engagementMode ? { engagementMode } : {}),
           };
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { ModeChip } from "@/components/ui/engagement-mode-glyph";
 import { RunTimeline } from "./run-timeline";
 import { RunActions } from "./run-actions";
 
@@ -33,6 +34,8 @@ export type RunRowData = {
   startedAt: Date | string;
   lastEventAt: Date | string;
   currentStep: string | null;
+  /** Engagement mode of this run — what kind of work is in flight. */
+  engagementMode?: string | null;
   agent: { id: string; name: string; profileKey: string };
   issue: {
     id: string;
@@ -201,6 +204,9 @@ export function RunRow({
           </Link>
         ) : (
           <span className="font-mono text-[0.6875rem] text-foreground/60">{issueKey}</span>
+        )}
+        {run.engagementMode && run.engagementMode !== "EXECUTE" && (
+          <ModeChip mode={run.engagementMode} />
         )}
         <span className="ml-auto flex items-center gap-1.5">
           <RunActions runId={run.id} agentName={run.agent.name} />

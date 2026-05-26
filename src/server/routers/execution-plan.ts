@@ -100,6 +100,18 @@ export const executionPlanRouter = router({
         include: {
           steps: {
             orderBy: { position: "asc" },
+            // Surface the materialized Issue per step (AXI-56) so the
+            // builder can deep-link it + hide the "Materialize" action.
+            include: {
+              issue: {
+                select: {
+                  id: true,
+                  number: true,
+                  title: true,
+                  workspace: { select: { key: true, slug: true } },
+                },
+              },
+            },
           },
           contextSet: { select: { id: true, name: true } },
           issue: { select: { id: true, number: true, title: true } },

@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   CornerDownRight,
+  FilePlus2,
   LayoutList,
   ListTree,
   Network,
@@ -122,6 +123,13 @@ type StepRow = {
   judgeVerdict: JudgeVerdict | null;
   childPlanId: string | null;
   lastFeedback: string | null;
+  // Materialized issue (AXI-56). Null = pure orchestration scaffolding.
+  issue: {
+    id: string;
+    number: number;
+    title: string;
+    workspace: { key: string; slug: string };
+  } | null;
 };
 
 /** Lightweight agent presence map keyed by agent id. */
@@ -236,6 +244,17 @@ export default function PlanDetailPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  // AXI-56 — turn an orchestration step into a first-class tracked Issue.
+  const materializeStep = trpc.executionPlan.materializeStep.useMutation({
+    onSuccess: (res) => {
+      utils.executionPlan.get.invalidate({ id: params.planId });
+      toast.success(
+        res.created ? "Step materialized as issue" : "Step already has an issue",
+      );
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const orderedSteps = useMemo<StepRow[]>(
     () =>
       (plan?.steps ?? [])
@@ -249,6 +268,7 @@ export default function PlanDetailPage() {
             judgeVerdict?: JudgeVerdict | null;
             childPlanId?: string | null;
             lastFeedback?: string | null;
+            issue?: StepRow["issue"];
           };
           return {
             id: s.id,
@@ -264,6 +284,7 @@ export default function PlanDetailPage() {
             judgeVerdict: x.judgeVerdict ?? null,
             childPlanId: x.childPlanId ?? null,
             lastFeedback: x.lastFeedback ?? null,
+            issue: x.issue ?? null,
           };
         }),
     [plan?.steps],
@@ -690,6 +711,12 @@ export default function PlanDetailPage() {
               onTransitionStep={(id, status) => updateStep.mutate({ id, status })}
               onPatchStep={(id, patch) => updateStep.mutate({ id, ...patch })}
               onRemoveStep={(id) => setConfirmState({ kind: "remove-step", stepId: id })}
+              onMaterializeStep={(id) => materializeStep.mutate({ stepId: id })}
+              materializingStepId={
+                materializeStep.isPending
+                  ? (materializeStep.variables?.stepId ?? null)
+                  : null
+              }
             />
           ) : view === "timeline" ? (
             <TimelineView
@@ -1082,6 +1109,8 @@ function StepsList({
   onTransitionStep,
   onPatchStep,
   onRemoveStep,
+  onMaterializeStep,
+  materializingStepId,
 }: {
   steps: StepRow[];
   positionById: Map<string, number>;
@@ -1095,6 +1124,8 @@ function StepsList({
     patch: { title?: string; expectedOutput?: string | null; body?: string | null },
   ) => void;
   onRemoveStep: (id: string) => void;
+  onMaterializeStep: (id: string) => void;
+  materializingStepId: string | null;
 }) {
   if (steps.length === 0) {
     return (
@@ -1118,6 +1149,8 @@ function StepsList({
             onTransition={(status) => onTransitionStep(step.id, status)}
             onPatch={(patch) => onPatchStep(step.id, patch)}
             onRemove={() => onRemoveStep(step.id)}
+            onMaterialize={() => onMaterializeStep(step.id)}
+            materializing={step.id === materializingStepId}
           />
         </li>
       ))}
@@ -1136,6 +1169,8 @@ function StepCard({
   onTransition,
   onPatch,
   onRemove,
+  onMaterialize,
+  materializing,
 }: {
   step: StepRow;
   index: number;
@@ -1151,6 +1186,8 @@ function StepCard({
     body?: string | null;
   }) => void;
   onRemove: () => void;
+  onMaterialize: () => void;
+  materializing: boolean;
 }) {
   const [title, setTitle] = useState(step.title);
   const [body, setBody] = useState(step.body ?? "");
@@ -1254,6 +1291,9 @@ function StepCard({
             retryCount={step.retryCount}
             childPlanId={step.childPlanId}
             workspaceSlug={workspaceSlug}
+            issue={step.issue}
+            onMaterialize={onMaterialize}
+            materializing={materializing}
           />
 
           {step.judgeVerdict ? (
@@ -1402,14 +1442,24 @@ function StepMetaStrip({
   retryCount,
   childPlanId,
   workspaceSlug,
+  issue,
+  onMaterialize,
+  materializing,
 }: {
   agent: AgentLite | null;
   depsLabel: string | null;
   retryCount: number;
   childPlanId: string | null;
   workspaceSlug: string;
+  // AXI-56 — materialized-issue provenance + action. Optional so the
+  // read-only graph/timeline meta strip can omit them.
+  issue?: StepRow["issue"];
+  onMaterialize?: () => void;
+  materializing?: boolean;
 }) {
-  const hasAny = agent || depsLabel || retryCount > 0 || childPlanId;
+  const canMaterialize = !issue && !!onMaterialize;
+  const hasAny =
+    agent || depsLabel || retryCount > 0 || childPlanId || issue || canMaterialize;
   if (!hasAny) return null;
   return (
     <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-meta text-muted-foreground">
@@ -1456,6 +1506,28 @@ function StepMetaStrip({
           <CornerDownRight className="h-2.5 w-2.5" />
           sub-plan
         </a>
+      ) : null}
+      {issue ? (
+        <a
+          href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
+          className="inline-flex items-center gap-1 rounded bg-subtle px-1.5 py-0.5 hover:bg-subtle/70"
+          title={`Tracked as ${issue.workspace.key}-${issue.number}: ${issue.title}`}
+        >
+          <span className="font-mono text-id">
+            {issue.workspace.key}-{issue.number}
+          </span>
+        </a>
+      ) : canMaterialize ? (
+        <button
+          type="button"
+          onClick={onMaterialize}
+          disabled={materializing}
+          className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 hover:bg-subtle disabled:opacity-50"
+          title="Create a tracked issue from this step"
+        >
+          <FilePlus2 className="h-2.5 w-2.5" />
+          {materializing ? "materializing…" : "Materialize as issue"}
+        </button>
       ) : null}
     </div>
   );
