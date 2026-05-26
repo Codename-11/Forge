@@ -17,6 +17,16 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   accepts a `goalId`, and a new `goals.attachPlan` action attaches an existing plan
   as the goal's active attempt — no need to go through the AI planner.
 
+### Changed
+
+- **The notifications bell no longer wipes unread state the instant you open it.**
+  It now marks notifications read when you *close* the panel, so you can open it to
+  glance, read individual items, and use the per-row Ack/Dismiss/Resolve controls
+  without the badge clearing out from under you.
+- **The bell/inbox badge is now a true "unread" count** — items new since you last
+  looked — instead of a running backlog total. Visiting the Inbox, pressing `M`, or
+  opening and closing the bell clears it; new activity raises it again.
+
 ## [2026-05-25] — Settings sidebar + sharper status, dispatch, and detail styling
 
 ### Added

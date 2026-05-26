@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -252,9 +253,11 @@ export function useActivityDrawer(): {
 }
 
 /**
- * Bell button — opens the activity drawer. Badge counts items that
- * need the user's attention (mentions, assigned, stalled) so the
- * number always means the same thing. Tooltip spells it out.
+ * Bell button — opens the activity drawer. Badge counts what's *unread*:
+ * notifications you haven't read plus inbox items (mentions, assigned,
+ * stalled) updated since your last visit. Opening + closing the drawer,
+ * visiting the Inbox, or pressing "M" there clears it; new activity
+ * re-raises it. Tooltip spells it out.
  */
 export function ActivityBell() {
   const ws = useMaybeWorkspace();
@@ -262,8 +265,8 @@ export function ActivityBell() {
   if (!ws) return null;
   const tip =
     unreadCount > 0
-      ? `${unreadCount} ${unreadCount === 1 ? "item needs" : "items need"} your attention`
-      : "No items need your attention";
+      ? `${unreadCount} unread ${unreadCount === 1 ? "item" : "items"}`
+      : "No unread items";
   return (
     <button
       type="button"
@@ -773,6 +776,13 @@ export default function ActivityDrawer() {
   const resolveNotification = trpc.notification.resolve.useMutation({
     onSuccess: invalidateNotifications,
   });
+  // Closing the drawer also counts as "seeing" the inbox preview, so the
+  // inbox-derived half of the bell badge (now a since-visit count) settles
+  // to zero alongside the notification half. Server-debounced to 5s.
+  const inboxVisit = trpc.inbox.visit.useMutation({
+    onSuccess: () => void utils.inbox.badge.invalidate(),
+  });
+  const inboxVisitMutate = inboxVisit.mutate;
   const notificationMutating =
     markNotificationRead.isPending ||
     acknowledgeNotification.isPending ||
@@ -802,17 +812,23 @@ export default function ActivityDrawer() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, close]);
 
-  // Auto mark-as-read 1s after the drawer opens, so the badge clears once
-  // the user has actually seen the panel rather than the moment they click.
+  // Mark "seen" when the drawer CLOSES, not on a timer while it's open.
+  // Opening to peek no longer wipes unread state mid-view, so the per-row
+  // Ack/Dismiss/Resolve controls and the manual "Mark alerts read" button
+  // stay meaningful — you act on items while looking, and the badge clears
+  // only once you've actually looked and left. Clears both the activity
+  // last-read anchor and the notification unread flags, and bumps the
+  // inbox visit so the since-visit half of the badge settles too.
+  const prevOpenRef = useRef(false);
   useEffect(() => {
-    if (!open) return;
-    const t = window.setTimeout(() => {
+    if (prevOpenRef.current && !open) {
       writeLastRead(new Date().toISOString());
       notifyLastRead();
       markNotificationReadMutate({ all: true });
-    }, 1000);
-    return () => window.clearTimeout(t);
-  }, [open, markNotificationReadMutate]);
+      inboxVisitMutate();
+    }
+    prevOpenRef.current = open;
+  }, [open, markNotificationReadMutate, inboxVisitMutate]);
 
   const { data, isLoading } = trpc.event.recent.useQuery(
     { cursor, limit: 40, mineOnly },

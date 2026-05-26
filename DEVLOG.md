@@ -7754,3 +7754,37 @@ added to the card's `CCActionRequest` type (the CC query already selected it).
 
 No server/runtime changes; agent-emitted TRANSITION asks deferred. typecheck +
 lint green. Not deployed (holding per Bailey).
+
+---
+
+## 2026-05-25 — Notifications/inbox: audit + three behavior fixes
+
+Bailey asked to verify the navbar notifications + inbox commands (mark read,
+snooze, etc.) actually work. Audited end-to-end: every control is wired
+(client handler → tRPC → DB → invalidation), realtime fan-out present, and the
+notification/inbox test suites are green (21 tests). No broken wiring. But three
+behaviors *felt* broken; Bailey okayed fixing all three.
+
+1. **Auto-mark-read on open → on close.** `activity-drawer.tsx` previously fired
+   `markNotificationRead({all:true})` on a 1s timer after the drawer opened, so a
+   peek wiped unread state mid-view and made the per-row + manual controls
+   pointless. Replaced with a close-transition effect (prevOpen ref; the drawer
+   stays mounted via top-bar.tsx and returns null when closed, so the open→false
+   transition is observable). On close we now write the activity last-read anchor,
+   mark notifications read, AND fire `inbox.visit` so both halves of the badge
+   settle.
+
+2 + 3. **Badge is now an unread/since-visit count, not a backlog total.**
+   `inbox.badge` previously returned raw assigned+stalled+mention totals, so
+   "mark read"/`M` never moved it. Reworked to count only rows new since
+   `User.lastInboxVisitAt` (mirrors the `unreadSinceVisit` notion `inbox.get`
+   already computes): assigned/stalled by `updatedAt > lastVisit`, mentions by
+   `createdAt > lastVisit`; null lastVisit → count all (new user). Now visiting
+   the Inbox (auto-visit on mount already existed), pressing `M`, or opening+
+   closing the bell drops it to zero; fresh activity re-raises it. Bell tooltip
+   updated from "items need your attention" → "N unread items". Sidebar inbox
+   badge shares `inbox.badge`, so it gets the same unread semantics.
+
+New test: `inbox-badge.test.ts` (3 cases — counts when never-visited, zeroes
+after visit, re-raises on post-visit update). typecheck + lint + notification/
+inbox suites green. Not deployed.
