@@ -623,6 +623,60 @@ describe("orchestration: Goal loop opens observable runs (AXI-57)", () => {
   });
 });
 
+describe("orchestration: goal under initiative (AXI-58)", () => {
+  it("links a goal to an initiative; rejects a cross-workspace initiative", async () => {
+    const { fixture, prisma } = await setup();
+    const initiative = await prisma.initiative.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Q3 bet",
+        slug: `q3-${Math.random().toString(36).slice(2, 8)}`,
+        createdById: fixture.user.id,
+      },
+    });
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Advance the bet",
+      initiativeId: initiative.id,
+    });
+    const row = await prisma.goal.findUniqueOrThrow({ where: { id: goal.id } });
+    expect(row.initiativeId).toBe(initiative.id);
+
+    await expect(
+      createGoal(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        title: "Bad",
+        initiativeId: "cmaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
+    ).rejects.toThrow(/Initiative not found/);
+  });
+});
+
+describe("execution plans: author a DAG at create time (AXI-54 gap 2)", () => {
+  it("resolves dependsOnStepIndexes → real step ids in one create call", async () => {
+    const { fixture, prisma } = await setup();
+    const { id: planId } = await createExecutionPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "DAG at create",
+      steps: [
+        { title: "root" },
+        { title: "child", dependsOnStepIndexes: [0] },
+        { title: "self-ref-dropped", dependsOnStepIndexes: [2, 99] },
+      ],
+    });
+    const steps = await prisma.executionStep.findMany({
+      where: { planId },
+      orderBy: { position: "asc" },
+    });
+    expect(steps[0].dependsOnStepIds).toEqual([]);
+    expect(steps[1].dependsOnStepIds).toEqual([steps[0].id]); // index 0 → root id
+    expect(steps[2].dependsOnStepIds).toEqual([]); // self + out-of-range dropped
+  });
+});
+
 describe("orchestration: attach hand-authored plan to goal", () => {
   it("links a plan to a goal as its active attempt", async () => {
     const { fixture, prisma } = await setup();

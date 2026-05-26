@@ -6412,6 +6412,7 @@ export const mcpTools = {
             assignedUserId: z.string().cuid().nullable().optional(),
             expectedOutput: z.string().max(50_000).nullable().optional(),
             dependsOnStepIds: z.array(z.string()).max(50).optional(),
+            dependsOnStepIndexes: z.array(z.number().int().min(0)).max(50).optional(),
           }),
         )
         .max(50)
@@ -6433,6 +6434,7 @@ export const mcpTools = {
           assignedUserId?: string | null;
           expectedOutput?: string | null;
           dependsOnStepIds?: string[];
+          dependsOnStepIndexes?: number[];
         }>;
       },
       ctx: McpContext,
@@ -6456,6 +6458,7 @@ export const mcpTools = {
           assignedUserId: s.assignedUserId ?? null,
           expectedOutput: s.expectedOutput ?? null,
           dependsOnStepIds: s.dependsOnStepIds ?? [],
+          dependsOnStepIndexes: s.dependsOnStepIndexes ?? [],
         })),
       });
     },
@@ -11101,6 +11104,7 @@ export const mcpTools = {
       title: z.string().min(1).max(300),
       description: z.string().max(50_000).nullable().optional(),
       issueId: z.string().cuid().nullable().optional(),
+      initiativeId: z.string().cuid().nullable().optional(),
       crewId: z.string().cuid().nullable().optional(),
       maxTotalCostUsd: z.number().nonnegative().nullable().optional(),
       maxWallTimeMinutes: z.number().int().positive().nullable().optional(),
@@ -11110,6 +11114,7 @@ export const mcpTools = {
         title: string;
         description?: string | null;
         issueId?: string | null;
+        initiativeId?: string | null;
         crewId?: string | null;
         maxTotalCostUsd?: number | null;
         maxWallTimeMinutes?: number | null;
@@ -11124,6 +11129,7 @@ export const mcpTools = {
         title: input.title,
         description: input.description ?? null,
         issueId: input.issueId ?? null,
+        initiativeId: input.initiativeId ?? null,
         crewId: input.crewId ?? null,
         maxTotalCostUsd: input.maxTotalCostUsd ?? null,
         maxWallTimeMinutes: input.maxWallTimeMinutes ?? null,

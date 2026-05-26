@@ -122,6 +122,7 @@ export interface CreateGoalInput {
   title: string;
   description?: string | null;
   issueId?: string | null;
+  initiativeId?: string | null;
   crewId?: string | null;
   maxTotalCostUsd?: number | null;
   maxWallTimeMinutes?: number | null;
@@ -149,6 +150,15 @@ export async function createGoal(
       throw new TRPCError({ code: "NOT_FOUND", message: "Agent crew not found in this workspace." });
     }
   }
+  if (input.initiativeId) {
+    const found = await db.initiative.findFirst({
+      where: { id: input.initiativeId, workspaceId: input.workspaceId },
+      select: { id: true },
+    });
+    if (!found) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Initiative not found in this workspace." });
+    }
+  }
   const { id } = await db.$transaction(async (tx) => {
     const goal = await tx.goal.create({
       data: {
@@ -156,6 +166,7 @@ export async function createGoal(
         title: input.title.trim(),
         description: input.description ?? null,
         issueId: input.issueId ?? null,
+        initiativeId: input.initiativeId ?? null,
         crewId: input.crewId ?? null,
         createdById: input.actorAgentId ? null : input.actorId,
         createdByAgentId: input.actorAgentId ?? null,
