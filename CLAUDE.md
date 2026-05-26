@@ -35,7 +35,17 @@ All tenant-scoped on `workspaceId`.
   it means a data migration (see Phase 1 of 2026-04-20 in `DEVLOG.md`
   for the pattern). Slug/name can change freely.
 - **Project** — groups issues. Optionally belongs to an Initiative.
-- **Issue** — the unit of work. Optional `projectId`, optional `cycleId`.
+- **Issue** — the unit of work. Optional `projectId`, optional `cycleId`,
+  optional `parentId` (self-relation `IssueChildren` → sub-issue tree).
+  `kind` is `WorkItemKind` (`EPIC | ISSUE | TASK`, default ISSUE; `TASK`
+  surfaced as "Sub-task" in the UI). **An Epic is just an
+  `Issue(kind=EPIC)` whose `children` are its scope** — there is no
+  separate Epic table. This reuses parent/child, relations, the
+  relations DAG, cycles, comments, and agent runs. Initiative stays
+  **transitive via project** (no `Issue.initiativeId`) — a writable
+  direct FK would fork rollups against `Project.initiativeId`; group big
+  work under an Epic instead. `issue.children` returns a child list +
+  done/total rollup; `issue.list` takes a `kinds[]` filter (Epics view).
 - **Cycle** — time-boxed iteration (default length from
   `Workspace.cycleLengthDays`). Issues move in/out of cycles. **Surfaced as
   "Sprint" in the UI** (since 2026-04-24); the data model, tRPC router

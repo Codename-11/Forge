@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Priority, StatusCategory } from "@prisma/client";
+import { Priority, StatusCategory, WorkItemKind } from "@prisma/client";
 
 /**
  * Canonical Zod schema for the per-user `IssueSavedView.filters` JSON
@@ -58,6 +58,8 @@ export const SavedViewFiltersSchema = z
     withoutCycle: z.boolean().optional(),
     /** Priority enums (any-of). Stored as the enum string value. */
     priorities: z.array(z.nativeEnum(Priority)).max(8).optional(),
+    /** Work-item kinds (any-of). e.g. `["EPIC"]` for the Epics view. */
+    kinds: z.array(z.nativeEnum(WorkItemKind)).max(8).optional(),
     /** Toggle: only issues blocked by an open dependency. */
     blocked: z.boolean().optional(),
     /** Window for "updated within last N days". */
