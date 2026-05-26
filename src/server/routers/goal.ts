@@ -4,6 +4,7 @@ import { router, workspaceProcedure } from "@/server/trpc";
 import { agentIdSchema } from "@/server/validators";
 import {
   abandonGoal,
+  attachPlanToGoal,
   createGoal,
   decomposeGoal,
   getGoal,
@@ -103,6 +104,25 @@ export const goalRouter = router({
         goalId: input.goalId,
         plannerAgentId: input.plannerAgentId ?? null,
         contextSetId: input.contextSetId ?? null,
+      });
+    }),
+
+  attachPlan: workspaceProcedure
+    .input(
+      z.object({
+        goalId: z.string().cuid(),
+        planId: z.string().cuid(),
+        makeActive: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return attachPlanToGoal(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session?.user?.id ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        goalId: input.goalId,
+        planId: input.planId,
+        makeActive: input.makeActive,
       });
     }),
 

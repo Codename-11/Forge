@@ -473,6 +473,86 @@ export async function decomposeGoal(
 }
 
 // ---------------------------------------------------------------------------
+// attachPlan — link an already-authored ExecutionPlan to a Goal. The
+// counterpart to decompose for hand-built plans: instead of the LLM planner
+// generating steps, an operator/agent authors the plan (e.g. via
+// executionPlans.create + plans.addSteps) and then attaches it. When
+// `makeActive` (default true) the plan becomes the goal's active attempt and
+// any prior active attempt is demoted.
+// ---------------------------------------------------------------------------
+
+export async function attachPlanToGoal(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    actorAgentId?: string | null;
+    goalId: string;
+    planId: string;
+    makeActive?: boolean;
+  },
+): Promise<{ planId: string; goalId: string }> {
+  const makeActive = params.makeActive ?? true;
+
+  const goal = await db.goal.findFirst({
+    where: { id: params.goalId, workspaceId: params.workspaceId },
+    select: { id: true, status: true },
+  });
+  if (!goal) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found." });
+  }
+  if (goal.status === GoalStatus.ACHIEVED || goal.status === GoalStatus.ABANDONED) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Cannot attach a plan to a ${goal.status.toLowerCase()} goal.`,
+    });
+  }
+
+  const plan = await db.executionPlan.findFirst({
+    where: { id: params.planId, workspaceId: params.workspaceId, archivedAt: null },
+    select: { id: true, goalId: true },
+  });
+  if (!plan) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
+  }
+  if (plan.goalId && plan.goalId !== goal.id) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Plan is already attached to a different goal.",
+    });
+  }
+
+  await db.$transaction(async (tx) => {
+    if (makeActive) {
+      await tx.executionPlan.updateMany({
+        where: { goalId: goal.id, isActiveAttempt: true, id: { not: plan.id } },
+        data: { isActiveAttempt: false },
+      });
+    }
+    await tx.executionPlan.update({
+      where: { id: plan.id },
+      data: { goalId: goal.id, isActiveAttempt: makeActive ? true : undefined },
+    });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
+      entity: "execution-plan",
+      entityId: plan.id,
+      action: "attach-goal",
+      before: { goalId: plan.goalId },
+      after: { goalId: goal.id, isActiveAttempt: makeActive },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "execution-plan",
+      subjectId: plan.id,
+      payload: { action: "attach-goal", goalId: goal.id, makeActive },
+    });
+  });
+
+  return { planId: plan.id, goalId: goal.id };
+}
+
+// ---------------------------------------------------------------------------
 // addSteps — the PLANNER bulk-fills a DRAFT plan with index-based deps.
 // ---------------------------------------------------------------------------
 

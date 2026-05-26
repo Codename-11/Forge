@@ -1,6 +1,6 @@
 import "server-only";
 import type { PrismaClient } from "@prisma/client";
-import { EventKind, ExecutionPlanStatus, Prisma } from "@prisma/client";
+import { EventKind, ExecutionPlanStatus, GoalStatus, Prisma } from "@prisma/client";
 import type { ExecutionStepStatus } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { recordChange } from "@/server/audit";
@@ -14,6 +14,14 @@ export interface CreateExecutionPlanInput {
   issueId?: string | null;
   projectId?: string | null;
   contextSetId?: string | null;
+  /**
+   * Optional owning Goal. When set, the plan is created as that goal's
+   * active attempt (prior attempts are demoted), mirroring `decomposeGoal`
+   * — so a hand-authored plan links to its Goal in one call instead of
+   * relying on the LLM planner. The goal must be in the same workspace and
+   * not ACHIEVED/ABANDONED.
+   */
+  goalId?: string | null;
   status?: ExecutionPlanStatus;
   steps?: Array<{
     title: string;
@@ -59,8 +67,31 @@ export async function createExecutionPlan(
       throw new TRPCError({ code: "NOT_FOUND", message: "Context set not found in this workspace." });
     }
   }
+  if (input.goalId) {
+    const goal = await db.goal.findFirst({
+      where: { id: input.goalId, workspaceId: input.workspaceId },
+      select: { id: true, status: true },
+    });
+    if (!goal) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found in this workspace." });
+    }
+    if (goal.status === GoalStatus.ACHIEVED || goal.status === GoalStatus.ABANDONED) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Cannot attach a plan to a ${goal.status.toLowerCase()} goal.`,
+      });
+    }
+  }
 
   const { id } = await db.$transaction(async (tx) => {
+    // When linking to a goal, this plan becomes the active attempt — demote
+    // any prior active attempt first (mirrors decomposeGoal).
+    if (input.goalId) {
+      await tx.executionPlan.updateMany({
+        where: { goalId: input.goalId, isActiveAttempt: true },
+        data: { isActiveAttempt: false },
+      });
+    }
     const plan = await tx.executionPlan.create({
       data: {
         workspaceId: input.workspaceId,
@@ -69,6 +100,8 @@ export async function createExecutionPlan(
         issueId: input.issueId ?? null,
         projectId: input.projectId ?? null,
         contextSetId: input.contextSetId ?? null,
+        goalId: input.goalId ?? null,
+        isActiveAttempt: input.goalId ? true : undefined,
         status: input.status ?? ExecutionPlanStatus.DRAFT,
         createdById: input.actorId,
         createdByAgentId: input.actorAgentId ?? null,

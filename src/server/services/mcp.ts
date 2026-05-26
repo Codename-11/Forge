@@ -6367,6 +6367,7 @@ export const mcpTools = {
       issueId: z.string().cuid().nullable().optional(),
       projectId: z.string().cuid().nullable().optional(),
       contextSetId: z.string().cuid().nullable().optional(),
+      goalId: z.string().cuid().nullable().optional(),
       status: z
         .enum(["DRAFT", "APPROVED", "RUNNING", "BLOCKED", "COMPLETED", "CANCELED"])
         .optional(),
@@ -6391,6 +6392,7 @@ export const mcpTools = {
         issueId?: string | null;
         projectId?: string | null;
         contextSetId?: string | null;
+        goalId?: string | null;
         status?: "DRAFT" | "APPROVED" | "RUNNING" | "BLOCKED" | "COMPLETED" | "CANCELED";
         steps?: Array<{
           title: string;
@@ -6413,6 +6415,7 @@ export const mcpTools = {
         issueId: input.issueId ?? null,
         projectId: input.projectId ?? null,
         contextSetId: input.contextSetId ?? null,
+        goalId: input.goalId ?? null,
         status: input.status,
         steps: input.steps?.map((s) => ({
           title: s.title,
@@ -11097,6 +11100,29 @@ export const mcpTools = {
         reason: input.reason ?? null,
       });
       return { ok: true };
+    },
+  },
+
+  "goals.attachPlan": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      goalId: z.string().cuid(),
+      planId: z.string().cuid(),
+      makeActive: z.boolean().optional(),
+    }),
+    async run(
+      input: { goalId: string; planId: string; makeActive?: boolean },
+      ctx: McpContext,
+    ) {
+      const { attachPlanToGoal } = await import("@/server/services/orchestration-service");
+      return attachPlanToGoal(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        goalId: input.goalId,
+        planId: input.planId,
+        makeActive: input.makeActive,
+      });
     },
   },
 
