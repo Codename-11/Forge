@@ -186,3 +186,7 @@ long enough that something more than a Coach comment is probably needed.
 - [Reference → Events](/reference/events.html) — the full `EventKind`
   enumeration including `ISSUE_STALLED`, `AGENT_NOACK`, and
   `ISSUE_SLA_BREACH`.
+- [Engagement Modes](/agents/engagement-modes.html) — the auto-transition
+  to started on assignment now fires only for `EXECUTE`-mode assignments
+  (`RESEARCH` / `REVIEW` / `DISCUSS` leave issue status alone); the run
+  carries `engagementMode`.

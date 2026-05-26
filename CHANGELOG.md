@@ -13,6 +13,20 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Engagement modes for agent work.** When you assign or mention an agent you can
+  now say *what* you want — **Execute** (take it to done), **Research** (investigate
+  & report, no changes), **Review** (critique only), or **Discuss** (just weigh in).
+  Only Execute moves the issue or runs the completion gates, so a research or review
+  pass can't accidentally start work or deploy. Defaults per surface are configurable
+  in **Settings → Dispatch Rules** (including how a bare @-mention is treated). See
+  the [Engagement modes guide](/agents/engagement-modes).
+- **Plan steps can become real issues.** Materialize any execution-plan step into a
+  tracked Issue (carrying its expected-output + verification), so planned work shows
+  up on the board/sprint like everything else — or leave it as pure plan scaffolding.
+- **Goal/plan work is now visible in Mission Control.** Steps an agent runs as part of
+  a Goal open real runs (with a mode chip) instead of dispatching silently.
+- **Goals can sit under an initiative**, and a hand-authored plan can be linked to a
+  goal (and built with step dependencies) in one step.
 - **Dependency graph on issues.** The Relations tab now has a **Graph** view (toggle
   next to List) that maps the issue's place in its blocks/blocked-by chain *and*
   parent/child sub-issue tree — an animated, themed DAG with the current issue

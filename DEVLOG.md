@@ -2,6 +2,39 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-26 — Orchestration↔issue convergence + engagement modes (AXI-55 epic)
+
+Shipped the full epic (AXI-55) per `/home/bailey/engagement-convergence-plan.md`
+runbook, five phases, backend-first with per-phase migrations applied to local
+via `prisma db execute` (the repo's local dev DB has migration-history drift, so
+`migrate dev`/`reset` are unusable here; prod picks up the migration folders via
+`migrate deploy` on boot). Migrations 0064–0067.
+
+- **AXI-56** (0064): `ExecutionStep.issueId` + `materializeStepAsIssue` (idempotent;
+  carries title/body/expectedOutput/verification/assignee). tRPC + MCP
+  `executionPlans.materializeStep`.
+- **AXI-57** (0065): `AgentRun.executionStepId`. `transitionStepToReady` now opens an
+  observable run (bound to the step's issue, else the plan anchor; tagged with the
+  step) IN ADDITION to the webhook dispatch — orchestrated turns are visible in
+  Mission Control without collapsing the two control modes. `applyRunCostToPlan`
+  resolves via the FK (legacy `sourceRunId` fallback).
+- **AXI-53** (0066): engagement modes. `EngagementMode` + `MentionEngagementPolicy`
+  enums; `AgentRun.engagementMode`; 3 `Workspace` knobs. `resolveEngagementMode()` +
+  per-mode instruction blocks (`engagement-mode.ts`, unit-tested). Runs carry the
+  mode (threaded from the AGENT_ASSIGNED payload through ensureCanonicalFromEvent +
+  the RUNS dispatcher, which also injects the instruction). Auto-transition gated on
+  EXECUTE. MCP `issues.assign` + tRPC `issue.update` accept `mode`. UI: mode glyph +
+  chips (run strip / RunRow), assign-picker segmented control, Settings → Dispatch
+  Rules controls.
+- **AXI-58** (0067): `Goal.initiativeId` (+ initiative back-relation); `createGoal`
+  accepts it. (Cycle↔goal/plan largely subsumed by step-as-issue.)
+- **AXI-54 gap 2**: `executionPlans.create` accepts `steps[].dependsOnStepIndexes`
+  (index→id in-txn), so a DAG is authorable in one create call.
+
+Tests: orchestration suite 10→17, new engagement-mode suite (9), all green; lint +
+typecheck clean. SLA/watchdog mode-gating left as a follow-up (the run carries the
+mode; no behavior regression — only auto-transition is gated so far).
+
 ## 2026-05-25 — Link hand-authored ExecutionPlans to Goals (AXI-54 gap 1)
 
 Closed Gap 1 of AXI-54: there was no API path to attach a hand-authored

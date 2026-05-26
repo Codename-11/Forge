@@ -138,6 +138,8 @@ ChatMessage ─── threadId, role (USER | AGENT | SYSTEM), body, contextSnaps
 
 ## Cross-references
 
+- [Engagement Modes](/agents/engagement-modes.html) — chat dispatch defaults to
+  `DISCUSS` (conversational; opens no heavyweight run).
 - [Runtime modes](/agents/runtime-modes.html) — persistent vs ephemeral, presence honesty.
 - [Hermes Integration](/agents/hermes.html) — streaming platform adapter.
 - [MCP Tools](/reference/mcp.html) — `chat.*` tool schemas.
