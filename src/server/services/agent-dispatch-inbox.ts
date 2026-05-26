@@ -96,6 +96,18 @@ async function ensureIssueRuns(
   agentIds: ReadonlyArray<string>,
 ): Promise<EnsureCanonicalResult> {
   const isAssigned = params.eventKind === EventKind.AGENT_ASSIGNED;
+  // Engagement mode (AXI-53) rides on the event payload when the dispatcher
+  // resolved one (e.g. issues.assign with an explicit/derived mode). Null →
+  // openOrTouchRun keeps the run's EXECUTE default.
+  const payloadMode =
+    params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)
+      ? ((params.payload as Record<string, unknown>).engagementMode as
+          | "EXECUTE"
+          | "RESEARCH"
+          | "REVIEW"
+          | "DISCUSS"
+          | undefined)
+      : undefined;
   const runIds: string[] = [];
   for (const agentId of agentIds) {
     const { run } = await openOrTouchRun(tx, {
@@ -104,6 +116,7 @@ async function ensureIssueRuns(
       agentId,
       actorId: params.actorId,
       assignmentEventId: isAssigned ? params.eventId : null,
+      engagementMode: payloadMode ?? null,
     });
     // Stamp the latest trigger on the run so the inbox can distinguish
     // "Victor was just re-mentioned in AXI-31" from "Victor is the

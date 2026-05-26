@@ -1,6 +1,6 @@
 import "server-only";
 import type { PrismaClient, AgentRun } from "@prisma/client";
-import { AgentRunStatus, EventKind, Prisma } from "@prisma/client";
+import { AgentRunStatus, EngagementMode, EventKind, Prisma } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { nanoid } from "nanoid";
@@ -102,6 +102,8 @@ export async function openOrTouchRun(
     currentStep?: string | null;
     /** Set when the run executes a Goal-orchestration ExecutionStep (AXI-57). */
     executionStepId?: string | null;
+    /** Engagement mode for this run (AXI-53). Defaults EXECUTE when unset. */
+    engagementMode?: EngagementMode | null;
   },
 ): Promise<{ run: AgentRun; isNew: boolean }> {
   const existing = await findActiveRun(tx, {
@@ -137,6 +139,7 @@ export async function openOrTouchRun(
       assignmentEventId: params.assignmentEventId ?? null,
       currentStep: params.currentStep ?? null,
       executionStepId: params.executionStepId ?? null,
+      ...(params.engagementMode ? { engagementMode: params.engagementMode } : {}),
     },
   });
 
