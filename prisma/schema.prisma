@@ -1560,6 +1560,7 @@ model Initiative {
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   projects  Project[]
+  goals     Goal[]    @relation("InitiativeGoals")
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, status, position])
@@ -2394,6 +2395,10 @@ model Goal {
   description        String?    @db.Text
   status             GoalStatus @default(OPEN)
   issueId            String?
+  /// Optional parent Initiative (AXI-58) — places a goal in the strategy
+  /// hierarchy (Initiative → Project/Goal) so "this goal advances this bet"
+  /// is expressible. Null = unparented.
+  initiativeId       String?
   createdById        String?
   createdByAgentId   String?
   crewId             String?
@@ -2408,12 +2413,14 @@ model Goal {
 
   workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue          Issue?          @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  initiative     Initiative?     @relation("InitiativeGoals", fields: [initiativeId], references: [id], onDelete: SetNull)
   createdBy      User?           @relation("GoalCreator", fields: [createdById], references: [id], onDelete: SetNull)
   createdByAgent Agent?          @relation("GoalCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
   crew           AgentCrew?      @relation("GoalCrew", fields: [crewId], references: [id], onDelete: SetNull)
   plans          ExecutionPlan[]
 
   @@index([workspaceId, status])
+  @@index([initiativeId])
 }
 
 /// Lifecycle for a multi-step execution plan.

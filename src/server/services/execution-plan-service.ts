@@ -139,6 +139,13 @@ export interface CreateExecutionPlanInput {
     expectedOutput?: string | null;
     verification?: Prisma.InputJsonValue | null;
     dependsOnStepIds?: string[];
+    /**
+     * Dependencies by 0-based position within THIS steps array (AXI-54 gap 2).
+     * Resolved to real step ids in the same transaction — the only way to
+     * author a DAG at create time, mirroring plans.addSteps. Takes precedence
+     * over `dependsOnStepIds` (which can't reference not-yet-created ids).
+     */
+    dependsOnStepIndexes?: number[];
   }>;
 }
 
@@ -216,9 +223,11 @@ export async function createExecutionPlan(
       },
     });
     if (input.steps && input.steps.length) {
+      // First pass: create steps without index-based deps so we have real ids.
+      const createdIds: string[] = [];
       for (let i = 0; i < input.steps.length; i++) {
         const step = input.steps[i];
-        await tx.executionStep.create({
+        const created = await tx.executionStep.create({
           data: {
             workspaceId: input.workspaceId,
             planId: plan.id,
@@ -231,8 +240,25 @@ export async function createExecutionPlan(
             verification: step.verification === undefined || step.verification === null
               ? Prisma.JsonNull
               : step.verification,
-            dependsOnStepIds: step.dependsOnStepIds ?? [],
+            // Index-based deps resolved in pass 2; fall back to explicit ids.
+            dependsOnStepIds: step.dependsOnStepIndexes?.length ? [] : (step.dependsOnStepIds ?? []),
           },
+          select: { id: true },
+        });
+        createdIds.push(created.id);
+      }
+      // Second pass: resolve dependsOnStepIndexes → real ids (drop out-of-range
+      // / self-referential), mirroring addStepsToPlan.
+      for (let i = 0; i < input.steps.length; i++) {
+        const idxs = input.steps[i].dependsOnStepIndexes;
+        if (!idxs?.length) continue;
+        const dependsOnStepIds = idxs
+          .filter((idx) => idx >= 0 && idx < createdIds.length && idx !== i)
+          .map((idx) => createdIds[idx]);
+        if (!dependsOnStepIds.length) continue;
+        await tx.executionStep.update({
+          where: { id: createdIds[i] },
+          data: { dependsOnStepIds },
         });
       }
     }
