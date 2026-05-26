@@ -14,6 +14,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
+import {
+  SubIssuesPanel,
+  ParentIssueBacklink,
+} from "@/components/issue-detail/sub-issues-panel";
 import { ActionRequestCard } from "@/components/action-requests/action-request-card";
 import {
   CommentToolCallCard,
@@ -222,15 +226,22 @@ export function IssueMain({
    * if the page hasn't migrated.
    */
   canResolveActions = false,
+  kind,
+  projectId,
+  parent,
 }: {
   issueId: string;
   description: string | null;
   comments: Comment[];
   onDescriptionSave: (next: string | null) => void;
   canResolveActions?: boolean;
+  kind: string;
+  projectId: string | null;
+  parent: { id: string; number: number; title: string } | null;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-8">
+      <ParentIssueBacklink parent={parent} />
       <AgentRunStrip issueId={issueId} />
       <IssueGoalsStrip issueId={issueId} />
       <IssuePlansStrip issueId={issueId} />
@@ -238,6 +249,11 @@ export function IssueMain({
         issueId={issueId}
         description={description}
         onSave={onDescriptionSave}
+      />
+      <SubIssuesPanel
+        parentId={issueId}
+        parentProjectId={projectId}
+        parentKind={kind}
       />
       <Comments
         issueId={issueId}

@@ -13,6 +13,12 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Epics & sub-issues.** Issues now have a **type** — Epic, Issue, or Sub-task — set
+  from a picker on the issue header (type glyphs show in lists). An **Epic** is an
+  issue whose **sub-issues** are its scope: the issue page has a Sub-issues panel with
+  a done/total progress bar and inline "add sub-issue", a "↑ part of EPIC-…" backlink
+  on children, and an **Epics** quick-filter on the issues list. Sub-issues reuse the
+  same parent/child tree the relations graph already draws.
 - **Engagement modes for agent work.** When you assign or mention an agent you can
   now say *what* you want — **Execute** (take it to done), **Research** (investigate
   & report, no changes), **Review** (critique only), or **Discuss** (just weigh in).
@@ -40,6 +46,8 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 - You can now link a hand-authored execution plan to a goal: `executionPlans.create`
   accepts a `goalId`, and a new `goals.attachPlan` action attaches an existing plan
   as the goal's active attempt — no need to go through the AI planner.
+- `executionPlans.create` can now seed a step DAG in one call using
+  `steps[].dependsOnStepIndexes`, matching `plans.addSteps` for hand-authored plans.
 
 ### Changed
 

@@ -261,6 +261,8 @@ const filterSchema = z.object({
   initiativeIds: z.array(z.string().cuid()).max(100).optional(),
   cycleIds: z.array(z.string().cuid()).max(100).optional(),
   priorities: z.array(z.nativeEnum(Priority)).max(8).optional(),
+  /** Work-item kind filter (any-of). e.g. `["EPIC"]` for the Epics view. */
+  kinds: z.array(z.nativeEnum(WorkItemKind)).max(8).optional(),
   /** Match issues whose project has no initiative (or no project at all). */
   withoutInitiative: z.boolean().optional(),
   /** Match issues with no cycle assignment. */
@@ -397,6 +399,7 @@ export const issueRouter = router({
           ...(input.priorities?.length
             ? { priority: { in: input.priorities } }
             : {}),
+          ...(input.kinds?.length ? { kind: { in: input.kinds } } : {}),
           ...(input.cycleId === null
             ? { cycleId: null }
             : input.cycleId
@@ -525,6 +528,45 @@ export const issueRouter = router({
       });
       if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
       return issue;
+    }),
+
+  /**
+   * Child issues of a parent (sub-issues) with their status + kind, plus a
+   * done/total rollup. Powers the Sub-issues panel on the issue detail page
+   * — lean and self-contained so the panel refetches after a create-child
+   * without re-pulling the whole `byId` payload. `done` counts children in
+   * a terminal status category (DONE/CANCELED).
+   */
+  children: workspaceProcedure
+    .input(z.object({ parentId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const parent = await ctx.db.issue.findFirst({
+        where: { id: input.parentId, workspaceId: ctx.workspaceId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!parent) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const rows = await ctx.db.issue.findMany({
+        where: {
+          parentId: input.parentId,
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+        },
+        orderBy: [{ status: { position: "asc" } }, { number: "asc" }],
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          kind: true,
+          priority: true,
+          status: { select: { id: true, name: true, color: true, category: true } },
+        },
+      });
+
+      const done = rows.filter(
+        (r) => r.status.category === "DONE" || r.status.category === "CANCELED",
+      ).length;
+      return { items: rows, total: rows.length, done };
     }),
 
   /**
@@ -857,6 +899,7 @@ export const issueRouter = router({
         description: z.string().max(50_000).nullable().optional(),
         statusId: z.string().cuid().optional(),
         priority: z.nativeEnum(Priority).optional(),
+        kind: z.nativeEnum(WorkItemKind).optional(),
         projectId: z.string().cuid().nullable().optional(),
         cycleId: z.string().cuid().nullable().optional(),
         assignedAgentId: agentIdSchema.nullable().optional(),

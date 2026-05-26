@@ -19,6 +19,7 @@ import { LabelChip } from "@/components/ui/label-chip";
 import { Avatar } from "@/components/ui/avatar";
 import { StatusDot } from "@/components/ui/status-dot";
 import { PriorityGlyph } from "@/components/ui/priority-glyph";
+import { WorkItemKindGlyph } from "@/components/ui/work-item-kind-glyph";
 import { EmptyState, Kbd, SkeletonList, useDensity } from "@/components/ui";
 import { Confirm, Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
@@ -609,6 +610,13 @@ export function IssueList({
                   )}
                 </span>
                 <PriorityGlyph priority={issue.priority} className="w-4" />
+                {issue.kind && issue.kind !== "ISSUE" && (
+                  <WorkItemKindGlyph
+                    kind={issue.kind}
+                    size={12}
+                    className="shrink-0"
+                  />
+                )}
                 <span className={keyCls}>
                   {formatIssueId(workspaceKey, issue.number)}
                 </span>
