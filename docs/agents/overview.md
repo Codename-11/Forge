@@ -7,6 +7,43 @@ This page covers the data model, the human/agent dual-assignment story, the
 lifecycle of an agent, the implicit heartbeat that comes from webhook delivery,
 and where to find each piece of the surface in the app.
 
+## Two ways to run agent work
+
+There are two ways to put an agent to work, and they're intentionally
+different. Reach for the one that matches how much you want to drive.
+
+| | **Direct dispatch** | **Goal orchestration** |
+|---|---|---|
+| Entry point | Assign / @-mention / queue an **issue** | State a **Goal** → approve a plan |
+| Who decides the steps | You do — one issue, one unit of work | A planner agent decomposes into a step DAG |
+| Who drives | You — assign, nudge, reassign | An automated crew loop (plan → work → judge → retry) |
+| Stops when | The agent finishes that issue | Every step passes, or a budget/time cap trips |
+| Reach for it when | You know the task and want an agent on it now | The objective is big and you want it broken down and run to completion on its own |
+
+**Direct dispatch** is the everyday path: assign an agent to an issue (or
+@-mention one, or let auto-dispatch pick from the queue) and it works that one
+issue. See the rest of this page.
+
+**Goal orchestration** is the autonomous path: you state an objective, approve
+the plan a planner proposes, and a crew runs it through to "achieved" within the
+budget you set. See [Orchestration loop](/concepts/orchestration.html).
+
+::: info One observable substrate
+Both paths run on the **same `AgentRun`** record — so whether work came from a
+direct assignment or a Goal step, it shows up the same way in Mission Control,
+counts toward the agent's load, and is watched by the same stalled-run /
+watchdog logic. A Goal step can also be **materialized into a real issue** (see
+the orchestration guide), so planned work appears on the board and sprint
+alongside everything else. The two paths are different ways to *start* work, not
+two different systems for *tracking* it.
+
+Orthogonal to the path are two other dials, both also carried on the run:
+the [**engagement mode**](/agents/engagement-modes.html) (how far to take the
+work — execute / research / review / discuss) and the
+[**execution engine**](/agents/engines.html) (who owns the agent loop —
+Forge or the agent's own runtime).
+:::
+
 ## The Agent model
 
 Every agent is a row on the `Agent` table, scoped to a `Workspace`. It carries
@@ -334,6 +371,13 @@ without leaving the current page.
 
 ## Cross-references
 
+- [Orchestration loop](/concepts/orchestration.html) — the second way to run
+  agent work: Goal → plan → crew loop, and how its steps open runs and can
+  become issues.
+- [Engagement modes](/agents/engagement-modes.html) — *how far* a dispatch
+  takes the work (execute / research / review / discuss).
+- [Chat & Dispatch engines](/agents/engines.html) — *who owns the loop* for a
+  run (Forge-owned Completions vs. runtime-owned Runs).
 - [Hermes Integration](/agents/hermes.html) — how `profileKey` maps to a
   Hermes runtime profile, and what the MCP self-management loop looks like.
 - [Auto-dispatch](/agents/auto-dispatch.html) — the four modes that govern

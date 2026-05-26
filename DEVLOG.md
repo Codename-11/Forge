@@ -2,6 +2,29 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-26 — User-docs cleanup for the AXI-55 epic (convergence + modes)
+
+Post-ship doc pass. The CHANGELOG/What's-New entries were already correct, but
+the reference docs hadn't caught up with the shipped epic. Fixed three gaps:
+
+- **`docs/agents/engagement-modes.md`** — rewrote from spec voice (addressed to
+  "you asked…", "Decisions resolved", Phase 2 reading as maybe-live) into guide
+  voice describing what's live. Phase 2 scoped-tool enforcement is now clearly
+  labelled planned-not-shipped.
+- **`docs/agents/overview.md`** — added a **"Two ways to run agent work"**
+  section (direct dispatch vs. Goal orchestration), the question users actually
+  had. Calls out the shared `AgentRun` substrate and the two orthogonal dials
+  (engagement mode, execution engine). Added orchestration/engines/modes to the
+  cross-references (overview previously didn't link to orchestration at all).
+- **`docs/concepts/orchestration.md`** — wove in the convergence: added
+  **"Steps, runs, and issues"** (AXI-57 steps open observable runs; AXI-56
+  materialize-step-as-issue), noted `Goal.initiativeId` (AXI-58) on the Goal
+  primitive, and corrected the cost-folding note to the new `executionStepId`
+  FK (legacy `sourceRunId` fallback).
+
+No code/feature change, no new CHANGELOG entry (docs describe already-shipped
+behaviour). VitePress build passes (dead-link check is build-failing by default).
+
 ## 2026-05-26 — Orchestration↔issue convergence + engagement modes (AXI-55 epic)
 
 Shipped the full epic (AXI-55) per `/home/bailey/engagement-convergence-plan.md`
