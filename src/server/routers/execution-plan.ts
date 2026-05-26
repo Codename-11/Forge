@@ -149,6 +149,7 @@ export const executionPlanRouter = router({
         issueId: z.string().cuid().nullable().optional(),
         projectId: z.string().cuid().nullable().optional(),
         contextSetId: z.string().cuid().nullable().optional(),
+        goalId: z.string().cuid().nullable().optional(),
         status: z.nativeEnum(ExecutionPlanStatus).optional(),
         steps: z.array(stepInputSchema).max(50).optional(),
       }),
@@ -163,6 +164,7 @@ export const executionPlanRouter = router({
         issueId: input.issueId ?? null,
         projectId: input.projectId ?? null,
         contextSetId: input.contextSetId ?? null,
+        goalId: input.goalId ?? null,
         status: input.status,
         steps: input.steps?.map((s) => ({
           title: s.title,

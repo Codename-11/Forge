@@ -10,6 +10,7 @@ import {
   abandonGoal,
   activatePlan,
   addStepsToPlan,
+  attachPlanToGoal,
   cascadeReadiness,
   createGoal,
   decomposeGoal,
@@ -17,6 +18,7 @@ import {
   recordVerdict,
   requestPlanApproval,
 } from "@/server/services/orchestration-service";
+import { createExecutionPlan } from "@/server/services/execution-plan-service";
 import {
   createAgentCrew,
   addCrewMember,
@@ -525,5 +527,99 @@ describe("orchestration: agentCrews CRUD", () => {
     });
     row = await prisma.agentCrew.findUniqueOrThrow({ where: { id: crew.id } });
     expect(row.archivedAt).not.toBeNull();
+  });
+});
+
+describe("orchestration: attach hand-authored plan to goal", () => {
+  it("links a plan to a goal as its active attempt", async () => {
+    const { fixture, prisma } = await setup();
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Ship the thing",
+    });
+    const { id: planId } = await createExecutionPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Hand-authored plan",
+    });
+
+    // Created standalone — not yet linked.
+    let plan = await prisma.executionPlan.findUniqueOrThrow({ where: { id: planId } });
+    expect(plan.goalId).toBeNull();
+
+    const res = await attachPlanToGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: goal.id,
+      planId,
+    });
+    expect(res).toEqual({ planId, goalId: goal.id });
+
+    plan = await prisma.executionPlan.findUniqueOrThrow({ where: { id: planId } });
+    expect(plan.goalId).toBe(goal.id);
+    expect(plan.isActiveAttempt).toBe(true);
+  });
+
+  it("createExecutionPlan with goalId links + demotes the prior active attempt", async () => {
+    const { fixture, prisma } = await setup();
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Multi-attempt goal",
+    });
+    const { id: firstId } = await createExecutionPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Attempt 1",
+      goalId: goal.id,
+    });
+    const { id: secondId } = await createExecutionPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Attempt 2",
+      goalId: goal.id,
+    });
+
+    const first = await prisma.executionPlan.findUniqueOrThrow({ where: { id: firstId } });
+    const second = await prisma.executionPlan.findUniqueOrThrow({ where: { id: secondId } });
+    expect(first.goalId).toBe(goal.id);
+    expect(first.isActiveAttempt).toBe(false); // demoted
+    expect(second.goalId).toBe(goal.id);
+    expect(second.isActiveAttempt).toBe(true); // newest active
+
+    const active = await prisma.executionPlan.count({
+      where: { goalId: goal.id, isActiveAttempt: true },
+    });
+    expect(active).toBe(1);
+  });
+
+  it("refuses to attach a plan already owned by a different goal", async () => {
+    const { fixture, prisma } = await setup();
+    const goalA = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Goal A",
+    });
+    const goalB = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Goal B",
+    });
+    const { id: planId } = await createExecutionPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Owned plan",
+      goalId: goalA.id,
+    });
+
+    await expect(
+      attachPlanToGoal(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        goalId: goalB.id,
+        planId,
+      }),
+    ).rejects.toThrow(/different goal/);
   });
 });

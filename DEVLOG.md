@@ -2,6 +2,33 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-25 — Link hand-authored ExecutionPlans to Goals (AXI-54 gap 1)
+
+Closed Gap 1 of AXI-54: there was no API path to attach a hand-authored
+`ExecutionPlan` to a `Goal` — only `goals.decompose` (the LLM planner) ever set
+`ExecutionPlan.goalId`, and `executionPlans.update` didn't accept it. Surfaced
+while building the engagement-mode Goal/Plan (AXI-53): the plan could only be
+associated to its goal via a shared `issueId`, never the `goalId` FK, so the
+Goal DAG view didn't claim it.
+
+Changes (no migration — `goalId` column already existed):
+- `createExecutionPlan` (+ tRPC `executionPlans.create` + MCP) now accepts
+  `goalId`. When set, the plan is created as the goal's active attempt and any
+  prior active attempt is demoted (mirrors `decomposeGoal`). Cross-tenant +
+  not-ACHIEVED/ABANDONED guards.
+- New `attachPlanToGoal` service + tRPC `goals.attachPlan` + MCP
+  `goals.attachPlan({ goalId, planId, makeActive? })` to link an *existing*
+  plan. Refuses to steal a plan already owned by a different goal; keeps the
+  single-active-attempt invariant.
+- Tests: 3 new orchestration cases (attach links + activates; create-with-goalId
+  demotes prior attempt; refuse cross-goal steal). 13/13 orchestration green;
+  full plan/mcp suites green; typecheck + lint clean.
+
+Gap 2 of AXI-54 (index-based step deps on `executionPlans.create`) still open —
+`plans.addSteps` remains the DAG-authoring path. Note: the `mcp__forge__*`
+stdio bridge drops array-of-object params, so step bulk-ops go via a direct
+`POST /api/mcp/<tool>`.
+
 ## 2026-05-25 — Agent run completion closes lifecycle rows
 
 Fixed the false-stalled-agent path where an agent could finish a no-op /

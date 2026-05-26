@@ -11,6 +11,12 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+### Added
+
+- You can now link a hand-authored execution plan to a goal: `executionPlans.create`
+  accepts a `goalId`, and a new `goals.attachPlan` action attaches an existing plan
+  as the goal's active attempt — no need to go through the AI planner.
+
 ## [2026-05-25] — Settings sidebar + sharper status, dispatch, and detail styling
 
 ### Added
