@@ -18,7 +18,7 @@ import {
   recordVerdict,
   requestPlanApproval,
 } from "@/server/services/orchestration-service";
-import { createExecutionPlan } from "@/server/services/execution-plan-service";
+import { createExecutionPlan, materializeStepAsIssue } from "@/server/services/execution-plan-service";
 import {
   createAgentCrew,
   addCrewMember,
@@ -527,6 +527,51 @@ describe("orchestration: agentCrews CRUD", () => {
     });
     row = await prisma.agentCrew.findUniqueOrThrow({ where: { id: crew.id } });
     expect(row.archivedAt).not.toBeNull();
+  });
+});
+
+describe("orchestration: materialize step as issue (AXI-56)", () => {
+  it("creates a linked issue carrying the step's contract, idempotently", async () => {
+    const { fixture, prisma } = await setup();
+    const { id: planId } = await createExecutionPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Plan with a step",
+      steps: [
+        {
+          title: "Wire the resolver",
+          body: "Implement resolveX()",
+          expectedOutput: "resolveX returns correctly",
+          verification: [{ label: "unit tests green", kind: "command", value: "pnpm test" }],
+        },
+      ],
+    });
+    const step = await prisma.executionStep.findFirstOrThrow({ where: { planId } });
+    expect(step.issueId).toBeNull();
+
+    const res = await materializeStepAsIssue(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      stepId: step.id,
+    });
+    expect(res.created).toBe(true);
+
+    const issue = await prisma.issue.findUniqueOrThrow({ where: { id: res.issueId } });
+    expect(issue.title).toBe("Wire the resolver");
+    expect(issue.description).toBe("Implement resolveX()");
+    expect(issue.expectedOutput).toBe("resolveX returns correctly");
+    expect(issue.verificationChecklist).not.toBeNull();
+
+    const relinked = await prisma.executionStep.findUniqueOrThrow({ where: { id: step.id } });
+    expect(relinked.issueId).toBe(res.issueId);
+
+    // Idempotent: second call returns the same issue, creates nothing new.
+    const again = await materializeStepAsIssue(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      stepId: step.id,
+    });
+    expect(again).toEqual({ issueId: res.issueId, created: false });
   });
 });
 

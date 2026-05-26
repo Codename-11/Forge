@@ -6429,6 +6429,20 @@ export const mcpTools = {
     },
   },
 
+  "executionPlans.materializeStep": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({ stepId: z.string().cuid() }),
+    async run(input: { stepId: string }, ctx: McpContext) {
+      const { materializeStepAsIssue } = await import("@/server/services/execution-plan-service");
+      return materializeStepAsIssue(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        stepId: input.stepId,
+      });
+    },
+  },
+
   "executionPlans.transition": {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({
