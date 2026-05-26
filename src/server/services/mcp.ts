@@ -114,6 +114,108 @@ function sortCommentsChronologically<T extends McpCommentWithDates>(comments: T[
   return [...comments].sort((a, b) => effectiveCommentTime(a) - effectiveCommentTime(b));
 }
 
+const mcpIssueDtoSelect = Prisma.validator<Prisma.IssueSelect>()({
+  id: true,
+  number: true,
+  title: true,
+  description: true,
+  priority: true,
+  statusId: true,
+  projectId: true,
+  assignedAgentId: true,
+  createdAt: true,
+  updatedAt: true,
+  dueDate: true,
+  workspace: { select: { key: true, slug: true } },
+  status: { select: { id: true, name: true, category: true, color: true } },
+  project: { select: { id: true, key: true, name: true } },
+  assignedAgent: { select: { id: true, name: true } },
+  labels: {
+    orderBy: { label: { name: "asc" } },
+    select: { label: { select: { name: true } } },
+  },
+});
+
+type McpIssueDtoRow = Prisma.IssueGetPayload<{ select: typeof mcpIssueDtoSelect }>;
+
+type McpIssueSortField = "updatedAt" | "createdAt" | "priority" | "identifier" | "title";
+
+type McpIssueDto = {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string | null;
+  url: string;
+  status: {
+    id: string;
+    name: string;
+    category: StatusCategory;
+    color: string;
+  };
+  priority: Priority;
+  project: { id: string; key: string; name: string } | null;
+  assignedAgent: { id: string; name: string } | null;
+  labels: Array<{ name: string }>;
+  createdAt: Date;
+  updatedAt: Date;
+  dueDate: Date | null;
+  // Legacy scalar ids retained so existing MCP clients do not have to
+  // migrate atomically while new clients can rely on the nested DTO above.
+  number: number;
+  statusId: string;
+  projectId: string | null;
+  assignedAgentId: string | null;
+};
+
+function mcpListEnvelope<T>(data: T[], nextCursor?: string): { data: T[]; nextCursor?: string } {
+  return nextCursor ? { data, nextCursor } : { data };
+}
+
+function mcpIssueUrl(slug: string, identifier: string): string {
+  return `/w/${slug}/i/${identifier}`;
+}
+
+function mcpIssueOrderBy(
+  field: McpIssueSortField | undefined,
+  order: Prisma.SortOrder,
+): Prisma.IssueOrderByWithRelationInput[] {
+  if (!field) return [{ priority: "desc" }, { createdAt: "desc" }, { id: "asc" }];
+  if (field === "identifier") return [{ number: order }, { id: "asc" }];
+  if (field === "priority") return [{ priority: order }, { createdAt: "desc" }, { id: "asc" }];
+  return [{ [field]: order }, { id: "asc" }];
+}
+
+function toMcpIssueDto(issue: McpIssueDtoRow): McpIssueDto {
+  const identifier = `${issue.workspace.key}-${issue.number}`;
+  return {
+    id: issue.id,
+    identifier,
+    title: issue.title,
+    description: issue.description,
+    url: mcpIssueUrl(issue.workspace.slug, identifier),
+    status: issue.status,
+    priority: issue.priority,
+    project: issue.project,
+    assignedAgent: issue.assignedAgent,
+    labels: issue.labels.map((row) => ({ name: row.label.name })),
+    createdAt: issue.createdAt,
+    updatedAt: issue.updatedAt,
+    dueDate: issue.dueDate,
+    number: issue.number,
+    statusId: issue.statusId,
+    projectId: issue.projectId,
+    assignedAgentId: issue.assignedAgentId,
+  };
+}
+
+async function mcpIssueDtoById(id: string): Promise<McpIssueDto> {
+  const issue = await db.issue.findUniqueOrThrow({
+    where: { id },
+    select: mcpIssueDtoSelect,
+  });
+  return toMcpIssueDto(issue);
+}
+
 /**
  * Resolve the acting user id. MCP keys often belong to a plugin (no userId);
  * fall back to any workspace member so rows that require an author /
@@ -143,7 +245,10 @@ function mcpGenerateProjectKey(title: string): string {
   let key =
     words.length === 1
       ? words[0].slice(0, 4)
-      : words.slice(0, 4).map((w) => w[0]).join("");
+      : words
+          .slice(0, 4)
+          .map((w) => w[0])
+          .join("");
   key = key.replace(/[^A-Z0-9]/g, "").slice(0, 8);
   if (key.length < 2) key = (key + "PRJ").slice(0, 4);
   return key;
@@ -284,7 +389,11 @@ async function mcpSetLayerFlag(
   }
 }
 
-async function assertMcpCanvasRef(ctx: McpContext, type: ForgeEntityType, id: string): Promise<void> {
+async function assertMcpCanvasRef(
+  ctx: McpContext,
+  type: ForgeEntityType,
+  id: string,
+): Promise<void> {
   if (type === "issue") {
     await assertKeyScope(scopeCtx(ctx), { entity: "issue", id });
   } else if (type === "project") {
@@ -292,10 +401,7 @@ async function assertMcpCanvasRef(ctx: McpContext, type: ForgeEntityType, id: st
   } else if (type === "initiative") {
     await assertKeyScope(scopeCtx(ctx), { entity: "initiative", id });
   }
-  const [hydrated] = await hydrateEntityRefs(
-    { db, workspaceId: ctx.workspaceId },
-    [{ type, id }],
-  );
+  const [hydrated] = await hydrateEntityRefs({ db, workspaceId: ctx.workspaceId }, [{ type, id }]);
   if (!hydrated || hydrated.missing) {
     throw new Error(`${type} target not found in this workspace.`);
   }
@@ -432,15 +538,46 @@ const MCP_CANVAS_TEMPLATES: Record<string, McpCanvasTemplate> = {
     nodes: [
       { key: "axis-x", noteBody: "**Effort →**", x: 200, y: -80, width: 200, height: 60 },
       { key: "axis-y", noteBody: "**Impact ↑**", x: -200, y: 200, width: 200, height: 60 },
-      { key: "q1", noteBody: "**High impact · Low effort**\nQuick wins", x: 60, y: 60, lane: "Top-right" },
-      { key: "q2", noteBody: "**High impact · High effort**\nBig bets", x: 320, y: 60, lane: "Top-right" },
-      { key: "q3", noteBody: "**Low impact · Low effort**\nFill-in", x: 60, y: 320, lane: "Bottom" },
-      { key: "q4", noteBody: "**Low impact · High effort**\nAvoid", x: 320, y: 320, lane: "Bottom" },
+      {
+        key: "q1",
+        noteBody: "**High impact · Low effort**\nQuick wins",
+        x: 60,
+        y: 60,
+        lane: "Top-right",
+      },
+      {
+        key: "q2",
+        noteBody: "**High impact · High effort**\nBig bets",
+        x: 320,
+        y: 60,
+        lane: "Top-right",
+      },
+      {
+        key: "q3",
+        noteBody: "**Low impact · Low effort**\nFill-in",
+        x: 60,
+        y: 320,
+        lane: "Bottom",
+      },
+      {
+        key: "q4",
+        noteBody: "**Low impact · High effort**\nAvoid",
+        x: 320,
+        y: 320,
+        lane: "Bottom",
+      },
     ],
   },
   architecture: {
     nodes: [
-      { key: "system", noteBody: "**System**\nName + one-line purpose.", x: 120, y: -40, width: 320, lane: "System" },
+      {
+        key: "system",
+        noteBody: "**System**\nName + one-line purpose.",
+        x: 120,
+        y: -40,
+        width: 320,
+        lane: "System",
+      },
       { key: "c1", noteBody: "Component A\n_purpose_", x: -80, y: 200, lane: "Components" },
       { key: "c2", noteBody: "Component B\n_purpose_", x: 200, y: 200, lane: "Components" },
       { key: "c3", noteBody: "Component C\n_purpose_", x: 480, y: 200, lane: "Components" },
@@ -459,31 +596,100 @@ const MCP_CANVAS_TEMPLATES: Record<string, McpCanvasTemplate> = {
   },
   standup: {
     nodes: [
-      { key: "y-h", noteBody: "**Yesterday**", x: 0, y: -60, width: MCP_NOTE_W, height: 50, lane: "Yesterday" },
+      {
+        key: "y-h",
+        noteBody: "**Yesterday**",
+        x: 0,
+        y: -60,
+        width: MCP_NOTE_W,
+        height: 50,
+        lane: "Yesterday",
+      },
       { key: "y1", noteBody: "Wrapped: …", x: 0, y: 40, lane: "Yesterday" },
       { key: "y2", noteBody: "Shipped: …", x: 0, y: 40 + MCP_ROW, lane: "Yesterday" },
-      { key: "t-h", noteBody: "**Today**", x: MCP_COL, y: -60, width: MCP_NOTE_W, height: 50, lane: "Today" },
+      {
+        key: "t-h",
+        noteBody: "**Today**",
+        x: MCP_COL,
+        y: -60,
+        width: MCP_NOTE_W,
+        height: 50,
+        lane: "Today",
+      },
       { key: "t1", noteBody: "Focus: …", x: MCP_COL, y: 40, lane: "Today" },
       { key: "t2", noteBody: "Stretch: …", x: MCP_COL, y: 40 + MCP_ROW, lane: "Today" },
-      { key: "b-h", noteBody: "**Blockers**", x: MCP_COL * 2, y: -60, width: MCP_NOTE_W, height: 50, lane: "Blockers" },
+      {
+        key: "b-h",
+        noteBody: "**Blockers**",
+        x: MCP_COL * 2,
+        y: -60,
+        width: MCP_NOTE_W,
+        height: 50,
+        lane: "Blockers",
+      },
       { key: "b1", noteBody: "Waiting on: …", x: MCP_COL * 2, y: 40, lane: "Blockers" },
     ],
   },
   retro: {
     nodes: [
-      { key: "ww-h", noteBody: "**Went well**", x: 0, y: -60, width: MCP_NOTE_W, height: 50, lane: "Went well" },
+      {
+        key: "ww-h",
+        noteBody: "**Went well**",
+        x: 0,
+        y: -60,
+        width: MCP_NOTE_W,
+        height: 50,
+        lane: "Went well",
+      },
       { key: "ww1", noteBody: "Win: …", x: 0, y: 40, lane: "Went well" },
-      { key: "dd-h", noteBody: "**Didn't go well**", x: MCP_COL, y: -60, width: MCP_NOTE_W, height: 50, lane: "Didn't" },
+      {
+        key: "dd-h",
+        noteBody: "**Didn't go well**",
+        x: MCP_COL,
+        y: -60,
+        width: MCP_NOTE_W,
+        height: 50,
+        lane: "Didn't",
+      },
       { key: "dd1", noteBody: "Friction: …", x: MCP_COL, y: 40, lane: "Didn't" },
-      { key: "cb-h", noteBody: "**Confused by**", x: 0, y: 40 + MCP_ROW, width: MCP_NOTE_W, height: 50, lane: "Confused by" },
+      {
+        key: "cb-h",
+        noteBody: "**Confused by**",
+        x: 0,
+        y: 40 + MCP_ROW,
+        width: MCP_NOTE_W,
+        height: 50,
+        lane: "Confused by",
+      },
       { key: "cb1", noteBody: "Unclear: …", x: 0, y: 40 + MCP_ROW + 100, lane: "Confused by" },
-      { key: "ai-h", noteBody: "**Action items**", x: MCP_COL, y: 40 + MCP_ROW, width: MCP_NOTE_W, height: 50, lane: "Action items" },
-      { key: "ai1", noteBody: "[ ] Owner — task", x: MCP_COL, y: 40 + MCP_ROW + 100, lane: "Action items" },
+      {
+        key: "ai-h",
+        noteBody: "**Action items**",
+        x: MCP_COL,
+        y: 40 + MCP_ROW,
+        width: MCP_NOTE_W,
+        height: 50,
+        lane: "Action items",
+      },
+      {
+        key: "ai1",
+        noteBody: "[ ] Owner — task",
+        x: MCP_COL,
+        y: 40 + MCP_ROW + 100,
+        lane: "Action items",
+      },
     ],
   },
   okr_tree: {
     nodes: [
-      { key: "obj", noteBody: "**Objective**\nThe outcome we want.", x: 200, y: -40, width: 320, lane: "Objective" },
+      {
+        key: "obj",
+        noteBody: "**Objective**\nThe outcome we want.",
+        x: 200,
+        y: -40,
+        width: 320,
+        lane: "Objective",
+      },
       { key: "kr1", noteBody: "**KR 1**\nMeasure → target.", x: -80, y: 220, lane: "Key Results" },
       { key: "kr2", noteBody: "**KR 2**\nMeasure → target.", x: 200, y: 220, lane: "Key Results" },
       { key: "kr3", noteBody: "**KR 3**\nMeasure → target.", x: 480, y: 220, lane: "Key Results" },
@@ -710,7 +916,14 @@ export const mcpTools = {
       unassigned: z.boolean().optional().describe("No human assignees AND no agent assigned."),
       withoutCycle: z.boolean().optional(),
       withoutInitiative: z.boolean().optional(),
-      includeDone: z.boolean().default(false).describe("Include DONE/CANCELED issues"),
+      createdByViewer: z
+        .boolean()
+        .default(false)
+        .describe("Only issues authored by the authenticated principal."),
+      includeDone: z.boolean().default(false).describe("Include DONE issues"),
+      orderBy: z.enum(["updatedAt", "createdAt", "priority", "identifier", "title"]).optional(),
+      order: z.enum(["asc", "desc"]).default("desc"),
+      cursor: z.string().cuid().optional().describe("Issue id cursor from the prior page."),
       limit: z.number().int().min(1).max(100).default(20),
     }),
     async run(
@@ -732,12 +945,17 @@ export const mcpTools = {
         unassigned?: boolean;
         withoutCycle?: boolean;
         withoutInitiative?: boolean;
+        createdByViewer: boolean;
         includeDone: boolean;
+        orderBy?: McpIssueSortField;
+        order: "asc" | "desc";
+        cursor?: string;
         limit: number;
       },
       ctx: McpContext,
     ) {
       const keyWhere = buildKeyScopeWhere(scopeCtx(ctx), "issue");
+      const createdByViewerId = input.createdByViewer ? await resolveActorId(ctx) : null;
 
       // Mirrors the tRPC `issue.list` where-construction (issue.ts:294-428).
       // Kept inline rather than DRY'd because the tRPC procedure consumes
@@ -781,7 +999,7 @@ export const mcpTools = {
         });
       }
 
-      return db.issue.findMany({
+      const rows = await db.issue.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           deletedAt: null,
@@ -803,18 +1021,27 @@ export const mcpTools = {
           ...(typeof input.initiativeId === "string"
             ? { project: { initiativeId: input.initiativeId } }
             : {}),
+          ...(input.createdByViewer ? { authorId: createdByViewerId! } : {}),
           ...(input.assignedAgentId === null
             ? { assignedAgentId: null }
             : input.assignedAgentId
               ? { assignedAgentId: input.assignedAgentId }
               : {}),
-          ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
+          ...(input.includeDone ? {} : { status: { category: { not: "DONE" } } }),
           ...(andClauses.length ? { AND: andClauses } : {}),
         },
-        take: input.limit,
-        orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
-        include: { status: true, project: true },
+        take: input.limit + 1,
+        skip: input.cursor ? 1 : 0,
+        cursor: input.cursor ? { id: input.cursor } : undefined,
+        orderBy: mcpIssueOrderBy(input.orderBy, input.order),
+        select: mcpIssueDtoSelect,
       });
+      let nextCursor: string | undefined;
+      if (rows.length > input.limit) {
+        rows.pop();
+        nextCursor = rows.at(-1)?.id;
+      }
+      return mcpListEnvelope(rows.map(toMcpIssueDto), nextCursor);
     },
   },
 
@@ -1000,7 +1227,7 @@ export const mcpTools = {
         select: { number: true },
       });
       const authorId = await resolveActorId(ctx);
-      return db.issue.create({
+      const issue = await db.issue.create({
         data: {
           workspaceId: ctx.workspaceId,
           number: (last?.number ?? 0) + 1,
@@ -1011,8 +1238,9 @@ export const mcpTools = {
           priority: input.priority ?? "NONE",
           authorId,
         },
-        include: { status: true },
+        select: mcpIssueDtoSelect,
       });
+      return toMcpIssueDto(issue);
     },
   },
 
@@ -1093,7 +1321,7 @@ export const mcpTools = {
       const actorId = await resolveActorId(ctx);
       const { id, ...patch } = input;
 
-      return db.$transaction(async (tx) => {
+      const updatedId = await db.$transaction(async (tx) => {
         const before = await tx.issue.findFirstOrThrow({
           where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
         });
@@ -1178,8 +1406,9 @@ export const mcpTools = {
           });
         }
 
-        return after;
+        return after.id;
       });
+      return mcpIssueDtoById(updatedId);
     },
   },
 
@@ -1281,11 +1510,11 @@ export const mcpTools = {
       if (!status) throw new Error("Status not found in this workspace.");
 
       // No-op path: caller asked for the status the issue already has.
-      // Return the row without writing audit / touching the run so we don't
+      // Return the DTO without writing audit / touching the run so we don't
       // emit a phantom ISSUE_STATUS_CHANGED. Matches the tRPC `issue.update`
       // semantics where `patch.statusId === before.statusId` skips the
       // status-change branch.
-      if (before.statusId === status.id) return before;
+      if (before.statusId === status.id) return mcpIssueDtoById(before.id);
 
       // Lifecycle timestamps based on the target category — mirrors
       // issue.ts:765-778 and the bulkTransition path below.
@@ -1296,7 +1525,7 @@ export const mcpTools = {
       if (status.category !== "DONE") extra.completedAt = null;
       if (status.category !== "CANCELED") extra.canceledAt = null;
 
-      return db.$transaction(async (tx) => {
+      const updatedId = await db.$transaction(async (tx) => {
         const after = await tx.issue.update({
           where: { id: before.id },
           data: { statusId: status.id, ...extra },
@@ -1346,8 +1575,9 @@ export const mcpTools = {
           }
         }
 
-        return after;
+        return after.id;
       });
+      return mcpIssueDtoById(updatedId);
     },
   },
 
@@ -1585,7 +1815,7 @@ export const mcpTools = {
         targetAgentId = agent.id;
       }
 
-      return db.$transaction(async (tx) => {
+      const updatedId = await db.$transaction(async (tx) => {
         const before = await tx.issue.findFirst({
           where: {
             id: input.issueId,
@@ -1669,8 +1899,9 @@ export const mcpTools = {
             await maybeApplyAgentTemplate(tx, before.id, targetAgentId);
           }
         }
-        return updated;
+        return updated.id;
       });
+      return mcpIssueDtoById(updatedId);
     },
   },
 
@@ -1816,6 +2047,7 @@ export const mcpTools = {
     input: z.object({
       limit: z.number().int().min(1).max(100).default(50),
       includeDone: z.boolean().default(false),
+      projectId: z.string().cuid().optional(),
       profileKey: z
         .string()
         .optional()
@@ -1824,7 +2056,7 @@ export const mcpTools = {
         ),
     }),
     async run(
-      input: { limit: number; includeDone: boolean; profileKey?: string },
+      input: { limit: number; includeDone: boolean; projectId?: string; profileKey?: string },
       ctx: McpContext,
     ) {
       let agentId: string | null = null;
@@ -1863,18 +2095,20 @@ export const mcpTools = {
       }
 
       const keyWhere = buildKeyScopeWhere(scopeCtx(ctx), "issue");
-      return db.issue.findMany({
+      const rows = await db.issue.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           deletedAt: null,
           assignedAgentId: agentId,
           ...keyWhere,
+          ...(input.projectId ? { projectId: input.projectId } : {}),
           ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
         },
         take: input.limit,
         orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
-        include: { status: true, project: true },
+        select: mcpIssueDtoSelect,
       });
+      return mcpListEnvelope(rows.map(toMcpIssueDto));
     },
   },
 
@@ -2081,9 +2315,9 @@ export const mcpTools = {
         }
         const after = await tx.issue.findUniqueOrThrow({
           where: { id: issue.id },
-          include: { labels: { include: { label: true } } },
+          select: mcpIssueDtoSelect,
         });
-        return { issue: after, added, removed };
+        return { issue: toMcpIssueDto(after), added, removed };
       });
     },
   },
@@ -2256,10 +2490,7 @@ export const mcpTools = {
        * chips render. Agent-authored use case — humans can pass them
        * but the renderer hides chips on human-authored comments.
        */
-      suggestedReplies: z
-        .array(z.string().trim().min(1).max(80))
-        .max(4)
-        .optional(),
+      suggestedReplies: z.array(z.string().trim().min(1).max(80)).max(4).optional(),
       /**
        * Optional confidence flag (LOW / MEDIUM / HIGH). Only rendered
        * as a chip on agent-authored comments — humans can pass it
@@ -2278,9 +2509,7 @@ export const mcpTools = {
         .object({
           title: z.string().min(1).max(300),
           body: z.string().max(10_000).nullable().optional(),
-          severity: z
-            .enum(["INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"])
-            .default("INFO"),
+          severity: z.enum(["INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]).default("INFO"),
           kind: z
             .enum([
               "FREE_FORM",
@@ -2387,9 +2616,7 @@ export const mcpTools = {
       // persisted so we have a stable id to bind via sourceType/sourceId.
       let actionRequestId: string | null = null;
       if (input.actionRequest) {
-        const { createActionRequest } = await import(
-          "@/server/services/action-request-service"
-        );
+        const { createActionRequest } = await import("@/server/services/action-request-service");
         const created = await createActionRequest(db, {
           workspaceId: ctx.workspaceId,
           actorId: authorId,
@@ -2555,7 +2782,7 @@ export const mcpTools = {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       // Defensive workspace check — assertKeyScope only enforces narrowing,
       // not workspace membership. The base findMany filter does the rest.
-      return db.comment.findMany({
+      const rows = await db.comment.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           issueId: input.issueId,
@@ -2563,7 +2790,7 @@ export const mcpTools = {
           ...(input.before ? { createdAt: { lt: input.before } } : {}),
         },
         orderBy: { createdAt: "desc" },
-        take: input.limit,
+        take: input.limit + 1,
         include: {
           author: { select: { id: true, name: true, image: true } },
           authoringAgent: {
@@ -2571,6 +2798,12 @@ export const mcpTools = {
           },
         },
       });
+      let nextCursor: string | undefined;
+      if (rows.length > input.limit) {
+        rows.pop();
+        nextCursor = rows.at(-1)?.createdAt.toISOString();
+      }
+      return mcpListEnvelope(rows, nextCursor);
     },
   },
 
@@ -4111,25 +4344,20 @@ export const mcpTools = {
         ),
     }),
     async run(input: { includeArchived: boolean; runtimeId?: string }, ctx: McpContext) {
-      return db.agent.findMany({
+      const rows = await db.agent.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           ...(input.includeArchived ? {} : { archivedAt: null }),
           ...(input.runtimeId ? { runtimeId: input.runtimeId } : {}),
         },
-        orderBy: [{ status: "asc" }, { name: "asc" }],
+        orderBy: [{ name: "asc" }, { profileKey: "asc" }],
         select: {
           id: true,
-          profileKey: true,
           name: true,
-          status: true,
-          runtimeMode: true,
-          provider: true,
-          capabilities: true,
-          archivedAt: true,
-          runtime: { select: { id: true, name: true, kind: true } },
+          profileKey: true,
         },
       });
+      return mcpListEnvelope(rows);
     },
   },
 
@@ -4829,9 +5057,7 @@ export const mcpTools = {
         const next = Number(updated.costUsd ?? 0);
         const delta = next - prev;
         if (delta !== 0) {
-          const { applyRunCostToPlan } = await import(
-            "@/server/services/orchestration-service"
-          );
+          const { applyRunCostToPlan } = await import("@/server/services/orchestration-service");
           await applyRunCostToPlan(db, {
             workspaceId: ctx.workspaceId,
             runId: run.id,
@@ -5011,7 +5237,7 @@ export const mcpTools = {
         .max(500)
         .optional()
         .describe(
-          "Operator-facing label, e.g. \"awaiting credentials for prod DB\". Replaces currentStep.",
+          'Operator-facing label, e.g. "awaiting credentials for prod DB". Replaces currentStep.',
         ),
       blocking: z
         .boolean()
@@ -5020,15 +5246,10 @@ export const mcpTools = {
           "When true, emit AGENT_RUN_BLOCKED so the agent's webhook is notified. Default false for silent waits.",
         ),
     }),
-    async run(
-      input: { runId: string; reason?: string; blocking: boolean },
-      ctx: McpContext,
-    ) {
+    async run(input: { runId: string; reason?: string; blocking: boolean }, ctx: McpContext) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
-        throw new Error(
-          "runs.setWaiting requires an API key with linkedAgentId set.",
-        );
+        throw new Error("runs.setWaiting requires an API key with linkedAgentId set.");
       }
       const run = await db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
@@ -5036,17 +5257,10 @@ export const mcpTools = {
       });
       if (!run) throw new Error("AgentRun not found in this workspace.");
       if (run.agentId !== linkedAgentId) {
-        throw new Error(
-          "AgentRun belongs to a different agent than the calling key.",
-        );
+        throw new Error("AgentRun belongs to a different agent than the calling key.");
       }
-      if (
-        run.status !== AgentRunStatus.ACTIVE &&
-        run.status !== AgentRunStatus.WAITING
-      ) {
-        throw new Error(
-          `Run is ${run.status}; only ACTIVE / WAITING runs can be marked waiting.`,
-        );
+      if (run.status !== AgentRunStatus.ACTIVE && run.status !== AgentRunStatus.WAITING) {
+        throw new Error(`Run is ${run.status}; only ACTIVE / WAITING runs can be marked waiting.`);
       }
 
       const reasonLabel = input.reason ?? "Waiting on operator";
@@ -5119,17 +5333,12 @@ export const mcpTools = {
         .string()
         .max(120)
         .optional()
-        .describe("Optional fresh step label, e.g. \"resuming after creds.\""),
+        .describe('Optional fresh step label, e.g. "resuming after creds."'),
     }),
-    async run(
-      input: { runId: string; currentStep?: string },
-      ctx: McpContext,
-    ) {
+    async run(input: { runId: string; currentStep?: string }, ctx: McpContext) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
-        throw new Error(
-          "runs.resumeWork requires an API key with linkedAgentId set.",
-        );
+        throw new Error("runs.resumeWork requires an API key with linkedAgentId set.");
       }
       const run = await db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
@@ -5137,26 +5346,17 @@ export const mcpTools = {
       });
       if (!run) throw new Error("AgentRun not found in this workspace.");
       if (run.agentId !== linkedAgentId) {
-        throw new Error(
-          "AgentRun belongs to a different agent than the calling key.",
-        );
+        throw new Error("AgentRun belongs to a different agent than the calling key.");
       }
-      if (
-        run.status !== AgentRunStatus.WAITING &&
-        run.status !== AgentRunStatus.ACTIVE
-      ) {
-        throw new Error(
-          `Run is ${run.status}; only WAITING / ACTIVE runs can be resumed.`,
-        );
+      if (run.status !== AgentRunStatus.WAITING && run.status !== AgentRunStatus.ACTIVE) {
+        throw new Error(`Run is ${run.status}; only WAITING / ACTIVE runs can be resumed.`);
       }
       return db.agentRun.update({
         where: { id: run.id },
         data: {
           status: AgentRunStatus.ACTIVE,
           lastEventAt: new Date(),
-          ...(input.currentStep !== undefined
-            ? { currentStep: input.currentStep }
-            : {}),
+          ...(input.currentStep !== undefined ? { currentStep: input.currentStep } : {}),
         },
         select: {
           id: true,
@@ -5179,9 +5379,7 @@ export const mcpTools = {
     input: z.object({
       agentId: z.string().min(1).max(40).optional(),
       issueId: z.string().min(1).max(40).optional(),
-      status: z
-        .enum(["ACTIVE", "COMPLETED", "ABANDONED", "STALLED", "WAITING"])
-        .optional(),
+      status: z.enum(["ACTIVE", "COMPLETED", "ABANDONED", "STALLED", "WAITING"]).optional(),
       limit: z.number().int().min(1).max(200).default(50),
       before: z.coerce
         .date()
@@ -5368,9 +5566,7 @@ export const mcpTools = {
     async run(input: { threadId: string }, ctx: McpContext) {
       const agentId = ctx.apiKey?.linkedAgentId ?? null;
       if (!agentId) {
-        throw new Error(
-          "chat.kickThread requires an API key with linkedAgentId set.",
-        );
+        throw new Error("chat.kickThread requires an API key with linkedAgentId set.");
       }
       const thread = await db.chatThread.findFirst({
         where: { id: input.threadId, workspaceId: ctx.workspaceId, agentId },
@@ -5478,9 +5674,7 @@ export const mcpTools = {
     ) {
       const agentId = ctx.apiKey?.linkedAgentId ?? null;
       if (!agentId) {
-        throw new Error(
-          "agent.inbox.list requires an API key with linkedAgentId set.",
-        );
+        throw new Error("agent.inbox.list requires an API key with linkedAgentId set.");
       }
       const { listInbox } = await import("@/server/services/agent-dispatch-inbox");
       const items = await listInbox(db, {
@@ -5520,14 +5714,10 @@ export const mcpTools = {
     async run(input: { runId?: string; chatMessageId?: string }, ctx: McpContext) {
       const agentId = ctx.apiKey?.linkedAgentId ?? null;
       if (!agentId) {
-        throw new Error(
-          "agent.inbox.ack requires an API key with linkedAgentId set.",
-        );
+        throw new Error("agent.inbox.ack requires an API key with linkedAgentId set.");
       }
       const { ackInboxItem } = await import("@/server/services/agent-dispatch-inbox");
-      const target = input.runId
-        ? { runId: input.runId }
-        : { chatMessageId: input.chatMessageId! };
+      const target = input.runId ? { runId: input.runId } : { chatMessageId: input.chatMessageId! };
       return db.$transaction((tx) =>
         ackInboxItem(tx, {
           workspaceId: ctx.workspaceId,
@@ -5558,16 +5748,10 @@ export const mcpTools = {
     async run(input: { runId?: string; chatMessageId?: string }, ctx: McpContext) {
       const agentId = ctx.apiKey?.linkedAgentId ?? null;
       if (!agentId) {
-        throw new Error(
-          "agent.inbox.outputStarted requires an API key with linkedAgentId set.",
-        );
+        throw new Error("agent.inbox.outputStarted requires an API key with linkedAgentId set.");
       }
-      const { markOutputStarted } = await import(
-        "@/server/services/agent-dispatch-inbox"
-      );
-      const target = input.runId
-        ? { runId: input.runId }
-        : { chatMessageId: input.chatMessageId! };
+      const { markOutputStarted } = await import("@/server/services/agent-dispatch-inbox");
+      const target = input.runId ? { runId: input.runId } : { chatMessageId: input.chatMessageId! };
       return db.$transaction((tx) =>
         markOutputStarted(tx, {
           workspaceId: ctx.workspaceId,
@@ -5654,6 +5838,29 @@ export const mcpTools = {
           autoDispatchMode: true,
         },
       });
+    },
+  },
+
+  /**
+   * Workspaces visible to this MCP principal. API keys are workspace-bound,
+   * so they see exactly their issuing workspace; session-authenticated
+   * callers can see every workspace they belong to.
+   */
+  "workspaces.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({}).default({}),
+    async run(_input: Record<string, never>, ctx: McpContext) {
+      const where: Prisma.WorkspaceWhereInput = ctx.apiKey
+        ? { id: ctx.workspaceId }
+        : ctx.userId
+          ? { deletedAt: null, memberships: { some: { userId: ctx.userId } } }
+          : { id: ctx.workspaceId };
+      const rows = await db.workspace.findMany({
+        where,
+        orderBy: { name: "asc" },
+        select: { id: true, name: true, slug: true },
+      });
+      return mcpListEnvelope(rows);
     },
   },
 
@@ -5808,10 +6015,7 @@ export const mcpTools = {
             where: {
               workspaceId: ctx.workspaceId,
               archivedAt: null,
-              OR: [
-                { issueId },
-                { sourceType: "issue", sourceId: issueId },
-              ],
+              OR: [{ issueId }, { sourceType: "issue", sourceId: issueId }],
             },
             orderBy: { updatedAt: "desc" },
             take: 20,
@@ -6005,10 +6209,12 @@ export const mcpTools = {
 
   "artifacts.get": {
     scopes: ["READ_ISSUES"] as const,
-    input: z.object({
-      id: z.string().cuid().optional(),
-      slug: z.string().min(1).max(64).optional(),
-    }).refine((v) => v.id || v.slug, { message: "Provide id or slug." }),
+    input: z
+      .object({
+        id: z.string().cuid().optional(),
+        slug: z.string().min(1).max(64).optional(),
+      })
+      .refine((v) => v.id || v.slug, { message: "Provide id or slug." }),
     async run(input: { id?: string; slug?: string }, ctx: McpContext) {
       const row = await db.artifact.findFirst({
         where: input.id
@@ -6485,7 +6691,10 @@ export const mcpTools = {
       status: z.enum(["DRAFT", "APPROVED", "RUNNING", "BLOCKED", "COMPLETED", "CANCELED"]),
     }),
     async run(
-      input: { id: string; status: "DRAFT" | "APPROVED" | "RUNNING" | "BLOCKED" | "COMPLETED" | "CANCELED" },
+      input: {
+        id: string;
+        status: "DRAFT" | "APPROVED" | "RUNNING" | "BLOCKED" | "COMPLETED" | "CANCELED";
+      },
       ctx: McpContext,
     ) {
       const { updateExecutionPlan } = await import("@/server/services/execution-plan-service");
@@ -6934,10 +7143,7 @@ export const mcpTools = {
       if (input.label !== undefined) data.label = input.label;
       if (input.kind !== undefined) data.kind = input.kind;
       if (input.meta !== undefined) {
-        data.meta =
-          input.meta === null
-            ? Prisma.JsonNull
-            : (input.meta as Prisma.InputJsonValue);
+        data.meta = input.meta === null ? Prisma.JsonNull : (input.meta as Prisma.InputJsonValue);
       }
       await db.$transaction(async (tx) => {
         await tx.workspaceCanvasEdge.update({ where: { id: input.id }, data });
@@ -7078,16 +7284,11 @@ export const mcpTools = {
       if (input.width !== undefined) data.width = input.width;
       if (input.height !== undefined) data.height = input.height;
       if (input.path !== undefined) {
-        data.path =
-          input.path === null
-            ? Prisma.JsonNull
-            : (input.path as Prisma.InputJsonValue);
+        data.path = input.path === null ? Prisma.JsonNull : (input.path as Prisma.InputJsonValue);
       }
       if (input.style !== undefined) {
         data.style =
-          input.style === null
-            ? Prisma.JsonNull
-            : (input.style as Prisma.InputJsonValue);
+          input.style === null ? Prisma.JsonNull : (input.style as Prisma.InputJsonValue);
       }
       if (input.text !== undefined) data.text = input.text;
       if (input.groupId !== undefined) data.groupId = input.groupId;
@@ -7249,20 +7450,12 @@ export const mcpTools = {
         "okr_tree",
         "empty",
       ]),
-      position: z
-        .object({ x: z.number(), y: z.number() })
-        .optional(),
+      position: z.object({ x: z.number(), y: z.number() }).optional(),
     }),
     async run(
       input: {
         canvasId: string;
-        templateId:
-          | "decision_matrix"
-          | "retro"
-          | "architecture"
-          | "standup"
-          | "okr_tree"
-          | "empty";
+        templateId: "decision_matrix" | "retro" | "architecture" | "standup" | "okr_tree" | "empty";
         position?: { x: number; y: number };
       },
       ctx: McpContext,
@@ -7428,10 +7621,7 @@ export const mcpTools = {
       x: z.number(),
       y: z.number(),
     }),
-    async run(
-      input: { canvasId: string; body: string; x: number; y: number },
-      ctx: McpContext,
-    ) {
+    async run(input: { canvasId: string; body: string; x: number; y: number }, ctx: McpContext) {
       const canvas = await db.workspaceCanvas.findFirst({
         where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
         select: { id: true },
@@ -7500,9 +7690,7 @@ export const mcpTools = {
             // thread's agent.
             OR: [
               ...(ctx.userId ? [{ userId: ctx.userId }] : []),
-              ...(ctx.apiKey?.linkedAgentId
-                ? [{ agentId: ctx.apiKey.linkedAgentId }]
-                : []),
+              ...(ctx.apiKey?.linkedAgentId ? [{ agentId: ctx.apiKey.linkedAgentId }] : []),
             ],
           },
           select: { id: true },
@@ -7538,10 +7726,7 @@ export const mcpTools = {
       canvasId: z.string().cuid(),
       title: z.string().min(1).max(300).optional(),
     }),
-    async run(
-      input: { canvasId: string; title?: string },
-      ctx: McpContext,
-    ) {
+    async run(input: { canvasId: string; title?: string }, ctx: McpContext) {
       const canvas = await db.workspaceCanvas.findFirst({
         where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
         include: { nodes: true, edges: true },
@@ -7774,7 +7959,9 @@ export const mcpTools = {
         return { id: created.id, kind: created.kind, name: created.name };
       } catch (err) {
         if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-          throw new Error(`A ${input.kind} style named "${trimmed}" already exists in this workspace.`);
+          throw new Error(
+            `A ${input.kind} style named "${trimmed}" already exists in this workspace.`,
+          );
         }
         throw err;
       }
@@ -7810,10 +7997,7 @@ export const mcpTools = {
       name: z.string().min(1).max(120).optional(),
       value: z.unknown().optional(),
     }),
-    async run(
-      input: { styleId: string; name?: string; value?: unknown },
-      ctx: McpContext,
-    ) {
+    async run(input: { styleId: string; name?: string; value?: unknown }, ctx: McpContext) {
       const existing = await db.canvasStyle.findFirst({
         where: { id: input.styleId, workspaceId: ctx.workspaceId },
         select: { id: true, kind: true, name: true },
@@ -7914,7 +8098,14 @@ export const mcpTools = {
         name: string;
         description?: string | null;
         thumbnail?: string | null;
-        definition: { nodes: unknown[]; shapes: unknown[]; frames: unknown[]; edges: unknown[]; width: number; height: number };
+        definition: {
+          nodes: unknown[];
+          shapes: unknown[];
+          frames: unknown[];
+          edges: unknown[];
+          width: number;
+          height: number;
+        };
       },
       ctx: McpContext,
     ) {
@@ -8018,7 +8209,14 @@ export const mcpTools = {
         name?: string;
         description?: string | null;
         thumbnail?: string | null;
-        definition?: { nodes: unknown[]; shapes: unknown[]; frames: unknown[]; edges: unknown[]; width: number; height: number };
+        definition?: {
+          nodes: unknown[];
+          shapes: unknown[];
+          frames: unknown[];
+          edges: unknown[];
+          width: number;
+          height: number;
+        };
       },
       ctx: McpContext,
     ) {
@@ -8048,7 +8246,10 @@ export const mcpTools = {
             entity: "canvas-component",
             entityId: input.componentId,
             action: "updated",
-            after: { name: data.name ?? existing.name, definitionUpdated: input.definition !== undefined },
+            after: {
+              name: data.name ?? existing.name,
+              definitionUpdated: input.definition !== undefined,
+            },
             eventKind: EventKind.ISSUE_UPDATED,
             subjectType: "canvas-component",
             subjectId: input.componentId,
@@ -8140,7 +8341,11 @@ export const mcpTools = {
       const fallbackH = typeof def?.height === "number" ? def.height : 200;
       if (input.parentFrameId) {
         const frame = await db.canvasFrame.findFirst({
-          where: { id: input.parentFrameId, workspaceId: ctx.workspaceId, canvasId: input.canvasId },
+          where: {
+            id: input.parentFrameId,
+            workspaceId: ctx.workspaceId,
+            canvasId: input.canvasId,
+          },
           select: { id: true },
         });
         if (!frame) throw new Error("parentFrameId not found on this canvas.");
@@ -8226,9 +8431,7 @@ export const mcpTools = {
       if (input.height !== undefined) data.height = input.height;
       if (input.overrides !== undefined) {
         data.overrides =
-          input.overrides === null
-            ? Prisma.JsonNull
-            : (input.overrides as Prisma.InputJsonValue);
+          input.overrides === null ? Prisma.JsonNull : (input.overrides as Prisma.InputJsonValue);
       }
       if (input.lockedAt !== undefined) {
         data.lockedAt = input.lockedAt === null ? null : new Date(input.lockedAt);
@@ -8398,7 +8601,11 @@ export const mcpTools = {
           entityId: instance.canvasId,
           action: "instance_detached",
           before: { instanceId: instance.id },
-          after: { nodeCount: nodeIds.length, shapeCount: shapeIds.length, frameCount: frameIds.length },
+          after: {
+            nodeCount: nodeIds.length,
+            shapeCount: shapeIds.length,
+            frameCount: frameIds.length,
+          },
           eventKind: EventKind.ISSUE_UPDATED,
           subjectType: "workspace-canvas",
           subjectId: instance.canvasId,
@@ -8419,7 +8626,11 @@ export const mcpTools = {
       locked: z.boolean(),
     }),
     async run(
-      input: { kind: "node" | "shape" | "frame" | "group" | "instance"; id: string; locked: boolean },
+      input: {
+        kind: "node" | "shape" | "frame" | "group" | "instance";
+        id: string;
+        locked: boolean;
+      },
       ctx: McpContext,
     ) {
       await mcpSetLayerFlag(ctx, "lockedAt", input.kind, input.id, input.locked);
@@ -8435,7 +8646,11 @@ export const mcpTools = {
       hidden: z.boolean(),
     }),
     async run(
-      input: { kind: "node" | "shape" | "frame" | "group" | "instance"; id: string; hidden: boolean },
+      input: {
+        kind: "node" | "shape" | "frame" | "group" | "instance";
+        id: string;
+        hidden: boolean;
+      },
       ctx: McpContext,
     ) {
       await mcpSetLayerFlag(ctx, "hiddenAt", input.kind, input.id, input.hidden);
@@ -8624,10 +8839,20 @@ export const mcpTools = {
             isPage: input.isPage ?? false,
             autoLayout: (input.autoLayout ?? undefined) as Prisma.InputJsonValue | undefined,
             constraints: (input.constraints ?? undefined) as Prisma.InputJsonValue | undefined,
-            backgroundFill: (input.backgroundFill ?? undefined) as Prisma.InputJsonValue | undefined,
+            backgroundFill: (input.backgroundFill ?? undefined) as
+              | Prisma.InputJsonValue
+              | undefined,
             createdById: ctx.userId ?? null,
           },
-          select: { id: true, name: true, x: true, y: true, width: true, height: true, isPage: true },
+          select: {
+            id: true,
+            name: true,
+            x: true,
+            y: true,
+            width: true,
+            height: true,
+            isPage: true,
+          },
         });
         await tx.workspaceCanvas.update({
           where: { id: input.canvasId },
@@ -8717,9 +8942,7 @@ export const mcpTools = {
       if (input.isPage !== undefined) data.isPage = input.isPage;
       if (input.autoLayout !== undefined) {
         data.autoLayout =
-          input.autoLayout === null
-            ? Prisma.JsonNull
-            : (input.autoLayout as Prisma.InputJsonValue);
+          input.autoLayout === null ? Prisma.JsonNull : (input.autoLayout as Prisma.InputJsonValue);
       }
       if (input.constraints !== undefined) {
         data.constraints =
@@ -9088,10 +9311,7 @@ export const mcpTools = {
       frameId: z.string().cuid(),
       reassignActivePage: z.string().cuid().optional(),
     }),
-    async run(
-      input: { frameId: string; reassignActivePage?: string },
-      ctx: McpContext,
-    ) {
+    async run(input: { frameId: string; reassignActivePage?: string }, ctx: McpContext) {
       const frame = await db.canvasFrame.findFirst({
         where: { id: input.frameId, workspaceId: ctx.workspaceId, isPage: true },
         select: { id: true, canvasId: true },
@@ -9284,8 +9504,13 @@ export const mcpTools = {
         select: { id: true },
       });
       if (!canvas) throw new Error("Canvas not found.");
-      const { nodeIds = [], shapeIds = [], frameIds = [], groupIds = [], instanceIds = [] } =
-        input.ids;
+      const {
+        nodeIds = [],
+        shapeIds = [],
+        frameIds = [],
+        groupIds = [],
+        instanceIds = [],
+      } = input.ids;
 
       const [nodes, shapes, frames, instances, groupRows] = await Promise.all([
         nodeIds.length
@@ -9806,10 +10031,7 @@ export const mcpTools = {
       x: z.number().optional(),
       y: z.number().optional(),
     }),
-    async run(
-      input: { canvasId: string; topic: string; x?: number; y?: number },
-      ctx: McpContext,
-    ) {
+    async run(input: { canvasId: string; topic: string; x?: number; y?: number }, ctx: McpContext) {
       const canvas = await db.workspaceCanvas.findFirst({
         where: { id: input.canvasId, workspaceId: ctx.workspaceId, archivedAt: null },
         select: { id: true },
@@ -10049,9 +10271,7 @@ export const mcpTools = {
     input: z.object({
       title: z.string().min(1).max(300),
       body: z.string().max(10_000).nullable().optional(),
-      severity: z
-        .enum(["INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"])
-        .default("INFO"),
+      severity: z.enum(["INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]).default("INFO"),
       /**
        * Action kind — discriminates what Forge should do when an
        * authorized operator clicks Accept. FREE_FORM (default) is
@@ -10128,9 +10348,7 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
-      const { createActionRequest } = await import(
-        "@/server/services/action-request-service"
-      );
+      const { createActionRequest } = await import("@/server/services/action-request-service");
       return createActionRequest(db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.userId ?? null,
@@ -10166,9 +10384,7 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
-      const { transitionActionRequest } = await import(
-        "@/server/services/action-request-service"
-      );
+      const { transitionActionRequest } = await import("@/server/services/action-request-service");
       await transitionActionRequest(db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.userId ?? null,
@@ -10194,18 +10410,13 @@ export const mcpTools = {
       id: z.string().cuid(),
       resolution: z.string().max(2_000).nullable().optional(),
     }),
-    async run(
-      input: { id: string; resolution?: string | null },
-      ctx: McpContext,
-    ) {
+    async run(input: { id: string; resolution?: string | null }, ctx: McpContext) {
       if (!ctx.userId) {
         throw new Error(
           "actionRequests.accept requires a human user context (no anonymous accept).",
         );
       }
-      const { acceptActionRequest } = await import(
-        "@/server/services/action-request-service"
-      );
+      const { acceptActionRequest } = await import("@/server/services/action-request-service");
       return acceptActionRequest(db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.userId,
@@ -10225,18 +10436,11 @@ export const mcpTools = {
       id: z.string().cuid(),
       reason: z.string().max(2_000).nullable().optional(),
     }),
-    async run(
-      input: { id: string; reason?: string | null },
-      ctx: McpContext,
-    ) {
+    async run(input: { id: string; reason?: string | null }, ctx: McpContext) {
       if (!ctx.userId) {
-        throw new Error(
-          "actionRequests.decline requires a human user context.",
-        );
+        throw new Error("actionRequests.decline requires a human user context.");
       }
-      const { declineActionRequest } = await import(
-        "@/server/services/action-request-service"
-      );
+      const { declineActionRequest } = await import("@/server/services/action-request-service");
       return declineActionRequest(db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.userId,
@@ -10265,9 +10469,7 @@ export const mcpTools = {
           "actionRequests.vote requires a user context (anonymous votes not supported).",
         );
       }
-      const { voteOnActionRequest } = await import(
-        "@/server/services/action-request-service"
-      );
+      const { voteOnActionRequest } = await import("@/server/services/action-request-service");
       return voteOnActionRequest(db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.userId,
@@ -10287,13 +10489,9 @@ export const mcpTools = {
     input: z.object({ id: z.string().cuid() }),
     async run(input: { id: string }, ctx: McpContext) {
       if (!ctx.userId) {
-        throw new Error(
-          "actionRequests.results requires a user context.",
-        );
+        throw new Error("actionRequests.results requires a user context.");
       }
-      const { getActionRequestResults } = await import(
-        "@/server/services/action-request-service"
-      );
+      const { getActionRequestResults } = await import("@/server/services/action-request-service");
       return getActionRequestResults(db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.userId,
@@ -10313,13 +10511,9 @@ export const mcpTools = {
     input: z.object({ id: z.string().cuid() }),
     async run(input: { id: string }, ctx: McpContext) {
       if (!ctx.userId) {
-        throw new Error(
-          "actionRequests.closeVoting requires a user context.",
-        );
+        throw new Error("actionRequests.closeVoting requires a user context.");
       }
-      const { closeActionRequestVoting } = await import(
-        "@/server/services/action-request-service"
-      );
+      const { closeActionRequestVoting } = await import("@/server/services/action-request-service");
       return closeActionRequestVoting(db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.userId,
@@ -10361,9 +10555,7 @@ export const mcpTools = {
       ctx: McpContext,
     ) {
       if (!ctx.userId) {
-        throw new Error(
-          "notification.setPreference requires a user context.",
-        );
+        throw new Error("notification.setPreference requires a user context.");
       }
       const workspaceId = input.scope === "global" ? null : ctx.workspaceId;
       const existing = await db.notificationPreference.findFirst({
@@ -10431,7 +10623,11 @@ export const mcpTools = {
       limit: z.number().int().min(1).max(100).default(50),
     }),
     async run(
-      input: { status?: "PENDING" | "APPROVED" | "REJECTED" | "CANCELED"; targetType?: string; limit: number },
+      input: {
+        status?: "PENDING" | "APPROVED" | "REJECTED" | "CANCELED";
+        targetType?: string;
+        limit: number;
+      },
       ctx: McpContext,
     ) {
       return db.reviewGate.findMany({
@@ -10487,7 +10683,11 @@ export const mcpTools = {
       resolution: z.string().max(10_000).nullable().optional(),
     }),
     async run(
-      input: { id: string; decision: "APPROVED" | "REJECTED" | "CANCELED"; resolution?: string | null },
+      input: {
+        id: string;
+        decision: "APPROVED" | "REJECTED" | "CANCELED";
+        resolution?: string | null;
+      },
       ctx: McpContext,
     ) {
       const { resolveReviewGate } = await import("@/server/services/agent-crew-service");
@@ -10617,15 +10817,8 @@ export const mcpTools = {
     scopes: ["WRITE_ISSUES", "WRITE_PROJECTS"] as const,
     input: z.object({
       noteId: z.string().describe("Note id (cuid)."),
-      kind: z
-        .enum(["issue", "project", "initiative"])
-        .describe("Downstream entity to create."),
-      title: z
-        .string()
-        .min(1)
-        .max(300)
-        .optional()
-        .describe("Override the auto-derived title."),
+      kind: z.enum(["issue", "project", "initiative"]).describe("Downstream entity to create."),
+      title: z.string().min(1).max(300).optional().describe("Override the auto-derived title."),
       projectId: z
         .string()
         .cuid()
@@ -10659,11 +10852,11 @@ export const mcpTools = {
       }
 
       const fallbackTitle =
-        note.body.split("\n").find((l) => l.trim())?.trim() || "Untitled note";
-      const title = (input.title?.trim() || note.title?.trim() || fallbackTitle).slice(
-        0,
-        300,
-      );
+        note.body
+          .split("\n")
+          .find((l) => l.trim())
+          ?.trim() || "Untitled note";
+      const title = (input.title?.trim() || note.title?.trim() || fallbackTitle).slice(0, 300);
       const description = note.body;
 
       const ws = await db.workspace.findUniqueOrThrow({
@@ -10738,11 +10931,7 @@ export const mcpTools = {
       if (input.kind === "project") {
         const baseKey = mcpGenerateProjectKey(title);
         return db.$transaction(async (tx) => {
-          const uniqueKey = await mcpEnsureUniqueProjectKey(
-            tx,
-            ctx.workspaceId,
-            baseKey,
-          );
+          const uniqueKey = await mcpEnsureUniqueProjectKey(tx, ctx.workspaceId, baseKey);
           const project = await tx.project.create({
             data: {
               workspaceId: ctx.workspaceId,
@@ -10794,11 +10983,7 @@ export const mcpTools = {
 
       const slug = mcpSlugifyInitiative(title);
       return db.$transaction(async (tx) => {
-        const uniqueSlug = await mcpEnsureUniqueInitiativeSlug(
-          tx,
-          ctx.workspaceId,
-          slug,
-        );
+        const uniqueSlug = await mcpEnsureUniqueInitiativeSlug(tx, ctx.workspaceId, slug);
         const last = await tx.initiative.findFirst({
           where: { workspaceId: ctx.workspaceId },
           orderBy: { position: "desc" },
@@ -11162,10 +11347,7 @@ export const mcpTools = {
       planId: z.string().cuid(),
       makeActive: z.boolean().optional(),
     }),
-    async run(
-      input: { goalId: string; planId: string; makeActive?: boolean },
-      ctx: McpContext,
-    ) {
+    async run(input: { goalId: string; planId: string; makeActive?: boolean }, ctx: McpContext) {
       const { attachPlanToGoal } = await import("@/server/services/orchestration-service");
       return attachPlanToGoal(db, {
         workspaceId: ctx.workspaceId,
@@ -11274,10 +11456,7 @@ export const mcpTools = {
       planId: z.string().cuid(),
       assignedUserId: z.string().cuid().nullable().optional(),
     }),
-    async run(
-      input: { planId: string; assignedUserId?: string | null },
-      ctx: McpContext,
-    ) {
+    async run(input: { planId: string; assignedUserId?: string | null }, ctx: McpContext) {
       const { requestPlanApproval } = await import("@/server/services/orchestration-service");
       return requestPlanApproval(db, {
         workspaceId: ctx.workspaceId,

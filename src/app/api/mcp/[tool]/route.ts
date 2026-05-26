@@ -4,6 +4,15 @@ import { authenticateApiKey, ApiKeyError } from "@/server/services/api-key-auth"
 import { rateLimit } from "@/server/rate-limit";
 import { logger } from "@/server/logger";
 
+function hasDataEnvelope(result: unknown): result is { data: unknown } {
+  return (
+    result !== null &&
+    typeof result === "object" &&
+    !Array.isArray(result) &&
+    Object.prototype.hasOwnProperty.call(result, "data")
+  );
+}
+
 /**
  * MCP tool dispatch: `POST /api/mcp/:tool` with JSON body as the tool input.
  * `GET /api/mcp/describe` returns the catalog.
@@ -37,7 +46,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ tool: stri
   if (!rl.ok) {
     return NextResponse.json(
       { error: "Rate limit exceeded." },
-      { status: 429, headers: { "retry-after": String(Math.ceil((rl.resetAt - Date.now()) / 1000)) } },
+      {
+        status: 429,
+        headers: { "retry-after": String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
+      },
     );
   }
 
@@ -50,7 +62,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ tool: stri
 
   const parsed = def.input.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid input.", issues: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid input.", issues: parsed.error.flatten() },
+      { status: 400 },
+    );
   }
 
   try {
@@ -60,7 +75,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ tool: stri
       pluginId: principal.pluginId,
       apiKey: principal,
     });
-    return NextResponse.json({ data: result });
+    return NextResponse.json(hasDataEnvelope(result) ? result : { data: result });
   } catch (err) {
     logger.error({ err, tool }, "mcp tool error");
     return NextResponse.json({ error: "Tool execution failed." }, { status: 500 });

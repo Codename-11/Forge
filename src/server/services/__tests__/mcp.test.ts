@@ -85,6 +85,14 @@ async function call<T extends keyof typeof mcpTools>(
   return def.run(parsed as never, ctx);
 }
 
+function dataOf<T>(value: unknown): T[] {
+  return (value as { data: T[] }).data;
+}
+
+function envelopeOf<T>(value: unknown): { data: T[]; nextCursor?: string } {
+  return value as { data: T[]; nextCursor?: string };
+}
+
 describe("mcp tool registry", () => {
   it("registers >= 30 tools spanning the new primitives", () => {
     const names = Object.keys(mcpTools);
@@ -100,9 +108,23 @@ describe("mcp tool registry", () => {
       "time.",
       "attachments.",
       "pins.",
+      "workspaces.",
     ];
     for (const p of expectedPrefixes) {
       expect(names.some((n) => n.startsWith(p))).toBe(true);
+    }
+    for (const name of [
+      "issues.create",
+      "issues.update",
+      "issues.transition",
+      "issues.setLabels",
+      "issues.assign",
+      "comments.list",
+      "comments.create",
+      "workspaces.list",
+      "agents.list",
+    ]) {
+      expect(names).toContain(name);
     }
   });
 
@@ -318,10 +340,10 @@ describe("mcp — existing tools honor ApiKey narrowing", () => {
     await createIssue(fixture, { title: "no-proj" });
 
     const { ctx } = buildMcpCtx(fixture, { projectIds: [onlyProject.id] });
-    const rows = (await call("issues.list", { includeDone: true }, ctx)) as Array<{
+    const rows = dataOf<{
       id: string;
       projectId: string | null;
-    }>;
+    }>(await call("issues.list", { includeDone: true }, ctx));
     expect(rows.map((r) => r.id)).toEqual([mine.id]);
   });
 
@@ -706,18 +728,47 @@ describe("mcp — new agent / cycles / time tools", () => {
         profileKey: "mizu",
       },
     });
-    const mine = await createIssue(fixture, { title: "mine" });
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "ASG",
+        name: "Assigned",
+        createdById: fixture.user.id,
+      },
+    });
+    const otherProject = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "OTH",
+        name: "Other",
+        createdById: fixture.user.id,
+      },
+    });
+    const mine = await createIssue(fixture, { title: "mine", projectId: project.id });
+    const otherAssigned = await createIssue(fixture, {
+      title: "same agent, other project",
+      projectId: otherProject.id,
+    });
     const theirs = await createIssue(fixture, { title: "theirs" });
     await prisma.issue.update({
       where: { id: mine.id },
       data: { assignedAgentId: agent.id },
     });
+    await prisma.issue.update({
+      where: { id: otherAssigned.id },
+      data: { assignedAgentId: agent.id },
+    });
 
-    const rows = (await call("issues.assigned", { profileKey: "mizu" }, ctx)) as Array<{
+    const rows = dataOf<{
       id: string;
-    }>;
-    expect(rows.map((r) => r.id)).toEqual([mine.id]);
+    }>(await call("issues.assigned", { profileKey: "mizu" }, ctx));
+    expect(rows.map((r) => r.id)).toEqual([mine.id, otherAssigned.id]);
     expect(rows.map((r) => r.id)).not.toContain(theirs.id);
+
+    const byProject = dataOf<{ id: string }>(
+      await call("issues.assigned", { profileKey: "mizu", projectId: project.id }, ctx),
+    );
+    expect(byProject.map((r) => r.id)).toEqual([mine.id]);
   });
 
   it("issues.assigned requires profileKey until ApiKey links agent", async () => {
@@ -1146,9 +1197,9 @@ describe("mcp — awareness tools (Stream BA)", () => {
         deletedAt: new Date(),
       },
     });
-    const rows = (await call("comments.list", { issueId: issue.id, limit: 50 }, ctx)) as Array<{
+    const rows = dataOf<{
       id: string;
-    }>;
+    }>(await call("comments.list", { issueId: issue.id, limit: 50 }, ctx));
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(c1.id);
     expect(ids).toContain(c2.id);
@@ -1189,7 +1240,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
       },
     });
     const { ctx } = buildMcpCtx(f);
-    const rows = (await call("comments.list", { issueId: otherIssue.id }, ctx)) as unknown[];
+    const rows = dataOf<unknown>(await call("comments.list", { issueId: otherIssue.id }, ctx));
     // Workspace filter on the where clause means we get an empty list rather
     // than a leak, even with broad scopes. Caller's workspaceId is the gate.
     expect(rows).toEqual([]);
@@ -1362,13 +1413,18 @@ describe("mcp — awareness tools (Stream BA)", () => {
       },
     });
     const { ctx } = buildMcpCtx(f);
-    const rows = (await call("agents.list", {}, ctx)) as Array<{ id: string }>;
+    const rows = dataOf<{ id: string }>(await call("agents.list", {}, ctx));
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(live.id);
     expect(ids).not.toContain(dead.id);
-    const all = (await call("agents.list", { includeArchived: true }, ctx)) as Array<{
+    expect(rows.find((r) => r.id === live.id)).toEqual({
+      id: live.id,
+      name: "Live",
+      profileKey: "live",
+    });
+    const all = dataOf<{
       id: string;
-    }>;
+    }>(await call("agents.list", { includeArchived: true }, ctx));
     expect(all.map((r) => r.id)).toContain(dead.id);
   });
 
@@ -1437,6 +1493,13 @@ describe("mcp — awareness tools (Stream BA)", () => {
     };
     expect(row.id).toBe(f.workspace.id);
     expect(row.cycleLengthDays).toBe(7);
+
+    const workspaces = dataOf<{ id: string; name: string; slug: string }>(
+      await call("workspaces.list", {}, ctx),
+    );
+    expect(workspaces).toEqual([
+      { id: f.workspace.id, name: f.workspace.name, slug: f.workspace.slug },
+    ]);
   });
 
   it("statuses.list returns all statuses for the workspace ordered by position", async () => {
@@ -1526,7 +1589,13 @@ describe("mcp — awareness tools (Stream BA)", () => {
 
     const { ctx: ctxAddr } = buildMcpCtx(f, { linkedAgentId: agent.id });
     const res = (await call("chat.getThread", { threadId: thread.id }, ctxAddr)) as {
-      thread: { id: string; title: string | null; topic: string | null; contextMode: string; summaryMarkdown: string | null };
+      thread: {
+        id: string;
+        title: string | null;
+        topic: string | null;
+        contextMode: string;
+        summaryMarkdown: string | null;
+      };
       messages: Array<{
         body: string;
         attachments: Array<{ id: string; filename: string; externalUrl: string | null }>;
@@ -1628,7 +1697,11 @@ describe("mcp — awareness tools (Stream BA)", () => {
       workspace: { id: string };
       thread: { id: string; title: string | null };
       conversation: { id: string; title: string | null; contextMode: string };
-      summary: { markdown: string | null; summarizedUntilMessageId: string | null; summarizedAt: Date | null };
+      summary: {
+        markdown: string | null;
+        summarizedUntilMessageId: string | null;
+        summarizedAt: Date | null;
+      };
       recentMessages: Array<{
         id: string;
         attachments: Array<{ id: string; filename: string; mimeType: string }>;
@@ -1995,6 +2068,53 @@ describe("mcp — notes (per-actor scoping)", () => {
 });
 
 describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
+  it("issues.create returns the stable Orca issue DTO", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "DTO",
+        name: "DTO Project",
+        createdById: fixture.user.id,
+      },
+    });
+
+    const created = (await call(
+      "issues.create",
+      { title: "created dto", projectId: project.id, priority: "HIGH" },
+      ctx,
+    )) as {
+      id: string;
+      identifier: string;
+      title: string;
+      url: string;
+      priority: string;
+      status: { id: string; name: string; category: string; color: string };
+      project: { id: string; key: string; name: string } | null;
+      assignedAgent: { id: string; name: string } | null;
+      labels: Array<{ name: string }>;
+      createdAt: Date;
+      updatedAt: Date;
+      dueDate: Date | null;
+      projectId: string | null;
+    };
+
+    expect(created).toMatchObject({
+      title: "created dto",
+      priority: "HIGH",
+      project: { id: project.id, key: "DTO", name: "DTO Project" },
+      assignedAgent: null,
+      labels: [],
+      projectId: project.id,
+    });
+    expect(created.identifier).toMatch(new RegExp(`^${fixture.workspace.key}-\\d+$`));
+    expect(created.url).toBe(`/w/${fixture.workspace.slug}/i/${created.identifier}`);
+    expect(created.status.category).toBe("BACKLOG");
+  });
+
   it("issues.list honors projectId, labelIds, cycleId, priority filters", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "MLF" });
     fixtures.push(fixture);
@@ -2050,36 +2170,159 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     await prisma.issueLabel.create({ data: { issueId: a.id, labelId: labelHot.id } });
     await prisma.issueLabel.create({ data: { issueId: c.id, labelId: labelCold.id } });
 
-    const byProject = (await call("issues.list", { projectId: projectA.id }, ctx)) as Array<{
+    const byProject = dataOf<{
       id: string;
-    }>;
+    }>(await call("issues.list", { projectId: projectA.id }, ctx));
     expect(byProject.map((i) => i.id).sort()).toEqual([a.id, b.id].sort());
 
-    const byLabel = (await call("issues.list", { labelIds: [labelHot.id] }, ctx)) as Array<{
+    const byLabel = dataOf<{
       id: string;
-    }>;
+    }>(await call("issues.list", { labelIds: [labelHot.id] }, ctx));
     expect(byLabel.map((i) => i.id)).toEqual([a.id]);
 
-    const byCycle = (await call("issues.list", { cycleId: cycle.id }, ctx)) as Array<{
+    const byCycle = dataOf<{
       id: string;
-    }>;
+    }>(await call("issues.list", { cycleId: cycle.id }, ctx));
     expect(byCycle.map((i) => i.id).sort()).toEqual([a.id, c.id].sort());
 
-    const backlog = (await call("issues.list", { cycleId: null }, ctx)) as Array<{ id: string }>;
+    const backlog = dataOf<{ id: string }>(await call("issues.list", { cycleId: null }, ctx));
     expect(backlog.map((i) => i.id)).toEqual([b.id]);
 
-    const urgent = (await call("issues.list", { priorities: ["URGENT", "HIGH"] }, ctx)) as Array<{
+    const urgent = dataOf<{
       id: string;
-    }>;
+    }>(await call("issues.list", { priorities: ["URGENT", "HIGH"] }, ctx));
     expect(urgent.map((i) => i.id)).toEqual([a.id]);
 
     // Compound filter: project A AND urgent priority.
-    const compound = (await call(
-      "issues.list",
-      { projectId: projectA.id, priority: "URGENT" },
-      ctx,
-    )) as Array<{ id: string }>;
+    const compound = dataOf<{ id: string }>(
+      await call("issues.list", { projectId: projectA.id, priority: "URGENT" }, ctx),
+    );
     expect(compound.map((i) => i.id)).toEqual([a.id]);
+  });
+
+  it("issues.list returns the Orca DTO, honors sort params, and paginates by cursor", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ORC" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "ORC",
+        name: "Orca",
+        createdById: fixture.user.id,
+      },
+    });
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, name: "Victor", profileKey: "victor" },
+    });
+    const label = await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "orca", color: "#123456" },
+    });
+    const b = await createIssue(fixture, { title: "Beta", projectId: project.id });
+    const a = await createIssue(fixture, { title: "Alpha", projectId: project.id });
+    const c = await createIssue(fixture, { title: "Charlie", projectId: project.id });
+    await prisma.issue.update({
+      where: { id: a.id },
+      data: { priority: "URGENT", assignedAgentId: agent.id, dueDate: new Date("2026-06-01") },
+    });
+    await prisma.issueLabel.create({ data: { issueId: a.id, labelId: label.id } });
+
+    const byTitle = envelopeOf<{
+      id: string;
+      identifier: string;
+      title: string;
+      description: string | null;
+      url: string;
+      status: { id: string; name: string; category: string; color: string };
+      priority: string;
+      project: { id: string; key: string; name: string } | null;
+      assignedAgent: { id: string; name: string } | null;
+      labels: Array<{ name: string }>;
+      createdAt: Date;
+      updatedAt: Date;
+      dueDate: Date | null;
+    }>(
+      await call(
+        "issues.list",
+        { includeDone: true, orderBy: "title", order: "asc", limit: 2 },
+        ctx,
+      ),
+    );
+    expect(byTitle.data.map((row) => row.title)).toEqual(["Alpha", "Beta"]);
+    expect(byTitle.nextCursor).toBeTruthy();
+    expect(byTitle.data[0]).toMatchObject({
+      id: a.id,
+      identifier: `${fixture.workspace.key}-${a.number}`,
+      url: `/w/${fixture.workspace.slug}/i/${fixture.workspace.key}-${a.number}`,
+      priority: "URGENT",
+      project: { id: project.id, key: "ORC", name: "Orca" },
+      assignedAgent: { id: agent.id, name: "Victor" },
+      labels: [{ name: "orca" }],
+    });
+
+    const secondPage = envelopeOf<{ id: string; title: string }>(
+      await call(
+        "issues.list",
+        {
+          includeDone: true,
+          orderBy: "title",
+          order: "asc",
+          limit: 2,
+          cursor: byTitle.nextCursor,
+        },
+        ctx,
+      ),
+    );
+    expect(secondPage.data.map((row) => row.title)).toEqual(["Charlie"]);
+    expect(secondPage.nextCursor).toBeUndefined();
+
+    const byIdentifierDesc = dataOf<{ id: string }>(
+      await call("issues.list", { includeDone: true, orderBy: "identifier", order: "desc" }, ctx),
+    );
+    expect(byIdentifierDesc.map((row) => row.id).slice(0, 3)).toEqual([c.id, a.id, b.id]);
+
+    const byPriorityDesc = dataOf<{ id: string }>(
+      await call("issues.list", { includeDone: true, orderBy: "priority", order: "desc" }, ctx),
+    );
+    expect(byPriorityDesc[0].id).toBe(a.id);
+  });
+
+  it("issues.list honors createdByViewer, statusCategories, and includeDone", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ORF" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const mine = await createIssue(fixture, { title: "mine" });
+    const theirs = await createIssue(fixture, { title: "theirs" });
+    await prisma.issue.update({
+      where: { id: theirs.id },
+      data: { authorId: fixture.secondUser.id },
+    });
+    const done = await createIssue(fixture, { title: "done", statusCategory: "DONE" });
+    const canceled = await createIssue(fixture, { title: "canceled", statusCategory: "CANCELED" });
+
+    const createdByViewer = dataOf<{ id: string }>(
+      await call("issues.list", { createdByViewer: true, includeDone: true }, ctx),
+    );
+    expect(createdByViewer.map((row) => row.id)).toContain(mine.id);
+    expect(createdByViewer.map((row) => row.id)).toContain(done.id);
+    expect(createdByViewer.map((row) => row.id)).toContain(canceled.id);
+    expect(createdByViewer.map((row) => row.id)).not.toContain(theirs.id);
+
+    const notDone = dataOf<{ id: string }>(await call("issues.list", { includeDone: false }, ctx));
+    expect(notDone.map((row) => row.id)).not.toContain(done.id);
+    expect(notDone.map((row) => row.id)).toContain(canceled.id);
+
+    const onlyCanceled = dataOf<{ id: string }>(
+      await call("issues.list", { statusCategories: ["CANCELED"], includeDone: false }, ctx),
+    );
+    expect(onlyCanceled.map((row) => row.id)).toEqual([canceled.id]);
+
+    const onlyDoneWithDoneExcluded = dataOf<{ id: string }>(
+      await call("issues.list", { statusCategories: ["DONE"], includeDone: false }, ctx),
+    );
+    expect(onlyDoneWithDoneExcluded).toEqual([]);
   });
 
   it("issues.update writes audit + ISSUE_UPDATED and emits ISSUE_PRIORITY_CHANGED on priority bump", async () => {
@@ -2508,11 +2751,9 @@ describe("mcp artifacts.*", () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "ARU" });
     fixtures.push(fixture);
     const { ctx } = buildMcpCtx(fixture);
-    const created = (await call(
-      "artifacts.create",
-      { title: "Iterating", body: "v1" },
-      ctx,
-    )) as { id: string };
+    const created = (await call("artifacts.create", { title: "Iterating", body: "v1" }, ctx)) as {
+      id: string;
+    };
     await call(
       "artifacts.update",
       { id: created.id, body: "v2", changelog: "tightened tone" },
@@ -2635,9 +2876,7 @@ describe("mcp runs.complete + completion contract", () => {
         runId: run.id,
         summary: "Migration shipped.",
         producedArtifactIds: [artifact.id],
-        verificationResult: [
-          { label: "Migration applied", done: true },
-        ],
+        verificationResult: [{ label: "Migration applied", done: true }],
         followUps: [{ title: "Backfill historical rows" }],
       },
       scopedCtx,
@@ -2711,9 +2950,7 @@ describe("mcp runs.setWaiting + runs.resumeWork", () => {
     expect(result.status).toBe("WAITING");
     expect(result.currentStep).toBe("awaiting prod creds");
     // lastEventAt bumped well after the backdate
-    expect(new Date(result.lastEventAt).getTime()).toBeGreaterThan(
-      Date.now() - 30_000,
-    );
+    expect(new Date(result.lastEventAt).getTime()).toBeGreaterThan(Date.now() - 30_000);
 
     const events = await prisma.agentRunEvent.findMany({
       where: { runId: run.id },
@@ -2789,9 +3026,7 @@ describe("mcp runs.setWaiting + runs.resumeWork", () => {
       },
     });
 
-    await expect(
-      call("runs.setWaiting", { runId: run.id }, ctx),
-    ).rejects.toThrow(/linkedAgentId/);
+    await expect(call("runs.setWaiting", { runId: run.id }, ctx)).rejects.toThrow(/linkedAgentId/);
   });
 
   it("setWaiting from a different agent's key is rejected", async () => {
@@ -2827,9 +3062,9 @@ describe("mcp runs.setWaiting + runs.resumeWork", () => {
     const apiKey = { ...ctx.apiKey!, linkedAgentId: intruder.id };
     const scopedCtx = { ...ctx, apiKey };
 
-    await expect(
-      call("runs.setWaiting", { runId: run.id }, scopedCtx),
-    ).rejects.toThrow(/different agent/);
+    await expect(call("runs.setWaiting", { runId: run.id }, scopedCtx)).rejects.toThrow(
+      /different agent/,
+    );
   });
 
   it("resumeWork flips WAITING back to ACTIVE", async () => {
@@ -2877,11 +3112,9 @@ describe("mcp canvases.* mutation tools", () => {
     const { ctx } = buildMcpCtx(fixture);
     const issue = await createIssue(fixture, { title: "Canvas anchor" });
 
-    const canvas = (await call(
-      "canvases.create",
-      { name: "Migration board" },
-      ctx,
-    )) as { id: string };
+    const canvas = (await call("canvases.create", { name: "Migration board" }, ctx)) as {
+      id: string;
+    };
 
     const node = (await call(
       "canvases.addNode",
@@ -2897,11 +3130,7 @@ describe("mcp canvases.* mutation tools", () => {
       ctx,
     )) as { id: string };
 
-    await call(
-      "canvases.patchNode",
-      { id: node.id, x: 99, y: 199, collapsed: true },
-      ctx,
-    );
+    await call("canvases.patchNode", { id: node.id, x: 99, y: 199, collapsed: true }, ctx);
 
     const got = (await call("canvases.get", { id: canvas.id }, ctx)) as {
       nodes: Array<{ id: string; x: number; y: number; collapsed: boolean }>;
@@ -2924,16 +3153,8 @@ describe("mcp canvases.* mutation tools", () => {
     const { ctx } = buildMcpCtx(fixture);
     const issue = await createIssue(fixture, { title: "Edge anchor" });
 
-    const canvasA = (await call(
-      "canvases.create",
-      { name: "Board A" },
-      ctx,
-    )) as { id: string };
-    const canvasB = (await call(
-      "canvases.create",
-      { name: "Board B" },
-      ctx,
-    )) as { id: string };
+    const canvasA = (await call("canvases.create", { name: "Board A" }, ctx)) as { id: string };
+    const canvasB = (await call("canvases.create", { name: "Board B" }, ctx)) as { id: string };
 
     const nodeA = (await call(
       "canvases.addNode",
@@ -3053,9 +3274,9 @@ describe("mcp — agent.inbox.list / agent.inbox.ack / agent.inbox.outputStarted
     const f = await createWorkspaceFixture({ keyPrefix: "INI" });
     fixtures.push(f);
     const { ctx } = buildMcpCtx(f, { linkedAgentId: null });
-    await expect(
-      call("agent.inbox.list", { status: "unacked", limit: 10 }, ctx),
-    ).rejects.toThrow(/linkedAgentId/);
+    await expect(call("agent.inbox.list", { status: "unacked", limit: 10 }, ctx)).rejects.toThrow(
+      /linkedAgentId/,
+    );
   });
 
   it("agent.inbox.list returns the linked agent's unacked runs", async () => {
@@ -3075,11 +3296,9 @@ describe("mcp — agent.inbox.list / agent.inbox.ack / agent.inbox.outputStarted
       },
     });
     const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
-    const result = (await call(
-      "agent.inbox.list",
-      { status: "unacked", limit: 10 },
-      ctx,
-    )) as { items: Array<{ kind: string; runId: string }> };
+    const result = (await call("agent.inbox.list", { status: "unacked", limit: 10 }, ctx)) as {
+      items: Array<{ kind: string; runId: string }>;
+    };
     expect(result.items.some((i) => i.kind === "run" && i.runId === run.id)).toBe(true);
   });
 
@@ -3117,11 +3336,9 @@ describe("mcp — agent.inbox.list / agent.inbox.ack / agent.inbox.outputStarted
     });
 
     const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
-    const result = (await call(
-      "agent.inbox.list",
-      { status: "unacked", limit: 10 },
-      ctx,
-    )) as { items: Array<{ kind: string; chatMessageId?: string }> };
+    const result = (await call("agent.inbox.list", { status: "unacked", limit: 10 }, ctx)) as {
+      items: Array<{ kind: string; chatMessageId?: string }>;
+    };
 
     expect(result.items.some((i) => i.kind === "chat" && i.chatMessageId === userMessage.id)).toBe(
       false,
@@ -3406,14 +3623,10 @@ describe("mcp — agent.inbox.list / agent.inbox.ack / agent.inbox.outputStarted
       linkedAgentId: agent.id,
       projectIds: [allowedProject.id],
     });
-    const result = (await call(
-      "agent.inbox.list",
-      { status: "unacked", limit: 50 },
-      ctx,
-    )) as { items: Array<{ kind: string; issueId?: string }> };
-    const visibleIssues = result.items
-      .filter((i) => i.kind === "run")
-      .map((i) => i.issueId);
+    const result = (await call("agent.inbox.list", { status: "unacked", limit: 50 }, ctx)) as {
+      items: Array<{ kind: string; issueId?: string }>;
+    };
+    const visibleIssues = result.items.filter((i) => i.kind === "run").map((i) => i.issueId);
     expect(visibleIssues).toContain(allowedIssue.id);
     expect(visibleIssues).not.toContain(blockedIssue.id);
   });
@@ -3452,11 +3665,11 @@ describe("mcp — orchestration loop tools", () => {
     expect(list.some((g) => g.id === goal.id)).toBe(true);
 
     // plans.decompose → DRAFT plan + PLANNING goal
-    const decomp = (await call(
-      "plans.decompose",
-      { goalId: goal.id },
-      ctx,
-    )) as { planId: string; status: string; plannerAgentId: string | null };
+    const decomp = (await call("plans.decompose", { goalId: goal.id }, ctx)) as {
+      planId: string;
+      status: string;
+      plannerAgentId: string | null;
+    };
     expect(decomp.status).toBe("PLANNING");
     expect(decomp.plannerAgentId).toBe(planner.id);
 
@@ -3465,10 +3678,7 @@ describe("mcp — orchestration loop tools", () => {
       "plans.addSteps",
       {
         planId: decomp.planId,
-        steps: [
-          { title: "first" },
-          { title: "second", dependsOnStepIndexes: [0] },
-        ],
+        steps: [{ title: "first" }, { title: "second", dependsOnStepIndexes: [0] }],
       },
       ctx,
     )) as { stepIds: string[] };
@@ -3481,10 +3691,7 @@ describe("mcp — orchestration loop tools", () => {
       "executionPlans.create",
       {
         title: "Hand-authored DAG",
-        steps: [
-          { title: "root" },
-          { title: "child", dependsOnStepIndexes: [0] },
-        ],
+        steps: [{ title: "root" }, { title: "child", dependsOnStepIndexes: [0] }],
       },
       ctx,
     )) as { id: string };
@@ -3506,4 +3713,3 @@ describe("mcp — orchestration loop tools", () => {
     expect(got.plans.some((p) => p.id === decomp.planId)).toBe(true);
   });
 });
-
