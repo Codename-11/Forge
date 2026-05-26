@@ -7725,3 +7725,32 @@ sweep). The live workspaces were already at 15, so no behavior change there.
 E2E: ran the full Playwright suite (9 specs — a11y, chat surface/streaming/
 attachments, issue flow, data export, runtime management) against a fresh
 prod build. Green.
+
+---
+
+## 2026-05-25 — Command Center: inline issue status on asks
+
+Bailey noticed the "Asks for you" cards offered only Accept/Decline. When an
+agent blocks on an issue (FREE_FORM/decision ask) but the operator decides the
+issue is actually Done, there was no way to close it without Decline — and
+Decline records a "Declined by …" resolution, which is the wrong signal.
+
+Confirmed the model is intentionally asymmetric: `runs.complete` / `setWaiting`
+/ `resumeWork` never touch issue status; only ActionRequest Accept on a
+TRANSITION-kind ask, or a manual transition, moves it. Decline never executes
+the bound action. (See action-request-service.ts decline path, mcp.ts
+runs.complete docstring, issue.ts finishRunsForIssue.)
+
+Change (UI only, per Bailey's pick): added `IssueStatusPicker` to
+`ActionRequestDecisionCard` in `command-center/page.tsx`. A ghost "Set status…"
+button (shown only when the ask has a linked issue) opens the shared `Picker`
+and drives `issue.update({ id, statusId })`. Deliberately independent of the
+ask — it does NOT resolve/decline the ActionRequest, so the ask stays open for a
+separate call and no decline resolution is written. Terminal transitions
+(DONE/CANCELED) close the issue's active runs server-side via the existing
+issue.ts path. statuses fetched lazily (`enabled: open`); invalidates
+commandCenter.summary + decisionsCount + inbox.get on settle. Needed `issue.id`
+added to the card's `CCActionRequest` type (the CC query already selected it).
+
+No server/runtime changes; agent-emitted TRANSITION asks deferred. typecheck +
+lint green. Not deployed (holding per Bailey).
