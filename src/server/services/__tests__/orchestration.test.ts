@@ -741,6 +741,29 @@ describe("orchestration: attach hand-authored plan to goal", () => {
     expect(active).toBe(1);
   });
 
+  it("createExecutionPlan resolves seeded step dependencies by input index", async () => {
+    const { fixture, prisma } = await setup();
+    const { id: planId } = await createExecutionPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Indexed DAG plan",
+      steps: [
+        { title: "root" },
+        { title: "child", dependsOnStepIndexes: [0] },
+        { title: "grandchild", dependsOnStepIndexes: [1] },
+      ],
+    });
+
+    const steps = await prisma.executionStep.findMany({
+      where: { planId },
+      orderBy: { position: "asc" },
+      select: { id: true, dependsOnStepIds: true },
+    });
+    expect(steps).toHaveLength(3);
+    expect(steps[1].dependsOnStepIds).toEqual([steps[0].id]);
+    expect(steps[2].dependsOnStepIds).toEqual([steps[1].id]);
+  });
+
   it("refuses to attach a plan already owned by a different goal", async () => {
     const { fixture, prisma } = await setup();
     const goalA = await createGoal(prisma, {

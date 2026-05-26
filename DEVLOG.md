@@ -35,6 +35,34 @@ Tests: orchestration suite 10→17, new engagement-mode suite (9), all green; li
 typecheck clean. SLA/watchdog mode-gating left as a follow-up (the run carries the
 mode; no behavior regression — only auto-transition is gated so far).
 
+## 2026-05-25 — ExecutionPlan create supports indexed step deps (AXI-54 gap 2)
+
+Closed Gap 2 of AXI-54: `executionPlans.create` can now seed a step DAG in the
+same call using `steps[].dependsOnStepIndexes`, matching the already-working
+`plans.addSteps` authoring shape. `createExecutionPlan` now creates seeded steps
+in a first pass, records their real ids, then resolves index dependencies in a
+second pass inside the same transaction. Explicit `dependsOnStepIds` remain
+supported and are de-duped with resolved index deps.
+
+Surface updates:
+- Service input accepts `dependsOnStepIndexes` on seeded steps.
+- tRPC `executionPlans.create` schema forwards `dependsOnStepIndexes` and router
+  coverage verifies the seeded child receives the resolved parent id.
+- MCP `executionPlans.create` schema forwards `dependsOnStepIndexes`, so agents
+  can hand-author a goal-linked DAG without falling back to `plans.addSteps`.
+- Changelog updated under Unreleased.
+
+Verification:
+- RED confirmed first: new service test failed with `dependsOnStepIds` still
+  empty for child steps.
+- `pnpm test src/server/services/__tests__/orchestration.test.ts -t "createExecutionPlan resolves seeded step dependencies by input index"` → pass
+- `pnpm test src/server/services/__tests__/mcp.test.ts -t "orchestration loop tools"` → pass
+- `pnpm test src/server/routers/__tests__/execution-plan.test.ts -t "creates a plan with ordered steps"` → pass
+- `pnpm test src/server/routers/__tests__/execution-plan.test.ts src/server/services/__tests__/orchestration.test.ts src/server/services/__tests__/mcp.test.ts` → 124 passed
+- `pnpm typecheck` → pass
+- `pnpm lint` → pass
+- `env -u OPENAI_API_KEY pnpm test` → 703 passed / 1 skipped, with 3 unrelated dispatcher/heartbeat failures when run against the shared `/home/bailey/forge/.env` database. The changed execution-plan/orchestration/MCP suites are green; the failures are in dispatch-rule/dispatcher/heartbeat selection tests and do not touch this code path.
+
 ## 2026-05-25 — Link hand-authored ExecutionPlans to Goals (AXI-54 gap 1)
 
 Closed Gap 1 of AXI-54: there was no API path to attach a hand-authored
