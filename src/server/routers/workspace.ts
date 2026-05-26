@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { CycleStatus, EventKind, Role } from "@prisma/client";
+import {
+  CycleStatus,
+  EngagementMode,
+  EventKind,
+  MentionEngagementPolicy,
+  Role,
+} from "@prisma/client";
 import { router, protectedProcedure, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 
@@ -115,6 +121,9 @@ export const workspaceRouter = router({
         stalledThresholdDays: true,
         agentHeartbeatWarnMinutes: true,
         agentHeartbeatCriticalMinutes: true,
+        assignmentEngagementMode: true,
+        mentionEngagementPolicy: true,
+        mentionDefaultMode: true,
         emailIngestEnabled: true,
         // emailIngestSecret intentionally omitted — see note above.
         createdAt: true,
@@ -228,6 +237,9 @@ export const workspaceRouter = router({
         aiProvider: z.enum(["hermes", "openai", "anthropic", "custom"]).optional(),
         aiModel: z.string().min(1).max(80).nullable().optional(),
         startedStatusId: z.string().nullable().optional(),
+        assignmentEngagementMode: z.nativeEnum(EngagementMode).optional(),
+        mentionEngagementPolicy: z.nativeEnum(MentionEngagementPolicy).optional(),
+        mentionDefaultMode: z.nativeEnum(EngagementMode).optional(),
         emailIngestEnabled: z.boolean().optional(),
       }),
     )

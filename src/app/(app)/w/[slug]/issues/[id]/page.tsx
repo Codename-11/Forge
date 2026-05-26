@@ -3,12 +3,19 @@ import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { AgentStatus } from "@prisma/client";
-import { Bot, Paperclip, Plus } from "lucide-react";
+import { Bot, Paperclip, Plus, Workflow } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Confirm, Picker } from "@/components/ui/modal";
+import {
+  EngagementModeGlyph,
+  MODE_LABEL,
+  MODE_SUBTITLE,
+  MODE_ORDER,
+  type EngagementModeValue,
+} from "@/components/ui/engagement-mode-glyph";
 import { EmptyState, Skeleton, SkeletonText } from "@/components/ui";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { presenceAvailability } from "@/lib/transport-display";
@@ -505,6 +512,24 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                         }
                       />
                     </SidebarField>
+                    {issue.executionSteps && issue.executionSteps.length > 0 ? (
+                      <SidebarField label="From plan">
+                        {issue.executionSteps.map((step) => (
+                          <a
+                            key={step.id}
+                            href={`/w/${slug}/plans/${step.plan.id}`}
+                            className="flex items-center gap-1.5 rounded-md border border-border bg-card/40 px-2 py-1 text-xs hover:bg-subtle"
+                            title={`Materialized from step ${step.position + 1}: ${step.title}`}
+                          >
+                            <Workflow className="h-3 w-3 shrink-0 text-muted-foreground" />
+                            <span className="truncate">{step.plan.title}</span>
+                            <span className="ml-auto shrink-0 font-mono text-[0.625rem] text-muted-foreground">
+                              step {step.position + 1}
+                            </span>
+                          </a>
+                        ))}
+                      </SidebarField>
+                    ) : null}
                     <SidebarField label="Labels">
                       <LabelPicker
                         current={issue.labels.map((l) => ({
@@ -629,7 +654,10 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         open={agentPickerOpen}
         onOpenChange={setAgentPickerOpen}
         currentAgentId={issue.assignedAgent?.id ?? null}
-        onSelect={(agentId) => {
+        defaultMode={
+          (ws?.assignmentEngagementMode as EngagementModeValue) ?? "EXECUTE"
+        }
+        onSelect={(agentId, mode) => {
           // Reassignment-confirmation toast: when the assigned agent
           // *changes* (not on the initial assign), reassure the
           // operator that context is preserved. The standard
@@ -647,7 +675,13 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               nextAgentName = `@${next.profileKey}`;
           }
           update.mutate(
-            { id: issue.id, assignedAgentId: agentId },
+            // Only stamp the mode when actually assigning an agent;
+            // unassign carries no engagement intent.
+            {
+              id: issue.id,
+              assignedAgentId: agentId,
+              ...(agentId ? { mode } : {}),
+            },
             {
               onSuccess: () => {
                 if (isReassign && nextAgentName) {
@@ -1221,14 +1255,23 @@ function AgentPickerModal({
   open,
   onOpenChange,
   currentAgentId,
+  defaultMode,
   onSelect,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   currentAgentId: string | null;
-  onSelect: (agentId: string | null) => void;
+  /** Workspace `assignmentEngagementMode` — the picker's starting mode. */
+  defaultMode: EngagementModeValue;
+  onSelect: (agentId: string | null, mode: EngagementModeValue) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<EngagementModeValue>(defaultMode);
+  // Re-seed the mode whenever the picker reopens or the workspace default
+  // changes — operators pick the agent fresh each time.
+  useEffect(() => {
+    if (open) setMode(defaultMode);
+  }, [open, defaultMode]);
   const { data: agents, isLoading } = trpc.agent.list.useQuery(
     { includeArchived: false },
     { enabled: open },
@@ -1270,9 +1313,47 @@ function AgentPickerModal({
       loading={isLoading}
       emptyLabel="No active agents match."
       onSelect={(it) => {
-        if (it.kind === "unassign") onSelect(null);
-        else onSelect(it.id);
+        if (it.kind === "unassign") onSelect(null, mode);
+        else onSelect(it.id, mode);
       }}
+      footer={
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+            Engagement mode
+          </span>
+          <div
+            role="radiogroup"
+            aria-label="Engagement mode"
+            className="flex flex-wrap gap-1"
+          >
+            {MODE_ORDER.map((m) => {
+              const activeMode = mode === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={activeMode}
+                  // Stop the keystroke from reaching the Picker's list
+                  // navigation; this control is mouse-driven.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setMode(m)}
+                  title={MODE_SUBTITLE[m]}
+                  className={
+                    "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors " +
+                    (activeMode
+                      ? "border-ember/60 bg-ember/10"
+                      : "border-border bg-card/30 text-muted-foreground hover:text-foreground")
+                  }
+                >
+                  <EngagementModeGlyph mode={m} size={11} />
+                  {MODE_LABEL[m]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      }
       renderItem={(it) => {
         if (it.kind === "unassign") {
           const active = currentAgentId === null;

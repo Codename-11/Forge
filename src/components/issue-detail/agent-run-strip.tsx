@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Bot, Activity, Hourglass } from "lucide-react";
+import { ModeChip } from "@/components/ui/engagement-mode-glyph";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { relativeTime, cn } from "@/lib/utils";
@@ -130,6 +131,7 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
           Waiting on you
         </span>
       )}
+      <ModeChip mode={run.engagementMode} />
       <span className="text-muted-foreground">·</span>
       <span className="truncate text-foreground/80">{step}</span>
       <span className="ml-auto flex items-center gap-2 text-meta text-muted-foreground">

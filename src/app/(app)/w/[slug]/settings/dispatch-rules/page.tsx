@@ -2,10 +2,18 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Route, GripVertical, MoreHorizontal } from "lucide-react";
-import { Priority } from "@prisma/client";
+import { MentionEngagementPolicy, Priority } from "@prisma/client";
+import type { EngagementMode } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { PriorityGlyph } from "@/components/ui/priority-glyph";
+import {
+  EngagementModeGlyph,
+  MODE_LABEL,
+  MODE_SUBTITLE,
+  MODE_ORDER,
+  type EngagementModeValue,
+} from "@/components/ui/engagement-mode-glyph";
 import { Input } from "@/components/ui/input";
 import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
@@ -64,6 +72,28 @@ const FALL_THROUGH_OPTIONS: { value: string; label: string }[] = [
   { value: "CAPABILITY_MATCH", label: "Capability match" },
   { value: "PRIORITY_MATCH", label: "Priority match" },
   { value: "MANUAL_ONLY", label: "Manual only" },
+];
+
+const MENTION_POLICY_OPTIONS: {
+  value: MentionEngagementPolicy;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    value: MentionEngagementPolicy.INFER,
+    label: "Infer",
+    hint: "No marker → the agent infers intent and asks before anything irreversible.",
+  },
+  {
+    value: MentionEngagementPolicy.FIXED,
+    label: "Fixed",
+    hint: "Always use the mention default mode regardless of the comment text.",
+  },
+  {
+    value: MentionEngagementPolicy.REQUIRE_MARKER,
+    label: "Require marker",
+    hint: "Execution needs an explicit marker; otherwise treat as Discuss.",
+  },
 ];
 
 const RESOLUTION_HELP = [
@@ -170,6 +200,17 @@ export default function DispatchRulesPage() {
     onSuccess: () => {
       toast.success("Rule deleted.");
       invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Engagement-mode config lives on the Workspace row; the
+  // `workspace.update` mutation persists it. Optimistically reflect the
+  // chosen value through `workspace.current`.
+  const updateWorkspace = trpc.workspace.update.useMutation({
+    onSuccess: () => {
+      toast.success("Engagement defaults saved.");
+      utils.workspace.current.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -504,6 +545,102 @@ export default function DispatchRulesPage() {
             </Section>
           )}
 
+          {/* Engagement modes — what kind of work a dispatched agent is
+              asked to do. Persisted on the Workspace row via
+              `workspace.update`. See docs/agents/engagement-modes.md. */}
+          <Section
+            title="Engagement modes"
+            hint="The intent handed to an agent at dispatch time — what it's asked to do, separate from which agent gets picked. Assignments default to one mode; @-mentions follow a policy."
+          >
+            <Card as="div" className="space-y-5 p-5">
+              <div className="space-y-2">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-sm">Assignment default</span>
+                  <span className="text-meta text-muted-foreground">
+                    Used when an issue is assigned or queued.
+                  </span>
+                </div>
+                <ModeSegmented
+                  value={
+                    (workspace?.assignmentEngagementMode as EngagementModeValue) ??
+                    "EXECUTE"
+                  }
+                  disabled={updateWorkspace.isPending}
+                  onChange={(mode) =>
+                    updateWorkspace.mutate({ assignmentEngagementMode: mode })
+                  }
+                />
+              </div>
+
+              <div className="space-y-2 border-t border-border/60 pt-4">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-sm">Mention policy</span>
+                  <span className="text-meta text-muted-foreground">
+                    How an @-mention without an explicit marker is handled.
+                  </span>
+                </div>
+                <div
+                  role="radiogroup"
+                  aria-label="Mention policy"
+                  className="inline-flex rounded-md border border-border bg-card/30 p-0.5"
+                >
+                  {MENTION_POLICY_OPTIONS.map((o) => {
+                    const active =
+                      (workspace?.mentionEngagementPolicy ?? "INFER") === o.value;
+                    return (
+                      <button
+                        key={o.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        disabled={updateWorkspace.isPending}
+                        onClick={() =>
+                          updateWorkspace.mutate({
+                            mentionEngagementPolicy: o.value,
+                          })
+                        }
+                        title={o.hint}
+                        className={
+                          "focus-ring rounded-[0.3125rem] px-3 py-1 text-xs transition-colors " +
+                          (active
+                            ? "bg-ember text-ember-foreground"
+                            : "text-muted-foreground hover:text-foreground")
+                        }
+                      >
+                        {o.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-meta text-muted-foreground">
+                  {MENTION_POLICY_OPTIONS.find(
+                    (o) =>
+                      o.value === (workspace?.mentionEngagementPolicy ?? "INFER"),
+                  )?.hint}
+                </p>
+              </div>
+
+              <div className="space-y-2 border-t border-border/60 pt-4">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-sm">Mention default mode</span>
+                  <span className="text-meta text-muted-foreground">
+                    The mode a mention starts from (under Infer / Fixed).
+                  </span>
+                </div>
+                <ModeSegmented
+                  value={
+                    (workspace?.mentionDefaultMode as EngagementModeValue) ??
+                    "DISCUSS"
+                  }
+                  disabled={updateWorkspace.isPending}
+                  onChange={(mode) =>
+                    updateWorkspace.mutate({ mentionDefaultMode: mode })
+                  }
+                />
+              </div>
+            </Card>
+          </Section>
+
           {/* Fall-through mode. The current value comes from
               `workspace.current` (which exposes `autoDispatchMode`), but
               `workspace.update` does not accept `autoDispatchMode`, so this
@@ -687,6 +824,57 @@ export default function DispatchRulesPage() {
         }}
       />
     </>
+  );
+}
+
+/**
+ * ModeSegmented — segmented control over the four engagement modes, each
+ * option showing its glyph + label + one-line subtext. Shared shape with the
+ * assign-popover picker so the feel matches.
+ */
+function ModeSegmented({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: EngagementModeValue;
+  onChange: (mode: EngagementMode) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Engagement mode"
+      className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+    >
+      {MODE_ORDER.map((m) => {
+        const active = value === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            disabled={disabled}
+            onClick={() => onChange(m as EngagementMode)}
+            className={
+              "focus-ring flex flex-col items-start gap-1 rounded-md border px-2.5 py-2 text-left transition-colors " +
+              (active
+                ? "border-ember/60 bg-ember/10"
+                : "border-border bg-card/30 hover:bg-subtle")
+            }
+          >
+            <span className="flex items-center gap-1.5">
+              <EngagementModeGlyph mode={m} size={12} />
+              <span className="text-xs">{MODE_LABEL[m]}</span>
+            </span>
+            <span className="text-[0.625rem] text-muted-foreground">
+              {MODE_SUBTITLE[m]}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
