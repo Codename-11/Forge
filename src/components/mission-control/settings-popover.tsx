@@ -151,7 +151,7 @@ export function SettingsPopover({ soundEnabled, onToggleSound }: SettingsPopover
                 </select>
               </div>
               <p className="px-2 pb-1 pt-0.5 text-[0.625rem] text-muted-foreground">
-                Per-workspace value wins. Mission Control will open on{" "}
+                Per-workspace value wins. Activity will open on{" "}
                 <span className="font-mono">{effectivePref}</span> here.
               </p>
             </div>

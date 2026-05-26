@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Route, GripVertical, MoreHorizontal } from "lucide-react";
+import { useWorkspace } from "@/hooks/use-workspace";
 import { MentionEngagementPolicy, Priority } from "@prisma/client";
 import type { EngagementMode } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
@@ -124,6 +126,7 @@ type RuleRow = {
 };
 
 export default function DispatchRulesPage() {
+  const ws = useWorkspace();
   const utils = trpc.useUtils();
   const { data: rules, isLoading, refetch } =
     trpc.dispatchRule.list.useQuery();
@@ -321,6 +324,26 @@ export default function DispatchRulesPage() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-8 p-6">
+          {/* Bindings prerequisite. Rules can only target agents bound to
+              this workspace — definitions live globally, bindings are set
+              under Settings → Agents. */}
+          <div className="flex items-start gap-3 rounded-md border border-border bg-card/40 p-3 text-[0.8125rem]">
+            <Route className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <div className="text-muted-foreground">
+              <span className="font-medium text-foreground">
+                Rules can only target agents bound to this workspace.
+              </span>{" "}
+              Agent definitions live globally; bind a profile under{" "}
+              <Link
+                href={`/w/${ws.slug}/settings/agents`}
+                className="text-foreground underline decoration-dotted underline-offset-2 hover:text-ember"
+              >
+                Settings → Agents
+              </Link>{" "}
+              before it can be a rule target.
+            </div>
+          </div>
+
           {!isLoading && rows.length === 0 ? (
             <Section
               title="Routing matrix"

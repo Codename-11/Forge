@@ -1,0 +1,136 @@
+"use client";
+import { useState } from "react";
+import { Globe, GlobeLock, Power, PowerOff } from "lucide-react";
+import { toast } from "sonner";
+import { trpc } from "@/lib/trpc";
+import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton } from "./admin-ui";
+
+/**
+ * Instance agent-policy surface for `/admin/agents`. Lists global agent
+ * profiles (`agents.profiles.list`) and exposes the two instance-admin
+ * governance toggles: instance-shared (`setInstanceShared`) and
+ * force-disable (`setDisabled`). Per-workspace bindings are configured in
+ * each workspace's Settings → Agents — this page is policy only.
+ * Part of the multi-workspace restructure.
+ */
+export function AdminAgents() {
+  const utils = trpc.useUtils();
+  const profiles = trpc.agents.profiles.list.useQuery();
+  const [pendingId, setPendingId] = useState<string | null>(null);
+
+  const setShared = trpc.agents.profiles.setInstanceShared.useMutation({
+    onMutate: (v) => setPendingId(v.id),
+    onSuccess: async () => {
+      await utils.agents.profiles.list.invalidate();
+      toast.success("Profile sharing updated.");
+    },
+    onError: (e) => toast.error(e.message),
+    onSettled: () => setPendingId(null),
+  });
+  const setDisabled = trpc.agents.profiles.setDisabled.useMutation({
+    onMutate: (v) => setPendingId(v.id),
+    onSuccess: async () => {
+      await utils.agents.profiles.list.invalidate();
+      toast.success("Profile state updated.");
+    },
+    onError: (e) => toast.error(e.message),
+    onSettled: () => setPendingId(null),
+  });
+
+  return (
+    <div className="mx-auto w-full max-w-[1280px] px-8 py-6">
+      <div className="mb-4 text-meta" style={{ color: ADMIN.textMuted }}>
+        Agent definitions are owned globally; instance admins decide which are shared to every workspace&apos;s
+        bind-catalog and which are force-disabled across the instance.
+      </div>
+      <AdminPanel title="Agent profiles" hint={profiles.data ? `${profiles.data.length} global` : undefined}>
+        <div
+          className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.5fr_1.2fr] items-center gap-2 px-4 py-2 text-meta"
+          style={{ color: ADMIN.textMuted, borderBottom: `1px solid ${ADMIN.border}` }}
+        >
+          <span>Profile</span>
+          <span>Provider</span>
+          <span>Runtime</span>
+          <span className="text-right">Bindings</span>
+          <span className="text-right">Instance policy</span>
+        </div>
+        {profiles.isLoading ? (
+          <AdminLoading />
+        ) : !profiles.data?.length ? (
+          <AdminEmpty>No global agent profiles defined.</AdminEmpty>
+        ) : (
+          profiles.data.map((p, i, arr) => {
+            const disabled = !!p.disabledAt;
+            const busy = pendingId === p.id;
+            return (
+              <div
+                key={p.id}
+                className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.5fr_1.2fr] items-center gap-2 px-4 py-2.5"
+                style={{ borderBottom: i === arr.length - 1 ? "none" : `1px solid ${ADMIN.borderRow}` }}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span aria-hidden className="text-lg leading-none">
+                    {p.avatar ?? "🤖"}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5">
+                      <span className="truncate text-[0.8125rem] font-medium" style={{ color: ADMIN.text }}>
+                        {p.name}
+                      </span>
+                      {disabled && (
+                        <span
+                          className="rounded px-1 text-[9px] font-bold uppercase tracking-wider"
+                          style={{ background: "rgba(239,68,68,0.18)", color: "hsl(var(--danger))" }}
+                        >
+                          disabled
+                        </span>
+                      )}
+                      {p.instanceShared && (
+                        <span
+                          className="rounded px-1 text-[9px] font-bold uppercase tracking-wider"
+                          style={{ background: "rgba(217,119,87,0.18)", color: ADMIN.ember }}
+                        >
+                          shared
+                        </span>
+                      )}
+                    </span>
+                    <span className="block text-[10px] font-mono" style={{ color: ADMIN.textDim }}>
+                      @{p.profileKey}
+                    </span>
+                  </span>
+                </span>
+                <span className="truncate text-meta" style={{ color: ADMIN.textSoft }}>
+                  {p.provider.toLowerCase()}
+                </span>
+                <span className="truncate text-meta font-mono" style={{ color: ADMIN.textSoft }}>
+                  {p.runtime?.name ?? "—"}
+                </span>
+                <span className="text-right font-mono text-[0.8125rem] tabular-nums" style={{ color: ADMIN.text }}>
+                  {p.bindings.length}
+                </span>
+                <span className="flex justify-end gap-1.5">
+                  <AdminButton
+                    icon={p.instanceShared ? GlobeLock : Globe}
+                    tone={p.instanceShared ? "default" : "ember"}
+                    disabled={busy}
+                    onClick={() => setShared.mutate({ id: p.id, instanceShared: !p.instanceShared })}
+                  >
+                    {p.instanceShared ? "Unshare" : "Share"}
+                  </AdminButton>
+                  <AdminButton
+                    icon={disabled ? Power : PowerOff}
+                    tone={disabled ? "default" : "danger"}
+                    disabled={busy}
+                    onClick={() => setDisabled.mutate({ id: p.id, disabled: !disabled })}
+                  >
+                    {disabled ? "Enable" : "Disable"}
+                  </AdminButton>
+                </span>
+              </div>
+            );
+          })
+        )}
+      </AdminPanel>
+    </div>
+  );
+}

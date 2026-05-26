@@ -36,6 +36,7 @@ import { PillSparkline } from "./pill-sparkline";
 import { ChatTab } from "./chat-tab";
 import { ControlTab } from "./control-tab";
 import { PlansTab } from "./plans-tab";
+import { Kbd } from "@/components/ui/kbd";
 
 /**
  * Mission Control — the global agent ops widget.
@@ -477,9 +478,11 @@ export function MissionControl() {
     [inLivePanel, activeRunId, isPinned, pinRun, unpinRun],
   );
 
-  // `g m` chord opens the panel from anywhere — same shell pattern as
-  // the sidebar nav chords. Doesn't take focus.
-  useChord("g", { m: () => setSize("panel") });
+  // `g 5` (and the legacy `g m`) chord opens the panel from anywhere —
+  // same shell pattern as the sidebar nav chords. Doesn't take focus.
+  // `g 5` matches the summon affordance shown on the pill ("G 5");
+  // `g m` is kept as a back-compat alias for existing muscle memory.
+  useChord("g", { "5": () => setSize("panel"), m: () => setSize("panel") });
 
   // Global `/` shortcut: open Mission Control directly to the Chat tab
   // with the composer focused. Same vibe as Slack / Linear.
@@ -545,8 +548,8 @@ export function MissionControl() {
           }}
           title={
             hasStalled
-              ? `${stalledRuns.length} stalled ${stalledRuns.length === 1 ? "run" : "runs"} · open Mission Control`
-              : "Mission Control (⌘')"
+              ? `${stalledRuns.length} stalled ${stalledRuns.length === 1 ? "run" : "runs"} · open Activity`
+              : "Activity (⌘')"
           }
           className={cn(
             "group flex items-center gap-2 rounded-full border bg-card/90 px-3 py-1.5 text-[0.75rem] shadow-sm backdrop-blur",
@@ -600,6 +603,13 @@ export function MissionControl() {
               · {firstStep}
             </span>
           )}
+          {/* Summon-chord hint: `G 5` opens Activity. Mirrors the keybinding
+              wiring below (`useChord("g", { 5, m })`). Hover-only so the
+              resting pill stays compact. */}
+          <span className="ml-0.5 hidden items-center gap-0.5 group-hover:inline-flex">
+            <Kbd>G</Kbd>
+            <Kbd>5</Kbd>
+          </span>
           <ChevronUp className="h-3 w-3 text-muted-foreground" />
         </button>
         <button
@@ -705,7 +715,7 @@ export function MissionControl() {
       >
         <GripHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
-          Mission Control
+          Activity
         </span>
         {hasStalled && (
           <span className="flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[0.625rem] text-amber-600">

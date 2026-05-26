@@ -80,6 +80,17 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
   return next({ ctx: { ...ctx, session: ctx.session } });
 });
 
+/**
+ * Global (cross-workspace) procedure. Session required, NO workspace
+ * context. Powers the "concourse" global shell + Mission Control, which
+ * read across every workspace the caller belongs to. READ-ONLY by
+ * convention — any write must go through a `workspaceProcedure` (the user
+ * enters a workspace first). It's `protectedProcedure` today; kept as a
+ * distinct, greppable name so the cross-workspace read surface is obvious
+ * and we can layer a hard read-only assertion here later.
+ */
+export const globalProcedure = protectedProcedure;
+
 export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   // Resolve slug → id if the caller only sent a slug. The URL segment
   // `/w/[slug]` is the source of truth for the client shell, so most
@@ -118,19 +129,30 @@ export const adminProcedure = workspaceProcedure.use(async ({ ctx, next }) => {
 
 /**
  * Instance-admin gate — for settings that are global to the whole
- * self-hosted instance rather than a single workspace (e.g. sign-in / SSO
- * providers). The instance admin is the bootstrapped operator whose email
- * matches `ADMIN_EMAIL` (the same identity `auth.ts` upserts on first
- * Credentials sign-in). Distinct from `adminProcedure`, which is a *per
- * workspace* OWNER/ADMIN check.
+ * self-hosted instance rather than a single workspace (the /admin shell:
+ * tenants, users, instance-wide runtimes, audit, system info, sign-in /
+ * SSO providers, and global AgentProfile governance). Distinct from
+ * `adminProcedure`, which is a *per workspace* OWNER/ADMIN check.
+ *
+ * Source of truth is `User.instanceRole === INSTANCE_ADMIN`. The legacy
+ * env-based `ADMIN_EMAIL` match is kept as a bootstrap fallback so the
+ * very first operator can administer the instance before their row has
+ * been stamped (auth.ts stamps it on sign-in; the backfill script stamps
+ * existing rows). `ctx.instanceRole` is injected for downstream use.
  */
 export const instanceAdminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  const user = await ctx.db.user.findUnique({
+    where: { id: ctx.session.user.id },
+    select: { instanceRole: true, email: true },
+  });
+  const isAdmin = user?.instanceRole === "INSTANCE_ADMIN";
   const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase();
-  const who = ctx.session.user?.email?.toLowerCase();
-  if (!adminEmail || !who || who !== adminEmail) {
+  const who = (user?.email ?? ctx.session.user?.email)?.toLowerCase();
+  const isBootstrap = !!adminEmail && !!who && who === adminEmail;
+  if (!isAdmin && !isBootstrap) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Instance admin required." });
   }
-  return next({ ctx });
+  return next({ ctx: { ...ctx, instanceRole: "INSTANCE_ADMIN" as const } });
 });
 
 /**

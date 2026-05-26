@@ -2,6 +2,54 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-26 — Multi-workspace restructure · Phase 1 (schema foundation)
+
+Kicked off the three-tier ownership restructure from the Claude Design
+handoff ("Forge Screens Board" + the three design chats). Full brief and
+phase plan in `docs/plans/multiws-restructure.md`. Working on branch
+`worktree-multiws-restructure`.
+
+Confirmed three architectural forks with Bailey before cutting any migration
+(all on a LIVE system — prod builds from the working tree, entrypoint
+auto-runs `migrate deploy`):
+
+1. **`Agent` row = the binding, not a rename.** Pushed back on the handoff's
+   "rename Agent → AgentProfile + new Binding table" framing — that repoints
+   every FK (`AgentRun.agentId`, `Issue.assignedAgentId`, `ChatThread.agentId`,
+   `ApiKey.linkedAgentId`, dispatch, MCP, CLI) on a live DB. Instead: keep
+   `Agent` as the per-workspace binding, add a global `AgentProfile`
+   definition it points at (`Agent.profileId`). Zero FK churn.
+2. **`profileKey` unique per owner** (`@@unique([ownerId, profileKey])`).
+3. **Connections** = model + mapping + read UI now, generic OAuth/OIDC
+   (modelled on the existing `SsoType` pattern: OIDC/GitHub/Google/Slack/
+   Custom — Authelia-style), not hardcoded vendors.
+
+**Phase 1 shipped (additive only — existing code compiles untouched):**
+- `enum InstanceRole`, `User.instanceRole` (default MEMBER).
+- `AgentProfile` (global, `ownerId`, base capabilities, `instanceShared`,
+  `disabledAt`); `Agent.profileId` + binding policy columns
+  (`autoDispatchEligible`, `engagementMode`); `@@index([profileId])`.
+- `Connection` (global, user-owned identity) + `ConnectionMapping`
+  (workspace-scoped) + `enum ConnectionProvider`/`ConnectionStatus`.
+- Migration `0069_multiws_restructure_phase1` (generated via a throwaway
+  shadow PG, replaying 0001–0068; DDL-only, no destructive ops).
+- `prisma/backfill-multiws.ts` — idempotent, **run-explicitly** data
+  backfill (NOT auto-applied on deploy): promotes ADMIN_EMAIL to
+  INSTANCE_ADMIN, creates one AgentProfile per (workspace-owner,
+  profileKey), links `Agent.profileId`, backfills `Runtime.ownerId`.
+- `instanceAdminProcedure` now checks `User.instanceRole` (DB) with the
+  `ADMIN_EMAIL` env match kept as bootstrap fallback; injects
+  `ctx.instanceRole`. `auth.ts` stamps INSTANCE_ADMIN on the bootstrap
+  operator's upsert (self-heals existing rows on next sign-in).
+
+Verified: `prisma validate` clean, `prisma format` clean, full
+`pnpm typecheck` passes, ESLint clean on touched files. Migration is safe
+to `migrate deploy`; backfill is decoupled and idempotent.
+
+Next (Phase 2): globalize `Runtime` (nullable `workspaceId`, `instanceShared`),
+split routers into `agents.profiles.*`/`agents.bindings.*`,
+`runtimes.*`/`connections.*` global+workspace, add `global.*` aggregation
+router + `globalProcedure`.
 ## 2026-05-26 — Forge MCP Orca integration contract
 
 Closed the Orca-facing MCP gaps in `src/server/services/mcp.ts`:

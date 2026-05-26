@@ -32,6 +32,37 @@ enum Role {
   GUEST
 }
 
+/// Instance-wide role, distinct from the per-workspace {@link Role}. An
+/// INSTANCE_ADMIN administers the whole self-hosted instance (tenants,
+/// users, instance-wide runtimes, audit, system info) and can create
+/// global {@link AgentProfile} rows, mark them instance-shared, and
+/// force-disable them. Everyone else is MEMBER at the instance level
+/// regardless of how many workspaces they own. Replaces the env-only
+/// `ADMIN_EMAIL` gate (kept as a bootstrap fallback in trpc.ts).
+enum InstanceRole {
+  INSTANCE_ADMIN
+  MEMBER
+}
+
+/// OAuth/identity provider kind for a {@link Connection}. Mirrors the
+/// generic-first approach of {@link SsoType}: OIDC covers any OpenID-
+/// Connect IdP (Authelia, Authentik, Keycloak, Okta, …); GITHUB / GOOGLE
+/// / SLACK are first-party shapes; CUSTOM is a freeform/manual identity.
+enum ConnectionProvider {
+  OIDC
+  GITHUB
+  GOOGLE
+  SLACK
+  CUSTOM
+}
+
+/// Health of a {@link Connection}'s stored credential.
+enum ConnectionStatus {
+  CONNECTED
+  DEGRADED
+  DISCONNECTED
+}
+
 /// Sign-in provider kind for {@link SsoProvider}. OIDC is the generic,
 /// discovery-based type that covers any OpenID-Connect IdP (Authelia,
 /// Authentik, Keycloak, Okta, Azure AD, …). GITHUB / GOOGLE are the two
@@ -433,31 +464,31 @@ enum AgentRunStatus {
 // ----------------------------------------------------------------------------
 
 model User {
-  id                     String    @id @default(cuid())
-  email                  String    @unique
-  emailVerified          DateTime?
-  name                   String?
-  handle                 String?   @unique
-  image                  String?
+  id                       String       @id @default(cuid())
+  email                    String       @unique
+  emailVerified            DateTime?
+  name                     String?
+  handle                   String?      @unique
+  image                    String?
   /// IANA timezone, e.g. "America/New_York". Null = infer from browser.
-  timezone               String?
+  timezone                 String?
   /// BCP-47 locale, e.g. "en-US". Null = infer from browser.
-  locale                 String?
+  locale                   String?
   /// "12h" | "24h". Null = infer from locale.
-  timeFormat             String?
+  timeFormat               String?
   /// "light" | "dark" | "system". Null = "system".
-  theme                  String?
+  theme                    String?
   /// "compact" | "comfortable". Null = "compact" (default, current behavior).
-  density                String?
+  density                  String?
   /// "default" | "larger". Null = "default".
-  textSize               String?
+  textSize                 String?
   /// "full" | "reduced". Null = "full" (ambient motion on). "reduced"
   /// stamps `data-motion="off"` on <html>, freezing the forge-* motion
   /// layer to its static fallbacks (independent of OS reduced-motion).
-  motion                 String?
+  motion                   String?
   /// Ambient page background. "grid" (default) | "glow" | "dots" | "none".
   /// Stamps `data-bg` on <html>; the shell mounts one fixed background layer.
-  backgroundStyle        String?
+  backgroundStyle          String?
   /// Default Mission Control tab. One of MissionControlTab values
   /// ("live" | "queue" | "agents" | "history" | "chat"). Null = "live".
   /// When set, the overlay opens to this tab if no per-workspace
@@ -465,88 +496,95 @@ model User {
   missionControlDefaultTab String?
   /// Default dashboard view — "list" or "canvas". Null = "list" (current
   /// Inbox behavior). Set when the user flips the dashboard view toggle.
-  dashboardView           String?
+  dashboardView            String?
   /// Workspace id remembered across logins; UI loads this one by default.
-  lastWorkspaceId        String?
+  lastWorkspaceId          String?
   /// Server-persisted onboarding state. Null = not dismissed; the
   /// localStorage flag (browser-scoped) controls the per-session
   /// resume-pill behavior. When set, the OnboardingCard is hidden
   /// permanently across devices.
-  onboardingDismissedAt  DateTime?
+  onboardingDismissedAt    DateTime?
   /// Steps the user has explicitly opted out of (currently only
   /// "member" / invite is skippable). Stored as string ids matching
   /// the OnboardingStep.id values.
-  onboardingSkippedSteps String[]  @default([])
+  onboardingSkippedSteps   String[]     @default([])
   /// Last time the user opened the Inbox surface. Drives "new since
   /// last visit" badging in inbox buckets — issues whose `updatedAt`
   /// is greater than this timestamp count as unread for that user.
   /// Bumped via `inbox.visit` (debounced 5s server-side).
-  lastInboxVisitAt       DateTime?
+  lastInboxVisitAt         DateTime?
   /// When true, the time-tracker shows a "pomodoro complete" toast
   /// every `pomodoroMinutes` while a timer is running. Off by default.
-  pomodoroEnabled        Boolean   @default(false)
+  pomodoroEnabled          Boolean      @default(false)
   /// Length of one pomodoro work block (minutes). 25 is canonical.
-  pomodoroMinutes        Int       @default(25)
+  pomodoroMinutes          Int          @default(25)
   /// Length of the suggested break (minutes). Surfaced in the toast
   /// copy; the timer itself isn't paused — pomodoro is a prompt, not
   /// a hard stop.
-  pomodoroBreakMinutes   Int       @default(5)
+  pomodoroBreakMinutes     Int          @default(5)
   /// Per-user dashboard layout customization. JSON shape:
   /// `{ order: string[], collapsed: string[], hidden: string[] }` keyed
   /// by widget id. Null = default layout (registry order, nothing
   /// collapsed or hidden).
-  dashboardPrefs         Json?
+  dashboardPrefs           Json?
   /// Last time the user viewed the What's New / changelog surface.
   /// Drives the "unseen entries" dot — when the latest changelog date
   /// is newer than this, the dot shows. Null = never seen.
-  changelogSeenAt        DateTime?
-  createdAt              DateTime  @default(now())
-  updatedAt              DateTime  @updatedAt
+  changelogSeenAt          DateTime?
+  /// Instance-wide role. Default MEMBER; the bootstrap operator (matching
+  /// `ADMIN_EMAIL`) is promoted to INSTANCE_ADMIN on sign-in and by the
+  /// backfill script. Gates the /admin shell and global AgentProfile
+  /// creation. See {@link InstanceRole}.
+  instanceRole             InstanceRole @default(MEMBER)
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
 
-  accounts    Account[]
-  sessions    Session[]
-  memberships Membership[]
+  accounts      Account[]
+  sessions      Session[]
+  memberships   Membership[]
+  agentProfiles AgentProfile[]
+  connections   Connection[]
 
-  authoredIssues          Issue[]             @relation("IssueAuthor")
+  authoredIssues          Issue[]                  @relation("IssueAuthor")
   assignedIssues          IssueAssignee[]
   comments                Comment[]
   auditEntries            AuditLog[]
   events                  ActivityEvent[]
   notificationStates      NotificationState[]
-  createdProjects         Project[]           @relation("ProjectCreator")
+  createdProjects         Project[]                @relation("ProjectCreator")
   apiKeys                 ApiKey[]
-  claimedIssues           Issue[]             @relation("IssueClaimedBy")
-  recurringCreated        RecurringIssue[]    @relation("RecurringCreator")
+  claimedIssues           Issue[]                  @relation("IssueClaimedBy")
+  recurringCreated        RecurringIssue[]         @relation("RecurringCreator")
   savedViews              SavedView[]
   issueSavedViews         IssueSavedView[]
   timeEntries             TimeEntry[]
   chatThreads             ChatThread[]
   runtimes                Runtime[]
-  controlRequestedRuns    AgentRun[]          @relation("AgentRunControlRequester")
+  controlRequestedRuns    AgentRun[]               @relation("AgentRunControlRequester")
   pins                    Pin[]
   recentItems             RecentItem[]
   notes                   Note[]
   issueWatches            IssueWatcher[]
-  createdArtifacts        Artifact[]          @relation("ArtifactCreator")
-  artifactVersions        ArtifactVersion[]   @relation("ArtifactVersionCreator")
-  ownedContextSets        ContextSet[]        @relation("ContextSetOwnerUser")
-  createdExecutionPlans   ExecutionPlan[]     @relation("ExecutionPlanCreator")
-  createdGoals            Goal[]              @relation("GoalCreator")
-  executionSteps          ExecutionStep[]     @relation("ExecutionStepUser")
-  requestedReviewGates    ReviewGate[]        @relation("ReviewGateRequester")
-  resolvedReviewGates     ReviewGate[]        @relation("ReviewGateResolver")
-  requestedActionRequests ActionRequest[]     @relation("ActionRequestRequester")
-  assignedActionRequests  ActionRequest[]     @relation("ActionRequestAssignee")
-  resolvedActionRequests  ActionRequest[]     @relation("ActionRequestResolver")
+  createdArtifacts        Artifact[]               @relation("ArtifactCreator")
+  artifactVersions        ArtifactVersion[]        @relation("ArtifactVersionCreator")
+  ownedContextSets        ContextSet[]             @relation("ContextSetOwnerUser")
+  createdExecutionPlans   ExecutionPlan[]          @relation("ExecutionPlanCreator")
+  createdGoals            Goal[]                   @relation("GoalCreator")
+  executionSteps          ExecutionStep[]          @relation("ExecutionStepUser")
+  requestedReviewGates    ReviewGate[]             @relation("ReviewGateRequester")
+  resolvedReviewGates     ReviewGate[]             @relation("ReviewGateResolver")
+  requestedActionRequests ActionRequest[]          @relation("ActionRequestRequester")
+  assignedActionRequests  ActionRequest[]          @relation("ActionRequestAssignee")
+  resolvedActionRequests  ActionRequest[]          @relation("ActionRequestResolver")
   actionRequestVotes      ActionRequestVote[]
   notificationPreferences NotificationPreference[]
-  createdCanvases         WorkspaceCanvas[]   @relation("WorkspaceCanvasCreator")
-  ownedCanvases           WorkspaceCanvas[]   @relation("WorkspaceCanvasOwner")
-  createdShapes           CanvasShape[]       @relation("CanvasShapeCreator")
-  createdCanvasFrames     CanvasFrame[]       @relation("CanvasFrameCreator")
-  createdCanvasGroups     CanvasGroup[]       @relation("CanvasGroupCreator")
-  createdCanvasComponents CanvasComponent[]   @relation("CanvasComponentCreator")
-  createdCanvasStyles     CanvasStyle[]       @relation("CanvasStyleCreator")
+  createdCanvases         WorkspaceCanvas[]        @relation("WorkspaceCanvasCreator")
+  ownedCanvases           WorkspaceCanvas[]        @relation("WorkspaceCanvasOwner")
+  createdShapes           CanvasShape[]            @relation("CanvasShapeCreator")
+  createdCanvasFrames     CanvasFrame[]            @relation("CanvasFrameCreator")
+  createdCanvasGroups     CanvasGroup[]            @relation("CanvasGroupCreator")
+  createdCanvasComponents CanvasComponent[]        @relation("CanvasComponentCreator")
+  createdCanvasStyles     CanvasStyle[]            @relation("CanvasStyleCreator")
 
   @@index([handle])
 }
@@ -597,13 +635,13 @@ model VerificationToken {
 /// derived from AUTH_SECRET — see `src/server/crypto.ts`); it is never
 /// returned to the client.
 model SsoProvider {
-  id           String  @id @default(cuid())
+  id           String   @id @default(cuid())
   /// Doubles as the NextAuth provider id, so the OAuth callback URL is
   /// `/api/auth/callback/<id>`. Stable for the row's lifetime.
   type         SsoType
   /// Display name + button label, e.g. "Authelia", "Company SSO".
   name         String
-  enabled      Boolean @default(false)
+  enabled      Boolean  @default(false)
   /// OIDC issuer base URL (discovery via `<issuer>/.well-known/
   /// openid-configuration`). Required for OIDC, null for GitHub/Google.
   issuer       String?
@@ -614,8 +652,8 @@ model SsoProvider {
   scopes       String?
   /// Maps to NextAuth `allowDangerousEmailAccountLinking`. Off by default —
   /// only enable when you trust the IdP to assert verified emails.
-  allowLinking Boolean @default(false)
-  sortOrder    Int     @default(0)
+  allowLinking Boolean  @default(false)
+  sortOrder    Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
@@ -625,86 +663,86 @@ model SsoProvider {
 // ----------------------------------------------------------------------------
 
 model Workspace {
-  id                            String           @id @default(cuid())
-  slug                          String           @unique
+  id                            String                  @id @default(cuid())
+  slug                          String                  @unique
   name                          String
   /// Short key used for issue identifiers: e.g. `FRG-123`.
-  key                           String           @unique
+  key                           String                  @unique
   avatarUrl                     String?
   /// Default cycle length (days). Overridable per cycle at create time.
-  cycleLengthDays               Int              @default(7)
+  cycleLengthDays               Int                     @default(7)
   /// Default rest/cooldown days between cycles (0 = back-to-back).
-  cycleCooldownDays             Int              @default(0)
+  cycleCooldownDays             Int                     @default(0)
   /// When true, the time-tracking surface is enabled for this workspace.
-  timeTrackingEnabled           Boolean          @default(false)
+  timeTrackingEnabled           Boolean                 @default(false)
   /// Soft cap on total attachment storage (MB) for this workspace.
-  attachmentQuotaMb             Int              @default(1024)
+  attachmentQuotaMb             Int                     @default(1024)
   /// Master toggle for auto-dispatching queued issues to agents.
-  autoDispatch                  Boolean          @default(false)
+  autoDispatch                  Boolean                 @default(false)
   /// Strategy used when autoDispatch is on. MANUAL_ONLY disables picking.
-  autoDispatchMode              AutoDispatchMode @default(MANUAL_ONLY)
+  autoDispatchMode              AutoDispatchMode        @default(MANUAL_ONLY)
   /// Default engagement mode for work dispatched via assignment / queue
   /// (the "you're handing it over" surface). See docs/agents/engagement-modes.md.
-  assignmentEngagementMode      EngagementMode   @default(EXECUTE)
+  assignmentEngagementMode      EngagementMode          @default(EXECUTE)
   /// How an @-mention with no explicit mode marker resolves.
   mentionEngagementPolicy       MentionEngagementPolicy @default(INFER)
   /// Fallback mode for @-mentions under FIXED policy (or when INFER yields
   /// nothing actionable). Mentions are conversational by default.
-  mentionDefaultMode            EngagementMode   @default(DISCUSS)
+  mentionDefaultMode            EngagementMode          @default(DISCUSS)
   /// When true, assigning (manually or auto) immediately pushes the agent
   /// webhook to start work; when false, the issue sits in the agent queue.
-  autoStartOnAssign             Boolean          @default(false)
+  autoStartOnAssign             Boolean                 @default(false)
   /// Heartbeat idle timeout: a heartbeat-tracked agent (Hermes, local daemon,
   /// or a health-probed app server) flips to OFFLINE once its last heartbeat
   /// is older than this window (see `sweepIdleAgents`). 0 = disabled (the
   /// agent never auto-offlines). Default 15 so true presence works out of the
   /// box — well above the 60s heartbeat/probe cadence.
-  agentIdleTimeoutMinutes       Int              @default(15)
+  agentIdleTimeoutMinutes       Int                     @default(15)
   /// Gated dispatch — assignment lands in queue but agent does not start
   /// work until a human approves.
-  requireApprovalBeforeStart    Boolean          @default(false)
+  requireApprovalBeforeStart    Boolean                 @default(false)
   /// When > 0, agents must move issues out of BACKLOG/TODO within
   /// this many minutes of assignment. Stale issues emit ISSUE_STALLED
   /// and (depending on `autoRedispatchOnStall`) get their assignedAgentId
   /// cleared so the next auto-dispatch picks them up.
-  assignmentSlaMinutes          Int              @default(0)
+  assignmentSlaMinutes          Int                     @default(0)
   /// When true, ISSUE_STALLED also clears assignedAgentId so the
   /// auto-dispatcher re-picks. When false, the event fires but the
   /// assignment is preserved (operator-driven workflow).
-  autoRedispatchOnStall         Boolean          @default(false)
+  autoRedispatchOnStall         Boolean                 @default(false)
   /// When > 0, every successful AGENT_ASSIGNED delivery starts an
   /// "ack window" — the agent must comment on or transition the
   /// issue within this many seconds, otherwise an AGENT_NOACK event
   /// fires (and the issue is re-dispatched if `autoRedispatchOnNoack`
   /// is true). 0 disables the check. 60–180s is reasonable when the
   /// agent's loop is fast.
-  requiredAckSeconds            Int              @default(0)
+  requiredAckSeconds            Int                     @default(0)
   /// When true, AGENT_NOACK also clears assignedAgentId so the
   /// auto-dispatcher re-picks. Mirrors `autoRedispatchOnStall`.
-  autoRedispatchOnNoack         Boolean          @default(false)
+  autoRedispatchOnNoack         Boolean                 @default(false)
   /// When true, the maintenance worker scans for SLA breaches every
   /// minute and emits ISSUE_SLA_BREACH events. Off by default —
   /// requires `Issue.slaMinutes` to be set per-issue, otherwise the
   /// sweep is a no-op for the row.
-  slaEnforcementEnabled         Boolean          @default(false)
+  slaEnforcementEnabled         Boolean                 @default(false)
   /// Master toggle for AI features in this workspace. Off by default.
   /// Gates AI triage on issue create AND Coach agent comments on
   /// stall/noack/breach events. Requires `ANTHROPIC_API_KEY` in env.
-  aiEnabled                     Boolean          @default(false)
+  aiEnabled                     Boolean                 @default(false)
   /// When true, every newly created issue (by a human author) kicks off
   /// a background AI triage. Null when `aiEnabled` is off.
-  aiTriageOnCreate              Boolean          @default(true)
+  aiTriageOnCreate              Boolean                 @default(true)
   /// When true, Coach agents post diagnostic comments on
   /// ISSUE_STALLED / AGENT_NOACK / ISSUE_SLA_BREACH events. The
   /// workspace must have an Agent with role=COACH for this to fire.
-  aiCoachEnabled                Boolean          @default(true)
+  aiCoachEnabled                Boolean                 @default(true)
   /// Which provider Forge talks to for AI features. Default `hermes`
   /// uses Mission-Control's pattern: an OpenAI-compatible Hermes
   /// gateway that itself fans out to Anthropic / OpenAI / etc. via the
   /// model-router plugin. Other values (`openai`, `anthropic`,
   /// `custom`) bypass Hermes and call the named provider directly.
   /// All provider URLs / keys live in env — see ai-providers.ts.
-  aiProvider                    String           @default("hermes")
+  aiProvider                    String                  @default("hermes")
   /// Optional model override. The provider supplies a sensible default
   /// (Hermes default = workspace's session model; OpenAI default =
   /// gpt-4o-mini; Anthropic default = claude-haiku-4-5-20251001).
@@ -713,7 +751,7 @@ model Workspace {
   /// as STALLED if it sees no AgentRunEvent within this many minutes.
   /// 5 is a reasonable starting point for short loops; bump for slower
   /// agents. 0 disables the sweep.
-  agentRunStaleMinutes          Int              @default(0)
+  agentRunStaleMinutes          Int                     @default(0)
   /// Optional Status row id to auto-transition into on AGENT_ASSIGNED.
   /// When set, the audit/event fan-out promotes assigned issues to this
   /// status (must be in IN_PROGRESS category, validated at write time).
@@ -725,102 +763,103 @@ model Workspace {
   /// considered "stalled" by the dashboard suggestions bucket. Settings-
   /// driven so admins can tune the workspace's idle definition without
   /// editing handler code. 0 disables the bucket.
-  stalledThresholdDays          Int              @default(7)
+  stalledThresholdDays          Int                     @default(7)
   /// Minutes since `Agent.lastHeartbeatAt` after which a PERSISTENT
   /// agent's presence row surfaces a warning chip on the agents page.
   /// EPHEMERAL agents only heartbeat while running, so the warning is
   /// suppressed for them. 0 disables the warning entirely.
-  agentHeartbeatWarnMinutes     Int              @default(5)
+  agentHeartbeatWarnMinutes     Int                     @default(5)
   /// Minutes since `Agent.lastHeartbeatAt` after which a PERSISTENT
   /// agent's presence row escalates to the critical (danger) tier.
   /// Should be > `agentHeartbeatWarnMinutes`. 0 disables critical.
-  agentHeartbeatCriticalMinutes Int              @default(30)
+  agentHeartbeatCriticalMinutes Int                     @default(30)
   /// Master toggle for the `/api/ingest/email` inbound endpoint. When
   /// off, the endpoint returns 403 even if the HMAC signature is valid.
   /// Off by default; admins flip it on in `/settings/integrations`.
-  emailIngestEnabled            Boolean          @default(false)
+  emailIngestEnabled            Boolean                 @default(false)
   /// HMAC-SHA256 shared secret for the email-ingest endpoint. Caller
   /// signs the JSON body and sends it as `x-forge-email-signature`.
   /// Null until the admin generates one; rotating it invalidates any
   /// outstanding inbound integrations.
   emailIngestSecret             String?
-  createdAt                     DateTime         @default(now())
-  updatedAt                     DateTime         @updatedAt
+  createdAt                     DateTime                @default(now())
+  updatedAt                     DateTime                @updatedAt
   deletedAt                     DateTime?
 
-  memberships        Membership[]
-  projects           Project[]
-  issues             Issue[]
-  statuses           Status[]
-  labels             Label[]
-  comments           Comment[]
-  attachments        Attachment[]
-  auditLogs          AuditLog[]
-  events             ActivityEvent[]
-  notificationStates NotificationState[]
-  plugins            Plugin[]
-  apiKeys            ApiKey[]
-  webhooks           Webhook[]
-  metrics            MetricAggregate[]
-  skills             Skill[]
-  templates          IssueTemplate[]
-  projectTemplates   ProjectTemplate[]
-  recurring          RecurringIssue[]
-  savedViews         SavedView[]
-  issueSavedViews    IssueSavedView[]
-  cycles             Cycle[]
-  initiatives        Initiative[]
-  issueRelations     IssueRelation[]
-  timeEntries        TimeEntry[]
-  agents             Agent[]
-  dispatchRules      DispatchRule[]
-  agentRuns          AgentRun[]
-  agentRunEvents     AgentRunEvent[]
-  chatThreads        ChatThread[]
-  chatMessages       ChatMessage[]
-  runtimes           Runtime[]
-  providerCredentials ProviderCredential[]
-  pins               Pin[]
-  recentItems        RecentItem[]
-  notes              Note[]
-  issueWatchers      IssueWatcher[]
-  artifacts          Artifact[]
-  artifactVersions   ArtifactVersion[]
-  contextSets        ContextSet[]
-  contextSetItems    ContextSetItem[]
-  executionPlans     ExecutionPlan[]
-  goals              Goal[]
-  executionSteps     ExecutionStep[]
-  agentCrews         AgentCrew[]
-  agentCrewMembers   AgentCrewMember[]
-  reviewGates        ReviewGate[]
-  actionRequests     ActionRequest[]
+  memberships             Membership[]
+  projects                Project[]
+  issues                  Issue[]
+  statuses                Status[]
+  labels                  Label[]
+  comments                Comment[]
+  attachments             Attachment[]
+  auditLogs               AuditLog[]
+  events                  ActivityEvent[]
+  notificationStates      NotificationState[]
+  plugins                 Plugin[]
+  apiKeys                 ApiKey[]
+  webhooks                Webhook[]
+  metrics                 MetricAggregate[]
+  skills                  Skill[]
+  templates               IssueTemplate[]
+  projectTemplates        ProjectTemplate[]
+  recurring               RecurringIssue[]
+  savedViews              SavedView[]
+  issueSavedViews         IssueSavedView[]
+  cycles                  Cycle[]
+  initiatives             Initiative[]
+  issueRelations          IssueRelation[]
+  timeEntries             TimeEntry[]
+  agents                  Agent[]
+  dispatchRules           DispatchRule[]
+  agentRuns               AgentRun[]
+  agentRunEvents          AgentRunEvent[]
+  chatThreads             ChatThread[]
+  chatMessages            ChatMessage[]
+  runtimes                Runtime[]
+  providerCredentials     ProviderCredential[]
+  connectionMappings      ConnectionMapping[]
+  pins                    Pin[]
+  recentItems             RecentItem[]
+  notes                   Note[]
+  issueWatchers           IssueWatcher[]
+  artifacts               Artifact[]
+  artifactVersions        ArtifactVersion[]
+  contextSets             ContextSet[]
+  contextSetItems         ContextSetItem[]
+  executionPlans          ExecutionPlan[]
+  goals                   Goal[]
+  executionSteps          ExecutionStep[]
+  agentCrews              AgentCrew[]
+  agentCrewMembers        AgentCrewMember[]
+  reviewGates             ReviewGate[]
+  actionRequests          ActionRequest[]
   notificationPreferences NotificationPreference[]
-  canvases            WorkspaceCanvas[]
-  canvasNodes         WorkspaceCanvasNode[]
-  canvasEdges         WorkspaceCanvasEdge[]
-  canvasShapes        CanvasShape[]
-  canvasFrames        CanvasFrame[]
-  canvasGroups        CanvasGroup[]
-  canvasComponents    CanvasComponent[]
-  canvasInstances     CanvasComponentInstance[]
-  canvasStyles        CanvasStyle[]
-  startedStatus       Status?               @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
+  canvases                WorkspaceCanvas[]
+  canvasNodes             WorkspaceCanvasNode[]
+  canvasEdges             WorkspaceCanvasEdge[]
+  canvasShapes            CanvasShape[]
+  canvasFrames            CanvasFrame[]
+  canvasGroups            CanvasGroup[]
+  canvasComponents        CanvasComponent[]
+  canvasInstances         CanvasComponentInstance[]
+  canvasStyles            CanvasStyle[]
+  startedStatus           Status?                   @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
 }
 
 model Membership {
-  id          String   @id @default(cuid())
-  userId      String
-  workspaceId String
-  role        Role     @default(MEMBER)
+  id                       String   @id @default(cuid())
+  userId                   String
+  workspaceId              String
+  role                     Role     @default(MEMBER)
   /// Per-workspace override for Mission Control's default tab. Empty
   /// (null) falls back to `User.missionControlDefaultTab`, then to
   /// "live". Lets an operator say "Chat is my default in Workspace A,
   /// Live is my default in Workspace B" without juggling global prefs.
   missionControlDefaultTab String?
-  createdAt   DateTime @default(now())
+  createdAt                DateTime @default(now())
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1154,7 +1193,7 @@ model IssueLabel {
 // ----------------------------------------------------------------------------
 
 model Comment {
-  id               String      @id @default(cuid())
+  id               String           @id @default(cuid())
   workspaceId      String
   /// Nullable since migration 0040 — a Comment hangs off EITHER an
   /// issue or an execution step, never both. The router layer keeps
@@ -1176,15 +1215,15 @@ model Comment {
   /// Null for human-session comments. SetNull on agent delete so the
   /// comment survives agent lifecycle churn.
   authoringAgentId String?
-  body             String      @db.Text
+  body             String           @db.Text
   /// BODY = normal comment (default). STATUS = the single rolling live
   /// status comment for an AgentRun, upserted via `comments.upsertStatus`.
-  kind             CommentKind @default(BODY)
+  kind             CommentKind      @default(BODY)
   /// 1:1 link to the owning AgentRun for STATUS-kind comments. Always
   /// null for BODY comments. Postgres treats NULL as distinct in unique
   /// indexes, so many BODYs can coexist while each AgentRun has at most
   /// one STATUS row.
-  runId            String?     @unique
+  runId            String?          @unique
   /// Compact step label rendered next to the live pulse (e.g. "running
   /// tests"). Null for BODY comments.
   currentStep      String?
@@ -1197,7 +1236,7 @@ model Comment {
   /// (STATUS = 50 entries, BODY = 20 entries — oldest dropped first).
   /// Defaults to `[]` so consumers can read length without null
   /// guards. Migration 0050 backfilled existing NULL rows to `[]`.
-  revisions        Json        @default("[]")
+  revisions        Json             @default("[]")
   /// Optional bag of short quick-reply chips an agent attached to the
   /// comment (added 2026-05-20, migration 0048). The thread renders
   /// these as clickable pills below the comment body when the comment
@@ -1205,7 +1244,7 @@ model Comment {
   /// thread (so old chips don't linger). Capped to 4 strings, each
   /// ≤80 chars by the create handler. Defaults to an empty array so
   /// existing rows don't need a backfill.
-  suggestedReplies String[]    @default([])
+  suggestedReplies String[]         @default([])
   /// Optional agent confidence flag (added 2026-05-20, migration 0050).
   /// Only meaningful for agent-authored comments; the UI hides the
   /// chip on human-authored rows. LOW = tentative, HIGH = verified.
@@ -1217,8 +1256,8 @@ model Comment {
   /// change, including suggestedReplies / confidence). Null = body
   /// has never been edited.
   editedAt         DateTime?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
   deletedAt        DateTime?
 
   workspace      Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1286,21 +1325,21 @@ enum AttachmentKind {
 
 /// Immutable audit log — row-level change tracking for compliance.
 model AuditLog {
-  id          String   @id @default(cuid())
-  workspaceId String
-  actorId     String?
+  id           String   @id @default(cuid())
+  workspaceId  String
+  actorId      String?
   /// When the action came through an agent-linked API key, the Agent
   /// is the recorded actor; `actorId` remains the human key-owner as
   /// secondary metadata. Null for human-driven actions.
   actorAgentId String?
-  entity      String
-  entityId    String
-  action      String
-  before      Json?
-  after       Json?
-  ip          String?
-  userAgent   String?  @db.Text
-  createdAt   DateTime @default(now())
+  entity       String
+  entityId     String
+  action       String
+  before       Json?
+  after        Json?
+  ip           String?
+  userAgent    String?  @db.Text
+  createdAt    DateTime @default(now())
 
   workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actor      User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
@@ -1314,19 +1353,19 @@ model AuditLog {
 /// Business-facing event stream. Plugins subscribe to these.
 /// Separate from AuditLog — audit is for compliance, events for product.
 model ActivityEvent {
-  id          String    @id @default(cuid())
-  workspaceId String
-  kind        EventKind
-  actorId     String?
+  id           String    @id @default(cuid())
+  workspaceId  String
+  kind         EventKind
+  actorId      String?
   /// When the action came through an agent-linked API key, the Agent
   /// is the recorded actor; `actorId` remains the human key-owner as
   /// secondary metadata. Null for human-driven / system actions.
   actorAgentId String?
   /// Primary subject reference, e.g. issueId.
-  subjectType String
-  subjectId   String
-  payload     Json
-  createdAt   DateTime  @default(now())
+  subjectType  String
+  subjectId    String
+  payload      Json
+  createdAt    DateTime  @default(now())
 
   workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actor              User?               @relation(fields: [actorId], references: [id], onDelete: SetNull)
@@ -1544,20 +1583,20 @@ model Cycle {
 
 /// Umbrella for related projects. Strategic container above Project.
 model Initiative {
-  id          String           @id @default(cuid())
-  workspaceId String
-  name        String
-  slug        String
-  description String?          @db.Text
-  targetDate  DateTime?
-  color       String?
-  status      InitiativeStatus @default(PLANNED)
-  position    Int              @default(0)
-  createdById String
+  id           String           @id @default(cuid())
+  workspaceId  String
+  name         String
+  slug         String
+  description  String?          @db.Text
+  targetDate   DateTime?
+  color        String?
+  status       InitiativeStatus @default(PLANNED)
+  position     Int              @default(0)
+  createdById  String
   /// Backlink for an initiative created via `notes.promote`.
   sourceNoteId String?
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   projects  Project[]
@@ -1652,8 +1691,16 @@ model Runtime {
   /// Stored only for ops display; the underlying ApiKey row is the
   /// source of truth.
   ownerKeyPrefix     String?
-  /// User who registered this runtime.
+  /// User who registered this runtime. The global owner — global runtime
+  /// views (Mission Control, /settings/runtimes) key off this rather than
+  /// `workspaceId`, so a host appears once across all the owner's
+  /// workspaces. `workspaceId` is retained (where the daemon first
+  /// registered) for back-compat; treat `ownerId` as the global identity.
   ownerId            String?
+  /// Instance admin can mark a runtime instance-shared so it appears in
+  /// every workspace's runtime picker (not just the owner's). Mirrors
+  /// {@link AgentProfile.instanceShared}.
+  instanceShared     Boolean         @default(false)
   archivedAt         DateTime?
   /// Soft kill-switch. When set, the runtime is "disabled": dispatch +
   /// chat refuse to dial it (the connector resolves to a sentinel that
@@ -1673,9 +1720,10 @@ model Runtime {
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  owner     User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
-  agents    Agent[]   @relation("AgentRuntime")
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  owner         User?          @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  agents        Agent[]        @relation("AgentRuntime")
+  agentProfiles AgentProfile[] @relation("AgentProfileRuntime")
 
   @@index([workspaceId, archivedAt])
   @@index([ownerId])
@@ -1711,6 +1759,79 @@ model ProviderCredential {
   @@index([workspaceId])
 }
 
+/// A global, user-owned external **identity** (OAuth / OIDC). Distinct
+/// from {@link ProviderCredential} (per-workspace AI model creds) and
+/// {@link SsoProvider} (instance sign-in). A Connection is *you* — your
+/// GitHub login, your Slack auth, your Authelia OIDC identity — defined
+/// once at the account level and *mapped* into workspaces via
+/// {@link ConnectionMapping}. The same GitHub identity can map to
+/// different repos in different workspaces (same token, different
+/// mapping). Token material is encrypted (`tokenEnc`, AES-256-GCM via
+/// crypto.ts) and never returned to clients.
+model Connection {
+  id        String             @id @default(cuid())
+  ownerId   String
+  provider  ConnectionProvider
+  /// Human label, e.g. "github.com/bailey" or "Forge · #ops".
+  label     String
+  /// Display handle of the connected account (not a secret).
+  account   String?
+  status    ConnectionStatus   @default(DISCONNECTED)
+  /// Granted scopes (display + enforcement hint).
+  scopes    String[]           @default([])
+  /// Non-secret provider config: issuer / authUrl / tokenUrl / clientId
+  /// / userinfo endpoints for OIDC and generic OAuth. Shape varies by
+  /// `provider`; validated in the connections router.
+  config    Json?
+  /// Encrypted token blob (AES-256-GCM). Null = no live token yet
+  /// (manual / pending). Redacted to `hasToken` by the router.
+  tokenEnc  String?
+  /// Last error surfaced for the connection (e.g. "token expires in 7d").
+  error     String?
+  expiresAt DateTime?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  owner    User                @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  mappings ConnectionMapping[]
+
+  @@index([ownerId])
+  @@index([provider])
+}
+
+/// Per-workspace mapping of a global {@link Connection} to a concrete
+/// target (a repo, a channel, a webhook). Identities live at the account
+/// level; workspaces decide what they map to. Read-only-cross-workspace:
+/// a mapping always carries its `workspaceId`.
+model ConnectionMapping {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  connectionId String
+  /// "repo" | "channel" | "webhook".
+  kind         String
+  /// External target: repo full name, channel name, or webhook URL.
+  target       String
+  /// "inbound" | "outbound" | "inbound+outbound".
+  direction    String   @default("inbound+outbound")
+  /// Default label ids applied to inbound work from this mapping.
+  labelIds     String[] @default([])
+  /// Where inbound events route (freeform display: "Dispatch matrix",
+  /// "Issue · auto-create", "Chat · @victor", …).
+  routeTo      String?
+  /// "active" | "paused".
+  status       String   @default("active")
+  /// Mapping-specific config (trigger filters, branch globs, …).
+  config       Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([connectionId])
+}
+
 // ----------------------------------------------------------------------------
 // Agents (MCP-first actors)
 // ----------------------------------------------------------------------------
@@ -1719,17 +1840,86 @@ model ProviderCredential {
 /// LLM profiles (e.g. `victor`, `mizu`) that authenticate via ApiKey and
 /// receive work via webhook push. `profileKey` is the stable, human-memorable
 /// handle used across Hermes and Forge (matches Hermes profile directory name).
-model Agent {
+/// Global, user-owned agent **definition**. The source of truth for an
+/// agent's identity and base capabilities, independent of any workspace.
+/// A workspace adopts a profile by creating an {@link Agent} *binding*
+/// (`Agent.profileId`) which carries per-workspace policy. `profileKey`
+/// is the stable cross-system handle (matches the Hermes profile dir);
+/// it is unique **per owner**, so two users can each own a `victor`.
+///
+/// Definitional columns (provider, runEngine, runtimeId, capabilities,
+/// avatar, webhook, template) are duplicated onto the binding during the
+/// expand/contract transition — the binding values are *effective /
+/// override*, the profile is canonical. New consumers should prefer
+/// `profile.*` and fall back to the binding's own column when
+/// `profileId` is null (un-backfilled rows).
+model AgentProfile {
   id               String           @id @default(cuid())
-  workspaceId      String
-  name             String
-  /// Stable handle for cross-system lookup. Unique per workspace.
+  /// User who owns / defined this profile.
+  ownerId          String
+  /// Stable handle, unique per owner. Maps to a Hermes profile dir name.
   profileKey       String
+  name             String
   description      String?          @db.Text
-  /// Avatar/emoji or URL — freeform. UI decides.
   avatar           String?
   provider         AgentProvider    @default(HERMES)
   runtimeMode      AgentRuntimeMode @default(PERSISTENT)
+  /// Null = use the integration's default (see adapters.ts).
+  runEngine        RunEngine?
+  /// Outbound webhook for the BYO/custom-webhook push path (override).
+  webhookUrl       String?
+  webhookSecret    String?
+  /// Global runtime that hosts this profile by default. Null = unbound.
+  runtimeId        String?
+  /// Base capability tags. Bindings inherit these and may override
+  /// (add/remove) per workspace via `Agent.capabilities`.
+  baseCapabilities String[]         @default([])
+  role             AgentRole        @default(WORKER)
+  templateMarkdown String?          @db.Text
+  /// Instance admin governance: when true the profile appears in every
+  /// workspace's bind-catalog (not just the owner's workspaces).
+  instanceShared   Boolean          @default(false)
+  /// Instance admin force-disable. When set, the profile (and all its
+  /// bindings) refuse dispatch/chat. Distinct from `archivedAt`.
+  disabledAt       DateTime?
+  archivedAt       DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  owner    User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  runtime  Runtime? @relation("AgentProfileRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
+  bindings Agent[]  @relation("AgentProfileBinding")
+
+  @@unique([ownerId, profileKey])
+  @@index([ownerId])
+  @@index([instanceShared])
+  @@index([runtimeId])
+}
+
+model Agent {
+  id                   String           @id @default(cuid())
+  workspaceId          String
+  /// The global definition this binding adopts. Nullable during the
+  /// expand/contract migration (un-backfilled rows are null); the
+  /// backfill script links each binding to a profile. Once fully
+  /// backfilled this becomes the definitional source of truth.
+  profileId            String?
+  /// Per-binding auto-dispatch eligibility. When false, the agent is
+  /// never auto-picked (manual assignment only) even if WORKER. Mirrors
+  /// the design's per-binding `autoDispatch` toggle; independent of the
+  /// workspace `autoDispatchMode`.
+  autoDispatchEligible Boolean          @default(true)
+  /// Per-binding engagement-mode override. Null = inherit the workspace
+  /// default (`Workspace.assignmentEngagementMode`).
+  engagementMode       EngagementMode?
+  name                 String
+  /// Stable handle for cross-system lookup. Unique per workspace.
+  profileKey           String
+  description          String?          @db.Text
+  /// Avatar/emoji or URL — freeform. UI decides.
+  avatar               String?
+  provider             AgentProvider    @default(HERMES)
+  runtimeMode          AgentRuntimeMode @default(PERSISTENT)
   /// Which execution engine drives this agent. Null = use the
   /// integration's default (see `adapters.ts` `defaultRunEngine`).
   /// COMPLETIONS = Forge owns the loop via OpenAI-compat
@@ -1739,7 +1929,7 @@ model Agent {
   /// streams `message.delta` + lifecycle events, native approval/stop).
   /// Dispatch (assigned work) always uses RUNS when the connector
   /// supports it; this column governs the interactive chat surface.
-  runEngine        RunEngine?
+  runEngine            RunEngine?
   /// Outbound webhook for push dispatch (issue.assigned etc) — the BYO /
   /// custom-webhook path and a per-agent OVERRIDE. As of the runtime-adapter
   /// refactor the managed Runtime owns the *runs* loop endpoint
@@ -1747,37 +1937,38 @@ model Agent {
   /// override for agents that receive push delivery (RUNS-engine agents have
   /// it suppressed — they're dispatched via the runs API). Retained, not
   /// dropped: it backs the custom-webhook agent feature.
-  webhookUrl       String?
+  webhookUrl           String?
   /// Optional HMAC secret for webhook signing; falls back to the
   /// workspace-level synthetic webhook secret when unset. Per-agent override,
   /// same status as `webhookUrl`.
-  webhookSecret    String?
+  webhookSecret        String?
   /// Runtime that hosts this agent. Null = legacy / unbound. SetNull on
   /// runtime delete so the agent row survives runtime churn.
-  runtimeId        String?
+  runtimeId            String?
   /// Free-form capability tags (e.g. "ops", "research", "code-review").
   /// Consumed by `autoDispatchMode = CAPABILITY_MATCH`.
-  capabilities     String[]         @default([])
+  capabilities         String[]         @default([])
   /// Distinguishes WORKER (claims work, default) from COACH (observes
   /// events and posts diagnostic comments) and OBSERVER (read-only).
   /// Auto-dispatch only considers WORKER agents.
-  role             AgentRole        @default(WORKER)
+  role                 AgentRole        @default(WORKER)
   /// Optional markdown template auto-applied to an issue's description on
   /// assignment, when the description is empty. Freeform (no length cap).
   /// See `src/server/services/agent-template.ts`.
-  templateMarkdown String?          @db.Text
-  status           AgentStatus      @default(OFFLINE)
-  lastHeartbeatAt  DateTime?
+  templateMarkdown     String?          @db.Text
+  status               AgentStatus      @default(OFFLINE)
+  lastHeartbeatAt      DateTime?
   /// Cap on simultaneously-claimed issues. 0 = unlimited.
-  maxConcurrent    Int              @default(1)
+  maxConcurrent        Int              @default(1)
   /// Timestamp of the last auto-dispatch assignment to this agent. Used by
   /// `AutoDispatchMode.ROUND_ROBIN` to pick the least-recent pick.
-  lastDispatchedAt DateTime?
-  archivedAt       DateTime?
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  lastDispatchedAt     DateTime?
+  archivedAt           DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
 
   workspace                Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  profile                  AgentProfile?     @relation("AgentProfileBinding", fields: [profileId], references: [id], onDelete: SetNull)
   runtime                  Runtime?          @relation("AgentRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
   assignedIssues           Issue[]           @relation("IssueAssignedAgent")
   apiKeys                  ApiKey[]          @relation("AgentApiKeys")
@@ -1803,6 +1994,7 @@ model Agent {
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
   @@index([runtimeId])
+  @@index([profileId])
 }
 
 /// Declarative routing layer consulted before the `AutoDispatchMode` logic
@@ -1956,12 +2148,12 @@ model AgentRun {
   /// when the Goal-orchestration loop opens a run for a step, so orchestrated
   /// turns are first-class observable runs (Mission Control / watchdog / cost)
   /// — not fire-and-forget webhooks. Null for direct-dispatch runs.
-  executionStepId    String?
+  executionStepId String?
   /// The engagement mode resolved for this run (AXI-53). Governs the
   /// completion contract: only EXECUTE auto-transitions the issue, is held to
   /// the SLA/watchdog "must move the issue" expectation, and enforces
   /// artifact/verification gates. See docs/agents/engagement-modes.md.
-  engagementMode     EngagementMode  @default(EXECUTE)
+  engagementMode  EngagementMode @default(EXECUTE)
 
   workspace          Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue              Issue           @relation(fields: [issueId], references: [id], onDelete: Cascade)
@@ -2035,35 +2227,35 @@ model ChatThread {
 }
 
 model ChatMessage {
-  id              String    @id @default(cuid())
-  workspaceId     String
-  threadId        String
-  role            ChatRole
-  body            String    @db.Text
-  contextSnapshot Json?
-  sourceRunId     String?
+  id                 String    @id @default(cuid())
+  workspaceId        String
+  threadId           String
+  role               ChatRole
+  body               String    @db.Text
+  contextSnapshot    Json?
+  sourceRunId        String?
   /// Set when a USER message has emitted CHAT_MESSAGE_POSTED and is safe
   /// for agent dispatch. Null means the message is still pending upload /
   /// attachment finalization, or is an agent/system message that is not
   /// dispatched to an agent.
-  dispatchedAt    DateTime?
+  dispatchedAt       DateTime?
   /// Set when the addressed agent has acknowledged this user turn via
   /// `agent.inbox.ack`. Drives the UI transition from "wake sent" →
   /// "acknowledged". Only meaningful when role = USER.
-  acknowledgedAt  DateTime?
+  acknowledgedAt     DateTime?
   /// Set when the agent's reply draft is first written (via
   /// `chat.startDraft`) or finalized in one shot. Drives the typing
   /// animation in the chat panel.
-  outputStartedAt DateTime?
+  outputStartedAt    DateTime?
   /// Worker-side: latest wake attempt timestamp regardless of HTTP
   /// success. Bumped on every WebhookDelivery for the addressed agent.
-  lastWakeAt      DateTime?
+  lastWakeAt         DateTime?
   /// Number of wake attempts the worker has made for this message.
-  wakeAttempts    Int       @default(0)
+  wakeAttempts       Int       @default(0)
   /// Optional pointer at the most recent WebhookDelivery so the
   /// diagnostics rail can link straight to the failed delivery row.
   lastWakeDeliveryId String?
-  createdAt       DateTime  @default(now())
+  createdAt          DateTime  @default(now())
 
   workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   thread    ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
@@ -2143,25 +2335,25 @@ model RecentItem {
 /// to a full Issue via `note.convertToIssue` — the source note is left
 /// in place so the user can archive it separately.
 model Note {
-  id          String     @id @default(cuid())
-  workspaceId String
-  userId      String
-  title       String?
-  body        String     @db.Text
-  pinned      Boolean    @default(false)
+  id             String     @id @default(cuid())
+  workspaceId    String
+  userId         String
+  title          String?
+  body           String     @db.Text
+  pinned         Boolean    @default(false)
   /// Variant — NOTE (scratchpad) vs JOURNAL (daily summary). JOURNAL
   /// entries are pinned to `journalDate` and unique per user per day,
   /// so `notes.todayJournal` can upsert idempotently.
-  kind        NoteKind   @default(NOTE)
+  kind           NoteKind   @default(NOTE)
   /// Lifecycle status. NOTE-kind rows default to IDEA (fresh capture);
   /// JOURNAL-kind rows default to ACTIVE since they're durable records,
   /// not pitches. Status drives dashboard zone routing and chip color.
-  status      NoteStatus @default(IDEA)
+  status         NoteStatus @default(IDEA)
   /// Calendar date for JOURNAL entries (UTC midnight, normalized in the
   /// caller's timezone). Null for NOTE rows. Unique with (workspaceId,
   /// userId) — Postgres allows multiple NULLs through a unique
   /// constraint, so NOTE rows are unaffected.
-  journalDate DateTime?
+  journalDate    DateTime?
   /// Forward link captured when `notes.promote` spins up a downstream
   /// entity from this note. `promotedToType` is one of "issue" |
   /// "project" | "initiative"; `promotedToId` references the row.
@@ -2169,9 +2361,9 @@ model Note {
   /// carries `sourceNoteId` so the link is bidirectional.
   promotedToType String?
   promotedToId   String?
-  archivedAt  DateTime?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  archivedAt     DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -2451,42 +2643,42 @@ enum ExecutionStepStatus {
 /// `contextSetId` ties the plan to a curated ContextSet so every step
 /// shares the same canonical-ref bundle.
 model ExecutionPlan {
-  id               String              @id @default(cuid())
-  workspaceId      String
-  title            String
-  description      String?             @db.Text
-  issueId          String?
-  projectId        String?
-  status           ExecutionPlanStatus @default(DRAFT)
-  createdById      String?
-  createdByAgentId String?
-  contextSetId     String?
+  id                 String              @id @default(cuid())
+  workspaceId        String
+  title              String
+  description        String?             @db.Text
+  issueId            String?
+  projectId          String?
+  status             ExecutionPlanStatus @default(DRAFT)
+  createdById        String?
+  createdByAgentId   String?
+  contextSetId       String?
   /// Optional pointer at an AgentCrew (added in Wave 7) that owns
   /// execution. SetNull on crew delete.
-  crewId           String?
+  crewId             String?
   /// Orchestration loop (migration 0051). When the plan is a decompose
   /// attempt for a Goal, `goalId` points at it. Multiple attempts per
   /// goal are allowed; only one carries `isActiveAttempt = true`.
-  goalId           String?
+  goalId             String?
   /// Per-step retry budget — how many times a FAILed judge verdict can
   /// re-dispatch a worker before the step is BLOCKED. Default 2.
-  maxStepRetries   Int                 @default(2)
+  maxStepRetries     Int                 @default(2)
   /// Budget caps mirrored from the goal (or set per-plan). When
   /// `totalCostUsd` exceeds `maxTotalCostUsd`, or wall-time exceeds
   /// `maxWallTimeMinutes`, the watchdog BLOCKs the plan + opens a gate.
-  maxTotalCostUsd  Float?
+  maxTotalCostUsd    Float?
   maxWallTimeMinutes Int?
-  totalCostUsd     Float               @default(0)
+  totalCostUsd       Float               @default(0)
   /// Marks the live decompose attempt for a goal. Prior attempts are
   /// flipped false when a new decompose runs.
-  isActiveAttempt  Boolean             @default(true)
+  isActiveAttempt    Boolean             @default(true)
   /// When true (default), a step entering REVIEW auto-dispatches a
   /// REVIEWER crew member to judge it. Opt out per-plan to require a
   /// manual `plans.judge` call.
-  autoJudge        Boolean             @default(true)
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
-  archivedAt       DateTime?
+  autoJudge          Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  archivedAt         DateTime?
 
   workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue          Issue?          @relation(fields: [issueId], references: [id], onDelete: SetNull)
@@ -2769,13 +2961,13 @@ model ActionRequest {
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
 
-  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  requestedByUser  User?     @relation("ActionRequestRequester", fields: [requestedByUserId], references: [id], onDelete: SetNull)
-  requestedByAgent Agent?    @relation("ActionRequestRequesterAgent", fields: [requestedByAgentId], references: [id], onDelete: SetNull)
-  assignedUser     User?     @relation("ActionRequestAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  assignedAgent    Agent?    @relation("ActionRequestAssigneeAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
-  resolvedByUser   User?     @relation("ActionRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
-  issue            Issue?    @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  workspace        Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requestedByUser  User?               @relation("ActionRequestRequester", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  requestedByAgent Agent?              @relation("ActionRequestRequesterAgent", fields: [requestedByAgentId], references: [id], onDelete: SetNull)
+  assignedUser     User?               @relation("ActionRequestAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignedAgent    Agent?              @relation("ActionRequestAssigneeAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  resolvedByUser   User?               @relation("ActionRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  issue            Issue?              @relation(fields: [issueId], references: [id], onDelete: SetNull)
   votes            ActionRequestVote[]
 
   @@index([workspaceId, status, createdAt])
@@ -2849,30 +3041,30 @@ model NotificationPreference {
 /// issue / project / initiative / user / workspace. Workspace-scope
 /// is the default (canvas with no anchor).
 model WorkspaceCanvas {
-  id            String     @id @default(cuid())
-  workspaceId   String
-  name          String
+  id           String     @id @default(cuid())
+  workspaceId  String
+  name         String
   /// Discriminator. Anchored canvases (PROJECT/INITIATIVE/CYCLE/ISSUE)
   /// carry `scopeType` + `scopeId`. PERSONAL = the per-user dashboard
   /// canvas (`ownerUserId` set). DESIGN = multi-page Figma-style canvas
   /// (`activePageId` tracks the currently-active top-level frame).
   /// Existing rows default to PROJECT to preserve current behavior;
   /// the kind is set explicitly at create time going forward.
-  kind          CanvasKind @default(PROJECT)
-  scopeType     String?
-  scopeId       String?
+  kind         CanvasKind @default(PROJECT)
+  scopeType    String?
+  scopeId      String?
   /// Owner for PERSONAL canvases. Null for shared / anchored canvases.
   /// Cascades on user delete (personal canvases vanish with the user).
-  ownerUserId   String?
+  ownerUserId  String?
   /// Currently-active page id for DESIGN canvases — points at a
   /// `CanvasFrame` row with `isPage = true`. Null for single-page
   /// canvases.
-  activePageId  String?
-  viewport      Json?
-  createdById   String?
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
-  archivedAt    DateTime?
+  activePageId String?
+  viewport     Json?
+  createdById  String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  archivedAt   DateTime?
 
   workspace          Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdBy          User?                     @relation("WorkspaceCanvasCreator", fields: [createdById], references: [id], onDelete: SetNull)
@@ -2897,21 +3089,21 @@ model WorkspaceCanvas {
 /// fetch time via the entity-hydration service; deleted-target rows
 /// surface as dead-ref placeholders rather than disappearing.
 model WorkspaceCanvasNode {
-  id          String   @id @default(cuid())
-  workspaceId String
-  canvasId    String
-  targetType  String
-  targetId    String
-  x           Float
-  y           Float
-  width       Float
-  height      Float
-  zIndex      Int      @default(0)
-  collapsed   Boolean  @default(false)
+  id            String    @id @default(cuid())
+  workspaceId   String
+  canvasId      String
+  targetType    String
+  targetId      String
+  x             Float
+  y             Float
+  width         Float
+  height        Float
+  zIndex        Int       @default(0)
+  collapsed     Boolean   @default(false)
   /// card | full | compact | live. Free-form string so views don't
   /// require enum migration.
-  viewMode    String?
-  meta        Json?
+  viewMode      String?
+  meta          Json?
   /// Optional parent CanvasFrame (a frame that owns this node — moves
   /// + auto-layout cascade). SetNull on frame delete so the node
   /// survives frame churn (becomes a free-floating node).
@@ -2929,8 +3121,8 @@ model WorkspaceCanvasNode {
   /// Set when the node is hidden in the layers panel. Hidden nodes are
   /// not rendered on the canvas but persist in the data model.
   hiddenAt      DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   canvas      WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
@@ -2969,46 +3161,46 @@ model WorkspaceCanvasEdge {
 /// freehand strokes) for ideation and grouping. Shapes with the same
 /// `groupId` are manipulated together.
 model CanvasShape {
-  id          String   @id @default(cuid())
-  workspaceId String
-  canvasId    String
+  id            String    @id @default(cuid())
+  workspaceId   String
+  canvasId      String
   /// box | ellipse | line | arrow | text | freehand
-  kind        String
+  kind          String
   /// Position. For bounded shapes (box/ellipse/text): x,y,width,height.
   /// For path shapes (line/arrow/freehand): start at (x,y); points
   /// stored in `path` JSON as an array of relative (dx, dy) tuples.
-  x           Float
-  y           Float
-  width       Float?
-  height      Float?
-  path        Json?
+  x             Float
+  y             Float
+  width         Float?
+  height        Float?
+  path          Json?
   /// Style. stroke, fill, strokeWidth, dasharray, fontSize, color,
   /// fontWeight, opacity. Free-form for v1; can tighten later.
-  style       Json?
+  style         Json?
   /// Optional text content for text + arrow-label shapes.
-  text        String?  @db.Text
-  zIndex      Int      @default(0)
+  text          String?   @db.Text
+  zIndex        Int       @default(0)
   /// Optional grouping. Two layers:
   ///   - Legacy `groupId` (free-form string) lets shapes share a
   ///     transient transform group without a backing row.
   ///   - `canvasGroupId` (added with the unified-workspace migration)
   ///     points at a first-class `CanvasGroup` row that can hold
   ///     mixed shape + node + frame children. New code prefers this.
-  groupId         String?
-  canvasGroupId   String?
+  groupId       String?
+  canvasGroupId String?
   /// Optional parent CanvasFrame (a frame that owns this shape — moves
   /// + auto-layout cascade). SetNull on frame delete.
-  parentFrameId   String?
+  parentFrameId String?
   /// Style references — opaque map of `{ fill?: styleId, text?: styleId,
   /// effect?: styleId }`. Applied on render.
-  styleRefs       Json?
+  styleRefs     Json?
   /// Set when the shape is locked from edits in the layers panel.
-  lockedAt        DateTime?
+  lockedAt      DateTime?
   /// Set when the shape is hidden in the layers panel.
-  hiddenAt        DateTime?
-  createdById String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  hiddenAt      DateTime?
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   canvas      WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
@@ -3036,47 +3228,47 @@ model CanvasShape {
 /// the frame moves all children; resizing the frame doesn't resize
 /// children unless `autoLayout` is set.
 model CanvasFrame {
-  id              String   @id @default(cuid())
-  workspaceId     String
-  canvasId        String
+  id             String    @id @default(cuid())
+  workspaceId    String
+  canvasId       String
   /// Nested frame parent. Null = top-level. Frames can nest arbitrarily.
-  parentFrameId   String?
+  parentFrameId  String?
   /// Display name shown in the title bar + layers panel.
-  name            String   @default("Frame")
-  x               Float
-  y               Float
-  width           Float
-  height          Float
+  name           String    @default("Frame")
+  x              Float
+  y              Float
+  width          Float
+  height         Float
   /// When true, this frame is a top-level "page" for DESIGN canvases.
   /// The active page id lives on `WorkspaceCanvas.activePageId`.
-  isPage          Boolean  @default(false)
+  isPage         Boolean   @default(false)
   /// Auto-layout config — `{ direction: "horizontal"|"vertical", gap,
   /// paddingTop, paddingRight, paddingBottom, paddingLeft, align:
   /// "start"|"center"|"end", justify: "start"|"center"|"end"|
   /// "space-between" }`. Null = free positioning.
-  autoLayout      Json?
+  autoLayout     Json?
   /// Per-frame constraints applied to children on resize: `{ horizontal:
   /// "left"|"right"|"center"|"scale", vertical: "top"|"bottom"|"center"
   /// |"scale" }`. Honored only when `autoLayout` is null.
-  constraints     Json?
+  constraints    Json?
   /// Optional background fill: `{ color?, opacity?, styleId? }`.
-  backgroundFill  Json?
-  z               Int      @default(0)
-  lockedAt        DateTime?
-  hiddenAt        DateTime?
-  createdById     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  backgroundFill Json?
+  z              Int       @default(0)
+  lockedAt       DateTime?
+  hiddenAt       DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  workspace   Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  canvas      WorkspaceCanvas       @relation(fields: [canvasId], references: [id], onDelete: Cascade)
-  parentFrame CanvasFrame?          @relation("CanvasFrameNesting", fields: [parentFrameId], references: [id], onDelete: SetNull)
-  childFrames CanvasFrame[]         @relation("CanvasFrameNesting")
-  nodes       WorkspaceCanvasNode[] @relation("CanvasFrameNodes")
-  shapes      CanvasShape[]         @relation("CanvasFrameShapes")
-  groups      CanvasGroup[]         @relation("CanvasFrameGroups")
+  workspace   Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  canvas      WorkspaceCanvas           @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  parentFrame CanvasFrame?              @relation("CanvasFrameNesting", fields: [parentFrameId], references: [id], onDelete: SetNull)
+  childFrames CanvasFrame[]             @relation("CanvasFrameNesting")
+  nodes       WorkspaceCanvasNode[]     @relation("CanvasFrameNodes")
+  shapes      CanvasShape[]             @relation("CanvasFrameShapes")
+  groups      CanvasGroup[]             @relation("CanvasFrameGroups")
   instances   CanvasComponentInstance[] @relation("CanvasFrameInstances")
-  createdBy   User?                 @relation("CanvasFrameCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?                     @relation("CanvasFrameCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([canvasId, parentFrameId, z])
   @@index([canvasId, isPage])
@@ -3125,22 +3317,22 @@ model CanvasGroup {
 /// paths still exist). "Detach instance" expands the definition into
 /// raw rows under the host frame.
 model CanvasComponent {
-  id            String    @id @default(cuid())
-  workspaceId   String
+  id          String    @id @default(cuid())
+  workspaceId String
   /// Unique per workspace — duplicates are rejected at create time.
-  name          String
-  description   String?   @db.Text
+  name        String
+  description String?   @db.Text
   /// Optional thumbnail data URL or asset key. Rendered in the
   /// components panel for drag-onto-canvas.
-  thumbnail     String?   @db.Text
+  thumbnail   String?   @db.Text
   /// Snapshot tree: `{ nodes: [...], shapes: [...], frames: [...],
   /// edges: [...], width, height }`. Opaque to the schema layer; the
   /// client renders + diffs against this.
-  definition    Json
-  createdById   String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  archivedAt    DateTime?
+  definition  Json
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  archivedAt  DateTime?
 
   workspace Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdBy User?                     @relation("CanvasComponentCreator", fields: [createdById], references: [id], onDelete: SetNull)
@@ -3156,7 +3348,7 @@ model CanvasComponent {
 /// expands the definition into raw nodes/shapes/frames and deletes
 /// this row.
 model CanvasComponentInstance {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   workspaceId   String
   canvasId      String
   componentId   String
@@ -3170,11 +3362,11 @@ model CanvasComponentInstance {
   /// e.g. `{ "nodes.0.text": "Hi", "shapes.2.style.fill": "#fff" }`.
   /// Empty = pure instance.
   overrides     Json?
-  z             Int      @default(0)
+  z             Int       @default(0)
   lockedAt      DateTime?
   hiddenAt      DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   canvas      WorkspaceCanvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
