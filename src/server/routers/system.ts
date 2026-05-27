@@ -2,7 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { router, workspaceProcedure } from "@/server/trpc";
+import { router, protectedProcedure } from "@/server/trpc";
 
 /**
  * System-wide read-only data — currently just the parsed CHANGELOG.md
@@ -137,7 +137,7 @@ function parseChangelog(raw: string): ChangelogEntry[] {
 }
 
 export const systemRouter = router({
-  changelog: workspaceProcedure
+  changelog: protectedProcedure
     .input(
       z
         .object({
@@ -154,7 +154,7 @@ export const systemRouter = router({
     }),
 
   /** Full changelog body for the `/whats-new` page renderer. */
-  changelogFull: workspaceProcedure.query(async () => {
+  changelogFull: protectedProcedure.query(async () => {
     const cache = await readChangelog();
     return { rawBody: cache.rawBody, entries: cache.entries };
   }),
@@ -165,7 +165,7 @@ export const systemRouter = router({
    * (deploy ritual); `release` is the latest curated CHANGELOG date (the
    * human-facing version); `version` is the coarse package.json major.
    */
-  buildInfo: workspaceProcedure.query(async () => {
+  buildInfo: protectedProcedure.query(async () => {
     const cache = await readChangelog();
     return {
       version: process.env.npm_package_version ?? "1.0.0",
