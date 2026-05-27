@@ -148,3 +148,4 @@ hardcoded — those should stay small regardless of Appearance.
 2. `pnpm test:e2e` (needs Postgres + Redis)
 3. Append to `DEVLOG.md`
 4. Commit; optional push.
+5. Follow `RELEASE.md` for release tagging and deploy.

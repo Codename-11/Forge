@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+          - prerelease
+      prerelease_id:
+        description: Prerelease ID (e.g., rc, beta) — only used if bump is prerelease
+        required: false
+        type: string
+        default: rc
+      dry_run:
+        description: Dry run — compute version but do not tag or release
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Compute next version
+        id: version
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          BUMP="${{ inputs.bump }}"
+          PRE_ID="${{ inputs.prerelease_id }}"
+
+          # Parse current version
+          if [[ "$CURRENT" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-([a-zA-Z0-9.]+))?(\+([a-zA-Z0-9.]+))?$ ]]; then
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+            PATCH="${BASH_REMATCH[3]}"
+            PRE="${BASH_REMATCH[5]}"
+          else
+            echo "Invalid semver: $CURRENT"
+            exit 1
+          fi
+
+          if [[ "$BUMP" == "major" ]]; then
+            NEXT="$((MAJOR + 1)).0.0"
+          elif [[ "$BUMP" == "minor" ]]; then
+            NEXT="${MAJOR}.$((MINOR + 1)).0"
+          elif [[ "$BUMP" == "patch" ]]; then
+            NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          elif [[ "$BUMP" == "prerelease" ]]; then
+            if [[ -n "$PRE" ]]; then
+              # Increment existing prerelease
+              if [[ "$PRE" =~ ^${PRE_ID}\.([0-9]+)$ ]]; then
+                NUM="${BASH_REMATCH[1]}"
+                NEXT="${MAJOR}.${MINOR}.${PATCH}-${PRE_ID}.$((NUM + 1))"
+              else
+                NEXT="${MAJOR}.${MINOR}.${PATCH}-${PRE_ID}.0"
+              fi
+            else
+              NEXT="${MAJOR}.${MINOR}.${PATCH}-${PRE_ID}.0"
+            fi
+          else
+            echo "Unknown bump: $BUMP"
+            exit 1
+          fi
+
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Current: $CURRENT → Next: $NEXT"
+
+      - name: Dry run summary
+        if: inputs.dry_run
+        run: |
+          echo "Dry run — no changes made."
+          echo "Current version: ${{ steps.version.outputs.current }}"
+          echo "Next version: ${{ steps.version.outputs.next }}"
+          echo "Tag: ${{ steps.version.outputs.tag }}"
+
+      - name: Update version
+        if: ${{ !inputs.dry_run }}
+        run: |
+          NEXT="${{ steps.version.outputs.next }}"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          # Update package.json
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '$NEXT';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+          git add package.json
+          git commit -m "release: $TAG"
+
+      - name: Push version bump
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git push origin main
+
+      - name: Create tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          PRERELEASE=""
+          if [[ "$TAG" =~ -[a-zA-Z0-9.]+$ ]]; then
+            PRERELEASE="--prerelease"
+          fi
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            $PRERELEASE \
+            --notes-start-tag "$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo '')"
