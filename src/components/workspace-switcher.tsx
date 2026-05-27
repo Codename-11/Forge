@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronsUpDown, Plus } from "lucide-react";
+import { Check, ChevronsUpDown, Plus, Sparkles } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { useChord, useHotkey } from "@/lib/keyboard";
 import { trpc } from "@/lib/trpc";
@@ -126,6 +126,24 @@ export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }
           <span className="kbd">esc</span>
         </div>
         <ul className="max-h-80 overflow-y-auto py-1">
+          <li className="border-b border-border">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                router.push("/");
+              }}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-muted-foreground hover:bg-subtle hover:text-foreground"
+            >
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded bg-ember/10">
+                <Sparkles className="h-3.5 w-3.5 text-ember" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-foreground">Mission Control</div>
+                <div className="truncate text-[0.6875rem]">All workspaces · home</div>
+              </div>
+            </button>
+          </li>
           {isLoading && (
             <li className="px-3 py-3 text-xs text-muted-foreground">Loading…</li>
           )}
