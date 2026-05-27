@@ -19,6 +19,7 @@ import {
 import { Avatar } from "@/components/ui/avatar";
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
+import { workspaceColor } from "@/lib/workspace-color";
 
 /**
  * Global "concourse" shell — the second of Forge's three shells (workspace
@@ -34,7 +35,62 @@ export interface GlobalShellWorkspace {
   slug: string;
   name: string;
   key: string;
+  avatarUrl?: string | null;
   mentions?: number;
+}
+
+/**
+ * Workspace badge: the workspace's uploaded `avatarUrl` when set, else a
+ * key-initial chip in the canonical warm-earthy `workspaceColor` (same as
+ * the workspace shell's switcher) — so chips look consistent everywhere.
+ */
+export function WorkspaceBadge({
+  ws,
+  size = 20,
+  className,
+}: {
+  ws: { key: string; name: string; avatarUrl?: string | null };
+  size?: number;
+  className?: string;
+}) {
+  if (ws.avatarUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={ws.avatarUrl}
+        alt={ws.name}
+        width={size}
+        height={size}
+        className={cn("shrink-0 rounded-md object-cover", className)}
+      />
+    );
+  }
+  const c = workspaceColor(ws.key);
+  return (
+    <span
+      aria-hidden
+      className={cn("inline-flex shrink-0 items-center justify-center rounded-md font-mono font-semibold", className)}
+      style={{
+        width: size,
+        height: size,
+        fontSize: Math.round(size * 0.42),
+        background: c.bg,
+        color: c.fg,
+        boxShadow: `inset 0 0 0 1px ${c.ring}`,
+      }}
+    >
+      {ws.key.slice(0, size >= 20 ? 2 : 1)}
+    </span>
+  );
+}
+
+/**
+ * Solid workspace chip color (the canonical warm-earthy hue), for small
+ * legacy letter-chips that render white text on a solid background.
+ * Prefer {@link WorkspaceBadge} for new code (handles avatars + ring).
+ */
+export function workspaceChipColor(key: string): string {
+  return workspaceColor(key).fg;
 }
 
 export interface GlobalShellUser {
@@ -49,14 +105,6 @@ const GLOBAL_NAV: { href: string; icon: LucideIcon; label: string; hint: string 
   { href: "/inbox", icon: Inbox, label: "Inbox", hint: "Mentions & assignments" },
   { href: "/activity", icon: Activity, label: "Activity", hint: "Live run feed" },
 ];
-
-/** Deterministic warm-palette chip color from a workspace key. */
-const CHIP_PALETTE = ["#d97757", "#3b6ea8", "#65a30d", "#9354c9", "#0d9488", "#b45309"];
-export function workspaceChipColor(key: string): string {
-  let h = 0;
-  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-  return CHIP_PALETTE[h % CHIP_PALETTE.length];
-}
 
 function ActivityPill() {
   return (
@@ -90,13 +138,7 @@ function WorkspaceSwitcherCard({ ws }: { ws: GlobalShellWorkspace }) {
       title={`Switch to ${ws.name}`}
       className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.8125rem] text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground"
     >
-      <span
-        aria-hidden
-        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[10px] font-bold text-white"
-        style={{ background: workspaceChipColor(ws.key) }}
-      >
-        {ws.key[0]}
-      </span>
+      <WorkspaceBadge ws={ws} size={20} />
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium text-foreground">{ws.name}</span>
         <span className="block truncate font-mono text-[10px] text-muted-foreground/70">{ws.key}</span>

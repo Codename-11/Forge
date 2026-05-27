@@ -27,7 +27,7 @@ export async function getGlobalShellData(): Promise<{
       memberships: {
         where: { workspace: { deletedAt: null } },
         orderBy: { createdAt: "asc" },
-        select: { workspace: { select: { id: true, slug: true, name: true, key: true } } },
+        select: { workspace: { select: { id: true, slug: true, name: true, key: true, avatarUrl: true } } },
       },
     },
   });

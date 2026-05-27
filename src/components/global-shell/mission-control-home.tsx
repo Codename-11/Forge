@@ -15,7 +15,8 @@ import {
 import { Spinner, EmptyState } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { relativeTime, cn } from "@/lib/utils";
-import { workspaceChipColor } from "./global-shell";
+import { workspaceColor } from "@/lib/workspace-color";
+import { WorkspaceBadge } from "./global-shell";
 
 /**
  * Mission Control — the cross-workspace home rendered inside the global
@@ -27,7 +28,8 @@ import { workspaceChipColor } from "./global-shell";
 
 type Workspace = { id: string; slug: string; name: string; key: string };
 
-function WsChip({ ws, dense }: { ws: Workspace; dense?: boolean }) {
+export function WsChip({ ws, dense }: { ws: Workspace; dense?: boolean }) {
+  const c = workspaceColor(ws.key);
   return (
     <span
       className={cn(
@@ -37,8 +39,8 @@ function WsChip({ ws, dense }: { ws: Workspace; dense?: boolean }) {
     >
       <span
         aria-hidden
-        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] text-[8px] font-bold text-white"
-        style={{ background: workspaceChipColor(ws.key) }}
+        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] font-mono text-[8px] font-bold"
+        style={{ background: c.bg, color: c.fg, boxShadow: `inset 0 0 0 1px ${c.ring}` }}
       >
         {ws.key[0]}
       </span>
@@ -245,13 +247,7 @@ export function MissionControlHome() {
                   href={`/w/${w.slug}`}
                   className="group flex items-center gap-2 rounded-md border border-transparent p-2 transition-colors hover:border-border hover:bg-subtle"
                 >
-                  <span
-                    aria-hidden
-                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[12px] font-bold text-white"
-                    style={{ background: workspaceChipColor(w.key) }}
-                  >
-                    {w.key[0]}
-                  </span>
+                  <WorkspaceBadge ws={w} size={28} />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
                       <span className="truncate text-[0.8125rem] font-semibold">{w.name}</span>

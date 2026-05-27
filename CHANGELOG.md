@@ -11,6 +11,8 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-05-27]
+
 ### Added
 
 - **Cross-workspace Mission Control.** A new home at `/` surfaces your work, agents,

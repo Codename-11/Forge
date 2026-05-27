@@ -14,9 +14,11 @@ import { NextResponse, type NextRequest } from "next/server";
  * Keep this active for ~6 weeks. After that we can drop it (or turn it
  * into a hard 410) once bookmarks have caught up.
  */
+// NOTE: `/inbox` is intentionally NOT here — post-restructure it's the
+// GLOBAL cross-workspace inbox (a real top-level route), not a legacy
+// alias for the workspace inbox (which lives at `/w/<slug>/inbox`).
 const LEGACY_PREFIXES = [
   "/dashboard",
-  "/inbox",
   "/issues",
   "/projects",
   "/focus",
@@ -68,7 +70,6 @@ export const config = {
   // /signin, and static assets are excluded via the matcher.
   matcher: [
     "/dashboard/:path*",
-    "/inbox/:path*",
     "/issues/:path*",
     "/projects/:path*",
     "/focus/:path*",
