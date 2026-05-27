@@ -2,6 +2,37 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-27 — Multi-workspace restructure · follow-up wave
+
+Executed `docs/plans/multiws-followup-goal.md` (agent-team spec) — the deferred/larger
+items after the core restructure shipped. Migration 0071 (`AgentProfile.requestedById`
++ `approvedAt`; `Agent.requireApprovalBeforeStart`, additive). Six lanes, parallel
+subagents, integrated centrally:
+
+- **Connections live OAuth/OIDC** — `/api/connections/[id]/authorize` + `/callback`
+  (PKCE + signed state), generic OIDC discovery + GitHub/Google/Slack, encrypted token
+  bundle + clientSecret (`config.clientSecretEnc`), `connection.refreshIfNeeded`. Global
+  connections page wired with Authorize/Re-authorize + add-connection flow. Per-connection
+  callback URL `<origin>/api/connections/<id>/callback`. Reuses AUTH_SECRET via crypto.ts.
+- **Activity dock 7-tab fidelity** — Live/Queue/Agents/History/Chat/Admin/Plans brought to
+  `screens-activity.jsx` (stat-card headers, section labels, dispatch hints, outcome words)
+  without changing data sources / keybindings / namespaces.
+- **Profile request→approve** — `agents.profiles.request` (member) / `approve` / `reject` /
+  `listPending`; `/admin/agents` pending queue; workspace catalog "Request a profile" dialog.
+  Bind catalog hides pending (unapproved) profiles; bind rejects pending.
+- **Wired admin + binding affordances** — `instanceAdmin.createTenant` / `inviteUser` /
+  `backup` (best-effort ack) behind the Overview/Users buttons; per-binding require-approval
+  toggle; connection-mapping default labels.
+- **MCP/CLI profile-awareness** — `agents.profiles.list`/`get` MCP tools, `agents.me` now
+  returns `profileId` + `instanceRole`; `forge agents --global`, `forge whoami` instanceRole.
+
+Verified: typecheck, lint, next+docs build, unit **736 passed/1 skipped** (sequential),
+e2e **17 passed** (incl. 3 new follow-up specs: admin agent-policy, connections authorize,
+Activity dock open+tab-switch). Known scope note: full OAuth round-trip + member/admin
+two-user flows are covered by the unit/integration layer rather than browser e2e (a mock
+IdP + second session would be disproportionate); backup is an acknowledgement, not a real
+dump job.
+
 ## 2026-05-26 — Multi-workspace restructure · Phase 1 (schema foundation)
 
 Kicked off the three-tier ownership restructure from the Claude Design

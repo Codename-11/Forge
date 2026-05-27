@@ -66,6 +66,7 @@ const PROVIDER_META: Record<
 
 type ConnectionRow = inferRouterOutputs<AppRouter>["connection"]["list"][number];
 type MappingRow = inferRouterOutputs<AppRouter>["connectionMapping"]["list"][number];
+type LabelRow = inferRouterOutputs<AppRouter>["label"]["list"][number];
 
 type EditingState = {
   id?: string;
@@ -74,6 +75,7 @@ type EditingState = {
   target: string;
   direction: Direction;
   routeTo: string;
+  labelIds: string[];
 };
 
 export default function ConnectionsMappingPage() {
@@ -85,6 +87,13 @@ export default function ConnectionsMappingPage() {
     trpc.connection.list.useQuery();
   const { data: mappings, isLoading: mappingsLoading } =
     trpc.connectionMapping.list.useQuery();
+  const { data: labels } = trpc.label.list.useQuery();
+
+  // Quick lookup so mapping rows can render chosen labels by id.
+  const labelById = useMemo(
+    () => new Map((labels ?? []).map((l) => [l.id, l])),
+    [labels],
+  );
 
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -158,6 +167,7 @@ export default function ConnectionsMappingPage() {
       target: "",
       direction: "inbound+outbound",
       routeTo: "",
+      labelIds: [],
     });
   }
 
@@ -169,6 +179,7 @@ export default function ConnectionsMappingPage() {
       target: row.target,
       direction: row.direction as Direction,
       routeTo: row.routeTo ?? "",
+      labelIds: row.labelIds ?? [],
     });
   }
 
@@ -183,6 +194,7 @@ export default function ConnectionsMappingPage() {
           target: editing.target.trim(),
           direction: editing.direction,
           routeTo: editing.routeTo.trim() || null,
+          labelIds: editing.labelIds,
         });
       } else {
         await create.mutateAsync({
@@ -191,6 +203,7 @@ export default function ConnectionsMappingPage() {
           target: editing.target.trim(),
           direction: editing.direction,
           routeTo: editing.routeTo.trim() || undefined,
+          labelIds: editing.labelIds,
         });
       }
       return undefined;
@@ -265,6 +278,7 @@ export default function ConnectionsMappingPage() {
               key={conn.id}
               conn={conn}
               rows={byConnection.get(conn.id) ?? []}
+              labelById={labelById}
               isAdmin={isAdmin}
               openMenuId={openMenuId}
               setOpenMenuId={setOpenMenuId}
@@ -444,6 +458,49 @@ export default function ConnectionsMappingPage() {
                 placeholder="Dispatch matrix"
               />
             </QuickForm.Field>
+            <QuickForm.Field
+              label="Default labels"
+              hint="Optional — applied to issues created from events on this mapping."
+            >
+              {(labels ?? []).length === 0 ? (
+                <p className="text-[0.6875rem] text-muted-foreground">
+                  No labels in this workspace yet.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-1">
+                  {(labels ?? []).map((l) => {
+                    const selected = editing.labelIds.includes(l.id);
+                    return (
+                      <button
+                        key={l.id}
+                        type="button"
+                        onClick={() =>
+                          setEditing({
+                            ...editing,
+                            labelIds: selected
+                              ? editing.labelIds.filter((id) => id !== l.id)
+                              : [...editing.labelIds, l.id],
+                          })
+                        }
+                        className={
+                          "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-meta transition-colors " +
+                          (selected
+                            ? "border-ember/40 bg-ember/10 text-foreground"
+                            : "border-dashed border-border bg-background text-muted-foreground")
+                        }
+                      >
+                        <span
+                          aria-hidden
+                          className="inline-block h-2 w-2 rounded-full"
+                          style={{ background: l.color }}
+                        />
+                        {l.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </QuickForm.Field>
           </>
         )}
       </QuickForm>
@@ -470,6 +527,7 @@ export default function ConnectionsMappingPage() {
 function ConnectionMappingSection({
   conn,
   rows,
+  labelById,
   isAdmin,
   openMenuId,
   setOpenMenuId,
@@ -481,6 +539,7 @@ function ConnectionMappingSection({
 }: {
   conn: ConnectionRow;
   rows: MappingRow[];
+  labelById: Map<string, LabelRow>;
   isAdmin: boolean;
   openMenuId: string | null;
   setOpenMenuId: (id: string | null) => void;
@@ -519,9 +578,31 @@ function ConnectionMappingSection({
             key={m.id}
             className="grid grid-cols-[1.4fr_0.8fr_0.7fr_0.4fr_28px] items-center gap-3 border-b border-border/60 px-4 py-3 last:border-b-0"
           >
-            <span className="flex items-center gap-2">
-              <KindIcon kind={m.kind as MappingKind} />
-              <span className="truncate font-mono text-[0.8125rem]">{m.target}</span>
+            <span className="flex min-w-0 flex-col gap-1">
+              <span className="flex items-center gap-2">
+                <KindIcon kind={m.kind as MappingKind} />
+                <span className="truncate font-mono text-[0.8125rem]">{m.target}</span>
+              </span>
+              {m.labelIds.length > 0 && (
+                <span className="flex flex-wrap items-center gap-1">
+                  {m.labelIds.map((id) => {
+                    const l = labelById.get(id);
+                    return (
+                      <span
+                        key={id}
+                        className="inline-flex items-center gap-1 rounded border border-border/60 bg-background px-1 py-0.5 text-[10px] text-muted-foreground"
+                      >
+                        <span
+                          aria-hidden
+                          className="inline-block h-1.5 w-1.5 rounded-full"
+                          style={{ background: l?.color ?? "var(--admin-border)" }}
+                        />
+                        {l?.name ?? id.slice(0, 6)}
+                      </span>
+                    );
+                  })}
+                </span>
+              )}
             </span>
             <span className="truncate text-[0.8125rem] text-muted-foreground">
               {m.routeTo || "—"}

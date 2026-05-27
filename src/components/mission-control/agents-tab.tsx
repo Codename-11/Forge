@@ -95,12 +95,46 @@ export function AgentsTab({ slug }: { slug: string }) {
     return a.name.localeCompare(b.name);
   });
 
+  // Header stats — online count + total capacity load across all agents.
+  const onlineCount = sorted.filter(
+    (a) => a.status === "ONLINE" || a.status === "BUSY",
+  ).length;
+  let loadTotal = 0;
+  let capTotal = 0;
+  let capUncapped = false;
+  for (const a of sorted) {
+    loadTotal += loadByAgent.get(a.id) ?? 0;
+    if (a.maxConcurrent > 0) capTotal += a.maxConcurrent;
+    else capUncapped = true;
+  }
+  const capValue = capUncapped
+    ? `${loadTotal}/∞`
+    : `${loadTotal}/${capTotal}`;
+
   return (
-    <div className="space-y-1.5 overflow-y-auto px-2 py-2">
+    <div className="space-y-2 overflow-y-auto px-2 py-2">
       {sorted.length === 0 && (
         <div className="px-1 py-2 text-meta text-muted-foreground">
           No agents in this workspace.
         </div>
+      )}
+      {sorted.length > 0 && (
+        <>
+          <div className="grid grid-cols-2 gap-1.5">
+            <StatCard
+              label="Online"
+              value={`${onlineCount}`}
+              sub={`of ${sorted.length} agent${sorted.length === 1 ? "" : "s"}`}
+              accent={onlineCount > 0 ? "success" : undefined}
+            />
+            <StatCard
+              label="Capacity used"
+              value={capValue}
+              sub="active / max"
+            />
+          </div>
+          <SectionLabel>Agents</SectionLabel>
+        </>
       )}
       {sorted.map((a) => {
         const load = loadByAgent.get(a.id) ?? 0;
@@ -188,6 +222,58 @@ export function AgentsTab({ slug }: { slug: string }) {
           </Link>
         );
       })}
+      {sorted.length > 0 && (
+        <Link
+          href={`/w/${slug}/agents`}
+          className="flex items-center gap-2 rounded-md border border-ember/20 bg-ember/5 px-2.5 py-1.5 text-meta text-muted-foreground hover:border-ember/40 hover:text-foreground"
+        >
+          <Bot className="h-3 w-3 shrink-0 text-ember/70" />
+          <span>New profiles are admin-gated.</span>
+          <span className="ml-auto inline-flex items-center gap-0.5 text-ember">
+            All profiles <ExternalLink className="h-2.5 w-2.5" />
+          </span>
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-1 pt-1 text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent?: "warning" | "danger" | "success";
+}) {
+  const valueTone =
+    accent === "warning"
+      ? "text-amber-600"
+      : accent === "danger"
+        ? "text-red-600"
+        : accent === "success"
+          ? "text-emerald-600"
+          : "text-foreground";
+  return (
+    <div className="flex flex-col gap-0.5 rounded-md border border-border bg-card/40 px-2 py-1.5">
+      <div className="text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className={cn("font-mono text-base leading-none tabular-nums", valueTone)}>
+        {value}
+      </div>
+      {sub && <div className="text-meta text-muted-foreground">{sub}</div>}
     </div>
   );
 }

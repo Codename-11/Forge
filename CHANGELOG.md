@@ -15,6 +15,17 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Connect external accounts (OAuth/OIDC).** Connections now do a real authorize →
+  callback flow (generic OIDC discovery plus GitHub / Google / Slack), so you can
+  **Authorize** an identity from **Settings → Connections** instead of pasting a token.
+  Tokens are encrypted and refreshed automatically near expiry.
+- **Request an agent profile.** Members can request a new agent profile from a
+  workspace's **Settings → Agents** catalog; instance admins approve or reject pending
+  requests from **/admin → Agent policy**. (Creating a profile directly still needs admin.)
+- **Per-binding "require approval"** — a workspace binding can require human approval
+  before a dispatched run starts, overriding the workspace default.
+- **Default labels on connection mappings** — inbound work from a mapped repo/channel
+  can auto-apply chosen labels.
 - **Cross-workspace Mission Control.** A new home at `/` surfaces your work, agents,
   runtimes, and live activity across every workspace you belong to — read-only, with a
   workspace chip on each row and a Slack-style workspace switcher in the rail (also in

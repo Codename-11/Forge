@@ -98,7 +98,8 @@ On start the daemon:
 
 ```bash
 forge runtimes list                  # via runtimes.list MCP; --json, --archived
-forge agents list                    # via agents.list MCP; --json, --archived, --runtime <id>
+forge agents list                    # workspace bindings via agents.list; --json, --archived, --runtime <id>
+forge agents list --global           # global AgentProfile defs via agents.profiles.list; --mine, --json, --archived
 forge issues list                    # most recent 25 issues
 forge issues list --mine             # issues assigned to your linked agent
 forge issue assign AXI-42 victor

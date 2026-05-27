@@ -46,6 +46,33 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+function ControlStatCard({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: "warning" | "danger";
+}) {
+  const valueTone =
+    accent === "warning"
+      ? "text-amber-600"
+      : accent === "danger"
+        ? "text-red-600"
+        : "text-foreground";
+  return (
+    <div className="flex flex-col gap-0.5 rounded-md border border-border bg-card/40 px-2 py-1.5">
+      <div className="text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className={cn("font-mono text-base leading-none tabular-nums", valueTone)}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
 type DeliveryItem = {
   id: string;
   status: string;
@@ -210,8 +237,28 @@ export function ControlTab({ slug: _slug }: { slug: string }) {
     { id: "DEAD_LETTER", label: "Dead" },
   ];
 
+  // Health summary cards — derived from queries already in flight; no new
+  // data wiring. "Dead" surfaces the DLQ the design's failure card calls out.
+  const deadCount = items.filter((i) => i.status === "DEAD_LETTER").length;
+  const failedCount = items.filter((i) => i.status === "FAILED").length;
+
   return (
     <div className="flex h-full flex-col overflow-y-auto">
+      {/* ---- Health summary ---- */}
+      <div className="grid grid-cols-3 gap-1.5 border-b border-border/60 px-3 py-2">
+        <ControlStatCard label="Pending" value={`${pendingItems.length}`} />
+        <ControlStatCard
+          label="Failed"
+          value={`${failedCount}`}
+          accent={failedCount > 0 ? "warning" : undefined}
+        />
+        <ControlStatCard
+          label="Dead-letter"
+          value={`${deadCount}`}
+          accent={deadCount > 0 ? "danger" : undefined}
+        />
+      </div>
+
       {/* ---- Section 1: Webhook Deliveries ---- */}
       <div className="border-b border-border/60 px-3 py-2">
         <div className="mb-2 flex items-center gap-1.5">
