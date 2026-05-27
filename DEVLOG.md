@@ -2,6 +2,25 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-27 — Release visibility & docs (v0.2.0)
+
+Post-v0.1.0 polish + docs. Relaxed `system.changelog`/`changelogFull`/`buildInfo` to
+`protectedProcedure` (data isn't tenant-specific) so they work in the global/admin shells.
+
+- **Global What's New** — `(app)/whats-new/page.tsx` + `whats-new-content.tsx` render the
+  canonical CHANGELOG grouped per release (Added/Changed/Fixed/Removed) with a Version·Title
+  heading; marks `changelogSeenAt` on mount. Reachable from Mission Control + Instance Admin
+  via the version chip. Workspace dashboard tile + `/w/[slug]/whats-new` unchanged (same source).
+- **Version chip** — `version-chip.tsx` reads `system.buildInfo`; in the global concourse +
+  admin rail footers (hover = release/SHA/build-time), links to What's New.
+- **CHANGELOG heading convention** — `## [YYYY-MM-DD] — vX.Y.Z · Title` (bracket date drives
+  the unseen dot; tail is the release name). Retrofitted v0.1.0; RELEASE.md updated.
+- **Docs** — new guides: mission-control, connections, instance-admin, agents/profiles-and-bindings
+  (registered in the VitePress sidebar).
+- **Ops** — pruned ~190 GB of Docker build cache + dangling images.
+
+Verified: typecheck, lint, next+docs build green. Released v0.2.0 via GitHub Flow.
+
 ## 2026-05-27 — Multi-workspace restructure · follow-up wave
 
 Executed `docs/plans/multiws-followup-goal.md` (agent-team spec) — the deferred/larger

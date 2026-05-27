@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { VersionChip } from "@/components/global-shell/version-chip";
 
 /**
  * Instance-admin shell — the third of Forge's three shells. Distinct
@@ -100,6 +101,7 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
           <ChevronLeft size={13} />
           <span className="flex-1">Back to Mission Control</span>
         </Link>
+        <VersionChip tone="admin" className="mt-0.5" />
       </div>
     </aside>
   );

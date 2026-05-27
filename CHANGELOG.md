@@ -11,7 +11,24 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
-## [2026-05-27]
+## [2026-05-27] — v0.2.0 · Release visibility & docs
+
+### Added
+
+- **What's New, everywhere.** A global **What's New** page (newest first, grouped
+  Added / Changed / Fixed / Removed per release) is now reachable from Mission Control
+  and Instance Admin — not just the workspace dashboard. All read the same canonical
+  `CHANGELOG.md`.
+- **Version at a glance.** The running version + build now show as a subtle chip in the
+  global "concourse" rail and the Instance Admin rail (hover for release / SHA / build
+  time), linking straight to What's New.
+
+### Changed
+
+- **Docs:** new user guides for **Mission Control**, **Connections**, **Instance Admin**,
+  and **Agent profiles & bindings** (the three-tier ownership model + request→approve).
+
+## [2026-05-27] — v0.1.0 · Multi-workspace platform
 
 ### Added
 

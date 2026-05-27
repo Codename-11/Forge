@@ -102,6 +102,7 @@ export default defineConfig({
         {
           text: "Working in Forge",
           items: [
+            { text: "Mission Control", link: "/guide/mission-control.html" },
             { text: "Inbox", link: "/guide/inbox.html" },
             { text: "Workspaces", link: "/guide/workspaces.html" },
             { text: "Today Widget", link: "/guide/today-widget.html" },
@@ -121,6 +122,8 @@ export default defineConfig({
           text: "Operating Forge",
           items: [
             { text: "Settings", link: "/guide/settings.html" },
+            { text: "Connections", link: "/guide/connections.html" },
+            { text: "Instance Admin", link: "/guide/instance-admin.html" },
             { text: "Keyboard", link: "/guide/keyboard.html" },
           ],
         },
@@ -150,6 +153,7 @@ export default defineConfig({
           items: [
             { text: "Overview", link: "/agents/overview.html" },
             { text: "Agents, Tiers & Transports", link: "/agents/providers-and-transports.html" },
+            { text: "Profiles & Bindings", link: "/agents/profiles-and-bindings.html" },
             { text: "Runtimes", link: "/agents/runtimes.html" },
             { text: "Hermes Integration", link: "/agents/hermes.html" },
             { text: "Chat & Dispatch Engines", link: "/agents/engines.html" },
