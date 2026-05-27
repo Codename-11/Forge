@@ -4376,6 +4376,7 @@ export const mcpTools = {
         select: {
           id: true,
           profileKey: true,
+          profileId: true,
           name: true,
           provider: true,
           runtimeMode: true,
@@ -4393,7 +4394,17 @@ export const mcpTools = {
       if (!agent || agent.workspaceId !== ctx.workspaceId) {
         throw new Error("Agent not found in this workspace.");
       }
-      return agent;
+      // Surface the owning user's instance role (drives /admin + global
+      // AgentProfile governance). Pulled from the API key's user so it's
+      // available to the binding-level identity call too.
+      const ownerId = ctx.apiKey?.userId ?? ctx.userId ?? null;
+      const owner = ownerId
+        ? await db.user.findUnique({
+            where: { id: ownerId },
+            select: { instanceRole: true },
+          })
+        : null;
+      return { ...agent, instanceRole: owner?.instanceRole ?? null };
     },
   },
 
@@ -4432,6 +4443,161 @@ export const mcpTools = {
           lastHeartbeatAt: true,
         },
       });
+    },
+  },
+
+  // --------------------------------------------------------------------- Agent profiles
+  // Global, user-owned agent *definitions* (`AgentProfile`) — the layer above
+  // the per-workspace `Agent` *binding* (`Agent.profileId`). `agents.list`
+  // above returns the bindings in the caller's workspace; these two tools
+  // return the global profiles the caller can see: the ones they own (keyed
+  // off the API key's user) plus instance-shared profiles published by an
+  // instance admin. Read-only — profile create/approve flows stay in the UI.
+
+  /**
+   * List the global agent profiles visible to the authenticated key's owner:
+   * profiles they own + instance-shared profiles. Approved profiles only by
+   * default (pending profiles aren't bindable). Mirrors `agents.list` shape
+   * (READ_USERS, list envelope) but reads the global `AgentProfile` table
+   * rather than the per-workspace `Agent` binding.
+   */
+  "agents.profiles.list": {
+    scopes: ["READ_USERS"] as const,
+    input: z.object({
+      includeArchived: z.boolean().default(false),
+      includePending: z
+        .boolean()
+        .default(false)
+        .describe("Include profiles awaiting instance-admin approval (approvedAt null)."),
+      mine: z
+        .boolean()
+        .default(false)
+        .describe(
+          "Only profiles owned by the key's user (exclude instance-shared profiles owned by others).",
+        ),
+    }),
+    async run(
+      input: { includeArchived: boolean; includePending: boolean; mine: boolean },
+      ctx: McpContext,
+    ) {
+      const ownerId = ctx.apiKey?.userId ?? ctx.userId ?? null;
+      const owner = ownerId
+        ? await db.user.findUnique({
+            where: { id: ownerId },
+            select: { instanceRole: true },
+          })
+        : null;
+      const ownership: Prisma.AgentProfileWhereInput =
+        input.mine || !ownerId
+          ? { ownerId: ownerId ?? "__none__" }
+          : { OR: [{ ownerId }, { instanceShared: true }] };
+      const rows = await db.agentProfile.findMany({
+        where: {
+          AND: [
+            ownership,
+            input.includeArchived ? {} : { archivedAt: null },
+            input.includePending ? {} : { approvedAt: { not: null } },
+          ],
+        },
+        orderBy: [{ profileKey: "asc" }, { name: "asc" }],
+        select: {
+          id: true,
+          ownerId: true,
+          profileKey: true,
+          name: true,
+          provider: true,
+          runEngine: true,
+          runtimeMode: true,
+          role: true,
+          baseCapabilities: true,
+          runtimeId: true,
+          instanceShared: true,
+          approvedAt: true,
+          archivedAt: true,
+          _count: { select: { bindings: true } },
+        },
+      });
+      return {
+        ...mcpListEnvelope(
+          rows.map((r) => ({ ...r, mine: ownerId != null && r.ownerId === ownerId })),
+        ),
+        // Owner identity context — drives /admin gating + global profile
+        // governance. `forge whoami` reads this to report the user's role
+        // even when the key has no linkedAgentId.
+        instanceRole: owner?.instanceRole ?? null,
+      };
+    },
+  },
+
+  /**
+   * Fetch a single global agent profile by id or `profileKey`. Resolves
+   * within the caller's visibility (owned + instance-shared). `profileKey`
+   * resolution prefers the caller's own profile (it is unique per owner).
+   */
+  "agents.profiles.get": {
+    scopes: ["READ_USERS"] as const,
+    input: z
+      .object({
+        id: z.string().min(1).max(40).optional(),
+        profileKey: z.string().min(1).max(120).optional(),
+      })
+      .refine((v) => Boolean(v.id || v.profileKey), {
+        message: "Provide either id or profileKey.",
+      }),
+    async run(input: { id?: string; profileKey?: string }, ctx: McpContext) {
+      const ownerId = ctx.apiKey?.userId ?? ctx.userId ?? null;
+      const visibility: Prisma.AgentProfileWhereInput = ownerId
+        ? { OR: [{ ownerId }, { instanceShared: true }] }
+        : { instanceShared: true };
+      const select = {
+        id: true,
+        ownerId: true,
+        profileKey: true,
+        name: true,
+        description: true,
+        avatar: true,
+        provider: true,
+        runEngine: true,
+        runtimeMode: true,
+        role: true,
+        baseCapabilities: true,
+        webhookUrl: true,
+        runtimeId: true,
+        templateMarkdown: true,
+        instanceShared: true,
+        disabledAt: true,
+        approvedAt: true,
+        archivedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        runtime: { select: { id: true, name: true, kind: true } },
+        _count: { select: { bindings: true } },
+      } satisfies Prisma.AgentProfileSelect;
+
+      let row;
+      if (input.id) {
+        row = await db.agentProfile.findFirst({
+          where: { AND: [{ id: input.id }, visibility] },
+          select,
+        });
+      } else {
+        // profileKey is unique per owner, so prefer the caller's own row,
+        // then fall back to an instance-shared profile with that key.
+        row = ownerId
+          ? await db.agentProfile.findFirst({
+              where: { ownerId, profileKey: input.profileKey! },
+              select,
+            })
+          : null;
+        if (!row) {
+          row = await db.agentProfile.findFirst({
+            where: { profileKey: input.profileKey!, instanceShared: true },
+            select,
+          });
+        }
+      }
+      if (!row) throw new Error("Agent profile not found or not visible to this key.");
+      return { ...row, mine: ownerId != null && row.ownerId === ownerId };
     },
   },
 

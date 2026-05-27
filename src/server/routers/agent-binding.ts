@@ -26,7 +26,13 @@ export const agentBindingRouter = router({
       where: {
         archivedAt: null,
         disabledAt: null,
-        OR: [{ ownerId: ctx.session.user.id }, { instanceShared: true }],
+        // Only approved profiles are bindable. A profile is approved when it
+        // wasn't requested (admin-created → requestedById null) or has been
+        // approved (approvedAt set). Pending requests are hidden from the catalog.
+        AND: [
+          { OR: [{ ownerId: ctx.session.user.id }, { instanceShared: true }] },
+          { OR: [{ requestedById: null }, { approvedAt: { not: null } }] },
+        ],
       },
       orderBy: { createdAt: "asc" },
       include: { runtime: { select: { id: true, name: true, kind: true } } },
@@ -69,6 +75,7 @@ export const agentBindingRouter = router({
         maxConcurrent: z.number().int().min(0).max(50).optional(),
         autoDispatchEligible: z.boolean().optional(),
         engagementMode: z.nativeEnum(EngagementMode).nullish(),
+        requireApprovalBeforeStart: z.boolean().optional(),
         capabilities: z.array(z.string().min(1).max(40)).optional(),
       }),
     )
@@ -77,6 +84,10 @@ export const agentBindingRouter = router({
       if (!profile || profile.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
       const shareable = profile.ownerId === ctx.session.user.id || profile.instanceShared;
       if (!shareable) throw new TRPCError({ code: "FORBIDDEN", message: "That profile isn't available to this workspace." });
+      // Pending (requested-but-unapproved) profiles can't be bound.
+      if (profile.requestedById && !profile.approvedAt) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "That profile is pending instance-admin approval." });
+      }
 
       // profileKey is unique per (workspaceId). Reuse an archived binding if present.
       const existing = await ctx.db.agent.findUnique({
@@ -105,6 +116,7 @@ export const agentBindingRouter = router({
         maxConcurrent: input.maxConcurrent ?? 1,
         autoDispatchEligible: input.autoDispatchEligible ?? true,
         engagementMode: input.engagementMode ?? null,
+        requireApprovalBeforeStart: input.requireApprovalBeforeStart ?? false,
       };
 
       const agent = existing
@@ -137,6 +149,7 @@ export const agentBindingRouter = router({
         maxConcurrent: z.number().int().min(0).max(50).optional(),
         autoDispatchEligible: z.boolean().optional(),
         engagementMode: z.nativeEnum(EngagementMode).nullish(),
+        requireApprovalBeforeStart: z.boolean().optional(),
         capabilities: z.array(z.string().min(1).max(40)).optional(),
       }),
     )

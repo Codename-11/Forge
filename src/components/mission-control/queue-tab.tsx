@@ -2,7 +2,15 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Bot, ChevronDown, Send, ExternalLink, Shield } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  Send,
+  ExternalLink,
+  Shield,
+  Inbox,
+  Workflow,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
@@ -108,14 +116,40 @@ export function QueueTab({ slug }: { slug: string }) {
   const items = queue ?? [];
   const unassignedCount = items.filter((q) => !q.assignedAgent).length;
   const blockedCount = items.filter((q) => q.unblocked === false).length;
+  // "Needs human" — unassigned with no eligible WORKER to take it. Mirrors
+  // the design's "dispatch failures" card without inventing a metric.
+  const noEligible = eligibleAgents.length === 0 ? unassignedCount : 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex-1 space-y-1.5 overflow-y-auto px-2 py-2">
+      <div className="flex-1 space-y-2 overflow-y-auto px-2 py-2">
         {items.length === 0 && (
-          <div className="px-1 py-2 text-meta text-muted-foreground">
-            Queue is empty.
+          <div className="flex flex-col items-center gap-1 px-4 py-8 text-center">
+            <Inbox className="h-5 w-5 text-muted-foreground/50" />
+            <div className="text-meta text-foreground/80">Queue is empty.</div>
+            <div className="text-meta text-muted-foreground">
+              Queued, unassigned issues land here for dispatch.
+            </div>
           </div>
+        )}
+        {items.length > 0 && (
+          <>
+            <div className="grid grid-cols-3 gap-1.5">
+              <StatCard label="In queue" value={`${items.length}`} />
+              <StatCard
+                label="Unassigned"
+                value={`${unassignedCount}`}
+                accent={unassignedCount > 0 ? "warning" : undefined}
+              />
+              <StatCard
+                label="Blocked"
+                value={`${blockedCount}`}
+                sub={noEligible > 0 ? "no eligible target" : undefined}
+                accent={blockedCount > 0 ? "danger" : undefined}
+              />
+            </div>
+            <SectionLabel>Waiting for an agent</SectionLabel>
+          </>
         )}
         {items.map((issue) => {
           const issueKey = `${(issue as unknown as { workspace?: { key: string } }).workspace?.key ?? slug.toUpperCase()}-${issue.number}`;
@@ -163,6 +197,46 @@ export function QueueTab({ slug }: { slug: string }) {
           <Send className="h-3 w-3" /> Dispatch all
         </button>
       </div>
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-1 pt-1 text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent?: "warning" | "danger" | "success";
+}) {
+  const valueTone =
+    accent === "warning"
+      ? "text-amber-600"
+      : accent === "danger"
+        ? "text-red-600"
+        : accent === "success"
+          ? "text-emerald-600"
+          : "text-foreground";
+  return (
+    <div className="flex flex-col gap-0.5 rounded-md border border-border bg-card/40 px-2 py-1.5">
+      <div className="text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className={cn("font-mono text-base leading-none tabular-nums", valueTone)}>
+        {value}
+      </div>
+      {sub && <div className="text-meta text-muted-foreground">{sub}</div>}
     </div>
   );
 }
@@ -232,6 +306,20 @@ function QueueRow({
             <ExternalLink className="h-3 w-3" />
           </Link>
         </span>
+      </div>
+      {/* Dispatch-state hint — mirrors the design's reason line without
+          inventing a matcher verdict the queue payload doesn't carry. */}
+      <div className="mt-1 flex items-center gap-1 pl-0.5 text-[0.625rem]">
+        <Workflow className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
+        {issue.assignedAgent ? (
+          <span className="font-mono text-ember">→ @{issue.assignedAgent.profileKey}</span>
+        ) : issue.blocked ? (
+          <span className="text-amber-600">blocked · waiting on dependencies</span>
+        ) : agents.length === 0 ? (
+          <span className="font-mono text-red-600">no eligible · needs human</span>
+        ) : (
+          <span className="text-muted-foreground">waiting for an agent</span>
+        )}
       </div>
       {open && !issue.assignedAgent && (
         <div className="mt-1.5 flex flex-wrap gap-1 border-t border-border/60 pt-1.5">

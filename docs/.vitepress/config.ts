@@ -12,10 +12,6 @@ export default defineConfig({
   // the apex.
   base: "/docs/",
   cleanUrls: false,
-  // Temporary agent-team goal spec for the restructure follow-up wave —
-  // self-deletes before its merge. Excluded from the published docs site
-  // (contains raw `<slug>`-style angle brackets that break the MD→Vue parse).
-  srcExclude: ["plans/multiws-followup-goal.md"],
   // Last-updated reads `git log` per page. Disabled because the Docker
   // prod builder excludes `.git` and doesn't ship git, so this would
   // fail every build. The dashboard's in-app docs viewer never shows

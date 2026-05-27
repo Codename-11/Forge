@@ -217,9 +217,35 @@ export function PlansTab({ slug }: { slug: string }) {
     );
   }
 
+  // Header stats derived purely from the live plan list already in scope —
+  // no extra queries, no fabricated cycle/initiative metrics.
+  const runningCount = plans.filter((p) => p.status === "RUNNING").length;
+  const blockedCount = plans.filter((p) => p.status === "BLOCKED").length;
+  let totalSteps = 0;
+  let doneSteps = 0;
+  for (const p of plans) {
+    const n = p._count?.steps ?? p.steps?.length ?? 0;
+    totalSteps += n;
+    doneSteps +=
+      p.doneSteps ?? (p.steps ?? []).filter((s) => s.status === "DONE").length;
+  }
+  const completionPct =
+    totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex-1 space-y-1.5 overflow-y-auto px-2 py-2">
+      <div className="flex-1 space-y-2 overflow-y-auto px-2 py-2">
+        <div className="grid grid-cols-3 gap-1.5">
+          <PlanStatCard label="Active" value={`${plans.length}`} />
+          <PlanStatCard
+            label="Running"
+            value={`${runningCount}`}
+            accent={blockedCount > 0 ? "danger" : runningCount > 0 ? "ember" : undefined}
+            sub={blockedCount > 0 ? `${blockedCount} blocked` : undefined}
+          />
+          <PlanStatCard label="Completion" value={`${completionPct}%`} />
+        </div>
+        <SectionLabel>Plans in flight</SectionLabel>
         {plans.map((p) => (
           <PlanRow
             key={p.id}
@@ -243,6 +269,44 @@ export function PlansTab({ slug }: { slug: string }) {
           All plans <ExternalLink className="h-3 w-3" />
         </Link>
       </div>
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-1 pt-1 text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
+function PlanStatCard({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent?: "ember" | "danger";
+}) {
+  const valueTone =
+    accent === "ember"
+      ? "text-ember"
+      : accent === "danger"
+        ? "text-danger"
+        : "text-foreground";
+  return (
+    <div className="flex flex-col gap-0.5 rounded-md border border-border bg-card/40 px-2 py-1.5">
+      <div className="text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className={cn("font-mono text-base leading-none tabular-nums", valueTone)}>
+        {value}
+      </div>
+      {sub && <div className="text-meta text-danger">{sub}</div>}
     </div>
   );
 }

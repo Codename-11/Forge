@@ -114,9 +114,12 @@ export function LiveTab({
           ))}
         </>
       )}
-      {(stalled.length > 0 || pinned.length > 0) && rest.length > 0 && (
-        <SectionLabel>Active</SectionLabel>
-      )}
+      {rest.length > 0 &&
+        (stalled.length > 0 || pinned.length > 0 || awaiting.length > 0 ? (
+          <SectionLabel>Active</SectionLabel>
+        ) : (
+          <SectionLabel>Running</SectionLabel>
+        ))}
       {rest.map((run) => (
         <RunRow
           key={run.id}

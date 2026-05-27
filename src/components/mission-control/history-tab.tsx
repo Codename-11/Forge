@@ -226,6 +226,12 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
                 : r.status === "STALLED"
                   ? "text-amber-500"
                   : "text-muted-foreground";
+            const outcome =
+              r.status === "COMPLETED"
+                ? "done"
+                : r.status === "STALLED"
+                  ? "stalled"
+                  : "abandoned";
             return (
               <div
                 key={r.id}
@@ -245,7 +251,10 @@ export function HistoryTab({ slug: _slug }: { slug: string }) {
                 ) : (
                   <span className="font-mono text-[0.6875rem] text-foreground/60">{issueKey}</span>
                 )}
-                <span className="ml-auto text-meta text-muted-foreground">
+                <span className={cn("ml-auto text-meta lowercase", tint)}>
+                  {outcome}
+                </span>
+                <span className="text-meta text-muted-foreground">
                   {r.finishedAt ? relativeTime(r.finishedAt) : ""}
                 </span>
               </div>

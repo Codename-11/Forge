@@ -1,9 +1,9 @@
 "use client";
 import { useState } from "react";
-import { Globe, GlobeLock, Power, PowerOff } from "lucide-react";
+import { Check, Globe, GlobeLock, Power, PowerOff, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
-import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton } from "./admin-ui";
+import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton, relTime } from "./admin-ui";
 
 /**
  * Instance agent-policy surface for `/admin/agents`. Lists global agent
@@ -16,7 +16,35 @@ import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton } from "./admi
 export function AdminAgents() {
   const utils = trpc.useUtils();
   const profiles = trpc.agents.profiles.list.useQuery();
+  const pending = trpc.agents.profiles.listPending.useQuery();
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [reviewId, setReviewId] = useState<string | null>(null);
+
+  async function invalidateAll() {
+    await Promise.all([
+      utils.agents.profiles.list.invalidate(),
+      utils.agents.profiles.listPending.invalidate(),
+    ]);
+  }
+
+  const approve = trpc.agents.profiles.approve.useMutation({
+    onMutate: (v) => setReviewId(v.id),
+    onSuccess: async () => {
+      await invalidateAll();
+      toast.success("Profile request approved.");
+    },
+    onError: (e) => toast.error(e.message),
+    onSettled: () => setReviewId(null),
+  });
+  const reject = trpc.agents.profiles.reject.useMutation({
+    onMutate: (v) => setReviewId(v.id),
+    onSuccess: async () => {
+      await invalidateAll();
+      toast.success("Profile request rejected.");
+    },
+    onError: (e) => toast.error(e.message),
+    onSettled: () => setReviewId(null),
+  });
 
   const setShared = trpc.agents.profiles.setInstanceShared.useMutation({
     onMutate: (v) => setPendingId(v.id),
@@ -43,6 +71,88 @@ export function AdminAgents() {
         Agent definitions are owned globally; instance admins decide which are shared to every workspace&apos;s
         bind-catalog and which are force-disabled across the instance.
       </div>
+      {/* Pending profile requests — members request, admins approve/reject. */}
+      {(pending.isLoading || (pending.data?.length ?? 0) > 0) && (
+        <div className="mb-6">
+          <AdminPanel
+            title="Pending requests"
+            hint={pending.data?.length ? `${pending.data.length} awaiting review` : undefined}
+          >
+            {pending.isLoading ? (
+              <AdminLoading />
+            ) : !pending.data?.length ? (
+              <AdminEmpty>No pending profile requests.</AdminEmpty>
+            ) : (
+              pending.data.map((p, i, arr) => {
+                const busy = reviewId === p.id;
+                const requester = p.requestedBy?.name ?? p.requestedBy?.email ?? "Unknown";
+                return (
+                  <div
+                    key={p.id}
+                    className="grid grid-cols-[1.6fr_1fr_0.6fr_1fr] items-center gap-2 px-4 py-2.5"
+                    style={{ borderBottom: i === arr.length - 1 ? "none" : `1px solid ${ADMIN.borderRow}` }}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span aria-hidden className="text-lg leading-none">
+                        {p.avatar ?? "🤖"}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="truncate text-[0.8125rem] font-medium" style={{ color: ADMIN.text }}>
+                          {p.name}
+                        </span>
+                        <span className="block text-[10px] font-mono" style={{ color: ADMIN.textDim }}>
+                          @{p.profileKey}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="flex min-w-0 items-center gap-1.5 text-meta" style={{ color: ADMIN.textSoft }}>
+                      <UserPlus size={11} />
+                      <span className="truncate">{requester}</span>
+                      <span style={{ color: ADMIN.textDim }}>· {relTime(p.requestedAt)}</span>
+                    </span>
+                    <span className="flex min-w-0 flex-wrap gap-1">
+                      {p.baseCapabilities.length === 0 ? (
+                        <span className="text-meta" style={{ color: ADMIN.textDim }}>
+                          no capabilities
+                        </span>
+                      ) : (
+                        p.baseCapabilities.slice(0, 4).map((c) => (
+                          <span
+                            key={c}
+                            className="rounded px-1 py-0.5 font-mono text-[10px]"
+                            style={{ background: "var(--admin-border-soft)", color: ADMIN.textSoft }}
+                          >
+                            {c}
+                          </span>
+                        ))
+                      )}
+                    </span>
+                    <span className="flex justify-end gap-1.5">
+                      <AdminButton
+                        icon={Check}
+                        tone="ember"
+                        disabled={busy}
+                        onClick={() => approve.mutate({ id: p.id })}
+                      >
+                        Approve
+                      </AdminButton>
+                      <AdminButton
+                        icon={X}
+                        tone="danger"
+                        disabled={busy}
+                        onClick={() => reject.mutate({ id: p.id })}
+                      >
+                        Reject
+                      </AdminButton>
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </AdminPanel>
+        </div>
+      )}
+
       <AdminPanel title="Agent profiles" hint={profiles.data ? `${profiles.data.length} global` : undefined}>
         <div
           className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.5fr_1.2fr] items-center gap-2 px-4 py-2 text-meta"

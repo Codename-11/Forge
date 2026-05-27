@@ -112,18 +112,24 @@ runtimes
 
 const agents = program
   .command("agents")
-  .description("Agent listing — backed by `agents.list` MCP.");
+  .description(
+    "Agent listing — workspace bindings (`agents.list`) or global profiles (`--global`, `agents.profiles.list`).",
+  );
 agents
   .command("list")
   .option("--json", "emit raw JSON instead of a table")
-  .option("--archived", "include archived agents")
-  .option("--runtime <id>", "filter to a single runtime")
+  .option("--archived", "include archived agents/profiles")
+  .option("--runtime <id>", "filter bindings to a single runtime")
+  .option("--global", "list global AgentProfile definitions instead of workspace bindings")
+  .option("--mine", "with --global: only profiles you own (exclude instance-shared)")
   .action(async (opts) => {
     try {
       await agentsListCommand({
         json: opts.json,
         archived: opts.archived,
         runtimeId: opts.runtime,
+        global: opts.global,
+        mine: opts.mine,
       });
     } catch (err) {
       console.error(chalk.red(err instanceof Error ? err.message : String(err)));

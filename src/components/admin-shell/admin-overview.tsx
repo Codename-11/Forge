@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import {
   Layers,
   Users,
@@ -10,6 +11,7 @@ import {
   Shield,
   MoreHorizontal,
 } from "lucide-react";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import {
   ADMIN,
@@ -20,6 +22,8 @@ import {
   AdminButton,
   relTime,
 } from "./admin-ui";
+import { QuickForm } from "@/components/ui/modal";
+import { Input } from "@/components/ui/input";
 
 /**
  * Instance-admin overview content. Aggregates `instanceAdmin.system`,
@@ -34,6 +38,8 @@ export function AdminOverview() {
   const users = trpc.instanceAdmin.users.useQuery();
   const runtimes = trpc.instanceAdmin.runtimes.useQuery();
   const audit = trpc.instanceAdmin.audit.useQuery({ limit: 12 });
+
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   const counts = system.data?.counts;
   const activeTenants = tenants.data?.filter((t) => t.runsLast24 > 0).length ?? 0;
@@ -191,7 +197,11 @@ export function AdminOverview() {
               ? `${counts.users} total · ${counts.admins} ${counts.admins === 1 ? "admin" : "admins"}`
               : undefined
           }
-          actions={<AdminButton icon={Plus}>Invite</AdminButton>}
+          actions={
+            <AdminButton icon={Plus} onClick={() => setInviteOpen(true)}>
+              Invite
+            </AdminButton>
+          }
         >
           <div
             className="grid grid-cols-[1.4fr_1fr_0.8fr_0.6fr_0.4fr] items-center gap-2 px-4 py-2 text-meta"
@@ -324,6 +334,89 @@ export function AdminOverview() {
         </div>
         <AdminButton icon={FileText}>License details</AdminButton>
       </div>
+
+      <InviteUserDialog open={inviteOpen} onOpenChange={setInviteOpen} />
     </div>
+  );
+}
+
+/* ── Invite-user dialog (shared shape with /admin/users) ────────────── */
+export function InviteUserDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const utils = trpc.useUtils();
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [makeAdmin, setMakeAdmin] = useState(false);
+
+  const invite = trpc.instanceAdmin.inviteUser.useMutation({
+    onSuccess: async (u) => {
+      await utils.instanceAdmin.users.invalidate();
+      await utils.instanceAdmin.system.invalidate();
+      toast.success(u.created ? `Invited ${u.email}.` : `${u.email} already existed — updated.`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Reset the form whenever the dialog opens.
+  function reset() {
+    setEmail("");
+    setName("");
+    setMakeAdmin(false);
+  }
+
+  return (
+    <QuickForm
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) reset();
+        onOpenChange(v);
+      }}
+      title="Invite user"
+      description="Pre-creates the account by email. They bind on first sign-in (Authelia owns identity). No workspace membership is added — owners add members per-workspace."
+      primaryLabel="Invite"
+      loading={invite.isPending}
+      onSubmit={async () => {
+        const trimmed = email.trim();
+        if (!trimmed) return { error: "Email required." };
+        try {
+          await invite.mutateAsync({
+            email: trimmed,
+            name: name.trim() || undefined,
+            instanceAdmin: makeAdmin,
+          });
+          reset();
+          return undefined;
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : "Failed to invite." };
+        }
+      }}
+    >
+      <QuickForm.Field label="Email" required>
+        <Input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="person@example.com"
+          autoFocus
+        />
+      </QuickForm.Field>
+      <QuickForm.Field label="Name" hint="Optional — shown until they set their own.">
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Doe" />
+      </QuickForm.Field>
+      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <input
+          type="checkbox"
+          checked={makeAdmin}
+          onChange={(e) => setMakeAdmin(e.target.checked)}
+          className="h-3.5 w-3.5 accent-[hsl(var(--ember))]"
+        />
+        Grant instance-admin access
+      </label>
+    </QuickForm>
   );
 }
