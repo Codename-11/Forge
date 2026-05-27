@@ -120,7 +120,7 @@ export function AdminOverview() {
                     </span>
                   </span>
                 </span>
-                <span className="truncate text-[0.8125rem]" style={{ color: "hsl(40 8% 80%)" }}>
+                <span className="truncate text-[0.8125rem]" style={{ color: "hsl(var(--admin-text-hi))" }}>
                   {t.owner?.name ?? t.owner?.email ?? "—"}
                 </span>
                 <span className="text-right font-mono text-[0.8125rem] tabular-nums" style={{ color: ADMIN.text }}>
@@ -285,11 +285,11 @@ export function AdminOverview() {
                 >
                   <span
                     className="inline-flex shrink-0 items-center rounded px-1 text-[9px] font-bold uppercase tracking-wider"
-                    style={{ background: "rgba(255,255,255,0.06)", color: ADMIN.textSoft }}
+                    style={{ background: "var(--admin-border)", color: ADMIN.textSoft }}
                   >
                     {e.workspace?.key ?? "—"}
                   </span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-[10.5px]" style={{ color: "hsl(40 8% 85%)" }}>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[10.5px]" style={{ color: "hsl(var(--admin-text-hi))" }}>
                     {e.kind.toLowerCase()} · {e.subjectType}
                   </span>
                   <span className="tabular-nums" style={{ color: ADMIN.textDim }}>

@@ -39,13 +39,13 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
     <aside
       className="flex h-full w-60 shrink-0 flex-col border-r"
       style={{
-        background: "linear-gradient(180deg, hsl(220 10% 14%) 0%, hsl(220 10% 11%) 100%)",
-        color: "hsl(40 8% 88%)",
-        borderColor: "rgba(255,255,255,0.08)",
+        background: "linear-gradient(180deg, hsl(var(--admin-surface)) 0%, hsl(var(--admin-bg)) 100%)",
+        color: "hsl(var(--admin-text-hi))",
+        borderColor: "var(--admin-border-strong)",
         minWidth: 240,
       }}
     >
-      <div className="px-3 pb-3 pt-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+      <div className="px-3 pb-3 pt-3" style={{ borderBottom: "1px solid var(--admin-border-strong)" }}>
         <div className="flex items-center gap-2">
           <span
             aria-hidden
@@ -55,10 +55,10 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
             <Shield size={14} />
           </span>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold tracking-tight" style={{ color: "hsl(40 12% 95%)" }}>
+            <div className="truncate text-sm font-semibold tracking-tight" style={{ color: "hsl(var(--admin-text))" }}>
               Instance admin
             </div>
-            <div className="truncate text-[10px]" style={{ color: "hsl(40 8% 65%)" }}>
+            <div className="truncate text-[10px]" style={{ color: "hsl(var(--admin-text-muted))" }}>
               {instanceUrl}
             </div>
           </div>
@@ -76,13 +76,13 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
               className="group flex items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] transition-colors"
               style={{
                 background: active ? "rgba(217,119,87,0.16)" : "transparent",
-                color: active ? "hsl(40 14% 96%)" : "hsl(40 8% 76%)",
+                color: active ? "hsl(var(--admin-text))" : "hsl(var(--admin-text-soft))",
               }}
             >
               <Ico size={13} style={{ color: active ? "hsl(var(--ember))" : "currentColor" }} />
               <span className="min-w-0 flex-1">
                 <span className="block font-medium leading-tight">{it.label}</span>
-                <span className="block text-[10px] leading-tight" style={{ color: "hsl(40 8% 58%)" }}>
+                <span className="block text-[10px] leading-tight" style={{ color: "hsl(var(--admin-text-dim))" }}>
                   {it.hint}
                 </span>
               </span>
@@ -91,11 +91,11 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
         })}
       </nav>
 
-      <div className="px-2 pb-3 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+      <div className="px-2 pb-3 pt-2" style={{ borderTop: "1px solid var(--admin-border-strong)" }}>
         <Link
           href="/"
           className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem]"
-          style={{ color: "hsl(40 8% 70%)" }}
+          style={{ color: "hsl(var(--admin-text-soft))" }}
         >
           <ChevronLeft size={13} />
           <span className="flex-1">Back to Mission Control</span>
@@ -133,18 +133,18 @@ export function AdminPage({
   const pathname = usePathname();
   const active = activePath ?? pathname ?? "/admin";
   return (
-    <div className="flex h-svh w-full overflow-hidden" style={{ background: "hsl(220 10% 12%)", color: "hsl(40 8% 88%)" }}>
+    <div className="flex h-svh w-full overflow-hidden" style={{ background: "hsl(var(--admin-bg))", color: "hsl(var(--admin-text-hi))" }}>
       <AdminSidebar activePath={active} instanceUrl={instanceUrl} />
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ background: "hsl(220 10% 14%)" }}>
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ background: "hsl(var(--admin-surface))" }}>
         <header
           className="flex h-12 shrink-0 items-center gap-3 border-b px-4"
-          style={{ background: "hsl(220 10% 16%)", borderColor: "rgba(255,255,255,0.08)", color: "hsl(40 8% 85%)" }}
+          style={{ background: "hsl(var(--admin-topbar))", borderColor: "var(--admin-border-strong)", color: "hsl(var(--admin-text-hi))" }}
         >
-          <nav className="flex items-center gap-1 text-meta" style={{ color: "hsl(40 8% 65%)" }}>
+          <nav className="flex items-center gap-1 text-meta" style={{ color: "hsl(var(--admin-text-muted))" }}>
             {crumbs.map((c, i) => (
               <span key={i} className="flex items-center gap-1">
                 {i > 0 && <ChevronRight size={11} className="opacity-60" />}
-                <span style={i === crumbs.length - 1 ? { color: "hsl(40 12% 95%)" } : undefined}>{c}</span>
+                <span style={i === crumbs.length - 1 ? { color: "hsl(var(--admin-text))" } : undefined}>{c}</span>
               </span>
             ))}
           </nav>
@@ -156,7 +156,7 @@ export function AdminPage({
             Instance scope · writes affect every tenant
           </span>
           <div className="ml-auto flex items-center gap-2">
-            <span className="text-meta" style={{ color: "hsl(40 8% 65%)" }}>
+            <span className="text-meta" style={{ color: "hsl(var(--admin-text-muted))" }}>
               v{version ?? "dev"}
               {buildSha ? ` · ${buildSha}` : ""}
             </span>
@@ -166,17 +166,17 @@ export function AdminPage({
         {title && (
           <header
             className="flex shrink-0 items-end gap-4 border-b px-8 pb-5 pt-5"
-            style={{ background: "hsl(220 10% 18%)", borderColor: "rgba(255,255,255,0.08)", color: "hsl(40 12% 95%)" }}
+            style={{ background: "hsl(var(--admin-tile))", borderColor: "var(--admin-border-strong)", color: "hsl(var(--admin-text))" }}
           >
             <div className="min-w-0 flex-1">
               {eyebrow && (
-                <div className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: "hsl(40 8% 60%)" }}>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: "hsl(var(--admin-text-dim))" }}>
                   {eyebrow}
                 </div>
               )}
               <h1 className="mt-0.5 truncate text-xl font-semibold tracking-tight">{title}</h1>
               {subtitle && (
-                <p className="mt-1 truncate text-sm" style={{ color: "hsl(40 8% 70%)" }}>
+                <p className="mt-1 truncate text-sm" style={{ color: "hsl(var(--admin-text-soft))" }}>
                   {subtitle}
                 </p>
               )}
