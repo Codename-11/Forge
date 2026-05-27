@@ -1,8 +1,9 @@
 "use client";
 
-import { PlugZap } from "lucide-react";
+import * as React from "react";
+import { PlugZap, KeyRound, RotateCw, Plus } from "lucide-react";
 import { Topbar } from "@/components/topbar";
-import { Spinner, EmptyState } from "@/components/ui";
+import { Spinner, EmptyState, Button, Input, QuickForm, toast } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
@@ -24,6 +25,14 @@ const PROVIDER_META: Record<string, { label: string; glyph: string; color: strin
   OIDC: { label: "OIDC", glyph: "ID", color: "#3b6ea8" },
   CUSTOM: { label: "Custom", glyph: "•", color: "#6b7280" },
 };
+
+const PROVIDER_OPTIONS: { value: string; label: string; needsIssuer?: boolean }[] = [
+  { value: "GITHUB", label: "GitHub" },
+  { value: "GOOGLE", label: "Google" },
+  { value: "SLACK", label: "Slack" },
+  { value: "OIDC", label: "OIDC (issuer discovery)", needsIssuer: true },
+  { value: "CUSTOM", label: "Custom OAuth", needsIssuer: true },
+];
 
 function WsChipDense({ ws }: { ws: Workspace }) {
   return (
@@ -49,14 +58,120 @@ function statusStyle(status: string) {
 }
 
 export default function ConnectionsPage() {
+  const utils = trpc.useUtils();
   const { data: connections, isLoading } = trpc.connection.list.useQuery();
+  const [addOpen, setAddOpen] = React.useState(false);
+  const [provider, setProvider] = React.useState("GITHUB");
+
+  const createM = trpc.connection.create.useMutation();
+
+  // Surface the OAuth callback result (?connection_connected / ?connection_error)
+  // as a toast, then strip the query params from the URL.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const ok = url.searchParams.get("connection_connected");
+    const err = url.searchParams.get("connection_error");
+    if (!ok && !err) return;
+    if (ok) toast({ variant: "success", title: "Connection authorized", description: ok });
+    if (err) toast({ variant: "error", title: "Authorization failed", description: err });
+    url.searchParams.delete("connection_connected");
+    url.searchParams.delete("connection_error");
+    window.history.replaceState({}, "", url.pathname + url.search);
+    void utils.connection.list.invalidate();
+  }, [utils]);
+
+  /** Create the connection, then hand the browser to the authorize route. */
+  async function handleAdd(e: React.FormEvent<HTMLFormElement>) {
+    const fd = new FormData(e.currentTarget);
+    const label = String(fd.get("label") ?? "").trim();
+    const clientId = String(fd.get("clientId") ?? "").trim();
+    const clientSecret = String(fd.get("clientSecret") ?? "").trim();
+    const issuer = String(fd.get("issuer") ?? "").trim();
+    const scopesRaw = String(fd.get("scopes") ?? "").trim();
+    if (!label || !clientId) return { error: "Label and client ID are required." };
+    const scopes = scopesRaw ? scopesRaw.split(/[\s,]+/).filter(Boolean) : [];
+    try {
+      const created = await createM.mutateAsync({
+        provider: provider as never,
+        label,
+        scopes,
+        config: {
+          clientId,
+          ...(clientSecret ? { clientSecret } : {}),
+          ...(issuer ? { issuer } : {}),
+        },
+      });
+      await utils.connection.list.invalidate();
+      setAddOpen(false);
+      // Kick off the live OAuth flow immediately.
+      window.location.href = `/api/connections/${created.id}/authorize`;
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Could not create connection." };
+    }
+  }
+
+  const needsIssuer = PROVIDER_OPTIONS.find((p) => p.value === provider)?.needsIssuer;
 
   return (
     <>
       <Topbar
         title="Connections"
         subtitle="OAuth identities you've authorized. These belong to you, not a workspace — workspaces map channels, repos, and webhooks onto them."
+        actions={
+          <Button size="sm" variant="subtle" onClick={() => setAddOpen(true)}>
+            <Plus className="h-3.5 w-3.5" /> Add connection
+          </Button>
+        }
       />
+
+      <QuickForm
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        title="Add connection"
+        description="Register an OAuth/OIDC client, then authorize it. The client secret is encrypted at rest and never shown again."
+        primaryLabel="Create & authorize"
+        onSubmit={handleAdd}
+        loading={createM.isPending}
+      >
+        <label className="block text-meta text-muted-foreground">
+          Provider
+          <select
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+            className="focus-ring mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+          >
+            {PROVIDER_OPTIONS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-meta text-muted-foreground">
+          Label
+          <Input name="label" placeholder="github.com/bailey" className="mt-1" autoFocus />
+        </label>
+        {needsIssuer && (
+          <label className="block text-meta text-muted-foreground">
+            Issuer URL (OIDC discovery)
+            <Input name="issuer" placeholder="https://auth.example.com" className="mt-1" />
+          </label>
+        )}
+        <label className="block text-meta text-muted-foreground">
+          Client ID
+          <Input name="clientId" placeholder="client id" className="mt-1 font-mono" />
+        </label>
+        <label className="block text-meta text-muted-foreground">
+          Client secret <span className="opacity-60">(optional for public/PKCE clients)</span>
+          <Input name="clientSecret" type="password" placeholder="••••••••" className="mt-1 font-mono" />
+        </label>
+        <label className="block text-meta text-muted-foreground">
+          Scopes <span className="opacity-60">(space or comma separated)</span>
+          <Input name="scopes" placeholder="openid email profile" className="mt-1 font-mono" />
+        </label>
+      </QuickForm>
+
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-3 p-6">
           {isLoading ? (
@@ -117,6 +232,20 @@ export default function ConnectionsPage() {
                         </div>
                       )}
                     </div>
+                    <a
+                      href={`/api/connections/${cn.id}/authorize`}
+                      className="focus-ring inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-subtle px-2 text-xs font-medium text-foreground hover:bg-muted"
+                    >
+                      {cn.status === "CONNECTED" ? (
+                        <>
+                          <RotateCw className="h-3.5 w-3.5" /> Re-authorize
+                        </>
+                      ) : (
+                        <>
+                          <KeyRound className="h-3.5 w-3.5" /> Authorize
+                        </>
+                      )}
+                    </a>
                   </header>
 
                   {cn.mappings.length > 0 ? (

@@ -25,6 +25,7 @@ import { EmptyState } from "@/components/settings/empty-state";
 import { Section } from "@/components/ui";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { trpc } from "@/lib/trpc";
+import { RequestProfileDialog } from "./request-profile-dialog";
 
 /**
  * Workspace · Agents — the **binding** surface.
@@ -60,6 +61,7 @@ export default function AgentsBindingPage() {
     agentId: string;
     name: string;
   } | null>(null);
+  const [requestOpen, setRequestOpen] = useState(false);
 
   function invalidate() {
     void utils.agents.bindings.list.invalidate();
@@ -256,20 +258,36 @@ export default function AgentsBindingPage() {
                   .
                 </div>
               )}
-              <Link
-                href="/settings/agents"
-                className="flex items-center gap-2 border-t border-border/60 p-3 text-[0.8125rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
-              >
-                <Plus className="h-3 w-3" />
-                Define a new profile globally
-                <span className="ml-auto rounded border border-ember/30 bg-ember/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-ember">
-                  requires instance admin
-                </span>
-              </Link>
+              {isAdmin ? (
+                <Link
+                  href="/settings/agents"
+                  className="flex items-center gap-2 border-t border-border/60 p-3 text-[0.8125rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
+                >
+                  <Plus className="h-3 w-3" />
+                  Define a new profile globally
+                  <span className="ml-auto rounded border border-ember/30 bg-ember/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-ember">
+                    requires instance admin
+                  </span>
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setRequestOpen(true)}
+                  className="flex w-full items-center gap-2 border-t border-border/60 p-3 text-left text-[0.8125rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
+                >
+                  <Plus className="h-3 w-3" />
+                  Request a profile
+                  <span className="ml-auto rounded border border-border/70 bg-card/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
+                    needs admin approval
+                  </span>
+                </button>
+              )}
             </Card>
           </Section>
         </div>
       </div>
+
+      <RequestProfileDialog open={requestOpen} onOpenChange={setRequestOpen} />
 
       <Confirm
         open={!!unbindTarget}
@@ -362,6 +380,7 @@ function BoundAgentRow({
     maxConcurrent?: number;
     autoDispatchEligible?: boolean;
     engagementMode?: EngagementMode | null;
+    requireApprovalBeforeStart?: boolean;
     capabilities?: string[];
   }) => void;
   onUnbind: () => void;
@@ -519,17 +538,44 @@ function BoundAgentRow({
           </div>
         </PolicyField>
 
+        {/* Per-binding require-approval gate. Lane B: wired to
+            agents.bindings.setPolicy({ requireApprovalBeforeStart }) —
+            the field rides on the binding (Agent) row from bindings.list.
+            For workspace-wide / rule-level approval policy, see the
+            dispatch-rules page linked under the toggle. */}
         <PolicyField
           label="Require approval"
-          hint="Gate before run starts — workspace-wide"
+          hint="Gate this agent before a run starts"
         >
           <div className="flex h-8 items-center">
-            <Link
-              href={`/w/${slug}/settings/dispatch-rules`}
-              className="text-[0.8125rem] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+            <button
+              type="button"
+              role="switch"
+              aria-checked={agent.requireApprovalBeforeStart}
+              aria-label="Toggle require-approval before start"
+              disabled={!isAdmin || saving}
+              onClick={() =>
+                onSavePolicy({
+                  requireApprovalBeforeStart: !agent.requireApprovalBeforeStart,
+                })
+              }
+              className={
+                "focus-ring inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 " +
+                (agent.requireApprovalBeforeStart ? "bg-ember" : "bg-subtle")
+              }
             >
-              Dispatch policy →
-            </Link>
+              <span
+                className={
+                  "inline-block h-3 w-3 rounded-full bg-background transition-transform " +
+                  (agent.requireApprovalBeforeStart
+                    ? "translate-x-3.5"
+                    : "translate-x-0.5")
+                }
+              />
+            </button>
+            <span className="ml-2 text-[0.8125rem] text-muted-foreground">
+              {agent.requireApprovalBeforeStart ? "approval required" : "auto-start"}
+            </span>
           </div>
         </PolicyField>
 

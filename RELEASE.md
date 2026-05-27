@@ -1,198 +1,82 @@
 # Forge Release Workflow
 
-> Canonical release policy for Forge (PM). Lane B — Platform/Service Deploy per [Axiom Delivery Workflows](https://github.com/Codename-11/forge/blob/main/RELEASE.md).
+> Canonical release policy for Forge. **GitHub Flow** — one long-lived branch
+> (`main`), short-lived feature branches, ship continuously to the single
+> self-hosted instance.
 
 ## Branch Model
 
 ```
-main              ← production deploy branch; always deployable; tagged releases cut from here
-dev               ← integration/staging branch; feature PRs target this
-feat/*            ← feature branches from dev
-fix/*             ← bugfix branches from dev (or main for hotfixes)
-chore/*           ← maintenance branches from dev
-docs/*            ← documentation branches from dev
-release/vX.Y      ← release preparation branches (optional, for major releases)
+main      ← the only long-lived branch; always deployable AND deployed; releases tagged here
+feat/*    ← short-lived feature branches from main → PR → squash-merge → main
+fix/*     ← bugfix branches from main
+chore/*   ← maintenance branches from main
+docs/*    ← documentation branches from main
 ```
 
 **Rules:**
-- `main` is sacred — it must always be deployable. No direct pushes.
-- All work lands via PR. No exceptions, even for repo owners.
-- Feature branches are short-lived — open the PR within 24–48 hours of branching.
-- Delete merged branches immediately.
+- `main` is always deployable. Every merge to `main` can ship.
+- Work lands via PR (review surface for humans + agents). Branch protection isn't
+  available on this plan, so this is convention — keep it anyway.
+- Branches are short-lived — open the PR within a day or two of branching; delete
+  merged branches immediately.
+- No long-lived `dev`/`staging` branch. Reintroduce one only if/when a separate
+  **staging deploy target** exists (then: `feat/* → PR → dev (staging) → PR → main (prod)`).
 
 ## Versioning
 
-[Semantic Versioning 2.0.0](https://semver.org/):
+[Semantic Versioning 2.0.0](https://semver.org/). Pre-1.0 (`0.x`): MINOR is the
+"feature" bump, PATCH is fixes; breaking changes are allowed within `0.x`.
 
 | Bump | When |
 |------|------|
-| **MAJOR** (`X.0.0`) | Breaking API changes, schema migrations requiring operator action, or significant UX rewrites |
-| **MINOR** (`x.Y.0`) | New features, new MCP tools, new UI surfaces, additive schema changes |
-| **PATCH** (`x.y.Z`) | Bug fixes, performance improvements, security patches, docs corrections |
+| **MAJOR** (`X.0.0`) | (post-1.0) breaking API/schema/UX changes |
+| **MINOR** (`x.Y.0`) | New features, MCP tools, UI surfaces, additive schema |
+| **PATCH** (`x.y.Z`) | Bug fixes, perf, security, docs |
 
-Pre-release versions: `v1.2.0-rc.1`, `v1.2.0-rc.2`, etc.
-
-## Release Types
-
-### Stable Release (`vX.Y.Z`)
-
-Cut from `main` after `dev` has been validated.
-
-```
-dev  →  PR →  main  →  tag vX.Y.Z  →  deploy  →  smoke
-```
-
-### Pre-release / RC (`vX.Y.Z-rc.N`)
-
-Cut from `dev` to stage-test before merging to `main`.
-
-```
-dev  →  tag vX.Y.Z-rc.N  →  deploy to staging  →  validate  →  PR dev→main  →  tag vX.Y.Z
-```
-
-RCs are **optional** for Forge. Use them when:
-- A release contains risky migrations or architectural changes
-- You want external/agent validation before production deploy
-- You're preparing a public announcement and want a stable target
-
-For routine patches and small features, skip the RC — merge `dev` → `main` and tag directly.
-
-### Hotfix
-
-For production bugs that can't wait for the next scheduled release.
-
-```
-main  →  branch fix/critical-bug  →  PR →  main  →  tag vX.Y.Z+1  →  deploy
-                ↓
-               merge main back into dev
-```
+`package.json` `version` must match the tag you cut.
 
 ## Release Process
 
-### 1. Prepare
+### 1. Land the work
+- Open a PR `feat/* → main`. CI (`.github/workflows/ci.yml`: lint · typecheck · unit ·
+  Playwright e2e) must be green. **Squash-merge** with a clean message.
+- Update `CHANGELOG.md` under a dated `## [YYYY-MM-DD]` heading (this is the in-app
+  What's New source). Bump `package.json` `version`.
 
-- Ensure all intended work is merged to `dev`
-- `pnpm lint && pnpm typecheck && pnpm test` passes locally
-- `CHANGELOG.md` is updated with the pending release section (this is the app-facing What's New source)
-- Version in `package.json` matches the intended tag
+> CI note: GitHub-hosted Actions require billing to be enabled. If Actions are
+> unavailable, gate the release on the equivalent local run
+> (`pnpm lint && pnpm typecheck && pnpm test` + `pnpm test:e2e` against the
+> `docker/docker-compose.yml` stack) and record that in the release notes.
 
-### 2. Validate (optional RC)
-
-If doing an RC:
-```bash
-git checkout dev
-git pull origin dev
-# Tag and push RC
-git tag v1.2.0-rc.1
-git push origin v1.2.0-rc.1
-```
-Deploy the RC tag to staging and run smoke tests.
-
-### 3. Merge to Main
-
-```bash
-# Open a PR: dev → main
-gh pr create --base main --head dev --title "release: v1.2.0" --body-file .github/release-pr-template.md
-```
-
-Wait for CI to pass, then **squash merge** with a clean commit message:
-```
-release: v1.2.0
-
-- Multi-workspace restructure (AXI-58)
-- Agent engagement modes (AXI-53)
-- Inbox + activity notifications
-```
-
-### 4. Tag the Release
-
+### 2. Tag the release
 ```bash
 git checkout main && git pull origin main
-git tag v1.2.0
-git push origin v1.2.0
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
+(Or trigger `.github/workflows/release.yml` — manual version bump + tag + GitHub Release —
+once Actions billing is restored.)
 
-Or use the GitHub UI: Releases → Draft → choose tag → auto-generate notes.
-
-### 5. Deploy
-
+### 3. Deploy (Docker-Server)
+Prod builds the working tree at `main`, stamped with the commit:
 ```bash
-# On Docker-Server
+cd /home/bailey/forge && git checkout main && git pull
 cd ~/docker/forge
-docker compose pull  # if using registry build
-docker compose up -d
-# Or rebuild from source:
-cd ~/forge && git checkout v1.2.0
-cd ~/docker/forge && docker compose up -d --build
+GIT_SHA=$(git -C /home/bailey/forge rev-parse --short HEAD) \
+BUILD_TIME=$(date -u +%FT%TZ) docker compose build forge forge-worker
+docker compose up -d                  # entrypoint runs `prisma migrate deploy`
+# run any one-time data backfill explicitly (prod image has no tsx — copy a .cjs + `node`)
 ```
 
-### 6. Smoke Test
+### 4. Smoke test
+`forge.axiom-labs.dev` loads · sign-in works · core flows (issue create, agent dispatch,
+MCP health) · `system.buildInfo` reports the deployed SHA · `docker compose logs forge`
+clean.
 
-- `forge.axiom-labs.dev` loads
-- Login works
-- Core flows: issue create, agent dispatch, MCP health
-- Check `docker logs forge-app` for errors
+### 5. Close the loop
+Update `DEVLOG.md`; mark issues done; note state in the project log if it changed.
 
-### 7. Close the Loop
-
-- Mark Forge issues as done
-- Update `DEVLOG.md`
-- Update Obsidian project note if state changed
-- Announce in `#hermes-agent` if material
-
-## Changelog Policy
-
-Forge maintains **two changelog surfaces**:
-
-1. **`CHANGELOG.md`** (repo root) — **App-facing What's New source.** Date-based entries (`[2026-05-27]`), read by the dashboard's What's New rail at request time. Update this as features ship on `dev`.
-2. **GitHub Release notes** — **Semver release history.** Auto-generated from PRs when a tag is pushed. These are the canonical release notes for operators and external consumers.
-
-Do not confuse the two. `CHANGELOG.md` is for users inside the app; GitHub Releases are for the repo's release page and deploy tracking.
-
-## Worktree Guidance
-
-Use a git worktree when:
-- Working on a feature while `dev` has unmerged changes
-- Running a long-running experiment or migration test
-- An agent needs an isolated checkout for parallel work
-
-```bash
-cd ~/forge
-git worktree add ../forge-feature-name -b feat/feature-name origin/dev
-cd ../forge-feature-name
-# ... work, commit, push, PR to dev ...
-```
-
-Clean up after merge:
-```bash
-cd ~/forge
-git worktree remove forge-feature-name
-git branch -D feat/feature-name
-```
-
-## CI/CD Integration
-
-- **PR to `dev` or `main`**: lint, typecheck, unit tests, Playwright E2E
-- **Merge to `main`**: same + optional deploy trigger (future)
-- **Tag push (`v*` )**: Docker image build + GitHub Release creation
-
-See `.github/workflows/ci.yml` and `.github/workflows/release.yml`.
-
-## Rollback
-
-If a release is bad:
-
-```bash
-# Immediate: revert to previous tag
-cd ~/docker/forge
-git -C ~/forge checkout v1.1.9  # previous stable
-docker compose up -d --build
-
-# Then: fix forward on dev, re-release
-```
-
-## Related
-
-- [Axiom Delivery Workflows](~/obsidian-vault/3. System/Operations/Axiom Delivery Workflows.md)
-- [Development Standards](~/obsidian-vault/3. System/Operations/Development Standards.md)
-- [Forge Project Note](~/obsidian-vault/3. System/Projects/Forge/Forge.md)
+## Hotfix
+Same as a normal change — branch `fix/*` from `main`, PR, squash-merge, tag a PATCH,
+deploy. (No back-merge needed; `main` is the only long-lived branch.)
+</content>

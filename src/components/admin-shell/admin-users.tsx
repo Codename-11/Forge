@@ -1,9 +1,10 @@
 "use client";
 import { useState } from "react";
-import { ShieldPlus, ShieldMinus } from "lucide-react";
+import { ShieldPlus, ShieldMinus, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton, relTime } from "./admin-ui";
+import { InviteUserDialog } from "./admin-overview";
 
 /**
  * Users table for `/admin/users` with an inline instance-role control
@@ -15,6 +16,7 @@ export function AdminUsers() {
   const utils = trpc.useUtils();
   const users = trpc.instanceAdmin.users.useQuery();
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   const setRole = trpc.instanceAdmin.setInstanceRole.useMutation({
     onMutate: (vars) => setPendingId(vars.userId),
@@ -45,6 +47,11 @@ export function AdminUsers() {
           users.data
             ? `${users.data.length} total · ${adminCount} ${adminCount === 1 ? "admin" : "admins"}`
             : undefined
+        }
+        actions={
+          <AdminButton icon={Plus} tone="ember" onClick={() => setInviteOpen(true)}>
+            Invite
+          </AdminButton>
         }
       >
         <div
@@ -127,6 +134,7 @@ export function AdminUsers() {
           })
         )}
       </AdminPanel>
+      <InviteUserDialog open={inviteOpen} onOpenChange={setInviteOpen} />
     </div>
   );
 }

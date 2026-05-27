@@ -119,6 +119,84 @@ export const agentProfileRouter = router({
     return { ...p, ownedByMe: p.ownerId === ctx.session.user.id, recentRuns };
   }),
 
+  /** Pending profile requests awaiting approval. INSTANCE_ADMIN only. */
+  listPending: instanceAdminProcedure.query(async ({ ctx }) => {
+    const profiles = await ctx.db.agentProfile.findMany({
+      where: { archivedAt: null, approvedAt: null, requestedById: { not: null } },
+      orderBy: { createdAt: "desc" },
+      include: {
+        runtime: { select: { id: true, name: true, kind: true } },
+        requestedBy: { select: { id: true, name: true, email: true, image: true } },
+      },
+    });
+    return profiles.map((p) => ({ ...p, requestedAt: p.createdAt }));
+  }),
+
+  /**
+   * Member-initiated profile request. Any signed-in user creates a PENDING
+   * profile (`requestedById` = caller, `approvedAt` = null). Not bindable
+   * until an instance admin approves. Owner defaults to the requester so the
+   * per-owner unique key constraint applies to their own requests.
+   */
+  request: protectedProcedure
+    .input(
+      z.object({
+        profileKey: profileKeySchema,
+        name: z.string().min(1).max(80),
+        description: z.string().max(2000).optional(),
+        avatar: z.string().max(2048).optional(),
+        provider: z.nativeEnum(AgentProvider).default(AgentProvider.HERMES),
+        runEngine: z.nativeEnum(RunEngine).nullish(),
+        baseCapabilities: z.array(z.string().min(1).max(40)).default([]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const ownerId = ctx.session.user.id;
+      const dupe = await ctx.db.agentProfile.findUnique({
+        where: { ownerId_profileKey: { ownerId, profileKey: input.profileKey } },
+        select: { id: true },
+      });
+      if (dupe) throw new TRPCError({ code: "CONFLICT", message: "You already have a profile with this key." });
+      return ctx.db.agentProfile.create({
+        data: {
+          ...input,
+          ownerId,
+          requestedById: ownerId,
+          approvedAt: null,
+        },
+      });
+    }),
+
+  /** Instance admin: approve a pending profile request. */
+  approve: instanceAdminProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const p = await ctx.db.agentProfile.findUnique({
+        where: { id: input.id },
+        select: { id: true, approvedAt: true },
+      });
+      if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
+      return ctx.db.agentProfile.update({
+        where: { id: input.id },
+        data: { approvedAt: new Date(), disabledAt: null },
+      });
+    }),
+
+  /** Instance admin: reject (archive) a pending profile request. */
+  reject: instanceAdminProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const p = await ctx.db.agentProfile.findUnique({
+        where: { id: input.id },
+        select: { id: true },
+      });
+      if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
+      return ctx.db.agentProfile.update({
+        where: { id: input.id },
+        data: { archivedAt: new Date() },
+      });
+    }),
+
   /** Create a new global profile. INSTANCE_ADMIN only. Owner defaults to the creator. */
   create: instanceAdminProcedure
     .input(
@@ -146,7 +224,8 @@ export const agentProfileRouter = router({
       });
       if (dupe) throw new TRPCError({ code: "CONFLICT", message: "That owner already has a profile with this key." });
       const { ownerId: _drop, ...rest } = input;
-      return ctx.db.agentProfile.create({ data: { ...rest, ownerId } });
+      // Admin-created profiles are pre-approved (requestedById stays null).
+      return ctx.db.agentProfile.create({ data: { ...rest, ownerId, approvedAt: new Date() } });
     }),
 
   /** Edit a profile's definition. Owner or instance admin. */

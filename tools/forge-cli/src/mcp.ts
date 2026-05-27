@@ -172,6 +172,7 @@ export async function validateToken(
 export interface AgentMe {
   id: string;
   profileKey: string;
+  profileId: string | null;
   name: string;
   provider: string;
   runtimeMode: string;
@@ -179,4 +180,6 @@ export interface AgentMe {
   capabilities: string[];
   webhookUrl: string | null;
   workspaceId: string;
+  /** Owning user's instance role (MEMBER | ADMIN | OWNER), or null. */
+  instanceRole: string | null;
 }

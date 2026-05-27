@@ -539,11 +539,12 @@ model User {
   createdAt                DateTime     @default(now())
   updatedAt                DateTime     @updatedAt
 
-  accounts      Account[]
-  sessions      Session[]
-  memberships   Membership[]
-  agentProfiles AgentProfile[]
-  connections   Connection[]
+  accounts               Account[]
+  sessions               Session[]
+  memberships            Membership[]
+  agentProfiles          AgentProfile[]
+  requestedAgentProfiles AgentProfile[] @relation("AgentProfileRequester")
+  connections            Connection[]
 
   authoredIssues          Issue[]                  @relation("IssueAuthor")
   assignedIssues          IssueAssignee[]
@@ -1883,43 +1884,57 @@ model AgentProfile {
   /// bindings) refuse dispatch/chat. Distinct from `archivedAt`.
   disabledAt       DateTime?
   archivedAt       DateTime?
+  /// Profile-request flow: a member can request a profile (creating it
+  /// with `requestedById` set and `approvedAt` null = pending). An
+  /// instance admin approves (`approvedAt` set) or rejects (archived).
+  /// Profiles created directly by an instance admin have `approvedAt`
+  /// set at creation and `requestedById` null. A pending profile is not
+  /// bindable until approved.
+  requestedById    String?
+  approvedAt       DateTime?
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
-  owner    User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  runtime  Runtime? @relation("AgentProfileRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
-  bindings Agent[]  @relation("AgentProfileBinding")
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  requestedBy User?    @relation("AgentProfileRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  runtime     Runtime? @relation("AgentProfileRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
+  bindings    Agent[]  @relation("AgentProfileBinding")
 
   @@unique([ownerId, profileKey])
   @@index([ownerId])
   @@index([instanceShared])
   @@index([runtimeId])
+  @@index([requestedById])
 }
 
 model Agent {
-  id                   String           @id @default(cuid())
-  workspaceId          String
+  id                         String           @id @default(cuid())
+  workspaceId                String
   /// The global definition this binding adopts. Nullable during the
   /// expand/contract migration (un-backfilled rows are null); the
   /// backfill script links each binding to a profile. Once fully
   /// backfilled this becomes the definitional source of truth.
-  profileId            String?
+  profileId                  String?
   /// Per-binding auto-dispatch eligibility. When false, the agent is
   /// never auto-picked (manual assignment only) even if WORKER. Mirrors
   /// the design's per-binding `autoDispatch` toggle; independent of the
   /// workspace `autoDispatchMode`.
-  autoDispatchEligible Boolean          @default(true)
+  autoDispatchEligible       Boolean          @default(true)
   /// Per-binding engagement-mode override. Null = inherit the workspace
   /// default (`Workspace.assignmentEngagementMode`).
-  engagementMode       EngagementMode?
-  name                 String
+  engagementMode             EngagementMode?
+  /// Per-binding gate: when true, dispatched work for this agent waits
+  /// for human approval before the run starts, overriding the workspace
+  /// `requireApprovalBeforeStart` for this binding only.
+  requireApprovalBeforeStart Boolean          @default(false)
+  name                       String
   /// Stable handle for cross-system lookup. Unique per workspace.
-  profileKey           String
-  description          String?          @db.Text
+  profileKey                 String
+  description                String?          @db.Text
   /// Avatar/emoji or URL — freeform. UI decides.
-  avatar               String?
-  provider             AgentProvider    @default(HERMES)
-  runtimeMode          AgentRuntimeMode @default(PERSISTENT)
+  avatar                     String?
+  provider                   AgentProvider    @default(HERMES)
+  runtimeMode                AgentRuntimeMode @default(PERSISTENT)
   /// Which execution engine drives this agent. Null = use the
   /// integration's default (see `adapters.ts` `defaultRunEngine`).
   /// COMPLETIONS = Forge owns the loop via OpenAI-compat
@@ -1929,7 +1944,7 @@ model Agent {
   /// streams `message.delta` + lifecycle events, native approval/stop).
   /// Dispatch (assigned work) always uses RUNS when the connector
   /// supports it; this column governs the interactive chat surface.
-  runEngine            RunEngine?
+  runEngine                  RunEngine?
   /// Outbound webhook for push dispatch (issue.assigned etc) — the BYO /
   /// custom-webhook path and a per-agent OVERRIDE. As of the runtime-adapter
   /// refactor the managed Runtime owns the *runs* loop endpoint
@@ -1937,35 +1952,35 @@ model Agent {
   /// override for agents that receive push delivery (RUNS-engine agents have
   /// it suppressed — they're dispatched via the runs API). Retained, not
   /// dropped: it backs the custom-webhook agent feature.
-  webhookUrl           String?
+  webhookUrl                 String?
   /// Optional HMAC secret for webhook signing; falls back to the
   /// workspace-level synthetic webhook secret when unset. Per-agent override,
   /// same status as `webhookUrl`.
-  webhookSecret        String?
+  webhookSecret              String?
   /// Runtime that hosts this agent. Null = legacy / unbound. SetNull on
   /// runtime delete so the agent row survives runtime churn.
-  runtimeId            String?
+  runtimeId                  String?
   /// Free-form capability tags (e.g. "ops", "research", "code-review").
   /// Consumed by `autoDispatchMode = CAPABILITY_MATCH`.
-  capabilities         String[]         @default([])
+  capabilities               String[]         @default([])
   /// Distinguishes WORKER (claims work, default) from COACH (observes
   /// events and posts diagnostic comments) and OBSERVER (read-only).
   /// Auto-dispatch only considers WORKER agents.
-  role                 AgentRole        @default(WORKER)
+  role                       AgentRole        @default(WORKER)
   /// Optional markdown template auto-applied to an issue's description on
   /// assignment, when the description is empty. Freeform (no length cap).
   /// See `src/server/services/agent-template.ts`.
-  templateMarkdown     String?          @db.Text
-  status               AgentStatus      @default(OFFLINE)
-  lastHeartbeatAt      DateTime?
+  templateMarkdown           String?          @db.Text
+  status                     AgentStatus      @default(OFFLINE)
+  lastHeartbeatAt            DateTime?
   /// Cap on simultaneously-claimed issues. 0 = unlimited.
-  maxConcurrent        Int              @default(1)
+  maxConcurrent              Int              @default(1)
   /// Timestamp of the last auto-dispatch assignment to this agent. Used by
   /// `AutoDispatchMode.ROUND_ROBIN` to pick the least-recent pick.
-  lastDispatchedAt     DateTime?
-  archivedAt           DateTime?
-  createdAt            DateTime         @default(now())
-  updatedAt            DateTime         @updatedAt
+  lastDispatchedAt           DateTime?
+  archivedAt                 DateTime?
+  createdAt                  DateTime         @default(now())
+  updatedAt                  DateTime         @updatedAt
 
   workspace                Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   profile                  AgentProfile?     @relation("AgentProfileBinding", fields: [profileId], references: [id], onDelete: SetNull)

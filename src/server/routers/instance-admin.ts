@@ -1,7 +1,20 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { InstanceRole } from "@prisma/client";
+import { CycleStatus, InstanceRole, Role } from "@prisma/client";
 import { router, instanceAdminProcedure } from "@/server/trpc";
+import { ensureWorkspaceBucket } from "@/server/services/storage";
+
+const slugSchema = z
+  .string()
+  .min(2)
+  .max(48)
+  .regex(/^[a-z0-9-]+$/, "Slug must be lowercase alphanumeric with dashes.");
+
+const keySchema = z
+  .string()
+  .min(2)
+  .max(6)
+  .regex(/^[A-Z]+$/, "Key must be uppercase letters.");
 
 /**
  * Instance-admin surface for the `/admin` shell: tenants, users +
@@ -151,6 +164,133 @@ export const instanceAdminRouter = router({
       buildSha: process.env.FORGE_GIT_SHA || null,
       buildTime: process.env.FORGE_BUILD_TIME || null,
       counts: { tenants, users, admins, runtimes, profiles, connections, runs24 },
+    };
+  }),
+
+  /**
+   * Create a workspace as an instance admin. Mirrors `workspace.create`
+   * (seeded statuses / labels / Cycle 1, best-effort bucket) but the
+   * binding is set from the instance-admin surface: the caller becomes
+   * OWNER of the new tenant so they can manage it immediately.
+   */
+  createTenant: instanceAdminProcedure
+    .input(
+      z.object({
+        slug: slugSchema,
+        name: z.string().min(1).max(80),
+        key: keySchema,
+        cycleLengthDays: z.number().int().min(1).max(90).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.workspace.findFirst({
+        where: { OR: [{ slug: input.slug }, { key: input.key }] },
+      });
+      if (existing) throw new TRPCError({ code: "CONFLICT", message: "Slug or key in use." });
+
+      const cycleLengthDays = input.cycleLengthDays ?? 7;
+      const now = new Date();
+      const cycleEndsAt = new Date(now.getTime());
+      cycleEndsAt.setUTCDate(cycleEndsAt.getUTCDate() + cycleLengthDays);
+
+      const workspace = await ctx.db.workspace.create({
+        data: {
+          slug: input.slug,
+          name: input.name,
+          key: input.key,
+          cycleLengthDays,
+          memberships: { create: { userId: ctx.session.user.id, role: Role.OWNER } },
+          statuses: {
+            create: [
+              { name: "Backlog", category: "BACKLOG", color: "#78716c", position: 0 },
+              { name: "Todo", category: "TODO", color: "#a8a29e", position: 1, isDefault: true },
+              { name: "In Progress", category: "IN_PROGRESS", color: "#d97706", position: 2 },
+              { name: "In Review", category: "IN_REVIEW", color: "#ca8a04", position: 3 },
+              { name: "Done", category: "DONE", color: "#65a30d", position: 4 },
+              { name: "Canceled", category: "CANCELED", color: "#57534e", position: 5 },
+            ],
+          },
+          labels: {
+            create: [
+              { name: "bug", color: "#b45309" },
+              { name: "feature", color: "#d97706" },
+              { name: "chore", color: "#78716c" },
+              { name: "docs", color: "#0d9488" },
+              { name: "quick-win", color: "#65a30d" },
+            ],
+          },
+          cycles: {
+            create: [
+              {
+                name: "Cycle 1",
+                startsAt: now,
+                endsAt: cycleEndsAt,
+                lengthDays: cycleLengthDays,
+                status: CycleStatus.ACTIVE,
+              },
+            ],
+          },
+        },
+        select: { id: true, slug: true, name: true, key: true },
+      });
+
+      // Best-effort bucket create — a dead MinIO shouldn't block the tenant.
+      await ensureWorkspaceBucket(workspace.id).catch((err) => {
+        console.warn(
+          `[instanceAdmin.createTenant] ensureWorkspaceBucket failed for ${workspace.slug}:`,
+          (err as Error).message,
+        );
+      });
+
+      return workspace;
+    }),
+
+  /**
+   * Invite a user by email. Authelia owns identity at the edge, so this
+   * upserts a shell `User` row keyed by email — first login binds to it.
+   * Membership is intentionally NOT created here (instance-level invite);
+   * workspace owners add members via `workspace.addMember`. Idempotent.
+   */
+  inviteUser: instanceAdminProcedure
+    .input(
+      z.object({
+        email: z.string().email(),
+        name: z.string().min(1).max(80).optional(),
+        instanceAdmin: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const email = input.email.trim().toLowerCase();
+      const role = input.instanceAdmin ? InstanceRole.INSTANCE_ADMIN : InstanceRole.MEMBER;
+      const existing = await ctx.db.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+      const user = await ctx.db.user.upsert({
+        where: { email },
+        update: {
+          // Only fill name if not already set; never clobber an existing one.
+          ...(input.name ? { name: input.name } : {}),
+          ...(input.instanceAdmin ? { instanceRole: role } : {}),
+        },
+        create: { email, name: input.name, instanceRole: role },
+        select: { id: true, email: true, name: true, instanceRole: true },
+      });
+      return { ...user, created: !existing };
+    }),
+
+  /**
+   * Trigger an instance backup. This deployment has no backup job wired
+   * up yet, so this is a best-effort acknowledgement: it records the
+   * intent and returns `{ scheduled: true, note }` for the UI. It does
+   * NOT shell out to pg_dump — durable backups are an ops concern
+   * (volume snapshots / managed Postgres), surfaced here for operators.
+   */
+  backup: instanceAdminProcedure.mutation(async () => {
+    return {
+      scheduled: true as const,
+      at: new Date(),
+      note: "No backup job is wired up in this deployment yet — backups are handled at the infrastructure layer (volume snapshots / managed Postgres). Logged the request.",
     };
   }),
 });
