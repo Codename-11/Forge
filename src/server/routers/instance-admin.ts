@@ -146,9 +146,10 @@ export const instanceAdminRouter = router({
       ctx.db.agentRun.count({ where: { startedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } } }),
     ]);
     return {
-      version: process.env.NEXT_PUBLIC_APP_VERSION ?? process.env.npm_package_version ?? "dev",
-      buildSha: process.env.GIT_SHA ?? null,
-      buildTime: process.env.BUILD_TIME ?? null,
+      // Match system.buildInfo: the Dockerfile bakes FORGE_GIT_SHA / FORGE_BUILD_TIME.
+      version: process.env.npm_package_version ?? "1.0.0",
+      buildSha: process.env.FORGE_GIT_SHA || null,
+      buildTime: process.env.FORGE_BUILD_TIME || null,
       counts: { tenants, users, admins, runtimes, profiles, connections, runs24 },
     };
   }),
