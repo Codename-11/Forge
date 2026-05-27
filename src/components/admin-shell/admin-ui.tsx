@@ -13,14 +13,14 @@ import { Spinner } from "@/components/ui/spinner";
  */
 
 export const ADMIN = {
-  panel: "hsl(220 10% 17%)",
-  tile: "hsl(220 10% 18%)",
-  border: "rgba(255,255,255,0.06)",
-  borderRow: "rgba(255,255,255,0.04)",
-  text: "hsl(40 12% 95%)",
-  textMuted: "hsl(40 8% 65%)",
-  textDim: "hsl(40 8% 60%)",
-  textSoft: "hsl(40 8% 70%)",
+  panel: "hsl(var(--admin-panel))",
+  tile: "hsl(var(--admin-tile))",
+  border: "var(--admin-border)",
+  borderRow: "var(--admin-border-soft)",
+  text: "hsl(var(--admin-text))",
+  textMuted: "hsl(var(--admin-text-muted))",
+  textDim: "hsl(var(--admin-text-dim))",
+  textSoft: "hsl(var(--admin-text-soft))",
   ember: "hsl(var(--ember))",
 } as const;
 
@@ -160,7 +160,7 @@ export function AdminButton({
       ? { background: "rgba(217,119,87,0.16)", color: ADMIN.ember, border: "1px solid rgba(217,119,87,0.3)" }
       : tone === "danger"
         ? { background: "rgba(239,68,68,0.12)", color: "hsl(var(--danger))", border: "1px solid rgba(239,68,68,0.3)" }
-        : { background: "rgba(255,255,255,0.04)", color: ADMIN.textSoft, border: `1px solid ${ADMIN.border}` };
+        : { background: "var(--admin-border-soft)", color: ADMIN.textSoft, border: `1px solid ${ADMIN.border}` };
   return (
     <button
       type={type}

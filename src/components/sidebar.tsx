@@ -7,6 +7,7 @@ import {
   Plus,
   PanelLeftClose,
   PanelLeftOpen,
+  Sparkles,
 } from "lucide-react";
 import {
   WORKSPACE_NAV_FOOTER_ITEMS,
@@ -310,6 +311,19 @@ export function Sidebar({
           "mx-2 flex flex-col gap-px border-t border-border/60 pt-2",
         )}
       >
+        {/* Escape hatch back to the cross-workspace home. The switcher also
+            offers it, but this is the always-visible affordance. */}
+        <Link
+          href="/"
+          title="Mission Control · across all workspaces"
+          className={cn(
+            "flex h-8 items-center gap-2 rounded-md text-[0.8125rem] text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground",
+            collapsed ? "justify-center px-0" : "px-2 max-md:justify-center max-md:px-0",
+          )}
+        >
+          <Sparkles className="h-4 w-4 shrink-0" />
+          <span className={cn(collapsed ? "hidden" : "max-md:hidden")}>Mission Control</span>
+        </Link>
         {footerItems.map((item) => (
           <NavRow
             key={item.path}

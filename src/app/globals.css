@@ -49,6 +49,25 @@
     --sticky-sky: 205 35% 78%;
     --sticky-lavender: 265 28% 80%;
     --sticky-peach: 25 55% 78%;
+
+    /* Instance-admin shell — a deliberately cool graphite tone (signals
+     * "instance, not tenant"). Tokenized so the /admin chrome is themed
+     * from one place; the ember accent still follows the user's accent
+     * hue via --ember. Graphite stays constant across light/dark on
+     * purpose — it's an identity, not a surface that flips. */
+    --admin-bg: 220 10% 12%;
+    --admin-surface: 220 10% 14%;
+    --admin-topbar: 220 10% 16%;
+    --admin-panel: 220 10% 17%;
+    --admin-tile: 220 10% 18%;
+    --admin-text: 40 12% 95%;
+    --admin-text-hi: 40 8% 86%;
+    --admin-text-soft: 40 8% 72%;
+    --admin-text-muted: 40 8% 65%;
+    --admin-text-dim: 40 8% 60%;
+    --admin-border: rgba(255, 255, 255, 0.06);
+    --admin-border-soft: rgba(255, 255, 255, 0.04);
+    --admin-border-strong: rgba(255, 255, 255, 0.08);
   }
 
   .dark {

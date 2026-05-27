@@ -44,13 +44,13 @@ export function AdminAudit() {
                 <span className="min-w-0">
                   <span
                     className="inline-flex items-center rounded px-1 text-[10px] font-mono"
-                    style={{ background: "rgba(255,255,255,0.06)", color: ADMIN.textSoft }}
+                    style={{ background: "var(--admin-border)", color: ADMIN.textSoft }}
                     title={e.workspace?.name ?? undefined}
                   >
                     {e.workspace?.key ?? "—"}
                   </span>
                 </span>
-                <span className="truncate text-meta font-mono" style={{ color: "hsl(40 8% 85%)" }}>
+                <span className="truncate text-meta font-mono" style={{ color: "hsl(var(--admin-text-hi))" }}>
                   {e.kind.toLowerCase()}
                 </span>
                 <span className="truncate text-meta" style={{ color: ADMIN.textSoft }}>

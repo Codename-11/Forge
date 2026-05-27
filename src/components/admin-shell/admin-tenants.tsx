@@ -53,7 +53,7 @@ export function AdminTenants() {
                   </span>
                 </span>
               </span>
-              <span className="min-w-0 truncate text-[0.8125rem]" style={{ color: "hsl(40 8% 80%)" }}>
+              <span className="min-w-0 truncate text-[0.8125rem]" style={{ color: "hsl(var(--admin-text-hi))" }}>
                 {t.owner?.name ?? t.owner?.email ?? "—"}
               </span>
               <span className="text-right font-mono text-[0.8125rem] tabular-nums" style={{ color: ADMIN.text }}>
