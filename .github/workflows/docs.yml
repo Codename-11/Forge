@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
   # Uncomment when the repo flips public + Pages is enabled:
   # push:
-  #   branches: [master]
+  #   branches: [main]
   #   paths:
   #     - "docs/**"
   #     - ".github/workflows/docs.yml"
