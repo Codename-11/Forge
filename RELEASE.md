@@ -41,8 +41,10 @@ docs/*    ← documentation branches from main
 ### 1. Land the work
 - Open a PR `feat/* → main`. CI (`.github/workflows/ci.yml`: lint · typecheck · unit ·
   Playwright e2e) must be green. **Squash-merge** with a clean message.
-- Update `CHANGELOG.md` under a dated `## [YYYY-MM-DD]` heading (this is the in-app
-  What's New source). Bump `package.json` `version`.
+- Update `CHANGELOG.md` under a heading `## [YYYY-MM-DD] — vX.Y.Z · Short title` — the
+  bracket date drives the in-app "unseen" dot + ordering; the `— vX.Y.Z · Title` tail is
+  the release name shown in What's New. Group items under `### Added/Changed/Fixed/Removed`.
+  Bump `package.json` `version` to match the tag. (Draft with `pnpm changelog`, then curate.)
 
 > CI note: GitHub-hosted Actions require billing to be enabled. If Actions are
 > unavailable, gate the release on the equivalent local run

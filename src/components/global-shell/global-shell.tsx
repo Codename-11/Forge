@@ -20,6 +20,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { workspaceColor } from "@/lib/workspace-color";
+import { VersionChip } from "./version-chip";
 
 /**
  * Global "concourse" shell — the second of Forge's three shells (workspace
@@ -262,6 +263,11 @@ function GlobalSidebar({
             </span>
           </Link>
         )}
+      </div>
+
+      {/* Build/version chip — at-a-glance "what's running" + What's New. */}
+      <div className="mx-2 mb-1 mt-1 border-t border-border/60 pt-1">
+        <VersionChip />
       </div>
     </aside>
   );
