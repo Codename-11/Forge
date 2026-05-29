@@ -33,7 +33,11 @@ import { trpc } from "@/lib/trpc";
 import { useHotkey } from "@/lib/keyboard";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
-import type { SavedViewFilters } from "@/lib/saved-view-filters";
+import type {
+  IssueGroupBy,
+  IssueSort,
+  SavedViewFilters,
+} from "@/lib/saved-view-filters";
 
 export function IssueList({
   workspaceKey,
@@ -46,6 +50,8 @@ export function IssueList({
   initiativeId,
   dueOn,
   extraFilters,
+  sort,
+  groupBy = "status",
   emptyHint,
   emptyOverride,
   enableBulk = true,
@@ -73,6 +79,10 @@ export function IssueList({
    * `SavedViewFilters` blob to apply.
    */
   extraFilters?: SavedViewFilters;
+  /** Result ordering, threaded straight into `issue.list`. */
+  sort?: IssueSort;
+  /** Client-side grouping dimension. Defaults to status (Linear-style). */
+  groupBy?: IssueGroupBy;
   emptyHint?: React.ReactNode;
   /**
    * When provided, replaces the default empty-state for this list. The
@@ -92,6 +102,7 @@ export function IssueList({
     initiativeId,
     dueOn,
     ...(extraFilters ?? {}),
+    sort,
   });
   const { data: statuses } = trpc.status.list.useQuery();
   // Unread set: issues the user is watching that have had activity
@@ -114,54 +125,153 @@ export function IssueList({
   const density = useDensity();
   const compact = density === "compact";
 
-  // Status grouping (Linear-style). Group the visible rows by status,
-  // ordered by the workspace status `position` (status.list is already
-  // position-sorted). Each group renders a sticky header before its rows.
-  // The flat selection/ordering refs (orderedIdsRef etc.) still see the
-  // rows in `filtered` order, so Shift+Click ranges + select-all are
-  // unaffected by the visual grouping.
+  // Grouping (Linear-style). Bucket the visible rows by the chosen
+  // dimension and render a sticky header before each group's rows. Status
+  // groups keep the workspace status order; the rest sort their buckets
+  // sensibly (priority high→none, projects/labels A–Z with the "none"
+  // bucket last). The flat selection/ordering refs (orderedIdsRef etc.)
+  // still see the rows in `filtered` order, so Shift+Click ranges +
+  // select-all are unaffected by the visual grouping.
   type IssueRow = (typeof filtered)[number];
-  const statusGroups = useMemo(() => {
-    const byStatus = new Map<string, IssueRow[]>();
-    for (const issue of filtered) {
-      const arr = byStatus.get(issue.statusId);
-      if (arr) arr.push(issue);
-      else byStatus.set(issue.statusId, [issue]);
-    }
-    const ordered: Array<{
-      status: { id: string; name: string; color: string; category: string };
+  const groups = useMemo<
+    Array<{
+      key: string;
+      label: string;
+      status?: { id: string; name: string; color: string; category: string };
+      projectId?: string;
       issues: IssueRow[];
-    }> = [];
-    const seen = new Set<string>();
-    // First, statuses in their workspace-defined order.
-    for (const s of statuses ?? []) {
-      const group = byStatus.get(s.id);
-      if (group && group.length > 0) {
-        ordered.push({
-          status: { id: s.id, name: s.name, color: s.color, category: s.category },
-          issues: group,
-        });
-        seen.add(s.id);
+    }>
+  >(() => {
+    if (groupBy === "none") {
+      return filtered.length
+        ? [{ key: "all", label: "", issues: filtered }]
+        : [];
+    }
+
+    if (groupBy === "status") {
+      const byStatus = new Map<string, IssueRow[]>();
+      for (const issue of filtered) {
+        const arr = byStatus.get(issue.statusId);
+        if (arr) arr.push(issue);
+        else byStatus.set(issue.statusId, [issue]);
       }
+      const ordered: Array<{
+        key: string;
+        label: string;
+        status: { id: string; name: string; color: string; category: string };
+        issues: IssueRow[];
+      }> = [];
+      const seen = new Set<string>();
+      for (const s of statuses ?? []) {
+        const group = byStatus.get(s.id);
+        if (group && group.length > 0) {
+          ordered.push({
+            key: s.id,
+            label: s.name,
+            status: { id: s.id, name: s.name, color: s.color, category: s.category },
+            issues: group,
+          });
+          seen.add(s.id);
+        }
+      }
+      for (const issue of filtered) {
+        if (seen.has(issue.statusId)) continue;
+        seen.add(issue.statusId);
+        ordered.push({
+          key: issue.statusId,
+          label: issue.status.name,
+          status: {
+            id: issue.status.id,
+            name: issue.status.name,
+            color: issue.status.color,
+            category: issue.status.category,
+          },
+          issues: byStatus.get(issue.statusId) ?? [],
+        });
+      }
+      return ordered;
     }
-    // Then any status present on a row but missing from status.list
-    // (shouldn't happen, but never drop rows). Use the row's own status.
-    for (const issue of filtered) {
-      if (seen.has(issue.statusId)) continue;
-      seen.add(issue.statusId);
-      const group = byStatus.get(issue.statusId) ?? [];
-      ordered.push({
-        status: {
-          id: issue.status.id,
-          name: issue.status.name,
-          color: issue.status.color,
-          category: issue.status.category,
-        },
-        issues: group,
+
+    if (groupBy === "priority") {
+      const order = ["URGENT", "HIGH", "MEDIUM", "LOW", "NONE"] as const;
+      const label: Record<string, string> = {
+        URGENT: "Urgent",
+        HIGH: "High",
+        MEDIUM: "Medium",
+        LOW: "Low",
+        NONE: "No priority",
+      };
+      const byPrio = new Map<string, IssueRow[]>();
+      for (const issue of filtered) {
+        const arr = byPrio.get(issue.priority);
+        if (arr) arr.push(issue);
+        else byPrio.set(issue.priority, [issue]);
+      }
+      return order
+        .filter((p) => byPrio.has(p))
+        .map((p) => ({
+          key: `prio:${p}`,
+          label: label[p] ?? p,
+          issues: byPrio.get(p)!,
+        }));
+    }
+
+    if (groupBy === "project") {
+      const byProject = new Map<string, IssueRow[]>();
+      for (const issue of filtered) {
+        const k = issue.project?.id ?? "none";
+        const arr = byProject.get(k);
+        if (arr) arr.push(issue);
+        else byProject.set(k, [issue]);
+      }
+      const entries = [...byProject.entries()].map(([k, issues]) => ({
+        key: `proj:${k}`,
+        label: issues[0]?.project?.name ?? "No project",
+        projectId: k === "none" ? undefined : k,
+        issues,
+      }));
+      // A–Z, with the "No project" bucket pinned last.
+      entries.sort((a, b) => {
+        if (!a.projectId) return 1;
+        if (!b.projectId) return -1;
+        return a.label.localeCompare(b.label);
       });
+      return entries;
     }
-    return ordered;
-  }, [filtered, statuses]);
+
+    // assignee — bucket by primary actor (assigned agent first, then the
+    // first human assignee, else Unassigned).
+    const byAssignee = new Map<string, { label: string; issues: IssueRow[] }>();
+    for (const issue of filtered) {
+      let k: string;
+      let label: string;
+      if (issue.assignedAgent) {
+        k = `agent:${issue.assignedAgent.id}`;
+        label = `@${issue.assignedAgent.profileKey ?? issue.assignedAgent.name}`;
+      } else if (issue.assignees[0]) {
+        k = `user:${issue.assignees[0].user.id}`;
+        label = issue.assignees[0].user.name ?? "Member";
+      } else {
+        k = "none";
+        label = "Unassigned";
+      }
+      const entry = byAssignee.get(k);
+      if (entry) entry.issues.push(issue);
+      else byAssignee.set(k, { label, issues: [issue] });
+    }
+    const entries = [...byAssignee.entries()].map(([k, v]) => ({
+      key: `asg:${k}`,
+      label: v.label,
+      issues: v.issues,
+      _none: k === "none",
+    }));
+    entries.sort((a, b) => {
+      if (a._none) return 1;
+      if (b._none) return -1;
+      return a.label.localeCompare(b.label);
+    });
+    return entries.map(({ _none, ...g }) => g);
+  }, [filtered, statuses, groupBy]);
 
   // M4 (design spec): stagger the row fade-in-up, but only on the first
   // render that has rows — not on every refetch / filter change (which
@@ -501,36 +611,49 @@ export function IssueList({
           </span>
         </div>
       )}
-      {statusGroups.map((group) => (
-        <div key={group.status.id}>
-          <div className="sticky top-0 z-[5] flex items-center gap-2 border-b border-border bg-card/80 px-5 py-1.5 backdrop-blur">
-            <StatusDot status={group.status} size={12} />
-            <span className="text-xs font-medium">{group.status.name}</span>
-            <span className="text-meta tabular-nums text-muted-foreground">
-              {group.issues.length}
-            </span>
-            {/* Per-group quick-add. Fires the shared new-issue flow; the
-                `forge:quick-create` event detail only supports a `projectId`
-                prefill (carried through here when the list is project-
-                scoped), NOT a `statusId`, so the new issue lands in the
-                workspace default status rather than this group's status. */}
-            <button
-              type="button"
-              title="Add issue"
-              aria-label={`Add issue in ${group.status.name}`}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("forge:quick-create", {
-                    detail: projectId ? { projectId } : {},
-                  }),
-                )
-              }
-              className="focus-ring ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:text-ember"
-            >
-              <Plus className="h-3 w-3" />
-              Add issue
-            </button>
-          </div>
+      {groups.map((group) => (
+        <div key={group.key}>
+          {group.label !== "" && (
+            <div className="sticky top-0 z-[5] flex items-center gap-2 border-b border-border bg-card/80 px-5 py-1.5 backdrop-blur">
+              {group.status ? (
+                <StatusDot status={group.status} size={12} />
+              ) : (
+                <span
+                  className="h-2.5 w-2.5 rounded-full bg-muted-foreground/40"
+                  aria-hidden
+                />
+              )}
+              <span className="text-xs font-medium">{group.label}</span>
+              <span className="text-meta tabular-nums text-muted-foreground">
+                {group.issues.length}
+              </span>
+              {/* Per-group quick-add (status + project groupings only).
+                  Fires the shared new-issue flow; the `forge:quick-create`
+                  event detail only supports a `projectId` prefill (the
+                  group's project when grouping by project, else the list's
+                  own scope), NOT a `statusId`, so the new issue lands in the
+                  workspace default status. */}
+              {(groupBy === "status" || groupBy === "project") && (
+                <button
+                  type="button"
+                  title="Add issue"
+                  aria-label={`Add issue in ${group.label}`}
+                  onClick={() => {
+                    const pid = group.projectId ?? projectId;
+                    window.dispatchEvent(
+                      new CustomEvent("forge:quick-create", {
+                        detail: pid ? { projectId: pid } : {},
+                      }),
+                    );
+                  }}
+                  className="focus-ring ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:text-ember"
+                >
+                  <Plus className="h-3 w-3" />
+                  Add issue
+                </button>
+              )}
+            </div>
+          )}
           <div className="divide-y divide-border">
             {group.issues.map((issue) => {
           const i = orderedIdsRef.current.indexOf(issue.id);

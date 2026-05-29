@@ -18,7 +18,11 @@ import {
   autoWatchUser,
 } from "@/server/services/issue-watchers";
 import { agentId as agentIdSchema } from "./agent";
-import { UPDATED_SINCE_VALUES, updatedSinceToDate } from "@/lib/saved-view-filters";
+import {
+  ISSUE_SORT_VALUES,
+  UPDATED_SINCE_VALUES,
+  updatedSinceToDate,
+} from "@/lib/saved-view-filters";
 import type { SlashCommand } from "@/lib/slash-commands";
 import type { db as DbHandleType } from "@/server/db";
 
@@ -292,6 +296,14 @@ const filterSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, "dueOn must be YYYY-MM-DD")
     .optional(),
 
+  /**
+   * Result ordering. `priority` (default) keeps the historical
+   * priority-desc then newest-first sort; the rest are single-key sorts
+   * surfaced by the issues-list Sort control. Not persisted on saved
+   * views — it's a per-user view preference.
+   */
+  sort: z.enum(ISSUE_SORT_VALUES).optional(),
+
   limit: z.number().min(1).max(500).default(50),
   cursor: cursorSchema,
 });
@@ -378,6 +390,19 @@ export const issueRouter = router({
         blockedConstraint = { id: { in: [...blocked] } };
       }
 
+      // Result ordering. Default keeps priority-desc then newest-first;
+      // the Sort control offers single-key alternatives.
+      const orderBy: Prisma.IssueOrderByWithRelationInput[] =
+        input.sort === "newest"
+          ? [{ createdAt: "desc" }]
+          : input.sort === "oldest"
+            ? [{ createdAt: "asc" }]
+            : input.sort === "updated"
+              ? [{ updatedAt: "desc" }]
+              : input.sort === "title"
+                ? [{ title: "asc" }]
+                : [{ priority: "desc" }, { createdAt: "desc" }];
+
       const rows = await ctx.db.issue.findMany({
         where: {
           workspaceId: ctx.workspaceId,
@@ -439,7 +464,7 @@ export const issueRouter = router({
         },
         take: input.limit + 1,
         cursor: input.cursor ? { id: input.cursor } : undefined,
-        orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
+        orderBy,
         include: {
           status: true,
           project: { select: { id: true, key: true, name: true, color: true, icon: true } },

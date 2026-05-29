@@ -11,6 +11,26 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+### Added
+
+- **Filter, sort & group your issues.** The issues list gains multi-select
+  **Status / Priority / Project / Assignee / Label** filters, a **Sort**
+  control (priority, newest, oldest, recently updated, title A–Z), and a
+  **Group by** control (status, project, assignee, priority, or none). Sort
+  and grouping are remembered per browser.
+- **Slash commands that show their work.** In the new-issue overlay (⇧C),
+  typing a command like `/priority high`, `/assign @victor`, `/due tomorrow`,
+  `/label bug`, or `/project AXI` now lights up the matching picker (priority,
+  project) or drops a removable **chip** the moment it's valid — press ⏎ to
+  apply it and keep only your title text. A live "↵ apply …" hint shows when
+  a command is recognized.
+
+### Changed
+
+- **Roomier create overlay.** The ⇧C quick-create panel is a touch larger
+  with a cleaner layout, and the project picker now matches the rest of the
+  app's styling instead of a plain dropdown.
+
 ## [2026-05-27] — v0.2.0 · Release visibility & docs
 
 ### Added

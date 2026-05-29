@@ -2,6 +2,43 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-05-28 — Issues filtering/sort/group + create-overlay slash chips
+
+UX wave on the create overlay (`quick-create.tsx`) and the issues list. Part of a
+larger in-flight session — overlay + issues shipped first; follow-ups (issue-detail
+responsive containment, inline slash/@ rendering in the comment composer, agent
+runtime attribution display, persistent running-status card) tracked separately and
+NOT in this commit.
+
+- **Slash → commit-to-chips** in QuickCreate. New `matchTrailingCommand()` in
+  `slash-commands.ts` detects a trailing `/cmd arg` at the end of the single-line
+  title (so commands finally work *with* a title — the old single-line input could
+  only hold a command OR a title, never both). Plain ⏎ commits the trailing command:
+  `/priority`→native priority chip, resolvable `/project KEY`→native project picker,
+  the rest (`/assign`,`/due`,`/label`,`/watch`,`/unwatch`, unresolved `/project`) land
+  in a `committed: SlashCommand[]` rendered as removable chips. `resolveIssueComposition()`
+  flushes any still-trailing command on submit and merges committed + leading +
+  flushed into `applyCommands`. Live `pendingCommand` drives a "↵ apply …" hint. The
+  autocomplete dropdown still handles mid-keyword stub insertion. Mode switches clear
+  `committed`. Unit tests added for `matchTrailingCommand`.
+- **Overlay polish** — `max-w-3xl`→`4xl`, `rounded-xl`, roomier top row; native
+  project `<select>` replaced with a themed `ProjectPickerChip` (dot + name, ember
+  tint, ModeChip-style popover). New `CommittedChips` row.
+- **Issues filter/sort/group** — `IssueFacetChips` (`saved-views/facet-chips.tsx`):
+  multi-select Status/Priority/Project/Assignee/Label chips projecting onto the
+  existing `SavedViewFilters` arrays (server already accepted them). `SortChip` +
+  `GroupChip` single-pick controls. Server: `issue.list` gains a `sort` enum
+  (`ISSUE_SORT_VALUES`) → orderBy switch; default unchanged (priority desc, created
+  desc). `issue-list.tsx` `statusGroups` generalized to `groups` keyed on
+  `groupBy` (status/project/assignee/priority/none); per-group add-issue button kept
+  for status+project. Sort/group persisted via `useStoredPref` (localStorage),
+  shared `IssueSort`/`IssueGroupBy` in `saved-view-filters.ts`.
+
+Verified: typecheck, lint, slash-commands unit tests green. (Full unit suite passes in
+the main checkout; 10 server-module files fail to load *in the worktree only* because
+`vitest.config.ts` aliases `server-only` to a worktree-relative path with no
+`node_modules/server-only` — environmental, not a code regression.)
+
 ## 2026-05-27 — Release visibility & docs (v0.2.0)
 
 Post-v0.1.0 polish + docs. Relaxed `system.changelog`/`changelogFull`/`buildInfo` to
