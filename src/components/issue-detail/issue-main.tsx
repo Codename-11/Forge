@@ -451,6 +451,8 @@ function DescriptionBlock({
               autoFocus
               multiline
               rows={8}
+              highlightMentions
+              highlightCommands
               value={draft}
               onChange={setDraft}
               onMentionOpenChange={setMentionOpen}
@@ -862,6 +864,8 @@ function Comments({
             }}
             multiline
             rows={2}
+            highlightMentions
+            highlightCommands
             value={draft}
             onChange={setDraft}
             onMentionOpenChange={setMentionOpen}
@@ -1205,6 +1209,8 @@ function CommentEditor({
           autoFocus
           multiline
           rows={3}
+          highlightMentions
+          highlightCommands
           value={body}
           onChange={setBody}
           onMentionOpenChange={setMentionOpen}

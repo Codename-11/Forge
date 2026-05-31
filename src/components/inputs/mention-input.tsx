@@ -20,6 +20,7 @@ import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { parseLine } from "@/lib/slash-commands";
 import type { AgentStatus } from "@prisma/client";
 
 /**
@@ -93,6 +94,16 @@ export interface MentionInputProps {
   id?: string;
   /** Optional render of a slot above/below the input (e.g. an existing slash autocomplete). */
   children?: ReactNode;
+  /**
+   * Inline token highlighting. When set, a backdrop layer behind the
+   * textarea tints `@mentions` (indigo) and/or recognised `/command`
+   * lines (ember) live as the operator types — so tokens are visible
+   * before submit, the same language as the new-issue overlay's chips.
+   * Off by default; the chat composer uses a different command vocabulary
+   * so it opts in to mentions only. Only wired for `multiline`.
+   */
+  highlightMentions?: boolean;
+  highlightCommands?: boolean;
 }
 
 export interface MentionInputHandle {
@@ -128,12 +139,29 @@ export const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
       ariaLabel,
       id,
       children,
+      highlightMentions = false,
+      highlightCommands = false,
     },
     ref,
   ) {
     const elRef = useRef<HTMLTextAreaElement | HTMLInputElement | null>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
+    const backdropRef = useRef<HTMLDivElement | null>(null);
     const ws = useMaybeWorkspace();
+
+    // Inline highlighting is only meaningful for the multiline composer
+    // (the single-line input doesn't host `/command` lines).
+    const highlightOn = multiline && (highlightMentions || highlightCommands);
+    const highlightSegments = useMemo(
+      () =>
+        highlightOn
+          ? buildHighlightSegments(value, {
+              mentions: highlightMentions,
+              commands: highlightCommands,
+            })
+          : null,
+      [highlightOn, value, highlightMentions, highlightCommands],
+    );
 
     // Re-render trigger keyed off cursor moves. We don't track caret in
     // state directly (Textarea owns it); we use `tick` to invalidate the
@@ -342,6 +370,20 @@ export const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
     // ---- Selection tracking ----------------------------------------------
     const bump = useCallback(() => setTick((t) => t + 1), []);
 
+    // ---- Highlight backdrop scroll sync -----------------------------------
+    // Keep the transparent backdrop scrolled in lockstep with the textarea
+    // so token tints stay aligned once the body grows past the visible rows.
+    const syncScroll = useCallback(() => {
+      const el = elRef.current;
+      const bd = backdropRef.current;
+      if (!el || !bd) return;
+      bd.scrollTop = el.scrollTop;
+      bd.scrollLeft = el.scrollLeft;
+    }, []);
+    useLayoutEffect(() => {
+      if (highlightOn) syncScroll();
+    }, [highlightOn, value, tick, syncScroll]);
+
     // ---- Imperative handle for parents -----------------------------------
     useImperativeHandle(
       ref,
@@ -433,6 +475,39 @@ export const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
         aria-expanded={visible}
         aria-controls={ariaControls}
       >
+        {highlightOn && highlightSegments && (
+          // Backdrop highlight layer: same box-model as the textarea
+          // (identical `className`), text rendered transparent so only the
+          // token background tints show — the real, editable text sits on
+          // top via the transparent-bg textarea. Scroll is mirrored below.
+          <div
+            ref={backdropRef}
+            aria-hidden
+            className={cn(
+              className,
+              "pointer-events-none absolute inset-0 z-0 select-none overflow-hidden whitespace-pre-wrap break-words text-transparent",
+            )}
+          >
+            {highlightSegments.map((s, i) =>
+              s.type === "text" ? (
+                <span key={i}>{s.text}</span>
+              ) : (
+                <span
+                  key={i}
+                  className={cn(
+                    "rounded-[3px]",
+                    s.type === "mention"
+                      ? "bg-indigo-500/15"
+                      : "bg-ember/15",
+                  )}
+                >
+                  {s.text}
+                </span>
+              ),
+            )}
+            {"​"}
+          </div>
+        )}
         {multiline ? (
           <textarea
             id={id}
@@ -454,7 +529,8 @@ export const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
             onClick={composedClick}
             onSelect={composedSelect}
             onFocus={composedFocus}
-            className={className}
+            onScroll={highlightOn ? syncScroll : undefined}
+            className={cn(className, highlightOn && "relative z-[1] bg-transparent")}
           />
         ) : (
           <input
@@ -527,6 +603,54 @@ export function detectMention(value: string, caret: number): MentionTrigger | nu
   const before = i === 0 ? "" : value[i - 1] ?? "";
   if (before && !/[\s(,.;:!?]/.test(before)) return null;
   return { start: i, end: caret, token: value.slice(i + 1, caret).toLowerCase() };
+}
+
+// ---------------------------------------------------------------------------
+// Inline highlight tokenizer
+// ---------------------------------------------------------------------------
+
+type HighlightSegment = { text: string; type: "text" | "mention" | "command" };
+
+// `@handle` with a leading boundary, mirroring detectMention / the
+// renderer's REF_RE so "email@host" never lights up. The capture group 1
+// is the boundary char (kept as plain text), group 2 is the token.
+const HL_MENTION_RE = /(^|[\s(,.;:!?])(@[a-z0-9][a-z0-9_-]*)/gi;
+
+/**
+ * Split a composer body into highlight segments for the backdrop layer.
+ * A whole line that parses as a recognised slash command becomes one
+ * `command` segment; otherwise the line is scanned for `@mentions`.
+ * Newlines are preserved as their own text segments so the backdrop wraps
+ * identically to the textarea.
+ */
+function buildHighlightSegments(
+  value: string,
+  opts: { mentions: boolean; commands: boolean },
+): HighlightSegment[] {
+  const out: HighlightSegment[] = [];
+  const now = new Date();
+  const lines = value.split("\n");
+  lines.forEach((line, li) => {
+    const trimmed = line.trimStart();
+    if (opts.commands && trimmed.startsWith("/") && parseLine(trimmed, now)) {
+      out.push({ text: line, type: "command" });
+    } else if (opts.mentions && line.includes("@")) {
+      const re = new RegExp(HL_MENTION_RE);
+      let last = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(line))) {
+        const at = m.index + m[1].length; // index of the '@'
+        if (at > last) out.push({ text: line.slice(last, at), type: "text" });
+        out.push({ text: m[2], type: "mention" });
+        last = at + m[2].length;
+      }
+      if (last < line.length) out.push({ text: line.slice(last), type: "text" });
+    } else {
+      out.push({ text: line, type: "text" });
+    }
+    if (li < lines.length - 1) out.push({ text: "\n", type: "text" });
+  });
+  return out;
 }
 
 // ---------------------------------------------------------------------------
