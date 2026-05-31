@@ -750,9 +750,11 @@ model Workspace {
   aiModel                       String?
   /// AgentRun monitoring: when > 0, the watchdog flags an ACTIVE run
   /// as STALLED if it sees no AgentRunEvent within this many minutes.
-  /// 5 is a reasonable starting point for short loops; bump for slower
-  /// agents. 0 disables the sweep.
-  agentRunStaleMinutes          Int                     @default(0)
+  /// Defaults to 30 — long enough not to misclassify a quiet-but-working
+  /// agent (they emit run events / status comments as they work), short
+  /// enough that a finished turn an agent didn't close via `runs.complete`
+  /// stops lingering as a live run on the issue page. 0 disables the sweep.
+  agentRunStaleMinutes          Int                     @default(30)
   /// Optional Status row id to auto-transition into on AGENT_ASSIGNED.
   /// When set, the audit/event fan-out promotes assigned issues to this
   /// status (must be in IN_PROGRESS category, validated at write time).
