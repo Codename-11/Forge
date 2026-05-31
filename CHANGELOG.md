@@ -11,6 +11,8 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-05-31] — v0.3.0 · Issues filtering & live composer UX
+
 ### Added
 
 - **Filter, sort & group your issues.** The issues list gains multi-select
