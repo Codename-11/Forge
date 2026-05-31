@@ -39,6 +39,34 @@ the main checkout; 10 server-module files fail to load *in the worktree only* be
 `vitest.config.ts` aliases `server-only` to a worktree-relative path with no
 `node_modules/server-only` — environmental, not a code regression.)
 
+Follow-up wave (same session, mid-session asks):
+- **#6 runtime label** — `audit.ts` assignment SYSTEM comment rendered the raw
+  `RuntimeKind` enum inside `_…_`; the embedded underscore broke the markdown emphasis.
+  New shared `src/lib/runtime-kind.ts` (`RUNTIME_KIND_LABEL`/`runtimeKindLabel`); audit
+  uses it and omits the line when the agent has no runtime.
+- **#5 inline composer highlight** — `MentionInput` gains opt-in `highlightMentions`/
+  `highlightCommands`: a transparent-text backdrop layer (identical box model, scroll-
+  synced) tints `@mentions` (indigo) + recognised `/command` lines (ember) live. Real
+  text rides on top via `bg-transparent` textarea (twMerge overrides the field bg).
+  `buildHighlightSegments` tokenizer (reuses `parseLine`). Enabled on the issue
+  description, comment, and edit-comment composers.
+- **#7 run strip settle** — `AgentRunStrip.deriveStripState` kept "running" (pulsing)
+  for the full 5-min stale window after the last event. Added an `idle` state: no events
+  within a 90s LIVE window (but before STALE) → calm static dot + "<step> · idle", no
+  ping. Presentational only; run lifecycle untouched (so a quiet-but-active run isn't
+  dropped). RunActivityChip already gated on 60s. NOTE: fully clearing the strip still
+  needs the run to reach terminal (agent `runs.complete`, or the `agentRunStaleMinutes`
+  sweep which defaults to 0/disabled).
+- **#4 responsive** — issue-detail Attachments "attach link" inputs used
+  `min-w-[18rem]`/`min-w-[14rem]` and overflowed the ~22rem rail on smaller laptops →
+  switched to `w-full min-w-0 basis-full` (stack). Relations search input → `flex-1
+  min-w-0`. Issues-list search → `w-32 sm:w-48`. Shell layout (capped 1600, `min-w-0`
+  main, `shrink-0` aside) was already sound; the overflow was inner content.
+
+Verified (follow-ups): typecheck + lint green. The inline-highlight backdrop is the one
+change that benefits from an eyeball in the running app (alignment), though the technique
+degrades gracefully — plain prose shows no tint.
+
 ## 2026-05-27 — Release visibility & docs (v0.2.0)
 
 Post-v0.1.0 polish + docs. Relaxed `system.changelog`/`changelogFull`/`buildInfo` to

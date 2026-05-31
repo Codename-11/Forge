@@ -328,7 +328,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
               value={linkUrl}
               onChange={(e) => setLinkUrl(e.target.value)}
               placeholder="https://docs.google.com/document/…"
-              className="min-w-[18rem] flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ember"
+              className="w-full min-w-0 flex-1 basis-full rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ember"
             />
             <input
               type="text"
@@ -336,7 +336,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
               onChange={(e) => setLinkTitle(e.target.value)}
               placeholder="Optional title (defaults to hostname)"
               maxLength={255}
-              className="min-w-[14rem] flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ember"
+              className="w-full min-w-0 flex-1 basis-full rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ember"
             />
             <Button
               type="submit"

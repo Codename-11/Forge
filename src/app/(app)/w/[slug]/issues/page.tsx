@@ -236,7 +236,7 @@ export default function IssuesPage() {
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search…"
-                    className="h-7 w-48 pr-7 text-xs"
+                    className="h-7 w-32 pr-7 text-xs sm:w-48"
                   />
                   {searchPending && (
                     <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">

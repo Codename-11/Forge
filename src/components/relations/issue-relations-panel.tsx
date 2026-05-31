@@ -275,7 +275,7 @@ function AddRelationForm({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search by key or title…"
-              className="h-7 text-xs"
+              className="h-7 min-w-0 flex-1 text-xs"
               autoFocus
             />
           )}
