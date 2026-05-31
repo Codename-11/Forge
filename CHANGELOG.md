@@ -11,6 +11,16 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-05-31] — v0.3.1 · Auto-settle stale agent runs
+
+### Changed
+
+- **Finished agent runs stop lingering.** The stalled-run watchdog is now on by
+  default (idle ACTIVE runs auto-close after 30 minutes), so an agent turn that
+  ended without an explicit "done" no longer shows as a live run on the issue
+  page indefinitely. Tunable per workspace (`agentRunStaleMinutes`); set 0 to
+  disable.
+
 ## [2026-05-31] — v0.3.0 · Issues filtering & live composer UX
 
 ### Added
