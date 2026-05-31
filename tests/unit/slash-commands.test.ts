@@ -1,5 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { parseSlashCommands, parseDateExpression } from "@/lib/slash-commands";
+import {
+  matchTrailingCommand,
+  parseSlashCommands,
+  parseDateExpression,
+} from "@/lib/slash-commands";
+
+describe("matchTrailingCommand", () => {
+  it("matches a command at the end of a title and reports the slash index", () => {
+    const text = "Fix login bug /priority high";
+    const m = matchTrailingCommand(text);
+    expect(m?.command).toEqual({ kind: "priority", level: "high" });
+    expect(text.slice(0, m!.start)).toBe("Fix login bug ");
+  });
+
+  it("captures multi-word args intact (due / label)", () => {
+    expect(matchTrailingCommand("Ship it /due in 3 days")?.command.kind).toBe(
+      "due",
+    );
+    expect(matchTrailingCommand("Triage /label needs review")?.command).toEqual({
+      kind: "label",
+      name: "needs review",
+    });
+  });
+
+  it("matches a command that is the entire input", () => {
+    const m = matchTrailingCommand("/watch");
+    expect(m?.command).toEqual({ kind: "watch" });
+    expect(m?.start).toBe(0);
+  });
+
+  it("ignores a mid-token slash (URLs, and/or)", () => {
+    expect(matchTrailingCommand("see https://example.com/foo")).toBeNull();
+    expect(matchTrailingCommand("ship this and/or that")).toBeNull();
+  });
+
+  it("returns null when the tail is not a recognised command", () => {
+    expect(matchTrailingCommand("Fix bug /bogus thing")).toBeNull();
+    expect(matchTrailingCommand("Fix bug /assign")).toBeNull(); // no handle
+    expect(matchTrailingCommand("plain title")).toBeNull();
+  });
+});
 
 describe("parseSlashCommands", () => {
   it("returns the body unchanged when no commands present", () => {

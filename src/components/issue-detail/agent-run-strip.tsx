@@ -70,18 +70,22 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
           now,
         });
   const step =
-    run.currentStep ??
-    (state === "waiting"
-      ? "Waiting on you"
-      : state === "running"
-        ? "working…"
-        : state === "acknowledged"
-          ? "acknowledged · drafting…"
-          : state === "wake-sent"
-            ? `wake sent · waiting for ack${run.wakeAttempts > 1 ? ` (${run.wakeAttempts} attempts)` : ""}`
-            : state === "queued"
-              ? "queued · waking…"
-              : "no activity");
+    state === "idle"
+      ? run.currentStep
+        ? `${run.currentStep} · idle`
+        : "idle"
+      : (run.currentStep ??
+        (state === "waiting"
+          ? "Waiting on you"
+          : state === "running"
+            ? "working…"
+            : state === "acknowledged"
+              ? "acknowledged · drafting…"
+              : state === "wake-sent"
+                ? `wake sent · waiting for ack${run.wakeAttempts > 1 ? ` (${run.wakeAttempts} attempts)` : ""}`
+                : state === "queued"
+                  ? "queued · waking…"
+                  : "no activity"));
 
   return (
     <div
@@ -100,12 +104,18 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
     >
       <span className="relative flex h-2 w-2 shrink-0">
         {state === "running" || state === "acknowledged" ? (
+          // Live pulse only while events are still arriving. Once the
+          // agent's final turn lands (no events past the live window) the
+          // state settles to "idle" — a calm static dot, no ping — so the
+          // strip stops claiming active work the moment it's done.
           <>
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember opacity-60" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
           </>
         ) : state === "waiting" ? (
           <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
+        ) : state === "idle" ? (
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-ember/60" />
         ) : state === "stalled" ? (
           <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
         ) : (
@@ -153,6 +163,7 @@ type StripState =
   | "wake-sent"
   | "acknowledged"
   | "running"
+  | "idle"
   | "stalled"
   | "waiting";
 
@@ -163,9 +174,16 @@ function deriveStripState(input: {
   lastEventAt: Date;
   now: number;
 }): Exclude<StripState, "waiting"> {
+  // Live window: how recently an event must have arrived to still read as
+  // actively "running" (pulsing). Past this — but before the stale cutoff
+  // — the run has settled (its final turn landed) and shows a calm "idle"
+  // state instead of claiming ongoing work.
+  const LIVE_MS = 90_000;
   const STALE_MS = 5 * 60_000;
   if (input.outputStartedAt) {
-    return input.now - input.lastEventAt.getTime() > STALE_MS ? "stalled" : "running";
+    const idleMs = input.now - input.lastEventAt.getTime();
+    if (idleMs > STALE_MS) return "stalled";
+    return idleMs > LIVE_MS ? "idle" : "running";
   }
   if (input.acknowledgedAt) {
     return input.now - input.lastEventAt.getTime() > STALE_MS ? "stalled" : "acknowledged";

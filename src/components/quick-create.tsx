@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown, CornerDownLeft, X } from "lucide-react";
 import { toast } from "sonner";
 import { ArtifactType, NotificationSeverity } from "@prisma/client";
 import { cn } from "@/lib/utils";
@@ -15,8 +15,10 @@ import { NewCycleDialog } from "@/components/cycles/new-cycle-dialog";
 import { NewInitiativeDialog } from "@/components/initiatives/new-initiative-dialog";
 import { NewProjectDialog } from "@/components/projects/new-project-dialog";
 import {
+  matchTrailingCommand,
   parseSlashCommands,
   SLASH_COMMAND_HELP,
+  type SlashCommand,
 } from "@/lib/slash-commands";
 import {
   SlashAutocomplete,
@@ -32,6 +34,45 @@ const SEVERITIES = [
   NotificationSeverity.ERROR,
   NotificationSeverity.CRITICAL,
 ] as const;
+
+// Map a slash `/priority <level>` token onto the native priority chip value.
+const LEVEL_TO_PRIORITY: Record<string, Priority> = {
+  urgent: "URGENT",
+  high: "HIGH",
+  medium: "MEDIUM",
+  low: "LOW",
+  none: "NONE",
+};
+
+// Short, human label for a committed slash command rendered as a chip.
+function commandChipLabel(c: SlashCommand): string {
+  switch (c.kind) {
+    case "assign":
+      return `@${c.handle}`;
+    case "due":
+      return `due ${c.date.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      })}`;
+    case "label":
+      return c.name;
+    case "project":
+      return c.key;
+    case "watch":
+      return "watching";
+    case "unwatch":
+      return "unwatch";
+    case "priority":
+      return `!${c.level}`;
+  }
+}
+
+// Stable identity for a committed command — used both as a React key and
+// to remove a specific chip. Labels are de-duped on insert, so the
+// (kind,label) pair is unique within `committed`.
+function commandKey(c: SlashCommand): string {
+  return `${c.kind}:${commandChipLabel(c)}`;
+}
 
 type Mode =
   | { kind: "issue" }
@@ -106,6 +147,11 @@ export function QuickCreate() {
   const [text, setText] = useState("");
   const [priority, setPriority] = useState<Priority>("NONE");
   const [projectId, setProjectId] = useState<string>("");
+  // Slash commands the operator has "committed" into chips: assign / due /
+  // label / watch / unwatch (and any /project whose key didn't resolve to a
+  // loaded project). Priority + a resolved project sync onto the native
+  // controls instead, so the visible pickers always reflect the command.
+  const [committed, setCommitted] = useState<SlashCommand[]>([]);
   const [restored, setRestored] = useState(false);
   // Per-mode extras for the new agentic-OS destinations.
   const [artifactType, setArtifactType] = useState<ArtifactType>(
@@ -236,6 +282,7 @@ export function QuickCreate() {
       setText("");
       setPriority("NONE");
       setProjectId("");
+      setCommitted([]);
       setRestored(false);
       setSeedDescription("");
       setShowDescription(false);
@@ -410,6 +457,48 @@ export function QuickCreate() {
     ? "⌘⏎ add description"
     : null;
 
+  // Compose the final issue input from the raw title + committed chips +
+  // any command still trailing in the title. Returns the cleaned title,
+  // the merged `applyCommands` list, and the resolved priority / project
+  // (a /priority or resolvable /project syncs onto these rather than
+  // riding along as a command).
+  function resolveIssueComposition(raw: string): {
+    finalTitle: string;
+    applyCommands: SlashCommand[] | undefined;
+    priorityValue: Priority;
+    projectIdValue: string;
+  } {
+    let working = raw;
+    let priorityValue = priority;
+    let projectIdValue = projectId;
+    const flushed: SlashCommand[] = [];
+    const trailing = matchTrailingCommand(working);
+    if (trailing) {
+      working = working.slice(0, trailing.start).replace(/\s+$/, "");
+      const c = trailing.command;
+      if (c.kind === "priority") {
+        priorityValue = LEVEL_TO_PRIORITY[c.level] ?? priorityValue;
+      } else if (c.kind === "project") {
+        const match = projects?.items.find(
+          (p) => p.key.toUpperCase() === c.key.toUpperCase(),
+        );
+        if (match) projectIdValue = match.id;
+        else flushed.push(c);
+      } else {
+        flushed.push(c);
+      }
+    }
+    const { strippedBody, commands: leadingCommands } =
+      parseSlashCommands(working);
+    const all = [...committed, ...leadingCommands, ...flushed];
+    return {
+      finalTitle: strippedBody.trim(),
+      applyCommands: all.length > 0 ? all : undefined,
+      priorityValue,
+      projectIdValue,
+    };
+  }
+
   // ----- submit ----------------------------------------------------
 
   async function submit(secondary: boolean) {
@@ -427,56 +516,42 @@ export function QuickCreate() {
     try {
       switch (mode.kind) {
         case "issue": {
-          // Pull leading slash commands out of the value. For the
-          // single-line QuickCreate input, this lets users type
-          // "/priority high\nFix the bug" or just put commands at the
-          // start of the title field. The stripped tail becomes the
-          // title; if the tail is empty (only commands typed) we
-          // bail with a clear toast.
-          const { strippedBody, commands } = parseSlashCommands(value);
-          const finalTitle = strippedBody.trim();
-          if (!finalTitle) {
+          // Resolve title + commands. Most commands have already been
+          // committed into chips (priority/project synced onto the native
+          // pickers, the rest in `committed`), but the operator may have a
+          // trailing command still in the title (clicked Create / hit ⌘⏎
+          // before pressing ⏎ to commit it) — flush it here. Any
+          // leading-line command is also extracted for safety. If the
+          // title is empty after stripping, bail with a clear toast.
+          const resolved = resolveIssueComposition(value);
+          if (!resolved.finalTitle) {
             toast.error("Title required after slash commands.");
             return;
           }
-          const applyCommands = commands.length > 0 ? commands : undefined;
+          const { finalTitle, applyCommands, priorityValue, projectIdValue } =
+            resolved;
           // Seed description (note → issue path). If empty after trim,
           // stay omitted so we don't write blank descriptions.
           const seededDesc = seedDescription.trim() || undefined;
           // Capture the archive intent before close() resets state.
           const archiveTargetNoteId =
             archiveNoteId && archiveOnCreate ? archiveNoteId : null;
+          const issue = await createIssue.mutateAsync({
+            title: finalTitle,
+            description: seededDesc,
+            projectId: projectIdValue || undefined,
+            priority: priorityValue,
+            labelIds: [],
+            applyCommands,
+          });
+          await utils.issue.list.invalidate();
+          if (archiveTargetNoteId) {
+            archiveNote.mutate({ id: archiveTargetNoteId });
+          }
+          done(`Created #${issue.number}`);
           if (secondary) {
-            // Create + open: same as primary but route to the new issue.
-            const issue = await createIssue.mutateAsync({
-              title: finalTitle,
-              description: seededDesc,
-              projectId: projectId || undefined,
-              priority,
-              labelIds: [],
-              applyCommands,
-            });
-            await utils.issue.list.invalidate();
-            if (archiveTargetNoteId) {
-              archiveNote.mutate({ id: archiveTargetNoteId });
-            }
-            done(`Created #${issue.number}`);
             const base = ws ? `/w/${ws.slug}` : "";
             router.push(`${base}/issues/${issue.id}`);
-          } else {
-            const issue = await createIssue.mutateAsync({
-              title: finalTitle,
-              description: seededDesc,
-              projectId: projectId || undefined,
-              priority,
-              labelIds: [],
-              applyCommands,
-            });
-            await utils.issue.list.invalidate();
-            if (archiveTargetNoteId) {
-              archiveNote.mutate({ id: archiveTargetNoteId });
-            }
-            done(`Created #${issue.number}`);
           }
           return;
         }
@@ -589,19 +664,21 @@ export function QuickCreate() {
             await utils.issue.activity.invalidate({ issueId: mode.issueId });
             done("Comment added.");
           } else {
-            const { strippedBody, commands } = parseSlashCommands(value);
-            const finalTitle = strippedBody.trim();
-            if (!finalTitle) {
+            const resolved = resolveIssueComposition(value);
+            if (!resolved.finalTitle) {
               toast.error("Title required after slash commands.");
               return;
             }
             const issue = await createIssue.mutateAsync({
-              title: finalTitle,
+              title: resolved.finalTitle,
+              // Sub-issues inherit the parent's project; a resolved
+              // /project on the sub-issue is ignored, but an unresolved one
+              // still rides along in applyCommands for the server to apply.
               projectId: contextIssue?.projectId ?? undefined,
               parentId: mode.issueId,
-              priority,
+              priority: resolved.priorityValue,
               labelIds: [],
-              applyCommands: commands.length > 0 ? commands : undefined,
+              applyCommands: resolved.applyCommands,
             });
             await utils.issue.list.invalidate();
             done(`Created sub-issue #${issue.number}`);
@@ -626,18 +703,95 @@ export function QuickCreate() {
     textareaRef: inputRef,
   });
 
+  // Apply one parsed slash command. Priority + a resolvable project key
+  // sync onto the native pickers (so the chip / select visibly updates);
+  // everything else lands in `committed` as a removable chip. Re-applying
+  // a single-valued command (assign / due / project / watch|unwatch)
+  // replaces the prior one; labels accumulate (de-duped by name).
+  const applyCommand = useCallback(
+    (cmd: SlashCommand) => {
+      if (cmd.kind === "priority") {
+        setPriority(LEVEL_TO_PRIORITY[cmd.level] ?? "NONE");
+        return;
+      }
+      if (cmd.kind === "project") {
+        const match = projects?.items.find(
+          (p) => p.key.toUpperCase() === cmd.key.toUpperCase(),
+        );
+        if (match) {
+          setProjectId(match.id);
+          return;
+        }
+        // Unknown / not-yet-loaded key — keep it as a chip; the server
+        // resolves it by key on create.
+        setCommitted((prev) => [
+          ...prev.filter((c) => c.kind !== "project"),
+          cmd,
+        ]);
+        return;
+      }
+      setCommitted((prev) => {
+        if (cmd.kind === "label") {
+          const dup = prev.some(
+            (c) =>
+              c.kind === "label" &&
+              c.name.toLowerCase() === cmd.name.toLowerCase(),
+          );
+          return dup ? prev : [...prev, cmd];
+        }
+        if (cmd.kind === "watch" || cmd.kind === "unwatch") {
+          return [
+            ...prev.filter((c) => c.kind !== "watch" && c.kind !== "unwatch"),
+            cmd,
+          ];
+        }
+        // assign / due — single-valued.
+        return [...prev.filter((c) => c.kind !== cmd.kind), cmd];
+      });
+    },
+    [projects],
+  );
+
+  // Commit a trailing `/command arg` in the title into a chip, stripping
+  // it (and the whitespace before it) from the title. Returns true when a
+  // command was committed. Bound to Enter in the title input.
+  const tryCommitTrailing = useCallback((): boolean => {
+    const m = matchTrailingCommand(text);
+    if (!m) return false;
+    applyCommand(m.command);
+    setText(text.slice(0, m.start).replace(/\s+$/, ""));
+    return true;
+  }, [text, applyCommand]);
+
+  const removeCommitted = useCallback((key: string) => {
+    setCommitted((prev) => prev.filter((c) => commandKey(c) !== key));
+  }, []);
+
+  // Live "this tail is a valid command" detection — drives the inline
+  // "↵ apply …" hint so the operator sees the command is recognised
+  // before committing it.
+  const pendingCommand = useMemo(
+    () => (slashEnabled ? matchTrailingCommand(text) : null),
+    [slashEnabled, text],
+  );
+
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    // Let the autocomplete consume nav / Enter / Tab / Escape first
-    // when it's open. When it returns true, we bail before running the
-    // QuickCreate Enter-to-submit shortcut so users can pick items
-    // without firing a create.
-    if (slashEnabled && slash.onKeyDown(e)) return;
     if (e.key === "Enter") {
       e.preventDefault();
       const secondary = e.metaKey || e.ctrlKey;
+      // Plain ⏎ with a recognised command at the end of the title commits
+      // it into a chip and stays open (the title keeps just the prose).
+      // ⌘/Ctrl+⏎ skips straight to create+open — submit() flushes any
+      // trailing command itself, so nothing is lost.
+      if (!secondary && slashEnabled && tryCommitTrailing()) return;
+      // Mid-keyword (e.g. "/assi") with the dropdown open: let it insert
+      // the stub rather than submitting an incomplete command.
+      if (slashEnabled && slash.visible && slash.onKeyDown(e)) return;
       void submit(secondary);
       return;
     }
+    // Arrow / Tab / Escape → autocomplete navigation while it's open.
+    if (slashEnabled && slash.onKeyDown(e)) return;
     // Tab / Shift+Tab cycles through cyclable modes — issue-context
     // is sticky so users navigating from a `/issues/:id` page don't
     // get bumped out of the comment/sub-issue flow by stray Tab.
@@ -649,6 +803,7 @@ export function QuickCreate() {
       setMode({ kind: next } as Mode);
       setPriority("NONE");
       setProjectId("");
+      setCommitted([]);
       return;
     }
     // ⌘1..⌘7 jump straight to a mode without dragging through the
@@ -660,6 +815,7 @@ export function QuickCreate() {
         setMode({ kind: CYCLABLE_MODES[idx] } as Mode);
         setPriority("NONE");
         setProjectId("");
+        setCommitted([]);
       }
       return;
     }
@@ -709,12 +865,12 @@ export function QuickCreate() {
         role="dialog"
         aria-label={`Quick-create ${modeLabel}`}
         className={cn(
-          "pointer-events-auto w-full max-w-3xl overflow-hidden rounded-lg border border-border bg-card/95 shadow-xl backdrop-blur",
+          "pointer-events-auto w-full max-w-4xl overflow-hidden rounded-xl border border-border bg-card/95 shadow-xl backdrop-blur",
           MOTION.slideInTop,
         )}
       >
         {/* Top row: mode chip + input + hint */}
-        <div className="flex items-center gap-2 px-3 py-3">
+        <div className="flex items-center gap-2.5 px-4 py-3.5">
           <ModeChip
             mode={mode}
             onToggleIntent={() => {
@@ -725,12 +881,14 @@ export function QuickCreate() {
               });
             }}
             onSwitch={(kind) => {
-              // Switching modes resets per-mode pickers (priority + project)
-              // so a stale priority chip doesn't follow you from issue → sprint.
+              // Switching modes resets per-mode pickers (priority + project +
+              // committed slash chips) so stale state doesn't follow you
+              // from issue → sprint.
               if (mode.kind === "issue-context") return;
               setMode({ kind } as Mode);
               setPriority("NONE");
               setProjectId("");
+              setCommitted([]);
             }}
           />
           <div className="relative min-w-0 flex-1">
@@ -754,11 +912,25 @@ export function QuickCreate() {
               Restored
             </span>
           )}
-          {secondaryHint && (
-            <span className="hidden shrink-0 items-center gap-1 text-[0.6875rem] text-muted-foreground sm:inline-flex">
-              <Kbd>⌘⏎</Kbd>
-              <span>{secondaryHint.replace("⌘⏎ ", "")}</span>
+          {/* Live "valid command" hint — shows the moment the tail of the
+              title parses as a recognised command, so ⏎ visibly "applies"
+              it into a chip instead of creating. Takes precedence over the
+              ⌘⏎ secondary hint while a command is pending. */}
+          {pendingCommand ? (
+            <span className="hidden shrink-0 items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-1.5 py-0.5 text-[0.6875rem] text-ember sm:inline-flex">
+              <CornerDownLeft className="h-3 w-3" aria-hidden />
+              <span>apply</span>
+              <span className="font-mono">
+                {commandChipLabel(pendingCommand.command)}
+              </span>
             </span>
+          ) : (
+            secondaryHint && (
+              <span className="hidden shrink-0 items-center gap-1 text-[0.6875rem] text-muted-foreground sm:inline-flex">
+                <Kbd>⌘⏎</Kbd>
+                <span>{secondaryHint.replace("⌘⏎ ", "")}</span>
+              </span>
+            )
           )}
           <button
             type="button"
@@ -790,6 +962,7 @@ export function QuickCreate() {
                   setMode({ kind: m } as Mode);
                   setPriority("NONE");
                   setProjectId("");
+                  setCommitted([]);
                   inputRef.current?.focus();
                 }}
                 className={cn(
@@ -914,11 +1087,20 @@ export function QuickCreate() {
                     </span>
                   </span>
                 )}
+                {mode.intent === "sub-issue" && (
+                  <CommittedChips
+                    committed={committed}
+                    onRemove={removeCommitted}
+                  />
+                )}
               </>
             )}
 
             {mode.kind === "issue" && (
               <>
+                <span className="mr-0.5 font-mono uppercase tracking-wider opacity-70">
+                  priority
+                </span>
                 {PRIORITIES.map((p) => (
                   <PriorityChip
                     key={p}
@@ -930,21 +1112,14 @@ export function QuickCreate() {
                 {projects && projects.items.length > 0 && (
                   <>
                     <span className="mx-1 h-3 w-px bg-border" aria-hidden />
-                    <select
+                    <ProjectPickerChip
+                      projects={projects.items}
                       value={projectId}
-                      onChange={(e) => setProjectId(e.target.value)}
-                      aria-label="Project"
-                      className="focus-ring h-6 max-w-[180px] truncate rounded-md border border-border bg-background px-1.5 text-[0.6875rem] text-foreground"
-                    >
-                      <option value="">No project</option>
-                      {projects.items.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setProjectId}
+                    />
                   </>
                 )}
+                <CommittedChips committed={committed} onRemove={removeCommitted} />
               </>
             )}
 
@@ -1173,5 +1348,174 @@ function IntentChip({
     >
       {label}
     </button>
+  );
+}
+
+/**
+ * Themed project picker for the create overlay — replaces a native
+ * `<select>` so it matches the warm-earthy chip language of the rest of
+ * the row (a coloured dot + name, ember tint when set). Mirrors the
+ * ModeChip dropdown mechanics (outside-click close + stopPropagation so
+ * picking an item doesn't dismiss the overlay).
+ */
+function ProjectPickerChip({
+  projects,
+  value,
+  onChange,
+}: {
+  projects: { id: string; name: string; color?: string | null }[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const selected = projects.find((p) => p.id === value) ?? null;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Project"
+        className={cn(
+          "focus-ring inline-flex h-6 items-center gap-1.5 rounded-md border px-2 text-[0.6875rem] transition-colors",
+          selected
+            ? "border-ember/50 bg-ember/10 text-foreground"
+            : "border-border bg-background/60 text-muted-foreground hover:bg-subtle/60",
+        )}
+      >
+        {selected?.color && (
+          <span
+            className="h-2 w-2 shrink-0 rounded-sm"
+            style={{ backgroundColor: selected.color }}
+            aria-hidden
+          />
+        )}
+        <span className="max-w-[160px] truncate">
+          {selected ? selected.name : "No project"}
+        </span>
+        <ChevronDown className="h-2.5 w-2.5 opacity-70" aria-hidden />
+      </button>
+      {open && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          className="absolute left-0 top-[calc(100%+4px)] z-50 max-h-64 min-w-[200px] overflow-y-auto rounded-md border border-border bg-popover shadow-sm"
+        >
+          <ul role="listbox" className="py-1">
+            <ProjectOption
+              label="No project"
+              selected={!value}
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+              }}
+            />
+            {projects.map((p) => (
+              <ProjectOption
+                key={p.id}
+                label={p.name}
+                color={p.color}
+                selected={value === p.id}
+                onClick={() => {
+                  onChange(p.id);
+                  setOpen(false);
+                }}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectOption({
+  label,
+  selected,
+  onClick,
+  color,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+  color?: string | null;
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        role="option"
+        aria-selected={selected}
+        onClick={onClick}
+        className={cn(
+          "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-subtle",
+          selected && "bg-subtle/60 text-foreground",
+        )}
+      >
+        <span
+          className="h-2.5 w-2.5 shrink-0 rounded-sm"
+          style={{ backgroundColor: color ?? "transparent" }}
+          aria-hidden
+        />
+        <span className="flex-1 truncate">{label}</span>
+        {selected && <Check className="h-3 w-3 text-ember" aria-hidden />}
+      </button>
+    </li>
+  );
+}
+
+/**
+ * Committed slash-command chips (assign / due / label / watch / unwatch,
+ * plus any unresolved /project). Each is removable with the × — the
+ * source of truth is the parent's `committed` array. Priority + a
+ * resolvable project never appear here; they sync onto the native
+ * controls instead.
+ */
+function CommittedChips({
+  committed,
+  onRemove,
+}: {
+  committed: SlashCommand[];
+  onRemove: (key: string) => void;
+}) {
+  if (committed.length === 0) return null;
+  return (
+    <>
+      {committed.map((c) => {
+        const key = commandKey(c);
+        const text = commandChipLabel(c);
+        return (
+          <span
+            key={key}
+            className="inline-flex h-6 items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-1.5 text-[0.6875rem] text-foreground"
+          >
+            <span className="max-w-[140px] truncate">{text}</span>
+            <button
+              type="button"
+              aria-label={`Remove ${text}`}
+              onClick={() => onRemove(key)}
+              className="focus-ring -mr-0.5 rounded p-0.5 text-muted-foreground hover:bg-ember/20 hover:text-foreground"
+            >
+              <X className="h-2.5 w-2.5" aria-hidden />
+            </button>
+          </span>
+        );
+      })}
+    </>
   );
 }

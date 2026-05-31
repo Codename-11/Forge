@@ -32,6 +32,35 @@ import { Priority, StatusCategory, WorkItemKind } from "@prisma/client";
 export const UPDATED_SINCE_VALUES = ["1d", "3d", "7d", "30d"] as const;
 export type UpdatedSinceWindow = (typeof UPDATED_SINCE_VALUES)[number];
 
+/**
+ * Issue-list ordering. Not part of the saved-view filter blob — it's a
+ * per-user *view* preference (like density), threaded straight into
+ * `issue.list` as `sort`. Shared here so the server enum and the client
+ * control can't drift.
+ */
+export const ISSUE_SORT_VALUES = [
+  "priority",
+  "newest",
+  "oldest",
+  "updated",
+  "title",
+] as const;
+export type IssueSort = (typeof ISSUE_SORT_VALUES)[number];
+
+/**
+ * Client-side grouping dimension for the issue list. Purely presentational
+ * (the list still fetches a flat, server-sorted page and buckets it in the
+ * browser), so this never reaches the server.
+ */
+export const ISSUE_GROUP_VALUES = [
+  "status",
+  "project",
+  "assignee",
+  "priority",
+  "none",
+] as const;
+export type IssueGroupBy = (typeof ISSUE_GROUP_VALUES)[number];
+
 const cuidArray = z.array(z.string().cuid()).max(100);
 
 export const SavedViewFiltersSchema = z

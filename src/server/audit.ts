@@ -2,6 +2,7 @@ import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { EventKind } from "@prisma/client";
 import { publish } from "@/server/realtime";
+import { RUNTIME_KIND_LABEL } from "@/lib/runtime-kind";
 import { nanoid } from "nanoid";
 import { ensureCanonicalFromEvent } from "@/server/services/agent-dispatch-inbox";
 import { resolveRunEngine, getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
@@ -250,11 +251,17 @@ async function maybeWriteAssignmentSystemComment(
     : null;
   const actorLabel = actor?.name ?? actor?.handle ?? "the system";
 
-  const runtimeLabel = agent.runtime?.kind ?? "unknown";
+  // Humanize the runtime kind — the raw enum (`REMOTE_HTTP`) reads badly
+  // and its embedded underscore breaks the `_…_` markdown emphasis,
+  // surfacing literal underscores in the thread. Omit the line entirely
+  // when the agent has no runtime rather than printing "unknown".
+  const runtimeLabel = agent.runtime
+    ? RUNTIME_KIND_LABEL[agent.runtime.kind]
+    : null;
 
   const body =
-    `**@${agent.profileKey}** was assigned by **@${actorLabel}**.\n\n` +
-    `_Runtime: ${runtimeLabel}._`;
+    `**@${agent.profileKey}** was assigned by **@${actorLabel}**.` +
+    (runtimeLabel ? `\n\n_Runtime: ${runtimeLabel}._` : "");
 
   await tx.comment.create({
     data: {

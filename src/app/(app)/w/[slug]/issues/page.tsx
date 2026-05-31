@@ -23,6 +23,11 @@ import {
   type CycleFilter,
   type InitiativeFilter,
 } from "@/components/saved-views/filter-chips";
+import {
+  GroupChip,
+  IssueFacetChips,
+  SortChip,
+} from "@/components/saved-views/facet-chips";
 import { QuickFilterChips } from "@/components/saved-views/quick-filter-chips";
 import {
   SavedViewsBar,
@@ -33,7 +38,11 @@ import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 import {
   isEmptyFilters,
+  ISSUE_GROUP_VALUES,
+  ISSUE_SORT_VALUES,
   safeParseFilters,
+  type IssueGroupBy,
+  type IssueSort,
   type SavedViewFilters,
 } from "@/lib/saved-view-filters";
 
@@ -61,6 +70,19 @@ export default function IssuesPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [view, setView] = useViewPref("issues");
+  // Sort + group-by are per-user *view* preferences (not saved-view
+  // filters): persisted in localStorage, threaded into the query (sort)
+  // and the list grouping (groupBy).
+  const [sort, setSort] = useStoredPref<IssueSort>(
+    "forge:issues:sort",
+    "priority",
+    ISSUE_SORT_VALUES,
+  );
+  const [groupBy, setGroupBy] = useStoredPref<IssueGroupBy>(
+    "forge:issues:group",
+    "status",
+    ISSUE_GROUP_VALUES,
+  );
   const [query, setQuery] = useState("");
   // Debounced mirror of `query` — only this value reaches the list
   // query, so typing doesn't fire a request per keystroke. `query`
@@ -214,7 +236,7 @@ export default function IssuesPage() {
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search…"
-                    className="h-7 w-48 pr-7 text-xs"
+                    className="h-7 w-32 pr-7 text-xs sm:w-48"
                   />
                   {searchPending && (
                     <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
@@ -249,9 +271,11 @@ export default function IssuesPage() {
             onCreate={() => setSaveOpen(true)}
           />
 
-          {/* Sprint + Initiative selectors — single-pick today, projected
-              onto the saved-view array fields under the hood. */}
+          {/* Facet chips (multi-select, projected onto saved-view array
+              fields) + Sprint/Initiative (single-pick). Sort — and Group,
+              list view only — are pinned right. */}
           <div className="flex flex-wrap items-center gap-2 pt-1">
+            <IssueFacetChips filters={filters} onChange={onChangeFilters} />
             <CycleFilterChip value={cycleId} onChange={setCycleId} />
             <InitiativeFilterChip
               value={initiativeId}
@@ -270,6 +294,12 @@ export default function IssuesPage() {
                 Clear filters
               </button>
             )}
+            <div className="ml-auto flex items-center gap-2">
+              {view === "list" && (
+                <GroupChip value={groupBy} onChange={setGroupBy} />
+              )}
+              <SortChip value={sort} onChange={setSort} />
+            </div>
           </div>
         </div>
       )}
@@ -306,6 +336,8 @@ export default function IssuesPage() {
             <IssueList
               workspaceKey={key}
               extraFilters={issueQueryFilters}
+              sort={sort}
+              groupBy={groupBy}
               dueOn={dueOn ?? undefined}
               emptyOverride={
                 hasFilters ? (
@@ -420,6 +452,35 @@ function DueOnChip({
       </button>
     </span>
   );
+}
+
+/**
+ * localStorage-backed string preference, validated against an allow-list
+ * so a hand-edited / stale value can't poison the query. Mirrors
+ * `useViewPref` but generic over the value union (used for sort + group).
+ */
+function useStoredPref<T extends string>(
+  key: string,
+  fallback: T,
+  allowed: readonly T[],
+) {
+  const [val, setVal] = useState<T>(fallback);
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(key);
+      if (stored && (allowed as readonly string[]).includes(stored)) {
+        setVal(stored as T);
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  const update = (v: T) => {
+    setVal(v);
+    try {
+      window.localStorage.setItem(key, v);
+    } catch {}
+  };
+  return [val, update] as const;
 }
 
 /**

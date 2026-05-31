@@ -11,6 +11,43 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-05-31] — v0.3.0 · Issues filtering & live composer UX
+
+### Added
+
+- **Filter, sort & group your issues.** The issues list gains multi-select
+  **Status / Priority / Project / Assignee / Label** filters, a **Sort**
+  control (priority, newest, oldest, recently updated, title A–Z), and a
+  **Group by** control (status, project, assignee, priority, or none). Sort
+  and grouping are remembered per browser.
+- **Slash commands that show their work.** In the new-issue overlay (⇧C),
+  typing a command like `/priority high`, `/assign @victor`, `/due tomorrow`,
+  `/label bug`, or `/project AXI` now lights up the matching picker (priority,
+  project) or drops a removable **chip** the moment it's valid — press ⏎ to
+  apply it and keep only your title text. A live "↵ apply …" hint shows when
+  a command is recognized.
+- **See your @mentions and /commands as you type.** The issue description and
+  comment composers now highlight `@mentions` and recognised `/command` lines
+  inline while you type, before you submit.
+
+### Changed
+
+- **Roomier create overlay.** The ⇧C quick-create panel is a touch larger
+  with a cleaner layout, and the project picker now matches the rest of the
+  app's styling instead of a plain dropdown.
+
+### Fixed
+
+- **Agent runtime reads cleanly.** The "X was assigned by Y" note in an
+  issue's timeline now shows a tidy runtime label (e.g. "remote webhook")
+  instead of the raw `REMOTE_HTTP` with stray underscores.
+- **Live run status settles when work ends.** The agent run strip on an issue
+  stops pulsing "working…" and settles to a calm "idle" state once the agent's
+  turn finishes, instead of looking busy for minutes afterward.
+- **Issue detail fits smaller screens.** The Attachments "attach link" form no
+  longer overflows the side panel on smaller laptops, and the issue detail +
+  issues list read cleanly down to mobile widths.
+
 ## [2026-05-27] — v0.2.0 · Release visibility & docs
 
 ### Added
