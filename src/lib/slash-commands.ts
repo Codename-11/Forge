@@ -173,7 +173,7 @@ export function parseDateExpression(raw: string, now = new Date()): Date | null 
  * Try to parse a single slash-command line into a structured command.
  * Returns null on no-match (or unrecognised arg).
  */
-function parseLine(raw: string, now: Date): SlashCommand | null {
+export function parseLine(raw: string, now: Date): SlashCommand | null {
   const m = raw.trim().match(/^\/(\w+)\s*(.*)$/);
   if (!m) return null;
   const cmd = m[1].toLowerCase();
@@ -214,6 +214,37 @@ function parseLine(raw: string, now: Date): SlashCommand | null {
     default:
       return null;
   }
+}
+
+/**
+ * Find a trailing slash command at the END of an inline, single-line
+ * input — e.g. the title field "Fix login bug /priority high". Returns
+ * the parsed command plus the index where the `/` token begins (so the
+ * caller can splice it out of the title), or null if the tail isn't a
+ * recognised command.
+ *
+ * Used by QuickCreate to "commit" a typed command into a chip. Only the
+ * LAST slash-token is considered, and the whole tail from that slash to
+ * end-of-string must parse — so multi-word args ("/due in 3 days",
+ * "/label needs review") are captured intact. A `/` mid-token
+ * ("https://…", "and/or") is never a match because the slash must be
+ * preceded by start-of-string or whitespace.
+ */
+export function matchTrailingCommand(
+  text: string,
+  now: Date = new Date(),
+): { command: SlashCommand; start: number } | null {
+  let slash = -1;
+  for (let i = text.length - 1; i >= 0; i--) {
+    if (text[i] === "/" && (i === 0 || /\s/.test(text[i - 1]))) {
+      slash = i;
+      break;
+    }
+  }
+  if (slash === -1) return null;
+  const command = parseLine(text.slice(slash), now);
+  if (!command) return null;
+  return { command, start: slash };
 }
 
 /**
