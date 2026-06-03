@@ -15,6 +15,13 @@ Gate on merged `main`: `pnpm lint && pnpm typecheck && pnpm test` (741 pass /
 1 skipped) and `pnpm test:e2e` (20 pass, including the 390/430/768 mobile
 smoke spec).
 
+Deploy smoke for v0.4.0 confirmed the container was running SHA `c0dbac2`, but
+also exposed an existing changelog parser bug: bracketed ISO-date headings were
+split at the first hyphen, leaving `system.buildInfo.release` null. Patched the
+parser/test coverage and bumped a follow-up `v0.4.1` patch release before
+redeploying. Patch gate: `pnpm lint && pnpm typecheck && pnpm test` (741 pass /
+1 skipped) and `E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
+
 ## 2026-06-02 — Mobile UI/UX worktree + Hermes runtime diagnostics scope
 
 Created the `mobile-ui-ux-enhancement` worktree at `/home/bailey/forge-mobile-ui-ux`
