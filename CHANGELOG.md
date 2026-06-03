@@ -11,6 +11,15 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-06-03] — v0.4.2 · Build version reporting
+
+### Fixed
+
+- **Version chip reports the tagged package version.** `system.buildInfo` now
+  reads `package.json` in standalone Docker images when `npm_package_version`
+  is absent, so the in-app release chip shows the deployed Forge version
+  instead of the fallback `v1.0.0`.
+
 ## [2026-06-03] — v0.4.1 · Release metadata visibility
 
 ### Fixed

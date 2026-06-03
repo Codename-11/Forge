@@ -39,9 +39,23 @@ interface CachedChangelog {
 }
 
 let _cache: CachedChangelog | null = null;
+let _packageVersion: string | null | undefined;
 
 function changelogPath(): string {
   return path.join(process.cwd(), "CHANGELOG.md");
+}
+
+async function readPackageVersion(): Promise<string> {
+  if (process.env.npm_package_version) return process.env.npm_package_version;
+  if (_packageVersion !== undefined) return _packageVersion ?? "1.0.0";
+  try {
+    const raw = await fs.readFile(path.join(process.cwd(), "package.json"), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    _packageVersion = typeof parsed.version === "string" ? parsed.version : null;
+  } catch {
+    _packageVersion = null;
+  }
+  return _packageVersion ?? "1.0.0";
 }
 
 async function readChangelog(): Promise<CachedChangelog> {
@@ -170,8 +184,9 @@ export const systemRouter = router({
    */
   buildInfo: protectedProcedure.query(async () => {
     const cache = await readChangelog();
+    const version = await readPackageVersion();
     return {
-      version: process.env.npm_package_version ?? "1.0.0",
+      version,
       gitSha: process.env.FORGE_GIT_SHA || null,
       buildTime: process.env.FORGE_BUILD_TIME || null,
       release: cache.entries.find((e) => e.date)?.version ?? null,
