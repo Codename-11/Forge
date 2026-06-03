@@ -22,6 +22,14 @@ parser/test coverage and bumped a follow-up `v0.4.1` patch release before
 redeploying. Patch gate: `pnpm lint && pnpm typecheck && pnpm test` (741 pass /
 1 skipped) and `E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
 
+Follow-up smoke on v0.4.1 passed for authenticated sign-in, deployed SHA,
+release date, mobile inbox overflow, MCP `issues.list`, and issue create/status
+transition, but showed `system.buildInfo.version` still falling back to `1.0.0`
+inside the standalone Docker runtime. Added a package.json fallback for runtime
+version reporting and bumped `v0.4.2`.
+Gate: `pnpm lint && pnpm typecheck && pnpm test` (741 pass / 1 skipped) and
+`E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
+
 ## 2026-06-02 — Mobile UI/UX worktree + Hermes runtime diagnostics scope
 
 Created the `mobile-ui-ux-enhancement` worktree at `/home/bailey/forge-mobile-ui-ux`
