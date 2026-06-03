@@ -33,11 +33,7 @@ import { trpc } from "@/lib/trpc";
 import { useHotkey } from "@/lib/keyboard";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
-import type {
-  IssueGroupBy,
-  IssueSort,
-  SavedViewFilters,
-} from "@/lib/saved-view-filters";
+import type { IssueGroupBy, IssueSort, SavedViewFilters } from "@/lib/saved-view-filters";
 
 export function IssueList({
   workspaceKey,
@@ -112,10 +108,7 @@ export function IssueList({
   const { data: unread } = trpc.issue.unreadIds.useQuery(undefined, {
     staleTime: 30_000,
   });
-  const unreadSet = useMemo(
-    () => new Set(unread?.ids ?? []),
-    [unread?.ids],
-  );
+  const unreadSet = useMemo(() => new Set(unread?.ids ?? []), [unread?.ids]);
   const utils = trpc.useUtils();
   const ws = useMaybeWorkspace();
   const base = ws ? `/w/${ws.slug}` : "";
@@ -143,9 +136,7 @@ export function IssueList({
     }>
   >(() => {
     if (groupBy === "none") {
-      return filtered.length
-        ? [{ key: "all", label: "", issues: filtered }]
-        : [];
+      return filtered.length ? [{ key: "all", label: "", issues: filtered }] : [];
     }
 
     if (groupBy === "status") {
@@ -294,28 +285,25 @@ export function IssueList({
 
   orderedIdsRef.current = filtered.map((i) => i.id);
 
-  const toggleSelected = useCallback(
-    (id: string, opts?: { range?: boolean }) => {
-      setSelected((prev) => {
-        const next = new Set(prev);
-        if (opts?.range && lastClickedRef.current) {
-          const list = orderedIdsRef.current;
-          const a = list.indexOf(lastClickedRef.current);
-          const b = list.indexOf(id);
-          if (a >= 0 && b >= 0) {
-            const [lo, hi] = a < b ? [a, b] : [b, a];
-            for (let i = lo; i <= hi; i++) next.add(list[i]);
-            return next;
-          }
+  const toggleSelected = useCallback((id: string, opts?: { range?: boolean }) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (opts?.range && lastClickedRef.current) {
+        const list = orderedIdsRef.current;
+        const a = list.indexOf(lastClickedRef.current);
+        const b = list.indexOf(id);
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          for (let i = lo; i <= hi; i++) next.add(list[i]);
+          return next;
         }
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      });
-      lastClickedRef.current = id;
-    },
-    [],
-  );
+      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    lastClickedRef.current = id;
+  }, []);
 
   const clearSelection = useCallback(() => setSelected(new Set()), []);
 
@@ -367,10 +355,7 @@ export function IssueList({
     { archived: false, limit: 100 },
     { enabled: projectPickerOpen },
   );
-  const { data: cyclesData } = trpc.cycle.list.useQuery(
-    {},
-    { enabled: cyclePickerOpen },
-  );
+  const { data: cyclesData } = trpc.cycle.list.useQuery({}, { enabled: cyclePickerOpen });
 
   // ---- Bulk mutations (Phase 0 procs) ----------------------------------
   const bulkTransition = trpc.issue.bulkTransition.useMutation({
@@ -518,16 +503,9 @@ export function IssueList({
       label: null,
       render: (cls) => (
         <SnoozeMenu
-          onSelect={(until) =>
-            snoozeManyM.mutate({ ids: selectedArray, until })
-          }
+          onSelect={(until) => snoozeManyM.mutate({ ids: selectedArray, until })}
           trigger={
-            <button
-              type="button"
-              disabled={bulkPending}
-              title="Snooze selected"
-              className={cls}
-            >
+            <button type="button" disabled={bulkPending} title="Snooze selected" className={cls}>
               <CalendarClock className="h-3 w-3" />
               Snooze for…
             </button>
@@ -586,14 +564,10 @@ export function IssueList({
   return (
     <div className="relative">
       {enableBulk && selected.size > 0 && (
-        <BulkBar
-          count={selected.size}
-          onClear={clearSelection}
-          actions={bulkActions}
-        />
+        <BulkBar count={selected.size} onClear={clearSelection} actions={bulkActions} />
       )}
       {enableBulk && selected.size === 0 && (
-        <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-background/95 px-5 py-1.5 text-xs backdrop-blur">
+        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-background/95 px-3 py-1.5 text-xs backdrop-blur sm:gap-3 sm:px-5">
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
@@ -606,7 +580,7 @@ export function IssueList({
             />
             <span className="text-muted-foreground">Select all</span>
           </label>
-          <span className="text-meta text-muted-foreground/70">
+          <span className="text-meta hidden text-muted-foreground/70 sm:inline">
             <Kbd>x</Kbd> select hovered · Shift+Click for range
           </span>
         </div>
@@ -614,14 +588,11 @@ export function IssueList({
       {groups.map((group) => (
         <div key={group.key}>
           {group.label !== "" && (
-            <div className="sticky top-0 z-[5] flex items-center gap-2 border-b border-border bg-card/80 px-5 py-1.5 backdrop-blur">
+            <div className="sticky top-0 z-[5] flex items-center gap-2 border-b border-border bg-card/80 px-3 py-1.5 backdrop-blur sm:px-5">
               {group.status ? (
                 <StatusDot status={group.status} size={12} />
               ) : (
-                <span
-                  className="h-2.5 w-2.5 rounded-full bg-muted-foreground/40"
-                  aria-hidden
-                />
+                <span className="h-2.5 w-2.5 rounded-full bg-muted-foreground/40" aria-hidden />
               )}
               <span className="text-xs font-medium">{group.label}</span>
               <span className="text-meta tabular-nums text-muted-foreground">
@@ -646,7 +617,7 @@ export function IssueList({
                       }),
                     );
                   }}
-                  className="focus-ring ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:text-ember"
+                  className="focus-ring text-meta ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:text-ember"
                 >
                   <Plus className="h-3 w-3" />
                   Add issue
@@ -656,174 +627,254 @@ export function IssueList({
           )}
           <div className="divide-y divide-border">
             {group.issues.map((issue) => {
-          const i = orderedIdsRef.current.indexOf(issue.id);
-          const on = selected.has(issue.id);
-          const isUnread = unreadSet.has(issue.id);
-          const isSnoozed =
-            !!issue.snoozedUntil &&
-            new Date(issue.snoozedUntil).getTime() > Date.now();
-          const rowCls = compact
-            ? "row gap-2 px-5 py-1.5 hover:bg-subtle/60"
-            : "row h-10 gap-3 px-5 hover:bg-subtle/60";
-          const keyCls = compact
-            ? "w-20 shrink-0 text-id text-muted-foreground"
-            : "w-20 shrink-0 text-id text-muted-foreground";
-          const titleCls = cn(
-            compact ? "truncate text-[0.75rem]" : "truncate text-sm",
-            // Subtle bolden for unread rows — just enough weight to
-            // register at a glance, no badge / color shift.
-            isUnread && "font-semibold",
-          );
-          return (
-            <div
-              key={issue.id}
-              className={cn(rowCls, on && "bg-ember/5", staggerRows && "forge-row-rise")}
-              style={
-                staggerRows
-                  ? ({ "--row-i": Math.min(i, 8) } as React.CSSProperties)
-                  : undefined
-              }
-              onMouseEnter={() => (hoveredRowRef.current = issue.id)}
-              onMouseLeave={() => {
-                if (hoveredRowRef.current === issue.id)
-                  hoveredRowRef.current = null;
-              }}
-            >
-              {enableBulk && (
-                <input
-                  type="checkbox"
-                  checked={on}
-                  onClick={(e) => {
-                    if (e.shiftKey) {
-                      e.preventDefault();
-                      toggleSelected(issue.id, { range: true });
-                    }
+              const i = orderedIdsRef.current.indexOf(issue.id);
+              const on = selected.has(issue.id);
+              const isUnread = unreadSet.has(issue.id);
+              const isSnoozed =
+                !!issue.snoozedUntil && new Date(issue.snoozedUntil).getTime() > Date.now();
+              const rowCls = compact
+                ? "flex items-start gap-2 px-3 py-2 hover:bg-subtle/60 sm:row sm:px-5 sm:py-1.5"
+                : "flex items-start gap-2 px-3 py-2.5 hover:bg-subtle/60 sm:row sm:h-10 sm:gap-3 sm:px-5 sm:py-0";
+              const keyCls = compact
+                ? "w-20 shrink-0 text-id text-muted-foreground sm:text-muted-foreground"
+                : "w-20 shrink-0 text-id text-muted-foreground sm:text-muted-foreground";
+              const titleCls = cn(
+                compact
+                  ? "text-[0.75rem] text-foreground sm:truncate"
+                  : "text-sm text-foreground sm:truncate",
+                // Subtle bolden for unread rows — just enough weight to
+                // register at a glance, no badge / color shift.
+                isUnread && "font-semibold",
+              );
+              return (
+                <div
+                  key={issue.id}
+                  className={cn(rowCls, on && "bg-ember/5", staggerRows && "forge-row-rise")}
+                  style={
+                    staggerRows ? ({ "--row-i": Math.min(i, 8) } as React.CSSProperties) : undefined
+                  }
+                  onMouseEnter={() => (hoveredRowRef.current = issue.id)}
+                  onMouseLeave={() => {
+                    if (hoveredRowRef.current === issue.id) hoveredRowRef.current = null;
                   }}
-                  onChange={(e) => {
-                    if (!(e.nativeEvent as MouseEvent).shiftKey)
-                      toggleSelected(issue.id);
-                  }}
-                  className="h-3.5 w-3.5 rounded border-border"
-                  aria-label="Select issue"
-                />
-              )}
-              <Link
-                href={`${base}/issues/${issue.id}`}
-                className={cn(
-                  "row min-w-0 flex-1 gap-3",
-                  compact ? "py-0" : "h-10",
-                )}
-              >
-                {/* Unread dot — quiet hint that a watched issue has
+                >
+                  {enableBulk && (
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onClick={(e) => {
+                        if (e.shiftKey) {
+                          e.preventDefault();
+                          toggleSelected(issue.id, { range: true });
+                        }
+                      }}
+                      onChange={(e) => {
+                        if (!(e.nativeEvent as MouseEvent).shiftKey) toggleSelected(issue.id);
+                      }}
+                      className="h-3.5 w-3.5 rounded border-border"
+                      aria-label="Select issue"
+                    />
+                  )}
+                  <Link
+                    href={`${base}/issues/${issue.id}`}
+                    className={cn("min-w-0 flex-1", compact ? "py-0" : "sm:h-10")}
+                  >
+                    <div className="min-w-0 space-y-1.5 sm:hidden">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span
+                          aria-label={isUnread ? "Unread activity" : undefined}
+                          title={isUnread ? "New activity since you last viewed" : undefined}
+                          className="flex w-1.5 shrink-0 items-center justify-center"
+                        >
+                          {isUnread && (
+                            <span aria-hidden className="block h-1.5 w-1.5 rounded-full bg-ember" />
+                          )}
+                        </span>
+                        <PriorityGlyph priority={issue.priority} className="w-4" />
+                        {issue.kind && issue.kind !== "ISSUE" && (
+                          <WorkItemKindGlyph kind={issue.kind} size={12} className="shrink-0" />
+                        )}
+                        <span className={cn(keyCls, "text-foreground/70")}>
+                          {formatIssueId(workspaceKey, issue.number)}
+                        </span>
+                        {issue._count.comments > 0 && (
+                          <span
+                            className="text-meta ml-auto inline-flex shrink-0 items-center gap-1 text-muted-foreground"
+                            title={`${issue._count.comments} comment${issue._count.comments === 1 ? "" : "s"}`}
+                          >
+                            <MessageSquare className="h-3 w-3" />
+                            <span className="tabular-nums">{issue._count.comments}</span>
+                          </span>
+                        )}
+                        {issue.project && (
+                          <Badge
+                            className={cn("shrink-0", issue._count.comments === 0 && "ml-auto")}
+                            color={issue.project.color ?? undefined}
+                          >
+                            {issue.project.key}
+                          </Badge>
+                        )}
+                      </div>
+                      <IssueHoverPreview
+                        issueKey={formatIssueId(workspaceKey, issue.number)}
+                        workspaceSlug={ws?.slug}
+                        className={cn("block min-w-0 break-words leading-snug", titleCls)}
+                      >
+                        {issue.title}
+                      </IssueHoverPreview>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="flex shrink-0 items-center gap-1.5">
+                          <StatusDot status={issue.status} />
+                          <span className="text-meta text-muted-foreground">
+                            {issue.status.name}
+                          </span>
+                        </span>
+                        {issue.assignedAgent && (
+                          <AgentHoverPreview agentId={issue.assignedAgent.id}>
+                            <span
+                              className="text-meta flex min-w-0 items-center gap-1 text-muted-foreground"
+                              title={`Agent: ${issue.assignedAgent.name}`}
+                            >
+                              <AgentPresenceDot
+                                status={issue.assignedAgent.status}
+                                size="sm"
+                                availability={presenceAvailability(issue.assignedAgent)}
+                              />
+                              <span className="text-id truncate">
+                                @{issue.assignedAgent.profileKey}
+                              </span>
+                            </span>
+                          </AgentHoverPreview>
+                        )}
+                        <div className="flex -space-x-1.5">
+                          {issue.assignees.slice(0, 3).map((a) => (
+                            <Avatar
+                              key={a.userId}
+                              name={a.user.name}
+                              image={a.user.image}
+                              size={16}
+                              className="ring-1 ring-background"
+                            />
+                          ))}
+                        </div>
+                        {isSnoozed && (
+                          <span
+                            className="text-meta inline-flex items-center gap-1 text-muted-foreground"
+                            title={`Snoozed until ${new Date(issue.snoozedUntil!).toLocaleString()}`}
+                          >
+                            <CalendarClock className="h-3 w-3" />
+                            <span>Snoozed</span>
+                          </span>
+                        )}
+                        <span className="text-meta text-muted-foreground">
+                          {relativeTime(issue.createdAt)}
+                        </span>
+                      </div>
+                      {issue.labels.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1">
+                          {issue.labels.slice(0, 2).map((l) => (
+                            <LabelChip key={l.labelId} label={l.label} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="row hidden min-w-0 flex-1 gap-3 sm:flex">
+                      {/* Unread dot — quiet hint that a watched issue has
                     activity since the user last viewed it. The 1.5-wide
                     slot is reserved on every row so adjacent columns
                     don't shift when the dot toggles. */}
-                <span
-                  aria-label={isUnread ? "Unread activity" : undefined}
-                  title={
-                    isUnread ? "New activity since you last viewed" : undefined
-                  }
-                  className="flex w-1.5 shrink-0 items-center justify-center"
-                >
-                  {isUnread && (
-                    <span
-                      aria-hidden
-                      className="block h-1.5 w-1.5 rounded-full bg-ember"
-                    />
-                  )}
-                </span>
-                <PriorityGlyph priority={issue.priority} className="w-4" />
-                {issue.kind && issue.kind !== "ISSUE" && (
-                  <WorkItemKindGlyph
-                    kind={issue.kind}
-                    size={12}
-                    className="shrink-0"
-                  />
-                )}
-                <span className={keyCls}>
-                  {formatIssueId(workspaceKey, issue.number)}
-                </span>
-                <span className="flex shrink-0 items-center gap-1.5">
-                  <StatusDot status={issue.status} />
-                  <span className="text-meta text-muted-foreground">
-                    {issue.status.name}
-                  </span>
-                </span>
-                <IssueHoverPreview
-                  issueKey={formatIssueId(workspaceKey, issue.number)}
-                  workspaceSlug={ws?.slug}
-                  className={cn("block min-w-0", titleCls)}
-                >
-                  {issue.title}
-                </IssueHoverPreview>
-                {/* Up to 2 label chips — hidden on narrow viewports so the
-                    title + key never get crowded out. */}
-                {issue.labels.length > 0 && (
-                  <div className="hidden shrink-0 items-center gap-1 md:flex">
-                    {issue.labels.slice(0, 2).map((l) => (
-                      <LabelChip key={l.labelId} label={l.label} />
-                    ))}
-                  </div>
-                )}
-                {issue.project && (
-                  <Badge className="ml-2 shrink-0" color={issue.project.color ?? undefined}>
-                    {issue.project.key}
-                  </Badge>
-                )}
-                <div className="ml-auto flex items-center gap-3">
-                  {issue._count.comments > 0 && (
-                    <span
-                      className="inline-flex items-center gap-1 text-meta text-muted-foreground"
-                      title={`${issue._count.comments} comment${issue._count.comments === 1 ? "" : "s"}`}
-                    >
-                      <MessageSquare className="h-3 w-3" />
-                      <span className="tabular-nums">{issue._count.comments}</span>
-                    </span>
-                  )}
-                  {isSnoozed && (
-                    <span
-                      className="inline-flex items-center gap-1 text-meta text-muted-foreground"
-                      title={`Snoozed until ${new Date(issue.snoozedUntil!).toLocaleString()}`}
-                    >
-                      <CalendarClock className="h-3 w-3" />
-                      <span>Snoozed</span>
-                    </span>
-                  )}
-                  <span className="text-meta text-muted-foreground">
-                    {relativeTime(issue.createdAt)}
-                  </span>
-                  {issue.assignedAgent && (
-                    <AgentHoverPreview agentId={issue.assignedAgent.id}>
                       <span
-                        className="flex items-center gap-1 text-meta text-muted-foreground"
-                        title={`Agent: ${issue.assignedAgent.name}`}
+                        aria-label={isUnread ? "Unread activity" : undefined}
+                        title={isUnread ? "New activity since you last viewed" : undefined}
+                        className="flex w-1.5 shrink-0 items-center justify-center"
                       >
-                        <AgentPresenceDot
-                          status={issue.assignedAgent.status}
-                          size="sm"
-                          availability={presenceAvailability(issue.assignedAgent)}
-                        />
-                        <span className="text-id">
-                          @{issue.assignedAgent.profileKey}
-                        </span>
+                        {isUnread && (
+                          <span aria-hidden className="block h-1.5 w-1.5 rounded-full bg-ember" />
+                        )}
                       </span>
-                    </AgentHoverPreview>
-                  )}
-                  <div className="flex -space-x-1.5">
-                    {issue.assignees.slice(0, 3).map((a) => (
-                      <Avatar
-                        key={a.userId}
-                        name={a.user.name}
-                        image={a.user.image}
-                        size={compact ? 16 : 18}
-                        className="ring-1 ring-background"
-                      />
-                    ))}
-                  </div>
+                      <PriorityGlyph priority={issue.priority} className="w-4" />
+                      {issue.kind && issue.kind !== "ISSUE" && (
+                        <WorkItemKindGlyph kind={issue.kind} size={12} className="shrink-0" />
+                      )}
+                      <span className={keyCls}>{formatIssueId(workspaceKey, issue.number)}</span>
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        <StatusDot status={issue.status} />
+                        <span className="text-meta text-muted-foreground">{issue.status.name}</span>
+                      </span>
+                      <IssueHoverPreview
+                        issueKey={formatIssueId(workspaceKey, issue.number)}
+                        workspaceSlug={ws?.slug}
+                        className={cn("block min-w-0", titleCls)}
+                      >
+                        {issue.title}
+                      </IssueHoverPreview>
+                      {/* Up to 2 label chips — hidden on narrow viewports so the
+                    title + key never get crowded out. */}
+                      {issue.labels.length > 0 && (
+                        <div className="hidden shrink-0 items-center gap-1 md:flex">
+                          {issue.labels.slice(0, 2).map((l) => (
+                            <LabelChip key={l.labelId} label={l.label} />
+                          ))}
+                        </div>
+                      )}
+                      {issue.project && (
+                        <Badge className="ml-2 shrink-0" color={issue.project.color ?? undefined}>
+                          {issue.project.key}
+                        </Badge>
+                      )}
+                      <div className="ml-auto flex items-center gap-3">
+                        {issue._count.comments > 0 && (
+                          <span
+                            className="text-meta inline-flex items-center gap-1 text-muted-foreground"
+                            title={`${issue._count.comments} comment${issue._count.comments === 1 ? "" : "s"}`}
+                          >
+                            <MessageSquare className="h-3 w-3" />
+                            <span className="tabular-nums">{issue._count.comments}</span>
+                          </span>
+                        )}
+                        {isSnoozed && (
+                          <span
+                            className="text-meta inline-flex items-center gap-1 text-muted-foreground"
+                            title={`Snoozed until ${new Date(issue.snoozedUntil!).toLocaleString()}`}
+                          >
+                            <CalendarClock className="h-3 w-3" />
+                            <span>Snoozed</span>
+                          </span>
+                        )}
+                        <span className="text-meta text-muted-foreground">
+                          {relativeTime(issue.createdAt)}
+                        </span>
+                        {issue.assignedAgent && (
+                          <AgentHoverPreview agentId={issue.assignedAgent.id}>
+                            <span
+                              className="text-meta flex items-center gap-1 text-muted-foreground"
+                              title={`Agent: ${issue.assignedAgent.name}`}
+                            >
+                              <AgentPresenceDot
+                                status={issue.assignedAgent.status}
+                                size="sm"
+                                availability={presenceAvailability(issue.assignedAgent)}
+                              />
+                              <span className="text-id">@{issue.assignedAgent.profileKey}</span>
+                            </span>
+                          </AgentHoverPreview>
+                        )}
+                        <div className="flex -space-x-1.5">
+                          {issue.assignees.slice(0, 3).map((a) => (
+                            <Avatar
+                              key={a.userId}
+                              name={a.user.name}
+                              image={a.user.image}
+                              size={compact ? 16 : 18}
+                              className="ring-1 ring-background"
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </Link>
                 </div>
-              </Link>
-            </div>
-          );
+              );
             })}
           </div>
         </div>
@@ -859,12 +910,8 @@ export function IssueList({
           onOpenChange={setLabelPickerOpen}
           selectedCount={selectedArray.length}
           labelCounts={labelCounts}
-          onAdd={(labelId) =>
-            bulkAddLabel.mutate({ ids: selectedArray, labelId })
-          }
-          onRemove={(labelId) =>
-            bulkRemoveLabel.mutate({ ids: selectedArray, labelId })
-          }
+          onAdd={(labelId) => bulkAddLabel.mutate({ ids: selectedArray, labelId })}
+          onRemove={(labelId) => bulkRemoveLabel.mutate({ ids: selectedArray, labelId })}
         />
       )}
 
@@ -892,9 +939,7 @@ export function IssueList({
           open={projectPickerOpen}
           onOpenChange={setProjectPickerOpen}
           projects={projectsData?.items ?? []}
-          onPick={(projectId) =>
-            bulkSetProjectM.mutate({ issueIds: selectedArray, projectId })
-          }
+          onPick={(projectId) => bulkSetProjectM.mutate({ issueIds: selectedArray, projectId })}
         />
       )}
 
@@ -903,9 +948,7 @@ export function IssueList({
           open={cyclePickerOpen}
           onOpenChange={setCyclePickerOpen}
           cycles={cyclesData ?? []}
-          onPick={(cycleId) =>
-            bulkSetCycleM.mutate({ issueIds: selectedArray, cycleId })
-          }
+          onPick={(cycleId) => bulkSetCycleM.mutate({ issueIds: selectedArray, cycleId })}
         />
       )}
     </div>
@@ -1050,8 +1093,8 @@ function BulkLabelPicker({
       )}
       footer={
         <span>
-          Click a label to add it to every selected issue. Click a label
-          marked <span className="font-mono">all</span> to remove it.
+          Click a label to add it to every selected issue. Click a label marked{" "}
+          <span className="font-mono">all</span> to remove it.
         </span>
       }
     />
@@ -1079,8 +1122,9 @@ function BulkAssigneePicker({
 }) {
   const [tab, setTab] = useState<"human" | "agent">("human");
   const [query, setQuery] = useState("");
-  const { data: members, isLoading: membersLoading } =
-    trpc.workspace.members.useQuery(undefined, { enabled: open && tab === "human" });
+  const { data: members, isLoading: membersLoading } = trpc.workspace.members.useQuery(undefined, {
+    enabled: open && tab === "human",
+  });
   const { data: agents, isLoading: agentsLoading } = trpc.agent.list.useQuery(
     { includeArchived: false },
     { enabled: open && tab === "agent" },
@@ -1134,10 +1178,7 @@ function BulkAssigneePicker({
     ...(agents ?? [])
       .filter((a) => {
         if (!q) return true;
-        return (
-          a.name.toLowerCase().includes(q) ||
-          a.profileKey.toLowerCase().includes(q)
-        );
+        return a.name.toLowerCase().includes(q) || a.profileKey.toLowerCase().includes(q);
       })
       .map(
         (a): AgentRow => ({

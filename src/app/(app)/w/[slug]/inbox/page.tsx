@@ -123,8 +123,7 @@ export default function InboxPage() {
   // Compute pulse stats and focus-in-cycle count (unchanged from prior).
   const pulse = useMemo(() => {
     const openCount = active?.items.length ?? 0;
-    const inProgress =
-      active?.items.filter((i) => i.status.category === "IN_PROGRESS").length ?? 0;
+    const inProgress = active?.items.filter((i) => i.status.category === "IN_PROGRESS").length ?? 0;
     const weekAgo = Date.now() - 7 * 86_400_000;
     const doneThisWeek =
       recentDone?.items.filter(
@@ -168,28 +167,25 @@ export default function InboxPage() {
   }, [data]);
   orderedIdsRef.current = orderedIds;
 
-  const toggleSelected = useCallback(
-    (id: string, opts?: { range?: boolean }) => {
-      setSelected((prev) => {
-        const next = new Set(prev);
-        if (opts?.range && lastClickedRef.current) {
-          const list = orderedIdsRef.current;
-          const a = list.indexOf(lastClickedRef.current);
-          const b = list.indexOf(id);
-          if (a >= 0 && b >= 0) {
-            const [lo, hi] = a < b ? [a, b] : [b, a];
-            for (let i = lo; i <= hi; i++) next.add(list[i]);
-            return next;
-          }
+  const toggleSelected = useCallback((id: string, opts?: { range?: boolean }) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (opts?.range && lastClickedRef.current) {
+        const list = orderedIdsRef.current;
+        const a = list.indexOf(lastClickedRef.current);
+        const b = list.indexOf(id);
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          for (let i = lo; i <= hi; i++) next.add(list[i]);
+          return next;
         }
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      });
-      lastClickedRef.current = id;
-    },
-    [],
-  );
+      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    lastClickedRef.current = id;
+  }, []);
 
   const clearSelection = useCallback(() => setSelected(new Set()), []);
 
@@ -222,9 +218,7 @@ export default function InboxPage() {
   // ---- Bulk mutations -----------------------------------------------------
   const snoozeManyM = trpc.issue.snoozeMany.useMutation({
     onSuccess: ({ updated }) => {
-      toast.success(
-        `Snoozed ${updated} issue${updated === 1 ? "" : "s"}.`,
-      );
+      toast.success(`Snoozed ${updated} issue${updated === 1 ? "" : "s"}.`);
       clearSelection();
       void utils.inbox.get.invalidate();
       void utils.inbox.badge.invalidate();
@@ -299,10 +293,7 @@ export default function InboxPage() {
     { archived: false, limit: 100 },
     { enabled: projectPickerOpen },
   );
-  const { data: bulkCycles } = trpc.cycle.list.useQuery(
-    {},
-    { enabled: cyclePickerOpen },
-  );
+  const { data: bulkCycles } = trpc.cycle.list.useQuery({}, { enabled: cyclePickerOpen });
 
   // ---- Per-row inline picker state (status, assignee) --------------------
   const [statusPicker, setStatusPicker] = useState<{
@@ -340,20 +331,20 @@ export default function InboxPage() {
         title="Inbox"
         subtitle="Your work — assignments, mentions, stalled, watching."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex w-full max-w-full flex-wrap items-center gap-1.5 sm:w-auto sm:justify-end sm:gap-2">
             <Button
               variant="outline"
               size="sm"
-              className="h-7"
+              className="h-7 shrink-0"
               disabled={markReadM.isPending}
               onClick={() => markReadM.mutate()}
               title="Mark inbox read"
             >
               <CheckCheck className="h-3.5 w-3.5" />
               Mark read
-              <Kbd className="ml-1">M</Kbd>
+              <Kbd className="ml-1 hidden sm:inline-flex">M</Kbd>
             </Button>
-            <div className="flex items-center gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
+            <div className="flex max-w-full flex-wrap items-center gap-1 rounded-md bg-subtle p-0.5 text-[0.6875rem]">
               <button
                 type="button"
                 onClick={() => setAllWorkspaces(false)}
@@ -383,10 +374,11 @@ export default function InboxPage() {
             </div>
             <Link
               href={`/w/${workspace.slug}/dashboard`}
-              className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
+              className="focus-ring inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
               title="Workspace overview — onboarding, focus, recent done"
             >
-              Workspace overview
+              <span className="sm:hidden">Overview</span>
+              <span className="hidden sm:inline">Workspace overview</span>
               <ChevronRight className="h-3 w-3" />
             </Link>
           </div>
@@ -408,8 +400,7 @@ export default function InboxPage() {
                 bulkSetCycleM.isPending ||
                 markReadM.isPending,
               onMarkRead: () => markReadM.mutate(),
-              onSnooze: (until) =>
-                snoozeManyM.mutate({ ids: selectedArray, until }),
+              onSnooze: (until) => snoozeManyM.mutate({ ids: selectedArray, until }),
               onReassign: () => setReassignPickerOpen(true),
               onMoveProject: () => setProjectPickerOpen(true),
               onMoveSprint: () => setCyclePickerOpen(true),
@@ -419,298 +410,293 @@ export default function InboxPage() {
         {/* Ambient background now lives once in the app shell <main>
             (.forge-page-bg, driven by the per-user data-bg pref). */}
         <div className="relative isolate">
-          <div className="mx-auto grid max-w-7xl grid-cols-1 gap-6 p-5 xl:grid-cols-[1fr_360px]">
-          {/* Left column — rollups + all existing inbox buckets/rollups. */}
-          <div className="min-w-0 space-y-8">
-          {/* Rollups — always render so the page doesn't jump while loading. */}
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <FocusRollup
-              count={data ? focusInCycle : null}
-              cycleName={data?.cycle?.name ?? null}
-              slug={workspace.slug}
-            />
-            <PulseRollup
-              openCount={pulse.openCount}
-              inProgress={pulse.inProgress}
-              doneThisWeek={pulse.doneThisWeek}
-              activeSprint={pulse.activeSprint}
-              slug={workspace.slug}
-            />
-          </div>
-
-          {isLoading || !data ? (
-            <div className="space-y-4">
-              <SkeletonList rows={4} />
-              <SkeletonList rows={3} />
-            </div>
-          ) : data.assignedUnblocked.length === 0 &&
-            data.mentions.length === 0 &&
-            data.humanStalled.length === 0 &&
-            data.agentStalled.length === 0 &&
-            data.snoozed.length === 0 ? (
-            <div className="rounded-lg border border-border bg-card/30 px-6 py-16">
-              <EmptyState
-                variant="page"
-                icon={<Sun />}
-                title="Inbox zero — nothing's waiting"
-                description="When someone @mentions you, assigns work, or replies to a thread you're following, it lands here."
-                action={
-                  <Link
-                    href={`/w/${workspace.slug}/dashboard`}
-                    className="text-meta inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
-                  >
-                    Browse suggestions in dashboard
-                    <ChevronRight className="h-3 w-3" />
-                  </Link>
-                }
-              />
-            </div>
-          ) : (
-            <>
-              <BucketSection
-                bucket="assigned"
-                title="Assigned & unblocked"
-                hint="Your assignments that aren't waiting on anything else."
-                icon={<Inbox className="h-3.5 w-3.5 text-muted-foreground" />}
-                count={data.counts.assignedUnblocked}
-                newCount={data.unreadSinceVisit.assignedUnblocked}
-                emptyTitle="Nothing in your queue."
-                emptyDescription={
-                  <span>
-                    Pick up something from Issues or press <Kbd>⇧C</Kbd> to create one.
-                  </span>
-                }
-                emptyIcon={<Inbox />}
-                rows={data.assignedUnblocked}
-                slug={workspace.slug}
-                previousVisitAt={previousVisitAt}
-                selected={selected}
-                onToggle={toggleSelected}
-                onHover={(id) => (hoveredRowRef.current = id)}
-                onPickStatus={(id) => setStatusPicker({ issueId: id })}
-                onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
-              />
-
-              <Section
-                title={
-                  <span className="flex items-center gap-2">
-                    <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />
-                    Mentions
-                    <span className="font-mono text-[0.6875rem] text-muted-foreground">
-                      {data.counts.mentions}
-                    </span>
-                    {data.unreadSinceVisit.mentions > 0 && (
-                      <NewBadge count={data.unreadSinceVisit.mentions} />
-                    )}
-                  </span>
-                }
-                hint="Comments that @mention you, last 7 days."
-              >
-                <Card as="ul">
-                  {data.mentions.length === 0 ? (
-                    <EmptyState
-                      as="li"
-                      variant="card"
-                      icon={<MessageCircle />}
-                      title="No recent mentions."
-                      description="Comments that @mention you land here."
-                    />
-                  ) : (
-                    data.mentions.map((m) => {
-                      const isNew =
-                        !!previousVisitAt &&
-                        new Date(m.createdAt) > previousVisitAt;
-                      // Mentions are issue-scoped today. After migration
-                      // 0040 (step comments) Comment.issueId is nullable
-                      // on the type, but the mentions feed still only
-                      // surfaces issue-attached rows. Skip defensively.
-                      if (!m.issue) return null;
-                      const issue = m.issue;
-                      return (
-                        <li
-                          key={m.id}
-                          className={cn(
-                            "flex items-start gap-3 px-3 py-2 text-[0.75rem]",
-                            isNew && "bg-ember/5",
-                          )}
-                        >
-                          {isNew && <NewDot />}
-                          <WorkspaceBadge
-                            slug={issue.workspace.slug}
-                            wsKey={issue.workspace.key}
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <Link
-                                href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
-                                className="text-id hover:underline"
-                              >
-                                {formatIssueId(issue.workspace.key, issue.number)}
-                              </Link>
-                              <span className="truncate">{issue.title}</span>
-                            </div>
-                            <div className="mt-0.5 line-clamp-2 text-muted-foreground">
-                              <span className="font-medium text-foreground">
-                                {m.author?.name ?? "Someone"}
-                              </span>
-                              {" — "}
-                              {m.body}
-                            </div>
-                          </div>
-                          <span className="text-meta shrink-0 text-muted-foreground">
-                            {relativeTime(m.createdAt)}
-                          </span>
-                        </li>
-                      );
-                    })
-                  )}
-                </Card>
-              </Section>
-
-              {!allWorkspaces && (
-                <WaitingOnMeSection slug={workspace.slug} />
-              )}
-
-              <BucketSection
-                bucket="humanStalled"
-                title="Stalled — yours"
-                hint={
-                  data.stalledThresholdDays
-                    ? `Your work without activity for more than ${data.stalledThresholdDays}d.`
-                    : "Your work without recent activity."
-                }
-                icon={<AlertTriangle className="h-3.5 w-3.5 text-warning" />}
-                count={data.counts.humanStalled}
-                newCount={data.unreadSinceVisit.humanStalled}
-                emptyTitle="Nothing stalled."
-                emptyDescription="Work is moving. Nice."
-                emptyIcon={<AlertTriangle />}
-                rows={data.humanStalled}
-                slug={workspace.slug}
-                previousVisitAt={previousVisitAt}
-                selected={selected}
-                onToggle={toggleSelected}
-                onHover={(id) => (hoveredRowRef.current = id)}
-                onPickStatus={(id) => setStatusPicker({ issueId: id })}
-                onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
-                tone="warn"
-              />
-
-              <BucketSection
-                bucket="agentStalled"
-                title="Agent runs stalled"
-                hint={
-                  data.stalledThresholdDays
-                    ? `Issues whose assigned agent has been silent for more than ${data.stalledThresholdDays}d.`
-                    : "Issues whose assigned agent has been silent."
-                }
-                icon={<Bot className="h-3.5 w-3.5 text-warning" />}
-                count={data.counts.agentStalled}
-                newCount={data.unreadSinceVisit.agentStalled}
-                emptyTitle="No agent runs stalled."
-                emptyDescription="Every assigned agent is moving."
-                emptyIcon={<Bot />}
-                rows={data.agentStalled}
-                slug={workspace.slug}
-                previousVisitAt={previousVisitAt}
-                selected={selected}
-                onToggle={toggleSelected}
-                onHover={(id) => (hoveredRowRef.current = id)}
-                onPickStatus={(id) => setStatusPicker({ issueId: id })}
-                onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
-                tone="warn"
-                showAgent
-              />
-
-              <SnoozedSection
-                rows={data.snoozed}
-                count={data.counts.snoozed}
-                slug={workspace.slug}
-              />
-
-              {!allWorkspaces && (
-                <WatchingSection slug={workspace.slug} />
-              )}
-
-              {!allWorkspaces && (
-                <Section
-                  title={
-                    <span className="flex items-center gap-2">
-                      <Target className="h-3.5 w-3.5 text-muted-foreground" />
-                      Current sprint burn
-                    </span>
-                  }
-                  hint="Progress on the active sprint in this workspace."
-                >
-                  {data.cycle ? (
-                    <div className="rounded-lg border border-border bg-card/40 p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="min-w-0 flex-1">
-                          <Link
-                            href={`/w/${workspace.slug}/cycles/${data.cycle.id}`}
-                            className="truncate text-sm font-semibold hover:underline"
-                          >
-                            {data.cycle.name}
-                          </Link>
-                          <div className="text-id text-muted-foreground">
-                            {data.cycle.done}/{data.cycle.total} done · {data.cycle.remaining}{" "}
-                            remaining
-                          </div>
-                        </div>
-                        <div className="text-right font-mono text-2xl tabular-nums">
-                          {data.cycle.pctDone}%
-                        </div>
-                      </div>
-                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-subtle">
-                        <div
-                          className="h-full bg-ember transition-[width]"
-                          style={{ width: `${data.cycle.pctDone}%` }}
-                        />
-                      </div>
-                      <div className="mt-3 flex items-center gap-3 text-[0.6875rem] text-muted-foreground">
-                        <Clock className="h-3 w-3" />
-                        <span>
-                          {data.cycle.endsAt
-                            ? `Ends ${relativeTime(data.cycle.endsAt)}`
-                            : "No end date"}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <Card>
-                      <EmptyState
-                        variant="section"
-                        icon={<Target />}
-                        title="No active sprint."
-                        description="Start one from the Sprints page."
-                      />
-                    </Card>
-                  )}
-                </Section>
-              )}
-            </>
-          )}
-          </div>
-
-          {/* Right rail — agent queue + online roster. Sticky on xl+,
-              drops below the buckets on smaller viewports. */}
-          {!allWorkspaces && (
-            <aside className="hidden min-w-0 xl:block">
-              <div className="sticky top-5 space-y-6">
-                <AgentQueueRail
-                  rows={queueRows}
-                  loading={queueLoading}
-                  workspaceKey={workspace.key}
+          <div className="mx-auto grid max-w-7xl grid-cols-1 gap-6 p-4 sm:p-5 xl:grid-cols-[1fr_360px]">
+            {/* Left column — rollups + all existing inbox buckets/rollups. */}
+            <div className="min-w-0 space-y-8">
+              {/* Rollups — always render so the page doesn't jump while loading. */}
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <FocusRollup
+                  count={data ? focusInCycle : null}
+                  cycleName={data?.cycle?.name ?? null}
                   slug={workspace.slug}
-                  ready={readyAgentIssues}
-                  claimed={claimedAgentIssues}
-                  assigned={assignedAgentIssues}
-                  onlineAgents={onlineAgents}
                 />
-                <AgentsOnlineRail agents={agents ?? []} />
+                <PulseRollup
+                  openCount={pulse.openCount}
+                  inProgress={pulse.inProgress}
+                  doneThisWeek={pulse.doneThisWeek}
+                  activeSprint={pulse.activeSprint}
+                  slug={workspace.slug}
+                />
               </div>
-            </aside>
-          )}
+
+              {isLoading || !data ? (
+                <div className="space-y-4">
+                  <SkeletonList rows={4} />
+                  <SkeletonList rows={3} />
+                </div>
+              ) : data.assignedUnblocked.length === 0 &&
+                data.mentions.length === 0 &&
+                data.humanStalled.length === 0 &&
+                data.agentStalled.length === 0 &&
+                data.snoozed.length === 0 ? (
+                <div className="rounded-lg border border-border bg-card/30 px-6 py-16">
+                  <EmptyState
+                    variant="page"
+                    icon={<Sun />}
+                    title="Inbox zero — nothing's waiting"
+                    description="When someone @mentions you, assigns work, or replies to a thread you're following, it lands here."
+                    action={
+                      <Link
+                        href={`/w/${workspace.slug}/dashboard`}
+                        className="text-meta inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                      >
+                        Browse suggestions in dashboard
+                        <ChevronRight className="h-3 w-3" />
+                      </Link>
+                    }
+                  />
+                </div>
+              ) : (
+                <>
+                  <BucketSection
+                    bucket="assigned"
+                    title="Assigned & unblocked"
+                    hint="Your assignments that aren't waiting on anything else."
+                    icon={<Inbox className="h-3.5 w-3.5 text-muted-foreground" />}
+                    count={data.counts.assignedUnblocked}
+                    newCount={data.unreadSinceVisit.assignedUnblocked}
+                    emptyTitle="Nothing in your queue."
+                    emptyDescription={
+                      <span>
+                        Pick up something from Issues or press <Kbd>⇧C</Kbd> to create one.
+                      </span>
+                    }
+                    emptyIcon={<Inbox />}
+                    rows={data.assignedUnblocked}
+                    slug={workspace.slug}
+                    previousVisitAt={previousVisitAt}
+                    selected={selected}
+                    onToggle={toggleSelected}
+                    onHover={(id) => (hoveredRowRef.current = id)}
+                    onPickStatus={(id) => setStatusPicker({ issueId: id })}
+                    onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
+                  />
+
+                  <Section
+                    title={
+                      <span className="flex items-center gap-2">
+                        <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                        Mentions
+                        <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                          {data.counts.mentions}
+                        </span>
+                        {data.unreadSinceVisit.mentions > 0 && (
+                          <NewBadge count={data.unreadSinceVisit.mentions} />
+                        )}
+                      </span>
+                    }
+                    hint="Comments that @mention you, last 7 days."
+                  >
+                    <Card as="ul">
+                      {data.mentions.length === 0 ? (
+                        <EmptyState
+                          as="li"
+                          variant="card"
+                          icon={<MessageCircle />}
+                          title="No recent mentions."
+                          description="Comments that @mention you land here."
+                        />
+                      ) : (
+                        data.mentions.map((m) => {
+                          const isNew =
+                            !!previousVisitAt && new Date(m.createdAt) > previousVisitAt;
+                          // Mentions are issue-scoped today. After migration
+                          // 0040 (step comments) Comment.issueId is nullable
+                          // on the type, but the mentions feed still only
+                          // surfaces issue-attached rows. Skip defensively.
+                          if (!m.issue) return null;
+                          const issue = m.issue;
+                          return (
+                            <li
+                              key={m.id}
+                              className={cn(
+                                "flex flex-wrap items-start gap-2 px-3 py-2 text-[0.75rem] sm:flex-nowrap sm:gap-3",
+                                isNew && "bg-ember/5",
+                              )}
+                            >
+                              {isNew && <NewDot />}
+                              <WorkspaceBadge
+                                slug={issue.workspace.slug}
+                                wsKey={issue.workspace.key}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <Link
+                                    href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
+                                    className="text-id shrink-0 hover:underline"
+                                  >
+                                    {formatIssueId(issue.workspace.key, issue.number)}
+                                  </Link>
+                                  <span className="truncate">{issue.title}</span>
+                                </div>
+                                <div className="mt-0.5 line-clamp-2 text-muted-foreground">
+                                  <span className="font-medium text-foreground">
+                                    {m.author?.name ?? "Someone"}
+                                  </span>
+                                  {" — "}
+                                  {m.body}
+                                </div>
+                              </div>
+                              <span className="text-meta ml-auto shrink-0 text-muted-foreground sm:ml-0">
+                                {relativeTime(m.createdAt)}
+                              </span>
+                            </li>
+                          );
+                        })
+                      )}
+                    </Card>
+                  </Section>
+
+                  {!allWorkspaces && <WaitingOnMeSection slug={workspace.slug} />}
+
+                  <BucketSection
+                    bucket="humanStalled"
+                    title="Stalled — yours"
+                    hint={
+                      data.stalledThresholdDays
+                        ? `Your work without activity for more than ${data.stalledThresholdDays}d.`
+                        : "Your work without recent activity."
+                    }
+                    icon={<AlertTriangle className="h-3.5 w-3.5 text-warning" />}
+                    count={data.counts.humanStalled}
+                    newCount={data.unreadSinceVisit.humanStalled}
+                    emptyTitle="Nothing stalled."
+                    emptyDescription="Work is moving. Nice."
+                    emptyIcon={<AlertTriangle />}
+                    rows={data.humanStalled}
+                    slug={workspace.slug}
+                    previousVisitAt={previousVisitAt}
+                    selected={selected}
+                    onToggle={toggleSelected}
+                    onHover={(id) => (hoveredRowRef.current = id)}
+                    onPickStatus={(id) => setStatusPicker({ issueId: id })}
+                    onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
+                    tone="warn"
+                  />
+
+                  <BucketSection
+                    bucket="agentStalled"
+                    title="Agent runs stalled"
+                    hint={
+                      data.stalledThresholdDays
+                        ? `Issues whose assigned agent has been silent for more than ${data.stalledThresholdDays}d.`
+                        : "Issues whose assigned agent has been silent."
+                    }
+                    icon={<Bot className="h-3.5 w-3.5 text-warning" />}
+                    count={data.counts.agentStalled}
+                    newCount={data.unreadSinceVisit.agentStalled}
+                    emptyTitle="No agent runs stalled."
+                    emptyDescription="Every assigned agent is moving."
+                    emptyIcon={<Bot />}
+                    rows={data.agentStalled}
+                    slug={workspace.slug}
+                    previousVisitAt={previousVisitAt}
+                    selected={selected}
+                    onToggle={toggleSelected}
+                    onHover={(id) => (hoveredRowRef.current = id)}
+                    onPickStatus={(id) => setStatusPicker({ issueId: id })}
+                    onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
+                    tone="warn"
+                    showAgent
+                  />
+
+                  <SnoozedSection
+                    rows={data.snoozed}
+                    count={data.counts.snoozed}
+                    slug={workspace.slug}
+                  />
+
+                  {!allWorkspaces && <WatchingSection slug={workspace.slug} />}
+
+                  {!allWorkspaces && (
+                    <Section
+                      title={
+                        <span className="flex items-center gap-2">
+                          <Target className="h-3.5 w-3.5 text-muted-foreground" />
+                          Current sprint burn
+                        </span>
+                      }
+                      hint="Progress on the active sprint in this workspace."
+                    >
+                      {data.cycle ? (
+                        <div className="rounded-lg border border-border bg-card/40 p-4">
+                          <div className="flex items-center gap-3">
+                            <div className="min-w-0 flex-1">
+                              <Link
+                                href={`/w/${workspace.slug}/cycles/${data.cycle.id}`}
+                                className="truncate text-sm font-semibold hover:underline"
+                              >
+                                {data.cycle.name}
+                              </Link>
+                              <div className="text-id text-muted-foreground">
+                                {data.cycle.done}/{data.cycle.total} done · {data.cycle.remaining}{" "}
+                                remaining
+                              </div>
+                            </div>
+                            <div className="shrink-0 text-right font-mono text-2xl tabular-nums">
+                              {data.cycle.pctDone}%
+                            </div>
+                          </div>
+                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-subtle">
+                            <div
+                              className="h-full bg-ember transition-[width]"
+                              style={{ width: `${data.cycle.pctDone}%` }}
+                            />
+                          </div>
+                          <div className="mt-3 flex flex-wrap items-center gap-3 text-[0.6875rem] text-muted-foreground">
+                            <Clock className="h-3 w-3" />
+                            <span>
+                              {data.cycle.endsAt
+                                ? `Ends ${relativeTime(data.cycle.endsAt)}`
+                                : "No end date"}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <Card>
+                          <EmptyState
+                            variant="section"
+                            icon={<Target />}
+                            title="No active sprint."
+                            description="Start one from the Sprints page."
+                          />
+                        </Card>
+                      )}
+                    </Section>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Right rail — agent queue + online roster. Sticky on xl+,
+              drops below the buckets on smaller viewports. */}
+            {!allWorkspaces && (
+              <aside className="hidden min-w-0 xl:block">
+                <div className="sticky top-5 space-y-6">
+                  <AgentQueueRail
+                    rows={queueRows}
+                    loading={queueLoading}
+                    workspaceKey={workspace.key}
+                    slug={workspace.slug}
+                    ready={readyAgentIssues}
+                    claimed={claimedAgentIssues}
+                    assigned={assignedAgentIssues}
+                    onlineAgents={onlineAgents}
+                  />
+                  <AgentsOnlineRail agents={agents ?? []} />
+                </div>
+              </aside>
+            )}
           </div>
         </div>
       </div>
@@ -778,9 +764,7 @@ export default function InboxPage() {
           open={projectPickerOpen}
           onOpenChange={setProjectPickerOpen}
           projects={bulkProjects?.items ?? []}
-          onPick={(projectId) =>
-            bulkSetProjectM.mutate({ issueIds: selectedArray, projectId })
-          }
+          onPick={(projectId) => bulkSetProjectM.mutate({ issueIds: selectedArray, projectId })}
         />
       )}
       {cyclePickerOpen && (
@@ -788,15 +772,12 @@ export default function InboxPage() {
           open={cyclePickerOpen}
           onOpenChange={setCyclePickerOpen}
           cycles={bulkCycles ?? []}
-          onPick={(cycleId) =>
-            bulkSetCycleM.mutate({ issueIds: selectedArray, cycleId })
-          }
+          onPick={(cycleId) => bulkSetCycleM.mutate({ issueIds: selectedArray, cycleId })}
         />
       )}
     </>
   );
 }
-
 
 // ---------------------------------------------------------------------------
 // Bulk action bar — actions are configured here and rendered by the
@@ -856,12 +837,7 @@ function inboxBulkActions({
         <SnoozeMenu
           onSelect={onSnooze}
           trigger={
-            <button
-              type="button"
-              disabled={disabled}
-              title="Snooze selected"
-              className={cls}
-            >
+            <button type="button" disabled={disabled} title="Snooze selected" className={cls}>
               <CalendarClock className="h-3 w-3" />
               Snooze for…
             </button>
@@ -1021,7 +997,7 @@ function IssueRow({
   return (
     <li
       className={cn(
-        "group relative flex items-center gap-2 px-3 py-2 text-[0.75rem]",
+        "group relative flex flex-wrap items-center gap-2 px-3 py-2 text-[0.75rem] sm:flex-nowrap",
         isSelected ? "bg-ember/5" : "hover:bg-subtle/40",
       )}
       onMouseEnter={() => onHover(true)}
@@ -1049,7 +1025,7 @@ function IssueRow({
       <WorkspaceBadge slug={issue.workspace.slug} wsKey={issue.workspace.key} />
       <Link
         href={`/w/${issue.workspace.slug}/issues/${issue.id}`}
-        className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
+        className="flex min-w-0 flex-1 basis-[calc(100%-4rem)] items-center gap-2 hover:underline sm:basis-auto"
       >
         <span className="text-id shrink-0 text-muted-foreground">
           {formatIssueId(issue.workspace.key, issue.number)}
@@ -1058,7 +1034,7 @@ function IssueRow({
       </Link>
       {showAgent && issue.assignedAgent && (
         <span
-          className="text-meta inline-flex shrink-0 items-center gap-1 text-muted-foreground"
+          className="text-meta inline-flex min-w-0 shrink-0 items-center gap-1 text-muted-foreground"
           title={`Assigned to ${issue.assignedAgent.name}`}
         >
           {issue.assignedAgent.avatar ? (
@@ -1071,7 +1047,7 @@ function IssueRow({
             size="sm"
             availability={presenceAvailability(issue.assignedAgent)}
           />
-          <span className="text-id">@{issue.assignedAgent.profileKey}</span>
+          <span className="text-id truncate">@{issue.assignedAgent.profileKey}</span>
         </span>
       )}
       {issue.project && (
@@ -1112,7 +1088,7 @@ function IssueRow({
         onPickStatus={onPickStatus}
         onPickAssignee={onPickAssignee}
         alwaysVisible={isSelected}
-        className="shrink-0"
+        className="ml-auto shrink-0 sm:ml-0"
       />
     </li>
   );
@@ -1156,12 +1132,12 @@ function SnoozedSection({
         {rows.map((i) => (
           <li
             key={i.id}
-            className="flex items-center gap-2 px-3 py-2 text-[0.75rem] hover:bg-subtle/40"
+            className="flex flex-wrap items-center gap-2 px-3 py-2 text-[0.75rem] hover:bg-subtle/40 sm:flex-nowrap"
           >
             <WorkspaceBadge slug={i.workspace.slug} wsKey={i.workspace.key} />
             <Link
               href={`/w/${i.workspace.slug}/issues/${i.id}`}
-              className="flex min-w-0 flex-1 items-center gap-2 hover:underline"
+              className="flex min-w-0 flex-1 basis-[calc(100%-3rem)] items-center gap-2 hover:underline sm:basis-auto"
             >
               <span className="text-id shrink-0 text-muted-foreground">
                 {formatIssueId(i.workspace.key, i.number)}
@@ -1171,9 +1147,7 @@ function SnoozedSection({
             {i.snoozedUntil && (
               <span
                 className="text-meta shrink-0 text-muted-foreground"
-                title={`Snoozed until ${new Date(
-                  i.snoozedUntil,
-                ).toLocaleString(undefined, {
+                title={`Snoozed until ${new Date(i.snoozedUntil).toLocaleString(undefined, {
                   weekday: "short",
                   month: "short",
                   day: "numeric",
@@ -1195,7 +1169,7 @@ function SnoozedSection({
                 unsnoozeM.mutate({ id: i.id });
               }}
               disabled={unsnoozeM.isPending}
-              className="focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
+              className="focus-ring ml-auto inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50 sm:ml-0"
             >
               <X className="h-3 w-3" />
               Unsnooze
@@ -1225,9 +1199,7 @@ function WaitingOnMeSection({ slug }: { slug: string }) {
         <span className="flex items-center gap-2">
           <Bot className="h-3.5 w-3.5 text-ember" />
           Waiting on me
-          <span className="font-mono text-[0.6875rem] text-muted-foreground">
-            {items.length}
-          </span>
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">{items.length}</span>
         </span>
       }
       hint="Agent comments that @-mention you with no reply from you yet."
@@ -1236,26 +1208,26 @@ function WaitingOnMeSection({ slug }: { slug: string }) {
         {items.map((row) => (
           <li
             key={row.lastComment.id}
-            className="flex items-start gap-3 px-3 py-2 text-[0.75rem] hover:bg-subtle/40"
+            className="flex flex-wrap items-start gap-2 px-3 py-2 text-[0.75rem] hover:bg-subtle/40 sm:flex-nowrap sm:gap-3"
           >
             <span
               aria-hidden
               className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-subtle text-[0.6875rem]"
               title={`@${row.lastComment.author.profileKey}`}
             >
-              {row.lastComment.author.avatar ?? (
-                <Bot className="h-3 w-3 text-muted-foreground" />
-              )}
+              {row.lastComment.author.avatar ?? <Bot className="h-3 w-3 text-muted-foreground" />}
             </span>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                 <Link
                   href={`/w/${slug}/issues/${row.issue.id}`}
-                  className="text-id hover:underline"
+                  className="text-id shrink-0 hover:underline"
                 >
                   {formatIssueId(row.issue.workspace.key, row.issue.number)}
                 </Link>
-                <span className="truncate">{row.issue.title}</span>
+                <span className="min-w-0 flex-1 basis-full truncate sm:basis-auto">
+                  {row.issue.title}
+                </span>
                 <span
                   className="text-id font-mono text-muted-foreground"
                   title={row.lastComment.author.name}
@@ -1268,7 +1240,7 @@ function WaitingOnMeSection({ slug }: { slug: string }) {
               </div>
             </div>
             <span
-              className="text-meta shrink-0 text-muted-foreground"
+              className="text-meta ml-auto shrink-0 text-muted-foreground sm:ml-0"
               title={new Date(row.lastComment.createdAt).toLocaleString()}
             >
               {relativeTime(row.lastComment.createdAt)}
@@ -1309,7 +1281,7 @@ function WatchingSection({ slug }: { slug: string }) {
         {items.map(({ issue: i }) => (
           <li
             key={i.id}
-            className="flex items-center gap-2 px-3 py-2 text-[0.75rem] hover:bg-subtle/40"
+            className="flex flex-wrap items-center gap-2 px-3 py-2 text-[0.75rem] hover:bg-subtle/40 sm:flex-nowrap"
           >
             <Link
               href={`/w/${slug}/issues/${i.id}`}
@@ -1321,7 +1293,7 @@ function WatchingSection({ slug }: { slug: string }) {
               </span>
               <span className="truncate">{i.title}</span>
               {i.status?.name && (
-                <span className="text-meta ml-auto shrink-0 text-muted-foreground">
+                <span className="text-meta ml-auto max-w-[45%] shrink-0 truncate text-muted-foreground">
                   {i.status.name}
                 </span>
               )}
@@ -1351,9 +1323,7 @@ function StatusPickerModal({
   const { data: statuses, isLoading } = trpc.status.list.useQuery();
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
-  const items = (statuses ?? []).filter(
-    (s) => !q || s.name.toLowerCase().includes(q),
-  );
+  const items = (statuses ?? []).filter((s) => !q || s.name.toLowerCase().includes(q));
   return (
     <Picker
       open={open}
@@ -1395,8 +1365,9 @@ function AssigneePickerModal({
 }) {
   const [tab, setTab] = useState<"human" | "agent">("human");
   const [query, setQuery] = useState("");
-  const { data: members, isLoading: membersLoading } =
-    trpc.workspace.members.useQuery(undefined, { enabled: open && tab === "human" });
+  const { data: members, isLoading: membersLoading } = trpc.workspace.members.useQuery(undefined, {
+    enabled: open && tab === "human",
+  });
   const { data: agents, isLoading: agentsLoading } = trpc.agent.list.useQuery(
     { includeArchived: false },
     { enabled: open && tab === "agent" },
@@ -1450,10 +1421,7 @@ function AssigneePickerModal({
     ...(agents ?? [])
       .filter((a) => {
         if (!q) return true;
-        return (
-          a.name.toLowerCase().includes(q) ||
-          a.profileKey.toLowerCase().includes(q)
-        );
+        return a.name.toLowerCase().includes(q) || a.profileKey.toLowerCase().includes(q);
       })
       .map(
         (a): AgentRow => ({
@@ -1533,15 +1501,13 @@ function AssigneePickerModal({
               <Avatar name={r.name} image={r.image} size={18} />
               <span className="truncate">{r.name}</span>
               {r.email && (
-                <span className="text-id ml-auto truncate text-muted-foreground">
-                  {r.email}
-                </span>
+                <span className="text-id ml-auto truncate text-muted-foreground">{r.email}</span>
               )}
             </div>
           );
         }}
         footer={
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             {tabStrip}
             <span>Human assignment sets the issue&apos;s claim.</span>
           </div>
@@ -1587,14 +1553,12 @@ function AssigneePickerModal({
             </span>
             <AgentPresenceDot status={r.status} availability={presenceAvailability(r)} />
             <span className="truncate">{r.name}</span>
-            <span className="text-id ml-auto text-muted-foreground">
-              @{r.profileKey}
-            </span>
+            <span className="text-id ml-auto text-muted-foreground">@{r.profileKey}</span>
           </div>
         );
       }}
       footer={
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           {tabStrip}
           <span>Agent assignment fires the AGENT_ASSIGNED webhook.</span>
         </div>
@@ -1872,9 +1836,7 @@ function AgentsOnlineRail({ agents }: { agents: RosterAgent[] }) {
         <span className="flex items-center gap-2">
           <UsersRound className="h-3.5 w-3.5 text-muted-foreground" />
           Agents online
-          <span className="font-mono text-[0.6875rem] text-muted-foreground">
-            {agents.length}
-          </span>
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">{agents.length}</span>
         </span>
       }
       hint="Every active agent in this workspace and what it can pick up."
@@ -1896,7 +1858,7 @@ function AgentsOnlineRail({ agents }: { agents: RosterAgent[] }) {
             >
               <span
                 aria-hidden
-                className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-subtle text-id"
+                className="text-id grid h-6 w-6 shrink-0 place-items-center rounded-full bg-subtle"
                 title={a.name}
               >
                 {a.avatar ?? (

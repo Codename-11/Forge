@@ -70,7 +70,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body className="font-sans">
         <ThemeProvider>
           {children}
-          <Toaster position="bottom-right" closeButton richColors theme="system" />
+          <Toaster
+            position="bottom-right"
+            closeButton
+            richColors
+            theme="system"
+            mobileOffset={{ bottom: 96, left: 12, right: 12 }}
+          />
           {/* Themed tooltips app-wide — intercepts every `title` attribute
               and renders a token-styled tooltip instead of the browser's
               native one (restoring `title` at rest for a11y). */}

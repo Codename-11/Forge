@@ -234,7 +234,7 @@ export default function ConnectionsMappingPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
+        <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
           {/* Explainer banner */}
           <div className="rounded-md border border-border bg-card/40 p-3 text-[0.8125rem]">
             <div className="flex items-center gap-2">
@@ -393,7 +393,7 @@ export default function ConnectionsMappingPage() {
                 ))}
               </select>
             </QuickForm.Field>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <QuickForm.Field label="Kind" required>
                 <select
                   value={editing.kind}
@@ -565,7 +565,7 @@ function ConnectionMappingSection({
         </div>
 
         {/* Column header */}
-        <div className="grid grid-cols-[1.4fr_0.8fr_0.7fr_0.4fr_28px] items-center gap-3 border-b border-border bg-subtle/40 px-4 py-2 text-meta text-muted-foreground">
+        <div className="hidden grid-cols-[1.4fr_0.8fr_0.7fr_0.4fr_28px] items-center gap-3 border-b border-border bg-subtle/40 px-4 py-2 text-meta text-muted-foreground md:grid">
           <span>{conn.provider === "SLACK" ? "Channel" : "Target"}</span>
           <span>Routes to</span>
           <span>Direction</span>
@@ -576,7 +576,7 @@ function ConnectionMappingSection({
         {rows.map((m) => (
           <div
             key={m.id}
-            className="grid grid-cols-[1.4fr_0.8fr_0.7fr_0.4fr_28px] items-center gap-3 border-b border-border/60 px-4 py-3 last:border-b-0"
+            className="grid grid-cols-[minmax(0,1fr)_28px] items-start gap-x-3 gap-y-2 border-b border-border/60 px-4 py-3 last:border-b-0 md:grid-cols-[1.4fr_0.8fr_0.7fr_0.4fr_28px] md:items-center"
           >
             <span className="flex min-w-0 flex-col gap-1">
               <span className="flex items-center gap-2">
@@ -604,13 +604,18 @@ function ConnectionMappingSection({
                 </span>
               )}
             </span>
-            <span className="truncate text-[0.8125rem] text-muted-foreground">
-              {m.routeTo || "—"}
+            <span className="col-span-2 flex items-center justify-between gap-3 text-[0.8125rem] text-muted-foreground md:col-auto md:block md:truncate">
+              <span className="text-meta text-muted-foreground/70 md:hidden">
+                Routes to
+              </span>
+              <span className="min-w-0 truncate">{m.routeTo || "—"}</span>
             </span>
-            <span className="text-meta text-muted-foreground">
-              {directionLabel(m.direction as Direction)}
+            <span className="col-span-2 flex items-center justify-between gap-3 text-meta text-muted-foreground md:col-auto md:block">
+              <span className="text-muted-foreground/70 md:hidden">Direction</span>
+              <span>{directionLabel(m.direction as Direction)}</span>
             </span>
-            <span className="text-right">
+            <span className="col-span-2 flex items-center justify-between gap-3 text-right md:col-auto md:block">
+              <span className="text-meta text-muted-foreground/70 md:hidden">Status</span>
               <span
                 className={
                   "inline-flex items-center gap-1 text-meta " +
@@ -627,7 +632,7 @@ function ConnectionMappingSection({
                 {m.status}
               </span>
             </span>
-            <div className="relative flex justify-end">
+            <div className="relative col-start-2 row-start-1 flex justify-end md:col-auto md:row-auto">
               <button
                 type="button"
                 aria-label="Mapping actions"

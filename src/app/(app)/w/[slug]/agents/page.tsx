@@ -30,20 +30,15 @@ export default function AgentsPage() {
     <>
       <Topbar
         title={
-          <span className="flex items-center gap-2">
+          <span className="flex min-w-0 flex-wrap items-center gap-2">
             <span>Agents</span>
-            {workspace && (
-              <DispatchModeBadge
-                mode={workspace.autoDispatchMode}
-                showSettingsLink
-              />
-            )}
+            {workspace && <DispatchModeBadge mode={workspace.autoDispatchMode} showSettingsLink />}
           </span>
         }
         subtitle="Live presence, pipeline, and recent activity."
         actions={
           <Link href={`/w/${ws.slug}/settings/agents`}>
-            <Button variant="ghost" size="sm">
+            <Button variant="ghost" size="sm" className="min-h-9">
               <Settings2 className="mr-1.5 h-3.5 w-3.5" />
               Manage agents
             </Button>
@@ -51,7 +46,7 @@ export default function AgentsPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="space-y-6 p-6">
+        <div className="space-y-4 p-4 sm:space-y-6 sm:p-6">
           <AgentPresenceStrip />
           <AgentPipeline />
           <AgentTimeline />

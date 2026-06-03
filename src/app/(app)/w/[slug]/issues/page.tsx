@@ -9,13 +9,7 @@ import { IssueBoard } from "@/components/issue-board";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  DensityProvider,
-  EmptyState,
-  Kbd,
-  useDensity,
-  useSetDensity,
-} from "@/components/ui";
+import { DensityProvider, EmptyState, Kbd, useDensity, useSetDensity } from "@/components/ui";
 import { ViewToggle, useViewPref } from "@/components/view-toggle";
 import {
   CycleFilterChip,
@@ -23,16 +17,9 @@ import {
   type CycleFilter,
   type InitiativeFilter,
 } from "@/components/saved-views/filter-chips";
-import {
-  GroupChip,
-  IssueFacetChips,
-  SortChip,
-} from "@/components/saved-views/facet-chips";
+import { GroupChip, IssueFacetChips, SortChip } from "@/components/saved-views/facet-chips";
 import { QuickFilterChips } from "@/components/saved-views/quick-filter-chips";
-import {
-  SavedViewsBar,
-  SaveViewDialog,
-} from "@/components/saved-views/saved-views-bar";
+import { SavedViewsBar, SaveViewDialog } from "@/components/saved-views/saved-views-bar";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -97,8 +84,7 @@ export default function IssuesPage() {
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [saveOpen, setSaveOpen] = useState(false);
 
-  const { data: wsCount, isLoading: wsLoading } =
-    trpc.workspace.current.useQuery();
+  const { data: wsCount, isLoading: wsLoading } = trpc.workspace.current.useQuery();
   const { data: me } = trpc.user.me.useQuery();
   const { data: views } = trpc.savedView.list.useQuery();
   const key = wsCount?.key ?? ws.key;
@@ -113,10 +99,7 @@ export default function IssuesPage() {
   const dueOnFromUrl = searchParams?.get("dueOn") ?? null;
   // Validate the URL value before threading it into the query. A
   // malformed `?dueOn=foo` shouldn't hit the server.
-  const dueOn =
-    dueOnFromUrl && /^\d{4}-\d{2}-\d{2}$/.test(dueOnFromUrl)
-      ? dueOnFromUrl
-      : null;
+  const dueOn = dueOnFromUrl && /^\d{4}-\d{2}-\d{2}$/.test(dueOnFromUrl) ? dueOnFromUrl : null;
   useEffect(() => {
     if (!viewIdFromUrl) {
       setActiveViewId(null);
@@ -139,9 +122,7 @@ export default function IssuesPage() {
   }, [viewIdFromUrl, views?.length]);
 
   // Cycle / initiative chip state derives from `filters`.
-  const cycleId: CycleFilter = filters.withoutCycle
-    ? null
-    : (filters.cycleIds?.[0] ?? undefined);
+  const cycleId: CycleFilter = filters.withoutCycle ? null : (filters.cycleIds?.[0] ?? undefined);
   const initiativeId: InitiativeFilter = filters.withoutInitiative
     ? null
     : (filters.initiativeIds?.[0] ?? undefined);
@@ -208,8 +189,7 @@ export default function IssuesPage() {
   }
 
   const hasFilters = !isEmptyFilters(filters) || !!query || !!dueOn;
-  const isWorkspaceEmpty =
-    !!wsCount && wsCount._count.issues === 0 && !hasFilters;
+  const isWorkspaceEmpty = !!wsCount && wsCount._count.issues === 0 && !hasFilters;
 
   // The query object we pass down. `query` is kept separate from the
   // saved-view filter blob (it's not persisted with views by default to
@@ -219,8 +199,7 @@ export default function IssuesPage() {
     [filters, debouncedQuery],
   );
 
-  const activeView =
-    activeViewId && views ? views.find((v) => v.id === activeViewId) : null;
+  const activeView = activeViewId && views ? views.find((v) => v.id === activeViewId) : null;
 
   return (
     <DensityProvider>
@@ -228,7 +207,7 @@ export default function IssuesPage() {
         title="All issues"
         subtitle={wsCount ? `${wsCount._count.issues} total` : undefined}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
             {view === "list" && !isWorkspaceEmpty && (
               <>
                 <div className="relative">
@@ -236,7 +215,7 @@ export default function IssuesPage() {
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search…"
-                    className="h-7 w-32 pr-7 text-xs sm:w-48"
+                    className="h-8 w-[min(44vw,12rem)] pr-7 text-xs sm:h-7 sm:w-48"
                   />
                   {searchPending && (
                     <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
@@ -247,21 +226,15 @@ export default function IssuesPage() {
                 <DensityToggle />
               </>
             )}
-            {!isWorkspaceEmpty && (
-              <ViewToggle value={view} onChange={setView} />
-            )}
+            {!isWorkspaceEmpty && <ViewToggle value={view} onChange={setView} />}
           </div>
         }
       />
 
       {!isWorkspaceEmpty && (
-        <div className="space-y-2 border-b border-border bg-card/20 px-5 py-2.5">
+        <div className="space-y-2 border-b border-border bg-card/20 px-3 py-2.5 sm:px-5">
           {/* Quick filters — non-saved built-ins. */}
-          <QuickFilterChips
-            filters={filters}
-            onChange={onChangeFilters}
-            meId={me?.id}
-          />
+          <QuickFilterChips filters={filters} onChange={onChangeFilters} meId={me?.id} />
 
           {/* Saved views — user-defined, persisted, reorderable. */}
           <SavedViewsBar
@@ -277,10 +250,7 @@ export default function IssuesPage() {
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <IssueFacetChips filters={filters} onChange={onChangeFilters} />
             <CycleFilterChip value={cycleId} onChange={setCycleId} />
-            <InitiativeFilterChip
-              value={initiativeId}
-              onChange={setInitiativeId}
-            />
+            <InitiativeFilterChip value={initiativeId} onChange={setInitiativeId} />
             {dueOn && <DueOnChip dueOn={dueOn} onClear={clearDueOn} />}
             {hasFilters && (
               <button
@@ -294,10 +264,8 @@ export default function IssuesPage() {
                 Clear filters
               </button>
             )}
-            <div className="ml-auto flex items-center gap-2">
-              {view === "list" && (
-                <GroupChip value={groupBy} onChange={setGroupBy} />
-              )}
+            <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
+              {view === "list" && <GroupChip value={groupBy} onChange={setGroupBy} />}
               <SortChip value={sort} onChange={setSort} />
             </div>
           </div>
@@ -394,11 +362,8 @@ function FilteredEmptyState({
           <span>
             {activeViewName ? (
               <>
-                The view{" "}
-                <span className="font-medium text-foreground">
-                  {activeViewName}
-                </span>{" "}
-                has no matches right now.{" "}
+                The view <span className="font-medium text-foreground">{activeViewName}</span> has
+                no matches right now.{" "}
               </>
             ) : (
               "Your active filters returned nothing. "
@@ -423,13 +388,7 @@ function FilteredEmptyState({
  * the Today widget's week-peek deep-link (`?dueOn=YYYY-MM-DD`). The X
  * removes the URL param without disturbing other filters.
  */
-function DueOnChip({
-  dueOn,
-  onClear,
-}: {
-  dueOn: string;
-  onClear: () => void;
-}) {
+function DueOnChip({ dueOn, onClear }: { dueOn: string; onClear: () => void }) {
   // Parse the YYYY-MM-DD as UTC midnight to avoid timezone surprises
   // when displaying "May 4" in the chip.
   const [y, m, d] = dueOn.split("-").map(Number);
@@ -440,7 +399,7 @@ function DueOnChip({
     timeZone: "UTC",
   });
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-2 py-0.5 text-meta text-ember">
+    <span className="text-meta inline-flex items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-2 py-0.5 text-ember">
       Due on {label}
       <button
         type="button"
@@ -459,11 +418,7 @@ function DueOnChip({
  * so a hand-edited / stale value can't poison the query. Mirrors
  * `useViewPref` but generic over the value union (used for sort + group).
  */
-function useStoredPref<T extends string>(
-  key: string,
-  fallback: T,
-  allowed: readonly T[],
-) {
+function useStoredPref<T extends string>(key: string, fallback: T, allowed: readonly T[]) {
   const [val, setVal] = useState<T>(fallback);
   useEffect(() => {
     try {

@@ -69,7 +69,7 @@ export default function LabelsPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-8 p-6">
+        <div className="mx-auto max-w-3xl space-y-8 p-4 sm:p-6">
           <Section
             title="Labels"
             hint="Tag issues with a color and name to slice and filter your work. Recolor or rename any time — changes apply everywhere the label is used."
@@ -199,7 +199,7 @@ export default function LabelsPage() {
               </div>
               <Badge color={editing.color}>{editing.name || "preview"}</Badge>
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setEditing(null)}>
                 Cancel
               </Button>

@@ -93,7 +93,7 @@ export default function RecurringPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-8 p-6">
+        <div className="mx-auto max-w-3xl space-y-8 p-4 sm:p-6">
           <Section
             title="Schedules"
             hint="Each schedule creates a fresh issue on its own cadence — daily standups, weekly reviews, monthly retros. A background ticker scans every 5 minutes and creates an issue whenever a schedule's next run is due, then advances it by the interval. Pause one to stop it without deleting it; “Run now” creates an issue immediately for a one-off."
@@ -224,7 +224,7 @@ export default function RecurringPage() {
                 className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
               />
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="space-y-1.5">
                 <label className="text-xs text-muted-foreground">Interval (days)</label>
                 <Input
@@ -263,7 +263,7 @@ export default function RecurringPage() {
                 </select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <label className="text-xs text-muted-foreground">Project</label>
                 <select
@@ -292,7 +292,7 @@ export default function RecurringPage() {
                 </label>
               </div>
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setEditing(null)}>
                 Cancel
               </Button>

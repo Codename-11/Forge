@@ -86,7 +86,7 @@ export function NeedsYouTile({ slug }: { slug: string }) {
 
   return (
     <section className="rounded-lg border border-ember/30 bg-ember/5 p-4">
-      <header className="mb-3 flex items-center gap-2">
+      <header className="mb-3 flex flex-wrap items-center gap-2">
         <Inbox className="h-3.5 w-3.5 text-ember" />
         <h3 className="text-sm font-semibold">Needs you</h3>
         <Badge className="bg-ember/15 text-ember">
@@ -94,7 +94,7 @@ export function NeedsYouTile({ slug }: { slug: string }) {
         </Badge>
         <Link
           href={commandCenterHref}
-          className="focus-ring ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:text-foreground"
+          className="focus-ring ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:text-foreground"
         >
           View all
           <ArrowRight className="h-3 w-3" />
@@ -105,7 +105,7 @@ export function NeedsYouTile({ slug }: { slug: string }) {
           card.kind === "ask" ? (
             <li
               key={`ask-${card.id}`}
-              className="flex items-start gap-2 rounded-md border border-border bg-background p-2"
+              className="flex flex-wrap items-start gap-2 rounded-md border border-border bg-background p-2 sm:flex-nowrap"
             >
               {card.avatar ? (
                 <span className="mt-0.5 text-[0.875rem] leading-none">
@@ -135,7 +135,7 @@ export function NeedsYouTile({ slug }: { slug: string }) {
                   {card.issueLabel ? " · " : ""}action request
                 </div>
               </div>
-              <Link href={commandCenterHref}>
+              <Link href={commandCenterHref} className="ml-auto shrink-0 sm:ml-0">
                 <Button variant="ember" size="sm">
                   Resolve
                 </Button>
@@ -144,7 +144,7 @@ export function NeedsYouTile({ slug }: { slug: string }) {
           ) : (
             <li
               key={`gate-${card.id}`}
-              className="flex items-start gap-2 rounded-md border border-border bg-background p-2"
+              className="flex flex-wrap items-start gap-2 rounded-md border border-border bg-background p-2 sm:flex-nowrap"
             >
               <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ember" />
               <div className="min-w-0 flex-1">
@@ -158,7 +158,7 @@ export function NeedsYouTile({ slug }: { slug: string }) {
                   {card.targetType.replace(/-/g, " ")} · awaiting your sign-off
                 </div>
               </div>
-              <Link href={card.href ?? commandCenterHref}>
+              <Link href={card.href ?? commandCenterHref} className="ml-auto shrink-0 sm:ml-0">
                 <Button variant="outline" size="sm">
                   Review
                 </Button>

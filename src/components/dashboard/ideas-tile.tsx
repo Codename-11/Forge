@@ -48,15 +48,15 @@ export function IdeasTile({ slug }: { slug: string }) {
 
   return (
     <section className="rounded-lg border border-border bg-card/40">
-      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+      <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
         <Lightbulb className="h-3.5 w-3.5 text-ember" aria-hidden />
         <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Ideas
         </span>
-        <span className="text-meta text-muted-foreground/70">
+        <span className="min-w-0 text-meta text-muted-foreground/70">
           fresh captures · IDEA
         </span>
-        <span className="ml-auto rounded-full bg-subtle px-1.5 font-mono text-[0.6875rem] text-muted-foreground">
+        <span className="ml-auto shrink-0 rounded-full bg-subtle px-1.5 font-mono text-[0.6875rem] text-muted-foreground">
           {items.length}
         </span>
       </header>
@@ -68,7 +68,7 @@ export function IdeasTile({ slug }: { slug: string }) {
           return (
             <li
               key={n.id}
-              className="group flex items-start gap-2 border-b border-border/60 px-4 py-2 last:border-b-0"
+              className="group flex flex-wrap items-start gap-2 border-b border-border/60 px-4 py-2 last:border-b-0 sm:flex-nowrap"
             >
               {n.pinned ? (
                 <Pin className="mt-1 h-3 w-3 shrink-0 fill-current text-ember" />
@@ -88,7 +88,7 @@ export function IdeasTile({ slug }: { slug: string }) {
                 onClick={() => promote.mutate({ noteId: n.id, kind: "issue" })}
                 disabled={promote.isPending}
                 className={cn(
-                  "focus-ring inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-meta text-muted-foreground transition-colors hover:border-ember/40 hover:text-foreground",
+                  "focus-ring ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-meta text-muted-foreground transition-colors hover:border-ember/40 hover:text-foreground sm:ml-0",
                   promote.isPending && "opacity-40",
                 )}
                 title="Promote this idea to a new issue"

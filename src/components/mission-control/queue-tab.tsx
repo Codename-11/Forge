@@ -2,15 +2,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import {
-  Bot,
-  ChevronDown,
-  Send,
-  ExternalLink,
-  Shield,
-  Inbox,
-  Workflow,
-} from "lucide-react";
+import { Bot, ChevronDown, Send, ExternalLink, Shield, Inbox, Workflow } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
@@ -87,8 +79,7 @@ export function QueueTab({ slug }: { slug: string }) {
   };
 
   const dispatchAllUnblocked = () => {
-    const unassigned =
-      queue?.filter((q) => !q.assignedAgent && q.unblocked !== false) ?? [];
+    const unassigned = queue?.filter((q) => !q.assignedAgent && q.unblocked !== false) ?? [];
     if (unassigned.length === 0) {
       toast.info("Nothing to dispatch.");
       return;
@@ -108,9 +99,7 @@ export function QueueTab({ slug }: { slug: string }) {
   };
 
   if (isLoading) {
-    return (
-      <div className="px-3 py-4 text-meta text-muted-foreground">Loading queue…</div>
-    );
+    return <div className="text-meta px-3 py-4 text-muted-foreground">Loading queue…</div>;
   }
 
   const items = queue ?? [];
@@ -134,7 +123,7 @@ export function QueueTab({ slug }: { slug: string }) {
         )}
         {items.length > 0 && (
           <>
-            <div className="grid grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-1 gap-1.5 min-[400px]:grid-cols-3">
               <StatCard label="In queue" value={`${items.length}`} />
               <StatCard
                 label="Unassigned"
@@ -177,12 +166,13 @@ export function QueueTab({ slug }: { slug: string }) {
           );
         })}
       </div>
-      <div className="flex items-center justify-between border-t border-border/60 px-3 py-2 text-meta">
+      <div className="text-meta flex flex-wrap items-center justify-between gap-2 border-t border-border/60 px-3 py-2">
         <span className="text-muted-foreground">
           {unassignedCount} unassigned
           {blockedCount > 0 && (
             <>
-              {" "}· <span className="text-amber-600">{blockedCount} blocked</span>
+              {" "}
+              · <span className="text-warning">{blockedCount} blocked</span>
             </>
           )}
         </span>
@@ -191,7 +181,7 @@ export function QueueTab({ slug }: { slug: string }) {
           onClick={dispatchAllUnblocked}
           disabled={unassignedCount === 0 || eligibleAgents.length === 0}
           className={cn(
-            "flex items-center gap-1 rounded-md bg-ember px-2 py-1 text-[0.6875rem] font-medium text-ember-foreground hover:bg-ember/90 disabled:cursor-not-allowed disabled:opacity-50",
+            "flex min-h-9 items-center gap-1 rounded-md bg-ember px-2 py-1 text-[0.6875rem] font-medium text-ember-foreground hover:bg-ember/90 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
           )}
         >
           <Send className="h-3 w-3" /> Dispatch all
@@ -222,20 +212,16 @@ function StatCard({
 }) {
   const valueTone =
     accent === "warning"
-      ? "text-amber-600"
+      ? "text-warning"
       : accent === "danger"
-        ? "text-red-600"
+        ? "text-danger"
         : accent === "success"
-          ? "text-emerald-600"
+          ? "text-success"
           : "text-foreground";
   return (
     <div className="flex flex-col gap-0.5 rounded-md border border-border bg-card/40 px-2 py-1.5">
-      <div className="text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      <div className={cn("font-mono text-base leading-none tabular-nums", valueTone)}>
-        {value}
-      </div>
+      <div className="text-[0.5625rem] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className={cn("font-mono text-base tabular-nums leading-none", valueTone)}>{value}</div>
       {sub && <div className="text-meta text-muted-foreground">{sub}</div>}
     </div>
   );
@@ -263,23 +249,21 @@ function QueueRow({
 
   return (
     <div className="rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem]">
-      <div className="flex items-center gap-2">
-        {issue.blocked && (
-          <Shield className="h-3 w-3 shrink-0 text-amber-600" aria-label="Blocked" />
-        )}
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        {issue.blocked && <Shield className="h-3 w-3 shrink-0 text-warning" aria-label="Blocked" />}
         <Link
           href={`/w/${slug}/issues/${issue.id}`}
           className="shrink-0 font-mono text-[0.6875rem] text-foreground/80 hover:text-ember"
         >
           {issue.key}
         </Link>
-        <span className="truncate text-foreground" title={issue.title}>
+        <span className="min-w-[12rem] flex-1 truncate text-foreground" title={issue.title}>
           {issue.title}
         </span>
-        <span className="ml-auto flex items-center gap-1">
+        <span className="ml-auto flex flex-wrap items-center justify-end gap-1">
           {issue.assignedAgent ? (
             <span
-              className="flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 font-mono text-[0.65625rem] text-indigo-700 dark:text-indigo-300"
+              className="flex min-h-8 items-center gap-1 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.65625rem] text-ember sm:min-h-0"
               title={`Assigned to ${issue.assignedAgent.name}`}
             >
               <Bot className="h-3 w-3" />
@@ -290,7 +274,7 @@ function QueueRow({
               type="button"
               onClick={() => setOpen((o) => !o)}
               className={cn(
-                "flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[0.65625rem] text-muted-foreground hover:border-ember/40 hover:text-foreground",
+                "flex min-h-8 items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[0.65625rem] text-muted-foreground hover:border-ember/40 hover:text-foreground sm:min-h-0",
                 open && "border-ember/40 text-foreground",
               )}
             >
@@ -299,7 +283,7 @@ function QueueRow({
           )}
           <Link
             href={`/w/${slug}/issues/${issue.id}`}
-            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground"
+            className="flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-5 sm:w-5"
             aria-label="Open issue"
             title="Open issue"
           >
@@ -314,9 +298,9 @@ function QueueRow({
         {issue.assignedAgent ? (
           <span className="font-mono text-ember">→ @{issue.assignedAgent.profileKey}</span>
         ) : issue.blocked ? (
-          <span className="text-amber-600">blocked · waiting on dependencies</span>
+          <span className="text-warning">blocked · waiting on dependencies</span>
         ) : agents.length === 0 ? (
-          <span className="font-mono text-red-600">no eligible · needs human</span>
+          <span className="font-mono text-danger">no eligible · needs human</span>
         ) : (
           <span className="text-muted-foreground">waiting for an agent</span>
         )}
@@ -324,9 +308,7 @@ function QueueRow({
       {open && !issue.assignedAgent && (
         <div className="mt-1.5 flex flex-wrap gap-1 border-t border-border/60 pt-1.5">
           {agents.length === 0 ? (
-            <span className="text-meta text-muted-foreground">
-              No eligible WORKER agents.
-            </span>
+            <span className="text-meta text-muted-foreground">No eligible WORKER agents.</span>
           ) : (
             agents.map((a) => (
               <button
@@ -337,7 +319,7 @@ function QueueRow({
                   setOpen(false);
                 }}
                 className={cn(
-                  "flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[0.65625rem] hover:border-ember/40",
+                  "flex min-h-8 items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[0.65625rem] hover:border-ember/40 sm:min-h-0",
                   a.status === "OFFLINE" && "opacity-60",
                 )}
                 title={`Status: ${a.status}`}
@@ -345,16 +327,14 @@ function QueueRow({
                 <Bot className="h-3 w-3 text-ember" /> @{a.profileKey}
                 {a.avgCostUsd != null && (
                   <span
-                    className="ml-1 text-meta text-muted-foreground"
+                    className="text-meta ml-1 text-muted-foreground"
                     title="Avg cost per run, last 30d"
                   >
                     ~{fmtCost(a.avgCostUsd)}
                   </span>
                 )}
                 {a.status === "OFFLINE" && (
-                  <span className="ml-1 text-meta text-muted-foreground">
-                    (offline)
-                  </span>
+                  <span className="text-meta ml-1 text-muted-foreground">(offline)</span>
                 )}
               </button>
             ))

@@ -43,7 +43,7 @@ export type BulkBarAction = {
 };
 
 const BTN_CLASS =
-  "focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50";
+  "focus-ring inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] hover:bg-subtle disabled:opacity-50";
 
 export function BulkBar({
   count,
@@ -75,7 +75,7 @@ export function BulkBar({
     >
       <div
         className={cn(
-          "flex items-center gap-3 px-5 py-2 text-[0.75rem]",
+          "flex flex-wrap items-center gap-2 px-3 py-2 text-[0.75rem] sm:gap-3 sm:px-5",
           contentClassName,
         )}
       >
@@ -96,7 +96,7 @@ export function BulkBar({
             </>
           )}
         </span>
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="flex w-full min-w-0 items-center gap-1.5 overflow-x-auto pb-1 sm:ml-auto sm:w-auto sm:overflow-visible sm:pb-0">
           {actions.map((a) => {
             if (a.render) {
               return <span key={a.id}>{a.render(BTN_CLASS)}</span>;

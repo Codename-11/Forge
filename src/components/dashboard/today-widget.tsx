@@ -66,10 +66,10 @@ export function TodayWidget({
 
   return (
     <section className="overflow-hidden rounded-lg border border-border bg-card/40">
-      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+      <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
         <Calendar className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
         <span className="text-sm font-medium">Today</span>
-        <span className="text-meta text-muted-foreground/70">
+        <span className="min-w-0 text-meta text-muted-foreground/70">
           this week at a glance
         </span>
       </header>
@@ -141,7 +141,7 @@ function SprintCountdown({
           <span className="ml-2 text-muted-foreground">— {label}</span>
         </div>
       </div>
-      <span className="text-meta text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+      <span className="hidden shrink-0 text-meta text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 sm:inline">
         Open →
       </span>
     </Link>
@@ -189,7 +189,7 @@ function DueSoonList({
           <li key={issue.id}>
             <Link
               href={`/w/${slug}/issues/${issue.id}`}
-              className="group flex items-center gap-2 rounded-md py-1 hover:bg-subtle/50"
+              className="group flex min-w-0 flex-wrap items-center gap-2 rounded-md py-1 hover:bg-subtle/50 sm:flex-nowrap"
             >
               <span className="w-5 shrink-0 text-center font-mono text-[0.6875rem] text-muted-foreground">
                 {PRIORITY_GLYPH[issue.priority] ?? "—"}
@@ -197,7 +197,7 @@ function DueSoonList({
               <span className="text-id shrink-0 text-muted-foreground">
                 {formatIssueId(workspaceKey, issue.number)}
               </span>
-              <span className="min-w-0 flex-1 truncate text-xs">
+              <span className="min-w-0 flex-1 basis-[calc(100%-5rem)] truncate text-xs sm:basis-auto">
                 {issue.title}
               </span>
               <DueChip dueDate={issue.dueDate!} />

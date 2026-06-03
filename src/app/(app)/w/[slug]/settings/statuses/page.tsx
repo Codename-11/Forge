@@ -109,7 +109,7 @@ export default function StatusesPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-8 p-6">
+        <div className="mx-auto max-w-3xl space-y-8 p-4 sm:p-6">
           <Section
             title="Pipeline"
             hint="Drag the handles to reorder. The order here is the order statuses appear on the board and in dropdowns. Each status belongs to a fixed category that drives how Forge groups, charts, and counts work."
@@ -221,7 +221,7 @@ export default function StatusesPage() {
               <Input value={color} onChange={(e) => setColor(e.target.value)} className="flex-1" />
             </div>
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
               Cancel
             </Button>

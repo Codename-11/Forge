@@ -102,19 +102,17 @@ export default function AgentDetailPage() {
     <>
       <Topbar
         title={
-          <span className="flex items-center gap-2">
+          <span className="flex min-w-0 flex-wrap items-center gap-2">
             <Link
               href={`/w/${ws.slug}/agents`}
-              className="text-muted-foreground hover:text-foreground"
+              className="flex min-h-9 min-w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:min-h-0 sm:min-w-0 sm:justify-start sm:hover:bg-transparent"
               title="Back to Agents"
             >
               <ChevronLeft className="h-4 w-4" />
             </Link>
-            <span>{agent?.name ?? profileKey}</span>
+            <span className="min-w-0 truncate">{agent?.name ?? profileKey}</span>
             {agent && (
-              <span className="font-mono text-meta text-muted-foreground">
-                @{agent.profileKey}
-              </span>
+              <span className="text-meta font-mono text-muted-foreground">@{agent.profileKey}</span>
             )}
             {agent &&
               (agent.availability === "on-demand" ? (
@@ -139,7 +137,7 @@ export default function AgentDetailPage() {
         actions={
           agent && (
             <Link href={`/w/${ws.slug}/settings/agents`}>
-              <Button variant="ghost" size="sm">
+              <Button variant="ghost" size="sm" className="min-h-9">
                 <Settings2 className="mr-1.5 h-3.5 w-3.5" />
                 Edit
               </Button>
@@ -148,19 +146,17 @@ export default function AgentDetailPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="space-y-6 p-6">
+        <div className="space-y-4 p-4 sm:space-y-6 sm:p-6">
           {!agent ? (
             <SkeletonList rows={6} />
           ) : (
             <>
               <IdentityStrip agent={agent} />
-              {healthFocus && (
-                <HealthFocusBanner agent={agent} focus={healthFocus} />
-              )}
+              {healthFocus && <HealthFocusBanner agent={agent} focus={healthFocus} />}
               <StatsRow agentId={agent.id} />
               <UptimeSection agentId={agent.id} />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                <div className="lg:col-span-2 space-y-4">
+                <div className="space-y-4 lg:col-span-2">
                   <StalledSection agentId={agent.id} slug={ws.slug} wsKey={ws.key} />
                   <CurrentlyWorkingSection agentId={agent.id} />
                 </div>
@@ -215,13 +211,7 @@ function parseHealthFocus(value: string | null): AgentHealthFocus | null {
   return null;
 }
 
-function HealthFocusBanner({
-  agent,
-  focus,
-}: {
-  agent: AgentRow;
-  focus: AgentHealthFocus;
-}) {
+function HealthFocusBanner({ agent, focus }: { agent: AgentRow; focus: AgentHealthFocus }) {
   const ws = useWorkspace();
   const copy =
     focus === "noack"
@@ -229,40 +219,31 @@ function HealthFocusBanner({
           title: "Missed ack investigation",
           reason:
             "Forge expected a comment or status transition after dispatch, but the ack window expired.",
-          fix:
-            "Check heartbeat freshness and failed webhook deliveries below, then retry the delivery or reassign the issue if the runner is unavailable.",
+          fix: "Check heartbeat freshness and failed webhook deliveries below, then retry the delivery or reassign the issue if the runner is unavailable.",
         }
       : focus === "webhook"
         ? {
             title: "Webhook delivery health",
             reason:
               "Agent dispatches travel through durable webhook deliveries before the runner receives work.",
-            fix:
-              "Open a failed or dead-letter delivery, inspect the response, fix the endpoint or secret, then retry.",
+            fix: "Open a failed or dead-letter delivery, inspect the response, fix the endpoint or secret, then retry.",
           }
         : {
             title: "Heartbeat freshness",
             reason:
               "Heartbeat and successful dispatch deliveries are the signals Forge uses to trust this agent is reachable.",
-            fix:
-              "Restart the runner or verify it can receive webhooks and call the heartbeat endpoint.",
+            fix: "Restart the runner or verify it can receive webhooks and call the heartbeat endpoint.",
           };
   return (
     <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 text-[0.75rem]">
       <div className="flex flex-wrap items-center gap-2">
         <AlertTriangle className="h-3.5 w-3.5 text-warning" />
         <span className="font-semibold text-foreground">{copy.title}</span>
-        <span className="font-mono text-meta text-muted-foreground">
-          @{agent.profileKey}
-        </span>
+        <span className="text-meta font-mono text-muted-foreground">@{agent.profileKey}</span>
       </div>
       <div className="mt-2 grid gap-2 md:grid-cols-3">
         <HealthCallout label="Reason" value={copy.reason} />
-        <HealthCallout
-          label="Recommended fix"
-          value={copy.fix}
-          className="md:col-span-2"
-        />
+        <HealthCallout label="Recommended fix" value={copy.fix} className="md:col-span-2" />
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Link
@@ -308,20 +289,16 @@ function HealthCallout({
 
 function IdentityStrip({ agent }: { agent: AgentRow }) {
   return (
-    <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border bg-card p-4">
+    <div className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4 sm:flex-row sm:flex-wrap sm:items-center">
       <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-subtle text-lg">
         {agent.avatar ?? <Bot className="h-5 w-5 text-muted-foreground" />}
       </div>
       <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold">{agent.name}</span>
-          <span className="font-mono text-meta text-muted-foreground">
-            @{agent.profileKey}
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="min-w-0 truncate text-sm font-semibold">{agent.name}</span>
+          <span className="text-meta font-mono text-muted-foreground">@{agent.profileKey}</span>
           <Badge>{PROVIDER_LABELS[agent.provider] ?? agent.provider}</Badge>
-          <Badge>
-            {agent.runtimeMode === "PERSISTENT" ? "persistent" : "single-session"}
-          </Badge>
+          <Badge>{agent.runtimeMode === "PERSISTENT" ? "persistent" : "single-session"}</Badge>
         </div>
         {agent.capabilities.length > 0 && (
           <div className="flex flex-wrap gap-1">
@@ -333,7 +310,7 @@ function IdentityStrip({ agent }: { agent: AgentRow }) {
           </div>
         )}
       </div>
-      <div className="flex items-center gap-4 text-meta text-muted-foreground">
+      <div className="text-meta flex min-w-0 flex-wrap items-center gap-3 text-muted-foreground sm:gap-4">
         <span>
           max concurrent{" "}
           <span className="font-mono text-foreground">
@@ -341,11 +318,11 @@ function IdentityStrip({ agent }: { agent: AgentRow }) {
           </span>
         </span>
         {agent.webhookUrl ? (
-          <span className="inline-flex items-center gap-1.5">
+          <span className="inline-flex min-w-0 items-center gap-1.5">
             <span className="rounded-sm bg-success/10 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-success">
               push
             </span>
-            <span className="font-mono">{truncateUrl(agent.webhookUrl)}</span>
+            <span className="truncate font-mono">{truncateUrl(agent.webhookUrl)}</span>
           </span>
         ) : (
           <span className="rounded-sm bg-subtle px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -371,15 +348,9 @@ function StatsRow({ agentId }: { agentId: string }) {
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <Stat
-        label="Uptime (7d)"
-        value={uptime ? `${uptime.uptimePct}%` : "—"}
-      />
+      <Stat label="Uptime (7d)" value={uptime ? `${uptime.uptimePct}%` : "—"} />
       <Stat label="Assignments (30d)" value={me?.assignments ?? "—"} />
-      <Stat
-        label="Mean TTFA"
-        value={formatDuration(me?.meanTimeToFirstAction)}
-      />
+      <Stat label="Mean TTFA" value={formatDuration(me?.meanTimeToFirstAction)} />
       <Stat label="Throughput (7d)" value={me?.throughputLast7d ?? "—"} />
     </div>
   );
@@ -426,13 +397,11 @@ function UptimeSection({ agentId }: { agentId: string }) {
   // Walk: each transition closes the prior segment and opens a new one.
   for (const t of data.transitions) {
     const at = new Date(t.at).getTime();
-    if (at > cursor)
-      segments.push({ from: cursor, to: at, status: cursorStatus });
+    if (at > cursor) segments.push({ from: cursor, to: at, status: cursorStatus });
     cursorStatus = (t.status as AgentStatus | null) ?? cursorStatus;
     cursor = at;
   }
-  if (end > cursor)
-    segments.push({ from: cursor, to: end, status: cursorStatus });
+  if (end > cursor) segments.push({ from: cursor, to: end, status: cursorStatus });
 
   return (
     <Section
@@ -460,13 +429,12 @@ function UptimeSection({ agentId }: { agentId: string }) {
             />
           ))}
         </div>
-        <div className="flex flex-wrap items-center gap-3 text-meta text-muted-foreground">
+        <div className="text-meta flex flex-wrap items-center gap-3 text-muted-foreground">
           <LegendDot color={STATUS_FILL.ONLINE} label="Online" />
           <LegendDot color={STATUS_FILL.BUSY} label="Busy" />
           <LegendDot color={STATUS_FILL.OFFLINE} label="Offline" />
           <span className="ml-auto">
-            online {formatDuration(data.onlineMs)} · busy{" "}
-            {formatDuration(data.busyMs)} · offline{" "}
+            online {formatDuration(data.onlineMs)} · busy {formatDuration(data.busyMs)} · offline{" "}
             {formatDuration(data.offlineMs)}
           </span>
         </div>
@@ -478,10 +446,7 @@ function UptimeSection({ agentId }: { agentId: string }) {
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
     <span className="inline-flex items-center gap-1">
-      <span
-        className="h-1.5 w-1.5 rounded-full"
-        style={{ background: color }}
-      />
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
       {label}
     </span>
   );
@@ -550,12 +515,7 @@ function StalledSection({
             </div>
             <ul className="space-y-1">
               {stalledRuns.map((r) => (
-                <StalledRunRow
-                  key={r.id}
-                  run={r}
-                  slug={slug}
-                  wsKey={wsKey}
-                />
+                <StalledRunRow key={r.id} run={r} slug={slug} wsKey={wsKey} />
               ))}
             </ul>
           </div>
@@ -565,9 +525,7 @@ function StalledSection({
             <div className="mb-1 flex items-center gap-2 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
               <span>
                 Stalled issues
-                {stalledThresholdDays > 0
-                  ? ` (${stalledThresholdDays}d+)`
-                  : ""}
+                {stalledThresholdDays > 0 ? ` (${stalledThresholdDays}d+)` : ""}
               </span>
               <span className="font-mono">{stalledIssues.length}</span>
             </div>
@@ -595,7 +553,7 @@ function StalledSection({
                         </span>
                       )}
                       {i.project && (
-                        <span className="font-mono text-meta text-muted-foreground">
+                        <span className="text-meta font-mono text-muted-foreground">
                           {i.project.key}
                         </span>
                       )}
@@ -604,9 +562,7 @@ function StalledSection({
                         style={{ background: i.status.color }}
                         title={i.status.name}
                       />
-                      <span className="text-meta text-warning">
-                        {relativeTime(i.updatedAt)}
-                      </span>
+                      <span className="text-meta text-warning">{relativeTime(i.updatedAt)}</span>
                     </Link>
                   </li>
                 );
@@ -645,8 +601,7 @@ function StalledRunRow({ run, slug, wsKey }: StalledRunRowProps) {
     onError: (e) => toast.error(e.message),
   });
 
-  const recentlyKicked =
-    kickedAt !== null && Date.now() - kickedAt < 30_000;
+  const recentlyKicked = kickedAt !== null && Date.now() - kickedAt < 30_000;
 
   return (
     <li className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-[0.75rem]">
@@ -664,18 +619,14 @@ function StalledRunRow({ run, slug, wsKey }: StalledRunRowProps) {
         </span>
         <span className="flex-1 truncate">{run.issue.title}</span>
         {run.issue.project && (
-          <span className="font-mono text-meta text-muted-foreground">
-            {run.issue.project.key}
-          </span>
+          <span className="text-meta font-mono text-muted-foreground">{run.issue.project.key}</span>
         )}
         <span
           className="h-1.5 w-1.5 rounded-full"
           style={{ background: run.issue.status.color }}
           title={run.issue.status.name}
         />
-        <span className="text-meta text-warning">
-          quiet {relativeTime(run.lastEventAt)}
-        </span>
+        <span className="text-meta text-warning">quiet {relativeTime(run.lastEventAt)}</span>
       </Link>
       {recentlyKicked ? (
         <span
@@ -741,18 +692,8 @@ function CurrentlyWorkingSection({ agentId }: { agentId: string }) {
       }
     >
       <div className="space-y-3">
-        <Bucket
-          label="In flight"
-          issues={lane.inFlight}
-          slug={ws.slug}
-          wsKey={ws.key}
-        />
-        <Bucket
-          label="Assigned"
-          issues={lane.assigned}
-          slug={ws.slug}
-          wsKey={ws.key}
-        />
+        <Bucket label="In flight" issues={lane.inFlight} slug={ws.slug} wsKey={ws.key} />
+        <Bucket label="Assigned" issues={lane.assigned} slug={ws.slug} wsKey={ws.key} />
         <Bucket
           label="Recently done (7d)"
           issues={lane.recentlyDone}
@@ -795,7 +736,7 @@ function Bucket({
         <span className="font-mono">{issues.length}</span>
       </div>
       {issues.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border px-2 py-1.5 text-meta text-muted-foreground">
+        <div className="text-meta rounded-md border border-dashed border-border px-2 py-1.5 text-muted-foreground">
           —
         </div>
       ) : (
@@ -819,9 +760,7 @@ function Bucket({
                 )}
                 <span className="flex-1 truncate">{i.title}</span>
                 {i.project && (
-                  <span className="font-mono text-meta text-muted-foreground">
-                    {i.project.key}
-                  </span>
+                  <span className="text-meta font-mono text-muted-foreground">{i.project.key}</span>
                 )}
                 <span
                   className="h-1.5 w-1.5 rounded-full"
@@ -855,8 +794,7 @@ function WebhookHealthCard({
   if (!data) return <SectionShell title="Webhook health" small />;
 
   const { totals } = data;
-  const total =
-    totals.success + totals.failed + totals.deadLetter + totals.pending || 0;
+  const total = totals.success + totals.failed + totals.deadLetter + totals.pending || 0;
   const hasDeliveryConcern = totals.failed > 0 || totals.deadLetter > 0;
   const deadLetterHref = deliveryInspectorHref(ws.slug, {
     status: "DEAD_LETTER",
@@ -879,24 +817,19 @@ function WebhookHealthCard({
       <Card
         id="dispatch-health"
         className={cn(
-          "space-y-2 p-3 scroll-mt-20",
-          (focus === "noack" || focus === "webhook") &&
-            "border-warning/40 bg-warning/5",
+          "scroll-mt-20 space-y-2 p-3",
+          (focus === "noack" || focus === "webhook") && "border-warning/40 bg-warning/5",
         )}
       >
         {data.configuredWebhookUrl ? (
-          <div className="truncate font-mono text-meta text-muted-foreground">
+          <div className="text-meta truncate font-mono text-muted-foreground">
             {data.configuredWebhookUrl}
           </div>
         ) : (
-          <div className="text-meta text-muted-foreground">
-            No webhook URL configured.
-          </div>
+          <div className="text-meta text-muted-foreground">No webhook URL configured.</div>
         )}
         {total === 0 ? (
-          <div className="text-meta text-muted-foreground">
-            No deliveries in window.
-          </div>
+          <div className="text-meta text-muted-foreground">No deliveries in window.</div>
         ) : (
           <div className="grid grid-cols-4 gap-2 text-[0.75rem]">
             <Pill tone="ok" label="ok" value={totals.success} />
@@ -909,7 +842,7 @@ function WebhookHealthCard({
           focus === "webhook" ||
           hasDeliveryConcern ||
           !data.configuredWebhookUrl) && (
-          <div className="space-y-1 rounded-md border border-border bg-background/40 p-2 text-meta text-muted-foreground">
+          <div className="text-meta space-y-1 rounded-md border border-border bg-background/40 p-2 text-muted-foreground">
             <div className="font-medium text-foreground">
               {hasDeliveryConcern
                 ? "Delivery failures are blocking dispatch."
@@ -918,13 +851,12 @@ function WebhookHealthCard({
                   : "No push endpoint is configured."}
             </div>
             <div>
-              Reason: assignments and mentions reach this agent through the
-              synthetic dispatch webhook; failed or dead-letter rows mean the
-              runner may not have received the work.
+              Reason: assignments and mentions reach this agent through the synthetic dispatch
+              webhook; failed or dead-letter rows mean the runner may not have received the work.
             </div>
             <div>
-              Recommended fix: inspect the latest failed row, repair the
-              endpoint or secret, then retry the dead-letter delivery.
+              Recommended fix: inspect the latest failed row, repair the endpoint or secret, then
+              retry the dead-letter delivery.
             </div>
             <div className="flex flex-wrap gap-2">
               <Link
@@ -956,13 +888,11 @@ function WebhookHealthCard({
                 <li key={r.id}>
                   <Link
                     href={href}
-                    className="focus-ring flex items-center gap-2 rounded-sm py-1 text-meta hover:bg-subtle/60"
+                    className="focus-ring text-meta flex items-center gap-2 rounded-sm py-1 hover:bg-subtle/60"
                     title="Open delivery details"
                   >
                     <DeliveryStatusDot status={r.status} />
-                    <span className="font-mono text-muted-foreground">
-                      {r.event.kind}
-                    </span>
+                    <span className="font-mono text-muted-foreground">{r.event.kind}</span>
                     <span className="ml-auto text-right text-muted-foreground">
                       {r.responseStatus ? `${r.responseStatus} · ` : ""}
                       {relativeTime(r.deliveredAt ?? r.scheduledAt)}
@@ -997,18 +927,12 @@ function Pill({
   return (
     <div className={cn("rounded-md px-2 py-1 text-center", cls)}>
       <div className="font-mono text-sm">{value}</div>
-      <div className="text-[0.6875rem] uppercase tracking-wider opacity-80">
-        {label}
-      </div>
+      <div className="text-[0.6875rem] uppercase tracking-wider opacity-80">{label}</div>
     </div>
   );
 }
 
-function DeliveryStatusDot({
-  status,
-}: {
-  status: DeliveryStatus;
-}) {
+function DeliveryStatusDot({ status }: { status: DeliveryStatus }) {
   const color =
     status === "SUCCESS"
       ? "bg-success"
@@ -1017,12 +941,7 @@ function DeliveryStatusDot({
         : status === "FAILED"
           ? "bg-warning"
           : "bg-danger";
-  return (
-    <span
-      className={cn("h-1.5 w-1.5 shrink-0 rounded-full", color)}
-      title={status}
-    />
-  );
+  return <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", color)} title={status} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,13 +954,7 @@ function DeliveryStatusDot({
  * fallback). Quiet single-line empty state when there's nothing on
  * either side.
  */
-function CrewsAndWorkSection({
-  agentId,
-  slug,
-}: {
-  agentId: string;
-  slug: string;
-}) {
+function CrewsAndWorkSection({ agentId, slug }: { agentId: string; slug: string }) {
   const { data } = trpc.agent.crewsAndWork.useQuery({ id: agentId });
 
   if (!data) return <SectionShell title="Crews & live work" small />;
@@ -1060,9 +973,7 @@ function CrewsAndWorkSection({
     >
       <Card className="space-y-3 p-3 text-[0.75rem]">
         {isEmpty ? (
-          <div className="text-meta text-muted-foreground">
-            Not on any crew yet.
-          </div>
+          <div className="text-meta text-muted-foreground">Not on any crew yet.</div>
         ) : (
           <>
             <div className="space-y-1.5">
@@ -1070,9 +981,7 @@ function CrewsAndWorkSection({
                 Crews
               </div>
               {crews.length === 0 ? (
-                <div className="text-meta text-muted-foreground">
-                  Not on any crew.
-                </div>
+                <div className="text-meta text-muted-foreground">Not on any crew.</div>
               ) : (
                 <ul className="flex flex-wrap gap-1.5">
                   {crews.map((c) => (
@@ -1081,9 +990,7 @@ function CrewsAndWorkSection({
                         href={`/w/${slug}/crews/${c.crewId}`}
                         className="focus-ring inline-flex items-center gap-1.5 rounded-md border border-border bg-card/40 px-2 py-1 hover:bg-subtle"
                       >
-                        <span className="truncate font-medium text-foreground">
-                          {c.crewName}
-                        </span>
+                        <span className="truncate font-medium text-foreground">{c.crewName}</span>
                         <RoleChip role={c.role} />
                       </Link>
                     </li>
@@ -1096,9 +1003,7 @@ function CrewsAndWorkSection({
                 Working on now
               </div>
               {activeSteps.length === 0 ? (
-                <div className="text-meta text-muted-foreground">
-                  Nothing in flight.
-                </div>
+                <div className="text-meta text-muted-foreground">Nothing in flight.</div>
               ) : (
                 <ul className="space-y-1">
                   {activeSteps.map((s) => (
@@ -1204,10 +1109,8 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
           >
             <KindIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium text-foreground">
-                {runtime.name}
-              </span>
-              <span className="block text-meta text-muted-foreground">
+              <span className="block truncate font-medium text-foreground">{runtime.name}</span>
+              <span className="text-meta block text-muted-foreground">
                 {adapterLabel ?? runtime.kind.toLowerCase().replace("_", " ")}
               </span>
             </span>
@@ -1215,7 +1118,8 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
           </Link>
         ) : (
           <div className="text-meta text-muted-foreground">
-            No managed runtime attached — {transport?.mode === "completions"
+            No managed runtime attached —{" "}
+            {transport?.mode === "completions"
               ? "chat uses a configured model (Streaming engine)."
               : transport?.mode === "dispatch"
                 ? "chat is delivered by the agent's daemon/webhook."
@@ -1225,7 +1129,7 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
 
         {/* Runtime heartbeat only matters for heartbeat-tracked runtimes. */}
         {runtime && agent.availability === "heartbeat" && (
-          <div className="flex items-baseline justify-between gap-3 text-meta text-muted-foreground">
+          <div className="text-meta flex items-baseline justify-between gap-3 text-muted-foreground">
             <span>Heartbeat</span>
             <span className="text-right text-foreground/80">
               {runtime.heartbeatAt ? `${relativeTime(runtime.heartbeatAt)} ago` : "—"}
@@ -1249,9 +1153,7 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
             <span
               className={cn(
                 "text-[0.6875rem]",
-                verifyResult.ready
-                  ? "text-success"
-                  : "text-amber-700 dark:text-amber-300",
+                verifyResult.ready ? "text-success" : "text-amber-700 dark:text-amber-300",
               )}
               title={verifyResult.probe.detail || undefined}
             >
@@ -1318,12 +1220,7 @@ function DispatchEligibilityCard({
           )}
         </Row>
         <Row label="Load">
-          <span
-            className={cn(
-              "font-mono",
-              atCap ? "text-warning" : "text-foreground",
-            )}
-          >
+          <span className={cn("font-mono", atCap ? "text-warning" : "text-foreground")}>
             {load}/{cap === 0 ? "∞" : cap}
           </span>
         </Row>
@@ -1342,30 +1239,24 @@ function DispatchEligibilityCard({
         </Row>
         <Row label="Last heartbeat">
           <span className="text-muted-foreground">
-            {agent.lastHeartbeatAt
-              ? relativeTime(agent.lastHeartbeatAt)
-              : "never"}
+            {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "never"}
           </span>
         </Row>
         <Row label="Last dispatched">
           <span className="text-muted-foreground">
-            {agent.lastDispatchedAt
-              ? relativeTime(agent.lastDispatchedAt)
-              : "never"}
+            {agent.lastDispatchedAt ? relativeTime(agent.lastDispatchedAt) : "never"}
           </span>
         </Row>
         {shouldExplainHeartbeat && (
-          <div className="rounded-md border border-border bg-background/40 p-2 text-meta text-muted-foreground">
-            <div className="font-medium text-foreground">
-              Heartbeat context
+          <div className="text-meta rounded-md border border-border bg-background/40 p-2 text-muted-foreground">
+            <div className="font-medium text-foreground">Heartbeat context</div>
+            <div>
+              Reason: Forge uses successful webhook delivery and explicit heartbeat calls as
+              reachability signals for dispatch.
             </div>
             <div>
-              Reason: Forge uses successful webhook delivery and explicit
-              heartbeat calls as reachability signals for dispatch.
-            </div>
-            <div>
-              Recommended fix: confirm the runner is online, can receive
-              dispatch webhooks, and is calling the heartbeat endpoint.
+              Recommended fix: confirm the runner is online, can receive dispatch webhooks, and is
+              calling the heartbeat endpoint.
             </div>
           </div>
         )}
@@ -1374,13 +1265,7 @@ function DispatchEligibilityCard({
   );
 }
 
-function Row({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-3">
       <span className="text-muted-foreground">{label}</span>
@@ -1391,13 +1276,7 @@ function Row({
 
 // ---------------------------------------------------------------------------
 
-function SectionShell({
-  title,
-  small = false,
-}: {
-  title: string;
-  small?: boolean;
-}) {
+function SectionShell({ title, small = false }: { title: string; small?: boolean }) {
   return (
     <Section title={title}>
       <div className="rounded-lg border border-border bg-card p-3">

@@ -2,6 +2,58 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-03 — v0.4.0 mobile app release
+
+Squash-merged the `mobile-ui-ux-enhancement` worktree into `main` for the
+v0.4.0 mobile app experience release and bumped `package.json` +
+`CHANGELOG.md`. The local release gate initially exposed stale generated
+Next type artifacts and a dev database whose Prisma migration bookkeeping was
+behind the schema; removed ignored `.next*` artifacts and resolved/applied the
+local dev DB migrations through `0072_enable_run_stale_sweep` before rerunning.
+
+Gate on merged `main`: `pnpm lint && pnpm typecheck && pnpm test` (741 pass /
+1 skipped) and `pnpm test:e2e` (20 pass, including the 390/430/768 mobile
+smoke spec).
+
+## 2026-06-02 — Mobile UI/UX worktree + Hermes runtime diagnostics scope
+
+Created the `mobile-ui-ux-enhancement` worktree at `/home/bailey/forge-mobile-ui-ux`
+and ran a delegated mobile pass across the core app: shell/nav, issues list/board/detail,
+dashboard/inbox/command-center/review, workspace settings, agents, and Mission Control.
+Tracked the implementation under AXI-72 and captured the Hermes/runtime diagnostic gap
+under AXI-73; existing runtime follow-ups AXI-70/AXI-71 remain the close-contract /
+precreated-run dispatch work.
+
+- **Mobile shell + workflows** — topbar/sidebar controls now wrap safely on narrow
+  viewports; mobile nav stays reachable; issue list/board/detail controls, bulk bars,
+  and metadata rows avoid document-level horizontal overflow.
+- **Settings + agents surfaces** — settings rail becomes a mobile-friendly scroll
+  nav; workspace/admin/connection/dispatch/member forms stack; agents, pipeline, and
+  Mission Control tabs/queues/chat rails fit 390px/430px layouts while preserving
+  desktop density.
+- **Dashboard/inbox/review** — dense action clusters and repeated cards use tighter
+  mobile padding, wrapping controls, stable touch targets, and truncation for long
+  IDs/titles/status labels.
+- **Verification hardening** — added `tests/e2e/mobile-smoke.spec.ts` covering
+  authenticated mobile widths 390/430/768 across inbox, issues list, issue detail,
+  and Kanban, including no horizontal document overflow.
+- **Test hygiene** — updated stale expectations around the new default
+  `agentRunStaleMinutes=30`, human-readable runtime labels, and dispatcher test
+  isolation from concurrent heartbeat sweeps.
+
+Verified in the worktree: `git diff --check`, `pnpm lint`, `pnpm typecheck`,
+`pnpm test` (741 pass / 1 skipped), and
+`pnpm exec playwright test tests/e2e/mobile-smoke.spec.ts --project=chromium` (3 pass).
+
+Follow-up mobile detail pass on the same worktree: stacked page topbars on phone
+widths, reduced crowded inbox labels, kept issue list search/action controls from
+compressing the title, made issue row title/key hierarchy clearer on mobile,
+tightened agent runtime stats into a compact tooltip-backed line, demoted
+issue-detail Delete to an icon-only mobile action, and offset mobile toasts
+above the bottom navigation. Verified with 390px screenshots plus
+`git diff --check`, `pnpm lint`, `pnpm typecheck`, and the mobile smoke
+Playwright spec.
+
 ## 2026-05-31 — Enable stale-run sweep (v0.3.1) + Hermes lifecycle considerations
 
 Follow-up to v0.3.0's run-strip "idle" settle. The strip de-pulses at 90s but only

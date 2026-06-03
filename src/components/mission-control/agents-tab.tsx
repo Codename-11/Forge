@@ -49,9 +49,7 @@ export function AgentsTab({ slug }: { slug: string }) {
   );
 
   if (isLoading) {
-    return (
-      <div className="px-3 py-4 text-meta text-muted-foreground">Loading agents…</div>
-    );
+    return <div className="text-meta px-3 py-4 text-muted-foreground">Loading agents…</div>;
   }
 
   // Count ACTIVE runs per agent for the load chip.
@@ -59,9 +57,7 @@ export function AgentsTab({ slug }: { slug: string }) {
   for (const run of activeRuns ?? []) {
     loadByAgent.set(run.agentId, (loadByAgent.get(run.agentId) ?? 0) + 1);
   }
-  const costByAgent = new Map(
-    (costStats?.byAgent ?? []).map((c) => [c.agentId, c]),
-  );
+  const costByAgent = new Map((costStats?.byAgent ?? []).map((c) => [c.agentId, c]));
 
   // Sort: PERSISTENT+ONLINE first, PERSISTENT+BUSY, EPHEMERAL (by lastHeartbeatAt desc), then OFFLINE
   const sorted = [...(agents ?? [])].sort((a, b) => {
@@ -96,9 +92,7 @@ export function AgentsTab({ slug }: { slug: string }) {
   });
 
   // Header stats — online count + total capacity load across all agents.
-  const onlineCount = sorted.filter(
-    (a) => a.status === "ONLINE" || a.status === "BUSY",
-  ).length;
+  const onlineCount = sorted.filter((a) => a.status === "ONLINE" || a.status === "BUSY").length;
   let loadTotal = 0;
   let capTotal = 0;
   let capUncapped = false;
@@ -107,31 +101,25 @@ export function AgentsTab({ slug }: { slug: string }) {
     if (a.maxConcurrent > 0) capTotal += a.maxConcurrent;
     else capUncapped = true;
   }
-  const capValue = capUncapped
-    ? `${loadTotal}/∞`
-    : `${loadTotal}/${capTotal}`;
+  const capValue = capUncapped ? `${loadTotal}/∞` : `${loadTotal}/${capTotal}`;
 
   return (
     <div className="space-y-2 overflow-y-auto px-2 py-2">
       {sorted.length === 0 && (
-        <div className="px-1 py-2 text-meta text-muted-foreground">
+        <div className="text-meta px-1 py-2 text-muted-foreground">
           No agents in this workspace.
         </div>
       )}
       {sorted.length > 0 && (
         <>
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className="grid grid-cols-1 gap-1.5 min-[400px]:grid-cols-2">
             <StatCard
               label="Online"
               value={`${onlineCount}`}
               sub={`of ${sorted.length} agent${sorted.length === 1 ? "" : "s"}`}
               accent={onlineCount > 0 ? "success" : undefined}
             />
-            <StatCard
-              label="Capacity used"
-              value={capValue}
-              sub="active / max"
-            />
+            <StatCard label="Capacity used" value={capValue} sub="active / max" />
           </div>
           <SectionLabel>Agents</SectionLabel>
         </>
@@ -148,30 +136,28 @@ export function AgentsTab({ slug }: { slug: string }) {
           <Link
             key={a.id}
             href={`/w/${slug}/agents/${a.profileKey}`}
-            className="flex flex-col gap-0.5 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem] hover:border-ember/40"
+            className="flex flex-col gap-1 rounded-md border border-border bg-card/40 px-2.5 py-2 text-[0.75rem] hover:border-ember/40 sm:gap-0.5 sm:py-1.5"
           >
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <PresenceDot status={a.status} availability={presenceAvailability(a)} />
               <Bot className="h-3.5 w-3.5 shrink-0 text-ember" />
-              <span className="font-medium text-foreground">{a.name}</span>
+              <span className="min-w-0 truncate font-medium text-foreground">{a.name}</span>
               <span className="font-mono text-[0.65625rem] text-muted-foreground">
                 @{a.profileKey}
               </span>
-              <span className="ml-auto flex items-center gap-1.5">
+              <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
                 {/* Runtime mode pill */}
                 <span
                   className={cn(
                     "rounded border px-1 py-0 text-[0.5625rem] uppercase tracking-wider text-muted-foreground",
                     mode === "PERSISTENT"
                       ? "border-border bg-subtle/40"
-                      : "border-amber-500/30 bg-subtle/40",
+                      : "border-warning/30 bg-subtle/40",
                   )}
                 >
                   {modeLabel}
                 </span>
-                {a.transport && (
-                  <TransportChip mode={a.transport.mode} label={a.transport.label} />
-                )}
+                {a.transport && <TransportChip mode={a.transport.mode} label={a.transport.label} />}
                 {a.runtime && (
                   <RuntimeChip
                     slug={slug}
@@ -197,13 +183,9 @@ export function AgentsTab({ slug }: { slug: string }) {
                 <span
                   className={cn(
                     "font-mono text-[0.65625rem]",
-                    atCap ? "text-amber-600" : "text-muted-foreground",
+                    atCap ? "text-warning" : "text-muted-foreground",
                   )}
-                  title={
-                    cap > 0
-                      ? `${load} active / ${cap} max`
-                      : `${load} active (no cap)`
-                  }
+                  title={cap > 0 ? `${load} active / ${cap} max` : `${load} active (no cap)`}
                 >
                   {cap > 0 ? `${load}/${cap}` : `${load}`}
                 </span>
@@ -213,10 +195,8 @@ export function AgentsTab({ slug }: { slug: string }) {
             {/* Last-seen freshness when offline — only for heartbeat-tracked
                 agents; on-demand agents have no heartbeat by design. */}
             {isOffline && presenceAvailability(a) !== "on-demand" && (
-              <div className="pl-7 text-meta text-muted-foreground">
-                {a.lastHeartbeatAt
-                  ? `seen ${relativeTime(a.lastHeartbeatAt)}`
-                  : "no heartbeat"}
+              <div className="text-meta pl-7 text-muted-foreground">
+                {a.lastHeartbeatAt ? `seen ${relativeTime(a.lastHeartbeatAt)}` : "no heartbeat"}
               </div>
             )}
           </Link>
@@ -225,7 +205,7 @@ export function AgentsTab({ slug }: { slug: string }) {
       {sorted.length > 0 && (
         <Link
           href={`/w/${slug}/agents`}
-          className="flex items-center gap-2 rounded-md border border-ember/20 bg-ember/5 px-2.5 py-1.5 text-meta text-muted-foreground hover:border-ember/40 hover:text-foreground"
+          className="text-meta flex items-center gap-2 rounded-md border border-ember/20 bg-ember/5 px-2.5 py-1.5 text-muted-foreground hover:border-ember/40 hover:text-foreground"
         >
           <Bot className="h-3 w-3 shrink-0 text-ember/70" />
           <span>New profiles are admin-gated.</span>
@@ -259,20 +239,16 @@ function StatCard({
 }) {
   const valueTone =
     accent === "warning"
-      ? "text-amber-600"
+      ? "text-warning"
       : accent === "danger"
-        ? "text-red-600"
+        ? "text-danger"
         : accent === "success"
-          ? "text-emerald-600"
+          ? "text-success"
           : "text-foreground";
   return (
     <div className="flex flex-col gap-0.5 rounded-md border border-border bg-card/40 px-2 py-1.5">
-      <div className="text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      <div className={cn("font-mono text-base leading-none tabular-nums", valueTone)}>
-        {value}
-      </div>
+      <div className="text-[0.5625rem] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className={cn("font-mono text-base tabular-nums leading-none", valueTone)}>{value}</div>
       {sub && <div className="text-meta text-muted-foreground">{sub}</div>}
     </div>
   );
@@ -306,7 +282,7 @@ function RuntimeChip({
     Number.isNaN(ageMs) || ageMs >= 300_000 ? "offline" : ageMs < 90_000 ? "live" : "idle";
   const dot =
     presence === "live"
-      ? "bg-emerald-500"
+      ? "bg-success"
       : presence === "idle"
         ? "bg-warning"
         : "bg-muted-foreground/40";

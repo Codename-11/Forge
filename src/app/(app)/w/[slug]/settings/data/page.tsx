@@ -89,7 +89,7 @@ export default function DataPortabilityPage() {
         subtitle="Portable JSON snapshots of this workspace's core content."
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-8 p-6">
+        <div className="mx-auto max-w-3xl space-y-8 p-4 sm:p-6">
           <Section
             title="Export workspace"
             hint="Download a portable JSON snapshot. Use it for backup, migrations, or seeding a demo workspace."

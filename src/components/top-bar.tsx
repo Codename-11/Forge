@@ -5,6 +5,7 @@ import {
   ChevronDown,
   HelpCircle,
   LogOut,
+  Menu,
   Moon,
   Plus,
   Settings,
@@ -42,7 +43,20 @@ export function TopBar({
   const ws = useMaybeWorkspace();
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card/30 px-3">
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card/30 px-3 md:gap-3">
+      <button
+        type="button"
+        title="Open navigation"
+        aria-label="Open navigation"
+        onClick={() => window.dispatchEvent(new Event("forge:open-mobile-nav"))}
+        className={cn(
+          "focus-ring inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground md:hidden",
+          MOTION.fast,
+        )}
+      >
+        <Menu className="h-4 w-4" />
+      </button>
+
       {/* Left: workspace-shell breadcrumbs. Derived from pathname so
           every page gets a consistent "where am I" trail without each
           page rolling its own subtitle. */}

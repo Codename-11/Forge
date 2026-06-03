@@ -27,7 +27,7 @@ function EntryRow({ href, item }: { href: string; item: SettingsNavItem }) {
       >
         <item.icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground group-hover:text-ember" />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{item.label}</span>
             {item.badge && (
               <span className="rounded border border-ember/30 bg-ember/10 px-1.5 py-0.5 text-[0.6875rem] uppercase tracking-wider text-ember">
@@ -53,7 +53,7 @@ export default function SettingsPage() {
     <>
       <Topbar title="Settings" subtitle={`${ws.name} · workspace configuration`} />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
+        <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
           {WORKSPACE_SETTINGS_GROUPS.map((group) => (
             <Section key={group.id} title={group.label} hint={group.hint}>
               <Card>

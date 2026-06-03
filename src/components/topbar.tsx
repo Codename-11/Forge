@@ -20,14 +20,16 @@ export function Topbar({
   actions?: ReactNode;
 }) {
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-5">
+    <header className="flex shrink-0 flex-col gap-2 border-b border-border bg-background px-4 py-2 sm:h-12 sm:flex-row sm:items-center sm:px-5 sm:py-0">
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold tracking-tight">{title}</div>
-        {subtitle && <div className="truncate text-subtitle text-muted-foreground">{subtitle}</div>}
+        {subtitle && (
+          <div className="text-subtitle line-clamp-2 text-muted-foreground sm:line-clamp-1">
+            {subtitle}
+          </div>
+        )}
       </div>
-      {actions && (
-        <div className="ml-auto flex items-center gap-1.5">{actions}</div>
-      )}
+      {actions && <div className="flex min-w-0 items-center gap-1.5 sm:ml-auto">{actions}</div>}
     </header>
   );
 }

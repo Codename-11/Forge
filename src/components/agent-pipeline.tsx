@@ -8,18 +8,14 @@ import { trpc } from "@/lib/trpc";
 import type { AppRouter } from "@/server/routers/_app";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { EmptyState, SkeletonList } from "@/components/ui";
-import {
-  RunControlMenu,
-  type RunControlMenuRun,
-} from "@/components/run-control-menu";
+import { RunControlMenu, type RunControlMenuRun } from "@/components/run-control-menu";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { formatIssueId, relativeTime } from "@/lib/utils";
 
 type PipelineData = inferRouterOutputs<AppRouter>["agent"]["pipeline"];
 type PipelineIssue = PipelineData["lanes"][number]["assigned"][number];
-type AgentRunRow =
-  inferRouterOutputs<AppRouter>["agentRun"]["activeAll"][number];
+type AgentRunRow = inferRouterOutputs<AppRouter>["agentRun"]["activeAll"][number];
 type ListedRunRow = inferRouterOutputs<AppRouter>["agentRun"]["list"][number];
 
 export default function AgentPipeline() {
@@ -66,11 +62,7 @@ export default function AgentPipeline() {
 
   const { pool, lanes } = data;
 
-  if (
-    lanes.length === 0 &&
-    pool.ready.length === 0 &&
-    pool.blocked.length === 0
-  ) {
+  if (lanes.length === 0 && pool.ready.length === 0 && pool.blocked.length === 0) {
     return (
       <EmptyState
         variant="card"
@@ -103,13 +95,13 @@ export default function AgentPipeline() {
           <div className="flex min-w-0 items-baseline gap-2">
             <span className="text-sm font-medium text-foreground">Pool</span>
             <span className="text-meta truncate text-muted-foreground">
-              queued &middot; unassigned &middot; {pool.ready.length} ready
-              &middot; {pool.blocked.length} blocked
+              queued &middot; unassigned &middot; {pool.ready.length} ready &middot;{" "}
+              {pool.blocked.length} blocked
             </span>
           </div>
         }
       >
-        <div className="grid grid-cols-[3fr_1fr] gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[3fr_1fr]">
           <Column label="Ready" count={pool.ready.length}>
             {pool.ready.map((issue) => (
               <IssueCard key={issue.id} issue={issue} wsSlug={ws.slug} wsKey={ws.key} />
@@ -145,9 +137,7 @@ export default function AgentPipeline() {
                   href={`/w/${ws.slug}/agents/${agent.profileKey}`}
                   className="flex min-w-0 items-center gap-2 hover:underline"
                 >
-                  <span className="truncate text-sm font-medium text-foreground">
-                    {agent.name}
-                  </span>
+                  <span className="truncate text-sm font-medium text-foreground">{agent.name}</span>
                   <span className="text-meta truncate font-mono text-muted-foreground">
                     @{agent.profileKey}
                   </span>
@@ -158,7 +148,7 @@ export default function AgentPipeline() {
               </div>
             }
           >
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
               <Column label="Assigned" count={counts.assigned}>
                 {lane.assigned.map((issue) => (
                   <IssueCard key={issue.id} issue={issue} wsSlug={ws.slug} wsKey={ws.key} />
@@ -185,9 +175,7 @@ export default function AgentPipeline() {
                           : null
                       }
                       controlRequestedAt={run?.controlRequestedAt ?? null}
-                      controlRequestedByName={
-                        run?.controlRequestedBy?.name ?? null
-                      }
+                      controlRequestedByName={run?.controlRequestedBy?.name ?? null}
                     />
                   );
                 })}
@@ -212,21 +200,13 @@ export default function AgentPipeline() {
 function Lane({ header, children }: { header: ReactNode; children: ReactNode }) {
   return (
     <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-      <div className="flex items-center gap-2">{header}</div>
+      <div className="flex min-w-0 flex-wrap items-center gap-2">{header}</div>
       {children}
     </div>
   );
 }
 
-function Column({
-  label,
-  count,
-  children,
-}: {
-  label: string;
-  count: number;
-  children: ReactNode;
-}) {
+function Column({ label, count, children }: { label: string; count: number; children: ReactNode }) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-1.5 px-1">
@@ -290,7 +270,7 @@ function IssueCard({
         href={`/w/${wsSlug}/issues/${issue.id}`}
         className="focus-ring block rounded-md border border-border bg-card px-2 py-1.5 hover:bg-subtle"
       >
-        <div className="flex items-center gap-1.5 text-[0.75rem]">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[0.75rem]">
           <span className="text-id text-muted-foreground">
             {formatIssueId(wsKey, issue.number)}
           </span>
@@ -313,14 +293,18 @@ function IssueCard({
             title={issue.status.name}
           />
         </div>
-        <div className={run ? "mt-0.5 truncate pr-6 text-[0.75rem]" : "mt-0.5 truncate text-[0.75rem]"}>
+        <div
+          className={
+            run
+              ? "mt-0.5 line-clamp-2 pr-8 text-[0.75rem] sm:truncate"
+              : "mt-0.5 line-clamp-2 text-[0.75rem] sm:truncate"
+          }
+        >
           {issue.title}
         </div>
         {(issue.project || issue._count.comments > 0) && (
           <div className="text-meta mt-1 flex items-center gap-2 text-muted-foreground">
-            {issue.project && (
-              <span className="font-mono">{issue.project.key}</span>
-            )}
+            {issue.project && <span className="font-mono">{issue.project.key}</span>}
             {issue._count.comments > 0 && <span>{issue._count.comments}c</span>}
           </div>
         )}
@@ -360,9 +344,7 @@ function FailedLane({
     <Lane
       header={
         <div className="flex min-w-0 items-baseline gap-2">
-          <span className="text-sm font-medium text-foreground">
-            Failed (24h)
-          </span>
+          <span className="text-sm font-medium text-foreground">Failed (24h)</span>
           <span className="text-meta truncate text-muted-foreground">
             abandoned &middot; stalled &middot; {runs.length}
           </span>
@@ -376,9 +358,7 @@ function FailedLane({
       ) : (
         <ul className="space-y-1.5">
           {runs.map((run) => {
-            const issueKey = run.issue
-              ? formatIssueId(wsKey, run.issue.number)
-              : "—";
+            const issueKey = run.issue ? formatIssueId(wsKey, run.issue.number) : "—";
             const ts = run.finishedAt ?? run.lastEventAt;
             const excerpt = excerptFor(run);
             return (
@@ -389,22 +369,17 @@ function FailedLane({
                       ? `/w/${wsSlug}/issues/${run.issue.id}`
                       : `/w/${wsSlug}/agents/${run.agent.profileKey}`
                   }
-                  className="focus-ring flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 hover:bg-subtle"
+                  className="focus-ring flex flex-wrap items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 hover:bg-subtle"
                 >
-                  <AgentPresenceDot
-                    status={run.agent.status}
-                    size="sm"
-                  />
-                  <span className="text-id shrink-0 text-muted-foreground">
-                    {issueKey}
-                  </span>
+                  <AgentPresenceDot status={run.agent.status} size="sm" />
+                  <span className="text-id shrink-0 text-muted-foreground">{issueKey}</span>
                   <span className="text-meta shrink-0 font-mono text-muted-foreground">
                     @{run.agent.profileKey}
                   </span>
                   <span className="rounded-sm bg-danger/10 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-danger">
                     {run.status.toLowerCase()}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-[0.75rem]">
+                  <span className="min-w-[12rem] flex-1 truncate text-[0.75rem]">
                     {excerpt ?? run.issue?.title ?? "Failed run"}
                   </span>
                   {ts && (
@@ -435,7 +410,5 @@ function excerptFor(run: ListedRunRow): string | null {
 }
 
 function EmptyRow() {
-  return (
-    <div className="text-meta px-2 py-1.5 text-muted-foreground">—</div>
-  );
+  return <div className="text-meta px-2 py-1.5 text-muted-foreground">—</div>;
 }

@@ -236,7 +236,7 @@ export default function WorkspaceSettingsPage() {
     <>
       <Topbar title="Workspace" subtitle={ws.name} />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl space-y-10 p-6 pb-24">
+        <div className="mx-auto max-w-2xl space-y-10 p-4 pb-24 sm:p-6">
           <Section
             title="Identity"
             hint="Visible to everyone in this workspace. The key is immutable once set."
@@ -292,7 +292,7 @@ export default function WorkspaceSettingsPage() {
             title="Sprint cadence"
             hint="Default iteration cadence. Each sprint can still override on create; rollover uses these."
           >
-            <FormCard className="grid grid-cols-2 gap-5 p-5">
+            <FormCard className="grid grid-cols-1 gap-5 p-4 sm:grid-cols-2 sm:p-5">
               <Field
                 label="Sprint length (days)"
                 hint="How long a sprint runs by default. Used when rollover creates the next sprint."
@@ -334,7 +334,7 @@ export default function WorkspaceSettingsPage() {
                 label="Enable time tracking"
                 hint="Exposes per-issue start/stop timers in the issue rail and the aggregated time-entry report."
               />
-              <div className="grid grid-cols-2 gap-5 border-t border-border/60 pt-5">
+              <div className="grid grid-cols-1 gap-5 border-t border-border/60 pt-5 sm:grid-cols-2">
                 <Field
                   label="Attachment quota (MB)"
                   hint="MB per workspace. Counts file size of finalized attachments only — drafts and aborted uploads don't count."
@@ -371,7 +371,7 @@ export default function WorkspaceSettingsPage() {
             hint="Watchdog for assignments where the agent woke up but never moved the issue. Pure follow-through reliability — no priority changes. Lower = louder."
           >
             <FormCard className="space-y-5 p-5">
-              <div className="grid grid-cols-2 gap-5">
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <Field
                   label="Stalled SLA (minutes)"
                   hint="Flip an issue to STALLED when an assigned agent hasn't moved it out of BACKLOG/TODO within this window. 0 disables. 30 is a reasonable start."
@@ -570,7 +570,7 @@ export default function WorkspaceSettingsPage() {
                 <ModelCredentials canEdit={canEdit} />
               </div>
 
-              <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/40 px-3 py-2.5">
+              <div className="flex flex-col gap-3 rounded-md border border-border/60 bg-background/40 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <div className="text-sm font-medium">Coach agent</div>
                   <div className="text-meta text-muted-foreground">
@@ -772,14 +772,14 @@ function DangerRow({
   onClick: () => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-4 px-4 py-3">
+    <div className="flex flex-col gap-4 px-4 py-3 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium">{title}</div>
         <div className="mt-0.5 max-w-[520px] text-meta text-muted-foreground">
           {blurb}
         </div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex w-full items-center gap-2 sm:w-auto">
         {confirmHint && (
           <span className="hidden h-7 items-center rounded-md border border-danger/40 bg-background px-2 font-mono text-xs text-muted-foreground/70 sm:flex">
             {confirmHint}
@@ -789,7 +789,7 @@ function DangerRow({
           size="sm"
           variant="outline"
           onClick={onClick}
-          className="border-danger/40 text-danger hover:bg-danger/10"
+          className="w-full border-danger/40 text-danger hover:bg-danger/10 sm:w-auto"
         >
           {ctaLabel}
         </Button>
@@ -812,20 +812,26 @@ function SaveBar({
 }) {
   if (!pending) return null;
   return (
-    <div className="sticky bottom-0 z-10 flex items-center gap-3 border-t border-border bg-background/95 px-6 py-3 backdrop-blur">
+    <div className="sticky bottom-0 z-10 flex flex-col gap-3 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:flex-row sm:items-center sm:px-6">
       <div className="flex items-center gap-2 text-meta text-muted-foreground">
         <span className="inline-block h-1.5 w-1.5 rounded-full bg-ember forge-breath" />
         <span>
           {pending} pending change{pending === 1 ? "" : "s"}
         </span>
       </div>
-      <div className="ml-auto flex items-center gap-2">
+      <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
         <Button variant="ghost" size="sm" onClick={onDiscard} disabled={saving}>
           Discard
         </Button>
-        <Button variant="ember" size="sm" onClick={onSave} disabled={saving}>
+        <Button
+          variant="ember"
+          size="sm"
+          onClick={onSave}
+          disabled={saving}
+          className="flex-1 sm:flex-none"
+        >
           {saving ? "Saving…" : "Save changes"}
-          <Kbd className="ml-1.5">⌘S</Kbd>
+          <Kbd className="ml-1.5 hidden sm:inline-flex">⌘S</Kbd>
         </Button>
       </div>
     </div>
@@ -915,7 +921,7 @@ function CredentialRow({
 
   return (
     <div className="rounded-md border border-border/60 bg-card/40 p-2.5">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span
           className={
             "h-1.5 w-1.5 rounded-full " +
@@ -961,7 +967,7 @@ function CredentialRow({
             placeholder="Default model (optional)"
             className="font-mono"
           />
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
               variant="ember"

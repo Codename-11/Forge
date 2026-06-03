@@ -1,6 +1,6 @@
 "use client";
 import { useRef, type ReactNode } from "react";
-import { EyeOff, GripVertical, Plus } from "lucide-react";
+import { ChevronDown, ChevronUp, EyeOff, GripVertical, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -74,6 +74,19 @@ export function DashboardStack({
     onChange({ order: ids, hidden: [...hidden] });
   }
 
+  function moveVisibleBy(id: string, delta: -1 | 1) {
+    const visibleIds = orderedIds.filter((orderedId) => !hidden.has(orderedId));
+    const from = visibleIds.indexOf(id);
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= visibleIds.length) return;
+    const targetId = visibleIds[to];
+    const ids = orderedIds.filter((orderedId) => orderedId !== id);
+    const targetIndex = ids.indexOf(targetId);
+    if (targetIndex < 0) return;
+    ids.splice(delta < 0 ? targetIndex : targetIndex + 1, 0, id);
+    onChange({ order: ids, hidden: [...hidden] });
+  }
+
   function hide(id: string) {
     onChange({ order: orderedIds, hidden: [...hidden, id] });
   }
@@ -84,7 +97,7 @@ export function DashboardStack({
 
   return (
     <div className="space-y-6">
-      {visible.map((w) => (
+      {visible.map((w, index) => (
         <div
           key={w.id}
           className={cn(
@@ -106,13 +119,37 @@ export function DashboardStack({
           }}
         >
           {editing && (
-            <div className="flex items-center gap-2 rounded-t-lg border-b border-dashed border-ember/30 bg-ember/5 px-2.5 py-1.5 text-meta text-muted-foreground">
-              <GripVertical className="h-3.5 w-3.5 cursor-grab active:cursor-grabbing" />
-              <span className="font-medium text-foreground/80">{w.title}</span>
+            <div className="flex flex-wrap items-center gap-1.5 rounded-t-lg border-b border-dashed border-ember/30 bg-ember/5 px-2.5 py-1.5 text-meta text-muted-foreground">
+              <GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab active:cursor-grabbing" />
+              <span className="min-w-0 flex-1 truncate font-medium text-foreground/80">
+                {w.title}
+              </span>
+              <div className="ml-auto inline-flex shrink-0 items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => moveVisibleBy(w.id, -1)}
+                  disabled={index === 0}
+                  className="focus-ring grid h-7 w-7 place-items-center rounded hover:bg-subtle hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+                  title="Move widget up"
+                  aria-label={`Move ${w.title} up`}
+                >
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveVisibleBy(w.id, 1)}
+                  disabled={index === visible.length - 1}
+                  className="focus-ring grid h-7 w-7 place-items-center rounded hover:bg-subtle hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+                  title="Move widget down"
+                  aria-label={`Move ${w.title} down`}
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => hide(w.id)}
-                className="focus-ring ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-subtle hover:text-foreground"
+                className="focus-ring inline-flex h-7 shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-subtle hover:text-foreground"
               >
                 <EyeOff className="h-3 w-3" /> Hide
               </button>
