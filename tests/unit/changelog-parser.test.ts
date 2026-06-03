@@ -31,9 +31,13 @@ function parse(raw: string): Array<{
   let cur: Entry | null = null;
   let curSubtype: Item["type"] | null = null;
   for (const line of lines) {
-    const versionMatch = line.match(/^##\s+\[?([^\]]+?)\]?(?:\s*[—-]\s*(.+))?$/);
-    if (versionMatch && line.startsWith("## ")) {
-      cur = { version: versionMatch[1].trim(), items: [] };
+    if (line.startsWith("## ")) {
+      const heading = line.slice(3).trim();
+      const bracketMatch = heading.match(/^\[([^\]]+)\](?:\s+[—-]\s+(.+))?$/);
+      const plainMatch = bracketMatch ? null : heading.match(/^(.+?)(?:\s+[—-]\s+(.+))?$/);
+      const version = (bracketMatch?.[1] ?? plainMatch?.[1])?.trim();
+      if (!version) continue;
+      cur = { version, items: [] };
       entries.push(cur);
       curSubtype = null;
       continue;
@@ -63,6 +67,7 @@ describe("CHANGELOG.md", () => {
     const raw = await fs.readFile(file, "utf8");
     const entries = parse(raw);
     expect(entries.length).toBeGreaterThan(0);
+    expect(entries[0]?.version).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     const totalItems = entries.reduce((n, e) => n + e.items.length, 0);
     expect(totalItems).toBeGreaterThan(0);
     // Every parsed item has a known type bucket.

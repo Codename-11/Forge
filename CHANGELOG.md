@@ -11,6 +11,15 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-06-03] — v0.4.1 · Release metadata visibility
+
+### Fixed
+
+- **What's New shows the current release again.** Fixed the changelog parser so
+  bracketed ISO-date headings like `[2026-06-03]` stay intact instead of being
+  split at the first hyphen, restoring `system.buildInfo.release` and the
+  release ordering used by What's New.
+
 ## [2026-06-03] — v0.4.0 · Mobile app experience
 
 ### Added

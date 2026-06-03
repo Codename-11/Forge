@@ -86,11 +86,14 @@ function parseChangelog(raw: string): ChangelogEntry[] {
   };
 
   for (const line of lines) {
-    const versionMatch = line.match(/^##\s+\[?([^\]]+?)\]?(?:\s*[—-]\s*(.+))?$/);
-    if (versionMatch && line.startsWith("## ")) {
+    if (line.startsWith("## ")) {
+      const heading = line.slice(3).trim();
+      const bracketMatch = heading.match(/^\[([^\]]+)\](?:\s+[—-]\s+(.+))?$/);
+      const plainMatch = bracketMatch ? null : heading.match(/^(.+?)(?:\s+[—-]\s+(.+))?$/);
+      const version = (bracketMatch?.[1] ?? plainMatch?.[1])?.trim();
+      if (!version) continue;
       flush();
-      const version = versionMatch[1].trim();
-      const tail = versionMatch[2]?.trim() ?? "";
+      const tail = (bracketMatch?.[2] ?? plainMatch?.[2])?.trim() ?? "";
       // Heuristic: a leading ISO date in version (e.g. `2026-05-04`)
       // counts as the date; otherwise keep null.
       const dateMatch = version.match(/^\d{4}-\d{2}-\d{2}$/);
