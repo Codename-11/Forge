@@ -32,8 +32,7 @@ function heartbeatSeverity(args: {
     // newly-created agent.
     return args.warnMinutes > 0 ? "warn" : "ok";
   }
-  const ageMs =
-    Date.now() - new Date(args.lastHeartbeatAt).getTime();
+  const ageMs = Date.now() - new Date(args.lastHeartbeatAt).getTime();
   if (!Number.isFinite(ageMs) || ageMs < 0) return "ok";
   const ageMin = ageMs / 60_000;
   if (args.criticalMinutes > 0 && ageMin >= args.criticalMinutes) {
@@ -59,18 +58,13 @@ export default function AgentPresenceStrip() {
       void utils.agent.pipeline.invalidate();
     },
     {
-      kind: [
-        "AGENT_STATUS_CHANGED",
-        "AGENT_ASSIGNED",
-        "AGENT_UPDATED",
-        "ISSUE_STATUS_CHANGED",
-      ],
+      kind: ["AGENT_STATUS_CHANGED", "AGENT_ASSIGNED", "AGENT_UPDATED", "ISSUE_STATUS_CHANGED"],
     },
   );
 
   if (agents === undefined) {
     return (
-      <div className="flex gap-2 overflow-x-auto">
+      <div className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 sm:mx-0 sm:px-0">
         {Array.from({ length: 3 }).map((_, i) => (
           <div
             key={i}
@@ -93,12 +87,8 @@ export default function AgentPresenceStrip() {
     );
   }
 
-  const laneByAgent = new Map(
-    (pipeline?.lanes ?? []).map((l) => [l.agent.id, l.counts]),
-  );
-  const dispatchByAgent = new Map(
-    (dispatch?.perAgent ?? []).map((r) => [r.agentId, r]),
-  );
+  const laneByAgent = new Map((pipeline?.lanes ?? []).map((l) => [l.agent.id, l.counts]));
+  const dispatchByAgent = new Map((dispatch?.perAgent ?? []).map((r) => [r.agentId, r]));
 
   // Settings-driven thresholds (Bailey's no-magic-numbers rule). Read
   // off Workspace.agentHeartbeat{Warn,Critical}Minutes; fall back to
@@ -108,7 +98,7 @@ export default function AgentPresenceStrip() {
   const criticalMinutes = workspace?.agentHeartbeatCriticalMinutes ?? 30;
 
   return (
-    <div className="flex gap-2 overflow-x-auto">
+    <div className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 sm:mx-0 sm:px-0">
       {agents.map((agent) => {
         const counts = laneByAgent.get(agent.id);
         const load = counts?.load ?? agent._count.assignedIssues;
@@ -133,10 +123,7 @@ export default function AgentPresenceStrip() {
         const beatAgeMin = agent.lastHeartbeatAt
           ? Math.max(
               0,
-              Math.floor(
-                (Date.now() - new Date(agent.lastHeartbeatAt).getTime()) /
-                  60_000,
-              ),
+              Math.floor((Date.now() - new Date(agent.lastHeartbeatAt).getTime()) / 60_000),
             )
           : null;
         const beatTitle =
@@ -145,9 +132,29 @@ export default function AgentPresenceStrip() {
             : severity === "warn"
               ? `Last heartbeat ${beatAgeMin ?? "?"} min ago — warn threshold ${warnMinutes}m`
               : undefined;
+        const beatText = agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : null;
+        const shortBeatText = beatText === "just now" ? "now" : beatText;
+        const metricText =
+          severity !== "ok" && shortBeatText
+            ? `Beat ${shortBeatText} · ${throughput}/7d`
+            : ttfaMin != null
+              ? `First ${ttfaMin}m · ${throughput}/7d`
+              : [`${throughput}/7d`, shortBeatText ? `beat ${shortBeatText}` : null]
+                  .filter(Boolean)
+                  .join(" · ");
+        const metricTitle = [
+          `${throughput} completed in the last 7 days`,
+          ttfaMin != null ? `${ttfaMin}m mean time to first action` : null,
+          beatText ? `Last heartbeat ${beatText}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
 
         return (
-          <div key={agent.id} className="relative w-[220px] shrink-0">
+          <div
+            key={agent.id}
+            className="relative w-[min(82vw,220px)] shrink-0 snap-start sm:w-[220px]"
+          >
             <Link
               href={`/w/${ws.slug}/agents/${agent.profileKey}`}
               className={cn(
@@ -166,9 +173,7 @@ export default function AgentPresenceStrip() {
                   pulse
                   lastHeartbeatAt={agent.lastHeartbeatAt}
                 />
-                <span className="truncate text-sm font-medium text-foreground">
-                  {agent.name}
-                </span>
+                <span className="truncate text-sm font-medium text-foreground">{agent.name}</span>
                 <span className="text-meta truncate font-mono text-muted-foreground">
                   @{agent.profileKey}
                 </span>
@@ -189,17 +194,12 @@ export default function AgentPresenceStrip() {
               </div>
 
               {unlimited ? (
-                <div className="text-meta font-mono text-muted-foreground">
-                  {load} active
-                </div>
+                <div className="text-meta font-mono text-muted-foreground">{load} active</div>
               ) : (
                 <div className="flex items-center gap-2">
                   <div className="h-1 flex-1 overflow-hidden rounded-full bg-subtle">
                     <div
-                      className={cn(
-                        "h-full rounded-full",
-                        overloaded ? "bg-warning" : "bg-ember",
-                      )}
+                      className={cn("h-full rounded-full", overloaded ? "bg-warning" : "bg-ember")}
                       style={{ width: `${pct}%` }}
                     />
                   </div>
@@ -210,6 +210,7 @@ export default function AgentPresenceStrip() {
               )}
 
               <div
+                title={metricTitle}
                 className={cn(
                   "text-meta truncate",
                   severity === "critical"
@@ -219,19 +220,11 @@ export default function AgentPresenceStrip() {
                       : "text-muted-foreground",
                 )}
               >
-                {throughput} done / 7d
-                {ttfaMin != null && <> &middot; {ttfaMin}m</>}
-                {agent.lastHeartbeatAt && (
-                  <> &middot; last beat {relativeTime(agent.lastHeartbeatAt)}</>
-                )}
+                {metricText}
               </div>
             </Link>
             <div className="absolute right-1 top-1 flex items-center gap-0.5">
-              <PinButton
-                targetType="AGENT"
-                targetId={agent.id}
-                workspaceId={ws.id}
-              />
+              <PinButton targetType="AGENT" targetId={agent.id} workspaceId={ws.id} />
               <AgentQuickActions
                 agentId={agent.id}
                 profileKey={agent.profileKey}

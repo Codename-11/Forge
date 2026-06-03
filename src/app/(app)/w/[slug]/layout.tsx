@@ -113,16 +113,6 @@ export default async function WorkspaceShellLayout({
         <AppearanceProvider>
         <AttachmentLightboxProvider>
         <ChatContextProvider>
-        {/* Below-sm banner: Forge is keyboard-driven and expects tablet+.
-            Full phone layout is explicitly out of scope for this design
-            sweep; users on narrower screens get a hint and a degraded
-            (but still functional) icon-rail + center-pins experience. */}
-        <div className="sticky top-0 z-40 flex items-center gap-2 border-b border-border bg-ember/10 px-3 py-1.5 text-[0.6875rem] text-foreground sm:hidden">
-          <span className="font-medium">Forge is keyboard-driven.</span>
-          <span className="text-muted-foreground">
-            Use on tablet or larger for the full experience.
-          </span>
-        </div>
         <div className="flex h-svh overflow-hidden">
           <Sidebar
             slug={workspace.slug}
@@ -132,7 +122,7 @@ export default async function WorkspaceShellLayout({
               email: session.user.email,
             }}
           />
-          <main className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+          <main className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col bg-background max-md:pb-20">
             {/* Ambient background — one viewport-sized layer behind all page
                 content, driven by the per-user `data-bg` appearance pref.
                 Lives in the non-scrolling <main> so it always covers the

@@ -27,7 +27,7 @@ export default function AdminPage() {
     return (
       <>
         <Topbar title="Admin" />
-        <div className="mx-auto max-w-5xl p-6 text-sm text-muted-foreground">
+        <div className="mx-auto max-w-5xl p-4 text-sm text-muted-foreground sm:p-6">
           {statsErr.message.includes("Admin")
             ? "Admin role required to view this page."
             : statsErr.message}
@@ -68,12 +68,12 @@ export default function AdminPage() {
         subtitle="Workspace-wide observability. Audit, events, webhook delivery."
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl space-y-6 p-6">
+        <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
           <Section
             title="Overview"
             hint="Workspace-wide health at a glance. Counts update as activity flows through the workspace."
           >
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-4">
               {cards.map((c) => (
                 <div
                   key={c.label}

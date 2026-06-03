@@ -49,7 +49,7 @@ export function WhatsNewTile({
   const [first, ...rest] = data.entries;
   return (
     <div className="rounded-lg border border-border bg-card/40 p-4">
-      <header className="mb-2 flex items-center gap-2">
+      <header className="mb-2 flex flex-wrap items-center gap-2">
         <Sparkles className="h-3.5 w-3.5 text-ember" aria-hidden />
         <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           What&apos;s new
@@ -61,7 +61,7 @@ export function WhatsNewTile({
             aria-label="New changes since you last looked"
           />
         )}
-        <span className="text-meta text-muted-foreground/70">
+        <span className="min-w-0 text-meta text-muted-foreground/70">
           recent changes
         </span>
       </header>

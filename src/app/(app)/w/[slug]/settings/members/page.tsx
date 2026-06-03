@@ -203,7 +203,7 @@ export default function MembersPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-8 p-6">
+        <div className="mx-auto max-w-3xl space-y-8 p-4 sm:p-6">
           <Section
             title="Roster"
             hint="Email-based access. A member binds to a real identity on first SSO login; until then they hold their assigned role in waiting."
@@ -234,7 +234,7 @@ export default function MembersPage() {
                   return (
                     <li
                       key={m.membershipId}
-                      className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-subtle/40"
+                      className="grid grid-cols-[2rem_minmax(0,1fr)] gap-3 px-4 py-3 hover:bg-subtle/40 sm:flex sm:flex-wrap sm:items-center"
                     >
                       <div className="flex h-8 w-8 items-center justify-center rounded-full bg-subtle text-xs font-medium text-muted-foreground">
                         {initials(m.name ?? m.email)}
@@ -266,7 +266,7 @@ export default function MembersPage() {
                             role: e.target.value as Role,
                           })
                         }
-                        className="focus-ring h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground disabled:opacity-50"
+                        className="focus-ring col-span-2 h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground disabled:opacity-50 sm:col-span-1"
                         aria-label={`Role for ${m.email}`}
                       >
                         {ROLES.map((r) => (
@@ -280,6 +280,7 @@ export default function MembersPage() {
                         onClick={() =>
                           setRemoveTarget({ userId: m.userId, email: m.email })
                         }
+                        className="col-span-2 sm:col-span-1"
                       >
                         Remove
                       </Button>
@@ -327,7 +328,7 @@ export default function MembersPage() {
                 : `${readyCount} invite${readyCount === 1 ? "" : "s"} will be sent`}{" "}
               · <Kbd>⌘⏎</Kbd> send
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button
                 type="button"
                 variant="ghost"
@@ -412,7 +413,7 @@ export default function MembersPage() {
                   onChange={(e) => setRecipientsRaw(e.target.value)}
                   placeholder={chips.length === 0 ? "teammate@example.com, …" : "add another email…"}
                   aria-label="Recipient emails"
-                  className="min-w-[160px] flex-1 resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  className="min-w-0 flex-1 resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none sm:min-w-[160px]"
                 />
               </div>
               {chips.length > 0 && (
@@ -443,7 +444,7 @@ export default function MembersPage() {
               <div
                 role="radiogroup"
                 aria-label="Invite role"
-                className="inline-flex rounded-md border border-border bg-card/40 p-0.5"
+                className="inline-flex flex-wrap rounded-md border border-border bg-card/40 p-0.5"
               >
                 {INVITE_ROLES.map((r) => (
                   <button

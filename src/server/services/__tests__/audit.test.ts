@@ -83,7 +83,7 @@ describe("audit.ts — AGENT_ASSIGNED system comment", () => {
     expect(sys[0].authoringAgentId).toBeNull();
     expect(sys[0].body).toContain(`@${agent.profileKey}`);
     expect(sys[0].body).toContain(fixture.user.name ?? "");
-    expect(sys[0].body).toContain("LOCAL_DAEMON");
+    expect(sys[0].body).toContain("_Runtime: local daemon._");
 
     // The SYSTEM comment is NOT routed through recordChange — verify
     // no COMMENT_CREATED row fired for it.
@@ -173,7 +173,7 @@ describe("audit.ts — AGENT_ASSIGNED system comment", () => {
     expect(sys).toHaveLength(0);
   });
 
-  it("falls back to runtime label 'unknown' when agent has no runtime", async () => {
+  it("omits the runtime label when agent has no runtime", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "AS4" });
     fixtures.push(fixture);
     const prisma = getPrisma();
@@ -206,7 +206,8 @@ describe("audit.ts — AGENT_ASSIGNED system comment", () => {
         kind: "SYSTEM",
       },
     });
-    expect(sys.body).toContain("unknown");
+    expect(sys.body).not.toContain("_Runtime:");
+    expect(sys.body).not.toContain("unknown");
   });
 });
 

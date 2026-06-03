@@ -55,6 +55,10 @@ describe("agent-run-stale — sweepStalledRuns", () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "ARS" });
     fixtures.push(fixture);
     const prisma = getPrisma();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { agentRunStaleMinutes: 0 },
+    });
     const agent = await createAgent(fixture.workspace.id, "ars-a1");
     const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
     const run = await prisma.agentRun.create({

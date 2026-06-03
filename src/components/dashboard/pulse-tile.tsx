@@ -68,10 +68,10 @@ export function PulseTile({ slug }: { slug: string }) {
 
   return (
     <section className="rounded-lg border border-border bg-card/40 p-4">
-      <header className="mb-3 flex items-center gap-2">
+      <header className="mb-3 flex flex-wrap items-center gap-2">
         <Activity className="h-3.5 w-3.5 text-muted-foreground" />
         <h3 className="text-sm font-semibold">Pulse</h3>
-        <span className="ml-auto text-meta text-muted-foreground">
+        <span className="ml-auto shrink-0 text-meta text-muted-foreground">
           last 7 days
         </span>
       </header>
@@ -101,9 +101,9 @@ export function PulseTile({ slug }: { slug: string }) {
       {/* Sprint progress bar — startsAt → endsAt */}
       {cycle && progress !== null && startsAt && endsAt ? (
         <div className="mt-3">
-          <div className="flex items-center justify-between text-meta text-muted-foreground">
-            <span>{sprintName}</span>
-            <span>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-meta text-muted-foreground">
+            <span className="min-w-0 truncate">{sprintName}</span>
+            <span className="shrink-0">
               {fmtDate(startsAt)} → {fmtDate(endsAt)}
             </span>
           </div>

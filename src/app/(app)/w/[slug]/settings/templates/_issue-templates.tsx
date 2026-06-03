@@ -188,7 +188,7 @@ export function IssueTemplatesPanel() {
                 placeholder="## Steps to reproduce&#10;1. ...&#10;&#10;## Expected&#10;&#10;## Actual"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <label className="text-xs text-muted-foreground">Project</label>
                 <select
@@ -252,7 +252,7 @@ export function IssueTemplatesPanel() {
                 )}
               </div>
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setEditing(null)}>
                 Cancel
               </Button>

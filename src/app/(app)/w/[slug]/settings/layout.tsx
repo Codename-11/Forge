@@ -16,7 +16,7 @@ export default function WorkspaceSettingsLayout({
   const ws = useWorkspace();
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:flex-row">
       <SettingsRail scope="workspace" slug={ws.slug} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
     </div>

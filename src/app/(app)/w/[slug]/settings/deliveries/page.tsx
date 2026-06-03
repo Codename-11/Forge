@@ -156,7 +156,7 @@ export default function WebhookDeliveriesPage() {
           title="Webhook deliveries"
           subtitle="Inspect and requeue failed webhook deliveries."
         />
-        <div className="mx-auto max-w-5xl p-6 text-sm text-muted-foreground">
+        <div className="mx-auto max-w-5xl p-4 text-sm text-muted-foreground sm:p-6">
           {msg}
         </div>
       </>
@@ -170,7 +170,7 @@ export default function WebhookDeliveriesPage() {
         subtitle="Inspect and requeue failed webhook deliveries."
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl space-y-6 p-6">
+        <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
           <Section
             title="Deliveries"
             hint="Rows reflect the durable queue. Retries reset attempt count and push back onto the worker."
@@ -428,7 +428,7 @@ function DeliveryDetail({ d }: { d: DeliveryRow }) {
   const guidance = deliveryGuidance(d);
   return (
     <div className="space-y-4 text-xs">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Status">
           <Badge color={DELIVERY_TONE[d.status as DeliveryStatus]}>
             {d.status}

@@ -54,7 +54,7 @@ export default function PluginsPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
+        <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
           <Card>
             {(plugins ?? []).map((p) => (
               <li key={p.id} className="flex items-start gap-4 px-4 py-3">

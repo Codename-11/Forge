@@ -71,7 +71,7 @@ export function SettingsRail(props: SettingsRailProps) {
     : groups;
 
   return (
-    <aside className="flex h-full min-h-0 w-60 shrink-0 flex-col overflow-hidden border-r border-border bg-card/30">
+    <aside className="flex max-h-64 min-h-0 w-full shrink-0 flex-col overflow-hidden border-b border-border bg-card/30 md:h-full md:max-h-none md:w-60 md:border-b-0 md:border-r">
       {props.scope === "account" && (
         <div className="border-b border-border/60 px-3 pt-3 pb-2">
           <Link
@@ -112,7 +112,9 @@ export function SettingsRail(props: SettingsRailProps) {
                 {g.label}
               </span>
               {g.hint && (
-                <span className="truncate text-meta text-muted-foreground/60">· {g.hint}</span>
+                <span className="hidden truncate text-meta text-muted-foreground/60 sm:inline">
+                  · {g.hint}
+                </span>
               )}
             </div>
             <ul className="flex flex-col gap-px">
@@ -136,7 +138,7 @@ export function SettingsRail(props: SettingsRailProps) {
                         )}
                       />
                       <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-1.5">
+                        <span className="flex flex-wrap items-center gap-1.5">
                           <span className="truncate font-medium">{it.label}</span>
                           {it.adminOnly && (
                             <span className="rounded border border-ember/30 bg-ember/10 px-1 text-[9px] font-medium uppercase tracking-wider text-ember">

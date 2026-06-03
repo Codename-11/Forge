@@ -29,7 +29,10 @@ export function ChatTab({
   autoFocus?: boolean;
 }) {
   const { data: threads } = trpc.chat.threads.useQuery(undefined, { staleTime: 30_000 });
-  const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false }, { staleTime: 60_000 });
+  const { data: agents } = trpc.agent.list.useQuery(
+    { includeArchived: false },
+    { staleTime: 60_000 },
+  );
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   // Null = show the agent's default thread; set = a specific conversation.
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
@@ -112,8 +115,7 @@ export function ChatTab({
       const bt = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
       return bt - at;
     });
-  const defaultThreadId =
-    agentThreads.find((t) => t.isDefault)?.id ?? agentThreads[0]?.id ?? null;
+  const defaultThreadId = agentThreads.find((t) => t.isDefault)?.id ?? agentThreads[0]?.id ?? null;
   // Default to the agent's most-recently-active thread (chat.threads comes
   // back ordered by lastMessageAt desc), not the "Main" default — so
   // reopening Chat drops you back into your last conversation.
@@ -122,9 +124,9 @@ export function ChatTab({
   const activeThreadId = selectedThreadId ?? lastActiveThreadId;
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-w-0 flex-col sm:flex-row">
       {/* Agent rail */}
-      <aside className="w-32 shrink-0 overflow-y-auto border-r border-border/60 bg-card/30">
+      <aside className="flex max-h-24 w-full shrink-0 overflow-x-auto overflow-y-hidden border-b border-border/60 bg-card/30 sm:block sm:max-h-none sm:w-32 sm:overflow-y-auto sm:border-b-0 sm:border-r">
         {railAgents.length === 0 && (
           <div className="px-2 py-3 text-center text-[0.625rem] text-muted-foreground">
             No agents yet
@@ -143,10 +145,8 @@ export function ChatTab({
                 setSelectedThreadId(null);
               }}
               className={cn(
-                "group flex w-full items-center gap-1.5 border-b border-border/40 px-2 py-1.5 text-left text-[0.6875rem]",
-                isActive
-                  ? "bg-ember/10 text-foreground"
-                  : "text-foreground/80 hover:bg-subtle/60",
+                "group flex min-h-10 w-32 shrink-0 items-center gap-1.5 border-r border-border/40 px-2 py-1.5 text-left text-[0.6875rem] sm:w-full sm:border-b sm:border-r-0",
+                isActive ? "bg-ember/10 text-foreground" : "text-foreground/80 hover:bg-subtle/60",
               )}
               title={`${a.name} · @${a.profileKey}`}
             >
@@ -162,7 +162,7 @@ export function ChatTab({
               <span
                 className={
                   a.status === "ONLINE"
-                    ? "h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
+                    ? "h-1.5 w-1.5 shrink-0 rounded-full bg-success"
                     : a.status === "BUSY"
                       ? "h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-ember"
                       : "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/40"
@@ -174,13 +174,13 @@ export function ChatTab({
         })}
       </aside>
       {/* Thread pane */}
-      <div className="min-w-0 flex-1">
+      <div className="min-h-0 min-w-0 flex-1">
         {selectedAgentId ? (
           <div className="flex h-full flex-col">
             {/* Thread strip: switch between this agent's conversations and
                 start a new one. Backend supports many threads per agent
                 (chat.createConversation) — this surfaces them. */}
-            <div className="flex items-center gap-1 overflow-x-auto border-b border-border/60 bg-card/20 px-2 py-1">
+            <div className="flex min-w-0 items-center gap-1 overflow-x-auto border-b border-border/60 bg-card/20 px-2 py-1">
               {agentThreads.map((t) => {
                 const active = activeThreadId === t.id;
                 return (
@@ -192,7 +192,7 @@ export function ChatTab({
                       setSelectedThreadId(t.id);
                     }}
                     className={cn(
-                      "max-w-[10rem] shrink-0 truncate rounded px-1.5 py-0.5 text-[0.625rem]",
+                      "min-h-8 max-w-[10rem] shrink-0 truncate rounded px-1.5 py-0.5 text-[0.625rem] sm:min-h-0",
                       active
                         ? "bg-ember/15 text-ember"
                         : "text-muted-foreground hover:bg-subtle/60",
@@ -207,7 +207,7 @@ export function ChatTab({
                 <Tooltip content="“Main” is your always-on thread with this agent. “New chat” starts a named side-conversation. Every message carries your current page context.">
                   <span
                     tabIndex={0}
-                    className="inline-flex h-5 w-5 cursor-help items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                    className="inline-flex h-8 w-8 cursor-help items-center justify-center rounded text-muted-foreground hover:text-foreground sm:h-5 sm:w-5"
                   >
                     <Info className="h-3 w-3" />
                   </span>
@@ -216,7 +216,7 @@ export function ChatTab({
                   <Tooltip content="Open this conversation in the full Chat page">
                     <Link
                       href={`/w/${slug}/chat?thread=${encodeURIComponent(activeThreadId)}`}
-                      className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:border-ember/40 hover:text-ember"
+                      className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:border-ember/40 hover:text-ember sm:min-h-0"
                     >
                       <SquareArrowOutUpRight className="h-3 w-3" /> Open in Chat
                     </Link>
@@ -230,7 +230,7 @@ export function ChatTab({
                     }
                   }}
                   disabled={createConversation.isPending}
-                  className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:border-ember/40 hover:text-ember disabled:opacity-50"
+                  className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:border-ember/40 hover:text-ember disabled:opacity-50 sm:min-h-0"
                   title="Start a new conversation with this agent"
                 >
                   <Plus className="h-3 w-3" /> New chat
@@ -239,7 +239,7 @@ export function ChatTab({
                   type="button"
                   onClick={() => setInspectorOpen((v) => !v)}
                   className={cn(
-                    "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border text-muted-foreground hover:border-ember/40 hover:text-ember",
+                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border border-border text-muted-foreground hover:border-ember/40 hover:text-ember sm:h-5 sm:w-5",
                     inspectorOpen && "border-ember/40 text-ember",
                   )}
                   title={inspectorOpen ? "Hide connection & status" : "Show connection & status"}
@@ -283,8 +283,8 @@ export function ChatTab({
               <Bot className="mx-auto mb-2 h-6 w-6 text-muted-foreground/60" />
               <div className="font-medium text-foreground">Talk to an agent</div>
               <div className="mt-1 text-[0.625rem]">
-                Pick an agent on the left to start a conversation. Forge sends
-                your current page context with each message.
+                Pick an agent on the left to start a conversation. Forge sends your current page
+                context with each message.
               </div>
             </div>
           </div>

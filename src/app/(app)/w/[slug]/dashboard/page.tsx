@@ -206,13 +206,13 @@ export default function DashboardPage() {
         title="Dashboard"
         subtitle="Workspace overview — onboarding, focus, recent done."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center justify-end gap-1.5 sm:gap-2">
             <DashboardViewToggle slug={slug} />
             {editing && (
               <button
                 type="button"
                 onClick={() => persistLayout({ order: [], hidden: [] })}
-                className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
+                className="focus-ring inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
                 title="Reset to the default layout"
               >
                 <RotateCcw className="h-3 w-3" />
@@ -223,7 +223,7 @@ export default function DashboardPage() {
               type="button"
               onClick={() => setEditing((v) => !v)}
               className={cn(
-                "focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem]",
+                "focus-ring inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem]",
                 editing
                   ? "bg-ember/15 text-ember"
                   : "text-muted-foreground hover:text-foreground",
@@ -245,7 +245,7 @@ export default function DashboardPage() {
             />
             <Link
               href={`/w/${slug}/inbox`}
-              className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
+              className="focus-ring inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
               title="Your action queue — pulse, queue, mentions, stalled (g i)"
             >
               Inbox
@@ -258,7 +258,7 @@ export default function DashboardPage() {
         {/* Ambient background now lives once in the app shell <main>
             (.forge-page-bg, driven by the per-user data-bg pref). */}
         <div className="relative isolate">
-          <div className="mx-auto max-w-6xl space-y-6 p-6">
+          <div className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
           <GreetingBar
             greeting={greeting}
             name={firstName}
@@ -453,7 +453,7 @@ function GreetingBar({
           Decide what to move forward today. Small steps count.
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto sm:justify-end">
         <Button data-quick-create variant="ember" size="sm" className="gap-1.5">
           <Plus className="h-3.5 w-3.5" />
           New issue
@@ -538,14 +538,14 @@ function FocusGrid({
             href={`/w/${slug}/issues/${issue.id}`}
             className="group flex h-full flex-col rounded-lg border border-border bg-card/40 p-3 transition-colors hover:border-ember/40"
           >
-            <div className="flex items-center gap-2">
-              <span className="w-5 text-center font-mono text-[0.6875rem] text-muted-foreground">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="w-5 shrink-0 text-center font-mono text-[0.6875rem] text-muted-foreground">
                 {PRIORITY_GLYPH[issue.priority]}
               </span>
-              <span className="text-id text-muted-foreground">
+              <span className="text-id shrink-0 text-muted-foreground">
                 {formatIssueId(workspaceKey, issue.number)}
               </span>
-              <Badge className="ml-auto" color={issue.status.color}>
+              <Badge className="ml-auto max-w-[45%] truncate" color={issue.status.color}>
                 {issue.status.name}
               </Badge>
             </div>
@@ -731,7 +731,7 @@ function OnboardingCard({
 
   return (
     <section className="rounded-lg border border-border bg-card/40 p-5">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold">Getting started</div>
           <div className="mt-0.5 text-xs text-muted-foreground">
@@ -890,11 +890,11 @@ function OnboardingRow({
 
 function SectionHeader({ title, hint }: { title: string; hint?: string }) {
   return (
-    <div className="mb-3 flex items-baseline gap-2">
-      <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+    <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+      <h2 className="shrink-0 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
         {title}
       </h2>
-      {hint && <span className="text-[0.6875rem] text-muted-foreground/70">{hint}</span>}
+      {hint && <span className="min-w-0 text-[0.6875rem] text-muted-foreground/70">{hint}</span>}
     </div>
   );
 }
@@ -910,11 +910,11 @@ function Column({
 }) {
   return (
     <div className="rounded-lg border border-border bg-card/40 p-4">
-      <div className="mb-3 flex items-baseline gap-2">
-        <div className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <div className="shrink-0 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
         </div>
-        {hint && <div className="text-[0.6875rem] text-muted-foreground/70">{hint}</div>}
+        {hint && <div className="min-w-0 text-[0.6875rem] text-muted-foreground/70">{hint}</div>}
       </div>
       {children}
     </div>
@@ -974,20 +974,20 @@ function IssueRow({
     <li>
       <Link
         href={`/w/${slug}/issues/${id}`}
-        className="flex items-center gap-2 text-xs hover:text-foreground"
+        className="flex min-w-0 items-center gap-2 text-xs hover:text-foreground"
       >
         {priority && (
-          <span className="w-5 text-center font-mono text-[0.6875rem] text-muted-foreground">
+          <span className="w-5 shrink-0 text-center font-mono text-[0.6875rem] text-muted-foreground">
             {PRIORITY_GLYPH[priority]}
           </span>
         )}
-        <span className="text-id text-muted-foreground">
+        <span className="text-id shrink-0 text-muted-foreground">
           {formatIssueId(workspaceKey, number)}
         </span>
-        <span className="truncate">{title}</span>
+        <span className="min-w-0 flex-1 truncate">{title}</span>
         <span
           className={
-            "text-meta ml-auto " +
+            "text-meta shrink-0 " +
             (trailingTone === "warn" ? "text-warning" : "text-muted-foreground")
           }
         >
@@ -1061,7 +1061,7 @@ function StandupTile({ slug }: { slug: string }) {
 
   return (
     <section className="rounded-lg border border-border bg-card/40">
-      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+      <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
         <span className="text-sm font-medium">Standup — last 24h</span>
         {data && total > 0 && (
           <span className="rounded-full bg-subtle px-1.5 font-mono text-[0.6875rem] text-muted-foreground">
@@ -1070,7 +1070,7 @@ function StandupTile({ slug }: { slug: string }) {
         )}
         <Link
           href={`/w/${slug}/standup`}
-          className="ml-auto text-[0.75rem] text-muted-foreground hover:text-foreground"
+          className="ml-auto shrink-0 text-[0.75rem] text-muted-foreground hover:text-foreground"
         >
           Open →
         </Link>
@@ -1194,7 +1194,7 @@ function SuggestionsStrip({
           No assigned work, no orphan issues in your projects, nothing
           stalled. Start a new project to keep momentum.
         </p>
-        <div className="mt-4 flex justify-center gap-2">
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
           <Link href={`/w/${slug}/projects`}>
             <Button variant="ember" size="sm" className="gap-1.5">
               <Rocket className="h-3.5 w-3.5" />
@@ -1217,7 +1217,7 @@ function SuggestionsStrip({
         <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
           <Sparkles className="h-3 w-3" />
           <span>Suggestions</span>
-          <span className="font-mono normal-case tracking-normal text-muted-foreground/70">
+          <span className="min-w-0 truncate font-mono normal-case tracking-normal text-muted-foreground/70">
             sprint · projects · stalled
           </span>
           <ChevronRight className="ml-auto h-3 w-3 transition-transform group-open:rotate-90" />
@@ -1391,7 +1391,7 @@ function SuggestionsCard({
           <li key={issue.id}>
             <Link
               href={`/w/${slug}/issues/${issue.id}`}
-              className="group flex items-center gap-2 rounded-md py-1 hover:bg-subtle/50"
+              className="group flex min-w-0 items-center gap-2 rounded-md py-1 hover:bg-subtle/50"
             >
               <span className="w-5 shrink-0 text-center font-mono text-[0.6875rem] text-muted-foreground">
                 {PRIORITY_GLYPH[issue.priority] ?? "—"}
@@ -1459,7 +1459,7 @@ function DashboardViewToggle({ slug }: { slug: string }) {
   }, [onCanvas]);
   return (
     <div
-      className="inline-flex items-center rounded-md border border-border bg-card/40 p-0.5 text-[0.6875rem]"
+      className="inline-flex shrink-0 items-center rounded-md border border-border bg-card/40 p-0.5 text-[0.6875rem]"
       role="tablist"
       aria-label="Dashboard view"
     >

@@ -51,6 +51,7 @@ async function createAgent(
     maxConcurrent?: number;
     status?: AgentStatus;
     lastDispatchedAt?: Date | null;
+    lastHeartbeatAt?: Date | null;
   },
 ): Promise<{ id: string }> {
   const prisma = getPrisma();
@@ -63,6 +64,12 @@ async function createAgent(
       maxConcurrent: opts.maxConcurrent ?? 1,
       status: opts.status ?? AgentStatus.ONLINE,
       lastDispatchedAt: opts.lastDispatchedAt ?? null,
+      lastHeartbeatAt:
+        opts.lastHeartbeatAt === undefined
+          ? opts.status === AgentStatus.OFFLINE
+            ? null
+            : new Date()
+          : opts.lastHeartbeatAt,
     },
     select: { id: true },
   });

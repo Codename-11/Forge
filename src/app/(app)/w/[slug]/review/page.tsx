@@ -76,7 +76,7 @@ export default function ReviewPage() {
         title="Review"
         subtitle={data ? `${items.length} gate${items.length === 1 ? "" : "s"}` : undefined}
       />
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
         <div className="mb-3 flex flex-wrap items-center gap-2">
           {FILTER_OPTIONS.map((opt) => (
             <button
@@ -109,21 +109,21 @@ export default function ReviewPage() {
                 key={gate.id}
                 className="flex flex-col gap-2 rounded-lg border border-border bg-card/40 p-3"
               >
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex flex-wrap items-start justify-between gap-2 sm:flex-nowrap">
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-meta uppercase tracking-wide text-muted-foreground">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2 text-meta uppercase tracking-wide text-muted-foreground">
                       <Shield className="h-3 w-3" />
                       {gate.targetType.replace("-", " ")} ·{" "}
                       {gateTargetHref(ws.slug, gate.targetType, gate.targetId) ? (
                         <Link
                           href={gateTargetHref(ws.slug, gate.targetType, gate.targetId)!}
-                          className="inline-flex items-center gap-0.5 font-mono text-id text-ember hover:underline"
+                          className="inline-flex min-w-0 items-center gap-0.5 font-mono text-id text-ember hover:underline"
                         >
-                          {gate.targetId.slice(0, 12)}…
+                          <span className="truncate">{gate.targetId.slice(0, 12)}…</span>
                           <ArrowUpRight className="h-3 w-3" />
                         </Link>
                       ) : (
-                        <span className="font-mono text-id">{gate.targetId}</span>
+                        <span className="min-w-0 truncate font-mono text-id">{gate.targetId}</span>
                       )}
                     </div>
                     <p className="mt-1 whitespace-pre-wrap text-sm">{gate.prompt}</p>

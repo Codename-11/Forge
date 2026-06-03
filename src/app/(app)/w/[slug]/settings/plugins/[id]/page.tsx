@@ -197,7 +197,7 @@ export default function PluginDetailPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-4xl space-y-6 p-6">
+        <div className="mx-auto max-w-4xl space-y-6 p-4 sm:p-6">
           {!plugin ? (
             <SkeletonList rows={5} />
           ) : (

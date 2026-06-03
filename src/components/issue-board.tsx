@@ -63,13 +63,13 @@ export function IssueBoard({
   if (!statuses) return null;
 
   return (
-    <div className="flex h-[calc(100svh-6rem)] gap-3 overflow-x-auto px-4 py-3">
+    <div className="flex h-[calc(100svh-8.5rem)] snap-x gap-2 overflow-x-auto px-3 py-3 sm:h-[calc(100svh-6rem)] sm:gap-3 sm:px-4">
       {statuses.map((s) => {
         const column = byStatus.get(s.id) ?? [];
         return (
           <section
             key={s.id}
-            className="flex w-72 shrink-0 flex-col rounded-lg border border-border bg-card/40"
+            className="flex w-[min(20rem,calc(100vw-2rem))] shrink-0 snap-start flex-col rounded-lg border border-border bg-card/40 sm:w-72"
           >
             <header className="flex h-9 items-center gap-2 border-b border-border px-3">
               <StatusDot status={s} size={12} />
@@ -104,18 +104,23 @@ export function IssueBoard({
                   href={`${base}/issues/${i.id}`}
                   className="block rounded-md border border-border bg-background p-2 text-left hover:border-ember/40"
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <span className="text-id text-muted-foreground">
                       {workspaceKey}-{i.number}
                     </span>
                     {i.project && (
-                      <Badge className="ml-auto" color={i.project.color ?? undefined}>
+                      <Badge
+                        className="ml-auto shrink-0"
+                        color={i.project.color ?? undefined}
+                      >
                         {i.project.key}
                       </Badge>
                     )}
                   </div>
-                  <div className="mt-1 text-sm leading-snug">{i.title}</div>
-                  <div className="mt-2 flex items-center gap-2">
+                  <div className="mt-1 break-words text-sm leading-snug">
+                    {i.title}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
                     <div className="flex -space-x-1.5">
                       {i.assignees.slice(0, 3).map((a) => (
                         <Avatar
@@ -130,7 +135,7 @@ export function IssueBoard({
                     {i.assignedAgent && (
                       <AgentHoverPreview agentId={i.assignedAgent.id}>
                         <span
-                          className="inline-flex items-center gap-1 text-meta text-muted-foreground"
+                          className="inline-flex min-w-0 items-center gap-1 text-meta text-muted-foreground"
                           title={`Agent: ${i.assignedAgent.name}`}
                         >
                           <AgentPresenceDot
@@ -138,7 +143,7 @@ export function IssueBoard({
                             size="sm"
                             availability={presenceAvailability(i.assignedAgent)}
                           />
-                          <span className="text-id">
+                          <span className="truncate text-id">
                             @{i.assignedAgent.profileKey}
                           </span>
                         </span>

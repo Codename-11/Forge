@@ -131,16 +131,13 @@ export function MissionControl() {
   const activeCount = activeRuns?.length ?? 0;
   // Runs blocked on a human approve/reject — surfaced as an amber badge on
   // the Live tab so it's actionable from any tab, not just inside Live.
-  const approvalCount =
-    activeRuns?.filter((r) => r.awaitingApprovalAt != null).length ?? 0;
+  const approvalCount = activeRuns?.filter((r) => r.awaitingApprovalAt != null).length ?? 0;
   const queueCount = (queue ?? []).filter((q) => !q.assignedAgent).length;
   const stalledRuns = useMemo(() => {
     // Detect runs that haven't ticked in >5min — even if the watchdog
     // hasn't flipped them yet, the pill should warn.
     const now = Date.now();
-    return (activeRuns ?? []).filter(
-      (r) => now - new Date(r.lastEventAt).getTime() > STALE_RUN_MS,
-    );
+    return (activeRuns ?? []).filter((r) => now - new Date(r.lastEventAt).getTime() > STALE_RUN_MS);
   }, [activeRuns]);
   const hasStalled = stalledRuns.length > 0;
 
@@ -202,8 +199,7 @@ export function MissionControl() {
       refetchOnWindowFocus: false,
     },
   );
-  const resolvedDefaultTab =
-    tabResolved?.resolved ?? me?.missionControlDefaultTab ?? null;
+  const resolvedDefaultTab = tabResolved?.resolved ?? me?.missionControlDefaultTab ?? null;
   const appliedDefaultRef = useRef<string | null>(null);
   useEffect(() => {
     if (!slug) return;
@@ -508,9 +504,7 @@ export function MissionControl() {
   // current step if there is one.
   const dots = (activeRuns ?? []).slice(0, 3);
   const firstStep =
-    activeRuns?.[0]?.currentStep ??
-    activeRuns?.[0]?.statusComment?.currentStep ??
-    null;
+    activeRuns?.[0]?.currentStep ?? activeRuns?.[0]?.statusComment?.currentStep ?? null;
 
   if (state.size === "pill") {
     const previewLine = unreadPreview
@@ -554,12 +548,12 @@ export function MissionControl() {
           className={cn(
             "group flex items-center gap-2 rounded-full border bg-card/90 px-3 py-1.5 text-[0.75rem] shadow-sm backdrop-blur",
             hasStalled
-              ? "border-amber-500/40 hover:border-amber-500/60"
+              ? "border-warning/40 hover:border-warning/60"
               : "border-border hover:border-ember/40",
           )}
         >
           {hasStalled ? (
-            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+            <AlertTriangle className="h-3.5 w-3.5 text-warning" />
           ) : activeCount > 0 ? (
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember opacity-50" />
@@ -569,7 +563,7 @@ export function MissionControl() {
             <Activity className="h-3.5 w-3.5 text-muted-foreground" />
           )}
           {dots.length > 0 && (
-            <span className="-space-x-1 flex">
+            <span className="flex -space-x-1">
               {dots.map((r) => (
                 <span
                   key={r.id}
@@ -599,7 +593,7 @@ export function MissionControl() {
             </span>
           )}
           {firstStep && activeCount === 1 && (
-            <span className="ml-1 max-w-32 truncate text-meta text-muted-foreground">
+            <span className="text-meta ml-1 max-w-32 truncate text-muted-foreground">
               · {firstStep}
             </span>
           )}
@@ -630,7 +624,7 @@ export function MissionControl() {
           <MessageSquare className="h-3.5 w-3.5" />
           {unreadCount > 0 && (
             <span
-              className="absolute -right-1 -top-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-ember px-1 font-mono text-[0.5625rem] text-white"
+              className="absolute -right-1 -top-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-ember px-1 font-mono text-[0.5625rem] text-ember-foreground"
               aria-label={`${unreadCount} unread`}
             >
               {unreadCount > 9 ? "9+" : unreadCount}
@@ -638,7 +632,7 @@ export function MissionControl() {
           )}
         </button>
         {unreadCount > 0 && previewLine && (
-          <span className="pointer-events-none ml-1 hidden max-w-[16rem] truncate rounded-md border border-border bg-card/80 px-2 py-0.5 text-meta text-muted-foreground shadow-sm backdrop-blur group-hover:block">
+          <span className="text-meta pointer-events-none ml-1 hidden max-w-[16rem] truncate rounded-md border border-border bg-card/80 px-2 py-0.5 text-muted-foreground shadow-sm backdrop-blur group-hover:block">
             {previewLine}
           </span>
         )}
@@ -656,7 +650,10 @@ export function MissionControl() {
           cornerClass,
           isDragging && "opacity-90",
         )}
-        style={{ width: 320, height: 380 }}
+        style={{
+          width: "min(320px, calc(100vw - 1rem))",
+          height: "min(380px, calc(100svh - 1rem))",
+        }}
       >
         <GlanceView
           slug={slug}
@@ -693,14 +690,14 @@ export function MissionControl() {
         (isDragging || isResizing) && "opacity-90",
       )}
       style={{
-        width: state.width,
-        height: state.height,
+        width: `min(${state.width}px, calc(100vw - 1rem))`,
+        height: `min(${state.height}px, calc(100svh - 1rem))`,
       }}
     >
       {/* Resize handle — invisible 12×12 hit area at the appropriate corner */}
       <div
         onPointerDown={onResizePointerDown}
-        className={cn("absolute h-3 w-3", resizeHandleClass)}
+        className={cn("absolute hidden h-3 w-3 sm:block", resizeHandleClass)}
         style={{ zIndex: 41 }}
         data-no-drag
         title="Resize"
@@ -709,7 +706,7 @@ export function MissionControl() {
       <header
         onPointerDown={onPointerDown}
         className={cn(
-          "flex items-center gap-2 rounded-t-lg border-b border-border/70 bg-card/80 px-3 py-2",
+          "flex min-w-0 flex-wrap items-center gap-2 rounded-t-lg border-b border-border/70 bg-card/80 px-3 py-2",
           isDragging ? "cursor-grabbing" : "cursor-grab",
         )}
       >
@@ -718,21 +715,18 @@ export function MissionControl() {
           Activity
         </span>
         {hasStalled && (
-          <span className="flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[0.625rem] text-amber-600">
+          <span className="flex items-center gap-1 rounded-md border border-warning/30 bg-warning/10 px-1.5 py-0 text-[0.625rem] text-warning">
             <Hourglass className="h-2.5 w-2.5" /> {stalledRuns.length} stalled
           </span>
         )}
         <span className="ml-auto flex items-center gap-1" data-no-drag>
-          <SettingsPopover
-            soundEnabled={state.soundEnabled}
-            onToggleSound={toggleSound}
-          />
+          <SettingsPopover soundEnabled={state.soundEnabled} onToggleSound={toggleSound} />
           <button
             type="button"
             onClick={togglePin}
             title={state.pinned ? "Unpin (auto-collapse on outside click)" : "Pin (stay open)"}
             className={cn(
-              "flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground",
+              "flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-6 sm:w-6",
               state.pinned && "text-ember hover:text-ember",
             )}
           >
@@ -742,7 +736,7 @@ export function MissionControl() {
             type="button"
             onClick={() => setSize("pill")}
             title="Collapse (Esc)"
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground"
+            className="flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-6 sm:w-6"
           >
             <ChevronDown className="h-3 w-3" />
           </button>
@@ -750,7 +744,7 @@ export function MissionControl() {
             type="button"
             onClick={() => setSize("pill")}
             title="Close"
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground"
+            className="flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-6 sm:w-6"
           >
             <XIcon className="h-3 w-3" />
           </button>
@@ -758,17 +752,12 @@ export function MissionControl() {
       </header>
 
       <nav
-        className="flex items-center gap-0.5 border-b border-border/70 bg-card/40 px-2 py-1"
+        className="flex items-center gap-0.5 overflow-x-auto border-b border-border/70 bg-card/40 px-2 py-1"
         data-no-drag
       >
         {TABS.map((t) => {
           const isActive = state.tab === t.id;
-          const count =
-            t.id === "live"
-              ? activeCount
-              : t.id === "queue"
-                ? queueCount
-                : null;
+          const count = t.id === "live" ? activeCount : t.id === "queue" ? queueCount : null;
           return (
             <button
               key={t.id}
@@ -776,7 +765,7 @@ export function MissionControl() {
               onClick={() => setTab(t.id)}
               title={`${t.label} (${t.chord})`}
               className={cn(
-                "flex items-center gap-1 rounded-md px-2 py-0.5 text-[0.6875rem]",
+                "flex min-h-8 shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-[0.6875rem] sm:min-h-0",
                 isActive
                   ? "bg-subtle text-foreground"
                   : "text-muted-foreground hover:bg-subtle/50 hover:text-foreground",
@@ -796,7 +785,7 @@ export function MissionControl() {
               {t.id === "live" && approvalCount > 0 && (
                 <span
                   title={`${approvalCount} run${approvalCount === 1 ? "" : "s"} awaiting approval`}
-                  className="rounded-md bg-amber-500/20 px-1 font-mono text-[0.625rem] text-amber-600 dark:text-amber-400"
+                  className="rounded-md bg-warning/20 px-1 font-mono text-[0.625rem] text-warning"
                 >
                   {approvalCount}✋
                 </span>

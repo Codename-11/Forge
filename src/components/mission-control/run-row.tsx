@@ -57,9 +57,7 @@ export type RunRowData = {
 };
 
 /** Narrow the JSON `pendingApproval` blob to its displayable fields. */
-function readPendingApproval(
-  v: unknown,
-): { command: string | null; description: string | null } {
+function readPendingApproval(v: unknown): { command: string | null; description: string | null } {
   if (!v || typeof v !== "object") return { command: null, description: null };
   const o = v as Record<string, unknown>;
   return {
@@ -132,12 +130,8 @@ export function RunRow({
     },
   });
 
-  const issueKey = run.issue
-    ? `${run.issue.workspace.key}-${run.issue.number}`
-    : "—";
-  const issueHref = run.issue
-    ? `/w/${run.issue.workspace.slug}/issues/${run.issue.id}`
-    : null;
+  const issueKey = run.issue ? `${run.issue.workspace.key}-${run.issue.number}` : "—";
+  const issueHref = run.issue ? `/w/${run.issue.workspace.slug}/issues/${run.issue.id}` : null;
   const lastEventAt =
     typeof run.lastEventAt === "string" ? new Date(run.lastEventAt) : run.lastEventAt;
   const lastEventAgeMs = Date.now() - lastEventAt.getTime();
@@ -147,9 +141,7 @@ export function RunRow({
     { runId: run.id },
     { staleTime: 60_000, enabled: !isStalled },
   );
-  const etaLabel = etaData?.etaMs
-    ? `~${formatEta(etaData.etaMs)} left`
-    : null;
+  const etaLabel = etaData?.etaMs ? `~${formatEta(etaData.etaMs)} left` : null;
 
   const { data: coachComment } = trpc.agentRun.coachDiagnosis.useQuery(
     { runId: run.id },
@@ -166,20 +158,15 @@ export function RunRow({
       )}
       onMouseEnter={onActivate}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => setExpanded((e) => !e)}
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-4 sm:w-4"
           aria-label={expanded ? "Collapse timeline" : "Expand timeline"}
           title={expanded ? "Collapse timeline" : "Expand timeline"}
         >
-          <ChevronRight
-            className={cn(
-              "h-3 w-3 transition-transform",
-              expanded && "rotate-90",
-            )}
-          />
+          <ChevronRight className={cn("h-3 w-3 transition-transform", expanded && "rotate-90")} />
         </button>
         {isStalled ? (
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
@@ -190,9 +177,7 @@ export function RunRow({
           </span>
         )}
         <Bot className="h-3.5 w-3.5 shrink-0 text-ember" />
-        <span className="truncate font-medium text-foreground">
-          {run.agent.name}
-        </span>
+        <span className="min-w-0 truncate font-medium text-foreground">{run.agent.name}</span>
         <span className="text-muted-foreground">·</span>
         {issueHref ? (
           <Link
@@ -208,11 +193,10 @@ export function RunRow({
         {run.engagementMode && run.engagementMode !== "EXECUTE" && (
           <ModeChip mode={run.engagementMode} />
         )}
-        <span className="ml-auto flex items-center gap-1.5">
+        <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
           <RunActions runId={run.id} agentName={run.agent.name} />
           {(() => {
-            const tokens =
-              (run.tokensIn ?? 0) + (run.tokensOut ?? 0);
+            const tokens = (run.tokensIn ?? 0) + (run.tokensOut ?? 0);
             if (tokens === 0) return null;
             const inPart = run.tokensIn ?? 0;
             const outPart = run.tokensOut ?? 0;
@@ -227,7 +211,7 @@ export function RunRow({
             );
           })()}
           <span
-            className="font-mono text-meta text-muted-foreground"
+            className="text-meta font-mono text-muted-foreground"
             title={`Started ${new Date(run.startedAt).toLocaleString()}`}
           >
             {elapsed(run.startedAt)}
@@ -236,7 +220,7 @@ export function RunRow({
             type="button"
             onClick={onTogglePin}
             className={cn(
-              "flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground",
+              "flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-5 sm:w-5",
               pinned && "text-ember hover:text-ember",
             )}
             aria-label={pinned ? "Unpin run" : "Pin run"}
@@ -247,7 +231,7 @@ export function RunRow({
           {issueHref && (
             <Link
               href={issueHref}
-              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground"
+              className="flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-5 sm:w-5"
               aria-label="Open issue"
               title="Open issue"
             >
@@ -257,11 +241,11 @@ export function RunRow({
         </span>
       </div>
       {/* Headline step + last-event freshness */}
-      <div className="mt-0.5 flex items-baseline gap-2 pl-6">
-        <span className="truncate text-foreground/80">
+      <div className="mt-0.5 flex flex-wrap items-baseline gap-2 pl-6">
+        <span className="min-w-[12rem] flex-1 truncate text-foreground/80">
           {run.currentStep ?? run.statusComment?.currentStep ?? "working…"}
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-2">
+        <span className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
           {etaLabel && (
             <span
               className="rounded-md border border-border/60 bg-subtle/60 px-1.5 py-0 font-mono text-[0.625rem] text-muted-foreground"
@@ -271,10 +255,7 @@ export function RunRow({
             </span>
           )}
           <span
-            className={cn(
-              "text-meta",
-              isStalled ? "text-warning" : "text-muted-foreground",
-            )}
+            className={cn("text-meta", isStalled ? "text-warning" : "text-muted-foreground")}
             title={`Last event ${lastEventAt.toLocaleString()}`}
           >
             {relativeTime(run.lastEventAt)}
@@ -283,16 +264,17 @@ export function RunRow({
       </div>
       {awaitingApproval && (
         <div
-          className="mt-1.5 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-meta"
+          className="text-meta mt-1.5 flex flex-wrap items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-2 py-1.5"
           data-no-drag
           onClick={(e) => e.stopPropagation()}
         >
-          <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+          <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
           <span className="min-w-0 flex-1 text-foreground/80">
             {run.agent.name} needs permission
             {pendingApproval.command ? (
               <>
-                {" "}to run{" "}
+                {" "}
+                to run{" "}
                 <code className="rounded bg-background/60 px-1 font-mono text-[0.625rem] text-foreground">
                   {pendingApproval.command.length > 80
                     ? `${pendingApproval.command.slice(0, 77)}…`
@@ -312,7 +294,7 @@ export function RunRow({
             type="button"
             disabled={respondApproval.isPending}
             onClick={() => respondApproval.mutate({ runId: run.id, decision: "approve" })}
-            className="inline-flex items-center gap-1 rounded border border-ember/40 bg-ember/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-ember hover:bg-ember/25 disabled:opacity-50"
+            className="inline-flex min-h-8 items-center gap-1 rounded border border-ember/40 bg-ember/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-ember hover:bg-ember/25 disabled:opacity-50 sm:min-h-0"
           >
             <Check className="h-3 w-3" /> Approve
           </button>
@@ -320,30 +302,28 @@ export function RunRow({
             type="button"
             disabled={respondApproval.isPending}
             onClick={() => respondApproval.mutate({ runId: run.id, decision: "reject" })}
-            className="inline-flex items-center gap-1 rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground disabled:opacity-50"
+            className="inline-flex min-h-8 items-center gap-1 rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground disabled:opacity-50 sm:min-h-0"
           >
             <X className="h-3 w-3" /> Reject
           </button>
         </div>
       )}
       {isStalled && !awaitingApproval && (
-        <div className="mt-1.5 rounded-md border border-warning/30 bg-background/50 px-2 py-1.5 text-meta text-muted-foreground">
+        <div className="text-meta mt-1.5 rounded-md border border-warning/30 bg-background/50 px-2 py-1.5 text-muted-foreground">
           <div className="font-medium text-foreground">
             No run event for {elapsed(lastEventAt)}.
           </div>
           <div>
-            Last signal: {lastEventAt.toLocaleString()}. Recommended fix:
-            check the agent heartbeat, webhook delivery, and latest issue
-            status comment before reassigning.
+            Last signal: {lastEventAt.toLocaleString()}. Recommended fix: check the agent heartbeat,
+            webhook delivery, and latest issue status comment before reassigning.
           </div>
           {coachComment && (
-            <div className="mt-1.5 rounded border border-amber-500/30 bg-card/60 px-2 py-1 text-foreground/80">
-              <div className="text-[0.625rem] font-semibold uppercase tracking-wider text-amber-700">
-                {coachComment.authoringAgent?.name ?? "Coach"} · {relativeTime(coachComment.createdAt)}
+            <div className="mt-1.5 rounded border border-warning/30 bg-card/60 px-2 py-1 text-foreground/80">
+              <div className="text-[0.625rem] font-semibold uppercase tracking-wider text-warning">
+                {coachComment.authoringAgent?.name ?? "Coach"} ·{" "}
+                {relativeTime(coachComment.createdAt)}
               </div>
-              <div className="mt-0.5 line-clamp-3 whitespace-pre-wrap">
-                {coachComment.body}
-              </div>
+              <div className="mt-0.5 line-clamp-3 whitespace-pre-wrap">{coachComment.body}</div>
             </div>
           )}
         </div>

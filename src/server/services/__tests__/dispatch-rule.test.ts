@@ -48,6 +48,7 @@ async function createAgent(
     status?: AgentStatus;
     archived?: boolean;
     lastDispatchedAt?: Date | null;
+    lastHeartbeatAt?: Date | null;
   },
 ): Promise<{ id: string }> {
   const prisma = getPrisma();
@@ -61,6 +62,12 @@ async function createAgent(
       status: opts.status ?? AgentStatus.ONLINE,
       archivedAt: opts.archived ? new Date() : null,
       lastDispatchedAt: opts.lastDispatchedAt ?? null,
+      lastHeartbeatAt:
+        opts.lastHeartbeatAt === undefined
+          ? opts.status === AgentStatus.OFFLINE
+            ? null
+            : new Date()
+          : opts.lastHeartbeatAt,
     },
     select: { id: true },
   });
@@ -527,4 +534,3 @@ describe("dispatcher — DispatchRule layer", () => {
     expect(res.reason).toBe(`rule:${winner.id}`);
   });
 });
-

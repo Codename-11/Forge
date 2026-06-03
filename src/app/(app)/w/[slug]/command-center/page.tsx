@@ -114,7 +114,7 @@ export default function CommandCenterPage() {
       {/* Ambient background now lives once in the app shell <main>
           (.forge-page-bg) — previously this page mounted the grid on the
           scroll container itself, so it only covered the first viewport. */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
         {isLoading ? (
           <SkeletonList rows={6} />
         ) : !data ? (
@@ -153,14 +153,14 @@ export default function CommandCenterPage() {
                   href={`/w/${ws.slug}/goals/${row.id}`}
                   className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                     <span className="truncate text-sm font-medium">{row.title}</span>
                     <span className="shrink-0 rounded bg-subtle px-1 py-0.5 text-[10px] uppercase text-muted-foreground">
                       {row.status.toLowerCase()}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 text-meta text-muted-foreground">
-                    <span className="truncate">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2 text-meta text-muted-foreground">
+                    <span className="min-w-0 flex-1 truncate">
                       {row.crew ? `${row.crew.name} · ` : ""}
                       {row._count.plans} plan{row._count.plans === 1 ? "" : "s"}
                     </span>
@@ -230,13 +230,13 @@ export default function CommandCenterPage() {
                   href={`/w/${ws.slug}/i/${row.issue.workspace.key}-${row.issue.number}`}
                   className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <Bot className="h-3 w-3 text-ember" />
                     <span className="text-sm font-medium">
                       @{row.agent.profileKey}
                     </span>
                     <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground truncate">
+                    <span className="min-w-0 truncate text-sm text-muted-foreground">
                       {row.issue.workspace.key}-{row.issue.number}
                     </span>
                   </div>
@@ -284,7 +284,7 @@ export default function CommandCenterPage() {
                   href={`/w/${ws.slug}/i/${row.workspace.key}-${row.number}`}
                   className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                     <span className="text-sm font-medium truncate">{row.title}</span>
                     <PriorityChip priority={row.priority} />
                   </div>
@@ -445,16 +445,16 @@ function ActionRequestDecisionCard({
           <span className="text-muted-foreground/70">asks</span>
         </div>
       ) : null}
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
         {request.issue ? (
           <Link
             href={`/w/${slug}/i/${request.issue.workspace.key}-${request.issue.number}`}
-            className="text-sm font-medium hover:underline"
+            className="min-w-0 flex-1 text-sm font-medium hover:underline"
           >
             {request.title}
           </Link>
         ) : (
-          <span className="text-sm font-medium">{request.title}</span>
+          <span className="min-w-0 flex-1 text-sm font-medium">{request.title}</span>
         )}
         <SeverityChip severity={request.severity} />
       </div>
@@ -462,7 +462,7 @@ function ActionRequestDecisionCard({
         <p className="line-clamp-2 text-meta text-muted-foreground">{request.body}</p>
       ) : null}
       {request.issue ? (
-        <span className="text-meta text-muted-foreground">
+        <span className="text-meta break-words text-muted-foreground">
           {request.issue.workspace.key}-{request.issue.number} · {request.issue.title}
         </span>
       ) : null}
@@ -477,7 +477,7 @@ function ActionRequestDecisionCard({
             className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-meta"
             aria-label="Decline reason"
           />
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant="outline"
@@ -512,7 +512,7 @@ function ActionRequestDecisionCard({
             className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-meta"
             aria-label="Answer"
           />
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant="ember"
@@ -536,7 +536,7 @@ function ActionRequestDecisionCard({
           </div>
         </div>
       ) : (
-        <div className="flex gap-2 pt-0.5">
+        <div className="flex flex-wrap gap-2 pt-0.5">
           {needsAnswer ? (
             <Button
               size="sm"
@@ -736,7 +736,7 @@ function ReviewGateDecisionCard({
             className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-meta"
             aria-label="Resolution note"
           />
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant="ember"
@@ -778,7 +778,7 @@ function ReviewGateDecisionCard({
           </div>
         </div>
       ) : (
-        <div className="flex gap-2 pt-0.5">
+        <div className="flex flex-wrap gap-2 pt-0.5">
           <Button
             size="sm"
             variant="ember"
@@ -818,10 +818,10 @@ function Section({
 }) {
   return (
     <section className="flex flex-col gap-2">
-      <header className="flex items-center justify-between gap-2 text-meta uppercase tracking-wide text-muted-foreground">
-        <div className="flex items-center gap-1.5">
+      <header className="flex min-w-0 items-center justify-between gap-2 text-meta uppercase tracking-wide text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-1.5">
           {icon}
-          {title}
+          <span className="truncate">{title}</span>
         </div>
         {count > 0 ? (
           <span

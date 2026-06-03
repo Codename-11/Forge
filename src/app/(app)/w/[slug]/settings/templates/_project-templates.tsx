@@ -158,7 +158,7 @@ export function ProjectTemplatesPanel() {
             <div className="text-sm font-semibold">
               {editing.id ? "Edit project template" : "New project template"}
             </div>
-            <div className="grid grid-cols-[1fr_120px] gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_120px]">
               <div className="space-y-1.5">
                 <label className="text-xs text-muted-foreground">Name</label>
                 <Input
@@ -191,7 +191,7 @@ export function ProjectTemplatesPanel() {
                 className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
               />
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <label className="text-xs text-muted-foreground">Color</label>
                 <div className="flex items-center gap-2">
@@ -224,7 +224,7 @@ export function ProjectTemplatesPanel() {
                 />
               </div>
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setEditing(null)}>
                 Cancel
               </Button>

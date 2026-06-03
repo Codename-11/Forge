@@ -11,6 +11,24 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-06-03] — v0.4.0 · Mobile app experience
+
+### Added
+
+- **Forge now works as a mobile app.** The authenticated shell, bottom
+  navigation, issues list/board/detail, inbox, dashboard, review, settings,
+  agents, and Mission Control now adapt down to phone widths with reachable
+  controls, stable touch targets, and no document-level horizontal overflow.
+- **Mobile regression coverage.** Added a Playwright smoke spec that exercises
+  core authenticated workspace routes at 390px, 430px, and 768px.
+
+### Changed
+
+- **Dense workflows read better on small screens.** Page topbars stack, subtitles
+  clamp cleanly, issue rows emphasize the useful title/key hierarchy, inbox
+  action labels shorten where needed, mobile toasts clear the bottom nav, and
+  agent runtime cards use compact tooltip-backed metrics.
+
 ## [2026-05-31] — v0.3.1 · Auto-settle stale agent runs
 
 ### Changed

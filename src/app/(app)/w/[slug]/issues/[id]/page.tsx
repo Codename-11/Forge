@@ -3,7 +3,7 @@ import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { AgentStatus, WorkItemKind } from "@prisma/client";
-import { Bot, Paperclip, Plus, Workflow } from "lucide-react";
+import { Bot, Paperclip, Plus, Trash2, Workflow } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
@@ -42,10 +42,7 @@ import { Breadcrumb } from "@/components/breadcrumb";
 import { ProjectChip } from "@/components/project-chip";
 import { InitiativeChip } from "@/components/initiative-chip";
 import { CycleChip } from "@/components/cycle-chip";
-import {
-  DispatchReasonChip,
-  type DispatchReason,
-} from "@/components/dispatch-reason-chip";
+import { DispatchReasonChip, type DispatchReason } from "@/components/dispatch-reason-chip";
 import { IssueSiblingNav } from "@/components/issue-sibling-nav";
 import { useHotkey } from "@/lib/keyboard";
 
@@ -81,10 +78,11 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   // surfaces on this page) honest without a manual reload while an
   // agent is working the issue. Cheap — the byId payload is small
   // relative to the page render cost.
-  const { data: issue, isLoading, error } = trpc.issue.byId.useQuery(
-    { id },
-    { refetchInterval: 15_000 },
-  );
+  const {
+    data: issue,
+    isLoading,
+    error,
+  } = trpc.issue.byId.useQuery({ id }, { refetchInterval: 15_000 });
   const { data: statuses } = trpc.status.list.useQuery();
   const { data: members } = trpc.workspace.members.useQuery();
   const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
@@ -106,10 +104,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   // inline in agent comments. Stays in this page so the byId payload
   // doesn't have to teach every nested consumer about the current user.
   const { data: me } = trpc.user.me.useQuery();
-  const { data: watchers } = trpc.issue.watchers.useQuery(
-    { issueId: id },
-    { staleTime: 30_000 },
-  );
+  const { data: watchers } = trpc.issue.watchers.useQuery({ issueId: id }, { staleTime: 30_000 });
   // Phase 1B: surface project's linked initiative and the issue's cycle as
   // chips. Both queries are skipped when the underlying id is null so we
   // don't hit the server on issues that don't have either link.
@@ -214,11 +209,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   // Phase 1B: sibling navigation. Scope picks which list defines siblings —
   // project membership wins; cycle membership is the fallback for issues
   // without a project. If neither, the nav is hidden and hotkeys no-op.
-  const siblingScope: "project" | "cycle" | null = projectId
-    ? "project"
-    : cycleId
-      ? "cycle"
-      : null;
+  const siblingScope: "project" | "cycle" | null = projectId ? "project" : cycleId ? "cycle" : null;
   const { data: siblings } = trpc.issue.siblings.useQuery(
     { issueId: id, scope: siblingScope ?? "project" },
     { enabled: !!siblingScope, staleTime: 30_000 },
@@ -276,9 +267,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   return (
     <>
       <Topbar
-        title={
-          <Breadcrumb className="font-normal" items={breadcrumbItems} />
-        }
+        title={<Breadcrumb className="font-normal" items={breadcrumbItems} />}
         subtitle={<span className="font-mono">{issue.status.name}</span>}
         actions={
           <>
@@ -290,8 +279,15 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             >
               Focus
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setDeleteOpen(true)}>
-              Delete
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setDeleteOpen(true)}
+              title="Delete issue"
+              aria-label="Delete issue"
+            >
+              <Trash2 className="h-3.5 w-3.5 sm:hidden" />
+              <span className="hidden sm:inline">Delete</span>
             </Button>
           </>
         }
@@ -383,7 +379,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                     update.mutate({ id: issue.id, title: titleDraft.trim() });
                   setEditingTitle(false);
                 }}
-                className="min-w-0 flex-1"
+                className="min-w-0 flex-1 basis-full sm:basis-auto"
               >
                 <input
                   autoFocus
@@ -405,7 +401,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               </form>
             ) : (
               <h1
-                className="min-w-0 cursor-text truncate rounded-md px-1 py-0.5 text-sm font-semibold tracking-tight hover:bg-subtle/60"
+                className="min-w-0 flex-1 basis-full cursor-text break-words rounded-md px-1 py-0.5 text-sm font-semibold tracking-tight hover:bg-subtle/60 sm:basis-auto sm:truncate"
                 onClick={() => setEditingTitle(true)}
                 title="Click to edit"
               >
@@ -415,7 +411,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
           </>
         }
         middle={
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex w-full flex-wrap items-center gap-1.5">
             <InlineStatus
               value={issue.statusId}
               options={statuses ?? []}
@@ -446,17 +442,13 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             <RunActivityChip issueId={issue.id} />
           </div>
         }
-        actions={
-          siblingScope ? (
-            <IssueSiblingNav issueId={issue.id} scope={siblingScope} />
-          ) : null
-        }
+        actions={siblingScope ? <IssueSiblingNav issueId={issue.id} scope={siblingScope} /> : null}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-6 p-5 md:flex-row md:gap-8 md:p-6 xl:gap-10 xl:p-8">
+        <div className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-5 p-3 sm:p-5 md:flex-row md:gap-8 md:p-6 xl:gap-10 xl:p-8">
           <div className="min-w-0 flex-1 md:max-w-3xl lg:max-w-4xl xl:max-w-5xl">
-            <div className="mb-5 flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="mb-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <Avatar name={issue.author.name} image={issue.author.image} size={16} />
               <span>{issue.author.name ?? "Unknown"}</span>
               <span>·</span>
@@ -488,8 +480,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 const isAssignee = issue.assignees.some(
                   (a) => a.user?.id === me.id || a.userId === me.id,
                 );
-                const isWatcher =
-                  watchers?.items.some((w) => w.userId === me.id) ?? false;
+                const isWatcher = watchers?.items.some((w) => w.userId === me.id) ?? false;
                 return isAssignee || isWatcher;
               })()}
             />
@@ -497,9 +488,9 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
           <aside
             aria-label="Issue detail rail"
-            className="shrink-0 md:sticky md:top-4 md:w-[22rem] md:self-start xl:w-[26rem]"
+            className="min-w-0 shrink-0 md:sticky md:top-4 md:w-[22rem] md:self-start xl:w-[26rem]"
           >
-            <div className="rounded-lg border border-border bg-card/30 md:max-h-[calc(100svh-7rem)]">
+            <div className="overflow-hidden rounded-lg border border-border bg-card/30 md:max-h-[calc(100svh-7rem)]">
               <IssueRail
                 issueId={issue.id}
                 header={
@@ -512,18 +503,14 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                       <ProjectPickerField
                         value={issue.projectId ?? null}
                         projects={projects?.items ?? []}
-                        onChange={(projectId) =>
-                          update.mutate({ id: issue.id, projectId })
-                        }
+                        onChange={(projectId) => update.mutate({ id: issue.id, projectId })}
                       />
                     </SidebarField>
                     <SidebarField label="Sprint">
                       <CyclePickerField
                         value={issue.cycleId ?? null}
                         cycles={cycles ?? []}
-                        onChange={(cycleId) =>
-                          update.mutate({ id: issue.id, cycleId })
-                        }
+                        onChange={(cycleId) => update.mutate({ id: issue.id, cycleId })}
                       />
                     </SidebarField>
                     {issue.executionSteps && issue.executionSteps.length > 0 ? (
@@ -552,32 +539,26 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                           color: l.label.color,
                         }))}
                         all={allLabels ?? []}
-                        onChange={(labelIds) =>
-                          setLabels.mutate({ issueId: issue.id, labelIds })
-                        }
+                        onChange={(labelIds) => setLabels.mutate({ issueId: issue.id, labelIds })}
                       />
                     </SidebarField>
                     <SidebarField label="Due">
                       <input
                         type="date"
                         value={
-                          issue.dueDate
-                            ? new Date(issue.dueDate).toISOString().slice(0, 10)
-                            : ""
+                          issue.dueDate ? new Date(issue.dueDate).toISOString().slice(0, 10) : ""
                         }
                         onChange={(e) =>
                           update.mutate({
                             id: issue.id,
-                            dueDate: e.target.value
-                              ? new Date(e.target.value)
-                              : null,
+                            dueDate: e.target.value ? new Date(e.target.value) : null,
                           })
                         }
                         className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 font-mono text-xs"
                       />
                     </SidebarField>
                     <SidebarField label="Agent queue">
-                      <label className="flex w-full items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[0.6875rem]">
+                      <label className="flex w-full flex-wrap items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[0.6875rem]">
                         <input
                           type="checkbox"
                           checked={issue.queued}
@@ -589,16 +570,10 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                           }
                           className="h-3.5 w-3.5"
                         />
-                        <span className="text-muted-foreground">
-                          Queue for agent
-                        </span>
-                        <span className="ml-auto">
+                        <span className="text-muted-foreground">Queue for agent</span>
+                        <span className="ml-auto shrink-0">
                           <Badge
-                            className={
-                              issue.queued
-                                ? "bg-success/10 text-success"
-                                : undefined
-                            }
+                            className={issue.queued ? "bg-success/10 text-success" : undefined}
                           >
                             {issue.queued ? "Queued" : "Not queued"}
                           </Badge>
@@ -606,20 +581,14 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                       </label>
                       <div className="text-[0.6875rem] text-muted-foreground">
                         Queued issues are available to{" "}
-                        <span className="font-mono text-foreground">
-                          issues.claim
-                        </span>
-                        ; assigned issues can still sit unclaimed until an
-                        agent starts.
+                        <span className="font-mono text-foreground">issues.claim</span>; assigned
+                        issues can still sit unclaimed until an agent starts.
                       </div>
                       {issue.claimedAt && (
                         <div className="mt-2 rounded-md border border-border bg-card/60 p-2 text-[0.6875rem]">
                           <div className="text-muted-foreground">Claimed</div>
                           <div className="mt-0.5">
-                            by{" "}
-                            <span className="font-mono">
-                              {issue.claimedById?.slice(0, 8)}
-                            </span>
+                            by <span className="font-mono">{issue.claimedById?.slice(0, 8)}</span>
                             {issue.claimExpiresAt && (
                               <> · expires {relativeTime(issue.claimExpiresAt)}</>
                             )}
@@ -668,9 +637,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         open={agentPickerOpen}
         onOpenChange={setAgentPickerOpen}
         currentAgentId={issue.assignedAgent?.id ?? null}
-        defaultMode={
-          (ws?.assignmentEngagementMode as EngagementModeValue) ?? "EXECUTE"
-        }
+        defaultMode={(ws?.assignmentEngagementMode as EngagementModeValue) ?? "EXECUTE"}
         onSelect={(agentId, mode) => {
           // Reassignment-confirmation toast: when the assigned agent
           // *changes* (not on the initial assign), reassure the
@@ -680,13 +647,11 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
           // last-7-day count from already-loaded data so the toast
           // doesn't trigger an extra fetch.
           const wasAssigned = !!issue.assignedAgent;
-          const isReassign =
-            wasAssigned && agentId !== issue.assignedAgent?.id;
+          const isReassign = wasAssigned && agentId !== issue.assignedAgent?.id;
           let nextAgentName: string | null = null;
           if (agentId) {
             const next = agentListData?.find((a) => a.id === agentId);
-            if (next)
-              nextAgentName = `@${next.profileKey}`;
+            if (next) nextAgentName = `@${next.profileKey}`;
           }
           update.mutate(
             // Only stamp the mode when actually assigning an agent;
@@ -703,19 +668,14 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                   // total events if the timeline isn't loaded.
                   const cutoff = Date.now() - 7 * 86_400_000;
                   const eventCount = recentEvents
-                    ? recentEvents.filter(
-                        (e) => new Date(e.createdAt).getTime() >= cutoff,
-                      ).length
+                    ? recentEvents.filter((e) => new Date(e.createdAt).getTime() >= cutoff).length
                     : null;
-                  toast.success(
-                    `Reassigned ${issueKey} to ${nextAgentName}`,
-                    {
-                      description:
-                        eventCount !== null
-                          ? `Context preserved · ${eventCount} event${eventCount === 1 ? "" : "s"} shared via comment thread`
-                          : "Context preserved · the new agent receives the full issue snapshot",
-                    },
-                  );
+                  toast.success(`Reassigned ${issueKey} to ${nextAgentName}`, {
+                    description:
+                      eventCount !== null
+                        ? `Context preserved · ${eventCount} event${eventCount === 1 ? "" : "s"} shared via comment thread`
+                        : "Context preserved · the new agent receives the full issue snapshot",
+                  });
                 } else if (!wasAssigned && nextAgentName) {
                   toast.success(`Assigned ${issueKey} to ${nextAgentName}`);
                 } else if (!agentId && wasAssigned) {
@@ -842,9 +802,7 @@ function KindPicker({
               {KIND_SUBTITLE[k]}
             </span>
             {v === k && (
-              <span className="ml-2 font-mono text-[0.6875rem] text-muted-foreground">
-                current
-              </span>
+              <span className="ml-2 font-mono text-[0.6875rem] text-muted-foreground">current</span>
             )}
           </div>
         )}
@@ -977,7 +935,9 @@ function ProjectPickerField({
                 <span className="inline-block h-2.5 w-2.5 rounded-sm bg-muted" />
                 <span className="text-muted-foreground">No project</span>
                 {value === null && (
-                  <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">current</span>
+                  <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+                    current
+                  </span>
                 )}
               </div>
             );
@@ -1070,7 +1030,9 @@ function CyclePickerField({
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">No sprint</span>
                 {value === null && (
-                  <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">current</span>
+                  <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+                    current
+                  </span>
                 )}
               </div>
             );
@@ -1122,17 +1084,14 @@ function LabelPicker({
             title="Remove label"
             className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-xs text-foreground hover:bg-subtle"
           >
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ background: l.color }}
-            />
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: l.color }} />
             {l.name}
           </button>
         ))}
         <button
           type="button"
           onClick={() => setOpen((x) => !x)}
-          className="focus-ring inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-meta text-muted-foreground hover:text-foreground"
+          className="focus-ring text-meta inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
         >
           <Plus className="h-[9px] w-[9px]" /> Add
         </button>
@@ -1192,11 +1151,11 @@ function AssigneePicker({
   }
 
   return (
-    <div className="relative">
+    <div className="relative min-w-0">
       <button
         type="button"
         onClick={() => setOpen((x) => !x)}
-        className="focus-ring flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-left text-[0.6875rem] hover:bg-subtle"
+        className="focus-ring flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-left text-[0.6875rem] hover:bg-subtle"
       >
         {current.length === 0 ? (
           <span className="text-muted-foreground">Unassigned</span>
@@ -1214,7 +1173,7 @@ function AssigneePicker({
       </button>
       {open && (
         <div
-          className="absolute z-20 mt-1 w-56 rounded-md border border-border bg-card shadow-lg"
+          className="absolute z-20 mt-1 w-[min(14rem,calc(100vw-2rem))] rounded-md border border-border bg-card shadow-lg"
           onMouseLeave={() => setOpen(false)}
         >
           <ul className="max-h-64 overflow-y-auto py-1">
@@ -1269,10 +1228,8 @@ function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => 
       onClick={onOpen}
       title="Assign agent (shift+a)"
       className={
-        "focus-ring flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-left text-[0.6875rem] hover:bg-subtle " +
-        (current
-          ? "border-border"
-          : "border-dashed border-border text-muted-foreground")
+        "focus-ring flex max-w-full items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-left text-[0.6875rem] hover:bg-subtle " +
+        (current ? "border-border" : "border-dashed border-border text-muted-foreground")
       }
     >
       {current ? (
@@ -1291,8 +1248,10 @@ function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => 
             size="sm"
             availability={presenceAvailability(current)}
           />
-          <span className="truncate">{current.name}</span>
-          <span className="font-mono text-[0.6875rem] text-muted-foreground">@{current.profileKey}</span>
+          <span className="min-w-0 truncate">{current.name}</span>
+          <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
+            @{current.profileKey}
+          </span>
         </>
       ) : (
         <>
@@ -1389,11 +1348,7 @@ function AgentPickerModal({
           <span className="text-[0.625rem] uppercase tracking-wider text-muted-foreground">
             Engagement mode
           </span>
-          <div
-            role="radiogroup"
-            aria-label="Engagement mode"
-            className="flex flex-wrap gap-1"
-          >
+          <div role="radiogroup" aria-label="Engagement mode" className="flex flex-wrap gap-1">
             {MODE_ORDER.map((m) => {
               const activeMode = mode === m;
               return (
@@ -1430,7 +1385,9 @@ function AgentPickerModal({
               <span className="inline-block h-2 w-2 rounded-full bg-muted" />
               <span className="text-muted-foreground">Unassign</span>
               {active && (
-                <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">current</span>
+                <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+                  current
+                </span>
               )}
             </div>
           );
@@ -1454,7 +1411,9 @@ function AgentPickerModal({
               availability={presenceAvailability(it)}
             />
             <span className="truncate">{it.name}</span>
-            <span className="font-mono text-[0.6875rem] text-muted-foreground">@{it.profileKey}</span>
+            <span className="font-mono text-[0.6875rem] text-muted-foreground">
+              @{it.profileKey}
+            </span>
             {it.capabilities.length > 0 && (
               // Capability pills — warm ember tone, with the full
               // capability label exposed via the title attribute so
@@ -1513,9 +1472,7 @@ function coerceDispatchReason(blob: unknown): DispatchReason | null {
   const reasonText = typeof r.reasonText === "string" ? r.reasonText : null;
   const decidedAt = typeof r.decidedAt === "string" ? r.decidedAt : null;
   const candidatesConsidered = Array.isArray(r.candidatesConsidered)
-    ? (r.candidatesConsidered.filter(
-        (c) => typeof c === "string",
-      ) as string[])
+    ? (r.candidatesConsidered.filter((c) => typeof c === "string") as string[])
     : [];
   if (!mode || !picked || !reasonText || !decidedAt) return null;
   return {

@@ -323,7 +323,7 @@ export default function DispatchRulesPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-8 p-6">
+        <div className="mx-auto max-w-3xl space-y-8 p-4 sm:p-6">
           {/* Bindings prerequisite. Rules can only target agents bound to
               this workspace — definitions live globally, bindings are set
               under Settings → Agents. */}
@@ -391,7 +391,7 @@ export default function DispatchRulesPage() {
               <Card as="div" className="overflow-hidden">
                 {/* Columnar header row. Grid template is shared with each
                     rule row below so columns line up. */}
-                <div className="grid grid-cols-[28px_28px_1fr_120px_140px_120px_180px_36px] gap-3 border-b border-border bg-card/30 px-4 py-2 text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                <div className="hidden grid-cols-[28px_28px_1fr_120px_140px_120px_180px_36px] gap-3 border-b border-border bg-card/30 px-4 py-2 text-[0.625rem] uppercase tracking-wider text-muted-foreground md:grid">
                   <span aria-hidden />
                   <span>On</span>
                   <span>Name</span>
@@ -423,7 +423,7 @@ export default function DispatchRulesPage() {
                         onDragOver={(e) => onDragOver(r.id, e)}
                         onDragEnd={() => setDragId(null)}
                         className={
-                          "group grid grid-cols-[28px_28px_1fr_120px_140px_120px_180px_36px] items-center gap-3 px-4 py-2.5 " +
+                          "group grid grid-cols-[28px_minmax(0,1fr)_36px] items-center gap-x-3 gap-y-2 px-4 py-3 md:grid-cols-[28px_28px_1fr_120px_140px_120px_180px_36px] md:py-2.5 " +
                           (dragId === r.id ? "opacity-50" : "")
                         }
                       >
@@ -431,7 +431,7 @@ export default function DispatchRulesPage() {
                         <GripVertical
                           size={13}
                           aria-hidden
-                          className="cursor-grab text-muted-foreground/50 opacity-0 group-hover:opacity-100"
+                          className="hidden cursor-grab text-muted-foreground/50 opacity-0 group-hover:opacity-100 md:block"
                         />
                         {/* Ember toggle switch — same enable mutation */}
                         <button
@@ -445,7 +445,7 @@ export default function DispatchRulesPage() {
                             toggle.mutate({ id: r.id, enabled: !r.enabled })
                           }
                           className={
-                            "focus-ring inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors " +
+                            "focus-ring col-start-1 row-start-1 inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors md:col-auto md:row-auto " +
                             (r.enabled ? "bg-ember" : "bg-subtle")
                           }
                         >
@@ -459,11 +459,14 @@ export default function DispatchRulesPage() {
                           />
                         </button>
                         {/* Name */}
-                        <span className="truncate text-sm" title={r.name}>
+                        <span
+                          className="col-start-2 row-start-1 truncate text-sm md:col-auto md:row-auto"
+                          title={r.name}
+                        >
                           {r.name}
                         </span>
                         {/* Priority */}
-                        <span className="text-meta">
+                        <span className="col-span-2 text-meta md:col-auto">
                           {r.priority ? (
                             <span className="inline-flex items-center gap-1">
                               <PriorityGlyph priority={r.priority} />{" "}
@@ -474,7 +477,7 @@ export default function DispatchRulesPage() {
                           )}
                         </span>
                         {/* Label chip */}
-                        <span className="text-meta">
+                        <span className="col-span-2 text-meta md:col-auto">
                           {label ? (
                             <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-1.5 py-0.5 text-meta">
                               <span
@@ -489,7 +492,7 @@ export default function DispatchRulesPage() {
                           )}
                         </span>
                         {/* Project */}
-                        <span className="text-meta">
+                        <span className="col-span-2 text-meta md:col-auto">
                           {project ? (
                             <span className="inline-flex items-center gap-1.5">
                               <span
@@ -503,7 +506,7 @@ export default function DispatchRulesPage() {
                           )}
                         </span>
                         {/* Target agent */}
-                        <span className="flex items-center gap-1.5 text-meta">
+                        <span className="col-span-2 flex items-center gap-1.5 text-meta md:col-auto">
                           {r.targetAgent.avatar ? (
                             <span style={{ fontSize: 12 }}>
                               {r.targetAgent.avatar}
@@ -514,7 +517,7 @@ export default function DispatchRulesPage() {
                           </span>
                         </span>
                         {/* Kebab — edit / delete */}
-                        <div className="relative">
+                        <div className="relative col-start-3 row-start-1 md:col-auto md:row-auto">
                           <button
                             type="button"
                             aria-label="Rule actions"
@@ -524,7 +527,7 @@ export default function DispatchRulesPage() {
                                 id === r.id ? null : r.id,
                               );
                             }}
-                            className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-subtle hover:text-foreground group-hover:opacity-100 data-[open=true]:opacity-100"
+                            className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground md:opacity-0 md:group-hover:opacity-100 md:data-[open=true]:opacity-100"
                             data-open={openMenuId === r.id}
                           >
                             <MoreHorizontal size={12} />
@@ -577,7 +580,7 @@ export default function DispatchRulesPage() {
           >
             <Card as="div" className="space-y-5 p-5">
               <div className="space-y-2">
-                <div className="flex items-baseline justify-between gap-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-3">
                   <span className="text-sm">Assignment default</span>
                   <span className="text-meta text-muted-foreground">
                     Used when an issue is assigned or queued.
@@ -596,7 +599,7 @@ export default function DispatchRulesPage() {
               </div>
 
               <div className="space-y-2 border-t border-border/60 pt-4">
-                <div className="flex items-baseline justify-between gap-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-3">
                   <span className="text-sm">Mention policy</span>
                   <span className="text-meta text-muted-foreground">
                     How an @-mention without an explicit marker is handled.
@@ -605,7 +608,7 @@ export default function DispatchRulesPage() {
                 <div
                   role="radiogroup"
                   aria-label="Mention policy"
-                  className="inline-flex rounded-md border border-border bg-card/30 p-0.5"
+                  className="inline-flex flex-wrap rounded-md border border-border bg-card/30 p-0.5"
                 >
                   {MENTION_POLICY_OPTIONS.map((o) => {
                     const active =
@@ -644,7 +647,7 @@ export default function DispatchRulesPage() {
               </div>
 
               <div className="space-y-2 border-t border-border/60 pt-4">
-                <div className="flex items-baseline justify-between gap-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-3">
                   <span className="text-sm">Mention default mode</span>
                   <span className="text-meta text-muted-foreground">
                     The mode a mention starts from (under Infer / Fixed).
@@ -679,7 +682,7 @@ export default function DispatchRulesPage() {
                 role="radiogroup"
                 aria-label="Fall-through mode (read-only)"
                 aria-readonly="true"
-                className="inline-flex rounded-md border border-border bg-card/30 p-0.5"
+                className="inline-flex flex-wrap rounded-md border border-border bg-card/30 p-0.5"
               >
                 {FALL_THROUGH_OPTIONS.map((o) => {
                   const active = workspace?.autoDispatchMode === o.value;
@@ -750,7 +753,7 @@ export default function DispatchRulesPage() {
                 autoFocus
               />
             </Field>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <Field label="Priority">
                 <select
                   value={editing.priority ?? ANY}
@@ -868,7 +871,7 @@ function ModeSegmented({
     <div
       role="radiogroup"
       aria-label="Engagement mode"
-      className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+      className="grid grid-cols-1 gap-2 sm:grid-cols-4"
     >
       {MODE_ORDER.map((m) => {
         const active = value === m;

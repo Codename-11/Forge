@@ -122,7 +122,7 @@ export default function ViewsPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-8 p-6">
+        <div className="mx-auto max-w-3xl space-y-8 p-4 sm:p-6">
           {allViews.length === 0 ? (
             <Card as="div">
               <EmptyState
@@ -204,7 +204,7 @@ export default function ViewsPage() {
             <label className="text-xs text-muted-foreground">Name</label>
             <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">Project</label>
               <select
@@ -292,7 +292,7 @@ export default function ViewsPage() {
               Shared (visible to everyone in the workspace)
             </label>
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
               Cancel
             </Button>

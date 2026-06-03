@@ -65,10 +65,10 @@ export function AgentActivityTile({ slug }: { slug: string }) {
 
   return (
     <section className="rounded-lg border border-border bg-card/40">
-      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+      <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
         <Bot className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-sm font-medium">Agents</span>
-        <span className="text-meta text-muted-foreground">
+        <span className="min-w-0 text-meta text-muted-foreground">
           {data.agents.length} active
           {stalledRunTotal > 0 && (
             <span className="ml-1.5 text-danger">
@@ -85,7 +85,7 @@ export function AgentActivityTile({ slug }: { slug: string }) {
         </span>
         <Link
           href={`/w/${slug}/agents`}
-          className="ml-auto text-[0.75rem] text-muted-foreground hover:text-foreground"
+          className="ml-auto shrink-0 text-[0.75rem] text-muted-foreground hover:text-foreground"
           title="Open the agents dashboard"
         >
           Open all →
@@ -96,18 +96,18 @@ export function AgentActivityTile({ slug }: { slug: string }) {
           <li key={a.id}>
             <Link
               href={`/w/${slug}/agents/${a.profileKey}`}
-              className="group flex items-center gap-2 px-4 py-2 text-[0.75rem] hover:bg-subtle/40"
+              className="group flex flex-wrap items-center gap-2 px-4 py-2 text-[0.75rem] hover:bg-subtle/40 sm:flex-nowrap"
               title={`Open ${a.name}`}
             >
               <AgentPresenceDot status={a.status} availability={a.availability} size="sm" />
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-subtle text-[0.6875rem]">
                 {a.avatar ?? a.name.slice(0, 1).toUpperCase()}
               </span>
-              <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+              <div className="flex min-w-0 flex-1 basis-[calc(100%-3rem)] items-baseline gap-1.5 sm:basis-auto">
                 <span className="truncate font-medium text-foreground">
                   {a.name}
                 </span>
-                <span className="text-id text-muted-foreground">
+                <span className="shrink-0 text-id text-muted-foreground">
                   @{a.profileKey}
                 </span>
               </div>

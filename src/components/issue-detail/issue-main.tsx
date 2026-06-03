@@ -1337,10 +1337,10 @@ function QuickReplyChips({
           key={`${i}-${text}`}
           type="button"
           onClick={() => onPick(text)}
-          className="focus-ring inline-flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-meta text-muted-foreground transition-colors hover:border-ember/40 hover:text-foreground"
+          className="focus-ring inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-left text-meta text-muted-foreground transition-colors hover:border-ember/40 hover:text-foreground"
         >
           <MessageCircleReply className="h-3 w-3" />
-          <span>{text}</span>
+          <span className="min-w-0 break-words">{text}</span>
         </button>
       ))}
     </div>
@@ -1404,7 +1404,7 @@ function StatusCommentPin({ comment }: { comment: Comment }) {
         agent={isAgent ? comment.authoringAgent ?? null : null}
       />
       <div className="min-w-0 flex-1 rounded-md border-l-2 border-l-ember border-y border-r border-border bg-ember/5 p-2.5">
-        <div className="flex items-center gap-2 text-meta">
+        <div className="flex flex-wrap items-center gap-2 text-meta">
           <Activity className="h-3 w-3 text-ember" />
           <span className="font-medium">{displayName}</span>
           {isAgent && (
@@ -1426,7 +1426,7 @@ function StatusCommentPin({ comment }: { comment: Comment }) {
               reason={comment.confidenceReason ?? null}
             />
           )}
-          <span className="ml-auto text-muted-foreground">
+          <span className="text-muted-foreground sm:ml-auto">
             updated {relativeTime(updated)}
           </span>
         </div>

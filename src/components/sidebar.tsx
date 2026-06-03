@@ -8,11 +8,13 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Sparkles,
+  Menu,
 } from "lucide-react";
 import {
   WORKSPACE_NAV_FOOTER_ITEMS,
   WORKSPACE_NAV_SECTIONS,
   type WorkspaceNavItem,
+  type WorkspaceNavSection,
 } from "@/components/sidebar-nav";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
@@ -21,6 +23,7 @@ import { useChord, useHotkey } from "@/lib/keyboard";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { PinnedSidebarSection } from "@/components/pins/pinned-sidebar-section";
 import { trpc } from "@/lib/trpc";
+import { Drawer } from "@/components/ui/modal";
 
 /**
  * Grouped, collapsible workspace sidebar.
@@ -33,8 +36,8 @@ import { trpc } from "@/lib/trpc";
  * Collapse:
  *   - `⌘\` toggles expanded (`w-56`) ↔ icon rail (`w-14`).
  *   - State persists per-user in `localStorage[forge.sidebarCollapsed]`.
- *   - Below the `md` breakpoint, the sidebar auto-collapses via CSS (the
- *     content is the same either way; only width + label visibility change).
+ *   - Below the `md` breakpoint, the desktop rail is replaced by a
+ *     touch-first bottom nav + drawer.
  *
  * What moved OUT of the sidebar:
  *   - Pins strip → top bar (`src/components/top-bar.tsx`).
@@ -46,6 +49,7 @@ const SECTIONS = WORKSPACE_NAV_SECTIONS;
 const FOOTER_ITEMS = WORKSPACE_NAV_FOOTER_ITEMS;
 
 const COLLAPSED_STORAGE_KEY = "forge.sidebarCollapsed";
+const MOBILE_PRIMARY_PATHS = ["/dashboard", "/inbox", "/issues", "/projects"] as const;
 
 function useSidebarCollapsed(): [boolean, (next: boolean) => void] {
   // Default to expanded; read from localStorage on mount so SSR output stays
@@ -89,10 +93,21 @@ export function Sidebar({
   const timeTrackingEnabled = workspace?.timeTrackingEnabled ?? false;
 
   const [collapsed, setCollapsed] = useSidebarCollapsed();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // `⌘\` toggles collapse globally. Backslash is an unclaimed key and plays
   // well with the rest of the cmd-prefixed shortcuts (`⌘K` command palette).
   useHotkey("cmd+\\", () => setCollapsed(!collapsed), [collapsed]);
+
+  useEffect(() => {
+    const open = () => setMobileNavOpen(true);
+    window.addEventListener("forge:open-mobile-nav", open);
+    return () => window.removeEventListener("forge:open-mobile-nav", open);
+  }, []);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [pathname]);
 
   // Pathname-aware quick-create label. The button itself doesn't change which
   // mode the overlay opens — that's keyed off the pathname inside the
@@ -172,16 +187,23 @@ export function Sidebar({
   // is the platform modifier — pressing Ctrl+C anywhere outside an
   // input would route to /cycles AND preventDefault the copy.
 
+  const mobilePrimaryItems = MOBILE_PRIMARY_PATHS.map((path) =>
+    sections.flatMap((sec) => sec.items).find((item) => item.path === path),
+  ).filter((item): item is WorkspaceNavItem & { href: string } => Boolean(item));
+
+  const isMobileMoreActive =
+    !!pathname &&
+    !mobilePrimaryItems.some((item) => isNavItemActive(pathname, item.href));
+
   return (
-    <aside
-      data-collapsed={collapsed || undefined}
-      className={cn(
-        "group/sidebar flex h-svh shrink-0 flex-col border-r border-border bg-card/40 transition-[width] duration-150",
-        // Below `md`, force icon rail regardless of user preference. This
-        // keeps the `w-` utility class applied so Tailwind purges correctly.
-        collapsed ? "w-14" : "w-56 max-md:w-14",
-      )}
-    >
+    <>
+      <aside
+        data-collapsed={collapsed || undefined}
+        className={cn(
+          "group/sidebar hidden h-svh shrink-0 flex-col border-r border-border bg-card/40 transition-[width] duration-150 md:flex",
+          collapsed ? "w-14" : "w-56",
+        )}
+      >
       {/* Workspace switcher — always visible at the top. Hides its label in
           collapsed mode via the data-collapsed CSS variant below. */}
       <div className="px-2 pt-3">
@@ -366,7 +388,23 @@ export function Sidebar({
           <span className="ml-auto kbd">{mod}+\</span>
         </span>
       </button>
-    </aside>
+      </aside>
+      <MobileWorkspaceNav
+        open={mobileNavOpen}
+        onOpenChange={setMobileNavOpen}
+        pathname={pathname}
+        sections={sections}
+        footerItems={footerItems}
+        primaryItems={mobilePrimaryItems}
+        moreActive={isMobileMoreActive}
+        inboxCount={inboxBadge?.count ?? 0}
+        decisionsCount={decisions?.total ?? 0}
+        quickCreateLabel={quickCreateLabel}
+        workspaceId={workspace?.id}
+        workspaceSlug={workspace?.slug}
+        hasPins={hasPins}
+      />
+    </>
   );
 }
 
@@ -392,7 +430,7 @@ function NavRow({
   inFooter?: boolean;
 }) {
   const { href, path, label, icon: Icon, chord, badge } = item;
-  const active = pathname === href || pathname?.startsWith(`${href}/`);
+  const active = isNavItemActive(pathname, href);
   const badgeCount =
     badge === "inbox" ? inboxCount : badge === "decisions" ? decisionsCount : 0;
   return (
@@ -454,4 +492,252 @@ function NavRow({
       </span>
     </Link>
   );
+}
+
+function MobileWorkspaceNav({
+  open,
+  onOpenChange,
+  pathname,
+  sections,
+  footerItems,
+  primaryItems,
+  moreActive,
+  inboxCount,
+  decisionsCount,
+  quickCreateLabel,
+  workspaceId,
+  workspaceSlug,
+  hasPins,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  pathname: string | null;
+  sections: Array<WorkspaceNavSectionWithHref>;
+  footerItems: Array<WorkspaceNavItem & { href: string }>;
+  primaryItems: Array<WorkspaceNavItem & { href: string }>;
+  moreActive: boolean;
+  inboxCount: number;
+  decisionsCount: number;
+  quickCreateLabel: string;
+  workspaceId?: string;
+  workspaceSlug?: string;
+  hasPins: boolean;
+}) {
+  return (
+    <>
+      <nav
+        aria-label="Primary workspace navigation"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card/95 px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-1.5 shadow-lg backdrop-blur md:hidden"
+      >
+        <div className="mx-auto grid max-w-lg grid-cols-5 gap-1">
+          {primaryItems.map((item) => (
+            <MobileBottomNavItem
+              key={item.path}
+              item={item}
+              pathname={pathname}
+              inboxCount={inboxCount}
+              decisionsCount={decisionsCount}
+            />
+          ))}
+          <button
+            type="button"
+            onClick={() => onOpenChange(true)}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            className={cn(
+              "focus-ring relative flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1.5 text-[0.6875rem]",
+              moreActive || open
+                ? "bg-subtle text-foreground"
+                : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+            )}
+          >
+            <Menu className="h-4 w-4 shrink-0" />
+            <span className="max-w-full truncate">More</span>
+          </button>
+        </div>
+      </nav>
+
+      <Drawer
+        open={open}
+        onOpenChange={onOpenChange}
+        title="Workspace menu"
+        maxHeight="min(82vh, 42rem)"
+      >
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-3">
+            <WorkspaceSwitcher />
+            <Link
+              href="/"
+              onClick={() => onOpenChange(false)}
+              className="focus-ring inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs text-muted-foreground hover:bg-subtle hover:text-foreground"
+            >
+              <Sparkles className="h-4 w-4" />
+              <span className="hidden min-[380px]:inline">Mission Control</span>
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              data-command-palette
+              onClick={() => onOpenChange(false)}
+              className="focus-ring inline-flex h-11 items-center justify-center gap-2 rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground hover:bg-subtle hover:text-foreground"
+            >
+              <Search className="h-4 w-4" />
+              <span className="truncate">Search</span>
+            </button>
+            <button
+              type="button"
+              data-quick-create
+              onClick={() => onOpenChange(false)}
+              className="focus-ring inline-flex h-11 items-center justify-center gap-2 rounded-md bg-ember px-3 text-xs font-medium text-ember-foreground hover:bg-ember/90"
+            >
+              <Plus className="h-4 w-4" />
+              <span className="truncate">{quickCreateLabel}</span>
+            </button>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            {sections.map((sec) => (
+              <div key={sec.id} className="flex flex-col gap-1">
+                <div className="px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                  {sec.label}
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {sec.items.map((item) => (
+                    <MobileDrawerNavItem
+                      key={item.path}
+                      item={item}
+                      pathname={pathname}
+                      inboxCount={inboxCount}
+                      decisionsCount={decisionsCount}
+                      onSelect={() => onOpenChange(false)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {workspaceId && workspaceSlug && hasPins && (
+            <div className="flex flex-col gap-1 border-t border-border/60 pt-3">
+              <div className="px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                Pinned
+              </div>
+              <div className="max-h-48 overflow-y-auto rounded-md border border-border/60 bg-background/40 p-1">
+                <PinnedSidebarSection
+                  workspaceId={workspaceId}
+                  workspaceSlug={workspaceSlug}
+                  collapsed={false}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-1.5 border-t border-border/60 pt-3">
+            {footerItems.map((item) => (
+              <MobileDrawerNavItem
+                key={item.path}
+                item={item}
+                pathname={pathname}
+                inboxCount={0}
+                decisionsCount={0}
+                onSelect={() => onOpenChange(false)}
+              />
+            ))}
+          </div>
+        </div>
+      </Drawer>
+    </>
+  );
+}
+
+function MobileBottomNavItem({
+  item,
+  pathname,
+  inboxCount,
+  decisionsCount,
+}: {
+  item: WorkspaceNavItem & { href: string };
+  pathname: string | null;
+  inboxCount: number;
+  decisionsCount: number;
+}) {
+  const { href, label, icon: Icon, badge } = item;
+  const active = isNavItemActive(pathname, href);
+  const badgeCount =
+    badge === "inbox" ? inboxCount : badge === "decisions" ? decisionsCount : 0;
+
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "focus-ring relative flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1.5 text-[0.6875rem]",
+        active
+          ? "bg-subtle text-foreground"
+          : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="max-w-full truncate">{label}</span>
+      {badgeCount > 0 && (
+        <span className="absolute right-2 top-1 h-1.5 w-1.5 rounded-full bg-ember ring-2 ring-card" />
+      )}
+    </Link>
+  );
+}
+
+function MobileDrawerNavItem({
+  item,
+  pathname,
+  inboxCount,
+  decisionsCount,
+  onSelect,
+}: {
+  item: WorkspaceNavItem & { href: string };
+  pathname: string | null;
+  inboxCount: number;
+  decisionsCount: number;
+  onSelect: () => void;
+}) {
+  const { href, label, icon: Icon, badge } = item;
+  const active = isNavItemActive(pathname, href);
+  const badgeCount =
+    badge === "inbox" ? inboxCount : badge === "decisions" ? decisionsCount : 0;
+
+  return (
+    <Link
+      href={href}
+      onClick={onSelect}
+      className={cn(
+        "focus-ring flex h-11 min-w-0 items-center gap-2 rounded-md px-3 text-xs",
+        active
+          ? "bg-subtle text-foreground"
+          : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {badgeCount > 0 && (
+        <span
+          className={cn(
+            "shrink-0 rounded-full px-1.5 font-mono text-[0.6875rem]",
+            badge === "decisions"
+              ? "bg-ember/15 text-ember"
+              : "bg-subtle text-foreground",
+          )}
+        >
+          {badgeCount > 99 ? "99+" : badgeCount}
+        </span>
+      )}
+    </Link>
+  );
+}
+
+type WorkspaceNavSectionWithHref = Omit<WorkspaceNavSection, "items"> & {
+  items: Array<WorkspaceNavItem & { href: string }>;
+};
+
+function isNavItemActive(pathname: string | null, href: string) {
+  return pathname === href || pathname?.startsWith(`${href}/`) || false;
 }
