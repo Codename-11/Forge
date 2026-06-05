@@ -17,6 +17,7 @@ import {
   RuntimeKind,
   StatusCategory,
   type CanvasStyleKind,
+  type EngagementMode,
 } from "@prisma/client";
 import { nanoid } from "nanoid";
 import { db } from "@/server/db";
@@ -1758,7 +1759,8 @@ export const mcpTools = {
   /**
    * Assign (or unassign) an agent to an issue. Agents are identified by id
    * or by `profileKey` (stable cross-system handle). Pass `agentId: null`
-   * to clear the current assignment. Emits AGENT_ASSIGNED on transitions.
+   * to clear the current assignment. Emits AGENT_ASSIGNED on assignment
+   * transitions and on same-agent explicit mode updates.
    */
   "issues.assign": {
     scopes: ["WRITE_ISSUES"] as const,
@@ -1826,12 +1828,14 @@ export const mcpTools = {
         });
         if (!before) throw new Error("Issue not found in this workspace.");
 
+        let targetAgent: { id: string; engagementMode: EngagementMode | null } | null = null;
         if (targetAgentId) {
           const agent = await tx.agent.findFirst({
             where: { id: targetAgentId, workspaceId: ctx.workspaceId },
-            select: { id: true },
+            select: { id: true, engagementMode: true },
           });
           if (!agent) throw new Error("Agent not found in this workspace.");
+          targetAgent = agent;
         }
 
         const updated = await tx.issue.update({
@@ -1851,12 +1855,15 @@ export const mcpTools = {
           },
         });
 
-        if ((before.assignedAgentId ?? null) !== (targetAgentId ?? null)) {
+        const assignmentChanged = (before.assignedAgentId ?? null) !== (targetAgentId ?? null);
+        const explicitModeProvided = input.mode !== undefined;
+        if (assignmentChanged || (!!targetAgentId && explicitModeProvided)) {
           // Resolve the engagement mode for this assignment (AXI-53). Only set
-          // on assign (not unassign). Stamped on the payload so the
-          // auto-transition gate + the opened run pick it up.
+          // on assign (not unassign). Precedence: explicit override > agent
+          // binding override > workspace default. Stamped on the payload so
+          // the auto-transition gate + the opened run pick it up.
           let engagementMode: string | undefined;
-          if (targetAgentId) {
+          if (targetAgentId && targetAgent) {
             const { resolveEngagementMode } = await import("@/server/services/engagement-mode");
             const ws = await tx.workspace.findUniqueOrThrow({
               where: { id: ctx.workspaceId },
@@ -1868,8 +1875,11 @@ export const mcpTools = {
             });
             engagementMode = resolveEngagementMode({
               surface: "assignment",
-              explicit: input.mode ?? null,
-              workspace: ws,
+              explicit: (input.mode as EngagementMode | undefined) ?? null,
+              workspace: {
+                ...ws,
+                assignmentAgentEngagementMode: targetAgent.engagementMode,
+              },
             }).mode;
           }
           await recordChange(tx, {
@@ -1878,7 +1888,7 @@ export const mcpTools = {
             actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: before.id,
-            action: "assign-agent",
+            action: assignmentChanged ? "assign-agent" : "update-agent-engagement-mode",
             before: { assignedAgentId: before.assignedAgentId },
             after: { assignedAgentId: targetAgentId },
             eventKind: EventKind.AGENT_ASSIGNED,
@@ -1887,6 +1897,7 @@ export const mcpTools = {
             payload: {
               agentId: targetAgentId,
               previousAgentId: before.assignedAgentId,
+              ...(assignmentChanged ? {} : { modeUpdated: true }),
               ...(engagementMode ? { engagementMode } : {}),
             },
           });
@@ -1895,7 +1906,7 @@ export const mcpTools = {
           // descriptions — including re-assignment to a different agent
           // on an issue whose description was templated by the previous
           // agent.
-          if (targetAgentId) {
+          if (assignmentChanged && targetAgentId) {
             await maybeApplyAgentTemplate(tx, before.id, targetAgentId);
           }
         }

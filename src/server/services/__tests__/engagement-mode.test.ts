@@ -29,6 +29,22 @@ describe("resolveEngagementMode", () => {
     expect(resolveEngagementMode({ surface: "assignment", workspace: research }).mode).toBe("RESEARCH");
   });
 
+  it("assignment + queue honor the agent binding override before the workspace default", () => {
+    const bound: WorkspaceEngagementConfig = {
+      ...ws,
+      assignmentAgentEngagementMode: EngagementMode.REVIEW,
+    };
+    expect(resolveEngagementMode({ surface: "assignment", workspace: bound }).mode).toBe("REVIEW");
+    expect(resolveEngagementMode({ surface: "queue", workspace: bound }).mode).toBe("REVIEW");
+    expect(
+      resolveEngagementMode({
+        surface: "assignment",
+        explicit: EngagementMode.EXECUTE,
+        workspace: bound,
+      }).mode,
+    ).toBe("EXECUTE");
+  });
+
   it("chat defaults DISCUSS, plan defaults EXECUTE, watcher defaults DISCUSS", () => {
     expect(resolveEngagementMode({ surface: "chat", workspace: ws }).mode).toBe("DISCUSS");
     expect(resolveEngagementMode({ surface: "plan", workspace: ws }).mode).toBe("EXECUTE");

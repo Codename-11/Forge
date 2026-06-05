@@ -124,7 +124,11 @@ export async function openOrTouchRun(
       data: {
         lastEventAt: new Date(),
         ...(resumeFromWaiting ? { status: AgentRunStatus.ACTIVE } : {}),
+        ...(params.assignmentEventId && !existing.assignmentEventId
+          ? { assignmentEventId: params.assignmentEventId }
+          : {}),
         ...(params.currentStep !== undefined ? { currentStep: params.currentStep } : {}),
+        ...(params.engagementMode ? { engagementMode: params.engagementMode } : {}),
       },
     });
     return { run: updated, isNew: false };

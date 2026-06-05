@@ -295,82 +295,83 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
       <IssueDetailTopbar
         left={
-          <>
-            <span className="text-id shrink-0 text-muted-foreground">{issueKey}</span>
-            <KindPicker
-              value={issue.kind}
-              onChange={(kind) => update.mutate({ id: issue.id, kind })}
-            />
-            {issue.attachments.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  // Jump to the right rail's Attachments tab. The rail
-                  // reads `?tab=` from the URL and "attachments" is its
-                  // default, so clearing the param works either way.
-                  const url = new URL(window.location.href);
-                  url.searchParams.delete("tab");
-                  router.replace(`${url.pathname}${url.search}${url.hash}`);
-                }}
-                title={`${issue.attachments.length} attachment${issue.attachments.length === 1 ? "" : "s"}`}
-                className="focus-ring inline-flex shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-muted-foreground hover:bg-subtle/60 hover:text-foreground"
-              >
-                <Paperclip className="h-3 w-3" />
-                <span className="text-id">{issue.attachments.length}</span>
-              </button>
-            )}
-            {issue.project && (
-              <ProjectChip
-                project={{
-                  id: issue.project.id,
-                  key: issue.project.key,
-                  name: issue.project.name,
-                  color: issue.project.color,
-                  icon: issue.project.icon,
-                }}
+          <div className="min-w-0 space-y-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5 md:gap-2">
+              <span className="text-id shrink-0 text-muted-foreground">{issueKey}</span>
+              <KindPicker
+                value={issue.kind}
+                onChange={(kind) => update.mutate({ id: issue.id, kind })}
               />
-            )}
-            {linkedInitiative?.initiative && (
-              <InitiativeChip
-                initiative={{
-                  id: linkedInitiative.initiative.id,
-                  slug: linkedInitiative.initiative.slug,
-                  name: linkedInitiative.initiative.name,
-                  status: linkedInitiative.initiative.status,
-                }}
+              {issue.attachments.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Jump to the right rail's Attachments tab. The rail
+                    // reads `?tab=` from the URL and "attachments" is its
+                    // default, so clearing the param works either way.
+                    const url = new URL(window.location.href);
+                    url.searchParams.delete("tab");
+                    router.replace(`${url.pathname}${url.search}${url.hash}`);
+                  }}
+                  title={`${issue.attachments.length} attachment${issue.attachments.length === 1 ? "" : "s"}`}
+                  className="focus-ring inline-flex shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-muted-foreground hover:bg-subtle/60 hover:text-foreground"
+                >
+                  <Paperclip className="h-3 w-3" />
+                  <span className="text-id">{issue.attachments.length}</span>
+                </button>
+              )}
+              {issue.project && (
+                <ProjectChip
+                  project={{
+                    id: issue.project.id,
+                    key: issue.project.key,
+                    name: issue.project.name,
+                    color: issue.project.color,
+                    icon: issue.project.icon,
+                  }}
+                />
+              )}
+              {linkedInitiative?.initiative && (
+                <InitiativeChip
+                  initiative={{
+                    id: linkedInitiative.initiative.id,
+                    slug: linkedInitiative.initiative.slug,
+                    name: linkedInitiative.initiative.name,
+                    status: linkedInitiative.initiative.status,
+                  }}
+                />
+              )}
+              {cycleData && (
+                <CycleChip
+                  cycle={{
+                    id: cycleData.id,
+                    name: cycleData.name,
+                    status: cycleData.status,
+                  }}
+                />
+              )}
+              {(() => {
+                // Phase 1C — surface "why was this agent picked?" inline
+                // with the existing chips when the dispatcher has stamped
+                // a reason on the issue. Coerce the JSON blob through a
+                // narrow validator (same shape `agent-timeline.tsx` uses)
+                // so a malformed payload doesn't crash the page.
+                const reason = coerceDispatchReason(issue.dispatchReason);
+                return reason ? <DispatchReasonChip reason={reason} /> : null;
+              })()}
+              {/* Phase 1A: per-workspace pin toggle. Lives next to the
+                  chip cluster so it visually groups with the issue's other
+                  metadata. The legacy `<PinToggleButton>` higher up in the
+                  Topbar actions still drives the cross-workspace strip
+                  (issue-only, p shortcut). */}
+              <PinButton
+                targetType="ISSUE"
+                targetId={issue.id}
+                workspaceId={workspace.id}
+                shortcut="p"
               />
-            )}
-            {cycleData && (
-              <CycleChip
-                cycle={{
-                  id: cycleData.id,
-                  name: cycleData.name,
-                  status: cycleData.status,
-                }}
-              />
-            )}
-            {(() => {
-              // Phase 1C — surface "why was this agent picked?" inline
-              // with the existing chips when the dispatcher has stamped
-              // a reason on the issue. Coerce the JSON blob through a
-              // narrow validator (same shape `agent-timeline.tsx` uses)
-              // so a malformed payload doesn't crash the page.
-              const reason = coerceDispatchReason(issue.dispatchReason);
-              return reason ? <DispatchReasonChip reason={reason} /> : null;
-            })()}
-            {/* Phase 1A: per-workspace pin toggle. Lives next to the
-                chip cluster so it visually groups with the issue's other
-                metadata. The legacy `<PinToggleButton>` higher up in the
-                Topbar actions still drives the cross-workspace strip
-                (issue-only, p shortcut). */}
-            <PinButton
-              targetType="ISSUE"
-              targetId={issue.id}
-              workspaceId={workspace.id}
-              shortcut="p"
-            />
-            <WatchButton issueId={issue.id} />
-
+              <WatchButton issueId={issue.id} />
+            </div>
             {editingTitle ? (
               <form
                 onSubmit={(e) => {
@@ -379,7 +380,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                     update.mutate({ id: issue.id, title: titleDraft.trim() });
                   setEditingTitle(false);
                 }}
-                className="min-w-0 flex-1 basis-full sm:basis-auto"
+                className="min-w-0"
               >
                 <input
                   autoFocus
@@ -401,14 +402,14 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               </form>
             ) : (
               <h1
-                className="min-w-0 flex-1 basis-full cursor-text break-words rounded-md px-1 py-0.5 text-sm font-semibold tracking-tight hover:bg-subtle/60 sm:basis-auto sm:truncate"
+                className="min-w-0 cursor-text break-words rounded-md px-1 py-0.5 text-sm font-semibold tracking-tight hover:bg-subtle/60"
                 onClick={() => setEditingTitle(true)}
                 title="Click to edit"
               >
                 {issue.title}
               </h1>
             )}
-          </>
+          </div>
         }
         middle={
           <div className="flex w-full flex-wrap items-center gap-1.5">
@@ -637,7 +638,11 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         open={agentPickerOpen}
         onOpenChange={setAgentPickerOpen}
         currentAgentId={issue.assignedAgent?.id ?? null}
-        defaultMode={(ws?.assignmentEngagementMode as EngagementModeValue) ?? "EXECUTE"}
+        defaultMode={
+          (issue.assignedAgent?.engagementMode as EngagementModeValue | null) ??
+          (ws?.assignmentEngagementMode as EngagementModeValue) ??
+          "EXECUTE"
+        }
         onSelect={(agentId, mode) => {
           // Reassignment-confirmation toast: when the assigned agent
           // *changes* (not on the initial assign), reassure the
@@ -1219,6 +1224,7 @@ type AssignedAgent = {
   profileKey: string;
   avatar: string | null;
   status: AgentStatus;
+  engagementMode?: EngagementModeValue | null;
 } | null;
 
 function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => void }) {
@@ -1228,7 +1234,7 @@ function AgentChip({ current, onOpen }: { current: AssignedAgent; onOpen: () => 
       onClick={onOpen}
       title="Assign agent (shift+a)"
       className={
-        "focus-ring flex max-w-full items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-left text-[0.6875rem] hover:bg-subtle " +
+        "focus-ring flex max-w-full items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-left text-[0.6875rem] hover:bg-subtle sm:max-w-[16rem] " +
         (current ? "border-border" : "border-dashed border-border text-muted-foreground")
       }
     >

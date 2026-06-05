@@ -23,20 +23,18 @@ export function IssueDetailTopbar({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-start gap-2 border-b border-border bg-card/20 px-3 py-2 sm:px-5",
+        "grid grid-cols-1 items-start gap-2 border-b border-border bg-card/20 px-3 py-2 sm:px-5 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,auto)_auto]",
         className,
       )}
     >
-      <div className="flex w-full min-w-0 flex-wrap items-center gap-1.5 md:w-auto md:gap-2">
-        {left}
-      </div>
+      <div className="min-w-0">{left}</div>
       {middle && (
-        <div className="flex w-full min-w-0 flex-wrap items-center gap-1.5 md:w-auto md:flex-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 lg:justify-end">
           {middle}
         </div>
       )}
       {actions && (
-        <div className="flex w-full shrink-0 items-center justify-end gap-1.5 md:ml-auto md:w-auto">
+        <div className="flex min-w-0 shrink-0 items-center justify-end gap-1.5">
           {actions}
         </div>
       )}

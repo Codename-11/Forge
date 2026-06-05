@@ -15,8 +15,9 @@ import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from
  * structured agent-run API (Hermes `/v1/runs`) rather than a webhook:
  *
  *   1. `startNewRuns` — find recent AGENT_ASSIGNED events whose assignee is
- *      a RUNS-engine agent and that don't yet have an AgentRun; open the
- *      AgentRun and `startRun` on the connector, stashing `externalRunId`.
+ *      a RUNS-engine agent and that don't yet have a provider run; reuse or
+ *      open the AgentRun and `startRun` on the connector, stashing
+ *      `externalRunId`.
  *   2. `pollActiveRuns` — for ACTIVE AgentRuns with an `externalRunId`, poll
  *      `getStatus` and mirror it onto the AgentRun (currentStep / token
  *      usage / terminal finish) so Mission Control reflects live progress.
@@ -31,6 +32,11 @@ import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from
 const ASSIGNMENT_LOOKBACK_MS = 15 * 60_000;
 const START_BATCH = 10;
 const POLL_BATCH = 25;
+const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
+  AgentRunStatus.COMPLETED,
+  AgentRunStatus.ABANDONED,
+  AgentRunStatus.STALLED,
+]);
 
 function issueMessage(
   issue: {
@@ -71,12 +77,20 @@ async function startNewRuns(): Promise<number> {
   for (const evt of events) {
     if (started >= START_BATCH) break;
     if (!evt.subjectId) continue;
-    // Dedup: one provider run per assignment event.
+    // Dedup: one provider run per assignment event. The durable inbox creates
+    // a canonical AgentRun in the same transaction as AGENT_ASSIGNED, before
+    // this worker dials the provider; that precreated row must be reused, not
+    // treated as already-dispatched.
     const already = await db.agentRun.findFirst({
       where: { assignmentEventId: evt.id },
-      select: { id: true },
+      select: { id: true, status: true, externalRunId: true },
     });
-    if (already) continue;
+    if (
+      already?.externalRunId ||
+      (already && TERMINAL_RUN_STATUSES.has(already.status))
+    ) {
+      continue;
+    }
 
     const issue = await db.issue.findUnique({
       where: { id: evt.subjectId },
@@ -163,7 +177,11 @@ async function startNewRuns(): Promise<number> {
           agentId: agent.id,
           kind: "DISPATCH_STARTED",
           currentStep: "running",
-          payload: { externalRunId, engine: "RUNS" },
+          payload: {
+            externalRunId,
+            engine: "RUNS",
+            reusedCanonicalRun: already?.id ?? null,
+          },
         });
       });
       started++;

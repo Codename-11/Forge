@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { AgentRunControlState, AgentRunStatus, EventKind, Prisma } from "@prisma/client";
+import { AgentRunControlState, AgentRunStatus, EngagementMode, EventKind, Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -78,6 +78,64 @@ export const agentRunRouter = router({
         where: { runId: input.runId },
         orderBy: { createdAt: "desc" },
         take: input.limit,
+      });
+    }),
+
+  /**
+   * Operator edits the engagement contract for an in-flight run. This is a
+   * lightweight run-state change: it updates the row, appends a timeline
+   * event for observability, and relies on the runtime's normal run reads /
+   * wake flow to honor the new contract.
+   */
+  setEngagementMode: workspaceProcedure
+    .input(z.object({ runId: idString, mode: z.nativeEnum(EngagementMode) }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        const run = await tx.agentRun.findFirst({
+          where: {
+            id: input.runId,
+            workspaceId: ctx.workspaceId,
+            status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+          },
+          select: {
+            id: true,
+            issueId: true,
+            agentId: true,
+            engagementMode: true,
+            currentStep: true,
+          },
+        });
+        if (!run) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Active run not found.",
+          });
+        }
+        if (run.engagementMode === input.mode) {
+          return { ok: true as const, changed: false as const, mode: input.mode };
+        }
+
+        await tx.agentRun.update({
+          where: { id: run.id },
+          data: {
+            engagementMode: input.mode,
+            lastEventAt: new Date(),
+          },
+        });
+        await appendRunEvent(tx, {
+          runId: run.id,
+          workspaceId: ctx.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          kind: "MODE_CHANGED",
+          currentStep: run.currentStep ?? undefined,
+          payload: {
+            from: run.engagementMode,
+            to: input.mode,
+            actorId: ctx.session.user.id,
+          },
+        });
+        return { ok: true as const, changed: true as const, mode: input.mode };
       });
     }),
 

@@ -476,6 +476,7 @@ export const issueRouter = router({
               profileKey: true,
               avatar: true,
               status: true,
+              engagementMode: true,
               // On-demand availability signals (so assignee chips don't show a
               // false "offline" for managed-runtime agents like Codex).
               provider: true,
@@ -512,6 +513,7 @@ export const issueRouter = router({
               profileKey: true,
               avatar: true,
               status: true,
+              engagementMode: true,
               // On-demand availability signals (so assignee chips don't show a
               // false "offline" for managed-runtime agents like Codex).
               provider: true,
@@ -689,6 +691,7 @@ export const issueRouter = router({
               profileKey: true,
               avatar: true,
               status: true,
+              engagementMode: true,
               // On-demand availability signals (so assignee chips don't show a
               // false "offline" for managed-runtime agents like Codex).
               provider: true,
@@ -747,11 +750,16 @@ export const issueRouter = router({
               where: { workspaceId: ctx.workspaceId, isDefault: true },
             });
 
+        let assignedAgentForCreate: {
+          profileKey: string;
+          engagementMode: EngagementMode | null;
+        } | null = null;
+
         // Cross-tenant guard: agent must live in this workspace.
         if (input.assignedAgentId) {
           const agent = await tx.agent.findFirst({
             where: { id: input.assignedAgentId, workspaceId: ctx.workspaceId },
-            select: { id: true },
+            select: { profileKey: true, engagementMode: true },
           });
           if (!agent) {
             throw new TRPCError({
@@ -759,6 +767,7 @@ export const issueRouter = router({
               message: "Agent not found in this workspace.",
             });
           }
+          assignedAgentForCreate = agent;
         }
 
         const last = await tx.issue.findFirst({
@@ -843,15 +852,31 @@ export const issueRouter = router({
           // Stamp a manual `dispatchReason` blob so the attribution
           // chip can render even when an operator picked the agent
           // directly (rather than the auto-dispatcher).
-          const agentRow = await tx.agent.findUniqueOrThrow({
-            where: { id: input.assignedAgentId },
-            select: { profileKey: true },
-          });
           const reasonBlob = await recordManualDispatchReason(tx, {
             issueId: issue.id,
-            agentProfileKey: agentRow.profileKey,
+            agentProfileKey: assignedAgentForCreate?.profileKey ?? input.assignedAgentId,
             actorId: ctx.session.user.id,
           });
+          const { resolveEngagementMode } = await import(
+            "@/server/services/engagement-mode"
+          );
+          const ws = await tx.workspace.findUniqueOrThrow({
+            where: { id: ctx.workspaceId },
+            select: {
+              assignmentEngagementMode: true,
+              mentionEngagementPolicy: true,
+              mentionDefaultMode: true,
+            },
+          });
+          const engagementMode = resolveEngagementMode({
+            surface: "assignment",
+            explicit: null,
+            workspace: {
+              ...ws,
+              assignmentAgentEngagementMode:
+                assignedAgentForCreate?.engagementMode ?? null,
+            },
+          }).mode;
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
@@ -867,6 +892,7 @@ export const issueRouter = router({
               agentId: input.assignedAgentId,
               previousAgentId: null,
               dispatchReason: reasonBlob,
+              engagementMode,
             },
             ip: ctx.ip,
             userAgent: ctx.userAgent,
@@ -1114,21 +1140,30 @@ export const issueRouter = router({
         // stream / webhook bus can route on `AGENT_ASSIGNED` without
         // parsing `payload` for every generic ISSUE_UPDATED.
         const agentProvided = Object.prototype.hasOwnProperty.call(patch, "assignedAgentId");
-        if (agentProvided && (patch.assignedAgentId ?? null) !== (before.assignedAgentId ?? null)) {
+        const nextAgentId = patch.assignedAgentId ?? null;
+        const assignmentChanged = nextAgentId !== (before.assignedAgentId ?? null);
+        const explicitModeProvided = explicitMode !== undefined;
+        const shouldEmitAgentAssignment =
+          agentProvided && (assignmentChanged || (!!nextAgentId && explicitModeProvided));
+        if (shouldEmitAgentAssignment) {
           // Manual assignment / unassignment — stamp a `dispatchReason`
           // when an agent is being set, clear it on unassign.
           let manualReason: Record<string, unknown> | null = null;
-          if (patch.assignedAgentId) {
-            const agentRow = await tx.agent.findUniqueOrThrow({
-              where: { id: patch.assignedAgentId },
-              select: { profileKey: true },
+          let agentRow: { profileKey: string; engagementMode: EngagementMode | null } | null =
+            null;
+          if (nextAgentId) {
+            agentRow = await tx.agent.findFirstOrThrow({
+              where: { id: nextAgentId, workspaceId: ctx.workspaceId },
+              select: { profileKey: true, engagementMode: true },
             });
-            manualReason = (await recordManualDispatchReason(tx, {
-              issueId: id,
-              agentProfileKey: agentRow.profileKey,
-              actorId: ctx.session.user.id,
-            })) as Record<string, unknown>;
-          } else {
+            if (assignmentChanged) {
+              manualReason = (await recordManualDispatchReason(tx, {
+                issueId: id,
+                agentProfileKey: agentRow.profileKey,
+                actorId: ctx.session.user.id,
+              })) as Record<string, unknown>;
+            }
+          } else if (assignmentChanged) {
             // Cleared assignment — drop the previous reason.
             await tx.issue.update({
               where: { id },
@@ -1136,10 +1171,11 @@ export const issueRouter = router({
             });
           }
           // Resolve the engagement mode for this assignment (AXI-53) —
-          // explicit override > workspace assignment default. Only on
-          // assign (not unassign). Mirrors the MCP `issues.assign` path.
+          // explicit override > agent binding override > workspace
+          // assignment default. Only on assign (not unassign). Mirrors
+          // the MCP `issues.assign` path.
           let engagementMode: EngagementMode | undefined;
-          if (patch.assignedAgentId) {
+          if (nextAgentId && agentRow) {
             const { resolveEngagementMode } = await import(
               "@/server/services/engagement-mode"
             );
@@ -1154,12 +1190,16 @@ export const issueRouter = router({
             engagementMode = resolveEngagementMode({
               surface: "assignment",
               explicit: explicitMode ?? null,
-              workspace: ws,
+              workspace: {
+                ...ws,
+                assignmentAgentEngagementMode: agentRow.engagementMode,
+              },
             }).mode;
           }
           const assignmentPayload: Prisma.InputJsonObject = {
-            agentId: patch.assignedAgentId ?? null,
+            agentId: nextAgentId,
             previousAgentId: before.assignedAgentId,
+            ...(assignmentChanged ? {} : { modeUpdated: true }),
             ...(manualReason ? { dispatchReason: manualReason as Prisma.InputJsonObject } : {}),
             ...(engagementMode ? { engagementMode } : {}),
           };
@@ -1169,9 +1209,9 @@ export const issueRouter = router({
             actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: id,
-            action: "assign-agent",
+            action: assignmentChanged ? "assign-agent" : "update-agent-engagement-mode",
             before: { assignedAgentId: before.assignedAgentId },
-            after: { assignedAgentId: patch.assignedAgentId ?? null },
+            after: { assignedAgentId: nextAgentId },
             eventKind: EventKind.AGENT_ASSIGNED,
             subjectType: "issue",
             subjectId: id,
@@ -1184,8 +1224,8 @@ export const issueRouter = router({
           // The helper itself no-ops on both missing template and non-
           // empty description, so re-assignment to a different agent on
           // an already-populated issue won't clobber prior content.
-          if (patch.assignedAgentId) {
-            await maybeApplyAgentTemplate(tx, id, patch.assignedAgentId);
+          if (assignmentChanged && nextAgentId) {
+            await maybeApplyAgentTemplate(tx, id, nextAgentId);
             // Auto-watch the newly-assigned agent so subsequent
             // issue-subject events route to it via the watcher branch
             // (in addition to the AGENT_ASSIGNED-and-route-to-assignee
@@ -1193,7 +1233,7 @@ export const issueRouter = router({
             await autoWatchAgent(tx, {
               workspaceId: ctx.workspaceId,
               issueId: id,
-              agentId: patch.assignedAgentId,
+              agentId: nextAgentId,
             });
           }
         }
@@ -1657,15 +1697,16 @@ export const issueRouter = router({
         const validIds = issues.map((i) => i.id);
         if (validIds.length === 0) return { updated: 0 };
 
-        // Resolve the bulk-set agent's profileKey once for the
-        // dispatchReason stamp (only when assigning, not on clear).
-        let agentProfileKey: string | null = null;
+        // Resolve the bulk-set agent once for dispatchReason + engagement
+        // mode stamping (only when assigning, not on clear).
+        let bulkAgent: { profileKey: string; engagementMode: EngagementMode | null } | null =
+          null;
         if (input.assignedAgentId) {
           const a = await tx.agent.findUnique({
             where: { id: input.assignedAgentId },
-            select: { profileKey: true },
+            select: { profileKey: true, engagementMode: true },
           });
-          agentProfileKey = a?.profileKey ?? null;
+          bulkAgent = a ?? null;
         }
 
         await tx.issue.updateMany({
@@ -1680,14 +1721,37 @@ export const issueRouter = router({
         // per-row; mirror that for manual bulk assignment so
         // attribution stays consistent regardless of code path).
         let manualReason: Prisma.InputJsonObject | null = null;
-        if (input.assignedAgentId && agentProfileKey) {
+        if (input.assignedAgentId && bulkAgent) {
           for (const row of issues) {
             manualReason = await recordManualDispatchReason(tx, {
               issueId: row.id,
-              agentProfileKey,
+              agentProfileKey: bulkAgent.profileKey,
               actorId: ctx.session.user.id,
             });
           }
+        }
+
+        let engagementMode: EngagementMode | undefined;
+        if (input.assignedAgentId && bulkAgent) {
+          const { resolveEngagementMode } = await import(
+            "@/server/services/engagement-mode"
+          );
+          const ws = await tx.workspace.findUniqueOrThrow({
+            where: { id: ctx.workspaceId },
+            select: {
+              assignmentEngagementMode: true,
+              mentionEngagementPolicy: true,
+              mentionDefaultMode: true,
+            },
+          });
+          engagementMode = resolveEngagementMode({
+            surface: "assignment",
+            explicit: null,
+            workspace: {
+              ...ws,
+              assignmentAgentEngagementMode: bulkAgent.engagementMode,
+            },
+          }).mode;
         }
 
         const CHUNK = 50;
@@ -1710,6 +1774,7 @@ export const issueRouter = router({
                 agentId: input.assignedAgentId,
                 previousAgentId: row.assignedAgentId,
                 ...(manualReason ? { dispatchReason: manualReason } : {}),
+                ...(engagementMode ? { engagementMode } : {}),
               },
               ip: ctx.ip,
               userAgent: ctx.userAgent,

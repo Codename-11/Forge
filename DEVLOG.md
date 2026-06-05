@@ -2,6 +2,38 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-05 — AXI-71 RUNS dispatch + issue run-state UX
+
+Investigated AXI-71 after Victor reported the webhook runtime had no local
+terminal/filesystem/git/patch tools. Confirmed the local Codex runtime does have
+the Forge repo/tooling, and traced the stall to the RUNS dispatcher skipping
+`AGENT_ASSIGNED` events whenever the durable inbox had already precreated the
+canonical `AgentRun`. Fixed `run-dispatcher` so it reuses precreated active /
+waiting runs that lack `externalRunId`, starts the provider run, stamps
+`externalRunId`, and records `DISPATCH_STARTED`.
+
+Engagement mode handling is now consistent across assignment surfaces:
+explicit mode > agent binding override > workspace default. Same-agent explicit
+mode updates emit an `AGENT_ASSIGNED` payload with `modeUpdated: true`, and
+`openOrTouchRun` restamps existing active/waiting runs so an in-flight run can
+move from Review/Research/Discuss to Execute without unassign/reassign churn.
+Applied the same payload stamping to issue create, update, bulk assignment,
+MCP `issues.assign`, and auto-dispatch (`engagementMode` is distinct from the
+auto-dispatch algorithm `mode`).
+
+Issue detail UX: split the subheader into a metadata row and title row so long
+titles do not crowd status/priority/agent/run chips; made the active run strip a
+two-zone layout with visible waiting state, timing, and an inline segmented
+engagement-mode control; tightened the topbar run activity chip and sticky agent
+rail to surface waiting/current mode more clearly.
+
+Verification: `pnpm lint`, `pnpm typecheck`, full `pnpm test` (744 pass / 1
+skipped), and focused `pnpm exec vitest run
+src/server/services/__tests__/engagement-mode.test.ts
+src/server/services/__tests__/agent-run.test.ts
+src/server/services/__tests__/run-dispatcher.test.ts` (12 pass). Browser gate:
+`E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
+
 ## 2026-06-03 — v0.4.0 mobile app release
 
 Squash-merged the `mobile-ui-ux-enhancement` worktree into `main` for the
