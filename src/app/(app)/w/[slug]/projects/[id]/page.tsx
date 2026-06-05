@@ -30,6 +30,7 @@ import { StatusDot } from "@/components/ui/status-dot";
 import { PinButton } from "@/components/pins/pin-button";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
+import { activityActorName } from "@/lib/activity-actor";
 import { useWorkspace } from "@/hooks/use-workspace";
 
 type Tab = "overview" | "list" | "board";
@@ -762,6 +763,12 @@ function ActivitySummary({
   evt: {
     kind: EventKind;
     actor: { id: string; name: string | null; image: string | null } | null;
+    actorAgent: {
+      id: string;
+      name: string | null;
+      profileKey: string;
+      avatar: string | null;
+    } | null;
     issue: {
       id: string;
       number: number;
@@ -773,7 +780,7 @@ function ActivitySummary({
   projectKey: string;
   workspaceSlug: string;
 }) {
-  const actorName = evt.actor?.name ?? "system";
+  const actorName = activityActorName(evt);
   const issue = evt.issue;
   const issueLink = issue ? (
     <Link

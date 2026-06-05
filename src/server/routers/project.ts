@@ -332,6 +332,9 @@ export const projectRouter = router({
             take: 10,
             include: {
               actor: { select: { id: true, name: true, image: true } },
+              actorAgent: {
+                select: { id: true, name: true, profileKey: true, avatar: true },
+              },
             },
           })
         : [];

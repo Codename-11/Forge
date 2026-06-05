@@ -2329,7 +2329,14 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "MUP" });
     fixtures.push(fixture);
     const prisma = getPrisma();
-    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: "agent-updater",
+        name: "Agent Updater",
+      },
+    });
+    const { ctx } = buildMcpCtx(fixture, { linkedAgentId: agent.id });
     const project = await prisma.project.create({
       data: {
         workspaceId: fixture.workspace.id,
@@ -2369,6 +2376,7 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     });
     expect(events.map((e) => e.kind)).toContain(EventKind.ISSUE_UPDATED);
     expect(events.map((e) => e.kind)).toContain(EventKind.ISSUE_PRIORITY_CHANGED);
+    expect(events.every((e) => e.actorAgentId === agent.id)).toBe(true);
 
     const audit = await prisma.auditLog.findMany({
       where: { workspaceId: fixture.workspace.id, entity: "Issue", entityId: issue.id },
@@ -2376,6 +2384,7 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     });
     expect(audit.map((a) => a.action)).toContain("update");
     expect(audit.map((a) => a.action)).toContain("change-priority");
+    expect(audit.every((a) => a.actorAgentId === agent.id)).toBe(true);
   });
 
   it("issues.update clears projectId/cycleId/parentId when passed null", async () => {
@@ -2443,7 +2452,10 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "MBT" });
     fixtures.push(fixture);
     const prisma = getPrisma();
-    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, profileKey: "bulk-mover", name: "Bulk Mover" },
+    });
+    const { ctx } = buildMcpCtx(fixture, { linkedAgentId: agent.id });
     const done = await prisma.status.findFirstOrThrow({
       where: { workspaceId: fixture.workspace.id, category: "DONE" },
     });
@@ -2474,6 +2486,7 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
       },
     });
     expect(events).toHaveLength(3);
+    expect(events.every((e) => e.actorAgentId === agent.id)).toBe(true);
   });
 
   it("labels.create/update/delete: ADMIN required + round-trip", async () => {
@@ -2639,6 +2652,19 @@ describe("mcp — issues.transition lifecycle handling", () => {
       orderBy: { createdAt: "asc" },
     });
     expect(events.map((e) => e.kind)).toContain(EventKind.ISSUE_STATUS_CHANGED);
+    const statusEvent = events.find((e) => e.kind === EventKind.ISSUE_STATUS_CHANGED);
+    expect(statusEvent?.actorAgentId).toBe(agent.id);
+
+    const audit = await prisma.auditLog.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        entity: "Issue",
+        entityId: issue.id,
+        action: "update",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(audit?.actorAgentId).toBe(agent.id);
 
     const runAfter = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(runAfter.status).toBe("COMPLETED");
