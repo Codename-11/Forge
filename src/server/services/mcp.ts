@@ -1560,12 +1560,15 @@ export const mcpTools = {
             issueId: before.id,
             status: status.category === "DONE" ? "COMPLETED" : "ABANDONED",
             actorId,
+            actorAgentId: agentId,
           });
         } else if (agentId) {
           const { run, isNew } = await openOrTouchRun(tx, {
             workspaceId: ctx.workspaceId,
             issueId: input.id,
             agentId,
+            actorId,
+            actorAgentId: agentId,
             currentStep: `→ ${status.name}`,
           });
           if (!isNew) {
@@ -2617,6 +2620,8 @@ export const mcpTools = {
             workspaceId: ctx.workspaceId,
             issueId: input.issueId,
             agentId: authoringAgentId,
+            actorId: authorId,
+            actorAgentId: authoringAgentId,
           });
           if (!isNew) {
             await appendRunEvent(tx, {
@@ -2695,6 +2700,7 @@ export const mcpTools = {
           issueId: input.issueId,
           agentId,
           actorId: authorId,
+          actorAgentId: agentId,
           currentStep: input.currentStep ?? null,
         });
 
@@ -5367,6 +5373,7 @@ export const mcpTools = {
           status: "COMPLETED",
           summary: input.summary,
           actorId: ctx.userId,
+          actorAgentId: linkedAgentId ?? null,
         });
         return tx.agentRun.findUniqueOrThrow({
           where: { id: run.id },

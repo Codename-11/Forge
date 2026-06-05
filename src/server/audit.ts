@@ -764,6 +764,7 @@ export async function recordChange(
       subjectType: params.subjectType,
       subjectId: params.subjectId,
       actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
       payload: payloadOut,
       resolvedAgentIds: uniqueResolvedAgentIds,
     });

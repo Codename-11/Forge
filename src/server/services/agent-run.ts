@@ -98,6 +98,7 @@ export async function openOrTouchRun(
     issueId: string;
     agentId: string;
     actorId?: string | null;
+    actorAgentId?: string | null;
     assignmentEventId?: string | null;
     currentStep?: string | null;
     /** Set when the run executes a Goal-orchestration ExecutionStep (AXI-57). */
@@ -161,6 +162,7 @@ export async function openOrTouchRun(
   await recordChange(tx, {
     workspaceId: params.workspaceId,
     actorId: params.actorId ?? null,
+    actorAgentId: params.actorAgentId ?? null,
     entity: "AgentRun",
     entityId: run.id,
     action: "create",
@@ -253,6 +255,7 @@ export async function finishRun(
     status: "COMPLETED" | "ABANDONED" | "STALLED";
     summary?: string | null;
     actorId?: string | null;
+    actorAgentId?: string | null;
   },
 ): Promise<AgentRun | null> {
   const existing = await tx.agentRun.findUnique({ where: { id: params.runId } });
@@ -285,6 +288,7 @@ export async function finishRun(
   await recordChange(tx, {
     workspaceId: params.workspaceId,
     actorId: params.actorId ?? null,
+    actorAgentId: params.actorAgentId ?? null,
     entity: "AgentRun",
     entityId: params.runId,
     action: "finish",
@@ -324,6 +328,7 @@ export async function recordAgentAction(
     payload?: Prisma.InputJsonValue;
     currentStep?: string | null;
     actorId?: string | null;
+    actorAgentId?: string | null;
     assignmentEventId?: string | null;
   },
 ): Promise<{ runId: string; isNewRun: boolean }> {
@@ -332,6 +337,7 @@ export async function recordAgentAction(
     issueId: params.issueId,
     agentId: params.agentId,
     actorId: params.actorId ?? null,
+    actorAgentId: params.actorAgentId ?? null,
     assignmentEventId: params.assignmentEventId ?? null,
     currentStep: params.currentStep,
   });
@@ -368,6 +374,7 @@ export async function finishRunsForIssue(
     issueId: string;
     status: "COMPLETED" | "ABANDONED";
     actorId?: string | null;
+    actorAgentId?: string | null;
   },
 ): Promise<number> {
   const active = await tx.agentRun.findMany({
@@ -382,6 +389,7 @@ export async function finishRunsForIssue(
       agentId: r.agentId,
       status: params.status,
       actorId: params.actorId ?? null,
+      actorAgentId: params.actorAgentId ?? null,
     });
   }
   return active.length;

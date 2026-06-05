@@ -58,6 +58,24 @@ Gate: `git diff --check`, `pnpm lint`, `pnpm typecheck`, focused
 src/server/services/__tests__/mcp.test.ts`, and full `pnpm test` (750 pass /
 1 skipped), plus `E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
 
+Fourth follow-up: extended agent-run lifecycle attribution so
+`openOrTouchRun`, `finishRun`, `recordAgentAction`, and `finishRunsForIssue`
+carry `actorAgentId` through to `recordChange`. Patched MCP/comment/status
+paths plus the audit-to-durable-inbox handoff so STARTED/COMPLETED run events
+created by agent-linked API keys render the agent as the actor while preserving
+the human key owner as secondary metadata. Issue activity now includes related
+`agent-run` lifecycle rows, and the activity drawer/global feeds hydrate run
+payload `issueId`s and render clearer run labels. Live backfill applied only to
+defensible lifecycle rows: 43 `AGENT_RUN_STARTED` + 31
+`AGENT_RUN_COMPLETED` ActivityEvents, and matching AgentRun audit rows (43
+`create`, 27 `finish` COMPLETED, 4 `finish` ABANDONED). Left 11 STALLED and 7
+KICKED run rows unattributed because those are watchdog/operator events.
+Gate: `git diff --check`, `pnpm lint`, `pnpm typecheck`, focused `pnpm test
+src/server/services/__tests__/agent-run.test.ts
+src/server/services/__tests__/mcp.test.ts tests/unit/activity-actor.test.ts`,
+full `pnpm test` (752 pass / 1 skipped), and `E2E_FORCE_BUILD=1 pnpm
+test:e2e` (20 pass).
+
 Verification: `pnpm lint`, `pnpm typecheck`, full `pnpm test` (744 pass / 1
 skipped), and focused `pnpm exec vitest run
 src/server/services/__tests__/engagement-mode.test.ts

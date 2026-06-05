@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Spinner, EmptyState } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
+import { activityActorName, activityActorOwnerTitle } from "@/lib/activity-actor";
 import { relativeTime, cn } from "@/lib/utils";
 import { workspaceColor } from "@/lib/workspace-color";
 import { WorkspaceBadge } from "./global-shell";
@@ -378,25 +379,41 @@ export function MissionControlHome() {
           ) : (
             <div className="flex flex-col gap-1.5">
               {activity.data!.slice(0, 8).map((e) => (
-                <div key={e.id} className="flex items-start gap-1.5 text-meta">
-                  <WsChip ws={e.workspace} dense />
-                  <span className="min-w-0 flex-1">
-                    <span className="text-foreground/90">{e.kind.split(".")[1] || e.kind}</span>
-                    {(e.actor?.name || e.actorAgent?.name) && (
-                      <span className="ml-1 truncate text-muted-foreground">
-                        {e.actorAgent?.name ?? e.actor?.name}
-                      </span>
-                    )}
-                  </span>
-                  <span className="tabular-nums text-muted-foreground/70">
-                    {relativeTime(e.createdAt)}
-                  </span>
-                </div>
+                <ActivityRow key={e.id} event={e} />
               ))}
             </div>
           )}
         </SectionCard>
       </div>
+    </div>
+  );
+}
+
+function ActivityRow({
+  event,
+}: {
+  event: {
+    kind: string;
+    createdAt: Date | string;
+    actor: { name: string | null } | null;
+    actorAgent: { name: string | null; profileKey?: string | null } | null;
+    workspace: Workspace;
+  };
+}) {
+  const actor = activityActorName(event);
+  const ownerTitle = activityActorOwnerTitle(event);
+  return (
+    <div className="flex items-start gap-1.5 text-meta">
+      <WsChip ws={event.workspace} dense />
+      <span className="min-w-0 flex-1">
+        <span className="text-foreground/90">{event.kind.split(".")[1] || event.kind}</span>
+        <span className="ml-1 truncate text-muted-foreground" title={ownerTitle}>
+          {actor}
+        </span>
+      </span>
+      <span className="tabular-nums text-muted-foreground/70">
+        {relativeTime(event.createdAt)}
+      </span>
     </div>
   );
 }

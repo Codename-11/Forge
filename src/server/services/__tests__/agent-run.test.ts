@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { AgentRunStatus, EngagementMode } from "@prisma/client";
-import { openOrTouchRun } from "@/server/services/agent-run";
+import { AgentRunStatus, EngagementMode, EventKind } from "@prisma/client";
+import { finishRun, openOrTouchRun } from "@/server/services/agent-run";
 import {
   createWorkspaceFixture,
   createIssue,
@@ -36,6 +36,70 @@ async function createAgent(workspaceId: string, profileKey: string): Promise<{ i
 }
 
 describe("agent-run lifecycle", () => {
+  it("records agent actor attribution on started and completed lifecycle rows", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARA" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "ara-a1");
+    const issue = await createIssue(fixture);
+
+    const { run } = await prisma.$transaction((tx) =>
+      openOrTouchRun(tx, {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        actorId: fixture.user.id,
+        actorAgentId: agent.id,
+      }),
+    );
+
+    const started = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_RUN_STARTED,
+        subjectType: "agent-run",
+        subjectId: run.id,
+      },
+    });
+    expect(started.actorId).toBe(fixture.user.id);
+    expect(started.actorAgentId).toBe(agent.id);
+
+    await prisma.$transaction((tx) =>
+      finishRun(tx, {
+        runId: run.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "COMPLETED",
+        summary: "Done.",
+        actorId: fixture.user.id,
+        actorAgentId: agent.id,
+      }),
+    );
+
+    const completed = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_RUN_COMPLETED,
+        subjectType: "agent-run",
+        subjectId: run.id,
+      },
+    });
+    expect(completed.actorId).toBe(fixture.user.id);
+    expect(completed.actorAgentId).toBe(agent.id);
+
+    const audit = await prisma.auditLog.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        entity: "AgentRun",
+        entityId: run.id,
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(audit.map((row) => row.action)).toEqual(["create", "finish"]);
+    expect(audit.every((row) => row.actorAgentId === agent.id)).toBe(true);
+  });
+
   it("touching an existing run can restamp engagement mode and resume WAITING", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "ARM" });
     fixtures.push(fixture);
