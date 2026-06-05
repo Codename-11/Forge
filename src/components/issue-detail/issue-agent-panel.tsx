@@ -1,10 +1,14 @@
 "use client";
 import type { AgentStatus } from "@prisma/client";
+import { useEffect, useState } from "react";
+import { Bell, RefreshCw, Zap } from "lucide-react";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
-import { ModeChip } from "@/components/ui/engagement-mode-glyph";
+import { ModeChip, type EngagementModeValue } from "@/components/ui/engagement-mode-glyph";
+import { STALE_RUN_MS } from "@/lib/agent-stale";
 import { presenceAvailability } from "@/lib/transport-display";
 import { relativeTime, cn } from "@/lib/utils";
 
@@ -24,6 +28,7 @@ type PanelAgent = {
   profileKey: string;
   avatar: string | null;
   status: AgentStatus;
+  engagementMode?: EngagementModeValue | null;
   // On-demand availability signals (optional — present on enriched queries).
   provider?: string | null;
   runtimeMode?: string | null;
@@ -40,10 +45,44 @@ export function IssueAgentPanel({
   assignedAgent: PanelAgent | null;
 }) {
   const utils = trpc.useUtils();
+  const [now, setNow] = useState(() => Date.now());
   const { data: run } = trpc.agentRun.activeForIssue.useQuery(
     { issueId },
     { staleTime: 5_000 },
   );
+
+  const invalidate = () => {
+    void utils.agentRun.activeForIssue.invalidate({ issueId });
+    void utils.issue.byId.invalidate({ id: issueId });
+  };
+
+  const nudgeM = trpc.agentRun.nudge.useMutation({
+    onSuccess: () => {
+      invalidate();
+      toast.success("Nudge sent");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const kickM = trpc.agentRun.kick.useMutation({
+    onSuccess: (res) => {
+      invalidate();
+      if (res.kicked) {
+        toast.success("Run kicked");
+      } else {
+        toast.message("Run is still fresh", {
+          description: "Kick becomes available after the run is quiet for a few minutes.",
+        });
+      }
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const wakeM = trpc.issue.update.useMutation({
+    onSuccess: () => {
+      invalidate();
+      toast.success("Agent wake sent");
+    },
+    onError: (err) => toast.error(err.message),
+  });
 
   // Refresh on agent-run SSE events for this issue — mirrors AgentRunStrip
   // so the panel and the strip move together.
@@ -54,12 +93,53 @@ export function IssueAgentPanel({
     void utils.agentRun.activeForIssue.invalidate({ issueId });
   });
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   // Prefer the run's agent (freshest), else the statically-assigned one.
   const agent: PanelAgent | null = run?.agent ?? assignedAgent;
   if (!agent) return null;
 
   const waiting = run?.status === "WAITING";
   const active = run?.status === "ACTIVE";
+  const idleMs = run ? now - new Date(run.lastEventAt).getTime() : 0;
+  const staleActive = active && idleMs >= STALE_RUN_MS;
+  const busy = nudgeM.isPending || kickM.isPending || wakeM.isPending;
+  const mode = run?.engagementMode ?? assignedAgent?.engagementMode ?? null;
+  const runAction =
+    run && waiting
+      ? {
+          label: "Nudge",
+          title: "Post an @mention to wake this waiting run",
+          icon: Bell,
+          onClick: () =>
+            nudgeM.mutate({
+              runId: run.id,
+              message: "please resume with the latest issue context",
+            }),
+        }
+      : run && staleActive
+        ? {
+            label: "Kick",
+            title: "Re-fire the wake event for this stale active run",
+            icon: RefreshCw,
+            onClick: () => kickM.mutate({ runId: run.id }),
+          }
+        : !run && assignedAgent
+          ? {
+              label: "Wake",
+              title: "Wake the assigned agent without changing assignment",
+              icon: Zap,
+              onClick: () =>
+                wakeM.mutate({
+                  id: issueId,
+                  assignedAgentId: assignedAgent.id,
+                  mode: assignedAgent.engagementMode ?? "EXECUTE",
+                }),
+            }
+          : null;
 
   return (
     <div
@@ -94,10 +174,31 @@ export function IssueAgentPanel({
               working
             </span>
           ))}
+        {runAction && (
+          <button
+            type="button"
+            onClick={runAction.onClick}
+            disabled={busy}
+            className={cn(
+              "inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-border bg-background px-1.5 text-[0.625rem] font-medium text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
+              waiting && "border-ember/30 text-ember hover:text-ember",
+            )}
+            title={runAction.title}
+          >
+            <runAction.icon
+              className={cn(
+                "h-3 w-3",
+                ((runAction.label === "Kick" && kickM.isPending) || wakeM.isPending) &&
+                  "animate-spin",
+              )}
+            />
+            <span>{runAction.label}</span>
+          </button>
+        )}
       </div>
-      {run?.engagementMode && (
+      {mode && (
         <div className="mt-2">
-          <ModeChip mode={run.engagementMode} />
+          <ModeChip mode={mode} />
         </div>
       )}
       <div className="mt-1.5 text-meta text-muted-foreground">
