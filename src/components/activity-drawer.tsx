@@ -33,7 +33,7 @@ import type { AppRouter } from "@/server/routers/_app";
 import { useCrossTab, useRealtime } from "@/hooks/use-realtime";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn, relativeTime } from "@/lib/utils";
-import { activityActorName } from "@/lib/activity-actor";
+import { activityActorName, activityActorOwnerTitle } from "@/lib/activity-actor";
 import {
   getEventNotificationActionLinks,
   mapActivityEventToNotification,
@@ -423,7 +423,13 @@ function summarizeEvent(
   evt: TimelineEvent,
   wsSlug: string,
 ): { headline: ReactNode; meta?: ReactNode } {
-  const actorName = activityActorName(evt);
+  const actorLabel = activityActorName(evt);
+  const actorOwnerTitle = activityActorOwnerTitle(evt);
+  const actorName = actorOwnerTitle ? (
+    <span title={actorOwnerTitle}>{actorLabel}</span>
+  ) : (
+    actorLabel
+  );
   const issue = evt.issue;
   const issueLabel = issue
     ? `${issue.workspace.key}-${issue.number}`

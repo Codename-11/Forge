@@ -47,8 +47,9 @@ that resolved the human API-key owner but failed to pass `actorAgentId` into
 `recordChange`. `issues.transition`, bulk transition, issue update/priority,
 queue, label edits, and project create/update now preserve linked-agent
 authorship in audit/activity rows. The activity drawer and project overview
-feeds now hydrate `actorAgent` and render agent-linked events as
-`Agent via Human`, so future Victor status moves do not collapse to Bailey.
+feeds now hydrate `actorAgent` and render the agent as the primary actor, with
+the human API-key owner retained as secondary metadata, so future Victor status
+moves do not collapse to Bailey or imply Bailey supervised the action.
 Applied a targeted production data repair for the existing AXI-71 Done move
 activity/audit rows, setting `actorAgentId` to Victor while preserving Bailey
 as the API-key owner.

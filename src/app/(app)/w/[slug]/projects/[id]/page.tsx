@@ -30,7 +30,7 @@ import { StatusDot } from "@/components/ui/status-dot";
 import { PinButton } from "@/components/pins/pin-button";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
-import { activityActorName } from "@/lib/activity-actor";
+import { activityActorName, activityActorOwnerTitle } from "@/lib/activity-actor";
 import { useWorkspace } from "@/hooks/use-workspace";
 
 type Tab = "overview" | "list" | "board";
@@ -780,7 +780,13 @@ function ActivitySummary({
   projectKey: string;
   workspaceSlug: string;
 }) {
-  const actorName = activityActorName(evt);
+  const actorLabel = activityActorName(evt);
+  const actorOwnerTitle = activityActorOwnerTitle(evt);
+  const actorName = actorOwnerTitle ? (
+    <span title={actorOwnerTitle}>{actorLabel}</span>
+  ) : (
+    actorLabel
+  );
   const issue = evt.issue;
   const issueLink = issue ? (
     <Link
