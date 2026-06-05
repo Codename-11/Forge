@@ -1,14 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { activityActorName } from "@/lib/activity-actor";
+import { activityActorName, activityActorOwnerTitle } from "@/lib/activity-actor";
 
 describe("activityActorName", () => {
-  it("shows an agent-linked event as agent via key owner", () => {
+  it("shows an agent-linked event as the agent, not the key owner", () => {
     expect(
       activityActorName({
         actor: { name: "Bailey" },
         actorAgent: { name: "Victor", profileKey: "victor" },
       }),
-    ).toBe("Victor via Bailey");
+    ).toBe("Victor");
+  });
+
+  it("keeps the human key owner as secondary metadata", () => {
+    expect(
+      activityActorOwnerTitle({
+        actor: { name: "Bailey" },
+        actorAgent: { name: "Victor", profileKey: "victor" },
+      }),
+    ).toBe("API key owner: Bailey");
+    expect(activityActorOwnerTitle({ actor: { name: "Bailey" }, actorAgent: null })).toBeUndefined();
   });
 
   it("falls back through agent handle, human, then system", () => {

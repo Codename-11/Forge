@@ -9,7 +9,11 @@ export function activityActorName(source: ActivityActorSource): string {
     (source.actorAgent?.profileKey ? `@${source.actorAgent.profileKey}` : null);
   const humanName = source.actor?.name ?? null;
 
-  if (agentName && humanName) return `${agentName} via ${humanName}`;
   if (agentName) return agentName;
   return humanName ?? "system";
+}
+
+export function activityActorOwnerTitle(source: ActivityActorSource): string | undefined {
+  if (!source.actorAgent || !source.actor?.name) return undefined;
+  return `API key owner: ${source.actor.name}`;
 }
