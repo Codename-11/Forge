@@ -27,6 +27,12 @@ const RELEVANT_KINDS: EventKind[] = [
   EventKind.AGENT_ASSIGNED,
   EventKind.AGENT_NOACK,
   EventKind.AGENT_STATUS_CHANGED,
+  EventKind.AGENT_RUN_STARTED,
+  EventKind.AGENT_RUN_BLOCKED,
+  EventKind.AGENT_RUN_COMPLETED,
+  EventKind.AGENT_RUN_STALLED,
+  EventKind.AGENT_RUN_CONTROL_REQUESTED,
+  EventKind.AGENT_RUN_KICKED,
 ];
 
 export const eventRouter = router({
@@ -104,6 +110,8 @@ export const eventRouter = router({
         if (e.subjectType === "issue") issueIds.add(e.subjectId);
         if (e.subjectType === "agent") agentIds.add(e.subjectId);
         const payload = (e.payload ?? {}) as Record<string, unknown>;
+        const pIssueId = payload.issueId;
+        if (typeof pIssueId === "string") issueIds.add(pIssueId);
         const pAgentId = payload.agentId;
         if (typeof pAgentId === "string") agentIds.add(pAgentId);
       }
@@ -156,9 +164,15 @@ export const eventRouter = router({
             typeof payload.agentId === "string"
               ? (payload.agentId as string)
               : null;
+          const pIssueId =
+            typeof payload.issueId === "string"
+              ? (payload.issueId as string)
+              : null;
           const subjectIssue =
             e.subjectType === "issue"
               ? (issueById.get(e.subjectId) ?? null)
+              : pIssueId
+                ? (issueById.get(pIssueId) ?? null)
               : null;
           const subjectAgent =
             e.subjectType === "agent"

@@ -644,11 +644,20 @@ export const issueRouter = router({
         select: { id: true },
       });
       if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+      const runs = await ctx.db.agentRun.findMany({
+        where: { issueId: input.issueId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      const runIds = runs.map((run) => run.id);
       const rows = await ctx.db.activityEvent.findMany({
         where: {
           workspaceId: ctx.workspaceId,
-          subjectType: "issue",
-          subjectId: input.issueId,
+          OR: [
+            { subjectType: "issue", subjectId: input.issueId },
+            ...(runIds.length
+              ? [{ subjectType: "agent-run", subjectId: { in: runIds } }]
+              : []),
+          ],
         },
         orderBy: { createdAt: "desc" },
         take: input.limit,
@@ -1275,6 +1284,7 @@ export const issueRouter = router({
             issueId: id,
             status: nextCategory === "DONE" ? "COMPLETED" : "ABANDONED",
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           });
         } else if (
           // Touch the run on transition by the assigned agent so the
@@ -1290,6 +1300,7 @@ export const issueRouter = router({
             kind: "TRANSITION",
             payload: { from: before.statusId, to: patch.statusId, category: nextCategory },
             actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           });
         }
 

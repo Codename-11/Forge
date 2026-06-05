@@ -525,6 +525,7 @@ export const commentRouter = router({
           issueId: input.issueId,
           agentId,
           actorId: ctx.session.user.id,
+          actorAgentId: agentId,
           currentStep: input.currentStep ?? null,
         });
 

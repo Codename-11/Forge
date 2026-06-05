@@ -38,6 +38,7 @@ export interface EnsureCanonicalParams {
   subjectType: string;
   subjectId: string;
   actorId: string | null;
+  actorAgentId?: string | null;
   payload: unknown;
   /**
    * Agent ids the audit-fan-out already resolved for this event. Lets
@@ -115,6 +116,7 @@ async function ensureIssueRuns(
       issueId: params.subjectId,
       agentId,
       actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
       assignmentEventId: isAssigned ? params.eventId : null,
       engagementMode: payloadMode ?? null,
     });

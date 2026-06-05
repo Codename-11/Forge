@@ -52,7 +52,13 @@ type Kind =
   | "COMMENT_CREATED"
   | "AGENT_ASSIGNED"
   | "AGENT_NOACK"
-  | "AGENT_STATUS_CHANGED";
+  | "AGENT_STATUS_CHANGED"
+  | "AGENT_RUN_STARTED"
+  | "AGENT_RUN_BLOCKED"
+  | "AGENT_RUN_COMPLETED"
+  | "AGENT_RUN_STALLED"
+  | "AGENT_RUN_CONTROL_REQUESTED"
+  | "AGENT_RUN_KICKED";
 
 type TimelineEvent = {
   id: string;
@@ -108,6 +114,12 @@ const KINDS: Kind[] = [
   "AGENT_ASSIGNED",
   "AGENT_NOACK",
   "AGENT_STATUS_CHANGED",
+  "AGENT_RUN_STARTED",
+  "AGENT_RUN_BLOCKED",
+  "AGENT_RUN_COMPLETED",
+  "AGENT_RUN_STALLED",
+  "AGENT_RUN_CONTROL_REQUESTED",
+  "AGENT_RUN_KICKED",
 ];
 
 const LAST_READ_KEY = "forge.activityDrawer.lastReadAt";
@@ -303,7 +315,11 @@ function iconFor(kind: Kind) {
     case "ISSUE_ASSIGNED":
       return <UserCheck className="h-3.5 w-3.5 text-muted-foreground" />;
     case "AGENT_STATUS_CHANGED":
+    case "AGENT_RUN_STARTED":
+    case "AGENT_RUN_CONTROL_REQUESTED":
       return <Activity className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "AGENT_RUN_COMPLETED":
+      return <CircleCheck className="h-3.5 w-3.5 text-success" />;
     case "ISSUE_CREATED":
       return <FilePlus className="h-3.5 w-3.5 text-muted-foreground" />;
     case "ISSUE_STATUS_CHANGED":
@@ -313,6 +329,8 @@ function iconFor(kind: Kind) {
     case "ISSUE_STALLED":
       return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
     case "AGENT_NOACK":
+    case "AGENT_RUN_BLOCKED":
+    case "AGENT_RUN_STALLED":
       return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
     case "ISSUE_SLA_BREACH":
       return <Clock className="h-3.5 w-3.5 text-danger" />;
@@ -320,6 +338,8 @@ function iconFor(kind: Kind) {
       return <Inbox className="h-3.5 w-3.5 text-muted-foreground" />;
     case "COMMENT_CREATED":
       return <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "AGENT_RUN_KICKED":
+      return <Bot className="h-3.5 w-3.5 text-muted-foreground" />;
     default:
       return <Bot className="h-3.5 w-3.5 text-muted-foreground" />;
   }
@@ -632,7 +652,63 @@ function summarizeEvent(
         ),
         meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
       };
+    case "AGENT_RUN_STARTED":
+      return {
+        headline: (
+          <>
+            {actorName} started run for {issueLink}
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
+    case "AGENT_RUN_COMPLETED": {
+      const finalStatus = readPayloadString(evt.payload, "finalStatus");
+      return {
+        headline: (
+          <>
+            {actorName} {finalStatus === "ABANDONED" ? "stopped" : "completed"} run
+            {" "}for {issueLink}
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
+    }
+    case "AGENT_RUN_STALLED":
+      return {
+        headline: (
+          <>
+            <span className="text-warning">Run stalled</span> for {issueLink}
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
+    case "AGENT_RUN_BLOCKED":
+      return {
+        headline: (
+          <>
+            {actorName} blocked run for {issueLink}
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
+    case "AGENT_RUN_KICKED":
+      return {
+        headline: (
+          <>
+            {actorName} kicked run for {issueLink}
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
   }
+  return {
+    headline: (
+      <>
+        {actorName} recorded {evt.kind.replace(/_/g, " ").toLowerCase()} on {issueLink}
+      </>
+    ),
+    meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+  };
 }
 
 function AlertActivityRow({

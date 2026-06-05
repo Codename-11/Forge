@@ -3,6 +3,7 @@ import { Activity as ActivityIcon } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
+import { activityActorName, activityActorOwnerTitle } from "@/lib/activity-actor";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 
@@ -37,9 +38,31 @@ const KIND_LABEL: Record<string, string> = {
   AGENT_NOACK: "Missed wake — agent didn't ack",
   COMMENT_CREATED: "Commented",
   COMMENT_UPDATED: "Edited comment",
+  AGENT_ASSIGNED: "Assigned agent",
+  AGENT_RUN_STARTED: "Started run",
+  AGENT_RUN_COMPLETED: "Completed run",
+  AGENT_RUN_STALLED: "Run stalled",
+  AGENT_RUN_BLOCKED: "Run blocked",
+  AGENT_RUN_CONTROL_REQUESTED: "Requested run control",
+  AGENT_RUN_KICKED: "Kicked run",
   SKILL_INVOKED: "Skill ran",
   PLUGIN_ERROR: "Plugin error",
 };
+
+function readPayloadString(payload: unknown, key: string): string | null {
+  if (!payload || typeof payload !== "object" || !(key in payload)) return null;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function activityLabel(kind: string, payload: unknown): string {
+  if (kind === "AGENT_RUN_COMPLETED") {
+    return readPayloadString(payload, "finalStatus") === "ABANDONED"
+      ? "Stopped run"
+      : "Completed run";
+  }
+  return KIND_LABEL[kind] ?? kind.replace(/_/g, " ").toLowerCase();
+}
 
 export function IssueActivityPanel({ issueId }: { issueId: string }) {
   const { data, isLoading } = trpc.issue.activity.useQuery(
@@ -88,10 +111,9 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
           {rows.map((e) => {
             const dispatch =
               e.kind === "AGENT_ASSIGNED" ? readDispatch(e.payload) : null;
-            // When the action came through an agent-linked API key, the
-            // Agent is the recorded actor; the human key-owner (`e.actor`)
-            // is kept as secondary metadata, surfaced in a tooltip.
             const agent = e.actorAgent;
+            const actorLabel = activityActorName(e);
+            const actorOwnerTitle = activityActorOwnerTitle(e);
             return (
               <li key={e.id} className="flex items-start gap-2 px-3 py-2">
                 {agent ? (
@@ -112,25 +134,10 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-1.5 text-[0.6875rem]">
-                    {agent ? (
-                      <span
-                        className="truncate font-medium"
-                        title={
-                          e.actor?.name
-                            ? `via API key owned by ${e.actor.name}`
-                            : undefined
-                        }
-                      >
-                        {agent.name}
-                      </span>
-                    ) : (
-                      <span className="truncate font-medium">
-                        {e.actor?.name ?? "System"}
-                      </span>
-                    )}
+                    <span className="truncate font-medium" title={actorOwnerTitle}>
+                      {actorLabel}
+                    </span>
                     {agent && (
-                      // Indigo `agent` chip mirrors the comment-card badge in
-                      // issue-main so "an agent did this" reads consistently.
                       <Badge
                         color="#6366f1"
                         className="font-mono text-[0.6875rem] uppercase tracking-wider"
@@ -139,7 +146,7 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
                       </Badge>
                     )}
                     <span className="truncate text-muted-foreground">
-                      {KIND_LABEL[e.kind] ?? e.kind.replace(/_/g, " ").toLowerCase()}
+                      {activityLabel(e.kind, e.payload)}
                     </span>
                     {dispatch?.mode && (
                       <span

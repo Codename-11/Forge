@@ -2929,6 +2929,19 @@ describe("mcp runs.complete + completion contract", () => {
       },
     });
     expect(completionEvents).toHaveLength(1);
+    expect(completionEvents[0]?.actorId).toBe(fixture.user.id);
+    expect(completionEvents[0]?.actorAgentId).toBe(agent.id);
+
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        entity: "AgentRun",
+        entityId: run.id,
+        action: "finish",
+      },
+    });
+    expect(audit.actorId).toBe(fixture.user.id);
+    expect(audit.actorAgentId).toBe(agent.id);
   });
 });
 

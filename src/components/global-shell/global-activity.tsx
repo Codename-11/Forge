@@ -2,6 +2,7 @@
 
 import { Activity as ActivityIcon } from "lucide-react";
 import { Spinner, EmptyState } from "@/components/ui";
+import { activityActorName, activityActorOwnerTitle } from "@/lib/activity-actor";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 import { WsChip } from "./mission-control-home";
@@ -30,7 +31,8 @@ export function GlobalActivity() {
       ) : (
         <div className="overflow-hidden rounded-lg border border-border bg-card/40">
           {rows.map((e, i) => {
-            const actor = e.actorAgent?.name ?? e.actor?.name ?? "—";
+            const actor = activityActorName(e);
+            const actorTitle = activityActorOwnerTitle(e);
             const kind = e.kind.split(".").slice(1).join(".") || e.kind;
             return (
               <div
@@ -42,7 +44,9 @@ export function GlobalActivity() {
                   {kind}
                 </span>
                 <span className="flex-1 truncate text-sm">
-                  <span className="text-foreground/90">{actor}</span>{" "}
+                  <span className="text-foreground/90" title={actorTitle}>
+                    {actor}
+                  </span>{" "}
                   <span className="text-muted-foreground">· {e.subjectType}</span>
                 </span>
                 <span
