@@ -523,6 +523,33 @@ export const issueRouter = router({
               runtimeId: true,
             },
           },
+          // Latest run, terminal or not. The failure banner is based on
+          // the newest row overall so a later successful run naturally
+          // clears an older STALLED / ABANDONED diagnostic.
+          agentRuns: {
+            orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
+            take: 1,
+            select: {
+              id: true,
+              status: true,
+              startedAt: true,
+              lastEventAt: true,
+              finishedAt: true,
+              currentStep: true,
+              summary: true,
+              externalRunId: true,
+              agent: {
+                select: {
+                  id: true,
+                  name: true,
+                  profileKey: true,
+                  avatar: true,
+                  provider: true,
+                  runtime: { select: { name: true, adapterKey: true } },
+                },
+              },
+            },
+          },
           labels: { include: { label: true } },
           comments: {
             orderBy: { createdAt: "asc" },

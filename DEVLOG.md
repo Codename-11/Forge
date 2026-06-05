@@ -34,6 +34,14 @@ assignment event using the agent's configured engagement mode). Follow-up gate:
 `git diff --check`, `pnpm lint`, `pnpm typecheck`, full `pnpm test` (744 pass /
 1 skipped), and `E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
 
+Second follow-up: added an issue-detail terminal-run failure banner driven by
+the latest `AgentRun` on `issue.byId`. Stalled / abandoned runs now surface a
+warning with agent, runtime, last-signal, run id, and recovery guidance; newer
+completed runs automatically suppress stale failure chrome. Gate: `git diff
+--check`, `pnpm lint`, `pnpm typecheck`, full `pnpm test` (748 pass / 1
+skipped), and `E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass after clearing the
+ignored `.next-e2e` build artifact from a failed first attempt).
+
 Verification: `pnpm lint`, `pnpm typecheck`, full `pnpm test` (744 pass / 1
 skipped), and focused `pnpm exec vitest run
 src/server/services/__tests__/engagement-mode.test.ts

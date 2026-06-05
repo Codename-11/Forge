@@ -36,6 +36,7 @@ import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
 import { IssueAgentPanel } from "@/components/issue-detail/issue-agent-panel";
+import { TerminalRunFailureBanner } from "@/components/issue-detail/run-failure-banner";
 import { RunActivityChip } from "@/components/issue-detail/run-activity-chip";
 import { AiTriageCard } from "@/components/ai-triage-card";
 import { Breadcrumb } from "@/components/breadcrumb";
@@ -463,6 +464,11 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             </div>
 
             <AiTriageCard issue={issue} />
+
+            <TerminalRunFailureBanner
+              run={issue.agentRuns?.[0] ?? null}
+              activityHref={`/w/${slug}/issues/${issue.id}?tab=activity`}
+            />
 
             <IssueMain
               issueId={issue.id}

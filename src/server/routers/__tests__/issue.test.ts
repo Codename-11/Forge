@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { RelationKind } from "@prisma/client";
+import { AgentProvider, AgentRunStatus, RelationKind } from "@prisma/client";
 import { issueRouter } from "@/server/routers/issue";
 import type { ApiKeyContext } from "@/server/services/api-key-auth";
 import {
@@ -33,6 +33,59 @@ async function setup() {
 }
 
 describe("issueRouter — blocker-aware claim + narrowing + unblocked flag", () => {
+  it("byId returns only the latest agent run for the issue-detail failure banner", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Needs failed-run banner" });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Codex",
+        profileKey: "codex",
+        provider: AgentProvider.CODEX,
+        status: "ONLINE",
+      },
+      select: { id: true },
+    });
+
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.STALLED,
+        currentStep: "stalled after no runtime activity",
+        externalRunId: null,
+        startedAt: new Date("2026-06-01T00:00:00.000Z"),
+        lastEventAt: new Date("2026-06-01T00:10:00.000Z"),
+        finishedAt: new Date("2026-06-01T00:10:00.000Z"),
+      },
+    });
+
+    const failed = await caller.byId({ id: issue.id });
+    expect(failed.agentRuns).toHaveLength(1);
+    expect(failed.agentRuns[0].status).toBe(AgentRunStatus.STALLED);
+    expect(failed.agentRuns[0].agent.profileKey).toBe("codex");
+
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.COMPLETED,
+        currentStep: "done",
+        externalRunId: "run-ok",
+        startedAt: new Date("2026-06-01T01:00:00.000Z"),
+        lastEventAt: new Date("2026-06-01T01:05:00.000Z"),
+        finishedAt: new Date("2026-06-01T01:05:00.000Z"),
+      },
+    });
+
+    const superseded = await caller.byId({ id: issue.id });
+    expect(superseded.agentRuns).toHaveLength(1);
+    expect(superseded.agentRuns[0].status).toBe(AgentRunStatus.COMPLETED);
+  });
+
   it("queue exposes `unblocked` (true when nothing blocks the issue)", async () => {
     const { caller, fixture } = await setup();
     const prisma = getPrisma();
