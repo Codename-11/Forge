@@ -27,6 +27,13 @@ two-zone layout with visible waiting state, timing, and an inline segmented
 engagement-mode control; tightened the topbar run activity chip and sticky agent
 rail to surface waiting/current mode more clearly.
 
+Follow-up: added contextual controls to the sticky assigned-agent rail. WAITING
+runs show Nudge (posts the wake mention), stale ACTIVE runs show Kick (re-fires
+the run wake), and assigned/no-active-run issues show Wake (same-agent
+assignment event using the agent's configured engagement mode). Follow-up gate:
+`git diff --check`, `pnpm lint`, `pnpm typecheck`, full `pnpm test` (744 pass /
+1 skipped), and `E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
+
 Verification: `pnpm lint`, `pnpm typecheck`, full `pnpm test` (744 pass / 1
 skipped), and focused `pnpm exec vitest run
 src/server/services/__tests__/engagement-mode.test.ts
