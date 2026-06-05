@@ -1377,6 +1377,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
           entityId: id,
           action: "update",
@@ -1395,6 +1396,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: id,
             action: "change-priority",
@@ -1468,6 +1470,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: before.id,
             action: "update",
@@ -1536,6 +1539,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId,
+          actorAgentId: agentId,
           entity: "Issue",
           entityId: before.id,
           action: "update",
@@ -1712,6 +1716,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: issue.id,
             action: "queue",
@@ -2314,6 +2319,7 @@ export const mcpTools = {
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
             entity: "Issue",
             entityId: issue.id,
             action: "set-labels",
@@ -2403,6 +2409,7 @@ export const mcpTools = {
             await recordChange(tx, {
               workspaceId: ctx.workspaceId,
               actorId,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
               entity: "Issue",
               entityId: issueId,
               action: "bulk-set-labels",
@@ -2873,6 +2880,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Project",
           entityId: project.id,
           action: "create",
@@ -2926,6 +2934,7 @@ export const mcpTools = {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Project",
           entityId: before.id,
           action: "update",

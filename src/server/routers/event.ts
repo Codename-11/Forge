@@ -87,6 +87,9 @@ export const eventRouter = router({
         take: input.limit + 1,
         include: {
           actor: { select: { id: true, name: true, image: true } },
+          actorAgent: {
+            select: { id: true, name: true, profileKey: true, avatar: true },
+          },
         },
       });
 
@@ -169,6 +172,7 @@ export const eventRouter = router({
             kind: e.kind,
             createdAt: e.createdAt,
             actor: e.actor,
+            actorAgent: e.actorAgent,
             subjectType: e.subjectType,
             subjectId: e.subjectId,
             issue: subjectIssue,

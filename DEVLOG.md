@@ -42,6 +42,21 @@ completed runs automatically suppress stale failure chrome. Gate: `git diff
 skipped), `NEXT_DIST_DIR=.next-e2e pnpm exec next build`, and `pnpm test:e2e`
 (20 pass).
 
+Third follow-up: fixed MCP agent attribution for issue/project mutation paths
+that resolved the human API-key owner but failed to pass `actorAgentId` into
+`recordChange`. `issues.transition`, bulk transition, issue update/priority,
+queue, label edits, and project create/update now preserve linked-agent
+authorship in audit/activity rows. The activity drawer and project overview
+feeds now hydrate `actorAgent` and render agent-linked events as
+`Agent via Human`, so future Victor status moves do not collapse to Bailey.
+Applied a targeted production data repair for the existing AXI-71 Done move
+activity/audit rows, setting `actorAgentId` to Victor while preserving Bailey
+as the API-key owner.
+Gate: `git diff --check`, `pnpm lint`, `pnpm typecheck`, focused
+`pnpm test tests/unit/activity-actor.test.ts`, focused `pnpm test
+src/server/services/__tests__/mcp.test.ts`, and full `pnpm test` (750 pass /
+1 skipped), plus `E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
+
 Verification: `pnpm lint`, `pnpm typecheck`, full `pnpm test` (744 pass / 1
 skipped), and focused `pnpm exec vitest run
 src/server/services/__tests__/engagement-mode.test.ts
