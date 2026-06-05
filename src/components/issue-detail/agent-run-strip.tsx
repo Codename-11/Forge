@@ -1,7 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Bot, Activity, Hourglass } from "lucide-react";
-import { ModeChip } from "@/components/ui/engagement-mode-glyph";
+import {
+  EngagementModeGlyph,
+  MODE_LABEL,
+  MODE_ORDER,
+  MODE_SUBTITLE,
+  type EngagementModeValue,
+} from "@/components/ui/engagement-mode-glyph";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { relativeTime, cn } from "@/lib/utils";
@@ -32,6 +38,11 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
     { issueId },
     { staleTime: 5_000 },
   );
+  const setMode = trpc.agentRun.setEngagementMode.useMutation({
+    onSuccess: () => {
+      void utils.agentRun.activeForIssue.invalidate({ issueId });
+    },
+  });
   const [now, setNow] = useState(() => Date.now());
 
   // Refresh the relative-time label every 10s so "updated Ns ago" stays
@@ -90,7 +101,7 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
   return (
     <div
       className={cn(
-        "mb-3 flex items-center gap-2 rounded-md border px-3 py-1.5 text-[0.75rem]",
+        "mb-3 grid gap-2 rounded-md border px-3 py-2 text-[0.75rem] sm:grid-cols-[minmax(0,1fr)_auto]",
         state === "running"
           ? "border-ember/30 bg-ember/5"
           : state === "acknowledged"
@@ -102,58 +113,116 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
                 : "border-border bg-card/40",
       )}
     >
-      <span className="relative flex h-2 w-2 shrink-0">
-        {state === "running" || state === "acknowledged" ? (
-          // Live pulse only while events are still arriving. Once the
-          // agent's final turn lands (no events past the live window) the
-          // state settles to "idle" — a calm static dot, no ping — so the
-          // strip stops claiming active work the moment it's done.
-          <>
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember opacity-60" />
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="relative flex h-2 w-2 shrink-0">
+          {state === "running" || state === "acknowledged" ? (
+            // Live pulse only while events are still arriving. Once the
+            // agent's final turn lands (no events past the live window) the
+            // state settles to "idle" — a calm static dot, no ping — so the
+            // strip stops claiming active work the moment it's done.
+            <>
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember opacity-60" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
+            </>
+          ) : state === "waiting" ? (
             <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
-          </>
-        ) : state === "waiting" ? (
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
-        ) : state === "idle" ? (
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-ember/60" />
-        ) : state === "stalled" ? (
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
-        ) : (
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-muted-foreground/60" />
-        )}
-      </span>
-      {state === "waiting" ? (
-        <Hourglass className="h-3.5 w-3.5 text-ember" />
-      ) : (
-        <Bot
-          className={cn(
-            "h-3.5 w-3.5",
-            state === "stalled" ? "text-amber-600 dark:text-amber-300" : "text-ember",
+          ) : state === "idle" ? (
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-ember/60" />
+          ) : state === "stalled" ? (
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
+          ) : (
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-muted-foreground/60" />
           )}
+        </span>
+        {state === "waiting" ? (
+          <Hourglass className="h-3.5 w-3.5 shrink-0 text-ember" />
+        ) : (
+          <Bot
+            className={cn(
+              "h-3.5 w-3.5 shrink-0",
+              state === "stalled" ? "text-amber-600 dark:text-amber-300" : "text-ember",
+            )}
+          />
+        )}
+        <span className="shrink-0 font-medium">{run.agent.name}</span>
+        {state === "waiting" && (
+          // Soft "Waiting on you" pill in the warm ember tone — distinct
+          // from the alarming amber STALLED pill so patient agents read
+          // as "your turn" not "broken."
+          <span className="shrink-0 rounded-sm border border-ember/40 bg-ember/10 px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wider text-ember">
+            Waiting on you
+          </span>
+        )}
+        <span className="shrink-0 text-muted-foreground">·</span>
+        <span className="min-w-0 truncate text-foreground/80" title={step}>
+          {step}
+        </span>
+      </div>
+      <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
+        <RunModeControl
+          runId={run.id}
+          mode={run.engagementMode as EngagementModeValue}
+          pending={setMode.isPending}
+          onChange={(mode) => setMode.mutate({ runId: run.id, mode })}
         />
-      )}
-      <span className="font-medium">{run.agent.name}</span>
-      {state === "waiting" && (
-        // Soft "Waiting on you" pill in the warm ember tone — distinct
-        // from the alarming amber STALLED pill so patient agents read
-        // as "your turn" not "broken."
-        <span className="rounded-sm border border-ember/40 bg-ember/10 px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wider text-ember">
-          Waiting on you
+        <span className="flex shrink-0 items-center gap-2 text-meta text-muted-foreground">
+          <Activity className="h-3 w-3" />
+          <span title={`Started ${new Date(run.startedAt).toLocaleString()}`}>
+            {elapsedLabel}
+          </span>
+          <span>·</span>
+          <span title={`Last event ${new Date(run.lastEventAt).toLocaleString()}`}>
+            updated {lastEventLabel}
+          </span>
         </span>
-      )}
-      <ModeChip mode={run.engagementMode} />
-      <span className="text-muted-foreground">·</span>
-      <span className="truncate text-foreground/80">{step}</span>
-      <span className="ml-auto flex items-center gap-2 text-meta text-muted-foreground">
-        <Activity className="h-3 w-3" />
-        <span title={`Started ${new Date(run.startedAt).toLocaleString()}`}>
-          {elapsedLabel}
-        </span>
-        <span>·</span>
-        <span title={`Last event ${new Date(run.lastEventAt).toLocaleString()}`}>
-          updated {lastEventLabel}
-        </span>
-      </span>
+      </div>
+    </div>
+  );
+}
+
+function RunModeControl({
+  runId,
+  mode,
+  pending,
+  onChange,
+}: {
+  runId: string;
+  mode: EngagementModeValue;
+  pending: boolean;
+  onChange: (mode: EngagementModeValue) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Run engagement mode"
+      className="flex min-w-0 flex-wrap gap-0.5 rounded-md border border-border bg-background/80 p-0.5"
+    >
+      {MODE_ORDER.map((m) => {
+        const active = mode === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            aria-label={`Set run mode to ${MODE_LABEL[m]}`}
+            title={`${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}`}
+            disabled={pending || active}
+            onClick={() => onChange(m)}
+            className={cn(
+              "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] uppercase tracking-wider transition-colors",
+              active
+                ? "bg-ember/10 text-foreground"
+                : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+              pending ? "opacity-60" : "",
+            )}
+            data-run-id={runId}
+          >
+            <EngagementModeGlyph mode={m} size={11} />
+            <span>{MODE_LABEL[m]}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

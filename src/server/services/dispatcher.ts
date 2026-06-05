@@ -5,6 +5,7 @@ import { recordChange } from "@/server/audit";
 import { presenceAvailability } from "@/lib/transport-display";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { autoWatchAgent } from "@/server/services/issue-watchers";
+import { resolveEngagementMode } from "@/server/services/engagement-mode";
 
 /**
  * Stamp a "manual assignment" `dispatchReason` blob onto an Issue row.
@@ -89,6 +90,9 @@ export async function maybeAutoDispatch(
           autoDispatchMode: true,
           autoStartOnAssign: true,
           requireApprovalBeforeStart: true,
+          assignmentEngagementMode: true,
+          mentionEngagementPolicy: true,
+          mentionDefaultMode: true,
         },
       },
     },
@@ -122,6 +126,7 @@ export async function maybeAutoDispatch(
       id: true,
       profileKey: true,
       capabilities: true,
+      engagementMode: true,
       maxConcurrent: true,
       lastDispatchedAt: true,
       // Availability inputs (cheap base columns) + disabled-runtime guard.
@@ -209,9 +214,20 @@ export async function maybeAutoDispatch(
         : null,
       eligible: true,
     };
+    const engagementMode = resolveEngagementMode({
+      surface: "queue",
+      explicit: null,
+      workspace: {
+        assignmentEngagementMode: issue.workspace.assignmentEngagementMode,
+        assignmentAgentEngagementMode: target.engagementMode,
+        mentionEngagementPolicy: issue.workspace.mentionEngagementPolicy,
+        mentionDefaultMode: issue.workspace.mentionDefaultMode,
+      },
+    }).mode;
     return await assignAndEmit(tx, issue.workspaceId, issue.id, target.id, {
       reason: `rule:${rule.id}`,
       mode: "RULE",
+      engagementMode,
       ruleId: rule.id,
       dispatch: {
         mode: "RULE",
@@ -323,9 +339,21 @@ export async function maybeAutoDispatch(
       : {}),
   };
 
+  const engagementMode = resolveEngagementMode({
+    surface: "queue",
+    explicit: null,
+    workspace: {
+      assignmentEngagementMode: issue.workspace.assignmentEngagementMode,
+      assignmentAgentEngagementMode: picked.engagementMode,
+      mentionEngagementPolicy: issue.workspace.mentionEngagementPolicy,
+      mentionDefaultMode: issue.workspace.mentionDefaultMode,
+    },
+  }).mode;
+
   return await assignAndEmit(tx, issue.workspaceId, issue.id, picked.id, {
     reason: finalReason,
     mode,
+    engagementMode,
     dispatch: {
       mode,
       candidates,
@@ -356,6 +384,7 @@ async function assignAndEmit(
   meta: {
     reason: string;
     mode: string;
+    engagementMode: string;
     ruleId?: string;
     dispatch?: Prisma.InputJsonObject;
   },
@@ -419,6 +448,7 @@ async function assignAndEmit(
       previousAgentId: null,
       auto: true,
       mode: meta.mode,
+      engagementMode: meta.engagementMode,
       reason: meta.reason,
       ...(meta.ruleId ? { ruleId: meta.ruleId } : {}),
       ...(meta.dispatch ? { dispatch: meta.dispatch } : {}),

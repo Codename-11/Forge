@@ -33,6 +33,11 @@ export interface ResolvedEngagement {
 
 export interface WorkspaceEngagementConfig {
   assignmentEngagementMode: EngagementMode;
+  /**
+   * Per-agent binding override for assignment/queue dispatch. Null means
+   * inherit the workspace assignment default.
+   */
+  assignmentAgentEngagementMode?: EngagementMode | null;
   mentionEngagementPolicy: MentionEngagementPolicy;
   mentionDefaultMode: EngagementMode;
 }
@@ -60,7 +65,9 @@ export function resolveEngagementMode(input: {
     case "assignment":
     case "queue":
       return {
-        mode: input.workspace.assignmentEngagementMode,
+        mode:
+          input.workspace.assignmentAgentEngagementMode ??
+          input.workspace.assignmentEngagementMode,
         source: "surface-default",
         inferable: false,
       };

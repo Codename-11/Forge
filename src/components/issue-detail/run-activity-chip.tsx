@@ -55,9 +55,10 @@ export function RunActivityChip({ issueId }: { issueId: string }) {
 
   const lastEventTs = new Date(run.lastEventAt).getTime();
   const ageMs = now - lastEventTs;
-  const isLive = ageMs < 60_000;
+  const waiting = run.status === "WAITING";
+  const isLive = !waiting && ageMs < 60_000;
   const ageLabel = ageMs < 60_000 ? "just now" : relativeTime(run.lastEventAt);
-  const step = (run.currentStep ?? "").trim() || "working…";
+  const step = (run.currentStep ?? "").trim() || (waiting ? "waiting on you" : "working…");
   const controlLabel =
     run.controlState === "PAUSE_REQUESTED"
       ? "pause requested"
@@ -89,8 +90,10 @@ export function RunActivityChip({ issueId }: { issueId: string }) {
       title={fullTitle}
       aria-label={`Agent activity: ${step}. Updated ${ageLabel}. Click to open Mission Control.`}
       className={cn(
-        "focus-ring inline-flex max-w-[18rem] items-center gap-1.5 rounded-md border px-2 py-1 text-left",
-        "border-ember/40 bg-ember/10 text-foreground/90 hover:bg-ember/15",
+        "focus-ring inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-left sm:max-w-[22rem]",
+        waiting
+          ? "border-ember/50 bg-ember/10 text-foreground/90 hover:bg-ember/15"
+          : "border-ember/40 bg-ember/10 text-foreground/90 hover:bg-ember/15",
       )}
     >
       <span
@@ -106,6 +109,9 @@ export function RunActivityChip({ issueId }: { issueId: string }) {
             isLive ? "bg-ember" : "bg-ember/60",
           )}
         />
+      </span>
+      <span className="shrink-0 rounded-sm border border-ember/35 bg-ember/10 px-1 py-px text-[0.5625rem] font-semibold uppercase tracking-wider text-ember">
+        {waiting ? "waiting" : isLive ? "live" : "run"}
       </span>
       <span className="text-id min-w-0 truncate">{step}</span>
       <span className="text-meta shrink-0 text-muted-foreground">

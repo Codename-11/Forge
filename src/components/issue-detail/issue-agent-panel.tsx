@@ -4,6 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { ModeChip } from "@/components/ui/engagement-mode-glyph";
 import { presenceAvailability } from "@/lib/transport-display";
 import { relativeTime, cn } from "@/lib/utils";
 
@@ -94,6 +95,11 @@ export function IssueAgentPanel({
             </span>
           ))}
       </div>
+      {run?.engagementMode && (
+        <div className="mt-2">
+          <ModeChip mode={run.engagementMode} />
+        </div>
+      )}
       <div className="mt-1.5 text-meta text-muted-foreground">
         {run ? (
           <>
