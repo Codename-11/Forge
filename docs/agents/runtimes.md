@@ -103,6 +103,13 @@ forge runtimes configure <runtimeId> \
 Code/repo issue preflight uses this declaration to decide whether Wake/Kick is
 likely to help or whether the work should move to a local-tool runtime.
 
+For Codex app-server, the same runtime config also carries the per-turn sandbox
+policy. Setting `workspaceRoot` is the important bit: Forge sends it as the
+Codex turn `cwd`, and the UI saves `localWorkspaceTools` plus
+`toolCapabilities: ["terminal", "filesystem", "git"]` alongside it so runtime
+cards and preflight match the actual scoped workspace (for example
+`/work/agent-forge` inside the bridge container).
+
 ## MCP tools (for runtimes that auto-register)
 
 `runtimes.register`, `runtimes.heartbeat`, and `runtimes.configure` are

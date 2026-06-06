@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { EventKind } from "@prisma/client";
 import { publish } from "@/server/realtime";
 import { RUNTIME_KIND_LABEL } from "@/lib/runtime-kind";
+import { runtimeToolSurface } from "@/lib/runtime-tools";
 import { nanoid } from "nanoid";
 import { ensureCanonicalFromEvent } from "@/server/services/agent-dispatch-inbox";
 import { resolveRunEngine, getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
@@ -72,6 +73,122 @@ const AGENT_WATCHER_FANOUT_EVENT_KINDS = new Set<EventKind>([
   EventKind.ISSUE_SLA_BREACH,
   EventKind.ISSUE_NUDGED,
 ]);
+
+const ENGAGEMENT_MODE_LABEL: Record<string, string> = {
+  EXECUTE: "EXECUTE",
+  RESEARCH: "RESEARCH",
+  REVIEW: "REVIEW",
+  DISCUSS: "DISCUSS",
+};
+
+const ENGAGEMENT_MODE_HINT: Record<string, string> = {
+  EXECUTE: "can modify and complete work",
+  RESEARCH: "investigate and report",
+  REVIEW: "instructions only",
+  DISCUSS: "discussion only",
+};
+
+function payloadRecord(payload: Prisma.InputJsonValue): Record<string, unknown> {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : {};
+}
+
+function payloadString(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function payloadBool(payload: Record<string, unknown>, key: string): boolean {
+  return payload[key] === true;
+}
+
+function modeLabel(mode: string | null): string | null {
+  return mode ? (ENGAGEMENT_MODE_LABEL[mode] ?? mode) : null;
+}
+
+function modeHint(mode: string | null): string | null {
+  return mode ? (ENGAGEMENT_MODE_HINT[mode] ?? null) : null;
+}
+
+function adapterLabel(adapterKey: string | null | undefined): string | null {
+  if (!adapterKey) return null;
+  return adapterKey
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+type AssignmentAgentContext = {
+  id: string;
+  profileKey: string;
+  provider: string;
+  webhookUrl: string | null;
+  runtime: {
+    id: string;
+    name: string;
+    kind: string;
+    adapterKey: string | null;
+    config: Prisma.JsonValue | null;
+  } | null;
+};
+
+function assignmentRuntimeLine(agent: AssignmentAgentContext): string | null {
+  if (agent.runtime) {
+    const adapterKey =
+      agent.runtime.adapterKey ?? (agent.runtime.kind === "LOCAL_DAEMON" ? "local-daemon" : null);
+    const surface = runtimeToolSurface(adapterKey, agent.runtime.config);
+    const runtimeName = agent.runtime.name || adapterLabel(agent.runtime.adapterKey);
+    const runtimeKind = RUNTIME_KIND_LABEL[agent.runtime.kind as keyof typeof RUNTIME_KIND_LABEL];
+    const isHermesRuntime = agent.provider === "HERMES" && agent.runtime.adapterKey === "hermes";
+    const toolText =
+      isHermesRuntime
+        ? "tools from Hermes host"
+        : agent.runtime.kind === "LOCAL_DAEMON"
+          ? "tools from local daemon"
+        : surface.hasRepoTools
+          ? "repo tools declared"
+          : "repo tools not declared";
+    return [runtimeName, runtimeKind, toolText].filter(Boolean).join(" · ");
+  }
+  if (agent.webhookUrl) return "webhook receiver · tools from webhook receiver";
+  return null;
+}
+
+function assignmentRuntimePayload(agent: AssignmentAgentContext): Prisma.InputJsonObject | null {
+  if (agent.runtime) {
+    const adapterKey =
+      agent.runtime.adapterKey ?? (agent.runtime.kind === "LOCAL_DAEMON" ? "local-daemon" : null);
+    const surface = runtimeToolSurface(adapterKey, agent.runtime.config);
+    const kind = RUNTIME_KIND_LABEL[agent.runtime.kind as keyof typeof RUNTIME_KIND_LABEL];
+    const isHermesRuntime = agent.provider === "HERMES" && agent.runtime.adapterKey === "hermes";
+    return {
+      id: agent.runtime.id,
+      name: agent.runtime.name,
+      kind: kind ?? agent.runtime.kind,
+      adapterKey: agent.runtime.adapterKey,
+      tools:
+        isHermesRuntime
+          ? "tools from Hermes host"
+          : agent.runtime.kind === "LOCAL_DAEMON"
+            ? "tools from local daemon"
+          : surface.hasRepoTools
+            ? "repo tools declared"
+            : "repo tools not declared",
+      ...(surface.workspaceRoot ? { workspaceRoot: surface.workspaceRoot } : {}),
+    };
+  }
+  if (agent.webhookUrl) {
+    return {
+      name: "webhook receiver",
+      kind: "webhook",
+      adapterKey: null,
+      tools: "tools from webhook receiver",
+    };
+  }
+  return null;
+}
 
 /**
  * Hydrate the small `issueSnapshot` blob we attach to every AGENT_ASSIGNED
@@ -249,28 +366,29 @@ async function maybeWriteAssignmentSystemComment(
     issueId: string;
     payload: Prisma.InputJsonValue;
     actorId: string | null;
+    agentContext?: AssignmentAgentContext | null;
   },
 ): Promise<void> {
-  const payload =
-    params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)
-      ? (params.payload as Record<string, unknown>)
-      : {};
-  const agentId =
-    typeof payload.agentId === "string" && payload.agentId.length > 0 ? payload.agentId : null;
-  const previousAgentId =
-    typeof payload.previousAgentId === "string" && payload.previousAgentId.length > 0
-      ? payload.previousAgentId
-      : null;
+  const payload = payloadRecord(params.payload);
+  const agentId = payloadString(payload, "agentId");
+  const previousAgentId = payloadString(payload, "previousAgentId");
+  const modeUpdated = payloadBool(payload, "modeUpdated");
+  const engagementMode = payloadString(payload, "engagementMode");
   if (!agentId) return; // unassignment — nothing to announce
-  if (agentId === previousAgentId) return; // no-op re-assignment
+  if (agentId === previousAgentId && !modeUpdated) return; // no-op re-assignment
 
-  const agent = await tx.agent.findFirst({
-    where: { id: agentId, workspaceId: params.workspaceId },
-    select: {
-      profileKey: true,
-      runtime: { select: { kind: true } },
-    },
-  });
+  const agent =
+    params.agentContext ??
+    (await tx.agent.findFirst({
+      where: { id: agentId, workspaceId: params.workspaceId },
+      select: {
+        id: true,
+        profileKey: true,
+        provider: true,
+        webhookUrl: true,
+        runtime: { select: { id: true, name: true, kind: true, adapterKey: true, config: true } },
+      },
+    }));
   if (!agent) return; // defensive — agent disappeared mid-transaction
 
   const actor = params.actorId
@@ -281,15 +399,17 @@ async function maybeWriteAssignmentSystemComment(
     : null;
   const actorLabel = actor?.name ?? actor?.handle ?? "the system";
 
-  // Humanize the runtime kind — the raw enum (`REMOTE_HTTP`) reads badly
-  // and its embedded underscore breaks the `_…_` markdown emphasis,
-  // surfacing literal underscores in the thread. Omit the line entirely
-  // when the agent has no runtime rather than printing "unknown".
-  const runtimeLabel = agent.runtime ? RUNTIME_KIND_LABEL[agent.runtime.kind] : null;
+  const mode = modeLabel(engagementMode);
+  const hint = modeHint(engagementMode);
+  const modePhrase = mode ? ` in **${mode}** mode${hint ? ` (${hint})` : ""}` : "";
+  const runtimeLabel = assignmentRuntimeLine(agent);
 
-  const body =
-    `**@${agent.profileKey}** was assigned by **@${actorLabel}**.` +
-    (runtimeLabel ? `\n\n_Runtime: ${runtimeLabel}._` : "");
+  const headline =
+    modeUpdated && agentId === previousAgentId
+      ? `**@${agent.profileKey}** work mode changed${modePhrase} by **@${actorLabel}**.`
+      : `**@${agent.profileKey}** was assigned${modePhrase} by **@${actorLabel}**.`;
+
+  const body = headline + (runtimeLabel ? `\n\n_Runtime: ${runtimeLabel}._` : "");
 
   await tx.comment.create({
     data: {
@@ -396,8 +516,34 @@ export async function recordChange(
       } as unknown as Prisma.InputJsonValue;
     }
 
+    const assignmentPayload = payloadRecord(payloadOut);
+    const assignedAgentId = payloadString(assignmentPayload, "agentId");
+    const assignmentAgentContext = assignedAgentId
+      ? await tx.agent.findFirst({
+          where: { id: assignedAgentId, workspaceId: params.workspaceId },
+          select: {
+            id: true,
+            profileKey: true,
+            provider: true,
+            webhookUrl: true,
+            runtime: {
+              select: { id: true, name: true, kind: true, adapterKey: true, config: true },
+            },
+          },
+        })
+      : null;
+    const runtimePayload = assignmentAgentContext
+      ? assignmentRuntimePayload(assignmentAgentContext)
+      : null;
+    if (runtimePayload) {
+      payloadOut = {
+        ...payloadRecord(payloadOut),
+        runtime: runtimePayload,
+      } as unknown as Prisma.InputJsonValue;
+    }
+
     // SYSTEM comment: a small in-thread note ("victor was assigned by
-    // Bailey. Runtime: LOCAL_DAEMON.") so the issue conversation surface
+    // Bailey. Runtime: local daemon.") so the issue conversation surface
     // doesn't look dead between assignment and the agent's first reply.
     // Hermes-managed agents historically had no inline acknowledgement
     // here — forge-cli daemons posted a starter comment, but everyone
@@ -411,6 +557,7 @@ export async function recordChange(
       issueId: params.subjectId,
       payload: payloadOut,
       actorId: params.actorId,
+      agentContext: assignmentAgentContext,
     });
   }
 

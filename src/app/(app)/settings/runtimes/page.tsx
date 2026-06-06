@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Bot, Server, Sparkles, MoreHorizontal } from "lucide-react";
+import { Bot, Server, Settings, Sparkles } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Spinner, EmptyState } from "@/components/ui";
 import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
@@ -103,6 +103,7 @@ export default function RuntimesPage() {
                     : r.health.tone === "warning"
                       ? "border-warning/30 bg-warning/5"
                       : "border-border bg-card/40";
+                const settingsWorkspace = r.workspacesInUse[0];
                 return (
                   <div key={r.id} className={`flex flex-col gap-3 rounded-lg border p-4 ${tone}`}>
                     <header className="flex items-start gap-2">
@@ -124,9 +125,16 @@ export default function RuntimesPage() {
                           <div className="truncate text-meta text-muted-foreground">{r.endpoint}</div>
                         )}
                       </div>
-                      <button className="text-muted-foreground hover:text-foreground" title="More">
-                        <MoreHorizontal size={14} />
-                      </button>
+                      {settingsWorkspace && (
+                        <Link
+                          href={`/w/${settingsWorkspace.slug}/settings/runtimes/${r.id}`}
+                          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground"
+                          title="Open runtime settings"
+                          aria-label={`Open settings for ${r.name}`}
+                        >
+                          <Settings size={14} />
+                        </Link>
+                      )}
                     </header>
 
                     <div className="grid grid-cols-3 gap-2 text-meta">

@@ -112,7 +112,7 @@ controlled on **two layers**:
    |-------|--------|--------|
    | **Sandbox mode** | `Full access` · `Workspace-write` · `Read-only` | OS-level file/network scope. Workspace-write limits writes to the workspace root. |
    | **Approval policy** | `Never` · `On request` · `On failure` · `Untrusted` | Anything but `Never` makes Codex raise an approval before risky commands/edits — Forge renders these as **accept/deny cards in chat**. |
-   | **Workspace root** | a path, e.g. `/work` | The turn's working dir; in workspace-write it's the only writable root. |
+   | **Workspace root** | a path, e.g. `/work/agent-forge` | The turn's working dir; in workspace-write it's the only writable root. Setting it also makes Forge declare the Codex runtime as having repo tools for preflight and runtime cards. |
 
    Defaults (no config) = **full access, no prompts** — the original behavior.
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { EventKind, RuntimeKind } from "@prisma/client";
+import { EngagementMode, EventKind, RuntimeKind } from "@prisma/client";
 import { agentDispatchUrlFor, recordChange } from "@/server/audit";
 import {
   createWorkspaceFixture,
@@ -83,7 +83,7 @@ describe("audit.ts — AGENT_ASSIGNED system comment", () => {
     expect(sys[0].authoringAgentId).toBeNull();
     expect(sys[0].body).toContain(`@${agent.profileKey}`);
     expect(sys[0].body).toContain(fixture.user.name ?? "");
-    expect(sys[0].body).toContain("_Runtime: local daemon._");
+    expect(sys[0].body).toContain("_Runtime: Test runtime · local daemon · tools from local daemon._");
 
     // The SYSTEM comment is NOT routed through recordChange — verify
     // no COMMENT_CREATED row fired for it.
@@ -133,6 +133,82 @@ describe("audit.ts — AGENT_ASSIGNED system comment", () => {
       },
     });
     expect(sys).toHaveLength(0);
+  });
+
+  it("posts a SYSTEM comment when the same agent's engagement mode changes", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "AS5" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        kind: RuntimeKind.REMOTE_HTTP,
+        name: "Hermes gateway",
+        adapterKey: "hermes",
+        config: {
+          localWorkspaceTools: true,
+          toolCapabilities: ["terminal", "filesystem", "git"],
+          workspaceRoot: "/home/bailey/forge",
+        },
+      },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: `as5-victor-${Date.now()}`,
+        runtimeId: runtime.id,
+      },
+    });
+    const issue = await createIssue(fixture);
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      entity: "Issue",
+      entityId: issue.id,
+      action: "update-agent-engagement-mode",
+      eventKind: EventKind.AGENT_ASSIGNED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: {
+        agentId: agent.id,
+        previousAgentId: agent.id,
+        modeUpdated: true,
+        engagementMode: EngagementMode.REVIEW,
+      },
+    });
+
+    const sys = await prisma.comment.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        kind: "SYSTEM",
+      },
+    });
+    expect(sys.body).toContain(`@${agent.profileKey}`);
+    expect(sys.body).toContain("work mode changed in **REVIEW** mode (instructions only)");
+    expect(sys.body).toContain(
+      "_Runtime: Hermes gateway · remote webhook · tools from Hermes host._",
+    );
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_ASSIGNED,
+        subjectId: issue.id,
+      },
+    });
+    expect(event.payload).toMatchObject({
+      modeUpdated: true,
+      engagementMode: EngagementMode.REVIEW,
+      runtime: {
+        name: "Hermes gateway",
+        kind: "remote webhook",
+        tools: "tools from Hermes host",
+      },
+    });
   });
 
   it("skips SYSTEM comment on unassignment (agentId === null)", async () => {

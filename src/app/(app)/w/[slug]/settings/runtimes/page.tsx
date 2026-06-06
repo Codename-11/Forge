@@ -63,6 +63,7 @@ const ADAPTER_LABEL: Record<string, string> = {
   "claude-code": "Claude Code",
   "claude-desktop": "Claude Desktop",
   codex: "Codex",
+  "codex-app-server": "Codex app server · managed",
 };
 
 /** Which connection tier a transport belongs to (see providers-and-transports.md). */
@@ -1120,7 +1121,11 @@ function codexPolicyToConfig(p: CodexPolicy): Record<string, unknown> {
     sandboxMode: p.sandboxMode,
     approvalPolicy: p.approvalPolicy,
   };
-  if (p.workspaceRoot.trim()) out.workspaceRoot = p.workspaceRoot.trim();
+  if (p.workspaceRoot.trim()) {
+    out.workspaceRoot = p.workspaceRoot.trim();
+    out.localWorkspaceTools = true;
+    out.toolCapabilities = [...RUNTIME_TOOL_CAPABILITIES];
+  }
   return out;
 }
 
@@ -1199,8 +1204,8 @@ function CodexPolicyFields({
           className="font-mono"
         />
         <span className="mt-1 block text-[0.625rem] text-muted-foreground/70">
-          Working directory for each turn. In workspace-write mode this is the only writable
-          root.
+          Working directory for each turn. Setting this also declares terminal,
+          filesystem, and git access for runtime preflight.
         </span>
       </label>
     </div>
