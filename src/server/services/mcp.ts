@@ -28,6 +28,7 @@ import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
+import { setIssueAgentWakeTarget } from "@/server/services/issue-watchers";
 import {
   openOrTouchRun,
   appendRunEvent,
@@ -2025,6 +2026,13 @@ export const mcpTools = {
               ...(engagementMode ? { engagementMode } : {}),
             },
           });
+          if (assignmentChanged) {
+            await setIssueAgentWakeTarget(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: before.id,
+              agentId: targetAgentId,
+            });
+          }
           // Apply the new agent's template if the description is empty.
           // No-op on unassign (targetAgentId === null) and on non-empty
           // descriptions — including re-assignment to a different agent
@@ -2127,6 +2135,11 @@ export const mcpTools = {
         await tx.issue.update({
           where: { id: issue.id },
           data: { assignedAgentId: newAgent.id },
+        });
+        await setIssueAgentWakeTarget(tx, {
+          workspaceId: ctx.workspaceId,
+          issueId: issue.id,
+          agentId: newAgent.id,
         });
 
         await recordChange(tx, {

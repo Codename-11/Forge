@@ -236,6 +236,7 @@ describe("audit.ts — watcher fan-out", () => {
         workspaceId: fixture.workspace.id,
         issueId: issue.id,
         agentId: agent.id,
+        wakeOnActivity: true,
       },
     });
 
@@ -456,11 +457,13 @@ describe("audit.ts — watcher fan-out", () => {
           workspaceId: fixture.workspace.id,
           issueId: issue.id,
           agentId: codex.id,
+          wakeOnActivity: false,
         },
         {
           workspaceId: fixture.workspace.id,
           issueId: issue.id,
           agentId: victor.id,
+          wakeOnActivity: true,
         },
       ],
     });
@@ -517,5 +520,89 @@ describe("audit.ts — watcher fan-out", () => {
     });
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]?.webhook.url).toBe(agentDispatchUrlFor(victor.id));
+  });
+
+  it("only wakes agent watchers that are activity-wake enabled for generic issue activity", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "WF5" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+
+    const passive = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Passive",
+        profileKey: `wf5-passive-${Date.now()}`,
+        webhookUrl: "https://example.invalid/passive",
+        webhookSecret: "test-secret",
+      },
+    });
+    const active = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Active",
+        profileKey: `wf5-active-${Date.now()}`,
+        webhookUrl: "https://example.invalid/active",
+        webhookSecret: "test-secret",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issueWatcher.createMany({
+      data: [
+        {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: passive.id,
+          wakeOnActivity: false,
+        },
+        {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: active.id,
+          wakeOnActivity: true,
+        },
+      ],
+    });
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      entity: "Issue",
+      entityId: issue.id,
+      action: "priority",
+      eventKind: EventKind.ISSUE_PRIORITY_CHANGED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: { priority: "HIGH" },
+    });
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.ISSUE_PRIORITY_CHANGED,
+        subjectId: issue.id,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    const runs = await prisma.agentRun.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        triggerEventId: event.id,
+      },
+    });
+    expect(runs.map((run) => run.agentId)).toEqual([active.id]);
+
+    const deliveries = await prisma.webhookDelivery.findMany({
+      where: {
+        eventId: event.id,
+        webhook: {
+          workspaceId: fixture.workspace.id,
+          url: { startsWith: "agent:dispatch" },
+        },
+      },
+      include: { webhook: true },
+    });
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.webhook.url).toBe(agentDispatchUrlFor(active.id));
   });
 });

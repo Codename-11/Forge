@@ -2409,12 +2409,18 @@ model Note {
 /// Pin (UI shortcut) and Watch (event subscription) are intentionally
 /// orthogonal — both can be active on the same issue simultaneously.
 model IssueWatcher {
-  id          String   @id @default(cuid())
-  workspaceId String
-  issueId     String
-  userId      String?
-  agentId     String?
-  createdAt   DateTime @default(now())
+  id             String   @id @default(cuid())
+  workspaceId    String
+  issueId        String
+  userId         String?
+  agentId        String?
+  /// Agent-only fan-out switch. A watcher row means "subscribed for
+  /// awareness"; this flag additionally means "wake this agent for future
+  /// issue activity." Human watchers ignore it. Current assigned agents get
+  /// it enabled; former assigned agents keep watching but are demoted so they
+  /// do not receive ghost work after reassignment.
+  wakeOnActivity Boolean  @default(false)
+  createdAt      DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue     Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)

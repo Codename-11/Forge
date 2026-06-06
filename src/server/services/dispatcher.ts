@@ -4,7 +4,7 @@ import { AgentStatus, AutoDispatchMode, EventKind } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { presenceAvailability } from "@/lib/transport-display";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
-import { autoWatchAgent } from "@/server/services/issue-watchers";
+import { setIssueAgentWakeTarget } from "@/server/services/issue-watchers";
 import { resolveEngagementMode } from "@/server/services/engagement-mode";
 
 /**
@@ -30,9 +30,7 @@ export async function recordManualDispatchReason(
     mode: "MANUAL",
     candidatesConsidered: [args.agentProfileKey],
     picked: args.agentProfileKey,
-    reasonText: args.actorId
-      ? "manual assignment"
-      : "manual assignment (system)",
+    reasonText: args.actorId ? "manual assignment" : "manual assignment (system)",
     decidedAt: new Date().toISOString(),
   };
   await tx.issue.update({
@@ -209,9 +207,7 @@ export async function maybeAutoDispatch(
       capabilities: target.capabilities,
       activeCount: target._count.assignedIssues,
       maxConcurrent: target.maxConcurrent,
-      lastDispatchedAt: target.lastDispatchedAt
-        ? target.lastDispatchedAt.toISOString()
-        : null,
+      lastDispatchedAt: target.lastDispatchedAt ? target.lastDispatchedAt.toISOString() : null,
       eligible: true,
     };
     const engagementMode = resolveEngagementMode({
@@ -241,17 +237,13 @@ export async function maybeAutoDispatch(
   if (eligible.length === 0) {
     return {
       agentId: null,
-      reason: ruleFallthroughReason
-        ? `${ruleFallthroughReason},no-candidates`
-        : "no-candidates",
+      reason: ruleFallthroughReason ? `${ruleFallthroughReason},no-candidates` : "no-candidates",
     };
   }
 
   // Round-robin tie-break: oldest `lastDispatchedAt` wins. Null sorts first
   // (agent has never been picked) so new agents get work before veterans.
-  const byRoundRobin = (
-    list: typeof eligible,
-  ): (typeof eligible)[number] => {
+  const byRoundRobin = (list: typeof eligible): (typeof eligible)[number] => {
     const sorted = [...list].sort((a, b) => {
       const at = a.lastDispatchedAt ? a.lastDispatchedAt.getTime() : -1;
       const bt = b.lastDispatchedAt ? b.lastDispatchedAt.getTime() : -1;
@@ -274,9 +266,7 @@ export async function maybeAutoDispatch(
     reasonTag = "round-robin";
   } else if (mode === AutoDispatchMode.PRIORITY_MATCH) {
     const tag = issue.priority.toLowerCase();
-    const matches = eligible.filter((a) =>
-      a.capabilities.some((c) => c.toLowerCase() === tag),
-    );
+    const matches = eligible.filter((a) => a.capabilities.some((c) => c.toLowerCase() === tag));
     if (matches.length) {
       picked = byRoundRobin(matches);
       reasonTag = `priority-match-${tag}+cap`;
@@ -287,24 +277,17 @@ export async function maybeAutoDispatch(
   } else {
     // CAPABILITY_MATCH — score by label-capability intersection, highest
     // wins; tie-break via round-robin.
-    const labelNames = new Set(
-      issue.labels.map((l) => l.label.name.toLowerCase()),
-    );
+    const labelNames = new Set(issue.labels.map((l) => l.label.name.toLowerCase()));
     const scored = eligible.map((a) => {
       const caps = a.capabilities.map((c) => c.toLowerCase());
-      const score = caps.reduce(
-        (acc, c) => acc + (labelNames.has(c) ? 1 : 0),
-        0,
-      );
+      const score = caps.reduce((acc, c) => acc + (labelNames.has(c) ? 1 : 0), 0);
       matchCountByAgent.set(a.id, score);
       return { agent: a, score };
     });
     const topScore = Math.max(...scored.map((s) => s.score));
     // When nobody matches any label, the top score is 0 — fall through to
     // plain round-robin across all eligible agents (don't stall dispatch).
-    const top = scored
-      .filter((s) => s.score === topScore)
-      .map((s) => s.agent);
+    const top = scored.filter((s) => s.score === topScore).map((s) => s.agent);
     picked = byRoundRobin(top);
     reasonTag = `capability-match:${topScore}`;
   }
@@ -323,9 +306,7 @@ export async function maybeAutoDispatch(
       capabilities: a.capabilities,
       activeCount: a._count.assignedIssues,
       maxConcurrent: a.maxConcurrent,
-      lastDispatchedAt: a.lastDispatchedAt
-        ? a.lastDispatchedAt.toISOString()
-        : null,
+      lastDispatchedAt: a.lastDispatchedAt ? a.lastDispatchedAt.toISOString() : null,
       ...(matchCount !== undefined ? { matchCount } : {}),
       eligible: eligibleFlag,
     };
@@ -334,9 +315,7 @@ export async function maybeAutoDispatch(
   const chosen = {
     agentId: picked.id,
     profileKey: picked.profileKey,
-    ...(chosenMatchCount !== undefined
-      ? { matchCount: chosenMatchCount }
-      : {}),
+    ...(chosenMatchCount !== undefined ? { matchCount: chosenMatchCount } : {}),
   };
 
   const engagementMode = resolveEngagementMode({
@@ -407,8 +386,7 @@ async function assignAndEmit(
         reason?: string;
       }
     | undefined;
-  const candidatesConsidered =
-    dispatchPayload?.candidates?.map((c) => c.profileKey) ?? [];
+  const candidatesConsidered = dispatchPayload?.candidates?.map((c) => c.profileKey) ?? [];
   const pickedProfile = dispatchPayload?.chosen?.profileKey ?? null;
   const reasonBlob: Prisma.InputJsonObject = {
     mode: meta.mode,
@@ -427,11 +405,10 @@ async function assignAndEmit(
     },
   });
 
-  // Auto-watch the dispatched agent so subsequent issue-subject events
-  // reach it via the watcher fan-out branch (in addition to the
-  // assignee branch). Sticky — re-dispatch to a different agent leaves
-  // the previous watcher row in place by design.
-  await autoWatchAgent(tx, { workspaceId, issueId, agentId });
+  // Keep watcher rows sticky but make only the current dispatched agent
+  // eligible for generic activity wake fan-out. Prior picks remain
+  // visible as watchers, not future ghost work.
+  await setIssueAgentWakeTarget(tx, { workspaceId, issueId, agentId });
 
   await recordChange(tx, {
     workspaceId,

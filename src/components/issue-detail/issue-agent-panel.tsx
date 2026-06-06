@@ -46,10 +46,7 @@ export function IssueAgentPanel({
 }) {
   const utils = trpc.useUtils();
   const [now, setNow] = useState(() => Date.now());
-  const { data: run } = trpc.agentRun.activeForIssue.useQuery(
-    { issueId },
-    { staleTime: 5_000 },
-  );
+  const { data: run } = trpc.agentRun.activeForIssue.useQuery({ issueId }, { staleTime: 5_000 });
 
   const invalidate = () => {
     void utils.agentRun.activeForIssue.invalidate({ issueId });
@@ -98,8 +95,11 @@ export function IssueAgentPanel({
     return () => window.clearInterval(timer);
   }, []);
 
-  // Prefer the run's agent (freshest), else the statically-assigned one.
-  const agent: PanelAgent | null = run?.agent ?? assignedAgent;
+  // Prefer the run's agent identity, but retain the richer runtime metadata
+  // from the issue's assigned-agent payload when they refer to the same agent.
+  const agent: PanelAgent | null = run?.agent
+    ? mergeAgentRuntimeMetadata(run.agent, assignedAgent)
+    : assignedAgent;
   if (!agent) return null;
 
   const waiting = run?.status === "WAITING";
@@ -196,12 +196,27 @@ export function IssueAgentPanel({
           </button>
         )}
       </div>
-      {mode && (
-        <div className="mt-2">
-          <ModeChip mode={mode} />
-        </div>
-      )}
-      <div className="mt-1.5 text-meta text-muted-foreground">
+      <div className="text-meta mt-2 grid gap-1.5 text-muted-foreground">
+        {mode && (
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="shrink-0 text-[0.625rem] font-medium uppercase tracking-wider text-muted-foreground/80">
+              Mode
+            </span>
+            <ModeChip
+              mode={mode}
+              title="Engagement mode changes the work contract only. It does not grant terminal, filesystem, or git tools."
+            />
+            <span
+              className="min-w-0 truncate"
+              title="Terminal, filesystem, and git access come from the runtime/tool surface."
+            >
+              instructions only
+            </span>
+          </div>
+        )}
+        <RuntimeSurfaceRow agent={agent} />
+      </div>
+      <div className="text-meta mt-1.5 text-muted-foreground">
         {run ? (
           <>
             {waiting ? "Waiting on your reply" : run.currentStep || "working…"}
@@ -215,4 +230,107 @@ export function IssueAgentPanel({
       </div>
     </div>
   );
+}
+
+function mergeAgentRuntimeMetadata(
+  runAgent: PanelAgent,
+  assignedAgent: PanelAgent | null,
+): PanelAgent {
+  if (!assignedAgent || assignedAgent.id !== runAgent.id) return runAgent;
+  return { ...assignedAgent, ...runAgent };
+}
+
+function RuntimeSurfaceRow({ agent }: { agent: PanelAgent }) {
+  const runtime = runtimeSurface(agent);
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <span className="shrink-0 text-[0.625rem] font-medium uppercase tracking-wider text-muted-foreground/80">
+        Runtime
+      </span>
+      <span
+        className={cn(
+          "min-w-0 truncate rounded-md border px-1.5 py-0.5 text-[0.625rem] uppercase tracking-wider",
+          runtime.configured
+            ? "border-border bg-card/40 text-muted-foreground"
+            : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+        )}
+        title={runtime.title}
+      >
+        {runtime.label}
+      </span>
+      <span className="min-w-0 truncate" title={runtime.toolTitle}>
+        {runtime.tools}
+      </span>
+    </div>
+  );
+}
+
+function runtimeSurface(agent: PanelAgent): {
+  label: string;
+  tools: string;
+  title: string;
+  toolTitle: string;
+  configured: boolean;
+} {
+  const provider = normalizeProvider(agent.provider);
+  const runtimeMode = agent.runtimeMode === "EPHEMERAL" ? "session" : "persistent";
+
+  if (provider === "HERMES") {
+    return {
+      label: `Hermes ${runtimeMode}`,
+      tools: "tools from Hermes host",
+      title:
+        "Agent identity is Hermes-backed. Forge dispatches to the Hermes runtime; Forge does not add local terminal tools.",
+      toolTitle:
+        "Terminal, filesystem, and git access depend on the Hermes host that receives this work.",
+      configured: true,
+    };
+  }
+
+  if (agent.runtimeId) {
+    return {
+      label: `${providerLabel(provider)} runtime`,
+      tools: "tools from attached runtime",
+      title:
+        "This agent has an attached managed runtime. Tool access is whatever that runtime exposes.",
+      toolTitle: "Changing Execute/Review/Research does not change the runtime tool surface.",
+      configured: true,
+    };
+  }
+
+  if (agent.webhookUrl) {
+    return {
+      label: "remote webhook",
+      tools: "tools from webhook receiver",
+      title:
+        "Forge reaches this agent through its configured webhook. The receiver decides which tools exist.",
+      toolTitle:
+        "Execute mode asks the webhook receiver to do execution work, but does not grant terminal, filesystem, or git access.",
+      configured: true,
+    };
+  }
+
+  return {
+    label: "unattached",
+    tools: "tool surface unknown",
+    title: "No runtime or webhook metadata is attached to this agent.",
+    toolTitle:
+      "Attach a runtime or webhook before expecting terminal, filesystem, or git-backed work.",
+    configured: false,
+  };
+}
+
+function normalizeProvider(provider: string | null | undefined): string | null {
+  const trimmed = provider?.trim();
+  return trimmed ? trimmed.toUpperCase() : null;
+}
+
+function providerLabel(provider: string | null): string {
+  if (!provider) return "agent";
+  return provider
+    .toLowerCase()
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }

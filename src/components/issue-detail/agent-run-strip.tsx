@@ -34,10 +34,7 @@ import { relativeTime, cn } from "@/lib/utils";
  */
 export function AgentRunStrip({ issueId }: { issueId: string }) {
   const utils = trpc.useUtils();
-  const { data: run } = trpc.agentRun.activeForIssue.useQuery(
-    { issueId },
-    { staleTime: 5_000 },
-  );
+  const { data: run } = trpc.agentRun.activeForIssue.useQuery({ issueId }, { staleTime: 5_000 });
   const setMode = trpc.agentRun.setEngagementMode.useMutation({
     onSuccess: () => {
       void utils.agentRun.activeForIssue.invalidate({ issueId });
@@ -165,11 +162,9 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
           pending={setMode.isPending}
           onChange={(mode) => setMode.mutate({ runId: run.id, mode })}
         />
-        <span className="flex shrink-0 items-center gap-2 text-meta text-muted-foreground">
+        <span className="text-meta flex shrink-0 items-center gap-2 text-muted-foreground">
           <Activity className="h-3 w-3" />
-          <span title={`Started ${new Date(run.startedAt).toLocaleString()}`}>
-            {elapsedLabel}
-          </span>
+          <span title={`Started ${new Date(run.startedAt).toLocaleString()}`}>{elapsedLabel}</span>
           <span>·</span>
           <span title={`Last event ${new Date(run.lastEventAt).toLocaleString()}`}>
             updated {lastEventLabel}
@@ -192,37 +187,46 @@ function RunModeControl({
   onChange: (mode: EngagementModeValue) => void;
 }) {
   return (
-    <div
-      role="radiogroup"
-      aria-label="Run engagement mode"
-      className="flex min-w-0 flex-wrap gap-0.5 rounded-md border border-border bg-background/80 p-0.5"
-    >
-      {MODE_ORDER.map((m) => {
-        const active = mode === m;
-        return (
-          <button
-            key={m}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            aria-label={`Set run mode to ${MODE_LABEL[m]}`}
-            title={`${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}`}
-            disabled={pending || active}
-            onClick={() => onChange(m)}
-            className={cn(
-              "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] uppercase tracking-wider transition-colors",
-              active
-                ? "bg-ember/10 text-foreground"
-                : "text-muted-foreground hover:bg-subtle hover:text-foreground",
-              pending ? "opacity-60" : "",
-            )}
-            data-run-id={runId}
-          >
-            <EngagementModeGlyph mode={m} size={11} />
-            <span>{MODE_LABEL[m]}</span>
-          </button>
-        );
-      })}
+    <div className="flex min-w-0 flex-wrap items-center gap-1">
+      <div
+        role="radiogroup"
+        aria-label="Run engagement mode"
+        title="Engagement mode changes the work contract only. Terminal, filesystem, and git access come from the runtime/tool surface."
+        className="flex min-w-0 flex-wrap gap-0.5 rounded-md border border-border bg-background/80 p-0.5"
+      >
+        {MODE_ORDER.map((m) => {
+          const active = mode === m;
+          return (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              aria-label={`Set run mode to ${MODE_LABEL[m]}`}
+              title={`${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}. Tools are provided by the runtime, not by mode.`}
+              disabled={pending || active}
+              onClick={() => onChange(m)}
+              className={cn(
+                "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] uppercase tracking-wider transition-colors",
+                active
+                  ? "bg-ember/10 text-foreground"
+                  : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+                pending ? "opacity-60" : "",
+              )}
+              data-run-id={runId}
+            >
+              <EngagementModeGlyph mode={m} size={11} />
+              <span>{MODE_LABEL[m]}</span>
+            </button>
+          );
+        })}
+      </div>
+      <span
+        className="text-meta text-muted-foreground"
+        title="Tools come from the assigned runtime."
+      >
+        tools from runtime
+      </span>
     </div>
   );
 }

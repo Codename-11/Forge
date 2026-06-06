@@ -59,7 +59,7 @@ export function getTerminalRunFailureBanner(
   const runtimeLabel = runtimeParts.length ? runtimeParts.join(" · ") : providerLabel;
   const metadata: BannerMetadata[] = [
     { label: "Agent", value: agentHandle ? `${agentName} (@${agentHandle})` : agentName },
-    { label: "Runtime", value: runtimeLabel },
+    { label: "Tool surface", value: runtimeLabel },
     { label: "Last signal", value: relativeTime(run.finishedAt ?? run.lastEventAt) },
     { label: "Run", value: run.externalRunId ? `${run.id} · ${run.externalRunId}` : run.id },
   ];
@@ -70,11 +70,11 @@ export function getTerminalRunFailureBanner(
     !/output|completed|finished/i.test(run.currentStep ?? "");
 
   return {
-    title: `${providerLabel} run ${run.status === "STALLED" ? "stalled" : "failed"} before completing`,
+    title: `${agentName} run ${run.status === "STALLED" ? "stalled" : "failed"} before completing`,
     description: stalledWithoutRuntimeActivity
-      ? `${providerLabel} did not report runtime activity for this run before the watchdog marked it stalled.`
-      : `${providerLabel} ended this run with status ${run.status}${run.currentStep ? `: ${run.currentStep}` : "."}`,
-    recommendation: `Kick applies to stale active runs; for this terminal run, wake or reassign once ${providerLabel} is healthy.`,
+      ? `${agentName} did not report runtime activity for this run before the watchdog marked it stalled.`
+      : `${agentName} ended this run with status ${run.status}${run.currentStep ? `: ${run.currentStep}` : "."}`,
+    recommendation: `Wake or reassign once ${agentName}'s runtime/tool surface is healthy. Switching Execute/Review/Research will not add terminal, filesystem, or git tools.`,
     metadata,
   };
 }
@@ -119,7 +119,7 @@ export function TerminalRunFailureBanner({
               </div>
             ))}
           </dl>
-          <div className="flex flex-wrap items-center gap-2 text-meta text-muted-foreground">
+          <div className="text-meta flex flex-wrap items-center gap-2 text-muted-foreground">
             <ArrowRightCircle className="h-3.5 w-3.5 shrink-0" />
             <span>{banner.recommendation}</span>
             {activityHref ? (

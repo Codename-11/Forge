@@ -12,10 +12,12 @@ import {
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
 import { finishRunsForIssue, recordAgentAction } from "@/server/services/agent-run";
+import { runtimePreflightForIssue } from "@/server/services/runtime-preflight";
 import {
   autoWatchActor,
   autoWatchAgent,
   autoWatchUser,
+  setIssueAgentWakeTarget,
 } from "@/server/services/issue-watchers";
 import { agentId as agentIdSchema } from "./agent";
 import {
@@ -124,6 +126,11 @@ async function applySlashCommandsToIssue(opts: {
               ip: opts.ip,
               userAgent: opts.userAgent,
             });
+            await setIssueAgentWakeTarget(tx, {
+              workspaceId: opts.workspaceId,
+              issueId: opts.issueId,
+              agentId: agent.id,
+            });
             await maybeApplyAgentTemplate(tx, opts.issueId, agent.id);
           });
           out.push({ kind: cmd.kind, status: "applied" });
@@ -182,14 +189,11 @@ async function applySlashCommandsToIssue(opts: {
           // user-watch only when caller is human; agent-watch when caller
           // is an agent via API key.
           if (opts.callerAgentId) {
-            await db.issueWatcher.upsert({
-              where: { issueId_agentId: { issueId: opts.issueId, agentId: opts.callerAgentId } },
-              create: {
-                workspaceId: opts.workspaceId,
-                issueId: opts.issueId,
-                agentId: opts.callerAgentId,
-              },
-              update: {},
+            await autoWatchAgent(db, {
+              workspaceId: opts.workspaceId,
+              issueId: opts.issueId,
+              agentId: opts.callerAgentId,
+              wakeOnActivity: true,
             });
           } else {
             await db.issueWatcher.upsert({
@@ -521,6 +525,14 @@ export const issueRouter = router({
               lastHeartbeatAt: true,
               webhookUrl: true,
               runtimeId: true,
+              runtime: {
+                select: {
+                  name: true,
+                  kind: true,
+                  adapterKey: true,
+                  config: true,
+                },
+              },
             },
           },
           // Latest run, terminal or not. The failure banner is based on
@@ -581,7 +593,29 @@ export const issueRouter = router({
         },
       });
       if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
-      return issue;
+      const runtimePreflight = runtimePreflightForIssue({
+        title: issue.title,
+        description: issue.description,
+        labels: issue.labels.map((l) => l.label.name),
+        assignedAgent: issue.assignedAgent,
+      });
+      const assignedAgent = issue.assignedAgent
+        ? {
+            ...issue.assignedAgent,
+            runtime: issue.assignedAgent.runtime
+              ? {
+                  name: issue.assignedAgent.runtime.name,
+                  kind: issue.assignedAgent.runtime.kind,
+                  adapterKey: issue.assignedAgent.runtime.adapterKey,
+                }
+              : null,
+          }
+        : null;
+      return {
+        ...issue,
+        assignedAgent,
+        runtimePreflight,
+      };
     }),
 
   /**
@@ -858,11 +892,11 @@ export const issueRouter = router({
             userId,
           });
         }
-        // Pre-assigned agent at create time also gets a watcher row so
-        // any subsequent issue-subject event reaches it via the
-        // watcher fan-out branch (in addition to the assignee branch).
+        // Pre-assigned agent at create time also becomes the issue's
+        // activity-wake target. The watcher row stays visible, while
+        // wake fan-out is explicit.
         if (input.assignedAgentId) {
-          await autoWatchAgent(tx, {
+          await setIssueAgentWakeTarget(tx, {
             workspaceId: ctx.workspaceId,
             issueId: issue.id,
             agentId: input.assignedAgentId,
@@ -1262,14 +1296,19 @@ export const issueRouter = router({
           // an already-populated issue won't clobber prior content.
           if (assignmentChanged && nextAgentId) {
             await maybeApplyAgentTemplate(tx, id, nextAgentId);
-            // Auto-watch the newly-assigned agent so subsequent
-            // issue-subject events route to it via the watcher branch
-            // (in addition to the AGENT_ASSIGNED-and-route-to-assignee
-            // branch). Sticky — unassignment doesn't strip the watch.
-            await autoWatchAgent(tx, {
+            // Keep watcher rows sticky but make only the current assigned
+            // agent eligible for generic activity wake fan-out. Prior
+            // assignees remain watching for visibility, not fresh work.
+            await setIssueAgentWakeTarget(tx, {
               workspaceId: ctx.workspaceId,
               issueId: id,
               agentId: nextAgentId,
+            });
+          } else if (assignmentChanged) {
+            await setIssueAgentWakeTarget(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: id,
+              agentId: null,
             });
           }
         }
@@ -1796,6 +1835,11 @@ export const issueRouter = router({
         for (let i = 0; i < validIds.length; i += CHUNK) {
           const chunk = issues.slice(i, i + CHUNK);
           for (const row of chunk) {
+            await setIssueAgentWakeTarget(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: row.id,
+              agentId: input.assignedAgentId,
+            });
             await recordChange(tx, {
               workspaceId: ctx.workspaceId,
               actorId: ctx.session.user.id,
@@ -2700,10 +2744,9 @@ export const issueRouter = router({
   // ----------------------------------------------------------------- Watching
   // Per-(issue, user OR agent) subscription. Watch and Pin are
   // orthogonal — pin is a UI shortcut, watch is event subscription.
-  // Watchers receive event fan-out via the per-agent dispatch shim
-  // (agents) or via the inbox/notification surface (humans). The
-  // actor of an event is filtered out of fan-out so people don't get
-  // pinged for their own moves.
+  // Human watchers receive notifications. Agent watcher rows are visible
+  // subscriptions; only rows with wakeOnActivity enabled receive generic
+  // issue-activity dispatch. Explicit @mentions still wake directly.
 
   /**
    * Add the caller as a watcher of `issueId`. Idempotent — calling
@@ -2722,14 +2765,14 @@ export const issueRouter = router({
       }
       const callerAgentId = ctx.apiKey?.linkedAgentId ?? null;
       if (callerAgentId) {
-        return ctx.db.issueWatcher.upsert({
+        await autoWatchAgent(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          issueId: input.issueId,
+          agentId: callerAgentId,
+          wakeOnActivity: true,
+        });
+        return ctx.db.issueWatcher.findUniqueOrThrow({
           where: { issueId_agentId: { issueId: input.issueId, agentId: callerAgentId } },
-          create: {
-            workspaceId: ctx.workspaceId,
-            issueId: input.issueId,
-            agentId: callerAgentId,
-          },
-          update: {},
         });
       }
       return ctx.db.issueWatcher.upsert({

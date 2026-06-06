@@ -201,11 +201,7 @@ export function useActivityDrawer(): {
   eventUnreadCount: number;
 } {
   const ws = useMaybeWorkspace();
-  const state = useSyncExternalStore(
-    subscribeDrawer,
-    getDrawerSnapshot,
-    getServerSnapshot,
-  );
+  const state = useSyncExternalStore(subscribeDrawer, getDrawerSnapshot, getServerSnapshot);
   const lastReadIso = useSyncExternalStore(
     subscribeLastRead,
     getLastReadSnapshot,
@@ -225,14 +221,11 @@ export function useActivityDrawer(): {
     staleTime: 60_000,
   });
 
-  const { data: notificationUnread } = trpc.notification.unreadCount.useQuery(
-    undefined,
-    {
-      enabled: Boolean(ws),
-      refetchOnWindowFocus: true,
-      staleTime: 30_000,
-    },
-  );
+  const { data: notificationUnread } = trpc.notification.unreadCount.useQuery(undefined, {
+    enabled: Boolean(ws),
+    refetchOnWindowFocus: true,
+    staleTime: 30_000,
+  });
 
   const utils = trpc.useUtils();
   useRealtime(
@@ -298,8 +291,8 @@ export function ActivityBell() {
       {unreadCount > 0 && (
         <span
           className={cn(
-            "absolute -top-0.5 -right-0.5 grid h-3.5 min-w-3.5 place-items-center",
-            "rounded-full bg-ember px-1 text-[0.6875rem] font-mono font-semibold text-ember-foreground",
+            "absolute -right-0.5 -top-0.5 grid h-3.5 min-w-3.5 place-items-center",
+            "rounded-full bg-ember px-1 font-mono text-[0.6875rem] font-semibold text-ember-foreground",
           )}
         >
           {unreadCount > 99 ? "99+" : unreadCount}
@@ -351,6 +344,82 @@ function readPayloadString(payload: unknown, key: string): string | null {
     if (typeof v === "string" && v.length > 0) return v;
   }
   return null;
+}
+
+function readPayloadRecord(payload: unknown, key: string): Record<string, unknown> | null {
+  if (!payload || typeof payload !== "object" || !(key in payload)) return null;
+  const v = (payload as Record<string, unknown>)[key];
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+function readPayloadNumber(payload: unknown, key: string): number | null {
+  if (!payload || typeof payload !== "object" || !(key in payload)) return null;
+  const v = (payload as Record<string, unknown>)[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function readPayloadBoolean(payload: unknown, key: string): boolean | null {
+  if (!payload || typeof payload !== "object" || !(key in payload)) return null;
+  const v = (payload as Record<string, unknown>)[key];
+  return typeof v === "boolean" ? v : null;
+}
+
+function readNestedString(payload: unknown, objectKey: string, valueKey: string): string | null {
+  const obj = readPayloadRecord(payload, objectKey);
+  const value = obj?.[valueKey];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function activityAgentHandle(evt: TimelineEvent): string | null {
+  const dispatch = readPayloadRecord(evt.payload, "dispatch");
+  const chosen = dispatch?.chosen;
+  const chosenHandle =
+    chosen && typeof chosen === "object" && !Array.isArray(chosen)
+      ? (chosen as Record<string, unknown>).profileKey
+      : null;
+  return (
+    evt.agent?.profileKey ??
+    evt.issue?.assignedAgent?.profileKey ??
+    readPayloadString(evt.payload, "agentProfileKey") ??
+    (typeof chosenHandle === "string" && chosenHandle.length > 0 ? chosenHandle : null) ??
+    readNestedString(evt.payload, "dispatchReason", "picked") ??
+    null
+  );
+}
+
+function agentHandleNode(handle: string | null): ReactNode {
+  return handle ? <span className="font-mono">@{handle}</span> : "the agent";
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.round((ms % 3_600_000) / 60_000);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+function runSummaryMeta(payload: unknown): ReactNode | undefined {
+  const summary =
+    readPayloadString(payload, "summary") ??
+    readPayloadString(payload, "currentStep") ??
+    readPayloadString(payload, "reason");
+  return summary ? <span className="truncate">{summary}</span> : undefined;
+}
+
+function dispatchMeta(payload: unknown): ReactNode | undefined {
+  const mode =
+    readPayloadString(payload, "mode") ?? readNestedString(payload, "dispatchReason", "mode");
+  const engagementMode = readPayloadString(payload, "engagementMode");
+  const reason =
+    readPayloadString(payload, "reason") ??
+    readNestedString(payload, "dispatchReason", "reasonText");
+  const parts = [
+    mode ? `dispatch ${mode}` : null,
+    engagementMode ? `mode ${engagementMode}` : null,
+    reason,
+  ].filter(Boolean);
+  return parts.length > 0 ? <span className="truncate">{parts.join(" · ")}</span> : undefined;
 }
 
 function notificationForEvent(
@@ -451,16 +520,11 @@ function summarizeEvent(
     actorLabel
   );
   const issue = evt.issue;
-  const issueLabel = issue
-    ? `${issue.workspace.key}-${issue.number}`
-    : null;
+  const issueLabel = issue ? `${issue.workspace.key}-${issue.number}` : null;
   const issueHref = issue ? `/w/${wsSlug}/issues/${issue.id}` : null;
   const issueLink =
     issue && issueHref ? (
-      <Link
-        href={issueHref}
-        className="font-mono text-foreground hover:text-ember"
-      >
+      <Link href={issueHref} className="font-mono text-foreground hover:text-ember">
         {issueLabel}
       </Link>
     ) : (
@@ -478,8 +542,7 @@ function summarizeEvent(
         meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
       };
     case "ISSUE_ASSIGNED": {
-      const agentHandle =
-        evt.agent?.profileKey ?? evt.issue?.assignedAgent?.profileKey;
+      const agentHandle = evt.agent?.profileKey ?? evt.issue?.assignedAgent?.profileKey;
       return {
         headline: (
           <>
@@ -495,22 +558,17 @@ function summarizeEvent(
       };
     }
     case "AGENT_ASSIGNED": {
-      const mode = readPayloadString(evt.payload, "mode");
-      const agentHandle =
-        evt.agent?.profileKey ?? evt.issue?.assignedAgent?.profileKey;
+      const agentHandle = activityAgentHandle(evt);
+      const redirectedFromRunId = readPayloadString(evt.payload, "redirectedFromRunId");
+      const auto = readPayloadBoolean(evt.payload, "auto") === true;
       return {
         headline: (
           <>
-            {actorName} assigned {issueLink}
-            {agentHandle && (
-              <>
-                {" "}
-                to <span className="font-mono">@{agentHandle}</span>
-              </>
-            )}
+            {auto ? "Auto-dispatch" : actorName} requested wake for {agentHandleNode(agentHandle)}{" "}
+            on {issueLink}
           </>
         ),
-        meta: mode ? <>mode &middot; {mode}</> : undefined,
+        meta: redirectedFromRunId ? <>redirected from previous run</> : dispatchMeta(evt.payload),
       };
     }
     case "AGENT_STATUS_CHANGED": {
@@ -534,10 +592,7 @@ function summarizeEvent(
             {issue && (
               <>
                 {" "}
-                &rarr;{" "}
-                <span style={{ color: issue.status.color }}>
-                  {issue.status.name}
-                </span>
+                &rarr; <span style={{ color: issue.status.color }}>{issue.status.name}</span>
               </>
             )}
           </>
@@ -596,12 +651,11 @@ function summarizeEvent(
         evt.payload && typeof evt.payload === "object"
           ? (evt.payload as Record<string, unknown>).requiredAckSeconds
           : null;
-      const secNum =
-        typeof seconds === "number" ? Math.round(seconds) : null;
+      const secNum = typeof seconds === "number" ? Math.round(seconds) : null;
       return {
         headline: (
           <>
-            <span className="text-warning">Missed wake</span> — {issueLink}{" "}
+            <span className="text-warning">Wake missed</span> — {issueLink}{" "}
             <span className="text-muted-foreground">
               {handle && (
                 <>
@@ -620,16 +674,13 @@ function summarizeEvent(
         evt.payload && typeof evt.payload === "object"
           ? (evt.payload as Record<string, unknown>).breachedByMinutes
           : null;
-      const overdueNum =
-        typeof overdue === "number" ? Math.max(0, overdue) : null;
+      const overdueNum = typeof overdue === "number" ? Math.max(0, overdue) : null;
       return {
         headline: (
           <>
             <span className="text-danger">SLA breach</span> — {issueLink}{" "}
             {overdueNum != null && (
-              <span className="text-muted-foreground">
-                {overdueNum}m overdue
-              </span>
+              <span className="text-muted-foreground">{overdueNum}m overdue</span>
             )}
           </>
         ),
@@ -637,6 +688,18 @@ function summarizeEvent(
       };
     }
     case "COMMENT_CREATED":
+      if (readPayloadString(evt.payload, "kind") === "STATUS") {
+        return {
+          headline: (
+            <>
+              {actorName} posted status output on {issueLink}
+            </>
+          ),
+          meta:
+            runSummaryMeta(evt.payload) ??
+            (issue ? <span className="truncate">{issue.title}</span> : undefined),
+        };
+      }
       return {
         headline: (
           <>
@@ -652,59 +715,101 @@ function summarizeEvent(
         ),
         meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
       };
-    case "AGENT_RUN_STARTED":
+    case "AGENT_RUN_STARTED": {
+      const handle = activityAgentHandle(evt);
       return {
         headline: (
           <>
-            {actorName} started run for {issueLink}
+            Run opened for {agentHandleNode(handle)} on {issueLink}
           </>
         ),
-        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+        meta: <>waiting for wake delivery and acknowledgement</>,
       };
+    }
+    case "AGENT_RUN_CONTROL_REQUESTED": {
+      const control = readPayloadString(evt.payload, "control");
+      const label =
+        control === "cancel"
+          ? "Stop requested"
+          : control === "pause"
+            ? "Pause requested"
+            : control === "redirect"
+              ? "Redirect requested"
+              : "Run control requested";
+      return {
+        headline: (
+          <>
+            {actorName} {label.toLowerCase()} for {issueLink}
+          </>
+        ),
+        meta: runSummaryMeta(evt.payload),
+      };
+    }
     case "AGENT_RUN_COMPLETED": {
       const finalStatus = readPayloadString(evt.payload, "finalStatus");
+      const handle = activityAgentHandle(evt);
+      const verb =
+        finalStatus === "ABANDONED"
+          ? "stopped"
+          : finalStatus === "STALLED"
+            ? "stalled"
+            : "completed";
       return {
         headline: (
           <>
-            {actorName} {finalStatus === "ABANDONED" ? "stopped" : "completed"} run
-            {" "}for {issueLink}
+            Run {verb} for {agentHandleNode(handle)} on {issueLink}
           </>
         ),
-        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+        meta:
+          runSummaryMeta(evt.payload) ??
+          (issue ? <span className="truncate">{issue.title}</span> : undefined),
       };
     }
     case "AGENT_RUN_STALLED":
       return {
         headline: (
           <>
-            <span className="text-warning">Run stalled</span> for {issueLink}
+            <span className="text-warning">Run stalled</span> for{" "}
+            {agentHandleNode(activityAgentHandle(evt))} on {issueLink}
           </>
         ),
-        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+        meta:
+          runSummaryMeta(evt.payload) ??
+          (issue ? <span className="truncate">{issue.title}</span> : undefined),
       };
     case "AGENT_RUN_BLOCKED":
       return {
         headline: (
           <>
-            {actorName} blocked run for {issueLink}
+            Run blocked for {agentHandleNode(activityAgentHandle(evt))} on {issueLink}
           </>
         ),
-        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+        meta:
+          runSummaryMeta(evt.payload) ??
+          (issue ? <span className="truncate">{issue.title}</span> : undefined),
       };
-    case "AGENT_RUN_KICKED":
+    case "AGENT_RUN_KICKED": {
+      const idleMs = readPayloadNumber(evt.payload, "idleMs");
+      const handle = activityAgentHandle(evt);
       return {
         headline: (
           <>
-            {actorName} kicked run for {issueLink}
+            {actorName} retried wake for {agentHandleNode(handle)} on {issueLink}
           </>
         ),
-        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+        meta:
+          idleMs != null ? (
+            <>last signal {formatDuration(idleMs)} ago</>
+          ) : (
+            runSummaryMeta(evt.payload)
+          ),
       };
+    }
   }
   return {
     headline: (
       <>
-        {actorName} recorded {evt.kind.replace(/_/g, " ").toLowerCase()} on {issueLink}
+        {actorName} recorded {String(evt.kind).replace(/_/g, " ").toLowerCase()} on {issueLink}
       </>
     ),
     meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
@@ -754,9 +859,7 @@ function AlertActivityRow({
               {statusLabel}
             </span>
           )}
-          <span className="min-w-0 truncate text-foreground">
-            {notification.summary}
-          </span>
+          <span className="min-w-0 truncate text-foreground">{notification.summary}</span>
         </div>
         {notification.reason && (
           <div className="text-meta mt-0.5 line-clamp-2 text-muted-foreground">
@@ -833,11 +936,7 @@ type Tab = "mine" | "activity";
 
 export default function ActivityDrawer() {
   const ws = useMaybeWorkspace();
-  const state = useSyncExternalStore(
-    subscribeDrawer,
-    getDrawerSnapshot,
-    getServerSnapshot,
-  );
+  const state = useSyncExternalStore(subscribeDrawer, getDrawerSnapshot, getServerSnapshot);
   const open = state.open;
 
   const [tab, setTab] = useState<Tab>("mine");
@@ -922,8 +1021,7 @@ export default function ActivityDrawer() {
   const { data, isLoading } = trpc.event.recent.useQuery(
     { cursor, limit: 40, mineOnly },
     {
-      enabled:
-        Boolean(ws) && (open || hasOpenedOnce) && tab === "activity",
+      enabled: Boolean(ws) && (open || hasOpenedOnce) && tab === "activity",
     },
   );
 
@@ -938,15 +1036,14 @@ export default function ActivityDrawer() {
     },
   );
 
-  const { data: attentionData, isLoading: attentionLoading } =
-    trpc.notification.list.useQuery(
-      { limit: 30 },
-      {
-        enabled: Boolean(ws) && (open || hasOpenedOnce) && tab === "mine",
-        refetchOnWindowFocus: true,
-        staleTime: 30_000,
-      },
-    );
+  const { data: attentionData, isLoading: attentionLoading } = trpc.notification.list.useQuery(
+    { limit: 30 },
+    {
+      enabled: Boolean(ws) && (open || hasOpenedOnce) && tab === "mine",
+      refetchOnWindowFocus: true,
+      staleTime: 30_000,
+    },
+  );
 
   useEffect(() => {
     if (!data) return;
@@ -968,22 +1065,16 @@ export default function ActivityDrawer() {
 
   const events = pages;
   const nextCursor = data?.nextCursor ?? null;
-  const attentionRows =
-    attentionData?.notifications.map(notificationRowFromPersisted) ?? [];
+  const attentionRows = attentionData?.notifications.map(notificationRowFromPersisted) ?? [];
   const unreadAlertCount = attentionRows.filter((row) => row.status === "UNREAD").length;
   const mineCount =
     (mineData
-      ? mineData.counts.assignedUnblocked +
-        mineData.counts.mentions +
-        mineData.counts.stalled
+      ? mineData.counts.assignedUnblocked + mineData.counts.mentions + mineData.counts.stalled
       : 0) + attentionRows.length;
 
   return (
     <div
-      className={cn(
-        "fixed inset-0 z-40 bg-foreground/20 backdrop-blur-sm",
-        MOTION.fadeIn,
-      )}
+      className={cn("fixed inset-0 z-40 bg-foreground/20 backdrop-blur-sm", MOTION.fadeIn)}
       onClick={close}
       aria-hidden="true"
     >
@@ -994,14 +1085,12 @@ export default function ActivityDrawer() {
         onClick={(e) => e.stopPropagation()}
         className={cn(
           "fixed right-0 top-0 z-40 flex h-svh w-[420px] max-w-full flex-col border-l border-border bg-card shadow-xl",
-          "motion-safe:animate-in motion-safe:slide-in-from-right-4 motion-safe:fade-in duration-150 ease-out",
+          "duration-150 ease-out motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-right-4",
         )}
       >
         <div className="sticky top-0 z-10 border-b border-border bg-card">
           <div className="flex items-center gap-2 px-4 pt-3">
-            <div className="text-sm font-semibold tracking-tight">
-              Notifications
-            </div>
+            <div className="text-sm font-semibold tracking-tight">Notifications</div>
             <div className="ml-auto flex items-center gap-1.5">
               {tab === "mine" && unreadAlertCount > 0 && (
                 <button
@@ -1130,17 +1219,12 @@ export default function ActivityDrawer() {
                 }
                 const { headline, meta } = summarizeEvent(evt, ws.slug);
                 return (
-                  <li
-                    key={evt.id}
-                    className="flex items-start gap-2 px-4 py-2.5 text-[0.75rem]"
-                  >
+                  <li key={evt.id} className="flex items-start gap-2 px-4 py-2.5 text-[0.75rem]">
                     <span className="mt-0.5 shrink-0">{iconFor(evt.kind)}</span>
                     <div className="min-w-0 flex-1">
                       <div className="text-foreground">{headline}</div>
                       {meta && (
-                        <div className="text-meta truncate text-muted-foreground">
-                          {meta}
-                        </div>
+                        <div className="text-meta truncate text-muted-foreground">{meta}</div>
                       )}
                     </div>
                     <span className="text-meta shrink-0 text-muted-foreground">
@@ -1199,9 +1283,7 @@ function DrawerTab({
         <span
           className={cn(
             "inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 font-mono text-[0.625rem]",
-            active
-              ? "bg-ember/20 text-ember"
-              : "bg-subtle text-muted-foreground",
+            active ? "bg-ember/20 text-ember" : "bg-subtle text-muted-foreground",
           )}
         >
           {count > 99 ? "99+" : count}
@@ -1435,11 +1517,7 @@ function MineRow({
         <span className="mt-0.5 shrink-0">{left}</span>
         <div className="min-w-0 flex-1">
           <div className="truncate text-foreground">{title}</div>
-          {meta && (
-            <div className="truncate text-[0.6875rem] text-muted-foreground">
-              {meta}
-            </div>
-          )}
+          {meta && <div className="truncate text-[0.6875rem] text-muted-foreground">{meta}</div>}
         </div>
       </Link>
     </li>
