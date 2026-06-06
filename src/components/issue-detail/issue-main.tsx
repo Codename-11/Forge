@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Activity, MessageCircleReply, Target, Workflow } from "lucide-react";
+import { MessageCircleReply, Target, Workflow } from "lucide-react";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { Avatar } from "@/components/ui/avatar";
 import {
@@ -66,17 +66,17 @@ type Comment = {
   body: string;
   createdAt: Date | string;
   /**
-   * Comment kind. STATUS comments are pinned above the thread and
-   * surfaced as the rolling agent run status (one per run, upserted
-   * via `comments.upsertStatus`). BODY comments render in the regular
-   * chronological list. SYSTEM comments are server-authored notices
-   * (assignment, dispatch provenance) with no author — rendered as
+   * Comment kind. STATUS comments are rolling agent run updates (one per
+   * run, upserted via `comments.upsertStatus`) and render in the regular
+   * chronological list using `updatedAt` as their effective timestamp.
+   * BODY comments sort by creation time. SYSTEM comments are server-authored
+   * notices (assignment, dispatch provenance) with no author — rendered as
    * ambient narration.
    */
   kind?: "BODY" | "STATUS" | "SYSTEM";
-  /** Last update time (server-side `updatedAt`). Drives "updated Ns ago" on STATUS pins. */
+  /** Last update time (server-side `updatedAt`). Drives STATUS timeline position. */
   updatedAt?: Date | string;
-  /** Compact step label rendered next to STATUS pins. Always null on BODY. */
+  /** Compact step label rendered next to STATUS rows. Always null on BODY. */
   currentStep?: string | null;
   /** SYSTEM rows have no author; renderer handles the null case. */
   author: { id: string; name: string | null; image: string | null } | null;
@@ -160,20 +160,6 @@ function commentTimelineMs(comment: Comment): number {
   return timestampMs(comment.createdAt);
 }
 
-function isPinnedStatusComment(comment: Comment, currentRunId: string | null): boolean {
-  if (comment.kind !== "STATUS") return false;
-  if (!comment.run) return !currentRunId;
-  // Pin only live/problem run status. Completed/abandoned status rows are
-  // historical summaries and belong in the chronological conversation.
-  // WAITING is a live state (agent self-blocked on operator), so it also
-  // pins — the operator's eye should land on it.
-  const live =
-    comment.run.status === "ACTIVE" ||
-    comment.run.status === "STALLED" ||
-    comment.run.status === "WAITING";
-  return !!currentRunId && comment.run.id === currentRunId && live;
-}
-
 /**
  * Agent comments often start with a one-line provenance tag like
  *
@@ -217,7 +203,6 @@ export function IssueMain({
   description,
   comments,
   onDescriptionSave,
-  currentRunId = null,
   /**
    * Caller-resolved signal used by `<ActionRequestCard>` to decide
    * whether to render Accept / Decline buttons. The page hands in
@@ -260,7 +245,6 @@ export function IssueMain({
       <Comments
         issueId={issueId}
         comments={comments}
-        currentRunId={currentRunId}
         canResolveActions={canResolveActions}
       />
     </div>
@@ -531,12 +515,10 @@ function DescriptionBlock({
 function Comments({
   issueId,
   comments,
-  currentRunId,
   canResolveActions,
 }: {
   issueId: string;
   comments: Comment[];
-  currentRunId: string | null;
   canResolveActions: boolean;
 }) {
   const utils = trpc.useUtils();
@@ -798,15 +780,14 @@ function Comments({
     onChange: setDraft,
   });
 
-  // STATUS comments are rolling agent-run updates. Active/stalled status is
-  // pinned as the "right now" answer; terminal status rows are historical and
-  // render in the normal timeline using updatedAt as their effective time.
-  const pinnedStatusComments = comments
-    .filter((comment) => isPinnedStatusComment(comment, currentRunId))
-    .sort((a, b) => commentTimelineMs(b) - commentTimelineMs(a));
-  const timelineComments = comments
-    .filter((c) => !isPinnedStatusComment(c, currentRunId))
-    .sort((a, b) => commentTimelineMs(a) - commentTimelineMs(b));
+  // STATUS comments are rolling agent-run updates. They stay in the same
+  // chronological thread as BODY/SYSTEM rows, but use updatedAt as their
+  // effective time so the status card moves when the agent actually reports
+  // new progress. The separate AgentRunStrip is the always-current control
+  // surface for live runs.
+  const timelineComments = [...comments].sort(
+    (a, b) => commentTimelineMs(a) - commentTimelineMs(b),
+  );
   // Identify the most recent agent-authored BODY comment — only its
   // quick-reply chips render (older chips are stale CTAs). STATUS rows
   // never carry chips, so the BODY filter is sufficient.
@@ -821,10 +802,7 @@ function Comments({
     <section>
       <SectionLabel>Comments {timelineComments.length > 0 && <Count>{timelineComments.length}</Count>}</SectionLabel>
       <div className="space-y-3">
-        {pinnedStatusComments.map((c) => (
-          <StatusCommentPin key={c.id} comment={c} />
-        ))}
-        {timelineComments.length === 0 && pinnedStatusComments.length === 0 && (
+        {timelineComments.length === 0 && (
           <p className="text-xs text-muted-foreground">No comments yet.</p>
         )}
         {timelineComments.map((c) => (
@@ -961,6 +939,12 @@ function TimelineCommentCard({
 }) {
   const isAgent = Boolean(comment.authoringAgent);
   const isStatus = comment.kind === "STATUS";
+  const isLiveStatus =
+    isStatus &&
+    (comment.run?.status === "ACTIVE" ||
+      comment.run?.status === "WAITING" ||
+      comment.run?.status === "STALLED");
+  const statusTime = comment.updatedAt ?? comment.createdAt;
   // BODY comments are editable inline (STATUS rows are agent-owned
   // rolling status, SYSTEM rows are server narration — neither edits).
   const isEditable = !isStatus && comment.kind !== "SYSTEM";
@@ -1044,7 +1028,7 @@ function TimelineCommentCard({
                 color="#d97706"
                 className="font-mono text-[0.6875rem] uppercase tracking-wider"
               >
-                ran status
+                {isLiveStatus ? "live status" : "run status"}
               </Badge>
             ) : (
               isAgent && (
@@ -1059,8 +1043,13 @@ function TimelineCommentCard({
                 </Badge>
               )
             )}
+            {isStatus && comment.currentStep && (
+              <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                · {comment.currentStep}
+              </span>
+            )}
             <span className="text-muted-foreground">
-              {relativeTime(isStatus ? (comment.updatedAt ?? comment.createdAt) : comment.createdAt)}
+              {isStatus ? `updated ${relativeTime(statusTime)}` : relativeTime(comment.createdAt)}
             </span>
             {!isStatus && comment.editedAt && (
               <CommentEditedMarker
@@ -1381,72 +1370,6 @@ function CommentAvatar({
     );
   }
   return <Avatar name={name} image={image} size={22} />;
-}
-
-/**
- * Pinned rendering for a single STATUS comment. Visually distinguished
- * from BODY comments: warm ember left-rail, "live status" eyebrow,
- * "updated Ns ago" so a stale status feels stale. The body itself goes
- * through `MarkdownWithAttachments` so issue refs / mentions / attachments
- * still render the same way as in BODY comments.
- */
-function StatusCommentPin({ comment }: { comment: Comment }) {
-  const isAgent = Boolean(comment.authoringAgent);
-  const displayName = comment.authoringAgent?.name ?? comment.author?.name ?? "System";
-  const updated = comment.updatedAt ?? comment.createdAt;
-  const { provenance, rest } = useMemo(
-    () => (isAgent ? splitProvenance(comment.body) : { provenance: null, rest: comment.body }),
-    [comment.body, isAgent],
-  );
-  const bodySegments = useMemo(() => splitToolDirectives(rest), [rest]);
-  const confidenceLevel: ConfidenceLevel | null =
-    isAgent && comment.confidence ? comment.confidence : null;
-  return (
-    <div className="flex gap-2.5">
-      <CommentAvatar
-        name={displayName}
-        image={isAgent ? null : (comment.author?.image ?? null)}
-        agent={isAgent ? comment.authoringAgent ?? null : null}
-      />
-      <div className="min-w-0 flex-1 rounded-md border-l-2 border-l-ember border-y border-r border-border bg-ember/5 p-2.5">
-        <div className="flex flex-wrap items-center gap-2 text-meta">
-          <Activity className="h-3 w-3 text-ember" />
-          <span className="font-medium">{displayName}</span>
-          {isAgent && (
-            <Badge
-              color="#d97706"
-              className="font-mono text-[0.6875rem] uppercase tracking-wider"
-            >
-              live status
-            </Badge>
-          )}
-          {comment.currentStep && (
-            <span className="font-mono text-[0.6875rem] text-muted-foreground">
-              · {comment.currentStep}
-            </span>
-          )}
-          {confidenceLevel && (
-            <ConfidenceChip
-              level={confidenceLevel}
-              reason={comment.confidenceReason ?? null}
-            />
-          )}
-          <span className="text-muted-foreground sm:ml-auto">
-            updated {relativeTime(updated)}
-          </span>
-        </div>
-        {provenance && (
-          <div className="mt-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
-            {provenance}
-          </div>
-        )}
-        <CommentBodyWithTools
-          segments={bodySegments}
-          className="mt-1.5 text-[0.8125rem] text-foreground/90"
-        />
-      </div>
-    </div>
-  );
 }
 
 function SectionLabel({ children }: { children: ReactNode }) {

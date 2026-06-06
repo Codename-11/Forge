@@ -2,6 +2,24 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-06 — Issue status timeline and Hermes enforcement flag
+
+Issue STATUS comments now stay inside the normal chronological comments
+timeline instead of pinning above the thread. Rolling status rows use
+`updatedAt` as their effective timestamp, active/waiting/stalled rows render
+as "live status", and terminal rows render as "run status"; the issue run
+strip remains the current-run control surface above the issue and near the
+composer. Updated `docs/concepts/comments.md` to match.
+
+Corrected the live `rt_hermes_gateway` Runtime config to set
+`modeToolPolicyEnforced: true` now that the deployed Hermes gateway is on the
+policy-capable build. New Hermes dispatches should badge as host-enforced;
+already-active runs keep their dispatch-time runtime-policy snapshot unless
+explicitly restarted/reconciled.
+
+Verification: `pnpm lint`, `pnpm typecheck`, `pnpm test` (793 passed / 1
+skipped).
+
 ## 2026-06-06 — Run recovery and runtime compliance console
 
 Added an operator recovery path for AgentRuns. Mission Control Admin now
