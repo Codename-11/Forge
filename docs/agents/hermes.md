@@ -49,6 +49,15 @@ Skipping the ack is what leaves Forge's UI showing an infinite thinking
 animation. Always ack, even for `[SILENT]` no-ops.
 :::
 
+Engagement mode is part of the same contract. Forge includes the mode
+instruction and shared run protocol in dispatch, and `agent.context.bundle`
+returns `runProtocol` with the current `runId`, mode, and mutation allowance.
+Forge MCP rejects issue-state mutations from active Research/Review/Discuss
+runs, but Hermes host tools are configured on the Hermes side. If a Hermes
+profile exposes terminal/filesystem/git tools, Forge cannot remove those tools
+from the host; configure Hermes toolsets/profiles to match the runtime's
+intended blast radius.
+
 Manual assignment is enough to start a Hermes agent. Operators do **not** have
 to also `@mention` the agent on the same issue. The webhook prompt should load
 the full issue context — including recent comments and attachments — via the

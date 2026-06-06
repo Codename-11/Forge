@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EngagementMode, EventKind, Prisma, Priority, RelationKind, StatusCategory, WorkItemKind } from "@prisma/client";
+import { AgentRunStatus, EngagementMode, EventKind, Prisma, Priority, RelationKind, StatusCategory, WorkItemKind } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -1265,6 +1265,24 @@ export const issueRouter = router({
                 assignmentAgentEngagementMode: agentRow.engagementMode,
               },
             }).mode;
+          }
+          if (!assignmentChanged && nextAgentId && explicitModeProvided) {
+            const activeRun = await tx.agentRun.findFirst({
+              where: {
+                workspaceId: ctx.workspaceId,
+                issueId: id,
+                agentId: nextAgentId,
+                status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+              },
+              select: { id: true },
+            });
+            if (activeRun) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message:
+                  "Stop or complete the current run before changing this agent's engagement mode.",
+              });
+            }
           }
           const assignmentPayload: Prisma.InputJsonObject = {
             agentId: nextAgentId,

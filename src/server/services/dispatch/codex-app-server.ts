@@ -456,10 +456,12 @@ export function makeCodexAppServerConnector(opts: {
       // Per-turn policy overrides (codex-cli 0.133 TurnStartParams accepts
       // cwd / approvalPolicy / sandboxPolicy and applies them to this turn and
       // subsequent turns on the thread). Defaults reproduce today's behavior.
+      const effectiveSandboxMode =
+        input.engagementMode && input.engagementMode !== "EXECUTE" ? "read-only" : sandboxMode;
       const turnParams: Record<string, unknown> = { threadId, input: turnInput };
       if (workspaceRoot) turnParams.cwd = workspaceRoot;
       turnParams.approvalPolicy = approvalPolicy;
-      turnParams.sandboxPolicy = toSandboxPolicy(sandboxMode, workspaceRoot);
+      turnParams.sandboxPolicy = toSandboxPolicy(effectiveSandboxMode, workspaceRoot);
       const turnRes = (await request(run, "turn/start", turnParams)) as {
         turn?: { id?: string };
       };

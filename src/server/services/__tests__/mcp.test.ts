@@ -1,7 +1,9 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
 import {
+  AgentRunStatus,
   AgentProvider,
   ChatContextMode,
+  EngagementMode,
   EventKind,
   PluginScope,
   RelationKind,
@@ -1864,6 +1866,42 @@ describe("mcp — awareness tools (Stream BA)", () => {
     expect(Array.isArray(bundle.relations)).toBe(true);
   });
 
+  it("agent.context.bundle includes the current run protocol contract", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAP" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "bap-agent", name: "Bap Agent" },
+    });
+    const issue = await createIssue(f, { title: "bundle protocol" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        engagementMode: EngagementMode.REVIEW,
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+
+    const bundle = (await call("agent.context.bundle", { issueId: issue.id }, ctx)) as {
+      runProtocol: {
+        runId: string | null;
+        engagementMode: string;
+        modeInstruction: string;
+        protocolInstruction: string;
+        mayMutateIssue: boolean;
+      };
+    };
+
+    expect(bundle.runProtocol.runId).toBe(run.id);
+    expect(bundle.runProtocol.engagementMode).toBe("REVIEW");
+    expect(bundle.runProtocol.modeInstruction).toContain("REVIEW");
+    expect(bundle.runProtocol.protocolInstruction).toContain("agent.inbox.outputStarted");
+    expect(bundle.runProtocol.mayMutateIssue).toBe(false);
+  });
+
   it("agent.context.bundle threadId branch enforces addressee", async () => {
     const f = await createWorkspaceFixture({ keyPrefix: "BAB2" });
     fixtures.push(f);
@@ -3043,6 +3081,74 @@ describe("mcp artifacts.*", () => {
 });
 
 describe("mcp runs.complete + completion contract", () => {
+  it("blocks issue-state mutations from non-EXECUTE active runs but allows comments", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CC0" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `cc0-${Date.now()}`,
+        name: "Researcher",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        engagementMode: EngagementMode.RESEARCH,
+      },
+    });
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+
+    await expect(
+      call("issues.update", { id: issue.id, title: "should not mutate" }, scopedCtx),
+    ).rejects.toThrow(/RESEARCH.*does not allow issues\.update/);
+
+    const comment = (await call(
+      "comments.create",
+      { issueId: issue.id, body: "Findings: this needs operator approval.", confidence: "HIGH" },
+      scopedCtx,
+    )) as { id: string; authoringAgentId: string | null };
+    expect(comment.authoringAgentId).toBe(agent.id);
+  });
+
+  it("allows issue-state mutations from EXECUTE active runs", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CCX" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `ccx-${Date.now()}`,
+        name: "Executor",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        engagementMode: EngagementMode.EXECUTE,
+      },
+    });
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+
+    const updated = (await call(
+      "issues.update",
+      { id: issue.id, title: "execute can mutate" },
+      scopedCtx,
+    )) as { title: string };
+    expect(updated.title).toBe("execute can mutate");
+  });
+
   it("issues.update accepts expectedOutput and verificationChecklist and surfaces them via agent.context.bundle", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "CC1" });
     fixtures.push(fixture);

@@ -4,7 +4,7 @@ import type { AgentProvider } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/agent-run";
-import { engagementInstruction } from "@/server/services/engagement-mode";
+import { forgeRunInstruction } from "@/server/services/engagement-mode";
 import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from "./registry";
 
 /**
@@ -40,18 +40,23 @@ const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
 
 function issueMessage(
   issue: {
+    id: string;
     key: string;
     title: string;
     description: string | null;
   },
   engagementInstruction?: string | null,
+  runId?: string | null,
 ): string {
   const body = issue.description?.trim();
   return (
     (engagementInstruction ? `${engagementInstruction}\n\n` : "") +
-    `You are assigned Forge issue ${issue.key}: ${issue.title}.\n\n` +
+    `You are assigned Forge issue ${issue.key}: ${issue.title}.\n` +
+    `Issue id: ${issue.id}.\n` +
+    (runId ? `Current AgentRun id: ${runId}.\n` : "") +
+    "\n" +
     (body ? `${body}\n\n` : "") +
-    `Work the issue using your tools, then summarise what you did.`
+    `Handle the issue according to the engagement mode and Forge run protocol above.`
   );
 }
 
@@ -139,7 +144,7 @@ async function startNewRuns(): Promise<number> {
     const engagementMode =
       (evtPayload.engagementMode as "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS" | undefined) ??
       "EXECUTE";
-    const instruction = engagementInstruction({
+    const instruction = forgeRunInstruction({
       mode: engagementMode,
       source: "surface-default",
       inferable: false,
@@ -149,13 +154,16 @@ async function startNewRuns(): Promise<number> {
       const { externalRunId } = await connector.startRun({
         message: issueMessage(
           {
+            id: issue.id,
             key: issueKey(issue.workspace.key, issue.number),
             title: issue.title,
             description: issue.description,
           },
           instruction,
+          already?.id ?? null,
         ),
         instructions: instruction,
+        engagementMode,
       });
       await db.$transaction(async (tx) => {
         const { run } = await openOrTouchRun(tx, {

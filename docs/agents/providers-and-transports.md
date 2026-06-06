@@ -115,6 +115,10 @@ controlled on **two layers**:
    | **Workspace root** | a path, e.g. `/work/agent-forge` | The turn's working dir; in workspace-write it's the only writable root. Setting it also makes Forge declare the Codex runtime as having repo tools for preflight and runtime cards. |
 
    Defaults (no config) = **full access, no prompts** — the original behavior.
+   Forge tightens this per run: non-Execute dispatches (Research, Review, and
+   Discuss) are sent to Codex with a read-only sandbox even if the runtime's
+   default sandbox is broader. Execute runs use the configured sandbox/approval
+   policy.
 
 **Disable without deleting.** Each runtime has an **Enable/Disable** toggle
 (distinct from Archive, which hides/deletes). A disabled runtime stays

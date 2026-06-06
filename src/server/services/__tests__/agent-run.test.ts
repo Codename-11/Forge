@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
 import { AgentRunStatus, EngagementMode, EventKind } from "@prisma/client";
-import { finishRun, finishRunsForIssue, openOrTouchRun } from "@/server/services/agent-run";
+import { appendRunEvent, finishRun, finishRunsForIssue, openOrTouchRun } from "@/server/services/agent-run";
 import {
   buildContext,
   createWorkspaceFixture,
@@ -102,7 +102,7 @@ describe("agent-run lifecycle", () => {
     expect(audit.every((row) => row.actorAgentId === agent.id)).toBe(true);
   });
 
-  it("touching an existing run can restamp engagement mode and resume WAITING", async () => {
+  it("touching an existing run preserves engagement mode and resumes WAITING", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "ARM" });
     fixtures.push(fixture);
     const prisma = getPrisma();
@@ -133,9 +133,76 @@ describe("agent-run lifecycle", () => {
     expect(result.isNew).toBe(false);
     expect(result.run.id).toBe(existing.id);
     expect(result.run.status).toBe(AgentRunStatus.ACTIVE);
-    expect(result.run.engagementMode).toBe(EngagementMode.EXECUTE);
+    expect(result.run.engagementMode).toBe(EngagementMode.REVIEW);
     expect(result.run.currentStep).toBe("starting run");
     expect(result.run.assignmentEventId).toBe("event-restamp");
+  });
+
+  it("rejects in-place engagement mode changes for active runs", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARL" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "arl-a1");
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        engagementMode: EngagementMode.RESEARCH,
+      },
+    });
+    const caller = agentRunRouter.createCaller(await buildContext(fixture));
+
+    await expect(
+      caller.setEngagementMode({ runId: run.id, mode: EngagementMode.EXECUTE }),
+    ).rejects.toThrow(/fixed when a run starts/i);
+
+    const unchanged = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(unchanged.engagementMode).toBe(EngagementMode.RESEARCH);
+  });
+
+  it("marks output started on the first substantive run event", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARO" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "aro-a1");
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        acknowledgedAt: new Date(),
+      },
+    });
+
+    await prisma.$transaction((tx) =>
+      appendRunEvent(tx, {
+        runId: run.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        kind: "DISPATCH_STARTED",
+      }),
+    );
+    const afterDispatch = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(afterDispatch.outputStartedAt).toBeNull();
+
+    await prisma.$transaction((tx) =>
+      appendRunEvent(tx, {
+        runId: run.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        kind: "STATUS",
+        currentStep: "starting work",
+      }),
+    );
+    const afterStatus = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(afterStatus.outputStartedAt).not.toBeNull();
   });
 
   it("does not mark another agent's unstarted run completed when an issue reaches done", async () => {

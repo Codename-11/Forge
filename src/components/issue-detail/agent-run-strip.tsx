@@ -35,11 +35,6 @@ import { relativeTime, cn } from "@/lib/utils";
 export function AgentRunStrip({ issueId }: { issueId: string }) {
   const utils = trpc.useUtils();
   const { data: run } = trpc.agentRun.activeForIssue.useQuery({ issueId }, { staleTime: 5_000 });
-  const setMode = trpc.agentRun.setEngagementMode.useMutation({
-    onSuccess: () => {
-      void utils.agentRun.activeForIssue.invalidate({ issueId });
-    },
-  });
   const [now, setNow] = useState(() => Date.now());
 
   // Refresh the relative-time label every 10s so "updated Ns ago" stays
@@ -159,8 +154,6 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
         <RunModeControl
           runId={run.id}
           mode={run.engagementMode as EngagementModeValue}
-          pending={setMode.isPending}
-          onChange={(mode) => setMode.mutate({ runId: run.id, mode })}
         />
         <span className="text-meta flex shrink-0 items-center gap-2 text-muted-foreground">
           <Activity className="h-3 w-3" />
@@ -178,20 +171,16 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
 function RunModeControl({
   runId,
   mode,
-  pending,
-  onChange,
 }: {
   runId: string;
   mode: EngagementModeValue;
-  pending: boolean;
-  onChange: (mode: EngagementModeValue) => void;
 }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1">
       <div
         role="radiogroup"
         aria-label="Run engagement mode"
-        title="Engagement mode changes the work contract only. Terminal, filesystem, and git access come from the runtime/tool surface."
+        title="Engagement mode is fixed when a run starts. Stop or complete this run, then reassign with a different mode."
         className="flex min-w-0 flex-wrap gap-0.5 rounded-md border border-border bg-background/80 p-0.5"
       >
         {MODE_ORDER.map((m) => {
@@ -202,16 +191,18 @@ function RunModeControl({
               type="button"
               role="radio"
               aria-checked={active}
-              aria-label={`Set run mode to ${MODE_LABEL[m]}`}
-              title={`${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}. Tools are provided by the runtime, not by mode.`}
-              disabled={pending || active}
-              onClick={() => onChange(m)}
+              aria-label={`Run mode ${MODE_LABEL[m]}`}
+              title={
+                active
+                  ? `${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}. Locked for this run.`
+                  : "Stop or complete this run, then reassign with this mode."
+              }
+              disabled
               className={cn(
                 "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] uppercase tracking-wider transition-colors",
                 active
                   ? "bg-ember/10 text-foreground"
-                  : "text-muted-foreground hover:bg-subtle hover:text-foreground",
-                pending ? "opacity-60" : "",
+                  : "text-muted-foreground opacity-45",
               )}
               data-run-id={runId}
             >
@@ -223,9 +214,9 @@ function RunModeControl({
       </div>
       <span
         className="text-meta text-muted-foreground"
-        title="Tools come from the assigned runtime."
+        title="Mode is fixed for this run. Tools come from the assigned runtime."
       >
-        tools from runtime
+        locked while running
       </span>
     </div>
   );
