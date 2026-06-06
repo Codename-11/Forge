@@ -26,27 +26,27 @@ function readDispatch(
   return d as { mode?: string; reason?: string; chosen?: { profileKey?: string; name?: string } };
 }
 
-const KIND_LABEL: Record<string, string> = {
-  ISSUE_CREATED: "Created issue",
-  ISSUE_UPDATED: "Updated",
-  ISSUE_DELETED: "Deleted",
-  ISSUE_STATUS_CHANGED: "Status changed",
-  ISSUE_ASSIGNED: "Assignees changed",
-  ISSUE_PRIORITY_CHANGED: "Priority changed",
-  ISSUE_STALLED: "Stalled — agent hadn't moved it",
-  ISSUE_SLA_BREACH: "SLA breach — past target",
-  AGENT_NOACK: "Missed wake — agent didn't ack",
-  COMMENT_CREATED: "Commented",
-  COMMENT_UPDATED: "Edited comment",
-  AGENT_ASSIGNED: "Assigned agent",
-  AGENT_RUN_STARTED: "Started run",
-  AGENT_RUN_COMPLETED: "Completed run",
-  AGENT_RUN_STALLED: "Run stalled",
-  AGENT_RUN_BLOCKED: "Run blocked",
-  AGENT_RUN_CONTROL_REQUESTED: "Requested run control",
-  AGENT_RUN_KICKED: "Kicked run",
-  SKILL_INVOKED: "Skill ran",
-  PLUGIN_ERROR: "Plugin error",
+const KIND_LABEL: Record<string, { label: string; phase?: string }> = {
+  ISSUE_CREATED: { label: "Created issue" },
+  ISSUE_UPDATED: { label: "Updated" },
+  ISSUE_DELETED: { label: "Deleted" },
+  ISSUE_STATUS_CHANGED: { label: "Status changed" },
+  ISSUE_ASSIGNED: { label: "Assignees changed" },
+  ISSUE_PRIORITY_CHANGED: { label: "Priority changed" },
+  ISSUE_STALLED: { label: "Stalled — agent hadn't moved it", phase: "stall" },
+  ISSUE_SLA_BREACH: { label: "SLA breach — past target", phase: "alert" },
+  AGENT_NOACK: { label: "Wake missed", phase: "no ack" },
+  COMMENT_CREATED: { label: "Commented" },
+  COMMENT_UPDATED: { label: "Edited comment" },
+  AGENT_ASSIGNED: { label: "Wake requested", phase: "wake" },
+  AGENT_RUN_STARTED: { label: "Run opened", phase: "run" },
+  AGENT_RUN_COMPLETED: { label: "Run completed", phase: "done" },
+  AGENT_RUN_STALLED: { label: "Run stalled", phase: "stall" },
+  AGENT_RUN_BLOCKED: { label: "Run blocked", phase: "blocked" },
+  AGENT_RUN_CONTROL_REQUESTED: { label: "Run control requested", phase: "control" },
+  AGENT_RUN_KICKED: { label: "Wake retried", phase: "retry" },
+  SKILL_INVOKED: { label: "Skill ran" },
+  PLUGIN_ERROR: { label: "Plugin error", phase: "error" },
 };
 
 function readPayloadString(payload: unknown, key: string): string | null {
@@ -55,13 +55,161 @@ function readPayloadString(payload: unknown, key: string): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function activityLabel(kind: string, payload: unknown): string {
-  if (kind === "AGENT_RUN_COMPLETED") {
-    return readPayloadString(payload, "finalStatus") === "ABANDONED"
-      ? "Stopped run"
-      : "Completed run";
+function readPayloadNumber(payload: unknown, key: string): number | null {
+  if (!payload || typeof payload !== "object" || !(key in payload)) return null;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readPayloadRecord(payload: unknown, key: string): Record<string, unknown> | null {
+  if (!payload || typeof payload !== "object" || !(key in payload)) return null;
+  const value = (payload as Record<string, unknown>)[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readNestedString(payload: unknown, objectKey: string, valueKey: string): string | null {
+  const obj = readPayloadRecord(payload, objectKey);
+  const value = obj?.[valueKey];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.round((ms % 3_600_000) / 60_000);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+function agentSuffix(payload: unknown, fallback?: string | null): string {
+  const handle =
+    fallback ??
+    readPayloadString(payload, "agentProfileKey") ??
+    readNestedString(payload, "dispatchReason", "picked");
+  return handle ? ` for @${handle}` : "";
+}
+
+function payloadDetail(payload: unknown): string | null {
+  return (
+    readPayloadString(payload, "summary") ??
+    readPayloadString(payload, "currentStep") ??
+    readPayloadString(payload, "preview") ??
+    readPayloadString(payload, "reason")
+  );
+}
+
+function dispatchDetail(payload: unknown): string | null {
+  const dispatch = readDispatch(payload);
+  const mode =
+    dispatch?.mode ??
+    readPayloadString(payload, "mode") ??
+    readNestedString(payload, "dispatchReason", "mode");
+  const engagementMode = readPayloadString(payload, "engagementMode");
+  const reason =
+    dispatch?.reason ??
+    readPayloadString(payload, "reason") ??
+    readNestedString(payload, "dispatchReason", "reasonText");
+  const parts = [
+    mode ? `dispatch ${mode}` : null,
+    engagementMode ? `mode ${engagementMode}` : null,
+    reason,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function controlLabel(payload: unknown): string {
+  const control = readPayloadString(payload, "control");
+  if (control === "cancel") return "Stop requested";
+  if (control === "pause") return "Pause requested";
+  if (control === "redirect") return "Redirect requested";
+  return "Run control requested";
+}
+
+function activityCopy(
+  kind: string,
+  payload: unknown,
+  actorAgentProfileKey?: string | null,
+): { label: string; detail?: string | null; phase?: string } {
+  if (kind === "AGENT_ASSIGNED") {
+    const dispatch = readDispatch(payload);
+    const handle =
+      dispatch?.chosen?.profileKey ?? readNestedString(payload, "dispatchReason", "picked");
+    return {
+      label: `Wake requested${agentSuffix(payload, handle)}`,
+      detail: dispatchDetail(payload),
+      phase: "wake",
+    };
   }
-  return KIND_LABEL[kind] ?? kind.replace(/_/g, " ").toLowerCase();
+  if (kind === "AGENT_RUN_STARTED") {
+    return {
+      label: `Run opened${agentSuffix(payload, actorAgentProfileKey)}`,
+      detail: "Waiting for wake delivery and acknowledgement",
+      phase: "run",
+    };
+  }
+  if (kind === "AGENT_RUN_KICKED") {
+    const idleMs = readPayloadNumber(payload, "idleMs");
+    return {
+      label: `Wake retried${agentSuffix(payload, actorAgentProfileKey)}`,
+      detail: idleMs != null ? `last signal ${formatDuration(idleMs)} ago` : payloadDetail(payload),
+      phase: "retry",
+    };
+  }
+  if (kind === "AGENT_NOACK") {
+    const seconds = readPayloadNumber(payload, "requiredAckSeconds");
+    const handle = readPayloadString(payload, "agentProfileKey");
+    return {
+      label: "Wake missed",
+      detail: `${handle ? `@${handle} did not ack` : "Agent did not ack"}${
+        seconds != null ? ` within ${Math.round(seconds)}s` : ""
+      }`,
+      phase: "no ack",
+    };
+  }
+  if (kind === "COMMENT_CREATED" && readPayloadString(payload, "kind") === "STATUS") {
+    return {
+      label: "Status output posted",
+      detail: payloadDetail(payload),
+      phase: "output",
+    };
+  }
+  if (kind === "COMMENT_CREATED" && actorAgentProfileKey) {
+    return {
+      label: `Agent replied from @${actorAgentProfileKey}`,
+      detail: payloadDetail(payload),
+      phase: "output",
+    };
+  }
+  if (kind === "AGENT_RUN_COMPLETED") {
+    const finalStatus = readPayloadString(payload, "finalStatus");
+    const label =
+      finalStatus === "ABANDONED"
+        ? "Run stopped"
+        : finalStatus === "STALLED"
+          ? "Run stalled"
+          : "Run completed";
+    return {
+      label: `${label}${agentSuffix(payload, actorAgentProfileKey)}`,
+      detail: payloadDetail(payload),
+      phase: finalStatus === "ABANDONED" ? "stopped" : "done",
+    };
+  }
+  if (kind === "AGENT_RUN_CONTROL_REQUESTED") {
+    return {
+      label: controlLabel(payload),
+      detail: payloadDetail(payload),
+      phase: "control",
+    };
+  }
+  const fallback = KIND_LABEL[kind] ?? { label: kind.replace(/_/g, " ").toLowerCase() };
+  return {
+    label: fallback.label,
+    detail:
+      kind.startsWith("AGENT_RUN_") || kind === "AGENT_RUN_BLOCKED" ? payloadDetail(payload) : null,
+    phase: fallback.phase,
+  };
 }
 
 export function IssueActivityPanel({ issueId }: { issueId: string }) {
@@ -81,9 +229,7 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
             Activity
           </h2>
         </header>
-        <p className="py-6 text-center text-xs text-muted-foreground">
-          Loading activity…
-        </p>
+        <p className="py-6 text-center text-xs text-muted-foreground">Loading activity…</p>
       </section>
     );
   }
@@ -97,23 +243,19 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
         <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Activity
         </h2>
-        <span className="font-mono text-[0.6875rem] text-muted-foreground">
-          {rows.length}
-        </span>
+        <span className="font-mono text-[0.6875rem] text-muted-foreground">{rows.length}</span>
       </header>
       {rows.length === 0 ? (
         <p className="py-6 text-center text-xs text-muted-foreground">
-          No activity yet. Status changes, assignments, and comments will
-          show up here.
+          No activity yet. Status changes, assignments, and comments will show up here.
         </p>
       ) : (
         <ul className="divide-y divide-border">
           {rows.map((e) => {
-            const dispatch =
-              e.kind === "AGENT_ASSIGNED" ? readDispatch(e.payload) : null;
             const agent = e.actorAgent;
             const actorLabel = activityActorName(e);
             const actorOwnerTitle = activityActorOwnerTitle(e);
+            const copy = activityCopy(e.kind, e.payload, agent?.profileKey ?? null);
             return (
               <li key={e.id} className="flex items-start gap-2 px-3 py-2">
                 {agent ? (
@@ -126,11 +268,7 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
                     size="xs"
                   />
                 ) : (
-                  <Avatar
-                    name={e.actor?.name ?? null}
-                    image={e.actor?.image ?? null}
-                    size={18}
-                  />
+                  <Avatar name={e.actor?.name ?? null} image={e.actor?.image ?? null} size={18} />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-1.5 text-[0.6875rem]">
@@ -145,24 +283,19 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
                         agent
                       </Badge>
                     )}
-                    <span className="truncate text-muted-foreground">
-                      {activityLabel(e.kind, e.payload)}
-                    </span>
-                    {dispatch?.mode && (
-                      <span
-                        className="ml-1 inline-flex items-center gap-1 rounded-sm bg-subtle px-1 text-[0.6875rem] font-mono uppercase tracking-wider text-muted-foreground"
-                        title={dispatch.reason ?? undefined}
-                      >
-                        {dispatch.mode}
+                    {copy.phase && (
+                      <span className="rounded-sm border border-border bg-subtle px-1 py-0 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                        {copy.phase}
                       </span>
                     )}
-                    {dispatch?.chosen?.profileKey && (
-                      <span className="ml-1 text-[0.6875rem] font-mono text-muted-foreground">
-                        → @{dispatch.chosen.profileKey}
-                      </span>
-                    )}
+                    <span className="truncate text-muted-foreground">{copy.label}</span>
                   </div>
-                  <div className="mt-0.5 text-meta text-muted-foreground">
+                  {copy.detail && (
+                    <div className="text-meta mt-0.5 line-clamp-2 text-foreground/70">
+                      {copy.detail}
+                    </div>
+                  )}
+                  <div className="text-meta mt-0.5 text-muted-foreground">
                     {relativeTime(e.createdAt)}
                   </div>
                 </div>

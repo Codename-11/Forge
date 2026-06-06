@@ -107,6 +107,30 @@ watcher path.
 Gate: `git diff --check`, `pnpm lint`, `pnpm typecheck`, full `pnpm test` (759
 pass / 1 skipped), and `E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
 
+Sixth follow-up: clarified the agent/runtime/mode model and closed the related
+logic gaps from AXI-73. Hermes remains a first-class RUNS runtime; the UI now
+separates agent identity, engagement mode, dispatch surface, and runtime/tool
+surface so Execute/Review/Research is not mistaken for terminal/filesystem/git
+capability. Added migration `0074_issue_watcher_wake_on_activity` to split
+agent watcher visibility from generic activity wake fan-out: assignment makes
+the current agent the wake target, reassignment demotes prior agent watcher
+rows without removing them, explicit agent watches opt into wakes, and mentions
+still wake directly. `finishRunsForIssue` now demotes another agent's
+unstarted/no-ack/no-output ACTIVE run to ABANDONED when an issue reaches Done
+instead of falsely recording it as completed by the closing agent. Added an
+issue-detail runtime preflight warning for code/repo-looking work assigned to a
+runtime that does not declare terminal/filesystem/git capability, plus clearer
+activity / Mission Control phase labels for wake requested, run opened, wake
+delivered, ack, output, retry, blocked, stopped, stalled, and completed states.
+Gate: `pnpm prisma:generate`, `pnpm prisma:deploy` locally, `git diff
+--check`, `pnpm lint`, `pnpm typecheck`, focused `pnpm test
+src/server/services/__tests__/agent-run.test.ts
+src/server/services/__tests__/audit.test.ts
+src/server/services/__tests__/runtime-preflight.test.ts
+src/server/routers/__tests__/issue.test.ts tests/unit/run-failure-banner.test.ts`,
+full `pnpm test` (764 pass / 1 skipped), and `E2E_FORCE_BUILD=1 pnpm
+test:e2e` (20 pass).
+
 Verification: `pnpm lint`, `pnpm typecheck`, full `pnpm test` (744 pass / 1
 skipped), and focused `pnpm exec vitest run
 src/server/services/__tests__/engagement-mode.test.ts

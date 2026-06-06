@@ -256,9 +256,7 @@ async function maybeWriteAssignmentSystemComment(
       ? (params.payload as Record<string, unknown>)
       : {};
   const agentId =
-    typeof payload.agentId === "string" && payload.agentId.length > 0
-      ? payload.agentId
-      : null;
+    typeof payload.agentId === "string" && payload.agentId.length > 0 ? payload.agentId : null;
   const previousAgentId =
     typeof payload.previousAgentId === "string" && payload.previousAgentId.length > 0
       ? payload.previousAgentId
@@ -287,9 +285,7 @@ async function maybeWriteAssignmentSystemComment(
   // and its embedded underscore breaks the `_…_` markdown emphasis,
   // surfacing literal underscores in the thread. Omit the line entirely
   // when the agent has no runtime rather than printing "unknown".
-  const runtimeLabel = agent.runtime
-    ? RUNTIME_KIND_LABEL[agent.runtime.kind]
-    : null;
+  const runtimeLabel = agent.runtime ? RUNTIME_KIND_LABEL[agent.runtime.kind] : null;
 
   const body =
     `**@${agent.profileKey}** was assigned by **@${actorLabel}**.` +
@@ -375,12 +371,8 @@ export async function recordChange(
   // started and skips). When the auto-transition fires, payloadOut also
   // gains an `autoTransitionedTo` field so receivers can tell apart a
   // pre-existing started status from a server-driven transition.
-  let payloadOut: Prisma.InputJsonValue =
-    (params.payload ?? {}) as Prisma.InputJsonValue;
-  if (
-    params.eventKind === EventKind.AGENT_ASSIGNED &&
-    params.subjectType === "issue"
-  ) {
+  let payloadOut: Prisma.InputJsonValue = (params.payload ?? {}) as Prisma.InputJsonValue;
+  if (params.eventKind === EventKind.AGENT_ASSIGNED && params.subjectType === "issue") {
     const assignMode =
       params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)
         ? ((params.payload as Record<string, unknown>).engagementMode as string | undefined)
@@ -492,7 +484,16 @@ export async function recordChange(
             webhookUrl: true,
             provider: true,
             runEngine: true,
-            runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
+            runtime: {
+              select: {
+                adapterKey: true,
+                endpoint: true,
+                secret: true,
+                config: true,
+                disabledAt: true,
+                name: true,
+              },
+            },
           },
         },
       },
@@ -528,10 +529,7 @@ export async function recordChange(
   // (b) Priority escalations (HIGH / URGENT) on an assigned issue — push
   //     to the assignee via a per-agent shim so the delivery carries its
   //     own target id (doesn't re-resolve the issue's assignee later).
-  if (
-    params.eventKind === EventKind.ISSUE_PRIORITY_CHANGED &&
-    params.subjectType === "issue"
-  ) {
+  if (params.eventKind === EventKind.ISSUE_PRIORITY_CHANGED && params.subjectType === "issue") {
     const to = (params.payload as { to?: string } | undefined)?.to;
     if (to === "HIGH" || to === "URGENT") {
       const issue = await tx.issue.findUnique({
@@ -576,8 +574,7 @@ export async function recordChange(
   const isCommentMentionEvent =
     (params.eventKind === EventKind.COMMENT_CREATED ||
       (params.eventKind === EventKind.COMMENT_UPDATED &&
-        (params.payload as { edited?: boolean } | undefined)?.edited ===
-          true)) &&
+        (params.payload as { edited?: boolean } | undefined)?.edited === true)) &&
     params.subjectType === "issue";
   if (isCommentMentionEvent) {
     // Normalize to a flat list of agent ids regardless of incoming shape.
@@ -610,10 +607,7 @@ export async function recordChange(
   }
 
   // (d) Chat — route to the agent the user is talking to.
-  if (
-    params.eventKind === EventKind.CHAT_MESSAGE_POSTED &&
-    params.subjectType === "chat-thread"
-  ) {
+  if (params.eventKind === EventKind.CHAT_MESSAGE_POSTED && params.subjectType === "chat-thread") {
     const payload = params.payload as
       | { agentId?: string; role?: string; streamed?: boolean }
       | undefined;
@@ -654,15 +648,10 @@ export async function recordChange(
   //      `agentId`. Also surfaces the event in the standard agent
   //      activity feed via the normal ActivityEvent write that already
   //      happened above.
-  if (
-    params.eventKind === EventKind.AGENT_RUN_BLOCKED &&
-    params.subjectType === "agent-run"
-  ) {
+  if (params.eventKind === EventKind.AGENT_RUN_BLOCKED && params.subjectType === "agent-run") {
     const payload = params.payload as { agentId?: string } | undefined;
     const blockedAgentId =
-      typeof payload?.agentId === "string" && payload.agentId.length > 0
-        ? payload.agentId
-        : null;
+      typeof payload?.agentId === "string" && payload.agentId.length > 0 ? payload.agentId : null;
     if (blockedAgentId) {
       const agent = await tx.agent.findFirst({
         where: {
@@ -738,6 +727,7 @@ export async function recordChange(
       },
       select: {
         agentId: true,
+        wakeOnActivity: true,
         agent: { select: { id: true, webhookUrl: true } },
       },
     });
@@ -751,6 +741,9 @@ export async function recordChange(
         currentIssue?.assignedAgentId !== w.agent.id &&
         !mentionedAgentIds.has(w.agent.id)
       ) {
+        continue;
+      }
+      if (params.eventKind !== EventKind.COMMENT_CREATED && !w.wakeOnActivity) {
         continue;
       }
       // Don't fan out the actor's own action back to themselves —

@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Wrench,
   MessageSquare,
+  Bell,
   Pause,
   Check,
   X as XIcon,
@@ -33,12 +34,17 @@ export type RunTimelineEvent = {
 
 const KIND_GLYPH: Record<string, typeof Play> = {
   STARTED: Play,
+  DISPATCH_STARTED: Play,
+  WAKE_DELIVERED: Bell,
+  ACK: Check,
   STEP: ArrowRight,
   TOOL_CALL: Wrench,
   STATUS: MessageSquare,
   COMMENT: MessageSquare,
   TRANSITION: ArrowRight,
   DISPATCH_RECEIVED: Play,
+  MODE_CHANGED: ArrowRight,
+  WAITING: Pause,
   BLOCKED: Pause,
   COMPLETED: Check,
   ABANDONED: XIcon,
@@ -48,12 +54,17 @@ const KIND_GLYPH: Record<string, typeof Play> = {
 
 const KIND_TINT: Record<string, string> = {
   STARTED: "text-ember",
+  DISPATCH_STARTED: "text-ember",
+  WAKE_DELIVERED: "text-ember",
+  ACK: "text-emerald-600",
   STEP: "text-foreground/70",
   TOOL_CALL: "text-foreground/60",
   STATUS: "text-ember",
   COMMENT: "text-indigo-500",
   TRANSITION: "text-foreground/70",
   DISPATCH_RECEIVED: "text-ember",
+  MODE_CHANGED: "text-foreground/70",
+  WAITING: "text-amber-500",
   BLOCKED: "text-amber-500",
   COMPLETED: "text-emerald-600",
   ABANDONED: "text-muted-foreground",
@@ -74,6 +85,16 @@ function relativeTime(input: Date | string): string {
 function previewPayload(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
+  if (typeof p.eventKind === "string" && p.eventKind !== "") {
+    return `from ${humanizeEventName(p.eventKind).toLowerCase()}`;
+  }
+  if (typeof p.externalRunId === "string" && p.externalRunId !== "") {
+    const engine = typeof p.engine === "string" ? p.engine : "runtime";
+    return `${engine} ${p.externalRunId}`;
+  }
+  if (typeof p.from === "string" && typeof p.to === "string") {
+    return `${p.from.toLowerCase()} -> ${p.to.toLowerCase()}`;
+  }
   if (typeof p.preview === "string") return p.preview;
   if (typeof p.currentStep === "string") return p.currentStep;
   if (typeof p.thinking === "string") return p.thinking;
@@ -81,11 +102,9 @@ function previewPayload(payload: unknown): string | null {
   if (typeof p.description === "string") return p.description;
   if (typeof p.lastEvent === "string") return humanizeEventName(p.lastEvent);
   if (typeof p.tool === "string") {
-    const state =
-      p.done === true ? (p.error === true ? "failed" : "completed") : "started";
+    const state = p.done === true ? (p.error === true ? "failed" : "completed") : "started";
     return `${p.tool} ${state}`;
   }
-  if (typeof p.eventKind === "string" && p.eventKind !== "") return String(p.eventKind);
   return null;
 }
 
@@ -98,6 +117,38 @@ function eventTitle(evt: RunTimelineEvent): string {
     evt.payload && typeof evt.payload === "object"
       ? (evt.payload as Record<string, unknown>)
       : null;
+  switch (evt.kind) {
+    case "STARTED":
+      return "run opened";
+    case "DISPATCH_STARTED":
+      return "runtime started";
+    case "WAKE_DELIVERED":
+      return "wake delivered";
+    case "ACK":
+      return "agent acknowledged";
+    case "STATUS":
+      return "status output";
+    case "COMMENT":
+      return "agent replied";
+    case "TRANSITION":
+      return "issue moved";
+    case "MODE_CHANGED":
+      return "mode changed";
+    case "WAITING":
+      return "waiting on operator";
+    case "BLOCKED":
+      return "run blocked";
+    case "COMPLETED":
+      return "run completed";
+    case "ABANDONED":
+      return "run stopped";
+    case "ERRORED":
+      return "run errored";
+    case "STALLED":
+      return "run stalled";
+    default:
+      break;
+  }
   if (evt.kind === "TOOL_CALL" && typeof payload?.tool === "string") {
     if (payload.done === true) {
       return payload.error === true ? "tool failed" : "tool completed";
@@ -120,7 +171,7 @@ export function RunTimeline({
 }) {
   if (events.length === 0) {
     return (
-      <div className={cn("py-2 pl-7 text-meta text-muted-foreground", className)}>
+      <div className={cn("text-meta py-2 pl-7 text-muted-foreground", className)}>
         No events yet.
       </div>
     );
@@ -129,10 +180,7 @@ export function RunTimeline({
   return (
     <ol className={cn("relative space-y-1.5 py-1.5", className)}>
       {/* Spine connecting the glyphs — sits behind them. */}
-      <div
-        aria-hidden
-        className="absolute left-[10px] top-2.5 bottom-2.5 w-px bg-border"
-      />
+      <div aria-hidden className="absolute bottom-2.5 left-[10px] top-2.5 w-px bg-border" />
       {events.map((evt, i) => {
         const Glyph = KIND_GLYPH[evt.kind] ?? Activity;
         const tint = KIND_TINT[evt.kind] ?? "text-muted-foreground";
@@ -141,16 +189,11 @@ export function RunTimeline({
         const preview = rawPreview && rawPreview !== title ? rawPreview : null;
         const isFreshest = i === 0;
         return (
-          <li
-            key={evt.id}
-            className="relative flex items-start gap-2 pl-0.5"
-          >
+          <li key={evt.id} className="relative flex items-start gap-2 pl-0.5">
             <span
               className={cn(
                 "relative z-10 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border bg-card",
-                isFreshest
-                  ? "border-ember/60 ring-2 ring-ember/15"
-                  : "border-border",
+                isFreshest ? "border-ember/60 ring-2 ring-ember/15" : "border-border",
               )}
             >
               {isFreshest && (
@@ -167,9 +210,7 @@ export function RunTimeline({
                   {relativeTime(evt.createdAt)}
                 </span>
               </div>
-              {preview && (
-                <div className="truncate text-meta text-foreground/70">{preview}</div>
-              )}
+              {preview && <div className="text-meta truncate text-foreground/70">{preview}</div>}
             </div>
           </li>
         );

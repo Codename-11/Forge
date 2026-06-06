@@ -7,11 +7,11 @@ import { cn } from "@/lib/utils";
 import { MOTION } from "@/lib/motion";
 
 /**
- * Watch / Unwatch toggle for an issue. Subscribes the caller to the
- * issue's event fan-out — comment @-mentions, status transitions, SLA
- * breaches all fire the watcher's webhook (agents) or land in the
- * inbox/notification surface (humans). Distinct from Pin (which is a
- * sidebar UI shortcut) — both can be active simultaneously.
+ * Watch / Unwatch toggle for an issue. Subscribes the caller to issue
+ * updates. Human watchers receive notifications; agent watchers are visible
+ * here, but only rows marked for activity wakes receive generic issue
+ * fan-out. Explicit @mentions still wake the mentioned agent. Distinct from
+ * Pin (which is a sidebar UI shortcut) — both can be active simultaneously.
  *
  * Reads `issue.watchers` for current state (cheap — one row per
  * watcher). Optimistic toggle so the eye flips immediately.
@@ -20,22 +20,13 @@ import { MOTION } from "@/lib/motion";
  * least one OTHER watcher (or any watcher when the caller isn't one).
  * The chip's native `title=` lists names so hovering reveals who.
  */
-export function WatchButton({
-  issueId,
-  className,
-}: {
-  issueId: string;
-  className?: string;
-}) {
+export function WatchButton({ issueId, className }: { issueId: string; className?: string }) {
   const utils = trpc.useUtils();
   // Caller's identity — for "is the caller currently watching?" we
   // can't derive it from the watchers list alone (the caller may be
   // an agent). Use the dedicated `issue.watching` query, scoped to
   // this issue via membership check on the watchers list.
-  const watchersQ = trpc.issue.watchers.useQuery(
-    { issueId },
-    { staleTime: 60_000 },
-  );
+  const watchersQ = trpc.issue.watchers.useQuery({ issueId }, { staleTime: 60_000 });
 
   // Detect whether the calling user is in the watchers list. This
   // covers the human path. For agents (API key with linkedAgentId),
@@ -45,12 +36,8 @@ export function WatchButton({
   const meQ = trpc.user.me.useQuery(undefined, { staleTime: 60_000 });
   const myUserId = meQ.data?.id;
   const watchers = watchersQ.data?.items ?? [];
-  const isWatching = !!(
-    myUserId && watchers.some((w) => w.userId === myUserId)
-  );
-  const otherCount = isWatching
-    ? watchers.length - 1
-    : watchers.length;
+  const isWatching = !!(myUserId && watchers.some((w) => w.userId === myUserId));
+  const otherCount = isWatching ? watchers.length - 1 : watchers.length;
 
   const watch = trpc.issue.watch.useMutation({
     onMutate: async () => {
@@ -93,12 +80,15 @@ export function WatchButton({
 
   // Tooltip enrichment: list watcher names so hovering reveals who.
   const watcherNames = watchers
-    .map((w) => w.user?.name || w.user?.handle || w.agent?.name || w.agent?.profileKey)
+    .map((w) => {
+      const name = w.user?.name || w.user?.handle || w.agent?.name || w.agent?.profileKey;
+      if (!name) return null;
+      if (w.agent) return w.wakeOnActivity ? `${name} (wakes)` : `${name} (watching)`;
+      return name;
+    })
     .filter(Boolean) as string[];
   const chipTitle =
-    watcherNames.length > 0
-      ? `Watching: ${watcherNames.join(", ")}`
-      : "No watchers yet";
+    watcherNames.length > 0 ? `Watching: ${watcherNames.join(", ")}` : "No watchers yet";
 
   return (
     <div className={cn("inline-flex items-center gap-1", className)}>
@@ -120,11 +110,7 @@ export function WatchButton({
           isWatching ? "text-ember" : "text-muted-foreground hover:text-foreground",
         )}
       >
-        {isWatching ? (
-          <Eye className="h-3 w-3" />
-        ) : (
-          <EyeOff className="h-3 w-3" />
-        )}
+        {isWatching ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
       </button>
       {watchers.length > 0 && (
         <WatcherChip count={watchers.length} watchers={watchers} fallbackTitle={chipTitle} />
@@ -170,8 +156,8 @@ function WatcherChip({
         role="tooltip"
         aria-hidden
         className={cn(
-          "pointer-events-none absolute right-0 top-[calc(100%+6px)] z-50 w-64 rounded-md border border-border bg-popover p-2 shadow-md opacity-0 transition-opacity",
-          "group-hover/watchers:opacity-100 group-focus-within/watchers:opacity-100",
+          "pointer-events-none absolute right-0 top-[calc(100%+6px)] z-50 w-64 rounded-md border border-border bg-popover p-2 opacity-0 shadow-md transition-opacity",
+          "group-focus-within/watchers:opacity-100 group-hover/watchers:opacity-100",
         )}
       >
         <div className="mb-1 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -179,10 +165,7 @@ function WatcherChip({
         </div>
         <ul className="flex flex-col gap-0.5">
           {shown.map((w) => (
-            <li
-              key={w.id}
-              className="flex items-center gap-2 rounded px-1 py-0.5 text-meta"
-            >
+            <li key={w.id} className="text-meta flex items-center gap-2 rounded px-1 py-0.5">
               <WatcherAvatar w={w} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-foreground">
@@ -197,12 +180,17 @@ function WatcherChip({
                       ? `@${w.agent.profileKey}`
                       : ""}
                 </div>
+                {w.agent && (
+                  <div className="truncate text-[0.625rem] text-muted-foreground/80">
+                    {w.wakeOnActivity ? "wakes on activity" : "watching only"}
+                  </div>
+                )}
               </div>
             </li>
           ))}
         </ul>
         {overflow > 0 && (
-          <div className="mt-1 border-t border-border/60 px-1 pt-1 text-meta text-muted-foreground">
+          <div className="text-meta mt-1 border-t border-border/60 px-1 pt-1 text-muted-foreground">
             +{overflow} more
           </div>
         )}
@@ -215,6 +203,7 @@ type WatcherRow = {
   id: string;
   userId?: string | null;
   agentId?: string | null;
+  wakeOnActivity?: boolean;
   user?: {
     id: string;
     name: string | null;

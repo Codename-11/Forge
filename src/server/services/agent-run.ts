@@ -281,9 +281,7 @@ export async function finishRun(
   });
 
   const eventKind =
-    params.status === "STALLED"
-      ? EventKind.AGENT_RUN_STALLED
-      : EventKind.AGENT_RUN_COMPLETED;
+    params.status === "STALLED" ? EventKind.AGENT_RUN_STALLED : EventKind.AGENT_RUN_COMPLETED;
 
   await recordChange(tx, {
     workspaceId: params.workspaceId,
@@ -379,17 +377,34 @@ export async function finishRunsForIssue(
 ): Promise<number> {
   const active = await tx.agentRun.findMany({
     where: { issueId: params.issueId, status: AgentRunStatus.ACTIVE },
-    select: { id: true, agentId: true },
+    select: {
+      id: true,
+      agentId: true,
+      externalRunId: true,
+      acknowledgedAt: true,
+      outputStartedAt: true,
+    },
   });
   for (const r of active) {
+    const runDidWork =
+      r.agentId === params.actorAgentId ||
+      !!r.externalRunId ||
+      !!r.acknowledgedAt ||
+      !!r.outputStartedAt;
+    const demotedUnstartedCompletion = params.status === "COMPLETED" && !runDidWork;
+    const status = demotedUnstartedCompletion ? "ABANDONED" : params.status;
+    const summary = demotedUnstartedCompletion
+      ? "Closed without completion because the issue reached Done before this run acknowledged or started."
+      : undefined;
     await finishRun(tx, {
       runId: r.id,
       workspaceId: params.workspaceId,
       issueId: params.issueId,
       agentId: r.agentId,
-      status: params.status,
-      actorId: params.actorId ?? null,
-      actorAgentId: params.actorAgentId ?? null,
+      status,
+      summary,
+      actorId: demotedUnstartedCompletion && params.actorAgentId ? null : (params.actorId ?? null),
+      actorAgentId: demotedUnstartedCompletion ? null : (params.actorAgentId ?? null),
     });
   }
   return active.length;

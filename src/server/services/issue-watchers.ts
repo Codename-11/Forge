@@ -13,8 +13,10 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
  * (`@@unique([issueId, userId])` / `@@unique([issueId, agentId])`).
  *
  * Watch is "sticky" — once a user or agent is watching, they stay
- * watching until they manually unwatch (matches GitHub behavior). We
- * never downgrade a watcher row here.
+ * watching until they manually unwatch (matches GitHub behavior).
+ * Agent wake fan-out is a separate opt-in bit (`wakeOnActivity`):
+ * assignment enables it, reassignment can demote old agent rows, and
+ * passive mentions can stay visible without becoming future ghost work.
  */
 
 /**
@@ -46,7 +48,12 @@ export async function autoWatchUser(
  */
 export async function autoWatchAgent(
   db: DbClient,
-  params: { workspaceId: string; issueId: string; agentId: string },
+  params: {
+    workspaceId: string;
+    issueId: string;
+    agentId: string;
+    wakeOnActivity?: boolean;
+  },
 ): Promise<void> {
   await db.issueWatcher.upsert({
     where: {
@@ -56,8 +63,38 @@ export async function autoWatchAgent(
       workspaceId: params.workspaceId,
       issueId: params.issueId,
       agentId: params.agentId,
+      wakeOnActivity: params.wakeOnActivity ?? false,
     },
-    update: {},
+    update: params.wakeOnActivity ? { wakeOnActivity: true } : {},
+  });
+}
+
+/**
+ * Mark exactly one agent watcher as activity-wake eligible for an issue.
+ * Existing watcher rows stay in place for visibility/history, but previous
+ * assignees are demoted so generic issue activity cannot page them.
+ */
+export async function setIssueAgentWakeTarget(
+  db: DbClient,
+  params: { workspaceId: string; issueId: string; agentId: string | null },
+): Promise<void> {
+  await db.issueWatcher.updateMany({
+    where: {
+      workspaceId: params.workspaceId,
+      issueId: params.issueId,
+      AND: [
+        { agentId: { not: null } },
+        ...(params.agentId ? [{ agentId: { not: params.agentId } }] : []),
+      ],
+    },
+    data: { wakeOnActivity: false },
+  });
+  if (!params.agentId) return;
+  await autoWatchAgent(db, {
+    workspaceId: params.workspaceId,
+    issueId: params.issueId,
+    agentId: params.agentId,
+    wakeOnActivity: true,
   });
 }
 
@@ -85,6 +122,7 @@ export async function autoWatchActor(
       workspaceId: params.workspaceId,
       issueId: params.issueId,
       agentId: params.callerAgentId,
+      wakeOnActivity: false,
     });
     return;
   }
