@@ -11,6 +11,20 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-06-06] — v0.5.0 · Agent runroom views
+
+### Added
+
+- **Agents now have an operational runroom.** The workspace agents view now
+  surfaces fleet health, dispatch queues, attention items, runtime topology,
+  and recent activity in one oversight screen.
+
+### Changed
+
+- **Agent detail pages focus on readiness.** Individual agents now show held
+  work, active runs, context, crew activity, runtime readiness, webhook health,
+  and dispatch eligibility in a cleaner operator layout.
+
 ## [2026-06-03] — v0.4.2 · Build version reporting
 
 ### Fixed
