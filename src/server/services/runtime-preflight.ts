@@ -1,6 +1,7 @@
 import "server-only";
 import type { AgentProvider, RuntimeKind } from "@prisma/client";
 import { getRuntimeAdapter } from "@/server/runtimes/adapters";
+import { runtimeHasDeclaredRepoTools, runtimeWorkspaceRoot } from "@/lib/runtime-tools";
 
 export type RuntimePreflightSeverity = "info" | "warning";
 
@@ -57,49 +58,12 @@ const CODE_WORK_HINTS = [
   "typescript",
 ];
 
-function configRecord(config: unknown): Record<string, unknown> {
-  return config && typeof config === "object" && !Array.isArray(config)
-    ? (config as Record<string, unknown>)
-    : {};
-}
-
-function declaredTools(config: unknown): Set<string> {
-  const raw = configRecord(config);
-  const values = [
-    ...(Array.isArray(raw.toolCapabilities) ? raw.toolCapabilities : []),
-    ...(Array.isArray(raw.tools) ? raw.tools : []),
-    ...(raw.localWorkspaceTools === true ? ["local-workspace"] : []),
-    ...(raw.terminal === true ? ["terminal"] : []),
-    ...(raw.filesystem === true ? ["filesystem"] : []),
-    ...(raw.git === true ? ["git"] : []),
-  ];
-  return new Set(
-    values
-      .filter((value): value is string => typeof value === "string")
-      .map((value) => value.toLowerCase().replace(/[_\s]+/g, "-")),
-  );
-}
-
-function hasDeclaredRepoTools(runtime: RuntimeRef): boolean {
-  const tools = declaredTools(runtime?.config);
-  return (
-    tools.has("local-workspace") ||
-    tools.has("local-repo") ||
-    tools.has("repo") ||
-    tools.has("terminal") ||
-    tools.has("filesystem") ||
-    tools.has("file-system") ||
-    tools.has("git")
-  );
-}
-
 function runtimeHasRepoTools(runtime: RuntimeRef): boolean {
   const adapterKey = runtime?.adapterKey ?? null;
-  if (hasDeclaredRepoTools(runtime)) return true;
+  if (runtimeHasDeclaredRepoTools(runtime?.config)) return true;
   if (adapterKey === "local-daemon") return true;
   if (adapterKey === "codex-app-server") {
-    const cfg = configRecord(runtime?.config);
-    return typeof cfg.workspaceRoot === "string" && cfg.workspaceRoot.trim().length > 0;
+    return !!runtimeWorkspaceRoot(runtime?.config);
   }
   return false;
 }

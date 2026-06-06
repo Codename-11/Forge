@@ -46,10 +46,12 @@ columns.
 ## Where Runtimes show up
 
 - **`/settings/runtimes`** — index page, one card per Runtime with kind
-  badge, providers, last heartbeat, owner, agent count.
+  badge, providers, last heartbeat, owner, agent count, adapter capabilities,
+  and declared local tool surface.
 - **`/settings/runtimes/[id]`** — detail. Lists agents on this runtime
   and surfaces a copy-pasteable `forge daemon start` recipe for empty
-  `LOCAL_DAEMON` rows.
+  `LOCAL_DAEMON` rows. The detail page also shows whether the runtime
+  declares `terminal`, `filesystem`, and `git` access.
 - **Agent detail page** — small Runtime card that click-throughs to the
   runtime detail.
 - **Mission Control agents tab** — compact `RuntimeChip` next to the
@@ -66,17 +68,46 @@ trpc.runtime.register.mutate({
 trpc.runtime.heartbeat.mutate({ id })
 trpc.runtime.archive.mutate({ id })
 trpc.runtime.update.mutate({
-  id, name?, providersAvailable?
+  id, name?, providersAvailable?, config?
 })
 ```
 
 All `workspaceProcedure`-gated.
 
+## Runtime config and tool surface
+
+`Runtime.config` is adapter-specific. For Hermes, Forge stores only
+non-secret declarations used for operator visibility and preflight checks:
+
+```json
+{
+  "localWorkspaceTools": true,
+  "toolCapabilities": ["terminal", "filesystem", "git"],
+  "workspaceRoot": "/home/bailey/forge"
+}
+```
+
+This does **not** grant tools to Hermes. The Hermes gateway/profile must
+actually run with those tools enabled and that repo mounted or available.
+Once true, set the declaration in **Settings → Runtimes → Edit** or via:
+
+```bash
+forge runtimes configure <runtimeId> \
+  --local-workspace-tools \
+  --tool terminal \
+  --tool filesystem \
+  --tool git \
+  --workspace-root /home/bailey/forge
+```
+
+Code/repo issue preflight uses this declaration to decide whether Wake/Kick is
+likely to help or whether the work should move to a local-tool runtime.
+
 ## MCP tools (for runtimes that auto-register)
 
-`runtimes.register`, `runtimes.heartbeat` — both `ADMIN`-scoped. The
-`forge` CLI's `daemon start` calls these on launch and on a 60-second
-heartbeat tick.
+`runtimes.register`, `runtimes.heartbeat`, and `runtimes.configure` are
+`ADMIN`-scoped. The `forge` CLI's `daemon start` calls register/heartbeat;
+operators can call configure to set runtime config without direct DB access.
 
 See [/reference/mcp.html#runtimes](/reference/mcp.html#runtimes) for
 exact shapes.

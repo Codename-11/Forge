@@ -20,6 +20,7 @@ import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { Section, SkeletonList } from "@/components/ui";
 import { CodeBlock } from "@/components/mcp-integration-blocks";
+import { RuntimeToolSurfacePanel } from "@/components/runtime-tool-surface";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
@@ -302,6 +303,10 @@ export default function RuntimeDetailPage() {
                         </span>
                       </div>
                     )}
+                    <RuntimeToolSurfacePanel
+                      adapterKey={runtime.adapterKey}
+                      config={runtime.config}
+                    />
                   </div>
                 </div>
               </Card>
@@ -447,7 +452,7 @@ export default function RuntimeDetailPage() {
           if (!v) setEditOpen(false);
         }}
         title="Edit runtime"
-        description="Update runtime connection details. Leave the secret blank to keep the existing value. Config must be a JSON object."
+        description="Update runtime connection details. Leave the secret blank to keep the existing value. Config must be a JSON object validated by the adapter."
         primaryLabel="Save"
         loading={update.isPending}
         onSubmit={async (e) => {

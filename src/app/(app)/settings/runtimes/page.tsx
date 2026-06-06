@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Bot, Server, Sparkles, MoreHorizontal } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Spinner, EmptyState } from "@/components/ui";
+import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
@@ -147,6 +148,7 @@ export default function RuntimesPage() {
                     <div className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-meta text-muted-foreground">
                       {r.health.reason}
                     </div>
+                    <RuntimeToolSurfaceBadges adapterKey={r.adapterKey} config={r.config} />
 
                     {/* Bound agents + workspaces */}
                     <div className="flex items-start gap-2 border-t border-border/60 pt-3">

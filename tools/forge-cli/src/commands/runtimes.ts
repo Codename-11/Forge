@@ -14,7 +14,9 @@ interface RuntimeRow {
   id: string;
   name: string;
   kind: string;
+  adapterKey: string | null;
   endpoint: string | null;
+  config?: unknown;
   providersAvailable: string[];
   heartbeatAt: string | null;
   connectedAt: string | null;
@@ -22,6 +24,14 @@ interface RuntimeRow {
   ownerId: string | null;
   owner?: { id: string; name: string | null } | null;
   _count?: { agents: number };
+}
+
+interface RuntimeConfigureResult {
+  id: string;
+  name: string;
+  adapterKey: string | null;
+  config: unknown;
+  updatedAt: string;
 }
 
 function pad(s: string, w: number): string {
@@ -38,6 +48,34 @@ function relativeTime(iso: string | null): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+function configRecord(config: unknown): Record<string, unknown> {
+  return config && typeof config === "object" && !Array.isArray(config)
+    ? (config as Record<string, unknown>)
+    : {};
+}
+
+function declaredTools(config: unknown, adapterKey: string | null): string[] {
+  const c = configRecord(config);
+  const tools = new Set<string>();
+  const add = (value: unknown) => {
+    if (typeof value !== "string") return;
+    const normalized = value.toLowerCase().replace(/[_\s]+/g, "-");
+    if (["terminal", "filesystem", "git"].includes(normalized)) tools.add(normalized);
+  };
+  if (Array.isArray(c.toolCapabilities)) c.toolCapabilities.forEach(add);
+  if (Array.isArray(c.tools)) c.tools.forEach(add);
+  for (const key of ["terminal", "filesystem", "git"]) {
+    if (c[key] === true) tools.add(key);
+  }
+  const workspaceRoot = typeof c.workspaceRoot === "string" && c.workspaceRoot.trim();
+  if (c.localWorkspaceTools === true || adapterKey === "local-daemon" || (adapterKey === "codex-app-server" && workspaceRoot)) {
+    tools.add("terminal");
+    tools.add("filesystem");
+    tools.add("git");
+  }
+  return ["terminal", "filesystem", "git"].filter((tool) => tools.has(tool));
 }
 
 export async function runtimesListCommand(opts: {
@@ -83,8 +121,72 @@ export async function runtimesListCommand(opts: {
       ? row.providersAvailable.join(",")
       : "—";
     const agents = row._count?.agents ?? 0;
+    const tools = declaredTools(row.config, row.adapterKey);
+    const toolText = tools.length ? tools.join(",") : "no-repo-tools";
     console.log(
-      `  ${chalk.cyan(pad(row.id.slice(0, 8), 10))} ${chalk.gray(pad(row.kind, 14))} ${pad(row.name, 28)} ${chalk.gray(`hb=${relativeTime(row.heartbeatAt)}`)}  ${chalk.gray(`agents=${agents}`)}  ${chalk.gray(`providers=${providers}`)}${tag}`,
+      `  ${chalk.cyan(pad(row.id.slice(0, 8), 10))} ${chalk.gray(pad(row.kind, 14))} ${pad(row.name, 28)} ${chalk.gray(`hb=${relativeTime(row.heartbeatAt)}`)}  ${chalk.gray(`agents=${agents}`)}  ${chalk.gray(`providers=${providers}`)}  ${chalk.gray(`tools=${toolText}`)}${tag}`,
     );
+  }
+}
+
+function collectTool(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+export const runtimeToolCollector = collectTool;
+
+export async function runtimesConfigureCommand(
+  runtimeId: string,
+  opts: {
+    json?: boolean;
+    localWorkspaceTools?: boolean;
+    tool?: string[];
+    workspaceRoot?: string;
+    replace?: boolean;
+  },
+): Promise<void> {
+  const auth = await requireAuth();
+  const config: Record<string, unknown> = {};
+  if (opts.localWorkspaceTools !== undefined) {
+    config.localWorkspaceTools = !!opts.localWorkspaceTools;
+  }
+  if (opts.tool && opts.tool.length > 0) {
+    config.toolCapabilities = opts.tool.map((tool) => tool.toLowerCase());
+  }
+  if (opts.workspaceRoot) {
+    config.workspaceRoot = opts.workspaceRoot;
+  }
+  if (Object.keys(config).length === 0) {
+    throw new Error(
+      "Nothing to configure. Pass --local-workspace-tools, --tool, or --workspace-root.",
+    );
+  }
+
+  const r = await callTool<RuntimeConfigureResult>(
+    auth,
+    "runtimes.configure",
+    {
+      runtimeId,
+      config,
+      merge: !opts.replace,
+    },
+  );
+  if (r.isError || !r.data) {
+    console.error(chalk.red(`runtimes.configure failed: ${r.text}`));
+    process.exit(1);
+  }
+
+  if (opts.json) {
+    console.log(JSON.stringify(r.data, null, 2));
+    return;
+  }
+
+  const tools = declaredTools(r.data.config, r.data.adapterKey);
+  const root = configRecord(r.data.config).workspaceRoot;
+  console.log(chalk.green(`Runtime configured: ${r.data.name} (${r.data.id})`));
+  console.log(`  adapter: ${r.data.adapterKey ?? "unknown"}`);
+  console.log(`  tools:   ${tools.length ? tools.join(", ") : "none declared"}`);
+  if (typeof root === "string" && root.trim()) {
+    console.log(`  root:    ${root.trim()}`);
   }
 }
