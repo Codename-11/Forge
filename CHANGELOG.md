@@ -11,6 +11,27 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-06-06] — v0.5.1 · Android PWA install and push
+
+### Added
+
+- **Forge installs cleanly on Android.** Added install prompts, launcher
+  shortcuts, update notifications, offline fallback, and opt-in visited-page
+  caching for the PWA shell.
+- **Browser push notifications.** Added VAPID-backed Web Push subscriptions,
+  service-worker notification handling, and best-effort fanout for alertable
+  workspace activity.
+
+### Changed
+
+- **iOS gets lightweight PWA guidance.** Users on iOS see an Add to Home Screen
+  hint when Forge is not already running standalone.
+
+### Fixed
+
+- **Twitter image builds without metadata warnings.** The twitter-image route
+  now exports metadata config directly so Next can analyze it cleanly.
+
 ## [2026-06-06] — v0.5.0 · Agent runroom views
 
 ### Added

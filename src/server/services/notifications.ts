@@ -5,6 +5,7 @@ import {
   type EventKind,
   type NotificationDelivery,
   type NotificationSeverity as PrismaNotificationSeverity,
+  type NotificationState,
   type Prisma,
   type PrismaClient,
 } from "@prisma/client";
@@ -13,6 +14,8 @@ import {
   mapActivityEventToNotification,
   type EventNotificationMetadata,
 } from "@/lib/notifications/event-notification";
+import { logger } from "@/server/logger";
+import { sendBrowserPushToUser, type BrowserPushPayload } from "@/server/services/web-push";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -21,9 +24,7 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
  * notification router can render a checkbox row per kind on the prefs
  * page without re-encoding the list.
  */
-export const ALERTABLE_EVENT_KINDS = [
-  ...ALERTABLE_ACTIVITY_EVENT_KINDS,
-] as EventKind[];
+export const ALERTABLE_EVENT_KINDS = [...ALERTABLE_ACTIVITY_EVENT_KINDS] as EventKind[];
 
 export const ACTIVE_NOTIFICATION_STATUSES = [
   NotificationStatus.UNREAD,
@@ -61,9 +62,9 @@ const notificationStateArgs = {
   },
 } satisfies Prisma.NotificationStateDefaultArgs;
 
-type NotificationStateWithEvent = Prisma.NotificationStateGetPayload<
-  typeof notificationStateArgs
->;
+const NOTIFICATION_FANOUT_RETRY_DELAYS_MS = [250, 1000, 3000] as const;
+
+type NotificationStateWithEvent = Prisma.NotificationStateGetPayload<typeof notificationStateArgs>;
 
 type HydratedIssue = {
   id: string;
@@ -119,6 +120,7 @@ export async function materializeRecentNotifications(
     userId: string;
     limit?: number;
     eventIds?: string[];
+    push?: boolean;
   },
 ): Promise<number> {
   const events = await findAlertableEvents(db, params);
@@ -141,15 +143,114 @@ export async function materializeRecentNotifications(
     // the user hasn't expressed a preference — treat that as enabled.
     const pref = prefs.get(item.event.kind);
     if (pref && pref.enabled === false) continue;
-    await upsertNotificationState(db, {
+    const result = await upsertNotificationState(db, {
       workspaceId: params.workspaceId,
       userId: params.userId,
       event: item.event,
       metadata: item.metadata,
     });
+    if (
+      params.push === true &&
+      result.created &&
+      result.state.status === NotificationStatus.UNREAD
+    ) {
+      await sendBrowserPushToUser(
+        db,
+        params.userId,
+        buildBrowserPushPayload(result.state, item.metadata),
+      );
+    }
     count += 1;
   }
   return count;
+}
+
+export async function materializeEventNotificationsForWorkspace(
+  db: DbClient,
+  params: {
+    workspaceId: string;
+    eventId: string;
+  },
+): Promise<number> {
+  const event = await db.activityEvent.findFirst({
+    where: {
+      id: params.eventId,
+      workspaceId: params.workspaceId,
+      kind: { in: ALERTABLE_EVENT_KINDS },
+    },
+    select: { actorId: true },
+  });
+  if (!event) return 0;
+
+  const memberships = await db.membership.findMany({
+    where: { workspaceId: params.workspaceId },
+    select: { userId: true },
+  });
+
+  let count = 0;
+  for (const membership of memberships) {
+    if (event.actorId && membership.userId === event.actorId) continue;
+    count += await materializeRecentNotifications(db, {
+      workspaceId: params.workspaceId,
+      userId: membership.userId,
+      eventIds: [params.eventId],
+      push: true,
+    });
+  }
+  return count;
+}
+
+export function scheduleEventNotificationFanout(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    eventId: string;
+  },
+): void {
+  scheduleEventNotificationFanoutAttempt(db, params, 0, 0);
+}
+
+function scheduleEventNotificationFanoutAttempt(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    eventId: string;
+  },
+  attempt: number,
+  delayMs: number,
+) {
+  setTimeout(() => {
+    void runScheduledEventNotificationFanout(db, params, attempt).catch((err) => {
+      logger.warn({ err, eventId: params.eventId }, "notification push fan-out failed");
+    });
+  }, delayMs);
+}
+
+async function runScheduledEventNotificationFanout(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    eventId: string;
+  },
+  attempt: number,
+): Promise<void> {
+  const event = await db.activityEvent.findFirst({
+    where: {
+      id: params.eventId,
+      workspaceId: params.workspaceId,
+      kind: { in: ALERTABLE_EVENT_KINDS },
+    },
+    select: { id: true },
+  });
+  if (!event) {
+    const retryDelay = NOTIFICATION_FANOUT_RETRY_DELAYS_MS[attempt];
+    if (retryDelay !== undefined) {
+      scheduleEventNotificationFanoutAttempt(db, params, attempt + 1, retryDelay);
+    }
+    return;
+  }
+
+  await materializeEventNotificationsForWorkspace(db, params);
 }
 
 /**
@@ -372,8 +473,7 @@ async function hydrateNotificationEvents(
   return events.map((event) => {
     const payload = asPayload(event.payload);
     const payloadAgentId =
-      readPayloadString(payload, "agentId") ??
-      readPayloadString(payload, "assignedAgentId");
+      readPayloadString(payload, "agentId") ?? readPayloadString(payload, "assignedAgentId");
     const issue =
       event.subjectType === "issue"
         ? ((issueById.get(event.subjectId) as HydratedIssue | undefined) ?? null)
@@ -423,10 +523,23 @@ async function upsertNotificationState(
     event: NotificationEventForClient;
     metadata: EventNotificationMetadata;
   },
-) {
+): Promise<{
+  state: NotificationState;
+  created: boolean;
+}> {
   const { workspaceId, userId, event, metadata } = params;
   const now = new Date();
   const replacementKey = metadata.replacementKey;
+  const existingState = await db.notificationState.findUnique({
+    where: {
+      workspaceId_userId_eventId: {
+        workspaceId,
+        userId,
+        eventId: event.id,
+      },
+    },
+    select: { id: true },
+  });
   const newerReplacement = replacementKey
     ? await db.notificationState.findFirst({
         where: {
@@ -455,9 +568,7 @@ async function upsertNotificationState(
       replacementKey,
       severity: metadata.severity,
       importance: metadata.importance,
-      status: createResolved
-        ? NotificationStatus.RESOLVED
-        : NotificationStatus.UNREAD,
+      status: createResolved ? NotificationStatus.RESOLVED : NotificationStatus.UNREAD,
       persistent: metadata.persistent,
       primaryHref: metadata.primaryHref,
       detailHref: metadata.detailHref,
@@ -499,7 +610,30 @@ async function upsertNotificationState(
     });
   }
 
-  return state;
+  return { state, created: !existingState };
+}
+
+function buildBrowserPushPayload(
+  state: NotificationState,
+  metadata: EventNotificationMetadata,
+): BrowserPushPayload {
+  const body =
+    metadata.toast.description ?? state.reason ?? metadata.reason ?? metadata.recommendedAction;
+  return {
+    title: metadata.toast.title,
+    body: body ? truncatePushBody(body) : undefined,
+    url: metadata.primaryHref,
+    tag: metadata.replacementKey,
+    notificationId: state.id,
+    icon: "/icons/forge-icon-192.png",
+    badge: "/icons/forge-icon-192.png",
+    renotify: metadata.severity === "ERROR" || metadata.severity === "CRITICAL",
+    requireInteraction: metadata.importance >= 80,
+  };
+}
+
+function truncatePushBody(value: string): string {
+  return value.length > 180 ? `${value.slice(0, 177)}...` : value;
 }
 
 function mergeStateMetadata(
@@ -510,10 +644,7 @@ function mergeStateMetadata(
 
   const primaryHref = state.primaryHref ?? mapped.primaryHref;
   const detailHref = state.detailHref ?? undefined;
-  const primaryActionLabel = actionLabelForHref(
-    primaryHref,
-    mapped.primaryActionLabel,
-  );
+  const primaryActionLabel = actionLabelForHref(primaryHref, mapped.primaryActionLabel);
   const detailActionLabel = detailHref
     ? actionLabelForHref(detailHref, mapped.detailActionLabel ?? "Open details")
     : undefined;
@@ -561,7 +692,5 @@ function asPayload(payload: Prisma.JsonValue): Record<string, unknown> {
 
 function readPayloadString(payload: Record<string, unknown>, key: string): string | null {
   const value = payload[key];
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : null;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }

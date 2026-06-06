@@ -8,7 +8,7 @@ import {
   type Prisma,
   type PrismaClient,
 } from "@prisma/client";
-import { router, workspaceProcedure } from "@/server/trpc";
+import { protectedProcedure, router, workspaceProcedure } from "@/server/trpc";
 import {
   ACTIVE_NOTIFICATION_STATUSES,
   ALERTABLE_EVENT_KINDS,
@@ -17,6 +17,12 @@ import {
   materializeRecentNotifications,
   notificationStateInclude,
 } from "@/server/services/notifications";
+import {
+  getWebPushPublicKey,
+  isWebPushConfigured,
+  revokeBrowserPushSubscription,
+  upsertBrowserPushSubscription,
+} from "@/server/services/web-push";
 
 const listInput = z
   .object({
@@ -40,7 +46,52 @@ const markReadInput = z
     message: "Provide `id` or set `all`.",
   });
 
+const pushSubscriptionInput = z.object({
+  endpoint: z.string().url().max(4096),
+  keys: z.object({
+    p256dh: z.string().min(1).max(512),
+    auth: z.string().min(1).max(512),
+  }),
+});
+
+const unsubscribePushInput = z.object({
+  endpoint: z.string().url().max(4096),
+});
+
 export const notificationRouter = router({
+  pushConfig: protectedProcedure.query(() => ({
+    enabled: isWebPushConfigured(),
+    publicKey: getWebPushPublicKey(),
+  })),
+
+  subscribePush: protectedProcedure
+    .input(pushSubscriptionInput)
+    .mutation(async ({ ctx, input }) => {
+      if (!isWebPushConfigured()) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Web Push is not configured for this Forge instance.",
+        });
+      }
+      const row = await upsertBrowserPushSubscription(ctx.db, {
+        userId: ctx.session.user.id,
+        endpoint: input.endpoint,
+        p256dh: input.keys.p256dh,
+        auth: input.keys.auth,
+        userAgent: ctx.userAgent,
+      });
+      return { id: row.id, endpoint: row.endpoint };
+    }),
+
+  unsubscribePush: protectedProcedure
+    .input(unsubscribePushInput)
+    .mutation(async ({ ctx, input }) => {
+      return revokeBrowserPushSubscription(ctx.db, {
+        userId: ctx.session.user.id,
+        endpoint: input.endpoint,
+      });
+    }),
+
   list: workspaceProcedure.input(listInput).query(async ({ ctx, input }) => {
     await materializeRecentNotifications(ctx.db, {
       workspaceId: ctx.workspaceId,
@@ -78,15 +129,11 @@ export const notificationRouter = router({
 
     const hasMore = rows.length > input.limit;
     const page = hasMore ? rows.slice(0, input.limit) : rows;
-    const notifications = await buildNotificationListItems(
-      ctx.db,
-      ctx.workspaceId,
-      page,
-    );
+    const notifications = await buildNotificationListItems(ctx.db, ctx.workspaceId, page);
 
     return {
       notifications,
-      nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
+      nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
     };
   }),
 
@@ -123,9 +170,7 @@ export const notificationRouter = router({
         include: notificationStateInclude(),
       });
       if (!row) return null;
-      const [item] = await buildNotificationListItems(ctx.db, ctx.workspaceId, [
-        row,
-      ]);
+      const [item] = await buildNotificationListItems(ctx.db, ctx.workspaceId, [row]);
       return item ?? null;
     }),
 
@@ -216,8 +261,7 @@ export const notificationRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
-      const scopeWorkspaceId =
-        input.scope === "global" ? null : ctx.workspaceId;
+      const scopeWorkspaceId = input.scope === "global" ? null : ctx.workspaceId;
       const effective = await loadEffectivePreferenceMap(ctx.db, {
         userId,
         workspaceId: scopeWorkspaceId,
@@ -232,8 +276,7 @@ export const notificationRouter = router({
           enabled: row?.enabled ?? true,
           delivery: row?.delivery ?? NotificationDelivery.INBOX_ONLY,
           /** Which scope produced the effective value (null = default). */
-          source:
-            row?.source ?? ("default" as "workspace" | "global" | "default"),
+          source: row?.source ?? ("default" as "workspace" | "global" | "default"),
         };
       });
       return { items, scopeWorkspaceId };
@@ -284,8 +327,7 @@ export const notificationRouter = router({
               workspaceId,
               eventKind: input.eventKind,
               enabled: input.enabled,
-              delivery:
-                input.delivery ?? NotificationDelivery.INBOX_ONLY,
+              delivery: input.delivery ?? NotificationDelivery.INBOX_ONLY,
             },
           });
       return row;
