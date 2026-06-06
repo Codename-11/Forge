@@ -21,7 +21,7 @@ import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
-import { cn, relativeTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 /**
  * Runtimes index — workspace-scoped registry of compute environments
@@ -255,6 +255,7 @@ export default function RuntimesPage() {
                             disabled
                           </span>
                         )}
+                        <RuntimeHealthBadge health={rt.health} />
                         {rt.providersAvailable.length > 0 && (
                           <div className="flex flex-wrap items-center gap-1">
                             {rt.providersAvailable.map((p) => (
@@ -269,11 +270,11 @@ export default function RuntimesPage() {
                         )}
                       </div>
                       <div className="mt-1.5 flex flex-wrap items-center gap-3 text-meta text-muted-foreground">
-                        <span>
-                          {rt.heartbeatAt
-                            ? `heartbeat ${relativeTime(rt.heartbeatAt)} ago`
-                            : "no heartbeat yet"}
-                        </span>
+                        <span>{rt.health.lastSignal}</span>
+                        <span>·</span>
+                        <span>{rt.health.reason}</span>
+                        <span>·</span>
+                        <span>{rt.health.sweepExpectation}</span>
                         <span>·</span>
                         <span className="inline-flex items-center gap-1.5">
                           <UsersIcon className="h-3 w-3" />
@@ -569,6 +570,32 @@ function KindBadge({ kind }: { kind: RuntimeKind }) {
       title={KIND_LABEL[kind]}
     >
       {KIND_LABEL[kind]}
+    </span>
+  );
+}
+
+function RuntimeHealthBadge({
+  health,
+}: {
+  health: { label: string; tone: "success" | "warning" | "danger" | "muted"; reason: string };
+}) {
+  const toneClass =
+    health.tone === "success"
+      ? "border-success/30 bg-success/10 text-success"
+      : health.tone === "danger"
+        ? "border-danger/30 bg-danger/10 text-danger"
+        : health.tone === "warning"
+          ? "border-warning/30 bg-warning/10 text-warning"
+          : "border-border bg-subtle/40 text-muted-foreground";
+  return (
+    <span
+      className={cn(
+        "rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+        toneClass,
+      )}
+      title={health.reason}
+    >
+      {health.label}
     </span>
   );
 }

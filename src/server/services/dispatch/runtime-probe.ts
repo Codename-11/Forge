@@ -35,7 +35,7 @@ export async function probeRuntime(input: {
     return probeCodexWs(endpoint, input.secret, timeoutMs);
   }
   if (adapterKey === "hermes") {
-    return probeHttp(endpoint, input.secret, timeoutMs);
+    return probeHermesHttp(endpoint, input.secret, timeoutMs);
   }
   return NOT_ATTEMPTED;
 }
@@ -101,8 +101,8 @@ function probeCodexWs(
   });
 }
 
-/** Cheap GET; reachable if the gateway answers at all (any HTTP status). */
-async function probeHttp(
+/** Cheap Hermes gateway handshake. Uses `/models` when the endpoint looks OpenAI-compatible so bad bearer tokens surface as auth failures. */
+async function probeHermesHttp(
   endpoint: string,
   secret: string | null | undefined,
   timeoutMs: number,
@@ -110,11 +110,19 @@ async function probeHttp(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(endpoint, {
+    const url = hermesProbeUrl(endpoint);
+    const res = await fetch(url, {
       method: "GET",
       headers: secret ? { authorization: `Bearer ${secret}` } : undefined,
       signal: ctrl.signal,
     });
+    if (res.status === 401 || res.status === 403) {
+      return {
+        attempted: true,
+        reachable: false,
+        detail: `Gateway rejected auth (HTTP ${res.status}).`,
+      };
+    }
     return {
       attempted: true,
       reachable: true,
@@ -128,5 +136,18 @@ async function probeHttp(
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+function hermesProbeUrl(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    const path = url.pathname.replace(/\/+$/, "");
+    if (path.endsWith("/v1")) {
+      url.pathname = `${path}/models`;
+    }
+    return url.toString();
+  } catch {
+    return endpoint;
   }
 }

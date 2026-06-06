@@ -2,28 +2,23 @@ import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
-import { getRuntimeAdapter } from "@/server/runtimes/adapters";
 import { probeRuntime } from "@/server/services/dispatch/runtime-probe";
+import { sanitizeRuntimeProbeDetail, supportsRuntimeProbe } from "@/server/services/runtime-status";
 import { recordRuntimeHeartbeatPresence } from "@/server/services/heartbeat";
 
 /**
- * Active health probe for outbound managed runtimes that can't heartbeat
- * inbound.
+ * Active health probe for managed runtimes with handshake probes.
  *
- * The local daemon proves its own liveness (`runtimes.heartbeat`), and Hermes
- * agents report at the agent level — both already drive true presence. But a
- * runtime Forge reaches *outbound* (the Codex app server) never calls back, so
- * its agents would read a permanent "on-demand". This sweep pings each such
- * runtime; a reachable endpoint is treated as a heartbeat — it bumps
- * `Runtime.heartbeatAt` and propagates liveness to the hosted persistent
- * agents (same path as `runtimes.heartbeat`), so they read true online/offline.
- * When the endpoint stops answering we simply don't bump, and `sweepIdleAgents`
- * flips the agents OFFLINE once their heartbeat goes stale.
+ * The local daemon proves its own liveness (`runtimes.heartbeat`). Managed
+ * HTTP/WebSocket adapters can be handshaken without starting a run: Codex app
+ * server is probed over WebSocket initialize, Hermes gateway over a cheap HTTP
+ * GET. The sweep persists every sanitized probe result so operators can tell
+ * "gateway/auth unreachable" from "presence heartbeat missing".
  *
- * Scope: only `transport: "app-server"` runtimes, where endpoint uptime ==
- * agent reachability (the server *is* the agent host). LOCAL_DAEMON self-
- * heartbeats and Hermes (`runs-api`) reports per-agent, so neither is probed —
- * probing them would risk overriding a more accurate signal.
+ * Only app-server runtimes whose presence is `runtime-heartbeat` use a
+ * successful probe as a runtime heartbeat and propagate liveness to hosted
+ * persistent agents. Hermes probes are diagnostic-only; agent/runtime presence
+ * still comes from forge-presence, agent heartbeat, or webhook delivery.
  *
  * Scheduled by `src/server/worker.ts` as a repeatable BullMQ job.
  */
@@ -45,13 +40,7 @@ export async function sweepRuntimeHealth(
     select: { id: true, adapterKey: true, endpoint: true, secret: true },
   });
 
-  const targets = runtimes.filter((rt) => {
-    const adapter = getRuntimeAdapter(rt.adapterKey);
-    return (
-      adapter?.transport === "app-server" &&
-      adapter.capabilities.presence === "runtime-heartbeat"
-    );
-  });
+  const targets = runtimes.filter((rt) => supportsRuntimeProbe(rt.adapterKey));
 
   let reachable = 0;
   await Promise.all(
@@ -63,14 +52,28 @@ export async function sweepRuntimeHealth(
           secret: rt.secret,
           timeoutMs: PROBE_TIMEOUT_MS,
         });
-        if (!res.reachable) return;
-        reachable += 1;
         const now = new Date();
-        await client.runtime.update({
+        const probeData = {
+          lastProbeAt: now,
+          lastProbeAttempted: res.attempted,
+          lastProbeReachable: res.reachable,
+          lastProbeDetail: sanitizeRuntimeProbeDetail(res.detail),
+        };
+        if (!res.reachable) {
+          await client.runtime.updateMany({
+            where: { id: rt.id },
+            data: probeData,
+          });
+          return;
+        }
+        reachable += 1;
+        const updated = await client.runtime.updateMany({
           where: { id: rt.id },
-          data: { heartbeatAt: now },
+          data: { ...probeData, heartbeatAt: now },
         });
-        await recordRuntimeHeartbeatPresence(rt.id, now, client);
+        if (updated.count > 0) {
+          await recordRuntimeHeartbeatPresence(rt.id, now, client);
+        }
       } catch (err) {
         // A single bad endpoint shouldn't sink the whole sweep.
         logger.warn({ err, runtimeId: rt.id }, "runtime-health: probe failed");
