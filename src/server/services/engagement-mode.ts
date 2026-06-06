@@ -9,6 +9,8 @@ import { EngagementMode, MentionEngagementPolicy } from "@prisma/client";
  * unit-testable.
  */
 
+export const FORGE_RUN_CONTRACT_VERSION = "2026-06-06.2";
+
 export type EngagementSurface =
   | "assignment"
   | "queue"
@@ -109,7 +111,7 @@ export function modeMayExecute(mode: EngagementMode): boolean {
 }
 
 const RUN_PROTOCOL_INSTRUCTIONS =
-  "FORGE RUN PROTOCOL. Use Forge's run lifecycle tools so the operator can see " +
+  `FORGE RUN PROTOCOL ${FORGE_RUN_CONTRACT_VERSION}. Use Forge's run lifecycle tools so the operator can see ` +
   "real state. If you have a runId, call `agent.inbox.ack({ runId })` before " +
   "substantive work. If you do not have a runId, call `agent.context.bundle` " +
   "with the issue id or `agent.inbox.list` to find the current run first. " +
@@ -117,6 +119,10 @@ const RUN_PROTOCOL_INSTRUCTIONS =
   "Use `comments.upsertStatus` only for meaningful human-facing checkpoints, " +
   "not every internal thought. If blocked, call `runs.setWaiting({ runId, " +
   "reason, blocking: true })` and stop. Finish the run with `runs.complete`. " +
+  "Include the mode-specific required fields when completing: EXECUTE supplies " +
+  "artifact/checklist evidence when the issue contract requires it, RESEARCH " +
+  "supplies findings plus confidence, REVIEW supplies a verdict, and DISCUSS " +
+  "supplies a reply only. " +
   "Non-EXECUTE modes are read/report/review only; Forge rejects issue-state " +
   "mutations from those runs.";
 

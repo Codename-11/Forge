@@ -107,6 +107,8 @@ export async function openOrTouchRun(
     executionStepId?: string | null;
     /** Engagement mode for this run (AXI-53). Defaults EXECUTE when unset. */
     engagementMode?: EngagementMode | null;
+    /** Dispatch-time runtime/tool policy snapshot. */
+    runtimePolicy?: Prisma.InputJsonValue | null;
   },
 ): Promise<{ run: AgentRun; isNew: boolean }> {
   const existing = await findActiveRun(tx, {
@@ -131,6 +133,9 @@ export async function openOrTouchRun(
           ? { assignmentEventId: params.assignmentEventId }
           : {}),
         ...(params.currentStep !== undefined ? { currentStep: params.currentStep } : {}),
+        ...(params.runtimePolicy && !existing.runtimePolicy
+          ? { runtimePolicy: params.runtimePolicy }
+          : {}),
       },
     });
     return { run: updated, isNew: false };
@@ -146,6 +151,7 @@ export async function openOrTouchRun(
       currentStep: params.currentStep ?? null,
       executionStepId: params.executionStepId ?? null,
       ...(params.engagementMode ? { engagementMode: params.engagementMode } : {}),
+      ...(params.runtimePolicy ? { runtimePolicy: params.runtimePolicy } : {}),
     },
   });
 
@@ -268,7 +274,12 @@ export async function finishRun(
 ): Promise<AgentRun | null> {
   const existing = await tx.agentRun.findUnique({ where: { id: params.runId } });
   if (!existing) return null;
-  if (existing.status !== AgentRunStatus.ACTIVE) return existing;
+  if (
+    existing.status !== AgentRunStatus.ACTIVE &&
+    existing.status !== AgentRunStatus.WAITING
+  ) {
+    return existing;
+  }
 
   const finished = await tx.agentRun.update({
     where: { id: params.runId },
@@ -384,7 +395,10 @@ export async function finishRunsForIssue(
   },
 ): Promise<number> {
   const active = await tx.agentRun.findMany({
-    where: { issueId: params.issueId, status: AgentRunStatus.ACTIVE },
+    where: {
+      issueId: params.issueId,
+      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+    },
     select: {
       id: true,
       agentId: true,

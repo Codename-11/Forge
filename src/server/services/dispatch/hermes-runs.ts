@@ -70,6 +70,17 @@ export function makeHermesRunsConnector(opts?: {
     async startRun(input: RunInput): Promise<StartedRun> {
       const body: Record<string, unknown> = { input: input.message };
       if (input.instructions) body.instructions = input.instructions;
+      if (input.engagementMode) body.engagement_mode = input.engagementMode;
+      if (input.contractVersion) body.forge_contract_version = input.contractVersion;
+      if (input.toolPolicy) {
+        body.tool_allowlist = input.toolPolicy.allowedHostTools;
+        body.runtime_policy = {
+          contract_version: input.toolPolicy.contractVersion,
+          engagement_mode: input.toolPolicy.engagementMode,
+          allowed_host_tools: input.toolPolicy.allowedHostTools,
+          enforcement_layers: input.toolPolicy.layers,
+        };
+      }
       if (input.history && input.history.length > 0) {
         body.conversation_history = input.history;
       }

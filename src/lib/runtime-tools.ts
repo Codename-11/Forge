@@ -1,6 +1,7 @@
 export const RUNTIME_TOOL_CAPABILITIES = ["terminal", "filesystem", "git"] as const;
 
 export type RuntimeToolCapability = (typeof RUNTIME_TOOL_CAPABILITIES)[number];
+export type RuntimeEngagementMode = "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS";
 
 const RUNTIME_TOOL_SET = new Set<string>(RUNTIME_TOOL_CAPABILITIES);
 
@@ -80,6 +81,31 @@ export function runtimeHasDeclaredRepoTools(config: unknown): boolean {
   );
 }
 
+export function runtimeHostEnforcesModeToolPolicy(config: unknown): boolean {
+  const c = configRecord(config);
+  return c.modeToolPolicyEnforced === true || c.hostEnforcedToolPolicy === true;
+}
+
+export function runtimeModeToolCapabilities(
+  config: unknown,
+  mode: RuntimeEngagementMode,
+): RuntimeToolCapability[] {
+  const c = configRecord(config);
+  const profiles =
+    c.modeToolProfiles && typeof c.modeToolProfiles === "object" && !Array.isArray(c.modeToolProfiles)
+      ? (c.modeToolProfiles as Record<string, unknown>)
+      : null;
+  const explicit = profiles?.[mode];
+  if (Array.isArray(explicit)) {
+    const tools = new Set<RuntimeToolCapability>();
+    for (const value of explicit) addTool(tools, value);
+    return RUNTIME_TOOL_CAPABILITIES.filter((tool) => tools.has(tool));
+  }
+
+  if (mode !== "EXECUTE") return [];
+  return declaredRuntimeToolCapabilities(config);
+}
+
 export function runtimeToolSurface(
   adapterKey: string | null | undefined,
   config: unknown,
@@ -113,4 +139,3 @@ export function runtimeToolSurface(
     label: hasRepoTools ? "repo tools declared" : "repo tools not declared",
   };
 }
-

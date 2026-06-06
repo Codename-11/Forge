@@ -119,6 +119,7 @@ runtimes
   .option("--local-workspace-tools", "declare that this runtime has local repo tools")
   .option("--tool <tool>", "declare a tool capability (terminal, filesystem, git); repeatable", runtimeToolCollector, [])
   .option("--workspace-root <path>", "workspace/repo root exposed to the runtime")
+  .option("--mode-tool-policy-enforced", "declare that the host enforces Forge per-run mode tool allowlists")
   .option("--replace", "replace config instead of merging with existing config")
   .option("--json", "emit raw JSON")
   .action(async (runtimeId, opts) => {
@@ -128,6 +129,7 @@ runtimes
         localWorkspaceTools: opts.localWorkspaceTools,
         tool: opts.tool,
         workspaceRoot: opts.workspaceRoot,
+        modeToolPolicyEnforced: opts.modeToolPolicyEnforced,
         replace: opts.replace,
       });
     } catch (err) {

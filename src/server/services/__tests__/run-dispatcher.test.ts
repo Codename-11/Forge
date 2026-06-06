@@ -104,7 +104,69 @@ describe("runs dispatcher", () => {
       });
       expect(after.externalRunId).toMatch(/^mock-/);
       expect(after.engagementMode).toBe(EngagementMode.REVIEW);
+      expect(after.runtimePolicy).toMatchObject({
+        contractVersion: expect.stringMatching(/^2026-/),
+        engagementMode: "REVIEW",
+      });
       expect(after.events.some((e) => e.kind === "DISPATCH_STARTED")).toBe(true);
+    } finally {
+      if (previousE2E === undefined) {
+        delete process.env.FORGE_E2E;
+      } else {
+        process.env.FORGE_E2E = previousE2E;
+      }
+    }
+  });
+
+  it("does not mark provider-terminal runs completed without runs.complete metadata", async () => {
+    const previousE2E = process.env.FORGE_E2E;
+    process.env.FORGE_E2E = "1";
+
+    try {
+      const fixture = await createWorkspaceFixture({ keyPrefix: "RPF" });
+      fixtures.push(fixture);
+      const prisma = getPrisma();
+      const runtime = await prisma.runtime.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          ownerId: fixture.user.id,
+          name: "mock runs",
+          kind: RuntimeKind.LOCAL_DAEMON,
+          adapterKey: "mock-runs",
+          providersAvailable: [AgentProvider.HERMES],
+        },
+        select: { id: true },
+      });
+      const agent = await prisma.agent.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          name: "runner",
+          profileKey: "runner-protocol",
+          provider: AgentProvider.HERMES,
+          runEngine: RunEngine.RUNS,
+          runtimeId: runtime.id,
+          status: "ONLINE",
+        },
+        select: { id: true },
+      });
+      const issue = await createIssue(fixture, { title: "poll terminal" });
+      const run = await prisma.agentRun.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: agent.id,
+          externalRunId: "mock-missing-terminal",
+          status: "ACTIVE",
+        },
+      });
+
+      const tick = await ingestRunsDispatch();
+      expect(tick.polled).toBeGreaterThanOrEqual(1);
+
+      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+      expect(after.status).toBe("STALLED");
+      expect(after.summary).toMatch(/without a valid Forge runs\.complete contract/);
+      expect(after.completionMeta).toBeNull();
     } finally {
       if (previousE2E === undefined) {
         delete process.env.FORGE_E2E;

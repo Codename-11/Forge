@@ -123,8 +123,12 @@ export async function runtimesListCommand(opts: {
     const agents = row._count?.agents ?? 0;
     const tools = declaredTools(row.config, row.adapterKey);
     const toolText = tools.length ? tools.join(",") : "no-repo-tools";
+    const modeTools =
+      configRecord(row.config).modeToolPolicyEnforced === true
+        ? "mode-tools=enforced"
+        : "mode-tools=prompt-only";
     console.log(
-      `  ${chalk.cyan(pad(row.id.slice(0, 8), 10))} ${chalk.gray(pad(row.kind, 14))} ${pad(row.name, 28)} ${chalk.gray(`hb=${relativeTime(row.heartbeatAt)}`)}  ${chalk.gray(`agents=${agents}`)}  ${chalk.gray(`providers=${providers}`)}  ${chalk.gray(`tools=${toolText}`)}${tag}`,
+      `  ${chalk.cyan(pad(row.id.slice(0, 8), 10))} ${chalk.gray(pad(row.kind, 14))} ${pad(row.name, 28)} ${chalk.gray(`hb=${relativeTime(row.heartbeatAt)}`)}  ${chalk.gray(`agents=${agents}`)}  ${chalk.gray(`providers=${providers}`)}  ${chalk.gray(`tools=${toolText}`)}  ${chalk.gray(modeTools)}${tag}`,
     );
   }
 }
@@ -142,6 +146,7 @@ export async function runtimesConfigureCommand(
     localWorkspaceTools?: boolean;
     tool?: string[];
     workspaceRoot?: string;
+    modeToolPolicyEnforced?: boolean;
     replace?: boolean;
   },
 ): Promise<void> {
@@ -156,9 +161,12 @@ export async function runtimesConfigureCommand(
   if (opts.workspaceRoot) {
     config.workspaceRoot = opts.workspaceRoot;
   }
+  if (opts.modeToolPolicyEnforced !== undefined) {
+    config.modeToolPolicyEnforced = !!opts.modeToolPolicyEnforced;
+  }
   if (Object.keys(config).length === 0) {
     throw new Error(
-      "Nothing to configure. Pass --local-workspace-tools, --tool, or --workspace-root.",
+      "Nothing to configure. Pass --local-workspace-tools, --tool, --workspace-root, or --mode-tool-policy-enforced.",
     );
   }
 
@@ -186,6 +194,11 @@ export async function runtimesConfigureCommand(
   console.log(chalk.green(`Runtime configured: ${r.data.name} (${r.data.id})`));
   console.log(`  adapter: ${r.data.adapterKey ?? "unknown"}`);
   console.log(`  tools:   ${tools.length ? tools.join(", ") : "none declared"}`);
+  console.log(
+    `  mode tools: ${
+      configRecord(r.data.config).modeToolPolicyEnforced === true ? "host-enforced" : "prompt-only"
+    }`,
+  );
   if (typeof root === "string" && root.trim()) {
     console.log(`  root:    ${root.trim()}`);
   }

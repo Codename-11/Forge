@@ -2,6 +2,8 @@ import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { AgentRunStatus, EventKind } from "@prisma/client";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
+import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
+import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { publish } from "@/server/realtime";
 import { nanoid } from "nanoid";
 
@@ -110,7 +112,27 @@ async function ensureIssueRuns(
           | undefined)
       : undefined;
   const runIds: string[] = [];
+  const agents = await tx.agent.findMany({
+    where: { workspaceId: params.workspaceId, id: { in: [...agentIds] } },
+    select: {
+      id: true,
+      provider: true,
+      runtime: { select: { name: true, adapterKey: true, config: true } },
+    },
+  });
+  const agentById = new Map(agents.map((agent) => [agent.id, agent]));
   for (const agentId of agentIds) {
+    const agent = agentById.get(agentId);
+    const engagementMode = payloadMode ?? "EXECUTE";
+    const runtimePolicy = agent
+      ? buildRuntimePolicySnapshot({
+          contractVersion: FORGE_RUN_CONTRACT_VERSION,
+          engagementMode,
+          adapterKey: agent.runtime?.adapterKey ?? (agent.provider === "HERMES" ? "hermes" : null),
+          runtimeName: agent.runtime?.name ?? null,
+          config: agent.runtime?.config,
+        })
+      : null;
     const { run } = await openOrTouchRun(tx, {
       workspaceId: params.workspaceId,
       issueId: params.subjectId,
@@ -118,7 +140,8 @@ async function ensureIssueRuns(
       actorId: params.actorId,
       actorAgentId: params.actorAgentId ?? null,
       assignmentEventId: isAssigned ? params.eventId : null,
-      engagementMode: payloadMode ?? null,
+      engagementMode,
+      runtimePolicy: runtimePolicy as Prisma.InputJsonValue | null,
     });
     // Stamp the latest trigger on the run so the inbox can distinguish
     // "Victor was just re-mentioned in AXI-31" from "Victor is the

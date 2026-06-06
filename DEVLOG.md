@@ -2,6 +2,46 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-06 — Run contract enforcement and restart flow
+
+Added the next hardening pass for Forge agent runs. `AgentRun` now stores
+`completionMeta` (mode-specific completion fields + run contract version) and
+`runtimePolicy` (effective tool/enforcement snapshot captured at dispatch).
+RUNS dispatch passes `engagement_mode`, `forge_contract_version`,
+`tool_allowlist`, and `runtime_policy` to Hermes, while Codex app-server keeps
+forcing non-Execute turns into read-only sandboxing. Runtime config now accepts
+`modeToolPolicyEnforced`; the workspace runtime UI and `forge runtimes
+configure --mode-tool-policy-enforced` expose it.
+
+`runs.complete` is now a real server-side mode contract: linked-agent key
+required, terminal rewrites rejected, Execute enforces issue artifact/checklist
+gates, Research requires `confidence`, Review requires `verdict`, and Discuss
+is reply-only. `finishRun` and issue-terminal close now include WAITING runs so
+patient runs do not linger. Added centralized MCP policy metadata/helper for
+Execute-only issue mutations and exposed policy in MCP descriptors.
+
+The issue run strip now offers explicit Stop + Restart with Mode actions rather
+than fake in-place switching. Issue and Mission Control run cards show runtime
+enforcement strength (Forge MCP, Codex sandbox, Hermes host, prompt-only) and
+protocol diagnostics (`never-acked`, `acked-no-output`, stale output without
+completion, invalid completion). The Mission Control timeline labels STEP rows
+from provider/current-step payloads instead of falling back to bare `STEP`.
+
+Follow-up hardening from subagent review: direct RUNS chat starts now use the
+Discuss contract/policy payload, durable inbox-created runs capture a
+dispatch-time runtime policy snapshot, Mission Control keeps WAITING runs in
+the live lane, provider-side terminal completion without `runs.complete` is
+marked STALLED instead of false-completed, and merged runtime config can now
+clear `modeToolPolicyEnforced` / tool declarations. Live Hermes runtime config
+was made explicit prompt-only (`modeToolPolicyEnforced: false`) with Execute
+repo tools and empty Research/Review/Discuss mode profiles until the Hermes
+host itself proves allowlist enforcement.
+
+Docs updated: engagement modes, Hermes integration, runtimes, and MCP
+reference. Verification: `pnpm lint`, `pnpm typecheck`, `pnpm test` (785 pass /
+1 skipped), `pnpm build:docs`, `pnpm build:app`, `pnpm test:e2e` (21 pass), and
+`pnpm build:cli`.
+
 ## 2026-06-06 — Runtime tool-surface config and cards
 
 Made runtime local tool surface a first-class declaration. Hermes Runtime

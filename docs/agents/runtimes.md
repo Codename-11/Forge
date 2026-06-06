@@ -83,12 +83,17 @@ non-secret declarations used for operator visibility and preflight checks:
 {
   "localWorkspaceTools": true,
   "toolCapabilities": ["terminal", "filesystem", "git"],
-  "workspaceRoot": "/home/bailey/forge"
+  "workspaceRoot": "/home/bailey/forge",
+  "modeToolPolicyEnforced": true
 }
 ```
 
-This does **not** grant tools to Hermes. The Hermes gateway/profile must
-actually run with those tools enabled and that repo mounted or available.
+The local workspace fields do **not** grant tools to Hermes. The Hermes
+gateway/profile must actually run with those tools enabled and that repo
+mounted or available. `modeToolPolicyEnforced` is a separate truth claim: set it
+only when the Hermes host honors Forge's per-run `tool_allowlist` for
+Research/Review/Discuss. When false or absent, Forge still blocks Forge MCP
+issue mutations, but host tools are prompt-only.
 Once true, set the declaration in **Settings → Runtimes → Edit** or via:
 
 ```bash
@@ -97,7 +102,8 @@ forge runtimes configure <runtimeId> \
   --tool terminal \
   --tool filesystem \
   --tool git \
-  --workspace-root /home/bailey/forge
+  --workspace-root /home/bailey/forge \
+  --mode-tool-policy-enforced
 ```
 
 Code/repo issue preflight uses this declaration to decide whether Wake/Kick is
@@ -189,9 +195,9 @@ they observe `autoTransitionedTo` in the payload.
 - Login takes URL + token directly (no OAuth device-code flow yet).
 - The AGENT_ASSIGNED loop only auto-runs for `CLAUDE` provider
   agents; other providers receive a placeholder comment.
-- No automatic `IN_PROGRESS` status transition on dispatch — there's
-  no `statuses.list` MCP tool yet to discover the workspace's
-  category-mapped started status.
+- If `Workspace.startedStatusId` is not configured, agents or daemons
+  should use `statuses.list({ category: "IN_PROGRESS" })` and transition
+  explicitly when Execute-mode work actually starts.
 :::
 
 ## Token usage on AgentRun
