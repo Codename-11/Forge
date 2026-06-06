@@ -94,6 +94,10 @@ mounted or available. `modeToolPolicyEnforced` is a separate truth claim: set it
 only when the Hermes host honors Forge's per-run `tool_allowlist` for
 Research/Review/Discuss. When false or absent, Forge still blocks Forge MCP
 issue mutations, but host tools are prompt-only.
+When true, Hermes should disable local terminal/file/code/desktop surfaces for
+restricted modes without disabling skills, memory, web/search, Forge context
+reads, or delegation; delegated subagents must inherit the same disabled local
+toolsets.
 Once true, set the declaration in **Settings → Runtimes → Edit** or via:
 
 ```bash

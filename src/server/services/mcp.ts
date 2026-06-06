@@ -30,6 +30,7 @@ import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { setIssueAgentWakeTarget } from "@/server/services/issue-watchers";
 import {
+  abandonRunsForAgentReassignment,
   openOrTouchRun,
   appendRunEvent,
   finishRun,
@@ -2092,6 +2093,18 @@ export const mcpTools = {
               ...(engagementMode ? { engagementMode } : {}),
             },
           });
+          if (assignmentChanged && before.assignedAgentId) {
+            await abandonRunsForAgentReassignment(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: before.id,
+              agentId: before.assignedAgentId,
+              actorId: ctx.userId,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+              summary: targetAgentId
+                ? "Abandoned because the issue was reassigned to another agent."
+                : "Abandoned because the agent assignment was cleared.",
+            });
+          }
           if (assignmentChanged) {
             await setIssueAgentWakeTarget(tx, {
               workspaceId: ctx.workspaceId,
@@ -2230,6 +2243,16 @@ export const mcpTools = {
             commentId: comment.id,
           },
         });
+        if (fromAgentId) {
+          await abandonRunsForAgentReassignment(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: issue.id,
+            agentId: fromAgentId,
+            actorId: ctx.userId,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            summary: "Abandoned because the issue was handed off to another agent.",
+          });
+        }
 
         // Apply the receiving agent's template if the description is
         // empty — in practice this rarely fires on a handoff (an issue

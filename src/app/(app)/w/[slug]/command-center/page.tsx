@@ -15,7 +15,9 @@ import {
   Inbox,
   Loader2,
   Shield,
+  ShieldCheck,
   Sparkles,
+  StopCircle,
   Target,
   Workflow,
   X,
@@ -52,6 +54,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 export default function CommandCenterPage() {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
+  const canRecoverRuns = ws.role === ("OWNER" as Role) || ws.role === ("ADMIN" as Role);
   const summaryInput = { dueWindowDays: 7, limit: 20 } as const;
   const { data, isLoading } = trpc.commandCenter.summary.useQuery(summaryInput);
 
@@ -112,19 +115,21 @@ export default function CommandCenterPage() {
       counts: { ...prev.counts, stalledRuns: stalledRuns.length },
     });
   };
-  const clearRunFailures = trpc.agentRun.clearMany.useMutation({
+  const recoverRuns = trpc.agentRun.recoverMany.useMutation({
     onMutate: ({ runIds }) => dropRunFailures(runIds),
     onError: (e) => {
       toast.error(e.message);
       void utils.commandCenter.summary.invalidate();
     },
     onSuccess: (result) => {
-      if (result.cleared > 0) {
-        toast.success(
-          result.cleared === 1
-            ? "Run failure cleared."
-            : `${result.cleared} run failures cleared.`,
-        );
+      if (result.changed > 0) {
+        const verb =
+          result.action === "ABANDON"
+            ? "abandoned"
+            : result.action === "RECONCILE"
+              ? "reconciled"
+              : "cleared";
+        toast.success(`${result.changed} run${result.changed === 1 ? "" : "s"} ${verb}.`);
       }
     },
     onSettled: () => {
@@ -283,31 +288,17 @@ export default function CommandCenterPage() {
 
             <Section
               icon={<AlertTriangle className="h-3.5 w-3.5" />}
-              title="Run failures"
-              empty="No uncleared run failures."
+              title="Run recovery"
+              empty="No run recovery needed."
               count={data.stalledRuns.length}
               tone="warning"
               action={
-                data.stalledRuns.length > 0 ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 px-1.5 text-[0.6875rem] normal-case tracking-normal"
-                    disabled={clearRunFailures.isPending}
-                    onClick={() =>
-                      clearRunFailures.mutate({
-                        runIds: data.stalledRuns.map((row) => row.id),
-                      })
-                    }
-                    title="Clear all run failures from operational queues"
-                  >
-                    {clearRunFailures.isPending ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Eraser className="h-3 w-3" />
-                    )}
-                    Clear all
-                  </Button>
+                data.stalledRuns.length > 0 && canRecoverRuns ? (
+                  <RunRecoveryBulkActions
+                    runs={data.stalledRuns}
+                    pending={recoverRuns.isPending}
+                    onRecover={(action, runIds) => recoverRuns.mutate({ action, runIds })}
+                  />
                 ) : null
               }
             >
@@ -316,8 +307,9 @@ export default function CommandCenterPage() {
                   key={row.id}
                   run={row}
                   slug={ws.slug}
-                  clearing={clearRunFailures.isPending}
-                  onClear={() => clearRunFailures.mutate({ runIds: [row.id] })}
+                  canRecover={canRecoverRuns}
+                  pending={recoverRuns.isPending}
+                  onRecover={(action) => recoverRuns.mutate({ action, runIds: [row.id] })}
                 />
               ))}
             </Section>
@@ -910,31 +902,88 @@ type CCRunFailure = {
   currentStep: string | null;
   lastEventAt: Date | string;
   finishedAt: Date | string | null;
+  recoveryReason: string;
+  recoveryTitle: string;
+  recoveryDetail: string;
+  recommendedAction: "ABANDON" | "CLEAR" | "RECONCILE";
+  availableActions: Array<"ABANDON" | "CLEAR" | "RECONCILE">;
   agent: { profileKey: string };
   issue: {
+    id: string;
     number: number;
     title: string;
     workspace: { key: string };
   };
 };
 
+function recoveryActionLabel(action: CCRunFailure["recommendedAction"]): string {
+  if (action === "ABANDON") return "Abandon";
+  if (action === "RECONCILE") return "Reconcile";
+  return "Clear";
+}
+
+function recoveryActionIcon(action: CCRunFailure["recommendedAction"]) {
+  if (action === "ABANDON") return StopCircle;
+  if (action === "RECONCILE") return ShieldCheck;
+  return Eraser;
+}
+
+function RunRecoveryBulkActions({
+  runs,
+  pending,
+  onRecover,
+}: {
+  runs: CCRunFailure[];
+  pending: boolean;
+  onRecover: (action: CCRunFailure["recommendedAction"], runIds: string[]) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {(["ABANDON", "RECONCILE", "CLEAR"] as const).map((action) => {
+        const runIds = runs
+          .filter((run) => run.availableActions.includes(action))
+          .map((run) => run.id);
+        if (runIds.length === 0) return null;
+        const Icon = recoveryActionIcon(action);
+        return (
+          <Button
+            key={action}
+            size="sm"
+            variant="ghost"
+            className="h-6 px-1.5 text-[0.6875rem] normal-case tracking-normal"
+            disabled={pending}
+            onClick={() => onRecover(action, runIds)}
+            title={`${recoveryActionLabel(action)} ${runIds.length} run${runIds.length === 1 ? "" : "s"}`}
+          >
+            {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Icon className="h-3 w-3" />}
+            {recoveryActionLabel(action)} {runIds.length}
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
 function RunFailureCard({
   run,
   slug,
-  clearing,
-  onClear,
+  canRecover,
+  pending,
+  onRecover,
 }: {
   run: CCRunFailure;
   slug: string;
-  clearing: boolean;
-  onClear: () => void;
+  canRecover: boolean;
+  pending: boolean;
+  onRecover: (action: CCRunFailure["recommendedAction"]) => void;
 }) {
   const ts = run.finishedAt ?? run.lastEventAt;
-  const excerpt = run.summary ?? run.currentStep ?? run.issue.title;
+  const excerpt = run.recoveryDetail ?? run.summary ?? run.currentStep ?? run.issue.title;
+  const ActionIcon = recoveryActionIcon(run.recommendedAction);
   return (
     <div className="flex gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning">
       <Link
-        href={`/w/${slug}/i/${run.issue.workspace.key}-${run.issue.number}`}
+        href={`/w/${slug}/issues/${run.issue.id}`}
         className="min-w-0 flex-1"
       >
         <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -942,24 +991,29 @@ function RunFailureCard({
             {run.issue.workspace.key}-{run.issue.number}
           </span>
           <span className="rounded bg-warning/10 px-1 py-0.5 text-[10px] uppercase text-warning">
-            {run.status.toLowerCase()}
+            {run.recoveryReason.replace("-", " ")}
           </span>
         </div>
+        <span className="text-meta block font-medium text-foreground/80">
+          {run.recoveryTitle}
+        </span>
         <span className="text-meta line-clamp-2 text-muted-foreground">
           @{run.agent.profileKey} · {new Date(ts).toLocaleString()} · {excerpt}
         </span>
       </Link>
-      <Button
-        size="sm"
-        variant="ghost"
-        className="h-7 shrink-0 px-2 text-muted-foreground"
-        disabled={clearing}
-        onClick={onClear}
-        title="Clear this run failure from operational queues"
-        aria-label="Clear run failure"
-      >
-        {clearing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Eraser className="h-3 w-3" />}
-      </Button>
+      {canRecover ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 shrink-0 px-2 text-muted-foreground"
+          disabled={pending}
+          onClick={() => onRecover(run.recommendedAction)}
+          title={`${recoveryActionLabel(run.recommendedAction)} this run from operational queues`}
+          aria-label={`${recoveryActionLabel(run.recommendedAction)} run`}
+        >
+          {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ActionIcon className="h-3 w-3" />}
+        </Button>
+      ) : null}
     </div>
   );
 }

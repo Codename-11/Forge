@@ -1,6 +1,12 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { AgentRunStatus, EngagementMode, EventKind } from "@prisma/client";
-import { appendRunEvent, finishRun, finishRunsForIssue, openOrTouchRun } from "@/server/services/agent-run";
+import { AgentRunStatus, EngagementMode, EventKind, RuntimeKind } from "@prisma/client";
+import {
+  abandonRunsForAgentReassignment,
+  appendRunEvent,
+  finishRun,
+  finishRunsForIssue,
+  openOrTouchRun,
+} from "@/server/services/agent-run";
 import {
   buildContext,
   createWorkspaceFixture,
@@ -397,5 +403,169 @@ describe("agent-run lifecycle", () => {
       agentId: agent.id,
       status: AgentRunStatus.STALLED,
     });
+  });
+
+  it("recovery abandons stale active runs and clears them from operational queues", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARX" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "arx-a1");
+    const issue = await createIssue(fixture);
+    const old = new Date(Date.now() - 20 * 60_000);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        lastEventAt: old,
+        currentStep: "wake sent",
+      },
+    });
+    const caller = agentRunRouter.createCaller(await buildContext(fixture));
+
+    const recovery = await caller.recovery({ limit: 10 });
+    const item = recovery.items.find((row) => row.id === run.id);
+    expect(item?.reason).toBe("active-stale");
+    expect(item?.recommendedAction).toBe("ABANDON");
+    expect(recovery.counts.activeStale).toBeGreaterThanOrEqual(1);
+
+    const result = await caller.recoverMany({ runIds: [run.id], action: "ABANDON" });
+    expect(result).toMatchObject({ ok: true, action: "ABANDON", changed: 1, runIds: [run.id] });
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.status).toBe(AgentRunStatus.ABANDONED);
+    expect(after.finishedAt).not.toBeNull();
+    expect(after.clearedAt).not.toBeNull();
+    expect(after.clearedById).toBe(fixture.user.id);
+
+    const empty = await caller.recovery({ limit: 10 });
+    expect(empty.items.map((row) => row.id)).not.toContain(run.id);
+  });
+
+  it("recovery reconciles protocol-failed completed runs without rewriting completion history", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "arp-a1");
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { artifactRequired: true },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.COMPLETED,
+        finishedAt: new Date(),
+        summary: "Done.",
+        producedArtifactIds: [],
+        engagementMode: EngagementMode.EXECUTE,
+      },
+    });
+    const caller = agentRunRouter.createCaller(await buildContext(fixture));
+
+    const recovery = await caller.recovery({ limit: 10 });
+    const item = recovery.items.find((row) => row.id === run.id);
+    expect(item?.reason).toBe("protocol-failed");
+    expect(item?.detail).toMatch(/requires at least one produced artifact/i);
+
+    const result = await caller.recoverMany({
+      runIds: [run.id],
+      action: "RECONCILE",
+      summary: "Reviewed historical completion.",
+    });
+    expect(result.changed).toBe(1);
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.status).toBe(AgentRunStatus.COMPLETED);
+    expect(after.clearedAt).not.toBeNull();
+    expect(after.completionMeta).toMatchObject({
+      protocolReconciledById: fixture.user.id,
+      protocolReconciledReason: "Reviewed historical completion.",
+    });
+    const reconciledEvent = await prisma.agentRunEvent.findFirstOrThrow({
+      where: { runId: run.id, kind: "RECONCILED" },
+    });
+    expect(reconciledEvent.payload).toBeTruthy();
+  });
+
+  it("runtimeCompliance reports declared tools, host enforcement, and recovery signals", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARS" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Hermes prompt-only",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "hermes",
+        endpoint: "http://127.0.0.1:8642/v1",
+        config: { toolCapabilities: [] },
+      },
+    });
+    const agent = await createAgent(fixture.workspace.id, "ars-a1");
+    await prisma.agent.update({
+      where: { id: agent.id },
+      data: { runtimeId: runtime.id },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.STALLED,
+        finishedAt: new Date(),
+        summary: "No runtime output.",
+      },
+    });
+    const caller = agentRunRouter.createCaller(await buildContext(fixture));
+
+    const scorecard = await caller.runtimeCompliance();
+    const card = scorecard.agents.find((row) => row.agentId === agent.id);
+    expect(card?.hasRepoTools).toBe(false);
+    expect(card?.hostToolPolicyEnforced).toBe(false);
+    expect(card?.terminalFailures).toBe(1);
+    expect(card?.signals.map((signal) => signal.code)).toEqual(
+      expect.arrayContaining(["no-repo-tools", "prompt-only-tools", "terminal-failures"]),
+    );
+  });
+
+  it("abandons only the previous assignee run on reassignment", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const oldAgent = await createAgent(fixture.workspace.id, "arr-old");
+    const newAgent = await createAgent(fixture.workspace.id, "arr-new");
+    const issue = await createIssue(fixture);
+    const oldRun = await openOrTouchRun(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      agentId: oldAgent.id,
+      currentStep: "old agent working",
+    });
+    const newRun = await openOrTouchRun(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      agentId: newAgent.id,
+      currentStep: "new agent working",
+    });
+
+    const count = await abandonRunsForAgentReassignment(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      agentId: oldAgent.id,
+      actorId: fixture.user.id,
+    });
+
+    expect(count).toBe(1);
+    const oldAfter = await prisma.agentRun.findUniqueOrThrow({ where: { id: oldRun.run.id } });
+    const newAfter = await prisma.agentRun.findUniqueOrThrow({ where: { id: newRun.run.id } });
+    expect(oldAfter.status).toBe(AgentRunStatus.ABANDONED);
+    expect(oldAfter.finishedAt).not.toBeNull();
+    expect(newAfter.status).toBe(AgentRunStatus.ACTIVE);
   });
 });

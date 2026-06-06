@@ -2,6 +2,41 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-06 — Run recovery and runtime compliance console
+
+Added an operator recovery path for AgentRuns. Mission Control Admin now
+shows a Run Recovery section that explains why runs are counted
+(`active-stale`, `terminal-failure`, or `protocol-failed`) and offers bounded
+bulk/per-row actions: abandon stale live runs, clear stalled/abandoned
+terminal rows, and reconcile protocol-invalid completed runs without rewriting
+history. Command Center now uses the same recovery classifier so its run
+recovery count matches the actionable rows.
+
+Added a runtime/agent compliance scorecard. Mission Control agent cards now
+surface runtime risk, declared repo-tool access, and Hermes host-enforcement
+signals; Instance Admin runtimes show declared tool surface directly in the
+runtime table. New recovery/compliance coverage lives in
+`agent-run.test.ts`.
+
+Centralized MCP execution through `mcp-exec.ts` so REST, JSON-RPC, and
+confirmed chat tools share lookup, scope, zod parsing, and engagement-mode
+policy preflight before calling the raw tool. Added regression coverage for
+transport-neutral errors, successful execution, Research-mode mutation denial,
+and chat-tool execution through the same wrapper.
+
+Tightened reassignment/live-status behavior. Reassigning or clearing an agent
+now abandons the previous assignee's active/waiting run, and the issue page
+only pins STATUS comments from the current assigned agent's active/waiting run;
+older run status cards remain chronological history. Hermes/engagement-mode
+docs now state that host allowlists block local terminal/file/code/desktop
+surfaces without blocking skills, memory, web/search, context reads, or
+delegation, and delegated subagents inherit the same local deny-list.
+
+Verification: `pnpm test src/server/services/__tests__/agent-run.test.ts
+src/server/services/__tests__/mcp-exec.test.ts`, `pnpm typecheck`, Hermes
+focused pytest coverage for runtime tool policy/API dispatch/delegation, plus
+pending full lint/test before release.
+
 ## 2026-06-06 — Run contract enforcement and restart flow
 
 Added the next hardening pass for Forge agent runs. `AgentRun` now stores

@@ -11,7 +11,11 @@ import {
 } from "@/server/services/dispatcher";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
-import { finishRunsForIssue, recordAgentAction } from "@/server/services/agent-run";
+import {
+  abandonRunsForAgentReassignment,
+  finishRunsForIssue,
+  recordAgentAction,
+} from "@/server/services/agent-run";
 import { runtimePreflightForIssue } from "@/server/services/runtime-preflight";
 import { runProtocolDiagnostics } from "@/server/services/run-protocol-diagnostics";
 import {
@@ -604,6 +608,18 @@ export const issueRouter = router({
         },
       });
       if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+      const currentAgentRun = issue.assignedAgentId
+        ? await ctx.db.agentRun.findFirst({
+            where: {
+              workspaceId: ctx.workspaceId,
+              issueId: issue.id,
+              agentId: issue.assignedAgentId,
+              status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+            },
+            orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
+            select: { id: true, status: true, lastEventAt: true },
+          })
+        : null;
       const runtimePreflight = runtimePreflightForIssue({
         title: issue.title,
         description: issue.description,
@@ -637,6 +653,7 @@ export const issueRouter = router({
         ...issue,
         assignedAgent,
         agentRuns,
+        currentAgentRun,
         runtimePreflight,
       };
     }),
@@ -1330,6 +1347,18 @@ export const issueRouter = router({
             ip: ctx.ip,
             userAgent: ctx.userAgent,
           });
+          if (assignmentChanged && before.assignedAgentId) {
+            await abandonRunsForAgentReassignment(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: id,
+              agentId: before.assignedAgentId,
+              actorId: ctx.session.user.id,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+              summary: nextAgentId
+                ? "Abandoned because the issue was reassigned to another agent."
+                : "Abandoned because the agent assignment was cleared.",
+            });
+          }
           // Apply template on assignment (or re-assignment) when the
           // new agent has one and the current description is empty.
           // The helper itself no-ops on both missing template and non-
@@ -1876,6 +1905,7 @@ export const issueRouter = router({
         for (let i = 0; i < validIds.length; i += CHUNK) {
           const chunk = issues.slice(i, i + CHUNK);
           for (const row of chunk) {
+            const assignmentChanged = (row.assignedAgentId ?? null) !== (input.assignedAgentId ?? null);
             await setIssueAgentWakeTarget(tx, {
               workspaceId: ctx.workspaceId,
               issueId: row.id,
@@ -1902,6 +1932,18 @@ export const issueRouter = router({
               ip: ctx.ip,
               userAgent: ctx.userAgent,
             });
+            if (assignmentChanged && row.assignedAgentId) {
+              await abandonRunsForAgentReassignment(tx, {
+                workspaceId: ctx.workspaceId,
+                issueId: row.id,
+                agentId: row.assignedAgentId,
+                actorId: ctx.session.user.id,
+                actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+                summary: input.assignedAgentId
+                  ? "Abandoned because the issue was bulk-reassigned to another agent."
+                  : "Abandoned because the agent assignment was cleared.",
+              });
+            }
           }
         }
 

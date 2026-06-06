@@ -113,6 +113,7 @@ export const instanceAdminRouter = router({
         lastProbeDetail: true,
         connectedAt: true,
         endpoint: true,
+        config: true,
         disabledAt: true,
         archivedAt: true,
         instanceShared: true,

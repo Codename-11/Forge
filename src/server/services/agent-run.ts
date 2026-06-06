@@ -431,3 +431,47 @@ export async function finishRunsForIssue(
   }
   return active.length;
 }
+
+/**
+ * Close active work for an agent that no longer owns the issue.
+ * Reassignment should leave that work as chronological history, not as a
+ * live/pinned status card competing with the new assignee.
+ */
+export async function abandonRunsForAgentReassignment(
+  tx: Tx,
+  params: {
+    workspaceId: string;
+    issueId: string;
+    agentId: string;
+    actorId?: string | null;
+    actorAgentId?: string | null;
+    summary?: string | null;
+  },
+): Promise<number> {
+  const active = await tx.agentRun.findMany({
+    where: {
+      workspaceId: params.workspaceId,
+      issueId: params.issueId,
+      agentId: params.agentId,
+      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+    },
+    select: { id: true, agentId: true },
+  });
+
+  for (const run of active) {
+    await finishRun(tx, {
+      runId: run.id,
+      workspaceId: params.workspaceId,
+      issueId: params.issueId,
+      agentId: run.agentId,
+      status: "ABANDONED",
+      summary:
+        params.summary ??
+        "Abandoned because this issue was reassigned before the run completed.",
+      actorId: params.actorId ?? null,
+      actorAgentId: params.actorAgentId ?? null,
+    });
+  }
+
+  return active.length;
+}

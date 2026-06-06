@@ -1,5 +1,6 @@
 "use client";
 import { trpc } from "@/lib/trpc";
+import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
 import { ADMIN, AdminPanel, AdminLoading, AdminEmpty } from "./admin-ui";
 
 /**
@@ -19,11 +20,12 @@ export function AdminRuntimes() {
         hint={runtimes.data ? `${online}/${runtimes.data.length} online` : undefined}
       >
         <div
-          className="grid grid-cols-[1.6fr_0.7fr_0.8fr_0.5fr_0.7fr_0.6fr] items-center gap-2 px-4 py-2 text-meta"
+          className="grid grid-cols-[1.5fr_0.65fr_1.2fr_0.75fr_0.5fr_0.7fr_0.6fr] items-center gap-2 px-4 py-2 text-meta"
           style={{ color: ADMIN.textMuted, borderBottom: `1px solid ${ADMIN.border}` }}
         >
           <span>Runtime</span>
           <span>Kind</span>
+          <span>Tool surface</span>
           <span>Owner</span>
           <span className="text-right">Agents</span>
           <span className="text-right">Heartbeat</span>
@@ -47,7 +49,7 @@ export function AdminRuntimes() {
             return (
               <div
                 key={r.id}
-                className="grid grid-cols-[1.6fr_0.7fr_0.8fr_0.5fr_0.7fr_0.6fr] items-center gap-2 px-4 py-2.5"
+                className="grid grid-cols-[1.5fr_0.65fr_1.2fr_0.75fr_0.5fr_0.7fr_0.6fr] items-center gap-2 px-4 py-2.5"
                 style={{ borderBottom: i === arr.length - 1 ? "none" : `1px solid ${ADMIN.borderRow}` }}
               >
                 <span className="min-w-0">
@@ -74,6 +76,11 @@ export function AdminRuntimes() {
                 <span className="truncate text-meta font-mono" style={{ color: ADMIN.textSoft }}>
                   {r.kind.toLowerCase()}
                 </span>
+                <RuntimeToolSurfaceBadges
+                  adapterKey={r.adapterKey}
+                  config={r.config}
+                  className="min-w-0"
+                />
                 <span className="truncate text-meta" style={{ color: ADMIN.textSoft }}>
                   {r.owner?.name ?? r.owner?.email ?? "—"}
                 </span>
