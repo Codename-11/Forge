@@ -76,8 +76,39 @@ function previewPayload(payload: unknown): string | null {
   const p = payload as Record<string, unknown>;
   if (typeof p.preview === "string") return p.preview;
   if (typeof p.currentStep === "string") return p.currentStep;
+  if (typeof p.thinking === "string") return p.thinking;
+  if (typeof p.summary === "string") return p.summary;
+  if (typeof p.description === "string") return p.description;
+  if (typeof p.lastEvent === "string") return humanizeEventName(p.lastEvent);
+  if (typeof p.tool === "string") {
+    const state =
+      p.done === true ? (p.error === true ? "failed" : "completed") : "started";
+    return `${p.tool} ${state}`;
+  }
   if (typeof p.eventKind === "string" && p.eventKind !== "") return String(p.eventKind);
   return null;
+}
+
+function humanizeEventName(value: string): string {
+  return value.replace(/[._-]+/g, " ").trim();
+}
+
+function eventTitle(evt: RunTimelineEvent): string {
+  const payload =
+    evt.payload && typeof evt.payload === "object"
+      ? (evt.payload as Record<string, unknown>)
+      : null;
+  if (evt.kind === "TOOL_CALL" && typeof payload?.tool === "string") {
+    if (payload.done === true) {
+      return payload.error === true ? "tool failed" : "tool completed";
+    }
+    return "tool started";
+  }
+  if (evt.kind === "STEP" && typeof payload?.thinking === "string") return "thinking";
+  if (evt.kind === "STEP" && typeof payload?.lastEvent === "string") {
+    return humanizeEventName(payload.lastEvent);
+  }
+  return humanizeEventName(evt.kind).toLowerCase();
 }
 
 export function RunTimeline({
@@ -105,7 +136,9 @@ export function RunTimeline({
       {events.map((evt, i) => {
         const Glyph = KIND_GLYPH[evt.kind] ?? Activity;
         const tint = KIND_TINT[evt.kind] ?? "text-muted-foreground";
-        const preview = previewPayload(evt.payload);
+        const title = eventTitle(evt);
+        const rawPreview = previewPayload(evt.payload);
+        const preview = rawPreview && rawPreview !== title ? rawPreview : null;
         const isFreshest = i === 0;
         return (
           <li
@@ -128,7 +161,7 @@ export function RunTimeline({
             <div className="min-w-0 flex-1 pt-0.5">
               <div className="flex items-baseline gap-2">
                 <span className="font-mono text-[0.6875rem] font-medium uppercase tracking-wider text-foreground">
-                  {evt.kind}
+                  {title}
                 </span>
                 <span className="text-meta text-muted-foreground">
                   {relativeTime(evt.createdAt)}

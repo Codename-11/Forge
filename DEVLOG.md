@@ -84,6 +84,21 @@ src/server/services/__tests__/mcp.test.ts tests/unit/activity-actor.test.ts`,
 full `pnpm test` (752 pass / 1 skipped), and `E2E_FORCE_BUILD=1 pnpm
 test:e2e` (20 pass).
 
+Fifth follow-up: cleaned up live run activity for AXI-73 diagnostics. Mission
+Control now fetches enough events to show the meaningful stream and renders
+human labels / payload previews for tool, thinking, summary, and provider
+status events instead of a wall of raw `STEP` rows. The RUNS poller no longer
+persists generic `STEP { lastEvent }` rows for connectors that already provide
+a live event stream; it only advances `currentStep` / `lastEventAt` and leaves
+the detailed timeline to subscription events. Also tightened comment wake
+fan-out so body comments only wake the current assigned agent and explicit
+agent mentions; stale watcher rows from prior assignees no longer create ghost
+runs after reassignment. AXI-73 live inspection confirmed the `@victor` wake
+did deliver successfully, while the extra Codex run came from this stale
+watcher path.
+Gate: `git diff --check`, `pnpm lint`, `pnpm typecheck`, full `pnpm test` (759
+pass / 1 skipped), and `E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
+
 Verification: `pnpm lint`, `pnpm typecheck`, full `pnpm test` (744 pass / 1
 skipped), and focused `pnpm exec vitest run
 src/server/services/__tests__/engagement-mode.test.ts

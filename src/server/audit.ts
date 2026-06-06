@@ -33,6 +33,38 @@ export function agentDispatchUrlFor(agentId: string): string {
   return `${AGENT_DISPATCH_WEBHOOK_URL_PREFIX}${agentId}`;
 }
 
+function mentionedAgentIdsFromPayload(payloadIn: unknown): string[] {
+  const payload = payloadIn as
+    | {
+        mentions?:
+          | {
+              agentIds?: unknown[];
+              agents?: Array<{ agentId?: unknown }>;
+            }
+          | Array<{ agentId?: unknown }>;
+      }
+    | undefined;
+  const mentionsRaw = payload?.mentions;
+  if (Array.isArray(mentionsRaw)) {
+    return mentionsRaw
+      .map((m) => m.agentId)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+  }
+  if (mentionsRaw && typeof mentionsRaw === "object") {
+    if (Array.isArray(mentionsRaw.agentIds)) {
+      return mentionsRaw.agentIds.filter(
+        (id): id is string => typeof id === "string" && id.length > 0,
+      );
+    }
+    if (Array.isArray(mentionsRaw.agents)) {
+      return mentionsRaw.agents
+        .map((m) => m.agentId)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+    }
+  }
+  return [];
+}
+
 const AGENT_WATCHER_FANOUT_EVENT_KINDS = new Set<EventKind>([
   EventKind.COMMENT_CREATED,
   EventKind.ISSUE_PRIORITY_CHANGED,
@@ -548,33 +580,8 @@ export async function recordChange(
           true)) &&
     params.subjectType === "issue";
   if (isCommentMentionEvent) {
-    const payload = params.payload as
-      | {
-          mentions?:
-            | {
-                agentIds?: string[];
-                userIds?: string[];
-                agents?: Array<{ agentId: string; profileKey?: string }>;
-              }
-            | Array<{ agentId: string; profileKey?: string }>;
-        }
-      | undefined;
-    const mentionsRaw = payload?.mentions;
     // Normalize to a flat list of agent ids regardless of incoming shape.
-    let mentionedAgentIds: string[] = [];
-    if (Array.isArray(mentionsRaw)) {
-      mentionedAgentIds = mentionsRaw.map((m) => m.agentId).filter(Boolean);
-    } else if (mentionsRaw && typeof mentionsRaw === "object") {
-      if (Array.isArray(mentionsRaw.agentIds)) {
-        mentionedAgentIds = mentionsRaw.agentIds.filter(
-          (id): id is string => typeof id === "string" && id.length > 0,
-        );
-      } else if (Array.isArray(mentionsRaw.agents)) {
-        mentionedAgentIds = mentionsRaw.agents
-          .map((m) => m.agentId)
-          .filter((id): id is string => typeof id === "string" && id.length > 0);
-      }
-    }
+    const mentionedAgentIds = mentionedAgentIdsFromPayload(params.payload);
     if (mentionedAgentIds.length) {
       // Load mentioned agents within workspace scope. We canonicalize
       // every mentioned active agent into the inbox so the operator's
@@ -715,6 +722,14 @@ export async function recordChange(
     !isCommentEdit &&
     !isRollingStatusComment;
   if (isAgentWatcherFanoutEvent) {
+    const mentionedAgentIds = new Set(mentionedAgentIdsFromPayload(params.payload));
+    const currentIssue =
+      params.eventKind === EventKind.COMMENT_CREATED
+        ? await tx.issue.findUnique({
+            where: { id: params.subjectId },
+            select: { assignedAgentId: true },
+          })
+        : null;
     const watchers = await tx.issueWatcher.findMany({
       where: {
         workspaceId: params.workspaceId,
@@ -728,6 +743,16 @@ export async function recordChange(
     });
     for (const w of watchers) {
       if (!w.agent) continue;
+      // Body comments should wake the assigned agent and explicit @mentions.
+      // Former assignees can remain sticky watchers; that stale watcher row
+      // should not become fresh canonical work after reassignment.
+      if (
+        params.eventKind === EventKind.COMMENT_CREATED &&
+        currentIssue?.assignedAgentId !== w.agent.id &&
+        !mentionedAgentIds.has(w.agent.id)
+      ) {
+        continue;
+      }
       // Don't fan out the actor's own action back to themselves —
       // when an agent comments and is also a watcher, the COMMENT_CREATED
       // already routes via the assigned-agent + mention shims. Watcher

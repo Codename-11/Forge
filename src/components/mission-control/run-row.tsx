@@ -118,7 +118,7 @@ export function RunRow({
   const [expanded, setExpanded] = useState(false);
   const utils = trpc.useUtils();
   const { data: events } = trpc.agentRun.events.useQuery(
-    { runId: run.id, limit: 12 },
+    { runId: run.id, limit: 40 },
     { enabled: expanded, staleTime: 5_000 },
   );
   const awaitingApproval = Boolean(run.awaitingApprovalAt);
