@@ -1,7 +1,6 @@
 import type { NextConfig } from "next";
 
-const isolatedBuild =
-  !!process.env.NEXT_DIST_DIR && process.env.NEXT_DIST_DIR !== ".next";
+const isolatedBuild = !!process.env.NEXT_DIST_DIR && process.env.NEXT_DIST_DIR !== ".next";
 
 const config: NextConfig = {
   reactStrictMode: true,
@@ -16,7 +15,14 @@ const config: NextConfig = {
   // `ws` (Codex app-server connector) must NOT be bundled/minified — the
   // bundler mangles its frame-masking util, yielding "b.mask is not a
   // function" when the client masks an outgoing frame. Load it unbundled.
-  serverExternalPackages: ["ioredis", "bullmq", "ws"],
+  serverExternalPackages: [
+    "ioredis",
+    "bullmq",
+    "ws",
+    "web-push",
+    "https-proxy-agent",
+    "agent-base",
+  ],
   eslint: {
     // Lint in CI / pre-commit via `pnpm lint`; don't gate production
     // build on warnings.
@@ -35,7 +41,13 @@ const config: NextConfig = {
         ...(Array.isArray(existing) ? existing : [existing]),
         "ioredis",
         "bullmq",
-        ({ request }: { request?: string }, callback: (err?: Error | null, result?: string) => void) => {
+        "web-push",
+        "https-proxy-agent",
+        "agent-base",
+        (
+          { request }: { request?: string },
+          callback: (err?: Error | null, result?: string) => void,
+        ) => {
           if (request && request.startsWith("node:")) {
             return callback(null, `commonjs ${request}`);
           }
@@ -83,6 +95,17 @@ const config: NextConfig = {
           },
         ],
       },
+      // Keep the service worker fresh. A stale SW is harder to reason
+      // about than stale app chunks because it controls future requests.
+      {
+        source: "/sw.js",
+        headers: [
+          { key: "Content-Type", value: "application/javascript; charset=utf-8" },
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+          { key: "Content-Security-Policy", value: "default-src 'self'; script-src 'self'" },
+          { key: "Service-Worker-Allowed", value: "/" },
+        ],
+      },
       // Override for the in-app VitePress docs at /docs/*. The workspace
       // /docs route iframes this path; SAMEORIGIN keeps clickjacking
       // guards in place while letting the Forge shell embed it.
@@ -92,15 +115,11 @@ const config: NextConfig = {
       // whole site.
       {
         source: "/docs",
-        headers: [
-          { key: "X-Frame-Options", value: "SAMEORIGIN" },
-        ],
+        headers: [{ key: "X-Frame-Options", value: "SAMEORIGIN" }],
       },
       {
         source: "/docs/:path*",
-        headers: [
-          { key: "X-Frame-Options", value: "SAMEORIGIN" },
-        ],
+        headers: [{ key: "X-Frame-Options", value: "SAMEORIGIN" }],
       },
     ];
   },
