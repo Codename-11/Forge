@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "sonner";
 import { NativeTooltips } from "@/components/native-tooltips";
+import { PwaProvider } from "@/components/pwa-provider";
 import { readAppearance } from "@/server/appearance";
 import "./globals.css";
 
@@ -69,6 +70,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     >
       <body className="font-sans">
         <ThemeProvider>
+          <PwaProvider />
           {children}
           <Toaster
             position="bottom-right"

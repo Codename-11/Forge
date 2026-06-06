@@ -2,11 +2,16 @@ import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { EventKind } from "@prisma/client";
 import { publish } from "@/server/realtime";
+import { db } from "@/server/db";
 import { RUNTIME_KIND_LABEL } from "@/lib/runtime-kind";
 import { runtimeToolSurface } from "@/lib/runtime-tools";
 import { nanoid } from "nanoid";
 import { ensureCanonicalFromEvent } from "@/server/services/agent-dispatch-inbox";
 import { resolveRunEngine, getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
+import {
+  ALERTABLE_EVENT_KINDS,
+  scheduleEventNotificationFanout,
+} from "@/server/services/notifications";
 
 /**
  * Synthetic slug + url used to route agent-bound dispatches through the
@@ -142,11 +147,10 @@ function assignmentRuntimeLine(agent: AssignmentAgentContext): string | null {
     const runtimeName = agent.runtime.name || adapterLabel(agent.runtime.adapterKey);
     const runtimeKind = RUNTIME_KIND_LABEL[agent.runtime.kind as keyof typeof RUNTIME_KIND_LABEL];
     const isHermesRuntime = agent.provider === "HERMES" && agent.runtime.adapterKey === "hermes";
-    const toolText =
-      isHermesRuntime
-        ? "tools from Hermes host"
-        : agent.runtime.kind === "LOCAL_DAEMON"
-          ? "tools from local daemon"
+    const toolText = isHermesRuntime
+      ? "tools from Hermes host"
+      : agent.runtime.kind === "LOCAL_DAEMON"
+        ? "tools from local daemon"
         : surface.hasRepoTools
           ? "repo tools declared"
           : "repo tools not declared";
@@ -168,11 +172,10 @@ function assignmentRuntimePayload(agent: AssignmentAgentContext): Prisma.InputJs
       name: agent.runtime.name,
       kind: kind ?? agent.runtime.kind,
       adapterKey: agent.runtime.adapterKey,
-      tools:
-        isHermesRuntime
-          ? "tools from Hermes host"
-          : agent.runtime.kind === "LOCAL_DAEMON"
-            ? "tools from local daemon"
+      tools: isHermesRuntime
+        ? "tools from Hermes host"
+        : agent.runtime.kind === "LOCAL_DAEMON"
+          ? "tools from local daemon"
           : surface.hasRepoTools
             ? "repo tools declared"
             : "repo tools not declared",
@@ -962,4 +965,11 @@ export async function recordChange(
     actorId: event.actorId,
     createdAt: event.createdAt.toISOString(),
   });
+
+  if (ALERTABLE_EVENT_KINDS.includes(event.kind)) {
+    scheduleEventNotificationFanout(db, {
+      workspaceId: event.workspaceId,
+      eventId: event.id,
+    });
+  }
 }

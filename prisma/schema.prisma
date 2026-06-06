@@ -553,6 +553,7 @@ model User {
   auditEntries            AuditLog[]
   events                  ActivityEvent[]
   notificationStates      NotificationState[]
+  pushSubscriptions       PushSubscription[]
   createdProjects         Project[]                @relation("ProjectCreator")
   apiKeys                 ApiKey[]
   claimedIssues           Issue[]                  @relation("IssueClaimedBy")
@@ -1414,6 +1415,28 @@ model NotificationState {
   @@index([workspaceId, userId, status, importance, createdAt])
   @@index([workspaceId, userId, replacementKey])
   @@index([eventId])
+}
+
+/// Browser Web Push subscription for one signed-in user/device.
+/// Endpoint is globally unique per browser subscription. Revoked rows
+/// are retained briefly for diagnostics and overwritten if the browser
+/// reuses the same endpoint.
+model PushSubscription {
+  id         String    @id @default(cuid())
+  userId     String
+  endpoint   String    @unique @db.Text
+  p256dh     String
+  auth       String
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  lastSeenAt DateTime  @default(now())
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([revokedAt, updatedAt])
 }
 
 /// Denormalized metric rollups computed by scheduled jobs.

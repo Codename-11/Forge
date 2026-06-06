@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/server/auth";
 import { TrpcProvider } from "@/lib/trpc-provider";
+import { PushNotificationProvider } from "@/components/push-notification-provider";
 
 /**
  * Outer authenticated layout. Purely auth-gating + a slug-aware tRPC
@@ -15,5 +16,10 @@ import { TrpcProvider } from "@/lib/trpc-provider";
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
   if (!session?.user) redirect("/signin");
-  return <TrpcProvider>{children}</TrpcProvider>;
+  return (
+    <TrpcProvider>
+      <PushNotificationProvider />
+      {children}
+    </TrpcProvider>
+  );
 }

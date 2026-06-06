@@ -2,6 +2,58 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-06 — Android PWA install and push notifications
+
+Expanded the PWA baseline for Android-first install behavior. `PwaProvider`
+now handles browser install prompts, app-installed confirmation, service-worker
+update prompts, online/offline status toasts, and an opt-in visited-page cache
+for offline navigation. iOS gets a lightweight Add to Home Screen hint when
+running outside standalone mode. The manifest now includes launcher shortcuts
+for Mission Control, Inbox, and What's New.
+
+Added Web Push support behind VAPID configuration. Push subscriptions are stored
+in the new `PushSubscription` table, exposed through protected notification
+tRPC procedures, and registered from `PushNotificationProvider` after user
+permission. The service worker now handles push payloads and notification
+click-through. Alertable activity-event materialization fans out best-effort
+browser push notifications to workspace members while preserving the existing
+in-app notification state and preference checks.
+
+Configuration: set `WEB_PUSH_VAPID_PUBLIC_KEY` and
+`WEB_PUSH_VAPID_PRIVATE_KEY` (or the `VAPID_*` aliases), plus optional
+`WEB_PUSH_SUBJECT`, to enable push prompts and delivery.
+
+Verification: `pnpm prisma:generate`, `pnpm lint`, `pnpm typecheck`, and
+`pnpm build:app` pass. The twitter-image runtime warning was removed by making
+that metadata route export its config directly. `pnpm test` was attempted and
+failed because this shell has no `DATABASE_URL` for Prisma-backed tests; Redis
+also reported closed connections during the same run.
+
+## 2026-06-06 — PWA install baseline
+
+Added the first Forge PWA baseline. New `app/manifest.ts` emits the install
+manifest at `/manifest.webmanifest` with root `start_url`/scope, standalone
+display, Forge metadata, and PNG install icons. Generated opaque install assets
+under `public/icons/`: 192, 512, and a padded 512 maskable icon from the existing
+ember app mark.
+
+Added `public/sw.js` plus `PwaProvider` registration in the root layout. The
+service worker precaches only the offline fallback and static Forge assets,
+serves navigations network-first with `/offline` fallback, and deliberately
+skips API, auth, tRPC/realtime, signed image, and other stateful paths. Added
+`/offline` as a token-styled fallback page and configured `/sw.js` headers
+(`application/javascript`, no-store, strict self CSP, root SW scope).
+
+Verification: `pnpm install --frozen-lockfile`, `pnpm prisma:generate`,
+`pnpm exec prettier --write` on touched PWA files, `pnpm lint`,
+`pnpm typecheck`, and `pnpm build:app` all pass. Local `next start` on port
+3210 verified `/manifest.webmanifest`, `/sw.js` headers/body, `/offline`, and
+all three icon files over HTTP; the server logged expected DB/Redis connection
+errors because this shell did not have runtime services configured. Full
+`pnpm test` was attempted after the build and failed broadly on the same
+environment gap (`DATABASE_URL` missing for Prisma-backed tests, plus Redis
+connection errors), not on PWA-specific assertions.
+
 ## 2026-06-06 — Runroom agents views
 
 Enhanced the workspace Agents surface around the selected "Runroom Command"
