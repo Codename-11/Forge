@@ -33,9 +33,10 @@ jobs:
         image: redis:7-alpine
         ports: ["6379:6379"]
       minio:
-        # bitnami image runs `minio server` by default (GH service containers
-        # can't pass a command), exposing the S3 API on :9000.
-        image: bitnami/minio:latest
+        # Bitnami's Docker Hub namespace moved historical images to
+        # bitnamilegacy. This image runs `minio server` by default (GH service
+        # containers can't pass a command), exposing the S3 API on :9000.
+        image: bitnamilegacy/minio:latest
         env:
           MINIO_ROOT_USER: forgeminio
           MINIO_ROOT_PASSWORD: forgeminio-dev-password
