@@ -20,12 +20,20 @@ test.describe("Runtime management", () => {
     await expect(page.getByTestId("codex-sandbox-fields")).toBeVisible();
     const mode = page.getByTestId("codex-sandbox-mode");
     await mode.selectOption("workspace-write");
+    await page.locator('input[placeholder="/work"]').fill("/work/agent-forge");
     await page.getByRole("button", { name: /save/i }).click();
+    await expect(row).toContainText("repo tools");
+    await expect(row).toContainText("terminal");
+    await expect(row).toContainText("filesystem");
+    await expect(row).toContainText("git");
 
     // Reopen and confirm the choice persisted (round-trips Runtime.config).
     await expect(page.getByTestId("codex-sandbox-fields")).toBeHidden();
     await row.getByRole("button", { name: /^edit$/i }).click();
     await expect(page.getByTestId("codex-sandbox-mode")).toHaveValue("workspace-write");
+    await expect(page.locator('input[placeholder="/work"]')).toHaveValue(
+      "/work/agent-forge",
+    );
   });
 
   test("Hermes tool surface config saves and persists", async ({ page }) => {

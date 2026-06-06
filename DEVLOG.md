@@ -18,6 +18,23 @@ workspace root. Added `runtimes.configure` MCP and `forge runtimes configure`
 so operators can set the same config from CLI without direct DB writes.
 Updated runtime, Hermes, provider/transport, MCP, and CLI docs.
 
+Follow-up: configured the live Codex app-server runtime with its bridge-visible
+Forge workspace root (`/work/agent-forge`), workspace-write sandbox, on-request
+approvals, and explicit repo-tool declaration. Workspace runtime cards now label
+the `codex-app-server` adapter directly; saving a Codex workspace root also
+persists the local tool-surface declaration so cards/preflight stop showing
+"no repo tools" for configured Codex runtimes. The global runtime card's dead
+ellipsis button is now a real settings link.
+
+Second follow-up: tightened issue assignment/run-state visibility after AXI-72.
+`AGENT_ASSIGNED` system comments now include the resolved engagement mode and a
+concrete runtime/tool-surface line, and same-agent mode changes (`modeUpdated`)
+write their own chronological SYSTEM comment instead of being suppressed as a
+no-op reassignment. Assignment activity rows now read as assignment/mode events
+and include runtime/tool details when the payload has them. This remains
+truthful: Forge does not synthesize an agent-authored "starting work" comment;
+the runtime/agent must still post status/comment output itself.
+
 ## 2026-06-05 — AXI-40 MCP workspace discovery + scoped access keys
 
 Implemented MCP workspace discovery and API-key provisioning for workspace-scoped agent/home-lab use. `workspaces.list` now returns `id`, `key`, `name`, and `slug`; non-admin API keys remain pinned to their issuing workspace, while user-backed sessions or ADMIN user-backed keys can list/select workspaces where the user is a member.

@@ -108,6 +108,9 @@ function dispatchDetail(payload: unknown): string | null {
     readPayloadString(payload, "mode") ??
     readNestedString(payload, "dispatchReason", "mode");
   const engagementMode = readPayloadString(payload, "engagementMode");
+  const runtime = readPayloadRecord(payload, "runtime");
+  const runtimeName = typeof runtime?.name === "string" ? runtime.name : null;
+  const runtimeTools = typeof runtime?.tools === "string" ? runtime.tools : null;
   const reason =
     dispatch?.reason ??
     readPayloadString(payload, "reason") ??
@@ -115,6 +118,8 @@ function dispatchDetail(payload: unknown): string | null {
   const parts = [
     mode ? `dispatch ${mode}` : null,
     engagementMode ? `mode ${engagementMode}` : null,
+    runtimeName ? `runtime ${runtimeName}` : null,
+    runtimeTools,
     reason,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : null;
@@ -136,11 +141,18 @@ function activityCopy(
   if (kind === "AGENT_ASSIGNED") {
     const dispatch = readDispatch(payload);
     const handle =
-      dispatch?.chosen?.profileKey ?? readNestedString(payload, "dispatchReason", "picked");
+      dispatch?.chosen?.profileKey ??
+      readNestedString(payload, "dispatchReason", "picked") ??
+      readPayloadString(payload, "agentProfileKey");
+    const modeUpdated =
+      payload && typeof payload === "object" && (payload as Record<string, unknown>).modeUpdated === true;
+    const target = handle ? `@${handle}` : "agent";
     return {
-      label: `Wake requested${agentSuffix(payload, handle)}`,
+      label: modeUpdated
+        ? `Mode changed for ${target}`
+        : `Assigned ${target}`,
       detail: dispatchDetail(payload),
-      phase: "wake",
+      phase: modeUpdated ? "mode" : "assign",
     };
   }
   if (kind === "AGENT_RUN_STARTED") {
