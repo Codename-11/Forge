@@ -26,6 +26,8 @@ import { pendingApprovals } from "@/server/services/chat-stream-state";
 import { resolveRunEngine, getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
 import { loadCanvasContextSummary } from "@/server/services/chat-context-canvas";
 import { presignDownloadUrl } from "@/server/services/storage";
+import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
+import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { logger } from "@/server/logger";
 
 /**
@@ -532,6 +534,13 @@ export async function POST(req: NextRequest) {
       // provider side; an `approval_required` event surfaces as a
       // tool_confirm card and our reply is POSTed back to the run.
       const streamViaRuns = async () => {
+        const runtimePolicy = buildRuntimePolicySnapshot({
+          contractVersion: FORGE_RUN_CONTRACT_VERSION,
+          engagementMode: "DISCUSS",
+          adapterKey: agent.runtime?.adapterKey ?? (effectiveProvider === "HERMES" ? "hermes" : null),
+          runtimeName: agent.runtime?.name ?? null,
+          config: agent.runtime?.config,
+        });
         const priorTurns = history.slice(0, -1).map((m) => ({
           role:
             m.role === ChatRole.USER
@@ -546,6 +555,9 @@ export async function POST(req: NextRequest) {
             message: body,
             history: priorTurns,
             instructions: systemPrompt,
+            engagementMode: "DISCUSS",
+            contractVersion: FORGE_RUN_CONTRACT_VERSION,
+            toolPolicy: runtimePolicy,
           });
           runExternalId = started.externalRunId;
         } catch (err) {

@@ -51,12 +51,33 @@ animation. Always ack, even for `[SILENT]` no-ops.
 
 Engagement mode is part of the same contract. Forge includes the mode
 instruction and shared run protocol in dispatch, and `agent.context.bundle`
-returns `runProtocol` with the current `runId`, mode, and mutation allowance.
+returns `runProtocol` with the current `runId`, contract version, mode, and
+mutation allowance.
 Forge MCP rejects issue-state mutations from active Research/Review/Discuss
-runs, but Hermes host tools are configured on the Hermes side. If a Hermes
-profile exposes terminal/filesystem/git tools, Forge cannot remove those tools
-from the host; configure Hermes toolsets/profiles to match the runtime's
-intended blast radius.
+runs. Hermes `/v1/runs` dispatch also carries:
+
+```json
+{
+  "engagement_mode": "REVIEW",
+  "forge_contract_version": "2026-06-06.2",
+  "tool_allowlist": [],
+  "runtime_policy": {
+    "contract_version": "2026-06-06.2",
+    "engagement_mode": "REVIEW",
+    "allowed_host_tools": [],
+    "enforcement_layers": [
+      { "kind": "forge-mcp", "enforced": true },
+      { "kind": "hermes-host", "enforced": true }
+    ]
+  }
+}
+```
+
+The Hermes host must honor `tool_allowlist` for host-side terminal/filesystem/git
+enforcement. Mark the Forge Runtime config with `modeToolPolicyEnforced: true`
+only after that host behavior is actually enabled. If a Hermes profile exposes
+tools while ignoring the allowlist, Forge will still block Forge MCP issue
+mutations, but the host-tool layer is prompt-only.
 
 Manual assignment is enough to start a Hermes agent. Operators do **not** have
 to also `@mention` the agent on the same issue. The webhook prompt should load

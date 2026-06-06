@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Bot, Activity, Hourglass } from "lucide-react";
+import { AlertTriangle, Bot, Activity, Hourglass, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import {
   EngagementModeGlyph,
   MODE_LABEL,
@@ -11,6 +12,10 @@ import {
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { relativeTime, cn } from "@/lib/utils";
+import {
+  RuntimePolicyBadges,
+} from "@/components/runtime-tool-surface";
+import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 
 /**
  * Live-pulse strip for the assigned agent's current run on this issue.
@@ -152,8 +157,20 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
         <RunModeControl
+          issueId={issueId}
           runId={run.id}
           mode={run.engagementMode as EngagementModeValue}
+        />
+        <RuntimePolicyBadges
+          compact
+          policy={run.runtimePolicy as RuntimePolicySnapshot | null | undefined}
+        />
+        <ProtocolDiagnostics
+          diagnostics={
+            run.protocolDiagnostics as
+              | Array<{ code: string; severity: string; title: string; description: string }>
+              | undefined
+          }
         />
         <span className="text-meta flex shrink-0 items-center gap-2 text-muted-foreground">
           <Activity className="h-3 w-3" />
@@ -168,19 +185,62 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
   );
 }
 
+function ProtocolDiagnostics({
+  diagnostics,
+}: {
+  diagnostics?: Array<{ code: string; severity: string; title: string; description: string }>;
+}) {
+  const actionable = diagnostics?.filter((d) => d.severity !== "info") ?? [];
+  if (actionable.length === 0) return null;
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1">
+      {actionable.slice(0, 2).map((diagnostic) => (
+        <span
+          key={diagnostic.code}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+            diagnostic.severity === "error"
+              ? "border-destructive/30 bg-destructive/10 text-destructive"
+              : "border-warning/30 bg-warning/10 text-warning",
+          )}
+          title={diagnostic.description}
+        >
+          <AlertTriangle className="h-3 w-3" />
+          {diagnostic.title}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function RunModeControl({
+  issueId,
   runId,
   mode,
 }: {
+  issueId: string;
   runId: string;
   mode: EngagementModeValue;
 }) {
+  const utils = trpc.useUtils();
+  const restartM = trpc.agentRun.restartWithMode.useMutation({
+    onSuccess: (res) => {
+      void utils.agentRun.activeForIssue.invalidate({ issueId });
+      void utils.agentRun.activeAll.invalidate();
+      void utils.agentRun.recentTerminal.invalidate();
+      void utils.issue.byId.invalidate({ id: issueId });
+      if (res.restarted) toast.success(`Restarted as ${MODE_LABEL[res.mode as EngagementModeValue]}`);
+      else toast.message("Run already uses that mode");
+    },
+    onError: (err) => toast.error(err.message),
+  });
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1">
+      <span className="text-meta text-muted-foreground">restart as</span>
       <div
-        role="radiogroup"
+        role="group"
         aria-label="Run engagement mode"
-        title="Engagement mode is fixed when a run starts. Stop or complete this run, then reassign with a different mode."
+        title="Mode is fixed per run. Pick another mode to stop this run and restart with that contract."
         className="flex min-w-0 flex-wrap gap-0.5 rounded-md border border-border bg-background/80 p-0.5"
       >
         {MODE_ORDER.map((m) => {
@@ -189,24 +249,40 @@ function RunModeControl({
             <button
               key={m}
               type="button"
-              role="radio"
-              aria-checked={active}
-              aria-label={`Run mode ${MODE_LABEL[m]}`}
+              aria-pressed={active}
+              aria-label={
+                active
+                  ? `Current run mode ${MODE_LABEL[m]}`
+                  : `Stop current run and restart as ${MODE_LABEL[m]}`
+              }
               title={
                 active
                   ? `${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}. Locked for this run.`
-                  : "Stop or complete this run, then reassign with this mode."
+                  : `Stop this run and restart as ${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}.`
               }
-              disabled
+              disabled={active || restartM.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Stop the current ${MODE_LABEL[mode]} run and restart as ${MODE_LABEL[m]}?`,
+                  )
+                ) {
+                  restartM.mutate({ runId, mode: m });
+                }
+              }}
               className={cn(
                 "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] uppercase tracking-wider transition-colors",
                 active
                   ? "bg-ember/10 text-foreground"
-                  : "text-muted-foreground opacity-45",
+                  : "text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50",
               )}
               data-run-id={runId}
             >
-              <EngagementModeGlyph mode={m} size={11} />
+              {restartM.isPending && !active ? (
+                <RefreshCw className="h-3 w-3 animate-spin" />
+              ) : (
+                <EngagementModeGlyph mode={m} size={11} />
+              )}
               <span>{MODE_LABEL[m]}</span>
             </button>
           );
@@ -214,9 +290,9 @@ function RunModeControl({
       </div>
       <span
         className="text-meta text-muted-foreground"
-        title="Mode is fixed for this run. Tools come from the assigned runtime."
+        title="Active mode is fixed for this run. Other modes stop and restart."
       >
-        locked while running
+        active mode locked
       </span>
     </div>
   );

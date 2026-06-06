@@ -62,9 +62,25 @@ import { computeAlignment, type AlignItem } from "@/server/services/canvas-align
 import { validateRuntimeConfig } from "@/server/services/runtime-config";
 import {
   engagementInstruction,
+  FORGE_RUN_CONTRACT_VERSION,
   forgeRunProtocolInstruction,
   modeMayExecute,
 } from "@/server/services/engagement-mode";
+import {
+  assertMcpIssueMutationPolicy,
+  assertMcpIssueMutationsPolicy,
+  assertMcpWorkspaceMutationPolicy,
+  mcpToolPolicy,
+  type ExplicitMcpPolicyToolName,
+} from "@/server/services/mcp-policy";
+import {
+  RUN_COMPLETION_CONFIDENCE_VALUES,
+  RUN_REVIEW_VERDICT_VALUES,
+  runCompletionMeta,
+  validateRunCompletion,
+  type RunCompletionConfidence,
+  type RunReviewVerdict,
+} from "@/server/services/run-completion-contract";
 
 /**
  * Forge's MCP (Model Context Protocol) surface — the stable set of tools any
@@ -128,39 +144,17 @@ function sortCommentsChronologically<T extends McpCommentWithDates>(comments: T[
 async function assertAgentIssueMutationAllowed(
   ctx: McpContext,
   issueId: string,
-  action: string,
+  action: ExplicitMcpPolicyToolName,
 ): Promise<void> {
-  const agentId = ctx.apiKey?.linkedAgentId ?? null;
-  if (!agentId) return;
-
-  const run = await db.agentRun.findFirst({
-    where: {
-      workspaceId: ctx.workspaceId,
-      issueId,
-      agentId,
-      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
-      engagementMode: { not: "EXECUTE" },
-    },
-    orderBy: { startedAt: "desc" },
-    select: { id: true, engagementMode: true },
-  });
-  if (!run) return;
-
-  throw new Error(
-    `Engagement mode ${run.engagementMode} does not allow ${action}. ` +
-      "Only EXECUTE runs may mutate issue state; post a comment/verdict, " +
-      "set the run waiting, or ask the operator to stop and restart with EXECUTE.",
-  );
+  await assertMcpIssueMutationPolicy(ctx, action, issueId);
 }
 
 async function assertAgentIssueMutationsAllowed(
   ctx: McpContext,
   issueIds: Iterable<string>,
-  action: string,
+  action: ExplicitMcpPolicyToolName,
 ): Promise<void> {
-  for (const issueId of new Set(issueIds)) {
-    await assertAgentIssueMutationAllowed(ctx, issueId, action);
-  }
+  await assertMcpIssueMutationsPolicy(ctx, action, issueIds);
 }
 
 const mcpIssueDtoSelect = Prisma.validator<Prisma.IssueSelect>()({
@@ -1374,6 +1368,7 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
+      await assertMcpWorkspaceMutationPolicy(ctx, "issues.create");
       if (input.projectId) {
         await assertKeyScope(scopeCtx(ctx), {
           entity: "project",
@@ -1763,6 +1758,11 @@ export const mcpTools = {
       claimTtlMinutes: z.number().int().min(1).max(1440).default(60),
     }),
     async run(input: { issueId?: string; claimTtlMinutes: number }, ctx: McpContext) {
+      if (input.issueId) {
+        await assertAgentIssueMutationAllowed(ctx, input.issueId, "issues.claim");
+      } else {
+        await assertMcpWorkspaceMutationPolicy(ctx, "issues.claim");
+      }
       const agentUserId = await resolveActorId(ctx);
       const expiresAt = new Date(Date.now() + input.claimTtlMinutes * 60_000);
 
@@ -1841,6 +1841,7 @@ export const mcpTools = {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({ id: z.string().describe("Issue id (cuid)") }),
     async run(input: { id: string }, ctx: McpContext) {
+      await assertAgentIssueMutationAllowed(ctx, input.id, "issues.release");
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.id });
       const issue = await db.issue.findFirstOrThrow({
         where: { id: input.id, workspaceId: ctx.workspaceId },
@@ -1860,6 +1861,7 @@ export const mcpTools = {
       queued: z.boolean().describe("Whether the issue should be in the agent queue"),
     }),
     async run(input: { id: string; queued: boolean }, ctx: McpContext) {
+      await assertAgentIssueMutationAllowed(ctx, input.id, "issues.setQueued");
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.id });
       const actorId = await resolveActorId(ctx);
       return db.$transaction(async (tx) => {
@@ -3398,6 +3400,7 @@ export const mcpTools = {
       issueId: z.string().describe("Issue id (cuid)"),
     }),
     async run(input: { cycleId: string; issueId: string }, ctx: McpContext) {
+      await assertAgentIssueMutationAllowed(ctx, input.issueId, "cycles.addIssue");
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       const [cycle, issue] = await Promise.all([
         db.cycle.findFirst({
@@ -3433,6 +3436,7 @@ export const mcpTools = {
       issueId: z.string().describe("Issue id (cuid)"),
     }),
     async run(input: { issueId: string }, ctx: McpContext) {
+      await assertAgentIssueMutationAllowed(ctx, input.issueId, "cycles.removeIssue");
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       const issue = await db.issue.findFirst({
         where: {
@@ -3702,6 +3706,7 @@ export const mcpTools = {
       if (input.fromIssueId === input.toIssueId) {
         throw new Error("Cannot relate an issue to itself.");
       }
+      await assertAgentIssueMutationsAllowed(ctx, [input.fromIssueId, input.toIssueId], "relations.add");
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.fromIssueId });
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.toIssueId });
 
@@ -5500,7 +5505,7 @@ export const mcpTools = {
       if (run.agentId !== linkedAgentId) {
         throw new Error("AgentRun belongs to a different agent than the calling key.");
       }
-      const data: Prisma.AgentRunUpdateInput = {};
+      const data: Prisma.AgentRunUpdateManyMutationInput = {};
       if (input.tokensIn !== undefined) data.tokensIn = input.tokensIn;
       if (input.tokensOut !== undefined) data.tokensOut = input.tokensOut;
       if (input.tokensCached !== undefined) data.tokensCached = input.tokensCached;
@@ -5582,6 +5587,8 @@ export const mcpTools = {
         )
         .max(20)
         .optional(),
+      confidence: z.enum(RUN_COMPLETION_CONFIDENCE_VALUES).optional(),
+      verdict: z.enum(RUN_REVIEW_VERDICT_VALUES).optional(),
     }),
     async run(
       input: {
@@ -5596,18 +5603,42 @@ export const mcpTools = {
           done: boolean;
         }>;
         followUps?: Array<{ title: string; body?: string; kind?: string }>;
+        confidence?: RunCompletionConfidence;
+        verdict?: RunReviewVerdict;
       },
       ctx: McpContext,
     ) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error("runs.complete requires an API key with linkedAgentId set.");
+      }
       const run = await db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
-        select: { id: true, agentId: true, issueId: true },
+        select: {
+          id: true,
+          agentId: true,
+          issueId: true,
+          status: true,
+          engagementMode: true,
+          issue: {
+            select: {
+              expectedOutput: true,
+              verificationChecklist: true,
+              artifactRequired: true,
+            },
+          },
+        },
       });
       if (!run) throw new Error("AgentRun not found in this workspace.");
-      if (linkedAgentId && run.agentId !== linkedAgentId) {
+      if (run.agentId !== linkedAgentId) {
         throw new Error("AgentRun belongs to a different agent than the calling key.");
       }
+      if (run.status !== AgentRunStatus.ACTIVE && run.status !== AgentRunStatus.WAITING) {
+        throw new Error(`Run is ${run.status}; only ACTIVE / WAITING runs can be completed.`);
+      }
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: run.issueId });
+
+      let issueLinkedArtifactIds = new Set<string>();
       // Validate every producedArtifactId belongs to this workspace.
       if (input.producedArtifactIds?.length) {
         const found = await db.artifact.findMany({
@@ -5615,12 +5646,32 @@ export const mcpTools = {
             id: { in: input.producedArtifactIds },
             workspaceId: ctx.workspaceId,
           },
-          select: { id: true },
+          select: { id: true, issueId: true, sourceType: true, sourceId: true },
         });
         if (found.length !== input.producedArtifactIds.length) {
           throw new Error("One or more producedArtifactIds not found in this workspace.");
         }
+        issueLinkedArtifactIds = new Set(
+          found
+            .filter(
+              (artifact) =>
+                artifact.issueId === run.issueId ||
+                (artifact.sourceType === "issue" && artifact.sourceId === run.issueId),
+            )
+            .map((artifact) => artifact.id),
+        );
       }
+      const completionErrors = validateRunCompletion({
+        mode: run.engagementMode,
+        issue: run.issue,
+        completion: input,
+        issueLinkedArtifactIds,
+      });
+      if (completionErrors.length > 0) {
+        throw new Error(`Run completion does not satisfy ${run.engagementMode}: ${completionErrors.join(" ")}`);
+      }
+
+      const completionMeta = runCompletionMeta(run.engagementMode, input);
       const data: Prisma.AgentRunUpdateInput = {};
       if (input.summary !== undefined) data.summary = input.summary;
       if (input.producedArtifactIds !== undefined) {
@@ -5632,11 +5683,20 @@ export const mcpTools = {
       if (input.followUps !== undefined) {
         data.followUps = input.followUps as Prisma.InputJsonValue;
       }
+      data.completionMeta = completionMeta as Prisma.InputJsonValue;
       return db.$transaction(async (tx) => {
-        await tx.agentRun.update({
-          where: { id: run.id },
+        const updated = await tx.agentRun.updateMany({
+          where: {
+            id: run.id,
+            workspaceId: ctx.workspaceId,
+            agentId: linkedAgentId,
+            status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+          },
           data,
         });
+        if (updated.count !== 1) {
+          throw new Error("Run is no longer active; completion was not applied.");
+        }
 
         // Close the lifecycle row through the shared service so the
         // active-run strip/inbox stop treating a completed no-op response
@@ -5661,6 +5721,7 @@ export const mcpTools = {
             producedArtifactIds: true,
             verificationResult: true,
             followUps: true,
+            completionMeta: true,
           },
         });
       });
@@ -6778,6 +6839,7 @@ export const mcpTools = {
         const comments = sortCommentsChronologically(rawComments);
         const currentMode = (currentRun?.engagementMode ?? "EXECUTE") as EngagementMode;
         const runProtocol = {
+          contractVersion: FORGE_RUN_CONTRACT_VERSION,
           runId: currentRun?.id ?? null,
           engagementMode: currentMode,
           modeInstruction: engagementInstruction({
@@ -7143,6 +7205,13 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
+      if (input.issueId) {
+        await assertAgentIssueMutationAllowed(ctx, input.issueId, "artifacts.promote");
+      } else if (input.sourceType === "issue") {
+        await assertAgentIssueMutationAllowed(ctx, input.sourceId, "artifacts.promote");
+      } else {
+        await assertMcpWorkspaceMutationPolicy(ctx, "artifacts.promote");
+      }
       const { promoteToArtifact } = await import("@/server/services/artifact-service");
       return promoteToArtifact(db, {
         workspaceId: ctx.workspaceId,
@@ -12473,6 +12542,7 @@ export async function describeMcp() {
     tools: Object.entries(mcpTools).map(([name, t]) => ({
       name,
       scopes: t.scopes,
+      policy: mcpToolPolicy(name, t.scopes),
       inputSchema: t.input._def,
     })),
   };

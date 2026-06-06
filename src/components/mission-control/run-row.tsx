@@ -15,6 +15,8 @@ import {
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { ModeChip } from "@/components/ui/engagement-mode-glyph";
+import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
+import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { RunTimeline } from "./run-timeline";
 import { RunActions } from "./run-actions";
 
@@ -31,6 +33,7 @@ import { RunActions } from "./run-actions";
 
 export type RunRowData = {
   id: string;
+  status?: string;
   startedAt: Date | string;
   lastEventAt: Date | string;
   currentStep: string | null;
@@ -54,6 +57,13 @@ export type RunRowData = {
   awaitingApprovalAt?: Date | string | null;
   /** Command/risk detail captured from the live events stream (JSON). */
   pendingApproval?: unknown;
+  runtimePolicy?: unknown;
+  protocolDiagnostics?: Array<{
+    code: string;
+    severity: "info" | "warning" | "error";
+    title: string;
+    description: string;
+  }>;
 };
 
 /** Narrow the JSON `pendingApproval` blob to its displayable fields. */
@@ -135,7 +145,8 @@ export function RunRow({
   const lastEventAt =
     typeof run.lastEventAt === "string" ? new Date(run.lastEventAt) : run.lastEventAt;
   const lastEventAgeMs = Date.now() - lastEventAt.getTime();
-  const isStalled = lastEventAgeMs > STALE_RUN_MS;
+  const isWaiting = run.status === "WAITING";
+  const isStalled = !isWaiting && lastEventAgeMs > STALE_RUN_MS;
 
   const { data: etaData } = trpc.agentRun.eta.useQuery(
     { runId: run.id },
@@ -154,7 +165,7 @@ export function RunRow({
       className={cn(
         "group/row relative rounded-md border border-border bg-card/40 px-2.5 py-2 text-[0.75rem] transition-colors",
         active && "border-ember/40 bg-ember/5",
-        isStalled && "border-warning/40 bg-warning/5",
+        (isStalled || isWaiting) && "border-warning/40 bg-warning/5",
       )}
       onMouseEnter={onActivate}
     >
@@ -168,7 +179,7 @@ export function RunRow({
         >
           <ChevronRight className={cn("h-3 w-3 transition-transform", expanded && "rotate-90")} />
         </button>
-        {isStalled ? (
+        {isStalled || isWaiting ? (
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
         ) : (
           <span className="relative flex h-2 w-2 shrink-0">
@@ -193,6 +204,15 @@ export function RunRow({
         {run.engagementMode && run.engagementMode !== "EXECUTE" && (
           <ModeChip mode={run.engagementMode} />
         )}
+        {isWaiting && (
+          <span className="rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-warning">
+            waiting
+          </span>
+        )}
+        <RuntimePolicyBadges
+          compact
+          policy={run.runtimePolicy as RuntimePolicySnapshot | null | undefined}
+        />
         <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
           <RunActions runId={run.id} agentName={run.agent.name} />
           {(() => {
@@ -243,7 +263,7 @@ export function RunRow({
       {/* Headline step + last-event freshness */}
       <div className="mt-0.5 flex flex-wrap items-baseline gap-2 pl-6">
         <span className="min-w-[12rem] flex-1 truncate text-foreground/80">
-          {run.currentStep ?? run.statusComment?.currentStep ?? "working…"}
+          {run.currentStep ?? run.statusComment?.currentStep ?? (isWaiting ? "waiting on operator" : "working…")}
         </span>
         <span className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
           {etaLabel && (
@@ -262,6 +282,25 @@ export function RunRow({
           </span>
         </span>
       </div>
+      {run.protocolDiagnostics && run.protocolDiagnostics.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1 pl-6">
+          {run.protocolDiagnostics.slice(0, 3).map((diagnostic) => (
+            <span
+              key={diagnostic.code}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+                diagnostic.severity === "error"
+                  ? "border-destructive/30 bg-destructive/10 text-destructive"
+                  : "border-warning/30 bg-warning/10 text-warning",
+              )}
+              title={diagnostic.description}
+            >
+              <AlertTriangle className="h-3 w-3" />
+              {diagnostic.title}
+            </span>
+          ))}
+        </div>
+      )}
       {awaitingApproval && (
         <div
           className="text-meta mt-1.5 flex flex-wrap items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-2 py-1.5"

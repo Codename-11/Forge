@@ -13,6 +13,7 @@ import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
 import { finishRunsForIssue, recordAgentAction } from "@/server/services/agent-run";
 import { runtimePreflightForIssue } from "@/server/services/runtime-preflight";
+import { runProtocolDiagnostics } from "@/server/services/run-protocol-diagnostics";
 import {
   autoWatchActor,
   autoWatchAgent,
@@ -550,6 +551,16 @@ export const issueRouter = router({
               currentStep: true,
               summary: true,
               externalRunId: true,
+              engagementMode: true,
+              acknowledgedAt: true,
+              outputStartedAt: true,
+              producedArtifactIds: true,
+              verificationResult: true,
+              followUps: true,
+              completionMeta: true,
+              runtimePolicy: true,
+              wakeAttempts: true,
+              lastWakeDeliveryId: true,
               agent: {
                 select: {
                   id: true,
@@ -611,9 +622,21 @@ export const issueRouter = router({
               : null,
           }
         : null;
+      const agentRuns = issue.agentRuns.map((run) => ({
+        ...run,
+        protocolDiagnostics: runProtocolDiagnostics({
+          run,
+          issue: {
+            expectedOutput: issue.expectedOutput,
+            verificationChecklist: issue.verificationChecklist,
+            artifactRequired: issue.artifactRequired,
+          },
+        }),
+      }));
       return {
         ...issue,
         assignedAgent,
+        agentRuns,
         runtimePreflight,
       };
     }),

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { mcpTools, type McpToolName } from "@/server/services/mcp";
+import { mcpToolPolicy } from "@/server/services/mcp-policy";
 import { authenticateApiKey, ApiKeyError } from "@/server/services/api-key-auth";
 import { rateLimit } from "@/server/rate-limit";
 import { logger } from "@/server/logger";
@@ -60,6 +61,9 @@ function toolDescriptor(name: McpToolName) {
   return {
     name,
     description,
+    annotations: {
+      forgePolicy: mcpToolPolicy(name, t.scopes),
+    },
     inputSchema,
   };
 }

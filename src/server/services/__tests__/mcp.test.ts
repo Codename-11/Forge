@@ -9,6 +9,7 @@ import {
   RelationKind,
 } from "@prisma/client";
 import { mcpTools, type McpContext } from "@/server/services/mcp";
+import { EXPLICIT_MCP_TOOL_POLICIES, mcpToolPolicy } from "@/server/services/mcp-policy";
 import type { ApiKeyContext } from "@/server/services/api-key-auth";
 import {
   createWorkspaceFixture,
@@ -145,6 +146,29 @@ describe("mcp tool registry", () => {
       const shape = zodToJsonSchema(def.input, { target: "jsonSchema7", $refStrategy: "none" });
       expect(shape, `tool ${name}`).toBeTruthy();
       expect(typeof shape).toBe("object");
+    }
+  });
+
+  it("declares central policy metadata for Execute-only issue mutation tools", () => {
+    for (const name of Object.keys(EXPLICIT_MCP_TOOL_POLICIES)) {
+      expect(mcpTools[name as keyof typeof mcpTools], name).toBeTruthy();
+    }
+    const executeOnly = Object.entries(EXPLICIT_MCP_TOOL_POLICIES).filter(
+      ([, policy]) => policy.allowedModes !== "ANY",
+    );
+    expect(executeOnly.length).toBeGreaterThan(0);
+    for (const [name, policy] of executeOnly) {
+      const tool = mcpTools[name as keyof typeof mcpTools];
+      expect(mcpToolPolicy(name, tool.scopes)).toEqual(policy);
+    }
+    for (const [name, tool] of Object.entries(mcpTools)) {
+      const policy = mcpToolPolicy(name, tool.scopes);
+      if (
+        (tool.scopes as readonly string[]).includes("WRITE_ISSUES") &&
+        policy.mutationKind === "issue-state"
+      ) {
+        expect(policy.allowedModes, name).not.toBe("ANY");
+      }
     }
   });
 });
@@ -1609,6 +1633,47 @@ describe("mcp — awareness tools (Stream BA)", () => {
     expect(rows.some((r) => r.name === "elsewhere")).toBe(false);
   });
 
+  it("runtimes.configure can clear host mode-tool enforcement through merged config", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BRC" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: f.workspace.id,
+        name: "hermes",
+        kind: "REMOTE_HTTP",
+        adapterKey: "hermes",
+        ownerId: f.user.id,
+        config: {
+          localWorkspaceTools: true,
+          toolCapabilities: ["terminal", "filesystem", "git"],
+          modeToolPolicyEnforced: true,
+        },
+      },
+    });
+    const { ctx } = buildMcpCtx(f);
+
+    const updated = (await call(
+      "runtimes.configure",
+      {
+        runtimeId: runtime.id,
+        merge: true,
+        config: {
+          localWorkspaceTools: false,
+          toolCapabilities: [],
+          modeToolPolicyEnforced: false,
+        },
+      },
+      ctx,
+    )) as { config: Record<string, unknown> };
+
+    expect(updated.config).toMatchObject({
+      localWorkspaceTools: false,
+      toolCapabilities: [],
+      modeToolPolicyEnforced: false,
+    });
+  });
+
   it("agents.list lists workspace agents and excludes archived by default", async () => {
     const f = await createWorkspaceFixture({ keyPrefix: "BAA" });
     fixtures.push(f);
@@ -1887,6 +1952,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
 
     const bundle = (await call("agent.context.bundle", { issueId: issue.id }, ctx)) as {
       runProtocol: {
+        contractVersion: string;
         runId: string | null;
         engagementMode: string;
         modeInstruction: string;
@@ -1895,6 +1961,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
       };
     };
 
+    expect(bundle.runProtocol.contractVersion).toMatch(/^2026-/);
     expect(bundle.runProtocol.runId).toBe(run.id);
     expect(bundle.runProtocol.engagementMode).toBe("REVIEW");
     expect(bundle.runProtocol.modeInstruction).toContain("REVIEW");
@@ -3108,6 +3175,61 @@ describe("mcp runs.complete + completion contract", () => {
     await expect(
       call("issues.update", { id: issue.id, title: "should not mutate" }, scopedCtx),
     ).rejects.toThrow(/RESEARCH.*does not allow issues\.update/);
+    await expect(
+      call("issues.create", { title: "should not create" }, scopedCtx),
+    ).rejects.toThrow(/RESEARCH.*does not allow issues\.create/);
+    await expect(
+      call("issues.claim", { issueId: issue.id, claimTtlMinutes: 30 }, scopedCtx),
+    ).rejects.toThrow(/RESEARCH.*does not allow issues\.claim/);
+    await expect(
+      call("issues.setQueued", { id: issue.id, queued: true }, scopedCtx),
+    ).rejects.toThrow(/RESEARCH.*does not allow issues\.setQueued/);
+
+    const cycle = await prisma.cycle.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Sprint",
+        startsAt: new Date(),
+        endsAt: new Date(Date.now() + 7 * 86_400_000),
+        lengthDays: 7,
+      },
+    });
+    await expect(
+      call("cycles.addIssue", { cycleId: cycle.id, issueId: issue.id }, scopedCtx),
+    ).rejects.toThrow(/RESEARCH.*does not allow cycles\.addIssue/);
+
+    const other = await createIssue(fixture, { title: "Related" });
+    await expect(
+      call(
+        "relations.add",
+        { fromIssueId: issue.id, toIssueId: other.id, kind: RelationKind.RELATES_TO },
+        scopedCtx,
+      ),
+    ).rejects.toThrow(/RESEARCH.*does not allow relations\.add/);
+
+    const thread = await prisma.chatThread.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        userId: fixture.user.id,
+        agentId: agent.id,
+        title: "Discovery",
+      },
+    });
+    const message = await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: thread.id,
+        role: "AGENT" as never,
+        body: "candidate artifact",
+      },
+    });
+    await expect(
+      call(
+        "artifacts.promote",
+        { sourceType: "chat-message", sourceId: message.id, type: "SPEC" },
+        scopedCtx,
+      ),
+    ).rejects.toThrow(/RESEARCH.*does not allow artifacts\.promote/);
 
     const comment = (await call(
       "comments.create",
@@ -3227,11 +3349,14 @@ describe("mcp runs.complete + completion contract", () => {
       producedArtifactIds: string[];
       verificationResult: unknown;
       followUps: unknown;
+      completionMeta: { mode: string; contractVersion: string };
     };
     expect(result.summary).toBe("Migration shipped.");
     expect(result.producedArtifactIds).toEqual([artifact.id]);
     expect(result.verificationResult).toBeTruthy();
     expect(result.followUps).toBeTruthy();
+    expect(result.completionMeta.mode).toBe("EXECUTE");
+    expect(result.completionMeta.contractVersion).toMatch(/^2026-/);
 
     const completed = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(completed.status).toBe("COMPLETED");
@@ -3258,6 +3383,164 @@ describe("mcp runs.complete + completion contract", () => {
     });
     expect(audit.actorId).toBe(fixture.user.id);
     expect(audit.actorAgentId).toBe(agent.id);
+  });
+
+  it("runs.complete requires a linked agent key and rejects terminal rewrites", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CC3" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `cc3-${Date.now()}`,
+        name: "Owner",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+      },
+    });
+
+    await expect(call("runs.complete", { runId: run.id, summary: "done" }, ctx)).rejects.toThrow(
+      /linkedAgentId/,
+    );
+
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+    await call("runs.complete", { runId: run.id, summary: "done" }, scopedCtx);
+    await expect(
+      call("runs.complete", { runId: run.id, summary: "rewrite" }, scopedCtx),
+    ).rejects.toThrow(/only ACTIVE \/ WAITING runs/);
+  });
+
+  it("runs.complete enforces Execute artifact and checklist gates", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CC4" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `cc4-${Date.now()}`,
+        name: "Executor",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: {
+        artifactRequired: true,
+        verificationChecklist: [{ label: "Tests pass", kind: "command", value: "pnpm test" }],
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        engagementMode: EngagementMode.EXECUTE,
+      },
+    });
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+
+    await expect(
+      call("runs.complete", { runId: run.id, summary: "done" }, scopedCtx),
+    ).rejects.toThrow(/produced artifact/);
+
+    const artifact = (await call(
+      "artifacts.create",
+      { issueId: issue.id, title: "Verification", body: "tests passed", type: "VERIFICATION" },
+      scopedCtx,
+    )) as { id: string };
+    await expect(
+      call(
+        "runs.complete",
+        {
+          runId: run.id,
+          summary: "done",
+          producedArtifactIds: [artifact.id],
+          verificationResult: [{ label: "Tests pass", done: false }],
+        },
+        scopedCtx,
+      ),
+    ).rejects.toThrow(/missing verification/);
+
+    const completed = (await call(
+      "runs.complete",
+      {
+        runId: run.id,
+        summary: "done",
+        producedArtifactIds: [artifact.id],
+        verificationResult: [{ label: "Tests pass", done: true }],
+      },
+      scopedCtx,
+    )) as { status: string };
+    expect(completed.status).toBe("COMPLETED");
+  });
+
+  it("runs.complete enforces Research, Review, and Discuss mode output", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CC5" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `cc5-${Date.now()}`,
+        name: "Mode Agent",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+    const mkRun = (mode: EngagementMode) =>
+      prisma.agentRun.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: agent.id,
+          engagementMode: mode,
+        },
+      });
+
+    const research = await mkRun(EngagementMode.RESEARCH);
+    await expect(
+      call("runs.complete", { runId: research.id, summary: "Findings" }, scopedCtx),
+    ).rejects.toThrow(/confidence/);
+    const researchDone = (await call(
+      "runs.complete",
+      { runId: research.id, summary: "Findings", confidence: "HIGH" },
+      scopedCtx,
+    )) as { completionMeta: { confidence: string } };
+    expect(researchDone.completionMeta.confidence).toBe("HIGH");
+
+    const review = await mkRun(EngagementMode.REVIEW);
+    await expect(
+      call("runs.complete", { runId: review.id, summary: "Looks good" }, scopedCtx),
+    ).rejects.toThrow(/verdict/);
+    const reviewDone = (await call(
+      "runs.complete",
+      { runId: review.id, summary: "Looks good", verdict: "APPROVE" },
+      scopedCtx,
+    )) as { completionMeta: { verdict: string } };
+    expect(reviewDone.completionMeta.verdict).toBe("APPROVE");
+
+    const discuss = await mkRun(EngagementMode.DISCUSS);
+    const artifact = (await call(
+      "artifacts.create",
+      { title: "Standalone", body: "not valid for discuss completion" },
+      ctx,
+    )) as { id: string };
+    await expect(
+      call(
+        "runs.complete",
+        { runId: discuss.id, summary: "Reply", producedArtifactIds: [artifact.id] },
+        scopedCtx,
+      ),
+    ).rejects.toThrow(/DISCUSS completion cannot attach/);
   });
 });
 

@@ -116,23 +116,23 @@ Each mode has a canonical instruction block injected into the agent's turn (via
   `expectedOutput`; verify against `verificationChecklist`."* (+ artifact /
   approval clauses when set.)
 
-Forge also injects the shared run protocol: ack the inbox item, mark output
-started when real work begins, use rolling status comments only for meaningful
-operator-facing checkpoints, call `runs.setWaiting` when blocked, and finish
-with `runs.complete`.
+Forge also injects the shared run protocol, including a contract version:
+ack the inbox item, mark output started when real work begins, use rolling
+status comments only for meaningful operator-facing checkpoints, call
+`runs.setWaiting` when blocked, and finish with `runs.complete`.
 
 Mode is enforced in layers. Forge MCP rejects issue-state mutations from
 active **Research**, **Review**, and **Discuss** runs; those runs can still
 comment, post status, record a verdict, set themselves waiting, and complete
 with their report. Codex app-server dispatches additionally force non-Execute
-runs into a read-only sandbox for that turn. Hermes and other remote runtimes
-still need host-side tool allowlists for terminal/filesystem/git enforcement:
-Forge can block Forge MCP mutations and pass the contract, but it cannot remove
-tools from a Hermes host that exposes them.
+runs into a read-only sandbox for that turn. Hermes receives the per-run
+`tool_allowlist` and runtime policy snapshot; it is host-enforced only when the
+Runtime config is marked `modeToolPolicyEnforced` and the Hermes host honors
+that contract. Otherwise that layer is prompt-only.
 
-An active run's mode is immutable. To change mode, stop or complete the current
-run and reassign/wake the agent with the new mode; Forge will not relabel a
-running external turn in place.
+An active run's mode is immutable. To change mode, use **Stop + Restart with
+Mode** from the run strip/agent card, or complete the current run and reassign
+with the new mode. Forge will not relabel a running external turn in place.
 
 ## What each mode changes in the system
 
@@ -144,14 +144,14 @@ Mode is what stops the silent "always execute" assumptions:
   Execute**. A Research run is "done" when it posts findings, so it's never
   falsely marked stalled for not moving the issue.
 - **Completion gates** (`artifactRequired` / `verificationChecklist`) are
-  enforced at `runs.complete` **only for Execute**.
-- **Research** terminates with a confidence-tagged comment and no transition.
-- **Review** terminates via a review-gate / action-request verdict.
-- **Discuss** is lightweight — it posts a reply comment and does **not** open a
-  heavyweight `AgentRun`, so Mission Control's run list stays a list of *real
-  work*. A Discuss agent that thinks work is warranted asks first and stops; a
-  human (or an explicit `execute:` / `research:` marker) then re-dispatches, and
-  *that* opens the run.
+  enforced at `runs.complete` **for Execute**.
+- **Research** completion requires findings plus `confidence` (`LOW`, `MEDIUM`,
+  or `HIGH`) and no transition.
+- **Review** completion requires a `verdict` (`APPROVE` or `REQUEST_CHANGES`).
+- **Discuss** completion is reply-only: no produced artifacts, verification
+  results, or follow-up work items. A Discuss agent that thinks work is
+  warranted asks first and stops; a human (or an explicit `execute:` /
+  `research:` marker) then restarts or re-dispatches.
 
 ## Configuring it
 
@@ -175,9 +175,12 @@ is reused everywhere, with the warm-earthy tokens:
   option ("Take it to done" / "Investigate & report" / "Critique only" / "Just
   weigh in").
 - **Issue detail — agent-run strip** — the active run's mode shows as a chip
-  beside `currentStep`, so it's obvious *what kind of work* is in flight.
+  beside `currentStep`, with restart buttons for the other modes and compact
+  enforcement/diagnostic badges.
 - **Mission Control — run rows** — a mode chip per run, so you can scan for "all
-  research runs" at a glance.
+  research runs" at a glance. Rows also show whether enforcement is Forge MCP,
+  Codex sandbox, Hermes host, or prompt-only, plus protocol diagnostics such as
+  never-acked or acked-without-output.
 
 ## Cross-references
 

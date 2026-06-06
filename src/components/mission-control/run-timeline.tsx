@@ -156,10 +156,13 @@ function eventTitle(evt: RunTimelineEvent): string {
     return "tool started";
   }
   if (evt.kind === "STEP" && typeof payload?.thinking === "string") return "thinking";
+  if (evt.kind === "STEP" && typeof payload?.currentStep === "string") {
+    return humanizeEventName(payload.currentStep);
+  }
   if (evt.kind === "STEP" && typeof payload?.lastEvent === "string") {
     return humanizeEventName(payload.lastEvent);
   }
-  return humanizeEventName(evt.kind).toLowerCase();
+  return evt.kind === "STEP" ? "step update" : humanizeEventName(evt.kind).toLowerCase();
 }
 
 export function RunTimeline({

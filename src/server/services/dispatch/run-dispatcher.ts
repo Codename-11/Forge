@@ -4,7 +4,11 @@ import type { AgentProvider } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/agent-run";
-import { forgeRunInstruction } from "@/server/services/engagement-mode";
+import {
+  FORGE_RUN_CONTRACT_VERSION,
+  forgeRunInstruction,
+} from "@/server/services/engagement-mode";
+import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from "./registry";
 
 /**
@@ -37,6 +41,15 @@ const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
   AgentRunStatus.ABANDONED,
   AgentRunStatus.STALLED,
 ]);
+
+function hasForgeCompletionMeta(value: Prisma.JsonValue | null | undefined): boolean {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as Record<string, unknown>).contractVersion === "string"
+  );
+}
 
 function issueMessage(
   issue: {
@@ -149,6 +162,13 @@ async function startNewRuns(): Promise<number> {
       source: "surface-default",
       inferable: false,
     });
+    const runtimePolicy = buildRuntimePolicySnapshot({
+      contractVersion: FORGE_RUN_CONTRACT_VERSION,
+      engagementMode,
+      adapterKey: agent.runtime?.adapterKey ?? (agent.provider === "HERMES" ? "hermes" : null),
+      runtimeName: agent.runtime?.name ?? null,
+      config: agent.runtime?.config,
+    });
 
     try {
       const { externalRunId } = await connector.startRun({
@@ -164,6 +184,8 @@ async function startNewRuns(): Promise<number> {
         ),
         instructions: instruction,
         engagementMode,
+        contractVersion: FORGE_RUN_CONTRACT_VERSION,
+        toolPolicy: runtimePolicy,
       });
       await db.$transaction(async (tx) => {
         const { run } = await openOrTouchRun(tx, {
@@ -176,7 +198,11 @@ async function startNewRuns(): Promise<number> {
         });
         await tx.agentRun.update({
           where: { id: run.id },
-          data: { externalRunId, acknowledgedAt: new Date() },
+          data: {
+            externalRunId,
+            acknowledgedAt: new Date(),
+            runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
+          },
         });
         await appendRunEvent(tx, {
           runId: run.id,
@@ -189,6 +215,15 @@ async function startNewRuns(): Promise<number> {
             externalRunId,
             engine: "RUNS",
             reusedCanonicalRun: already?.id ?? null,
+            contractVersion: FORGE_RUN_CONTRACT_VERSION,
+            runtimePolicy: {
+              adapterKey: runtimePolicy.adapterKey,
+              layers: runtimePolicy.layers.map((layer) => ({
+                kind: layer.kind,
+                enforced: layer.enforced,
+              })),
+              allowedHostTools: runtimePolicy.allowedHostTools,
+            },
           },
         });
       });
@@ -214,6 +249,8 @@ async function pollActiveRuns(): Promise<number> {
       externalRunId: true,
       currentStep: true,
       awaitingApprovalAt: true,
+      summary: true,
+      completionMeta: true,
       agent: {
         select: {
           provider: true,
@@ -302,13 +339,22 @@ async function pollActiveRuns(): Promise<number> {
       continue;
     }
 
-    // Terminal — finish the run and mirror usage.
-    const terminal: "COMPLETED" | "ABANDONED" | "STALLED" =
+    // Terminal — finish the run and mirror usage. Provider-side
+    // "completed" is not enough to complete a Forge issue run; agents must
+    // close through runs.complete so mode-specific contracts are validated.
+    let terminal: "COMPLETED" | "ABANDONED" | "STALLED" =
       status.state === "completed"
         ? "COMPLETED"
         : status.state === "cancelled"
           ? "ABANDONED"
           : "STALLED";
+    let summary = status.output ?? run.summary ?? null;
+    if (terminal === "COMPLETED" && !hasForgeCompletionMeta(run.completionMeta)) {
+      terminal = "STALLED";
+      summary =
+        "Provider run ended without a valid Forge runs.complete contract. " +
+        (status.output ? `Provider output: ${status.output}` : "No provider output was reported.");
+    }
     await db
       .$transaction(async (tx) => {
         await finishRun(tx, {
@@ -317,7 +363,7 @@ async function pollActiveRuns(): Promise<number> {
           issueId: run.issueId,
           agentId: run.agentId,
           status: terminal,
-          summary: status.output ?? null,
+          summary,
         });
         const usage = status.usage;
         await tx.agentRun.update({

@@ -12,6 +12,12 @@ type BannerRun = {
   externalRunId?: string | null;
   lastEventAt: Date | string;
   finishedAt?: Date | string | null;
+  protocolDiagnostics?: Array<{
+    code: string;
+    severity: "info" | "warning" | "error";
+    title: string;
+    description: string;
+  }>;
   agent?: {
     name?: string | null;
     profileKey?: string | null;
@@ -47,7 +53,9 @@ export function isTerminalFailedRunStatus(status: string | null | undefined): bo
 export function getTerminalRunFailureBanner(
   run: BannerRun | null | undefined,
 ): TerminalRunFailureBannerModel | null {
-  if (!run || !isTerminalFailedRunStatus(run.status)) return null;
+  if (!run) return null;
+  const invalidCompletion = run.protocolDiagnostics?.find((d) => d.severity === "error") ?? null;
+  if (!isTerminalFailedRunStatus(run.status) && !invalidCompletion) return null;
 
   const provider = normalizeLabel(run.agent?.provider) ?? "Agent";
   const providerLabel = provider === "CODEX" ? "Codex" : titleCase(provider);
@@ -68,6 +76,16 @@ export function getTerminalRunFailureBanner(
     run.status === "STALLED" &&
     !run.externalRunId &&
     !/output|completed|finished/i.test(run.currentStep ?? "");
+
+  if (invalidCompletion) {
+    return {
+      title: `${agentName} completed without required output`,
+      description: invalidCompletion.description,
+      recommendation:
+        "Restart the run with the correct mode or ask the agent to complete with the required mode-specific fields.",
+      metadata,
+    };
+  }
 
   return {
     title: `${agentName} run ${run.status === "STALLED" ? "stalled" : "failed"} before completing`,

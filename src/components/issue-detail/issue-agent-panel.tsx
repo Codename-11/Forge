@@ -11,6 +11,8 @@ import { ModeChip, type EngagementModeValue } from "@/components/ui/engagement-m
 import { STALE_RUN_MS } from "@/lib/agent-stale";
 import { presenceAvailability } from "@/lib/transport-display";
 import { relativeTime, cn } from "@/lib/utils";
+import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
+import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 
 /**
  * Persistent agent-status panel for the issue right rail. The rail is
@@ -206,12 +208,10 @@ export function IssueAgentPanel({
               mode={mode}
               title="Engagement mode changes the work contract only. It does not grant terminal, filesystem, or git tools."
             />
-            <span
-              className="min-w-0 truncate"
-              title="Terminal, filesystem, and git access come from the runtime/tool surface."
-            >
-              instructions only
-            </span>
+            <RuntimePolicyBadges
+              compact
+              policy={run?.runtimePolicy as RuntimePolicySnapshot | null | undefined}
+            />
           </div>
         )}
         <RuntimeSurfaceRow agent={agent} />

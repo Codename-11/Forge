@@ -138,6 +138,39 @@ describe("agent-run lifecycle", () => {
     expect(result.run.assignmentEventId).toBe("event-restamp");
   });
 
+  it("finishRun closes WAITING runs", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARW" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "arw-a1");
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.WAITING,
+        currentStep: "waiting on operator",
+      },
+    });
+
+    await prisma.$transaction((tx) =>
+      finishRun(tx, {
+        runId: run.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ABANDONED",
+        summary: "Operator stopped the waiting run.",
+        actorId: fixture.user.id,
+      }),
+    );
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.status).toBe(AgentRunStatus.ABANDONED);
+    expect(after.finishedAt).not.toBeNull();
+  });
+
   it("rejects in-place engagement mode changes for active runs", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "ARL" });
     fixtures.push(fixture);
@@ -161,6 +194,46 @@ describe("agent-run lifecycle", () => {
 
     const unchanged = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(unchanged.engagementMode).toBe(EngagementMode.RESEARCH);
+  });
+
+  it("restartWithMode abandons the current run and opens a new run with the requested mode", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "arr-a1");
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        engagementMode: EngagementMode.REVIEW,
+      },
+    });
+    const caller = agentRunRouter.createCaller(await buildContext(fixture));
+
+    const result = await caller.restartWithMode({
+      runId: run.id,
+      mode: EngagementMode.EXECUTE,
+    });
+    expect(result.restarted).toBe(true);
+
+    const runs = await prisma.agentRun.findMany({
+      where: { issueId: issue.id, agentId: agent.id },
+      orderBy: { startedAt: "asc" },
+    });
+    expect(runs).toHaveLength(2);
+    expect(runs[0]?.id).toBe(run.id);
+    expect(runs[0]?.status).toBe(AgentRunStatus.ABANDONED);
+    expect(runs[0]?.summary).toContain("restart as EXECUTE");
+    expect(runs[1]?.status).toBe(AgentRunStatus.ACTIVE);
+    expect(runs[1]?.engagementMode).toBe(EngagementMode.EXECUTE);
+    expect(runs[1]?.assignmentEventId).not.toBeNull();
   });
 
   it("marks output started on the first substantive run event", async () => {
@@ -229,6 +302,16 @@ describe("agent-run lifecycle", () => {
         acknowledgedAt: new Date(),
       },
     });
+    const waiting = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: staleAgent.id,
+        status: AgentRunStatus.WAITING,
+        acknowledgedAt: new Date(),
+        currentStep: "waiting",
+      },
+    });
 
     await prisma.$transaction((tx) =>
       finishRunsForIssue(tx, {
@@ -241,13 +324,14 @@ describe("agent-run lifecycle", () => {
     );
 
     const after = await prisma.agentRun.findMany({
-      where: { id: { in: [unstarted.id, started.id] } },
+      where: { id: { in: [unstarted.id, started.id, waiting.id] } },
       orderBy: { agentId: "asc" },
     });
     const byId = new Map(after.map((run) => [run.id, run]));
     expect(byId.get(unstarted.id)?.status).toBe(AgentRunStatus.ABANDONED);
     expect(byId.get(unstarted.id)?.summary).toContain("before this run acknowledged");
     expect(byId.get(started.id)?.status).toBe(AgentRunStatus.COMPLETED);
+    expect(byId.get(waiting.id)?.status).toBe(AgentRunStatus.COMPLETED);
 
     const staleActivity = await prisma.activityEvent.findFirstOrThrow({
       where: {

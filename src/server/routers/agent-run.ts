@@ -9,11 +9,71 @@ import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { appendRunEvent, finishRun } from "@/server/services/agent-run";
 import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
+import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
+import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
+import { runProtocolDiagnostics } from "@/server/services/run-protocol-diagnostics";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // a loose validator instead of `.cuid()` so both shapes pass.
 const idString = z.string().min(1).max(40);
 const CLEARABLE_RUN_STATUSES = [AgentRunStatus.ABANDONED, AgentRunStatus.STALLED] as const;
+
+type RunWithPolicyInputs = {
+  status: AgentRunStatus;
+  engagementMode: EngagementMode;
+  acknowledgedAt?: Date | string | null;
+  outputStartedAt?: Date | string | null;
+  lastEventAt: Date | string;
+  summary?: string | null;
+  producedArtifactIds?: string[] | null;
+  verificationResult?: Prisma.JsonValue | null;
+  followUps?: Prisma.JsonValue | null;
+  completionMeta?: Prisma.JsonValue | null;
+  runtimePolicy?: Prisma.JsonValue | null;
+  issue?: {
+    expectedOutput?: string | null;
+    verificationChecklist?: Prisma.JsonValue | null;
+    artifactRequired?: boolean;
+  } | null;
+  agent: {
+    provider?: string | null;
+    runtime?: {
+      name?: string | null;
+      adapterKey?: string | null;
+      config?: Prisma.JsonValue | null;
+    } | null;
+  };
+};
+
+function enrichRun<T extends RunWithPolicyInputs>(run: T) {
+  const existingPolicy =
+    run.runtimePolicy && typeof run.runtimePolicy === "object" && !Array.isArray(run.runtimePolicy)
+      ? run.runtimePolicy
+      : null;
+  const runtimePolicy =
+    existingPolicy ??
+    buildRuntimePolicySnapshot({
+      contractVersion: FORGE_RUN_CONTRACT_VERSION,
+      engagementMode: run.engagementMode,
+      adapterKey: run.agent.runtime?.adapterKey ?? (run.agent.provider === "HERMES" ? "hermes" : null),
+      runtimeName: run.agent.runtime?.name ?? null,
+      config: run.agent.runtime?.config,
+    });
+  return {
+    ...run,
+    runtimePolicy,
+    protocolDiagnostics: runProtocolDiagnostics({
+      run,
+      issue: run.issue
+        ? {
+            expectedOutput: run.issue.expectedOutput ?? null,
+            verificationChecklist: run.issue.verificationChecklist ?? null,
+            artifactRequired: run.issue.artifactRequired ?? false,
+          }
+        : null,
+    }),
+  };
+}
 
 /**
  * Read-only router for AgentRun monitoring. Live mutations land via the
@@ -46,14 +106,35 @@ export const agentRunRouter = router({
         orderBy: { lastEventAt: "desc" },
         include: {
           agent: {
-            select: { id: true, name: true, profileKey: true, avatar: true, status: true },
+            select: {
+              id: true,
+              name: true,
+              profileKey: true,
+              avatar: true,
+              status: true,
+              provider: true,
+              runtimeMode: true,
+              lastHeartbeatAt: true,
+              webhookUrl: true,
+              runtimeId: true,
+              runtime: {
+                select: { name: true, adapterKey: true, config: true },
+              },
+            },
+          },
+          issue: {
+            select: {
+              expectedOutput: true,
+              verificationChecklist: true,
+              artifactRequired: true,
+            },
           },
           statusComment: {
             select: { id: true, body: true, currentStep: true, updatedAt: true, revisions: true },
           },
         },
       });
-      return run;
+      return run ? enrichRun(run) : null;
     }),
 
   /**
@@ -127,10 +208,10 @@ export const agentRunRouter = router({
         .default({ limit: 20 }),
     )
     .query(async ({ ctx, input }) => {
-      return ctx.db.agentRun.findMany({
+      const runs = await ctx.db.agentRun.findMany({
         where: {
           workspaceId: ctx.workspaceId,
-          status: AgentRunStatus.ACTIVE,
+          status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
         },
         orderBy: { lastEventAt: "desc" },
         take: input.limit,
@@ -142,6 +223,10 @@ export const agentRunRouter = router({
               profileKey: true,
               avatar: true,
               status: true,
+              provider: true,
+              runtime: {
+                select: { name: true, adapterKey: true, config: true },
+              },
             },
           },
           issue: {
@@ -149,6 +234,9 @@ export const agentRunRouter = router({
               id: true,
               number: true,
               title: true,
+              expectedOutput: true,
+              verificationChecklist: true,
+              artifactRequired: true,
               status: { select: { id: true, name: true, category: true, color: true } },
               workspace: { select: { key: true, slug: true } },
             },
@@ -165,6 +253,7 @@ export const agentRunRouter = router({
           },
         },
       });
+      return runs.map(enrichRun);
     }),
 
   /**
@@ -257,7 +346,7 @@ export const agentRunRouter = router({
       // are explicitly excluded — WAITING is non-terminal (the agent is
       // paused on the operator) and should keep appearing on the live
       // surfaces, not in the post-mortem History tab.
-      return ctx.db.agentRun.findMany({
+      const runs = await ctx.db.agentRun.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           status: {
@@ -269,18 +358,29 @@ export const agentRunRouter = router({
         take: input.limit,
         include: {
           agent: {
-            select: { id: true, name: true, profileKey: true, avatar: true },
+            select: {
+              id: true,
+              name: true,
+              profileKey: true,
+              avatar: true,
+              provider: true,
+              runtime: { select: { name: true, adapterKey: true, config: true } },
+            },
           },
           issue: {
             select: {
               id: true,
               number: true,
               title: true,
+              expectedOutput: true,
+              verificationChecklist: true,
+              artifactRequired: true,
               workspace: { select: { key: true, slug: true } },
             },
           },
         },
       });
+      return runs.map(enrichRun);
     }),
 
   /**
@@ -528,6 +628,119 @@ export const agentRunRouter = router({
         await maybeAutoDispatch(tx, run.issueId);
         return { ok: true, redispatched: true };
       });
+    }),
+
+  /**
+   * Stop the current run and immediately open a fresh assignment event for
+   * the same agent with a different engagement mode. Mode is still immutable
+   * per run; this is a truthful stop + restart, not an in-place switch.
+   */
+  restartWithMode: workspaceProcedure
+    .input(z.object({ runId: idString, mode: z.nativeEnum(EngagementMode) }))
+    .mutation(async ({ ctx, input }) => {
+      const run = await ctx.db.agentRun.findFirst({
+        where: {
+          id: input.runId,
+          workspaceId: ctx.workspaceId,
+          status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+        },
+        select: {
+          id: true,
+          issueId: true,
+          agentId: true,
+          engagementMode: true,
+          externalRunId: true,
+          agent: {
+            select: {
+              id: true,
+              profileKey: true,
+              provider: true,
+              runtime: {
+                select: {
+                  adapterKey: true,
+                  endpoint: true,
+                  secret: true,
+                  config: true,
+                  disabledAt: true,
+                  name: true,
+                },
+              },
+            },
+          },
+          issue: { select: { assignedAgentId: true } },
+        },
+      });
+      if (!run) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Active run not found." });
+      }
+      if (run.engagementMode === input.mode) {
+        return { ok: true as const, restarted: false as const, mode: input.mode };
+      }
+
+      const connector = getRunsConnectorForAgent({
+        provider: run.agent.provider,
+        runtime: run.agent.runtime,
+      });
+      if (run.externalRunId) {
+        await connector?.stop?.(run.externalRunId);
+      }
+
+      await ctx.db.$transaction(async (tx) => {
+        await finishRun(tx, {
+          runId: run.id,
+          workspaceId: ctx.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          status: "ABANDONED",
+          summary: `Stopped by operator to restart as ${input.mode}.`,
+          actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        });
+
+        const dispatchReason = {
+          mode: "MODE_RESTART",
+          picked: run.agent.profileKey,
+          previousMode: run.engagementMode,
+          engagementMode: input.mode,
+          restartedFromRunId: run.id,
+          decidedAt: new Date().toISOString(),
+        };
+        await tx.issue.update({
+          where: { id: run.issueId },
+          data: {
+            assignedAgentId: run.agentId,
+            dispatchReason,
+          },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "Issue",
+          entityId: run.issueId,
+          action: "restart-agent-run",
+          before: {
+            assignedAgentId: run.issue.assignedAgentId,
+            engagementMode: run.engagementMode,
+          },
+          after: {
+            assignedAgentId: run.agentId,
+            engagementMode: input.mode,
+          },
+          eventKind: EventKind.AGENT_ASSIGNED,
+          subjectType: "issue",
+          subjectId: run.issueId,
+          payload: {
+            agentId: run.agentId,
+            previousAgentId: run.issue.assignedAgentId,
+            engagementMode: input.mode,
+            restartedFromRunId: run.id,
+            dispatchReason,
+          },
+        });
+      });
+
+      return { ok: true as const, restarted: true as const, mode: input.mode };
     }),
 
   /**

@@ -1,11 +1,24 @@
 "use client";
 
-import { CheckCircle2, FolderOpen, GitBranch, Terminal, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  FolderOpen,
+  GitBranch,
+  ShieldAlert,
+  ShieldCheck,
+  Terminal,
+  XCircle,
+} from "lucide-react";
 import {
   RUNTIME_TOOL_CAPABILITIES,
+  runtimeHostEnforcesModeToolPolicy,
   runtimeToolSurface,
   type RuntimeToolCapability,
 } from "@/lib/runtime-tools";
+import {
+  primaryEnforcementLayer,
+  type RuntimePolicySnapshot,
+} from "@/lib/runtime-enforcement";
 import { cn } from "@/lib/utils";
 
 const TOOL_META: Record<RuntimeToolCapability, { label: string; icon: typeof Terminal }> = {
@@ -71,6 +84,98 @@ export function RuntimeToolSurfaceBadges({
           cwd {surface.workspaceRoot}
         </span>
       )}
+      <RuntimeConfigEnforcementBadge adapterKey={adapterKey} config={config} />
+    </div>
+  );
+}
+
+function RuntimeConfigEnforcementBadge({
+  adapterKey,
+  config,
+}: {
+  adapterKey: string | null | undefined;
+  config: unknown;
+}) {
+  if (adapterKey === "hermes") {
+    const enforced = runtimeHostEnforcesModeToolPolicy(config);
+    const Icon = enforced ? ShieldCheck : ShieldAlert;
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+          enforced
+            ? "border-success/30 bg-success/10 text-success"
+            : "border-warning/30 bg-warning/10 text-warning",
+        )}
+        title={
+          enforced
+            ? "Hermes runtime is marked as host-enforcing per-run tool allowlists."
+            : "Hermes runtime receives mode instructions, but host tool policy is prompt-only."
+        }
+      >
+        <Icon className="h-3 w-3" />
+        {enforced ? "host enforced" : "prompt only"}
+      </span>
+    );
+  }
+  if (adapterKey === "codex-app-server") {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-md border border-success/30 bg-success/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-success"
+        title="Codex app server receives Forge's per-turn sandbox policy; non-Execute runs are forced read-only."
+      >
+        <ShieldCheck className="h-3 w-3" />
+        sandbox enforced
+      </span>
+    );
+  }
+  return null;
+}
+
+export function RuntimePolicyBadges({
+  policy,
+  compact = false,
+}: {
+  policy: RuntimePolicySnapshot | null | undefined;
+  compact?: boolean;
+}) {
+  if (!policy) return null;
+  const primary = primaryEnforcementLayer(policy);
+  const layers = compact && primary ? [primary] : policy.layers;
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1">
+      {layers.map((layer) => {
+        const Icon = layer.enforced ? ShieldCheck : ShieldAlert;
+        return (
+          <span
+            key={`${layer.kind}-${layer.label}`}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+              layer.enforced
+                ? "border-success/30 bg-success/10 text-success"
+                : "border-warning/30 bg-warning/10 text-warning",
+            )}
+            title={layer.detail}
+          >
+            <Icon className="h-3 w-3" />
+            {layer.kind === "forge-mcp"
+              ? "Forge MCP"
+              : layer.kind === "codex-sandbox"
+                ? "Codex sandbox"
+                : layer.kind === "hermes-host"
+                  ? "Hermes host"
+                  : "prompt only"}
+          </span>
+        );
+      })}
+      {!compact && (
+        <span
+          className="truncate rounded-md border border-border bg-background/40 px-1.5 py-0.5 font-mono text-[0.625rem] text-muted-foreground"
+          title={`Run contract ${policy.contractVersion}`}
+        >
+          v {policy.contractVersion}
+        </span>
+      )}
     </div>
   );
 }
@@ -130,4 +235,3 @@ export function RuntimeToolSurfacePanel({
     </div>
   );
 }
-

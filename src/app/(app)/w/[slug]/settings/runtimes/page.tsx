@@ -678,12 +678,14 @@ type RuntimeToolPolicy = {
   localWorkspaceTools: boolean;
   toolCapabilities: RuntimeToolCapability[];
   workspaceRoot: string;
+  modeToolPolicyEnforced: boolean;
 };
 
 const DEFAULT_RUNTIME_TOOL_POLICY: RuntimeToolPolicy = {
   localWorkspaceTools: false,
   toolCapabilities: [],
   workspaceRoot: "",
+  modeToolPolicyEnforced: false,
 };
 
 function runtimeToolPolicyFromConfig(config: unknown): RuntimeToolPolicy {
@@ -691,16 +693,25 @@ function runtimeToolPolicyFromConfig(config: unknown): RuntimeToolPolicy {
     localWorkspaceTools: runtimeDeclaresLocalWorkspaceTools(config),
     toolCapabilities: declaredRuntimeToolCapabilities(config),
     workspaceRoot: runtimeWorkspaceRoot(config) ?? "",
+    modeToolPolicyEnforced:
+      !!(
+        config &&
+        typeof config === "object" &&
+        !Array.isArray(config) &&
+        (config as Record<string, unknown>).modeToolPolicyEnforced === true
+      ),
   };
 }
 
 function runtimeToolPolicyToConfig(p: RuntimeToolPolicy): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  if (p.localWorkspaceTools) out.localWorkspaceTools = true;
+  const out: Record<string, unknown> = {
+    localWorkspaceTools: p.localWorkspaceTools,
+    modeToolPolicyEnforced: p.modeToolPolicyEnforced,
+  };
   const tools = RUNTIME_TOOL_CAPABILITIES.filter((tool) =>
     p.toolCapabilities.includes(tool),
   );
-  if (tools.length > 0) out.toolCapabilities = tools;
+  out.toolCapabilities = tools;
   if (p.workspaceRoot.trim()) out.workspaceRoot = p.workspaceRoot.trim();
   return out;
 }
@@ -739,20 +750,39 @@ function RuntimeToolPolicyFields({
           type="checkbox"
           className="mt-0.5"
           checked={value.localWorkspaceTools}
-          onChange={(e) =>
-            onChange({
-              ...value,
-              localWorkspaceTools: e.target.checked,
-              toolCapabilities: e.target.checked
-                ? [...RUNTIME_TOOL_CAPABILITIES]
-                : value.toolCapabilities,
-            })
-          }
-        />
+            onChange={(e) =>
+              onChange({
+                ...value,
+                localWorkspaceTools: e.target.checked,
+                toolCapabilities: e.target.checked
+                  ? [...RUNTIME_TOOL_CAPABILITIES]
+                  : [],
+              })
+            }
+          />
         <span className="min-w-0">
           <span className="block font-medium text-foreground">Local workspace tools enabled</span>
           <span className="block text-meta text-muted-foreground">
             Use only when the Hermes host can run commands in the repo.
+          </span>
+        </span>
+      </label>
+      <label className="flex items-start gap-2 rounded-md border border-border bg-background/30 px-2.5 py-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={value.modeToolPolicyEnforced}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              modeToolPolicyEnforced: e.target.checked,
+            })
+          }
+        />
+        <span className="min-w-0">
+          <span className="block font-medium text-foreground">Host-enforced mode tools</span>
+          <span className="block text-meta text-muted-foreground">
+            Hermes enforces Forge&apos;s per-run tool allowlist for non-Execute modes.
           </span>
         </span>
       </label>

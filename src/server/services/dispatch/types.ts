@@ -22,6 +22,18 @@ export interface RunMessage {
 
 export type RunEngagementMode = "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS";
 
+export interface RunToolPolicy {
+  contractVersion: string;
+  engagementMode: RunEngagementMode;
+  allowedHostTools: string[];
+  layers: Array<{
+    kind: string;
+    label: string;
+    enforced: boolean;
+    detail: string;
+  }>;
+}
+
 export interface RunInput {
   /** The latest user message. */
   message: string;
@@ -31,6 +43,10 @@ export interface RunInput {
   instructions?: string;
   /** Resolved Forge engagement mode for this run. Connectors may harden policy from it. */
   engagementMode?: RunEngagementMode;
+  /** Forge run protocol/contract version injected into this dispatch. */
+  contractVersion?: string;
+  /** Effective runtime/tool policy snapshot for this run. */
+  toolPolicy?: RunToolPolicy;
   /**
    * Optional memory-scope key. Connectors that support server-side memory
    * (Hermes long-term memory) scope the run to it; others ignore it.
