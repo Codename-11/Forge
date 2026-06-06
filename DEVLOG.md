@@ -35,6 +35,25 @@ and include runtime/tool details when the payload has them. This remains
 truthful: Forge does not synthesize an agent-authored "starting work" comment;
 the runtime/agent must still post status/comment output itself.
 
+Third follow-up: made engagement mode a real run contract instead of only UI
+copy. Dispatch now injects a shared Forge run protocol (ack inbox, mark output
+started, use meaningful status, set waiting when blocked, complete the run)
+alongside the mode instruction, includes issue/run ids in RUNS prompts, and
+surfaces the same `runProtocol` object in `agent.context.bundle`. Agent-linked
+MCP calls from active Research/Review/Discuss runs now reject issue-state
+mutations (issue updates/transitions/assignment/labels, issue-linked artifacts,
+and action-request acceptance) while still allowing comments/status/waiting and
+completion reports. Codex app-server non-Execute runs are forced into read-only
+sandboxing per turn; Hermes still needs host-side toolset enforcement for
+terminal/filesystem/git tools.
+
+Active run modes are now immutable. The issue strip shows the mode as locked
+while running, `agentRun.setEngagementMode` rejects in-place changes, same-agent
+mode updates are blocked while a run is active/waiting, and `openOrTouchRun`
+preserves the existing mode on later wake/touch events. Substantive run events
+(status/comments/steps/tool calls/transitions) now auto-set `outputStartedAt`
+so live UI moves out of "acknowledged" once real output lands.
+
 ## 2026-06-05 — AXI-40 MCP workspace discovery + scoped access keys
 
 Implemented MCP workspace discovery and API-key provisioning for workspace-scoped agent/home-lab use. `workspaces.list` now returns `id`, `key`, `name`, and `slug`; non-admin API keys remain pinned to their issuing workspace, while user-backed sessions or ADMIN user-backed keys can list/select workspaces where the user is a member.

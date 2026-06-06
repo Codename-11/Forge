@@ -83,60 +83,35 @@ export const agentRunRouter = router({
     }),
 
   /**
-   * Operator edits the engagement contract for an in-flight run. This is a
-   * lightweight run-state change: it updates the row, appends a timeline
-   * event for observability, and relies on the runtime's normal run reads /
-   * wake flow to honor the new contract.
+   * Compatibility endpoint for older clients. Engagement mode is a run-start
+   * contract; changing it while the external runtime is already active would
+   * make Forge's UI disagree with the prompt/tool policy the agent actually
+   * received. Stop/complete the run, then reassign with the desired mode.
    */
   setEngagementMode: workspaceProcedure
     .input(z.object({ runId: idString, mode: z.nativeEnum(EngagementMode) }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.db.$transaction(async (tx) => {
-        const run = await tx.agentRun.findFirst({
-          where: {
-            id: input.runId,
-            workspaceId: ctx.workspaceId,
-            status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
-          },
-          select: {
-            id: true,
-            issueId: true,
-            agentId: true,
-            engagementMode: true,
-            currentStep: true,
-          },
-        });
-        if (!run) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Active run not found.",
-          });
-        }
-        if (run.engagementMode === input.mode) {
-          return { ok: true as const, changed: false as const, mode: input.mode };
-        }
-
-        await tx.agentRun.update({
-          where: { id: run.id },
-          data: {
-            engagementMode: input.mode,
-            lastEventAt: new Date(),
-          },
-        });
-        await appendRunEvent(tx, {
-          runId: run.id,
+      const run = await ctx.db.agentRun.findFirst({
+        where: {
+          id: input.runId,
           workspaceId: ctx.workspaceId,
-          issueId: run.issueId,
-          agentId: run.agentId,
-          kind: "MODE_CHANGED",
-          currentStep: run.currentStep ?? undefined,
-          payload: {
-            from: run.engagementMode,
-            to: input.mode,
-            actorId: ctx.session.user.id,
-          },
+          status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+        },
+        select: { id: true, engagementMode: true },
+      });
+      if (!run) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Active run not found.",
         });
-        return { ok: true as const, changed: true as const, mode: input.mode };
+      }
+      if (run.engagementMode === input.mode) {
+        return { ok: true as const, changed: false as const, mode: input.mode };
+      }
+      throw new TRPCError({
+        code: "CONFLICT",
+        message:
+          "Engagement mode is fixed when a run starts. Stop or complete this run, then reassign with the desired mode.",
       });
     }),
 

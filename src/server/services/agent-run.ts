@@ -26,6 +26,8 @@ import { nanoid } from "nanoid";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
+const OUTPUT_EVENT_KINDS = new Set(["COMMENT", "STATUS", "TRANSITION", "STEP", "TOOL_CALL"]);
+
 /**
  * Lightweight SSE-only publish. Used for high-frequency STEP / TOOL
  * events where we don't want to spam the AuditLog + ActivityEvent
@@ -129,7 +131,6 @@ export async function openOrTouchRun(
           ? { assignmentEventId: params.assignmentEventId }
           : {}),
         ...(params.currentStep !== undefined ? { currentStep: params.currentStep } : {}),
-        ...(params.engagementMode ? { engagementMode: params.engagementMode } : {}),
       },
     });
     return { run: updated, isNew: false };
@@ -204,6 +205,7 @@ export async function appendRunEvent(
     currentStep?: string | null;
   },
 ): Promise<void> {
+  const now = new Date();
   await tx.agentRunEvent.create({
     data: {
       workspaceId: params.workspaceId,
@@ -212,10 +214,16 @@ export async function appendRunEvent(
       payload: params.payload ?? Prisma.JsonNull,
     },
   });
+  if (OUTPUT_EVENT_KINDS.has(params.kind)) {
+    await tx.agentRun.updateMany({
+      where: { id: params.runId, outputStartedAt: null },
+      data: { outputStartedAt: now },
+    });
+  }
   await tx.agentRun.update({
     where: { id: params.runId },
     data: {
-      lastEventAt: new Date(),
+      lastEventAt: now,
       ...(params.currentStep !== undefined ? { currentStep: params.currentStep } : {}),
     },
   });

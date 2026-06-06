@@ -108,6 +108,18 @@ export function modeMayExecute(mode: EngagementMode): boolean {
   return mode === EngagementMode.EXECUTE;
 }
 
+const RUN_PROTOCOL_INSTRUCTIONS =
+  "FORGE RUN PROTOCOL. Use Forge's run lifecycle tools so the operator can see " +
+  "real state. If you have a runId, call `agent.inbox.ack({ runId })` before " +
+  "substantive work. If you do not have a runId, call `agent.context.bundle` " +
+  "with the issue id or `agent.inbox.list` to find the current run first. " +
+  "When you begin producing output, call `agent.inbox.outputStarted({ runId })`. " +
+  "Use `comments.upsertStatus` only for meaningful human-facing checkpoints, " +
+  "not every internal thought. If blocked, call `runs.setWaiting({ runId, " +
+  "reason, blocking: true })` and stop. Finish the run with `runs.complete`. " +
+  "Non-EXECUTE modes are read/report/review only; Forge rejects issue-state " +
+  "mutations from those runs.";
+
 const BASE_INSTRUCTIONS: Record<EngagementMode, string> = {
   EXECUTE:
     "ENGAGEMENT MODE: EXECUTE. Take this to completion. The definition of done " +
@@ -135,4 +147,14 @@ const INFER_SUFFIX =
 export function engagementInstruction(resolved: ResolvedEngagement): string {
   const base = BASE_INSTRUCTIONS[resolved.mode];
   return resolved.inferable ? base + INFER_SUFFIX : base;
+}
+
+/** Shared run lifecycle instructions injected into dispatched agent turns. */
+export function forgeRunProtocolInstruction(): string {
+  return RUN_PROTOCOL_INSTRUCTIONS;
+}
+
+/** Complete dispatch instruction block: mode contract + Forge run protocol. */
+export function forgeRunInstruction(resolved: ResolvedEngagement): string {
+  return `${engagementInstruction(resolved)}\n\n${forgeRunProtocolInstruction()}`;
 }

@@ -60,6 +60,11 @@ import { forgeEntityTypeSchema, type ForgeEntityType } from "@/lib/entity-ref";
 import { hydrateEntityRefs } from "@/server/services/entity-hydration";
 import { computeAlignment, type AlignItem } from "@/server/services/canvas-alignment";
 import { validateRuntimeConfig } from "@/server/services/runtime-config";
+import {
+  engagementInstruction,
+  forgeRunProtocolInstruction,
+  modeMayExecute,
+} from "@/server/services/engagement-mode";
 
 /**
  * Forge's MCP (Model Context Protocol) surface — the stable set of tools any
@@ -118,6 +123,44 @@ function effectiveCommentTime(comment: McpCommentWithDates): number {
 
 function sortCommentsChronologically<T extends McpCommentWithDates>(comments: T[]): T[] {
   return [...comments].sort((a, b) => effectiveCommentTime(a) - effectiveCommentTime(b));
+}
+
+async function assertAgentIssueMutationAllowed(
+  ctx: McpContext,
+  issueId: string,
+  action: string,
+): Promise<void> {
+  const agentId = ctx.apiKey?.linkedAgentId ?? null;
+  if (!agentId) return;
+
+  const run = await db.agentRun.findFirst({
+    where: {
+      workspaceId: ctx.workspaceId,
+      issueId,
+      agentId,
+      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+      engagementMode: { not: "EXECUTE" },
+    },
+    orderBy: { startedAt: "desc" },
+    select: { id: true, engagementMode: true },
+  });
+  if (!run) return;
+
+  throw new Error(
+    `Engagement mode ${run.engagementMode} does not allow ${action}. ` +
+      "Only EXECUTE runs may mutate issue state; post a comment/verdict, " +
+      "set the run waiting, or ask the operator to stop and restart with EXECUTE.",
+  );
+}
+
+async function assertAgentIssueMutationsAllowed(
+  ctx: McpContext,
+  issueIds: Iterable<string>,
+  action: string,
+): Promise<void> {
+  for (const issueId of new Set(issueIds)) {
+    await assertAgentIssueMutationAllowed(ctx, issueId, action);
+  }
 }
 
 const mcpIssueDtoSelect = Prisma.validator<Prisma.IssueSelect>()({
@@ -1437,6 +1480,7 @@ export const mcpTools = {
       ctx: McpContext,
     ) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.id });
+      await assertAgentIssueMutationAllowed(ctx, input.id, "issues.update");
       const actorId = await resolveActorId(ctx);
       const { id, ...patch } = input;
 
@@ -1553,6 +1597,7 @@ export const mcpTools = {
       for (const id of input.ids) {
         await assertKeyScope(scopeCtx(ctx), { entity: "issue", id });
       }
+      await assertAgentIssueMutationsAllowed(ctx, input.ids, "issues.bulkTransition");
       const actorId = await resolveActorId(ctx);
 
       const status = await db.status.findFirst({
@@ -1614,6 +1659,7 @@ export const mcpTools = {
     }),
     async run(input: { id: string; statusId: string }, ctx: McpContext) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.id });
+      await assertAgentIssueMutationAllowed(ctx, input.id, "issues.transition");
       const actorId = await resolveActorId(ctx);
       const agentId = ctx.apiKey?.linkedAgentId ?? null;
 
@@ -1919,6 +1965,7 @@ export const mcpTools = {
       ctx: McpContext,
     ) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      await assertAgentIssueMutationAllowed(ctx, input.issueId, "issues.assign");
 
       // Resolve target agent id:
       //   agentId === null           → unassign
@@ -1983,6 +2030,22 @@ export const mcpTools = {
 
         const assignmentChanged = (before.assignedAgentId ?? null) !== (targetAgentId ?? null);
         const explicitModeProvided = input.mode !== undefined;
+        if (!assignmentChanged && targetAgentId && explicitModeProvided) {
+          const activeRun = await tx.agentRun.findFirst({
+            where: {
+              workspaceId: ctx.workspaceId,
+              issueId: before.id,
+              agentId: targetAgentId,
+              status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+            },
+            select: { id: true },
+          });
+          if (activeRun) {
+            throw new Error(
+              "Stop or complete the current run before changing this agent's engagement mode.",
+            );
+          }
+        }
         if (assignmentChanged || (!!targetAgentId && explicitModeProvided)) {
           // Resolve the engagement mode for this assignment (AXI-53). Only set
           // on assign (not unassign). Precedence: explicit override > agent
@@ -2077,6 +2140,7 @@ export const mcpTools = {
       ctx: McpContext,
     ) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      await assertAgentIssueMutationAllowed(ctx, input.issueId, "issues.reassign");
       const authorId = await resolveActorId(ctx);
 
       return db.$transaction(async (tx) => {
@@ -2415,6 +2479,7 @@ export const mcpTools = {
     }),
     async run(input: { issueId: string; add: string[]; remove: string[] }, ctx: McpContext) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      await assertAgentIssueMutationAllowed(ctx, input.issueId, "issues.setLabels");
       const actorId = await resolveActorId(ctx);
       const labelIds = Array.from(new Set([...input.add, ...input.remove]));
       if (labelIds.length > 0) {
@@ -2494,6 +2559,7 @@ export const mcpTools = {
       for (const id of input.issueIds) {
         await assertKeyScope(scopeCtx(ctx), { entity: "issue", id });
       }
+      await assertAgentIssueMutationsAllowed(ctx, input.issueIds, "issues.bulkSetLabels");
       const actorId = await resolveActorId(ctx);
       const labelIds = Array.from(new Set([...input.add, ...input.remove]));
       const found = await db.label.findMany({
@@ -2753,7 +2819,12 @@ export const mcpTools = {
             actorId: authorId,
             actorAgentId: authoringAgentId,
           });
-          if (!isNew) {
+          if (isNew) {
+            await tx.agentRun.updateMany({
+              where: { id: run.id, outputStartedAt: null },
+              data: { outputStartedAt: new Date() },
+            });
+          } else {
             await appendRunEvent(tx, {
               runId: run.id,
               workspaceId: ctx.workspaceId,
@@ -2833,6 +2904,12 @@ export const mcpTools = {
           actorAgentId: agentId,
           currentStep: input.currentStep ?? null,
         });
+        if (isNew) {
+          await tx.agentRun.updateMany({
+            where: { id: run.id, outputStartedAt: null },
+            data: { outputStartedAt: new Date() },
+          });
+        }
 
         const existing = await tx.comment.findFirst({
           where: { runId: run.id, kind: CommentKind.STATUS },
@@ -6699,6 +6776,18 @@ export const mcpTools = {
           artifactRequired: issue.artifactRequired,
         };
         const comments = sortCommentsChronologically(rawComments);
+        const currentMode = (currentRun?.engagementMode ?? "EXECUTE") as EngagementMode;
+        const runProtocol = {
+          runId: currentRun?.id ?? null,
+          engagementMode: currentMode,
+          modeInstruction: engagementInstruction({
+            mode: currentMode,
+            source: "surface-default",
+            inferable: false,
+          }),
+          protocolInstruction: forgeRunProtocolInstruction(),
+          mayMutateIssue: modeMayExecute(currentMode),
+        };
 
         return {
           workspace,
@@ -6710,6 +6799,7 @@ export const mcpTools = {
           currentRun,
           artifacts,
           completionContract,
+          runProtocol,
         };
       }
 
@@ -6930,6 +7020,10 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
+      if (input.issueId) {
+        await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+        await assertAgentIssueMutationAllowed(ctx, input.issueId, "artifacts.create");
+      }
       const { createArtifact } = await import("@/server/services/artifact-service");
       const actorId = ctx.userId ?? null;
       return createArtifact(db, {
@@ -6975,6 +7069,14 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
+      const artifact = await db.artifact.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { issueId: true },
+      });
+      if (artifact?.issueId) {
+        await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: artifact.issueId });
+        await assertAgentIssueMutationAllowed(ctx, artifact.issueId, "artifacts.update");
+      }
       const { updateArtifact } = await import("@/server/services/artifact-service");
       return updateArtifact(db, {
         workspaceId: ctx.workspaceId,
@@ -6996,6 +7098,14 @@ export const mcpTools = {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({ id: z.string().cuid() }),
     async run(input: { id: string }, ctx: McpContext) {
+      const artifact = await db.artifact.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { issueId: true },
+      });
+      if (artifact?.issueId) {
+        await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: artifact.issueId });
+        await assertAgentIssueMutationAllowed(ctx, artifact.issueId, "artifacts.archive");
+      }
       const { archiveArtifact } = await import("@/server/services/artifact-service");
       await archiveArtifact(db, {
         workspaceId: ctx.workspaceId,
@@ -11073,6 +11183,13 @@ export const mcpTools = {
         throw new Error(
           "actionRequests.accept requires a human user context (no anonymous accept).",
         );
+      }
+      const request = await db.actionRequest.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { issueId: true },
+      });
+      if (request?.issueId) {
+        await assertAgentIssueMutationAllowed(ctx, request.issueId, "actionRequests.accept");
       }
       const { acceptActionRequest } = await import("@/server/services/action-request-service");
       return acceptActionRequest(db, {

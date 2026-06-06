@@ -116,11 +116,23 @@ Each mode has a canonical instruction block injected into the agent's turn (via
   `expectedOutput`; verify against `verificationChecklist`."* (+ artifact /
   approval clauses when set.)
 
-This is prompt-level guidance: it honors the agent's judgment but a misbehaving
-agent *can* ignore it. A stronger guarantee — gating each run's tool allowlist
-by mode so a Research/Discuss run physically can't transition or deploy — is a
-planned follow-on, not yet shipped. Until then, mode is enforced by the
-system-side gates below plus the injected guidance.
+Forge also injects the shared run protocol: ack the inbox item, mark output
+started when real work begins, use rolling status comments only for meaningful
+operator-facing checkpoints, call `runs.setWaiting` when blocked, and finish
+with `runs.complete`.
+
+Mode is enforced in layers. Forge MCP rejects issue-state mutations from
+active **Research**, **Review**, and **Discuss** runs; those runs can still
+comment, post status, record a verdict, set themselves waiting, and complete
+with their report. Codex app-server dispatches additionally force non-Execute
+runs into a read-only sandbox for that turn. Hermes and other remote runtimes
+still need host-side tool allowlists for terminal/filesystem/git enforcement:
+Forge can block Forge MCP mutations and pass the contract, but it cannot remove
+tools from a Hermes host that exposes them.
+
+An active run's mode is immutable. To change mode, stop or complete the current
+run and reassign/wake the agent with the new mode; Forge will not relabel a
+running external turn in place.
 
 ## What each mode changes in the system
 

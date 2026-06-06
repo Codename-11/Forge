@@ -76,6 +76,13 @@ key contract.
 | `listWatchers` | List watchers of an issue with user/agent identity fields.                |
 | `listWatching` | List issues the caller is currently watching.                             |
 
+Agent-linked keys are mode-gated for issue state. When the calling agent has an
+active/waiting `AgentRun` on the issue in **RESEARCH**, **REVIEW**, or
+**DISCUSS**, Forge rejects issue-state mutation tools such as `issues.update`,
+`issues.transition`, `issues.assign`, label changes, issue-linked artifact
+writes, and action-request acceptance. The agent can still comment, upsert
+status, set the run waiting, and complete the run with its report/verdict.
+
 **`reassign`** is the canonical agent-to-agent handoff. Input:
 `{ issueId, toProfileKey, rationale }` — `rationale` must be ≥ 10 characters.
 The tool, in one transaction, posts a comment of the form
@@ -604,7 +611,7 @@ round-trips on dispatch — bundles workspace + issue (or thread) + comments
 
 | Tool | Summary |
 |---|---|
-| `context.bundle` | `{ issueId? }` xor `{ threadId? }`. For `issueId`: returns `{ workspace, issue (full row), description, comments (last 50), attachments, relations, currentRun }`. For `threadId`: returns `{ workspace, thread, messages (last 50), agent (peer summary), linkedIssues (any issues mentioned in messages' contextSnapshots) }`. Addressee gating mirrors `chat.getThread` for the threadId branch; issue-narrowing applies for the issueId branch. |
+| `context.bundle` | `{ issueId? }` xor `{ threadId? }`. For `issueId`: returns `{ workspace, issue (full row), description, comments (last 50), attachments, relations, currentRun, artifacts, completionContract, runProtocol }`. `runProtocol` includes `{ runId, engagementMode, modeInstruction, protocolInstruction, mayMutateIssue }` so agents can ack/output-start/complete the correct run and know whether issue mutations are allowed. For `threadId`: returns `{ workspace, thread, messages (last 50), agent (peer summary), linkedIssues (any issues mentioned in messages' contextSnapshots) }`. Addressee gating mirrors `chat.getThread` for the threadId branch; issue-narrowing applies for the issueId branch. |
 
 ## Not on MCP
 

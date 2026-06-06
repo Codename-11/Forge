@@ -3,6 +3,8 @@ import { EngagementMode, MentionEngagementPolicy } from "@prisma/client";
 import {
   resolveEngagementMode,
   engagementInstruction,
+  forgeRunInstruction,
+  forgeRunProtocolInstruction,
   modeMayExecute,
   type WorkspaceEngagementConfig,
 } from "@/server/services/engagement-mode";
@@ -95,5 +97,23 @@ describe("resolveEngagementMode", () => {
     expect(mk(EngagementMode.RESEARCH)).toContain("Do NOT modify code");
     expect(mk(EngagementMode.REVIEW)).toContain("verdict");
     expect(mk(EngagementMode.DISCUSS)).toContain("No work product");
+  });
+
+  it("run protocol instructions describe ack, output start, waiting, and completion", () => {
+    const text = forgeRunProtocolInstruction();
+    expect(text).toContain("agent.inbox.ack");
+    expect(text).toContain("agent.inbox.outputStarted");
+    expect(text).toContain("runs.setWaiting");
+    expect(text).toContain("runs.complete");
+  });
+
+  it("forgeRunInstruction combines mode contract with run protocol", () => {
+    const text = forgeRunInstruction({
+      mode: EngagementMode.RESEARCH,
+      source: "explicit",
+      inferable: false,
+    });
+    expect(text).toContain("ENGAGEMENT MODE: RESEARCH");
+    expect(text).toContain("FORGE RUN PROTOCOL");
   });
 });

@@ -20,6 +20,8 @@ export interface RunMessage {
   content: string;
 }
 
+export type RunEngagementMode = "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS";
+
 export interface RunInput {
   /** The latest user message. */
   message: string;
@@ -27,6 +29,8 @@ export interface RunInput {
   history?: RunMessage[];
   /** System prompt / instructions for this run. */
   instructions?: string;
+  /** Resolved Forge engagement mode for this run. Connectors may harden policy from it. */
+  engagementMode?: RunEngagementMode;
   /**
    * Optional memory-scope key. Connectors that support server-side memory
    * (Hermes long-term memory) scope the run to it; others ignore it.
