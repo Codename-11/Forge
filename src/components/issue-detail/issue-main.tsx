@@ -160,18 +160,18 @@ function commentTimelineMs(comment: Comment): number {
   return timestampMs(comment.createdAt);
 }
 
-function isPinnedStatusComment(comment: Comment): boolean {
+function isPinnedStatusComment(comment: Comment, currentRunId: string | null): boolean {
   if (comment.kind !== "STATUS") return false;
+  if (!comment.run) return !currentRunId;
   // Pin only live/problem run status. Completed/abandoned status rows are
   // historical summaries and belong in the chronological conversation.
   // WAITING is a live state (agent self-blocked on operator), so it also
   // pins — the operator's eye should land on it.
-  if (!comment.run) return true;
-  return (
+  const live =
     comment.run.status === "ACTIVE" ||
     comment.run.status === "STALLED" ||
-    comment.run.status === "WAITING"
-  );
+    comment.run.status === "WAITING";
+  return !!currentRunId && comment.run.id === currentRunId && live;
 }
 
 /**
@@ -217,6 +217,7 @@ export function IssueMain({
   description,
   comments,
   onDescriptionSave,
+  currentRunId = null,
   /**
    * Caller-resolved signal used by `<ActionRequestCard>` to decide
    * whether to render Accept / Decline buttons. The page hands in
@@ -234,6 +235,7 @@ export function IssueMain({
   description: string | null;
   comments: Comment[];
   onDescriptionSave: (next: string | null) => void;
+  currentRunId?: string | null;
   canResolveActions?: boolean;
   kind: string;
   projectId: string | null;
@@ -258,6 +260,7 @@ export function IssueMain({
       <Comments
         issueId={issueId}
         comments={comments}
+        currentRunId={currentRunId}
         canResolveActions={canResolveActions}
       />
     </div>
@@ -528,10 +531,12 @@ function DescriptionBlock({
 function Comments({
   issueId,
   comments,
+  currentRunId,
   canResolveActions,
 }: {
   issueId: string;
   comments: Comment[];
+  currentRunId: string | null;
   canResolveActions: boolean;
 }) {
   const utils = trpc.useUtils();
@@ -797,10 +802,10 @@ function Comments({
   // pinned as the "right now" answer; terminal status rows are historical and
   // render in the normal timeline using updatedAt as their effective time.
   const pinnedStatusComments = comments
-    .filter(isPinnedStatusComment)
+    .filter((comment) => isPinnedStatusComment(comment, currentRunId))
     .sort((a, b) => commentTimelineMs(b) - commentTimelineMs(a));
   const timelineComments = comments
-    .filter((c) => !isPinnedStatusComment(c))
+    .filter((c) => !isPinnedStatusComment(c, currentRunId))
     .sort((a, b) => commentTimelineMs(a) - commentTimelineMs(b));
   // Identify the most recent agent-authored BODY comment — only its
   // quick-reply chips render (older chips are stale CTAs). STATUS rows

@@ -1,8 +1,19 @@
 "use client";
 import Link from "next/link";
-import { Bot, Cloud, ExternalLink, Globe, HardDrive, Server } from "lucide-react";
+import type { inferRouterOutputs } from "@trpc/server";
+import {
+  AlertTriangle,
+  Bot,
+  Cloud,
+  ExternalLink,
+  Globe,
+  HardDrive,
+  Server,
+  ShieldCheck,
+} from "lucide-react";
 import type { RuntimeKind } from "@prisma/client";
 import { trpc } from "@/lib/trpc";
+import type { AppRouter } from "@/server/routers/_app";
 import { cn } from "@/lib/utils";
 import { TransportChip } from "@/components/agents/transport-chip";
 import { presenceAvailability } from "@/lib/transport-display";
@@ -37,6 +48,9 @@ function fmtTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
+type AgentCompliance =
+  inferRouterOutputs<AppRouter>["agentRun"]["runtimeCompliance"]["agents"][number];
+
 export function AgentsTab({ slug }: { slug: string }) {
   const { data: agents, isLoading } = trpc.agent.list.useQuery({
     includeArchived: false,
@@ -47,6 +61,9 @@ export function AgentsTab({ slug }: { slug: string }) {
     { sinceDays: 30 },
     { staleTime: 60_000 },
   );
+  const { data: compliance } = trpc.agentRun.runtimeCompliance.useQuery(undefined, {
+    staleTime: 10_000,
+  });
 
   if (isLoading) {
     return <div className="text-meta px-3 py-4 text-muted-foreground">Loading agents…</div>;
@@ -58,6 +75,9 @@ export function AgentsTab({ slug }: { slug: string }) {
     loadByAgent.set(run.agentId, (loadByAgent.get(run.agentId) ?? 0) + 1);
   }
   const costByAgent = new Map((costStats?.byAgent ?? []).map((c) => [c.agentId, c]));
+  const complianceByAgent = new Map(
+    (compliance?.agents ?? []).map((row) => [row.agentId, row]),
+  );
 
   // Sort: PERSISTENT+ONLINE first, PERSISTENT+BUSY, EPHEMERAL (by lastHeartbeatAt desc), then OFFLINE
   const sorted = [...(agents ?? [])].sort((a, b) => {
@@ -120,6 +140,14 @@ export function AgentsTab({ slug }: { slug: string }) {
               accent={onlineCount > 0 ? "success" : undefined}
             />
             <StatCard label="Capacity used" value={capValue} sub="active / max" />
+            {compliance && (compliance.counts.warnings > 0 || compliance.counts.danger > 0) && (
+              <StatCard
+                label="Runtime risk"
+                value={`${compliance.counts.danger}/${compliance.counts.warnings}`}
+                sub="danger / warning"
+                accent={compliance.counts.danger > 0 ? "danger" : "warning"}
+              />
+            )}
           </div>
           <SectionLabel>Agents</SectionLabel>
         </>
@@ -129,6 +157,7 @@ export function AgentsTab({ slug }: { slug: string }) {
         const cap = a.maxConcurrent;
         const atCap = cap > 0 && load >= cap;
         const cost = costByAgent.get(a.id);
+        const card = complianceByAgent.get(a.id);
         const mode = a.runtimeMode ?? "PERSISTENT";
         const modeLabel = mode === "PERSISTENT" ? "persistent" : "session";
         const isOffline = a.status === "OFFLINE";
@@ -167,6 +196,7 @@ export function AgentsTab({ slug }: { slug: string }) {
                     heartbeatAt={a.runtime.heartbeatAt}
                   />
                 )}
+                {card && <ComplianceChips card={card} />}
                 {a.role !== "WORKER" && (
                   <span className="rounded-md border border-border bg-subtle px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
                     {a.role}
@@ -215,6 +245,75 @@ export function AgentsTab({ slug }: { slug: string }) {
         </Link>
       )}
     </div>
+  );
+}
+
+function ComplianceChips({ card }: { card: AgentCompliance }) {
+  const risk =
+    card.tone === "danger"
+      ? "danger"
+      : card.tone === "warning"
+        ? "warning"
+        : card.tone === "ok"
+          ? "ok"
+          : "muted";
+  const riskClass =
+    risk === "danger"
+      ? "border-danger/30 bg-danger/10 text-danger"
+      : risk === "warning"
+        ? "border-warning/30 bg-warning/10 text-warning"
+        : risk === "ok"
+          ? "border-success/30 bg-success/10 text-success"
+          : "border-border bg-subtle/40 text-muted-foreground";
+  const title =
+    card.signals.length > 0
+      ? card.signals.map((signal) => `${signal.label}: ${signal.detail}`).join("\n")
+      : "Runtime compliance looks healthy.";
+  return (
+    <>
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 rounded border px-1 py-0 text-[0.5625rem] uppercase tracking-wider",
+          riskClass,
+        )}
+        title={title}
+      >
+        {risk === "ok" ? <ShieldCheck className="h-2.5 w-2.5" /> : <AlertTriangle className="h-2.5 w-2.5" />}
+        {risk === "ok" ? "compliant" : `${card.signals.length} signal${card.signals.length === 1 ? "" : "s"}`}
+      </span>
+      <span
+        className={cn(
+          "rounded border px-1 py-0 font-mono text-[0.5625rem] uppercase tracking-wider",
+          card.hasRepoTools
+            ? "border-success/30 bg-success/10 text-success"
+            : "border-warning/30 bg-warning/10 text-warning",
+        )}
+        title={
+          card.hasRepoTools
+            ? `Declared tools: ${card.tools.join(", ") || "repo tools"}`
+            : "Runtime does not declare terminal/filesystem/git tools."
+        }
+      >
+        {card.hasRepoTools ? "repo" : "no repo"}
+      </span>
+      {card.adapterKey === "hermes" && (
+        <span
+          className={cn(
+            "rounded border px-1 py-0 font-mono text-[0.5625rem] uppercase tracking-wider",
+            card.hostToolPolicyEnforced
+              ? "border-success/30 bg-success/10 text-success"
+              : "border-warning/30 bg-warning/10 text-warning",
+          )}
+          title={
+            card.hostToolPolicyEnforced
+              ? "Hermes host is marked as enforcing per-run tool allowlists."
+              : "Hermes host tool policy is prompt-only."
+          }
+        >
+          {card.hostToolPolicyEnforced ? "host enforced" : "prompt only"}
+        </span>
+      )}
+    </>
   );
 }
 

@@ -75,9 +75,15 @@ runs. Hermes `/v1/runs` dispatch also carries:
 
 The Hermes host must honor `tool_allowlist` for host-side terminal/filesystem/git
 enforcement. Mark the Forge Runtime config with `modeToolPolicyEnforced: true`
-only after that host behavior is actually enabled. If a Hermes profile exposes
-tools while ignoring the allowlist, Forge will still block Forge MCP issue
-mutations, but the host-tool layer is prompt-only.
+only after that host behavior is actually enabled. The allowlist controls
+local host surfaces only: restricted modes disable Hermes terminal,
+file-patching, code-execution, and desktop-local toolsets, while skills,
+memory, web/search, Forge context tools, and Hermes delegation remain
+available. Delegated subagents inherit the same disabled local toolsets, so a
+Review/Research run can still use Hermes orchestration without regaining repo
+write access. If a Hermes profile exposes tools while ignoring the allowlist,
+Forge will still block Forge MCP issue mutations, but the host-tool layer is
+prompt-only.
 
 Manual assignment is enough to start a Hermes agent. Operators do **not** have
 to also `@mention` the agent on the same issue. The webhook prompt should load

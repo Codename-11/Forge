@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { mcpTools, describeMcp, type McpToolName } from "@/server/services/mcp";
+import { describeMcp } from "@/server/services/mcp";
+import { executeMcpTool } from "@/server/services/mcp-exec";
 import { authenticateApiKey, ApiKeyError } from "@/server/services/api-key-auth";
 import { rateLimit } from "@/server/rate-limit";
 import { logger } from "@/server/logger";
@@ -18,7 +19,7 @@ function hasDataEnvelope(result: unknown): result is { data: unknown } {
  * `GET /api/mcp/describe` returns the catalog.
  *
  * Auth: `Authorization: Bearer <forge_sk_...>` — scoped API key.
- * Each tool declares required scopes; we reject early on missing scopes.
+ * Each tool declares required scopes; shared execution rejects missing scopes.
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ tool: string }> }) {
   const { tool } = await ctx.params;
@@ -26,16 +27,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ tool: stri
     return NextResponse.json(await describeMcp());
   }
 
-  const def = mcpTools[tool as McpToolName];
-  if (!def) return NextResponse.json({ error: "Unknown tool." }, { status: 404 });
-
   const auth = req.headers.get("authorization");
   const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
   if (!token) return NextResponse.json({ error: "Missing bearer token." }, { status: 401 });
 
   let principal: Awaited<ReturnType<typeof authenticateApiKey>>;
   try {
-    principal = await authenticateApiKey(token, [...def.scopes]);
+    principal = await authenticateApiKey(token);
   } catch (err) {
     if (err instanceof ApiKeyError)
       return NextResponse.json({ error: err.message }, { status: err.status });
@@ -60,24 +58,36 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ tool: stri
     // empty body is OK for tools that take no input
   }
 
-  const parsed = def.input.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "Invalid input.", issues: parsed.error.flatten() },
-      { status: 400 },
-    );
-  }
-
-  try {
-    const result = await def.run(parsed.data as never, {
+  const exec = await executeMcpTool({
+    name: tool,
+    input: body,
+    ctx: {
       workspaceId: principal.workspaceId,
       userId: principal.userId,
       pluginId: principal.pluginId,
       apiKey: principal,
-    });
-    return NextResponse.json(hasDataEnvelope(result) ? result : { data: result });
+    },
+    source: "rest",
+  });
+
+  if (!exec.ok) {
+    if (exec.error.code === "INVALID_INPUT") {
+      return NextResponse.json(
+        { error: "Invalid input.", issues: exec.error.data },
+        { status: 400 },
+      );
+    }
+    if (exec.error.code === "TOOL_ERROR") {
+      logger.error({ err: exec.error.cause, tool }, "mcp tool error");
+      return NextResponse.json({ error: "Tool execution failed." }, { status: 500 });
+    }
+    return NextResponse.json({ error: exec.error.message }, { status: exec.error.status });
+  }
+
+  try {
+    return NextResponse.json(hasDataEnvelope(exec.result) ? exec.result : { data: exec.result });
   } catch (err) {
-    logger.error({ err, tool }, "mcp tool error");
+    logger.error({ err, tool }, "mcp response serialization error");
     return NextResponse.json({ error: "Tool execution failed." }, { status: 500 });
   }
 }

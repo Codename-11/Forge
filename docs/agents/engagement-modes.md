@@ -128,7 +128,10 @@ with their report. Codex app-server dispatches additionally force non-Execute
 runs into a read-only sandbox for that turn. Hermes receives the per-run
 `tool_allowlist` and runtime policy snapshot; it is host-enforced only when the
 Runtime config is marked `modeToolPolicyEnforced` and the Hermes host honors
-that contract. Otherwise that layer is prompt-only.
+that contract. In Hermes, the policy gates local
+terminal/filesystem/git-equivalent toolsets while leaving skills, memory, web,
+Forge context reads, and delegation available. Delegated subagents inherit the
+same disabled local toolsets. Otherwise that layer is prompt-only.
 
 An active run's mode is immutable. To change mode, use **Stop + Restart with
 Mode** from the run strip/agent card, or complete the current run and reassign

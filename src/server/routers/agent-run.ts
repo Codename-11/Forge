@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { AgentRunControlState, AgentRunStatus, EngagementMode, EventKind, Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
-import { router, workspaceProcedure } from "@/server/trpc";
+import { adminProcedure, router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
@@ -12,11 +12,22 @@ import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
 import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { runProtocolDiagnostics } from "@/server/services/run-protocol-diagnostics";
+import {
+  listRunRecoveryItems,
+  recoverAgentRuns,
+  type RunRecoveryAction,
+} from "@/server/services/agent-run-recovery";
+import { runtimeComplianceScorecard } from "@/server/services/runtime-compliance";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // a loose validator instead of `.cuid()` so both shapes pass.
 const idString = z.string().min(1).max(40);
 const CLEARABLE_RUN_STATUSES = [AgentRunStatus.ABANDONED, AgentRunStatus.STALLED] as const;
+const recoveryActionSchema = z.enum(["ABANDON", "CLEAR", "RECONCILE"] satisfies [
+  RunRecoveryAction,
+  RunRecoveryAction,
+  RunRecoveryAction,
+]);
 
 type RunWithPolicyInputs = {
   status: AgentRunStatus;
@@ -93,6 +104,15 @@ export const agentRunRouter = router({
   activeForIssue: workspaceProcedure
     .input(z.object({ issueId: idString }))
     .query(async ({ ctx, input }) => {
+      const issue = await ctx.db.issue.findFirst({
+        where: {
+          id: input.issueId,
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+        },
+        select: { assignedAgentId: true },
+      });
+      if (!issue?.assignedAgentId) return null;
       // Treat WAITING runs as "still in flight" for the live strip so a
       // patient agent doesn't disappear from the issue page just because
       // it self-blocked. The strip itself renders WAITING with a soft
@@ -101,6 +121,7 @@ export const agentRunRouter = router({
         where: {
           workspaceId: ctx.workspaceId,
           issueId: input.issueId,
+          agentId: issue.assignedAgentId,
           status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
         },
         orderBy: { lastEventAt: "desc" },
@@ -296,6 +317,36 @@ export const agentRunRouter = router({
       );
       return { sinceDays: input.sinceDays, byAgent, totals };
     }),
+
+  /**
+   * Operator recovery queue: active runs that are stale, terminal failures
+   * that are uncleared, and completed runs that violate the run protocol.
+   * This is the canonical source for Mission Control/Admin cleanup badges.
+   */
+  recovery: adminProcedure
+    .input(
+      z
+        .object({
+          includeCleared: z.boolean().default(false),
+          limit: z.number().int().min(1).max(100).default(50),
+        })
+        .default({ includeCleared: false, limit: 50 }),
+    )
+    .query(async ({ ctx, input }) => {
+      return listRunRecoveryItems(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        includeCleared: input.includeCleared,
+        limit: input.limit,
+      });
+    }),
+
+  /**
+   * Runtime/agent compliance scorecard. Keeps capability/tool-surface and
+   * recovery signals server-side so the cards and badges agree.
+   */
+  runtimeCompliance: workspaceProcedure.query(async ({ ctx }) => {
+    return runtimeComplianceScorecard(ctx.db, { workspaceId: ctx.workspaceId });
+  }),
 
   /**
    * Cost + approval metadata for a set of run ids. Powers the per-step
@@ -862,6 +913,31 @@ export const agentRunRouter = router({
           cleared: runs.length,
           runIds: runs.map((run) => run.id),
         };
+      });
+    }),
+
+  /**
+   * Bulk recovery actions from the operator console. ABANDON closes stale
+   * active/waiting runs and clears them from operational queues; CLEAR hides
+   * terminal stalled/abandoned runs; RECONCILE marks protocol-invalid
+   * completed runs as reviewed without rewriting history.
+   */
+  recoverMany: adminProcedure
+    .input(
+      z.object({
+        runIds: z.array(idString).min(1).max(100),
+        action: recoveryActionSchema,
+        summary: z.string().max(500).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return recoverAgentRuns(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        runIds: input.runIds,
+        action: input.action,
+        summary: input.summary ?? null,
       });
     }),
 

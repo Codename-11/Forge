@@ -1,7 +1,22 @@
 "use client";
 import { useState } from "react";
-import { RefreshCw, AlertTriangle, Activity, ChevronDown, ChevronRight } from "lucide-react";
+import Link from "next/link";
+import { toast } from "sonner";
+import type { inferRouterOutputs } from "@trpc/server";
+import {
+  RefreshCw,
+  AlertTriangle,
+  Activity,
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  Eraser,
+  Loader2,
+  ShieldCheck,
+  StopCircle,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import type { AppRouter } from "@/server/routers/_app";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +28,8 @@ import { cn } from "@/lib/utils";
  */
 
 type FilterStatus = "all" | "PENDING" | "FAILED" | "DEAD_LETTER";
+type RecoveryItem = inferRouterOutputs<AppRouter>["agentRun"]["recovery"]["items"][number];
+type RecoveryAction = RecoveryItem["recommendedAction"];
 
 function relativeTime(input: Date | string | null | undefined): string {
   if (!input) return "—";
@@ -69,6 +86,220 @@ function ControlStatCard({
       <div className={cn("font-mono text-base leading-none tabular-nums", valueTone)}>
         {value}
       </div>
+    </div>
+  );
+}
+
+function recoveryActionCopy(action: RecoveryAction): {
+  label: string;
+  title: string;
+  icon: typeof Eraser;
+} {
+  if (action === "ABANDON") {
+    return {
+      label: "Abandon",
+      title: "Abandon this stale run and clear it from operational queues",
+      icon: StopCircle,
+    };
+  }
+  if (action === "RECONCILE") {
+    return {
+      label: "Reconcile",
+      title: "Mark this protocol-failed completion reviewed without rewriting history",
+      icon: ShieldCheck,
+    };
+  }
+  return {
+    label: "Clear",
+    title: "Clear this terminal failure from operational queues",
+    icon: Eraser,
+  };
+}
+
+function RunRecoveryRow({
+  item,
+  slug,
+  pending,
+  onRecover,
+}: {
+  item: RecoveryItem;
+  slug: string;
+  pending: boolean;
+  onRecover: (action: RecoveryAction, runId: string) => void;
+}) {
+  const issue = item.run.issue;
+  const issueKey = `${issue.workspace.key}-${issue.number}`;
+  const action = recoveryActionCopy(item.recommendedAction);
+  const ActionIcon = action.icon;
+  const tone =
+    item.severity === "error"
+      ? "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
+      : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400";
+  return (
+    <div className="rounded-md border border-border bg-card/40 px-2.5 py-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <Bot className="h-3.5 w-3.5 shrink-0 text-ember" />
+        <span className="font-medium text-foreground">{item.run.agent.name}</span>
+        <span className="font-mono text-[0.65625rem] text-muted-foreground">
+          @{item.run.agent.profileKey}
+        </span>
+        <Link
+          href={`/w/${slug}/issues/${issue.id}`}
+          className="font-mono text-[0.65625rem] text-foreground/80 hover:text-ember"
+        >
+          {issueKey}
+        </Link>
+        <span
+          className={cn(
+            "rounded border px-1 py-0 font-mono text-[0.5625rem] uppercase tracking-wider",
+            tone,
+          )}
+          title={item.detail}
+        >
+          {item.reason.replace("-", " ")}
+        </span>
+        <span className="ml-auto text-meta text-muted-foreground">
+          {relativeTime(item.run.finishedAt ?? item.run.lastEventAt)}
+        </span>
+      </div>
+      <div className="mt-1 text-meta text-muted-foreground">
+        <span className="font-medium text-foreground/80">{item.title}</span>
+        {" · "}
+        {item.detail}
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        {item.diagnostics.slice(0, 2).map((diagnostic) => (
+          <span
+            key={diagnostic.code}
+            className="rounded border border-border bg-background/50 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground"
+            title={diagnostic.description}
+          >
+            {diagnostic.title}
+          </span>
+        ))}
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => onRecover(item.recommendedAction, item.id)}
+          title={action.title}
+          className="ml-auto inline-flex min-h-8 items-center gap-1 rounded border border-border px-2 py-1 text-[0.625rem] uppercase tracking-wider text-muted-foreground hover:border-ember/40 hover:text-foreground disabled:opacity-50 sm:min-h-0"
+        >
+          {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ActionIcon className="h-3 w-3" />}
+          {action.label}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RunRecoverySection({
+  slug,
+}: {
+  slug: string;
+}) {
+  const utils = trpc.useUtils();
+  const { data, isLoading } = trpc.agentRun.recovery.useQuery(
+    { limit: 50 },
+    { staleTime: 5_000 },
+  );
+  const recover = trpc.agentRun.recoverMany.useMutation({
+    onError: (e) => toast.error(e.message),
+    onSuccess: (result) => {
+      if (result.changed > 0) {
+        const verb =
+          result.action === "ABANDON"
+            ? "abandoned"
+            : result.action === "RECONCILE"
+              ? "reconciled"
+              : "cleared";
+        toast.success(`${result.changed} run${result.changed === 1 ? "" : "s"} ${verb}.`);
+      } else {
+        toast.message("No recoverable runs changed.");
+      }
+    },
+    onSettled: () => {
+      void utils.agentRun.recovery.invalidate();
+      void utils.agentRun.runtimeCompliance.invalidate();
+      void utils.agentRun.activeAll.invalidate();
+      void utils.agentRun.recentTerminal.invalidate();
+      void utils.commandCenter.summary.invalidate();
+    },
+  });
+  const items = data?.items ?? [];
+  const recoverable = (action: RecoveryAction) =>
+    items.filter((item) => item.availableActions.includes(action));
+  const bulk = (action: RecoveryAction) => {
+    const runIds = recoverable(action).map((item) => item.id);
+    if (runIds.length === 0) return;
+    recover.mutate({ action, runIds });
+  };
+
+  return (
+    <div className="border-b border-border/60 px-3 py-2">
+      <div className="mb-2 flex min-w-0 flex-wrap items-center gap-1.5">
+        <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+          Run Recovery
+        </span>
+        {data && (
+          <span className="font-mono text-[0.625rem] text-muted-foreground">
+            {data.counts.total} counted
+          </span>
+        )}
+        <span className="ml-auto flex flex-wrap gap-1">
+          {(["ABANDON", "RECONCILE", "CLEAR"] as RecoveryAction[]).map((action) => {
+            const count = recoverable(action).length;
+            if (count === 0) return null;
+            const copy = recoveryActionCopy(action);
+            const Icon = copy.icon;
+            return (
+              <button
+                key={action}
+                type="button"
+                disabled={recover.isPending}
+                onClick={() => bulk(action)}
+                className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.5625rem] uppercase tracking-wider text-muted-foreground hover:border-ember/40 hover:text-foreground disabled:opacity-50"
+                title={`${copy.label} ${count} run${count === 1 ? "" : "s"}`}
+              >
+                <Icon className="h-2.5 w-2.5" />
+                {copy.label} {count}
+              </button>
+            );
+          })}
+        </span>
+      </div>
+      {data && (
+        <div className="mb-2 grid grid-cols-4 gap-1.5">
+          <ControlStatCard label="Stale" value={`${data.counts.activeStale}`} accent={data.counts.activeStale ? "warning" : undefined} />
+          <ControlStatCard label="Terminal" value={`${data.counts.terminalFailures}`} accent={data.counts.terminalFailures ? "danger" : undefined} />
+          <ControlStatCard label="Protocol" value={`${data.counts.protocolFailed}`} accent={data.counts.protocolFailed ? "danger" : undefined} />
+          <ControlStatCard label="Scanned" value={`${data.scanned}`} />
+        </div>
+      )}
+      {isLoading ? (
+        <div className="py-3 text-meta text-muted-foreground">Loading run recovery…</div>
+      ) : items.length === 0 ? (
+        <div className="rounded-md border border-border/60 bg-card/30 px-2 py-2 text-meta text-muted-foreground">
+          No stale, uncleared, or protocol-failed runs.
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {items.map((item) => (
+            <RunRecoveryRow
+              key={item.id}
+              item={item}
+              slug={slug}
+              pending={recover.isPending && recover.variables?.runIds.includes(item.id)}
+              onRecover={(action, runId) => recover.mutate({ action, runIds: [runId] })}
+            />
+          ))}
+        </div>
+      )}
+      {data?.truncated && (
+        <div className="mt-1.5 text-meta text-muted-foreground">
+          Showing the first {items.length} recovery rows from a bounded scan.
+        </div>
+      )}
     </div>
   );
 }
@@ -181,7 +412,7 @@ function DeliveryRow({
   );
 }
 
-export function ControlTab({ slug: _slug }: { slug: string }) {
+export function ControlTab({ slug }: { slug: string }) {
   const ws = useMaybeWorkspace();
   const isAdmin = ws?.role === "OWNER" || ws?.role === "ADMIN";
 
@@ -258,6 +489,8 @@ export function ControlTab({ slug: _slug }: { slug: string }) {
           accent={deadCount > 0 ? "danger" : undefined}
         />
       </div>
+
+      <RunRecoverySection slug={slug} />
 
       {/* ---- Section 1: Webhook Deliveries ---- */}
       <div className="border-b border-border/60 px-3 py-2">

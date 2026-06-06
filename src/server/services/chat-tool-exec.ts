@@ -1,6 +1,6 @@
 import "server-only";
-import { mcpTools, type McpToolName } from "@/server/services/mcp";
 import { findChatTool } from "@/server/services/chat-tools-allowlist";
+import { executeMcpTool } from "@/server/services/mcp-exec";
 import { logger } from "@/server/logger";
 
 export interface ExecuteChatToolArgs {
@@ -42,9 +42,7 @@ function summarize(name: string, result: unknown): string {
  * branch in /api/mcp/rpc/route.ts but in-process with a synthetic
  * (apiKey-less) McpContext sourced from the authenticated session.
  */
-export async function executeChatTool(
-  args: ExecuteChatToolArgs,
-): Promise<ChatToolResult> {
+export async function executeChatTool(args: ExecuteChatToolArgs): Promise<ChatToolResult> {
   const tool = findChatTool(args.name);
   if (!tool) {
     return {
@@ -53,56 +51,35 @@ export async function executeChatTool(
     };
   }
 
-  const def = (mcpTools as Record<string, unknown>)[tool.name] as
-    | (typeof mcpTools)[McpToolName]
-    | undefined;
-  if (!def) {
-    return {
-      ok: false,
-      summary: `Tool ${tool.name} is not a registered MCP tool.`,
-    };
-  }
-
-  const parsed = def.input.safeParse(args.args ?? {});
-  if (!parsed.success) {
-    return {
-      ok: false,
-      summary: `Invalid arguments for ${tool.name}: ${parsed.error.issues
-        .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
-        .slice(0, 3)
-        .join("; ")}`,
-    };
-  }
-
-  try {
-    const run = def.run as (
-      input: unknown,
-      ctx: {
-        workspaceId: string;
-        userId: string | null;
-        pluginId: string | null;
-        apiKey: null;
-      },
-    ) => Promise<unknown>;
-    const result = await run(parsed.data, {
+  const exec = await executeMcpTool({
+    name: tool.name,
+    input: args.args ?? {},
+    ctx: {
       workspaceId: args.workspaceId,
       userId: args.userId,
       pluginId: null,
       apiKey: null,
-    });
+    },
+    source: "chat",
+    requireApiKey: false,
+  });
+
+  if (exec.ok) {
     return {
       ok: true,
-      summary: summarize(tool.name, result),
-      result,
-    };
-  } catch (err) {
-    logger.warn(
-      { err, tool: tool.name, workspaceId: args.workspaceId },
-      "chat-tool-exec: tool run failed",
-    );
-    return {
-      ok: false,
-      summary: err instanceof Error ? err.message : `Tool ${tool.name} failed.`,
+      summary: summarize(tool.name, exec.result),
+      result: exec.result,
     };
   }
+
+  if (exec.error.code === "TOOL_ERROR") {
+    logger.warn(
+      { err: exec.error.cause, tool: tool.name, workspaceId: args.workspaceId },
+      "chat-tool-exec: tool run failed",
+    );
+  }
+  return {
+    ok: false,
+    summary: exec.error.message,
+  };
 }

@@ -6,6 +6,7 @@ import {
   ReviewGateStatus,
 } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
+import { listRunRecoveryItems } from "@/server/services/agent-run-recovery";
 
 /** Goal statuses that mean a goal is live and worth surfacing. */
 const LIVE_GOAL_STATUSES = [GoalStatus.PLANNING, GoalStatus.ACTIVE];
@@ -57,7 +58,7 @@ export const commandCenterRouter = router({
         actionRequests,
         reviewGates,
         activeRuns,
-        stalledRuns,
+        runRecovery,
         recentArtifacts,
         dueIssues,
         runningTimer,
@@ -108,25 +109,9 @@ export const commandCenterRouter = router({
             },
           },
         }),
-        ctx.db.agentRun.findMany({
-          where: {
-            workspaceId: ctx.workspaceId,
-            status: { in: [AgentRunStatus.STALLED, AgentRunStatus.ABANDONED] },
-            clearedAt: null,
-          },
-          orderBy: [{ finishedAt: "desc" }, { lastEventAt: "desc" }],
-          take: input.limit,
-          include: {
-            agent: { select: { id: true, name: true, profileKey: true, avatar: true } },
-            issue: {
-              select: {
-                id: true,
-                number: true,
-                title: true,
-                workspace: { select: { slug: true, key: true } },
-              },
-            },
-          },
+        listRunRecoveryItems(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          limit: input.limit,
         }),
         ctx.db.artifact.findMany({
           where: { workspaceId: ctx.workspaceId, archivedAt: null },
@@ -210,11 +195,22 @@ export const commandCenterRouter = router({
         return { ...rest, doneSteps, totalSteps };
       });
 
+      const stalledRuns = runRecovery.items.map((item) => ({
+        ...item.run,
+        recoveryReason: item.reason,
+        recoveryTitle: item.title,
+        recoveryDetail: item.detail,
+        recommendedAction: item.recommendedAction,
+        availableActions: item.availableActions,
+        diagnostics: item.diagnostics,
+      }));
+
       return {
         actionRequests,
         reviewGates,
         activeRuns,
         stalledRuns,
+        runRecoveryCounts: runRecovery.counts,
         recentArtifacts,
         dueIssues,
         runningTimer,
@@ -223,7 +219,7 @@ export const commandCenterRouter = router({
           actionRequests: actionRequests.length,
           reviewGates: reviewGates.length,
           activeRuns: activeRuns.length,
-          stalledRuns: stalledRuns.length,
+          stalledRuns: runRecovery.counts.total,
           recentArtifacts: recentArtifacts.length,
           dueIssues: dueIssues.length,
           liveGoals: liveGoals.length,

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { mcpTools, type McpToolName } from "@/server/services/mcp";
+import { executeMcpTool, type McpExecutionFailure } from "@/server/services/mcp-exec";
 import { mcpToolPolicy } from "@/server/services/mcp-policy";
 import { authenticateApiKey, ApiKeyError } from "@/server/services/api-key-auth";
 import { rateLimit } from "@/server/rate-limit";
@@ -46,6 +47,22 @@ function fail(id: JsonRpcRequest["id"], err: JsonRpcError) {
   return { jsonrpc: "2.0" as const, id: id ?? null, error: err };
 }
 
+function rpcErrorCode(error: McpExecutionFailure): number {
+  switch (error.code) {
+    case "UNKNOWN_TOOL":
+      return -32601;
+    case "INVALID_INPUT":
+      return -32602;
+    case "UNAUTHENTICATED":
+      return -32001;
+    case "FORBIDDEN":
+    case "POLICY_DENIED":
+      return -32002;
+    case "TOOL_ERROR":
+      return -32000;
+  }
+}
+
 function toolDescriptor(name: McpToolName) {
   const t = mcpTools[name];
   const inputSchema = zodToJsonSchema(t.input, {
@@ -71,7 +88,7 @@ function toolDescriptor(name: McpToolName) {
 async function handleRpc(
   msg: JsonRpcRequest,
   auth: Awaited<ReturnType<typeof authenticateApiKey>> | null,
-  authorize: (required: readonly string[]) => Promise<void>,
+  authError: ApiKeyError | null,
 ) {
   const { id, method, params } = msg;
 
@@ -97,55 +114,58 @@ async function handleRpc(
     }
 
     case "tools/call": {
-      if (!auth)
-        return fail(id, { code: -32001, message: "Unauthenticated. Send Bearer token." });
-      const p = (params ?? {}) as { name?: string; arguments?: unknown };
-      if (!p.name)
-        return fail(id, { code: -32602, message: "Missing tool name." });
-      const def = mcpTools[p.name as McpToolName];
-      if (!def) return fail(id, { code: -32601, message: `Unknown tool: ${p.name}` });
-
-      try {
-        await authorize(def.scopes);
-      } catch (err) {
-        if (err instanceof ApiKeyError) {
-          return fail(id, { code: -32002, message: err.message });
-        }
-        throw err;
-      }
-
-      const parsed = def.input.safeParse(p.arguments ?? {});
-      if (!parsed.success) {
+      if (!auth) {
         return fail(id, {
-          code: -32602,
-          message: "Invalid tool arguments.",
-          data: parsed.error.flatten(),
+          code: -32001,
+          message: authError?.message ?? "Unauthenticated. Send Bearer token.",
         });
       }
+      const p = (params ?? {}) as { name?: string; arguments?: unknown };
+      if (!p.name) return fail(id, { code: -32602, message: "Missing tool name." });
 
-      try {
-        const result = await def.run(parsed.data as never, {
+      const exec = await executeMcpTool({
+        name: p.name,
+        input: p.arguments ?? {},
+        ctx: {
           workspaceId: auth.workspaceId,
           userId: auth.userId,
           pluginId: auth.pluginId,
           apiKey: auth,
-        });
-        return ok(id, {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          isError: false,
-        });
-      } catch (err) {
-        logger.error({ err, tool: p.name }, "mcp tool error");
-        return ok(id, {
-          content: [
-            {
-              type: "text",
-              text: `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`,
-            },
-          ],
-          isError: true,
+        },
+        source: "json-rpc",
+      });
+
+      if (!exec.ok && exec.error.code === "INVALID_INPUT") {
+        return fail(id, {
+          code: -32602,
+          message: "Invalid tool arguments.",
+          data: exec.error.data,
         });
       }
+      if (!exec.ok && exec.error.code !== "TOOL_ERROR") {
+        return fail(id, {
+          code: rpcErrorCode(exec.error),
+          message: exec.error.message,
+          data: exec.error.data,
+        });
+      }
+      if (exec.ok) {
+        return ok(id, {
+          content: [{ type: "text", text: JSON.stringify(exec.result, null, 2) }],
+          isError: false,
+        });
+      }
+
+      logger.error({ err: exec.error.cause, tool: p.name }, "mcp tool error");
+      return ok(id, {
+        content: [
+          {
+            type: "text",
+            text: `Tool execution failed: ${exec.error.message}`,
+          },
+        ],
+        isError: true,
+      });
     }
 
     default:
@@ -179,15 +199,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const authorize = async (required: readonly string[]) => {
-    if (authError) throw authError;
-    if (!auth) throw new ApiKeyError("Missing bearer token.", 401);
-    for (const s of required) {
-      if (!auth.scopes.includes(s as (typeof auth.scopes)[number]))
-        throw new ApiKeyError(`Missing required scope: ${s}`, 403);
-    }
-  };
-
   let body: unknown;
   try {
     body = await req.json();
@@ -201,13 +212,13 @@ export async function POST(req: NextRequest) {
   // Support both single requests and batched arrays (JSON-RPC 2.0 spec).
   if (Array.isArray(body)) {
     const responses = await Promise.all(
-      body.map((msg) => handleRpc(msg as JsonRpcRequest, auth, authorize)),
+      body.map((msg) => handleRpc(msg as JsonRpcRequest, auth, authError)),
     );
     const filtered = responses.filter((r) => r != null);
     return NextResponse.json(filtered);
   }
 
-  const result = await handleRpc(body as JsonRpcRequest, auth, authorize);
+  const result = await handleRpc(body as JsonRpcRequest, auth, authError);
   if (result == null) return new NextResponse(null, { status: 204 });
   return NextResponse.json(result);
 }
