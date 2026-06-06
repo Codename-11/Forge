@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const WIDTHS = [390, 430, 768] as const;
+const WIDTHS = [360, 390, 430] as const;
 const HEIGHT = 844;
 
 async function expectNoDocumentHorizontalOverflow(page: Page, label: string) {
@@ -22,13 +22,25 @@ async function expectNoDocumentHorizontalOverflow(page: Page, label: string) {
 }
 
 async function expectShellControls(page: Page, width: number) {
-  await expect(page.locator("header [data-quick-create]").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "New issue" }).first()).toBeVisible();
 
   if (width < 768) {
     await expect(
       page.getByRole("button", { name: "Open navigation" }),
     ).toBeVisible();
   }
+}
+
+async function createIssueFromMobileTopbar(page: Page, title: string) {
+  await page.getByRole("button", { name: "New issue" }).first().click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  const titleField = page.getByPlaceholder(/Issue title/i);
+  await titleField.fill(title);
+  await expect(titleField).toHaveValue(title);
+  await titleField.press("Control+Enter");
+  await expect(page).toHaveURL(/\/w\/forge\/issues\//, { timeout: 20_000 });
+  await expect(page.getByText(title).first()).toBeVisible();
 }
 
 test.describe("Mobile smoke", () => {
@@ -43,6 +55,13 @@ test.describe("Mobile smoke", () => {
       page,
     }) => {
       await page.setViewportSize({ width, height: HEIGHT });
+
+      await page.goto("/w/forge/dashboard");
+      await expectShellControls(page, width);
+      await expect(
+        page.locator("header", { hasText: "Dashboard" }).last(),
+      ).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `dashboard at ${width}px`);
 
       await page.goto("/w/forge/inbox");
       await expectShellControls(page, width);
@@ -73,6 +92,7 @@ test.describe("Mobile smoke", () => {
       await expect(page.getByRole("combobox", { name: "Status" })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "Priority" })).toBeVisible();
       await expect(page.getByRole("button", { name: /focus/i })).toBeVisible();
+      await expect(page.getByLabel("Issue detail rail")).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `issue detail at ${width}px`);
 
       await page.goto("/w/forge/issues");
@@ -81,6 +101,78 @@ test.describe("Mobile smoke", () => {
       await expect(page.getByRole("button", { name: "Kanban" })).toBeVisible();
       await expect(page.getByRole("button", { name: /new issue in/i }).first()).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `issues kanban at ${width}px`);
+
+      await page.goto("/w/forge/command-center");
+      await expectShellControls(page, width);
+      await expect(
+        page.locator("header", { hasText: "Command center" }).last(),
+      ).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `command center at ${width}px`);
+
+      await page.goto("/w/forge/agents");
+      await expectShellControls(page, width);
+      await expect(
+        page.locator("header", { hasText: "Agents" }).last(),
+      ).toBeVisible();
+      await expect(page.getByRole("link", { name: /@victor/i }).first()).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `agents at ${width}px`);
+
+      await page.goto("/w/forge/settings/runtimes");
+      await expectShellControls(page, width);
+      await expect(
+        page.locator("header", { hasText: "Runtimes" }).last(),
+      ).toBeVisible();
+      await expect(page.getByTestId("runtime-row-e2e-codex-runtime")).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `runtimes at ${width}px`);
     });
   }
+
+  test("primary phone-width issue workflow supports create, edit, comment, status, assignment, agents, and runtimes", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: HEIGHT });
+    const title = `Mobile UX ${Date.now()}`;
+    const editedTitle = `${title} edited`;
+    const comment = `Mobile comment ${Date.now()}`;
+
+    await page.goto("/w/forge/issues");
+    await expectShellControls(page, 390);
+    await createIssueFromMobileTopbar(page, title);
+    await expectNoDocumentHorizontalOverflow(page, "created issue detail at 390px");
+
+    await page.getByRole("heading", { name: title }).click();
+    const titleInput = page.locator("form input").first();
+    await expect(titleInput).toBeVisible();
+    await titleInput.fill(editedTitle);
+    await titleInput.press("Enter");
+    await expect(page.getByRole("heading", { name: editedTitle })).toBeVisible();
+
+    await page.getByLabel("Comment composer").fill(comment);
+    await page.getByRole("button", { name: /^Comment/ }).click();
+    await expect(page.locator("span", { hasText: comment }).first()).toBeVisible();
+
+    const status = page.getByRole("combobox", { name: "Status" });
+    await status.selectOption({ label: "In Progress" });
+    await expect(status).toHaveValue(/.+/);
+
+    await page.getByTitle(/Assign agent/i).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("radiogroup", { name: "Engagement mode" })).toBeVisible();
+    await page.getByPlaceholder(/Assign agent/i).fill("victor");
+    await page.getByRole("option", { name: /@victor/i }).click();
+    await expect(page.getByRole("button", { name: /@victor/i }).first()).toBeVisible();
+    await expectNoDocumentHorizontalOverflow(page, "issue assignment at 390px");
+
+    await page.goto("/w/forge/agents/victor");
+    await expect(page.locator("header", { hasText: "@victor" }).last()).toBeVisible();
+    await expectNoDocumentHorizontalOverflow(page, "agent detail at 390px");
+
+    await page.goto("/w/forge/settings/runtimes");
+    const runtimeRow = page.getByTestId("runtime-row-e2e-codex-runtime");
+    await expect(runtimeRow).toBeVisible();
+    await runtimeRow.getByRole("link").first().click();
+    await expect(page).toHaveURL(/\/w\/forge\/settings\/runtimes\//);
+    await expect(page.getByText(/Tool surface|terminal|filesystem|git/i).first()).toBeVisible();
+    await expectNoDocumentHorizontalOverflow(page, "runtime detail at 390px");
+  });
 });

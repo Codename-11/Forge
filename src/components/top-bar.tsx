@@ -74,9 +74,10 @@ export function TopBar({
         <button
           type="button"
           data-quick-create
+          aria-label="New issue"
           title="New issue (Shift+C)"
           className={cn(
-            "focus-ring inline-flex h-7 items-center gap-1.5 rounded-md bg-ember px-2 text-[0.6875rem] font-medium text-ember-foreground hover:bg-ember/90",
+            "focus-ring inline-flex h-10 items-center gap-1.5 rounded-md bg-ember px-2.5 text-[0.6875rem] font-medium text-ember-foreground hover:bg-ember/90 sm:h-7 sm:px-2",
             MOTION.fast,
           )}
         >

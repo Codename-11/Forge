@@ -180,6 +180,14 @@ explicitly restarted/reconciled.
 Verification: `pnpm lint`, `pnpm typecheck`, `pnpm test` (793 passed / 1
 skipped).
 
+## 2026-06-06 — Mobile core app usability pass
+
+Improved the shared topbar for phone-width layouts: the quick-create button now has an explicit accessible name and a larger mobile tap target, while page-level action groups wrap instead of forcing header overflow. Desktop sizing remains the same from the `sm:` breakpoint upward.
+
+Expanded mobile smoke coverage to target 360px, 390px, and 430px widths. The spec now covers dashboard, inbox, issue list, issue detail rail, kanban, command center, agents, runtimes, and a primary phone-width workflow: create issue from the topbar, edit title, comment, change status, assign Victor, inspect agent detail, and open runtime detail. Each changed surface asserts no document-level horizontal overflow.
+
+Verification: `pnpm lint`, `pnpm prisma:generate && pnpm typecheck`, `pnpm test` (793 passed / 1 skipped), `pnpm exec playwright test tests/e2e/mobile-smoke.spec.ts` (4 passed), conflict-marker scan, and `git diff --check`.
+
 ## 2026-06-06 — Run recovery and runtime compliance console
 
 Added an operator recovery path for AgentRuns. Mission Control Admin now
