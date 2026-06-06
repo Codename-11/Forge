@@ -13,6 +13,7 @@ import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // a loose validator instead of `.cuid()` so both shapes pass.
 const idString = z.string().min(1).max(40);
+const CLEARABLE_RUN_STATUSES = [AgentRunStatus.ABANDONED, AgentRunStatus.STALLED] as const;
 
 /**
  * Read-only router for AgentRun monitoring. Live mutations land via the
@@ -565,6 +566,7 @@ export const agentRunRouter = router({
         .object({
           status: z.array(z.nativeEnum(AgentRunStatus)).max(5).optional(),
           agentId: idString.optional(),
+          includeCleared: z.boolean().default(false),
           limit: z.number().int().min(1).max(100).default(30),
         })
         .default({ limit: 30 }),
@@ -575,6 +577,7 @@ export const agentRunRouter = router({
           workspaceId: ctx.workspaceId,
           ...(input.status?.length ? { status: { in: input.status } } : {}),
           ...(input.agentId ? { agentId: input.agentId } : {}),
+          ...(input.includeCleared ? {} : { clearedAt: null }),
         },
         orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
         take: input.limit,
@@ -603,6 +606,74 @@ export const agentRunRouter = router({
             select: { id: true, body: true, currentStep: true, updatedAt: true },
           },
         },
+      });
+    }),
+
+  /**
+   * Clear terminal run failures from operational queues without deleting
+   * history. Cleared runs remain visible in issue activity / run history, but
+   * Command Center and the pipeline failure lane hide them by default.
+   */
+  clearMany: workspaceProcedure
+    .input(z.object({ runIds: z.array(idString).min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      const uniqueIds = Array.from(new Set(input.runIds));
+      return ctx.db.$transaction(async (tx) => {
+        const runs = await tx.agentRun.findMany({
+          where: {
+            id: { in: uniqueIds },
+            workspaceId: ctx.workspaceId,
+            status: { in: [...CLEARABLE_RUN_STATUSES] },
+            clearedAt: null,
+          },
+          select: {
+            id: true,
+            issueId: true,
+            agentId: true,
+            status: true,
+            clearedAt: true,
+          },
+        });
+        if (runs.length === 0) {
+          return { ok: true as const, cleared: 0, runIds: [] as string[] };
+        }
+
+        const clearedAt = new Date();
+        for (const run of runs) {
+          await tx.agentRun.update({
+            where: { id: run.id },
+            data: {
+              clearedAt,
+              clearedById: ctx.session.user.id,
+            },
+          });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            entity: "AgentRun",
+            entityId: run.id,
+            action: "clear",
+            before: { status: run.status, clearedAt: run.clearedAt },
+            after: { status: run.status, clearedAt: clearedAt.toISOString() },
+            eventKind: EventKind.AGENT_RUN_CLEARED,
+            subjectType: "agent-run",
+            subjectId: run.id,
+            payload: {
+              runId: run.id,
+              issueId: run.issueId,
+              agentId: run.agentId,
+              status: run.status,
+              clearedAt: clearedAt.toISOString(),
+            },
+          });
+        }
+
+        return {
+          ok: true as const,
+          cleared: runs.length,
+          runIds: runs.map((run) => run.id),
+        };
       });
     }),
 

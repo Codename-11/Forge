@@ -42,6 +42,7 @@ const KIND_LABEL: Record<string, { label: string; phase?: string }> = {
   AGENT_RUN_STARTED: { label: "Run opened", phase: "run" },
   AGENT_RUN_COMPLETED: { label: "Run completed", phase: "done" },
   AGENT_RUN_STALLED: { label: "Run stalled", phase: "stall" },
+  AGENT_RUN_CLEARED: { label: "Run failure cleared", phase: "done" },
   AGENT_RUN_BLOCKED: { label: "Run blocked", phase: "blocked" },
   AGENT_RUN_CONTROL_REQUESTED: { label: "Run control requested", phase: "control" },
   AGENT_RUN_KICKED: { label: "Wake retried", phase: "retry" },
@@ -194,6 +195,13 @@ function activityCopy(
       label: `${label}${agentSuffix(payload, actorAgentProfileKey)}`,
       detail: payloadDetail(payload),
       phase: finalStatus === "ABANDONED" ? "stopped" : "done",
+    };
+  }
+  if (kind === "AGENT_RUN_CLEARED") {
+    return {
+      label: `Run failure cleared${agentSuffix(payload, actorAgentProfileKey)}`,
+      detail: payloadDetail(payload),
+      phase: "done",
     };
   }
   if (kind === "AGENT_RUN_CONTROL_REQUESTED") {

@@ -57,6 +57,7 @@ type Kind =
   | "AGENT_RUN_BLOCKED"
   | "AGENT_RUN_COMPLETED"
   | "AGENT_RUN_STALLED"
+  | "AGENT_RUN_CLEARED"
   | "AGENT_RUN_CONTROL_REQUESTED"
   | "AGENT_RUN_KICKED";
 
@@ -118,6 +119,7 @@ const KINDS: Kind[] = [
   "AGENT_RUN_BLOCKED",
   "AGENT_RUN_COMPLETED",
   "AGENT_RUN_STALLED",
+  "AGENT_RUN_CLEARED",
   "AGENT_RUN_CONTROL_REQUESTED",
   "AGENT_RUN_KICKED",
 ];
@@ -312,6 +314,7 @@ function iconFor(kind: Kind) {
     case "AGENT_RUN_CONTROL_REQUESTED":
       return <Activity className="h-3.5 w-3.5 text-muted-foreground" />;
     case "AGENT_RUN_COMPLETED":
+    case "AGENT_RUN_CLEARED":
       return <CircleCheck className="h-3.5 w-3.5 text-success" />;
     case "ISSUE_CREATED":
       return <FilePlus className="h-3.5 w-3.5 text-muted-foreground" />;
@@ -771,6 +774,18 @@ function summarizeEvent(
           <>
             <span className="text-warning">Run stalled</span> for{" "}
             {agentHandleNode(activityAgentHandle(evt))} on {issueLink}
+          </>
+        ),
+        meta:
+          runSummaryMeta(evt.payload) ??
+          (issue ? <span className="truncate">{issue.title}</span> : undefined),
+      };
+    case "AGENT_RUN_CLEARED":
+      return {
+        headline: (
+          <>
+            {actorName} cleared run failure for {agentHandleNode(activityAgentHandle(evt))} on{" "}
+            {issueLink}
           </>
         ),
         meta:

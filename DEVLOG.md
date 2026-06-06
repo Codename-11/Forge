@@ -131,6 +131,21 @@ src/server/routers/__tests__/issue.test.ts tests/unit/run-failure-banner.test.ts
 full `pnpm test` (764 pass / 1 skipped), and `E2E_FORCE_BUILD=1 pnpm
 test:e2e` (20 pass).
 
+Seventh follow-up: fixed the terminal-run failure cleanup gap exposed by the
+11 old AXI stalled runs still appearing in Command Center. Added migration
+`0075_agent_run_cleared_operational_failures` with `AgentRun.clearedAt` /
+`clearedById`, `AGENT_RUN_CLEARED`, and a one-time backfill that pre-clears
+terminal STALLED/ABANDONED runs older than 24 hours so historical watchdog
+closures stay durable but stop polluting live ops. Added `agentRun.clearMany`
+with audit/activity rows, made `agentRun.list` hide cleared runs by default,
+and changed Command Center / Pipeline from "stalled runs" to uncleared "run
+failures" with per-row and Clear all actions. Activity and issue timelines now
+label clears as cleanup rather than a fresh stall.
+Gate: `pnpm prisma:generate`, `pnpm prisma:deploy` locally, `git diff
+--check`, focused `pnpm test src/server/services/__tests__/agent-run.test.ts`
+(4 pass), `pnpm typecheck`, `pnpm lint`, full `pnpm test` (768 pass / 1
+skipped), and `E2E_FORCE_BUILD=1 pnpm test:e2e` (20 pass).
+
 Verification: `pnpm lint`, `pnpm typecheck`, full `pnpm test` (744 pass / 1
 skipped), and focused `pnpm exec vitest run
 src/server/services/__tests__/engagement-mode.test.ts

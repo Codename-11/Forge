@@ -2,12 +2,14 @@ import { describe, it, expect, afterAll, afterEach } from "vitest";
 import { AgentRunStatus, EngagementMode, EventKind } from "@prisma/client";
 import { finishRun, finishRunsForIssue, openOrTouchRun } from "@/server/services/agent-run";
 import {
+  buildContext,
   createWorkspaceFixture,
   createIssue,
   disconnectPrisma,
   getPrisma,
   type TestFixture,
 } from "@/server/routers/__tests__/helpers";
+import { agentRunRouter } from "@/server/routers/agent-run";
 
 const fixtures: TestFixture[] = [];
 
@@ -190,5 +192,59 @@ describe("agent-run lifecycle", () => {
     expect(staleActivity.actorId).toBeNull();
     expect(staleActivity.actorAgentId).toBeNull();
     expect(staleActivity.payload).toMatchObject({ finalStatus: "ABANDONED" });
+  });
+
+  it("clears terminal failures from operational run lists without deleting history", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARC" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "arc-a1");
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.STALLED,
+        finishedAt: new Date(),
+        summary: "No runtime activity.",
+      },
+    });
+    const caller = agentRunRouter.createCaller(await buildContext(fixture));
+
+    const before = await caller.list({ status: [AgentRunStatus.STALLED], limit: 10 });
+    expect(before.map((row) => row.id)).toContain(run.id);
+
+    const result = await caller.clearMany({ runIds: [run.id] });
+    expect(result).toMatchObject({ ok: true, cleared: 1, runIds: [run.id] });
+
+    const hidden = await caller.list({ status: [AgentRunStatus.STALLED], limit: 10 });
+    expect(hidden.map((row) => row.id)).not.toContain(run.id);
+
+    const withCleared = await caller.list({
+      status: [AgentRunStatus.STALLED],
+      includeCleared: true,
+      limit: 10,
+    });
+    expect(withCleared.map((row) => row.id)).toContain(run.id);
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.clearedAt).toBeTruthy();
+    expect(after.clearedById).toBe(fixture.user.id);
+    expect(after.status).toBe(AgentRunStatus.STALLED);
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_RUN_CLEARED,
+        subjectId: run.id,
+      },
+    });
+    expect(event.payload).toMatchObject({
+      runId: run.id,
+      issueId: issue.id,
+      agentId: agent.id,
+      status: AgentRunStatus.STALLED,
+    });
   });
 });

@@ -2,12 +2,14 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Workflow } from "lucide-react";
+import { Eraser, Loader2, Workflow } from "lucide-react";
+import { toast } from "sonner";
 import type { inferRouterOutputs } from "@trpc/server";
 import { trpc } from "@/lib/trpc";
 import type { AppRouter } from "@/server/routers/_app";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { Button } from "@/components/ui/button";
 import { RunControlMenu, type RunControlMenuRun } from "@/components/run-control-menu";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -22,6 +24,10 @@ export default function AgentPipeline() {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
   const { data } = trpc.agent.pipeline.useQuery({});
+  const failedRunsInput = {
+    status: ["ABANDONED", "STALLED"] as ("ABANDONED" | "STALLED")[],
+    limit: 30,
+  };
   // Active runs power the In-flight column's RunControlMenu — joined
   // client-side by issueId so the existing pipeline rollup query
   // doesn't need to grow a join.
@@ -31,9 +37,35 @@ export default function AgentPipeline() {
   // there's no FAILED enum value, so the failure surface is the union
   // of ABANDONED + STALLED. The procedure doesn't expose a `since`
   // filter; we pull the most recent 30 then window them client-side.
-  const { data: failedRuns } = trpc.agentRun.list.useQuery({
-    status: ["ABANDONED", "STALLED"],
-    limit: 30,
+  const { data: failedRuns } = trpc.agentRun.list.useQuery(failedRunsInput);
+  const clearFailures = trpc.agentRun.clearMany.useMutation({
+    onMutate: ({ runIds }) => {
+      const drop = new Set(runIds);
+      const prev = utils.agentRun.list.getData(failedRunsInput);
+      if (prev) {
+        utils.agentRun.list.setData(
+          failedRunsInput,
+          prev.filter((run) => !drop.has(run.id)),
+        );
+      }
+    },
+    onError: (e) => {
+      toast.error(e.message);
+      void utils.agentRun.list.invalidate();
+    },
+    onSuccess: (result) => {
+      if (result.cleared > 0) {
+        toast.success(
+          result.cleared === 1
+            ? "Run failure cleared."
+            : `${result.cleared} run failures cleared.`,
+        );
+      }
+    },
+    onSettled: () => {
+      void utils.agentRun.list.invalidate();
+      void utils.commandCenter.summary.invalidate();
+    },
   });
 
   useRealtime(
@@ -192,7 +224,14 @@ export default function AgentPipeline() {
         );
       })}
 
-      <FailedLane runs={failedWindow} wsSlug={ws.slug} wsKey={ws.key} />
+      <FailedLane
+        runs={failedWindow}
+        wsSlug={ws.slug}
+        wsKey={ws.key}
+        clearing={clearFailures.isPending}
+        onClearRun={(runId) => clearFailures.mutate({ runIds: [runId] })}
+        onClearAll={(runIds) => clearFailures.mutate({ runIds })}
+      />
     </div>
   );
 }
@@ -335,19 +374,42 @@ function FailedLane({
   runs,
   wsSlug,
   wsKey,
+  clearing,
+  onClearRun,
+  onClearAll,
 }: {
   runs: ListedRunRow[];
   wsSlug: string;
   wsKey: string;
+  clearing: boolean;
+  onClearRun: (runId: string) => void;
+  onClearAll: (runIds: string[]) => void;
 }) {
   return (
     <Lane
       header={
-        <div className="flex min-w-0 items-baseline gap-2">
-          <span className="text-sm font-medium text-foreground">Failed (24h)</span>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-foreground">Failed (uncleared)</span>
           <span className="text-meta truncate text-muted-foreground">
             abandoned &middot; stalled &middot; {runs.length}
           </span>
+          {runs.length > 0 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto h-6 px-1.5 text-[0.6875rem] text-muted-foreground"
+              disabled={clearing}
+              onClick={() => onClearAll(runs.map((run) => run.id))}
+              title="Clear all run failures from operational queues"
+            >
+              {clearing ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Eraser className="h-3 w-3" />
+              )}
+              Clear all
+            </Button>
+          )}
         </div>
       }
     >
@@ -363,31 +425,48 @@ function FailedLane({
             const excerpt = excerptFor(run);
             return (
               <li key={run.id}>
-                <Link
-                  href={
-                    run.issue
-                      ? `/w/${wsSlug}/issues/${run.issue.id}`
-                      : `/w/${wsSlug}/agents/${run.agent.profileKey}`
-                  }
-                  className="focus-ring flex flex-wrap items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 hover:bg-subtle"
-                >
-                  <AgentPresenceDot status={run.agent.status} size="sm" />
-                  <span className="text-id shrink-0 text-muted-foreground">{issueKey}</span>
-                  <span className="text-meta shrink-0 font-mono text-muted-foreground">
-                    @{run.agent.profileKey}
-                  </span>
-                  <span className="rounded-sm bg-danger/10 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-danger">
-                    {run.status.toLowerCase()}
-                  </span>
-                  <span className="min-w-[12rem] flex-1 truncate text-[0.75rem]">
-                    {excerpt ?? run.issue?.title ?? "Failed run"}
-                  </span>
-                  {ts && (
-                    <span className="text-meta shrink-0 text-muted-foreground">
-                      {relativeTime(ts)}
+                <div className="focus-ring flex flex-wrap items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 hover:bg-subtle">
+                  <Link
+                    href={
+                      run.issue
+                        ? `/w/${wsSlug}/issues/${run.issue.id}`
+                        : `/w/${wsSlug}/agents/${run.agent.profileKey}`
+                    }
+                    className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
+                  >
+                    <AgentPresenceDot status={run.agent.status} size="sm" />
+                    <span className="text-id shrink-0 text-muted-foreground">{issueKey}</span>
+                    <span className="text-meta shrink-0 font-mono text-muted-foreground">
+                      @{run.agent.profileKey}
                     </span>
-                  )}
-                </Link>
+                    <span className="rounded-sm bg-danger/10 px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-danger">
+                      {run.status.toLowerCase()}
+                    </span>
+                    <span className="min-w-[12rem] flex-1 truncate text-[0.75rem]">
+                      {excerpt ?? run.issue?.title ?? "Failed run"}
+                    </span>
+                    {ts && (
+                      <span className="text-meta shrink-0 text-muted-foreground">
+                        {relativeTime(ts)}
+                      </span>
+                    )}
+                  </Link>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 shrink-0 px-1.5 text-muted-foreground"
+                    disabled={clearing}
+                    onClick={() => onClearRun(run.id)}
+                    title="Clear this run failure from operational queues"
+                    aria-label="Clear run failure"
+                  >
+                    {clearing ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Eraser className="h-3 w-3" />
+                    )}
+                  </Button>
+                </div>
               </li>
             );
           })}
