@@ -1,5 +1,11 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { ChatContextMode, EventKind, RelationKind } from "@prisma/client";
+import {
+  AgentProvider,
+  ChatContextMode,
+  EventKind,
+  PluginScope,
+  RelationKind,
+} from "@prisma/client";
 import { mcpTools, type McpContext } from "@/server/services/mcp";
 import type { ApiKeyContext } from "@/server/services/api-key-auth";
 import {
@@ -109,6 +115,7 @@ describe("mcp tool registry", () => {
       "attachments.",
       "pins.",
       "workspaces.",
+      "access.",
     ];
     for (const p of expectedPrefixes) {
       expect(names.some((n) => n.startsWith(p))).toBe(true);
@@ -122,6 +129,8 @@ describe("mcp tool registry", () => {
       "comments.list",
       "comments.create",
       "workspaces.list",
+      "access.createSession",
+      "access.createAgentKey",
       "agents.list",
     ]) {
       expect(names).toContain(name);
@@ -135,6 +144,207 @@ describe("mcp tool registry", () => {
       expect(shape, `tool ${name}`).toBeTruthy();
       expect(typeof shape).toBe("object");
     }
+  });
+});
+
+describe("mcp workspace and access keys", () => {
+  it("lists workspace keys but keeps non-admin API keys pinned to their issuing workspace", async () => {
+    const source = await createWorkspaceFixture({ keyPrefix: "MWA" });
+    const target = await createWorkspaceFixture({ keyPrefix: "MWB" });
+    fixtures.push(source, target);
+    const prisma = getPrisma();
+    await prisma.membership.create({
+      data: { userId: source.user.id, workspaceId: target.workspace.id, role: "MEMBER" },
+    });
+
+    const { ctx: nonAdminCtx } = buildMcpCtx(source, {
+      scopes: ["READ_ISSUES"],
+    });
+    const pinned = dataOf<{ id: string; key: string }>(
+      await call("workspaces.list", {}, nonAdminCtx),
+    );
+    expect(pinned).toHaveLength(1);
+    expect(pinned[0]).toMatchObject({ id: source.workspace.id, key: source.workspace.key });
+
+    const { ctx: adminCtx } = buildMcpCtx(source, {
+      scopes: ["READ_ISSUES", "ADMIN"],
+    });
+    const visible = dataOf<{ id: string; key: string }>(
+      await call("workspaces.list", {}, adminCtx),
+    );
+    expect(visible.map((w) => w.id)).toEqual(
+      expect.arrayContaining([source.workspace.id, target.workspace.id]),
+    );
+    expect(visible.find((w) => w.id === target.workspace.id)?.key).toBe(target.workspace.key);
+  });
+
+  it("creates and lists a workspace-selected PERSONAL key without exposing stored secrets", async () => {
+    const source = await createWorkspaceFixture({ keyPrefix: "MPA" });
+    const target = await createWorkspaceFixture({ keyPrefix: "MPB" });
+    fixtures.push(source, target);
+    const prisma = getPrisma();
+    await prisma.membership.create({
+      data: { userId: source.user.id, workspaceId: target.workspace.id, role: "OWNER" },
+    });
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: target.workspace.id,
+        key: "PER",
+        name: "Personal ops",
+        createdById: source.user.id,
+      },
+    });
+
+    const { ctx } = buildMcpCtx(source, { scopes: ["READ_ISSUES", "ADMIN"] });
+    const created = (await call(
+      "access.createPersonal",
+      {
+        workspaceKey: target.workspace.key,
+        name: "Victor PER bootstrap",
+        scopes: [PluginScope.READ_ISSUES, PluginScope.WRITE_ISSUES],
+        projectIds: [project.id],
+      },
+      ctx,
+    )) as {
+      id: string;
+      kind: string;
+      rawKey: string;
+      workspace: { id: string; key: string };
+      projectIds: string[];
+    };
+
+    expect(created.kind).toBe("PERSONAL");
+    expect(created.workspace).toMatchObject({ id: target.workspace.id, key: target.workspace.key });
+    expect(created.projectIds).toEqual([project.id]);
+    expect(created.rawKey).toMatch(/^forge_sk_/);
+
+    const stored = await prisma.apiKey.findUniqueOrThrow({ where: { id: created.id } });
+    expect(stored.workspaceId).toBe(target.workspace.id);
+    expect(stored.kind).toBe("PERSONAL");
+    expect(stored.hashedKey).not.toBe(created.rawKey);
+
+    const listed = dataOf<Record<string, unknown>>(
+      await call("access.list", { workspaceSlug: target.workspace.slug }, ctx),
+    );
+    const metadata = listed.find((row) => row.id === created.id)!;
+    expect(metadata).toBeTruthy();
+    expect(metadata.kind).toBe("PERSONAL");
+    expect(metadata).not.toHaveProperty("rawKey");
+    expect(metadata).not.toHaveProperty("hashedKey");
+  });
+
+  it("creates SESSION and AGENT keys in the selected workspace and rejects unsafe cross-workspace use", async () => {
+    const source = await createWorkspaceFixture({ keyPrefix: "MSA" });
+    const target = await createWorkspaceFixture({ keyPrefix: "MSB" });
+    fixtures.push(source, target);
+    const prisma = getPrisma();
+    await prisma.membership.create({
+      data: { userId: source.user.id, workspaceId: target.workspace.id, role: "OWNER" },
+    });
+    const targetAgent = await prisma.agent.create({
+      data: {
+        workspaceId: target.workspace.id,
+        name: "Victor",
+        profileKey: "victor",
+        provider: AgentProvider.HERMES,
+      },
+    });
+    const sourceAgent = await prisma.agent.create({
+      data: {
+        workspaceId: source.workspace.id,
+        name: "Wrong Victor",
+        profileKey: "wrong-victor",
+        provider: AgentProvider.HERMES,
+      },
+    });
+
+    const { ctx: nonAdminCtx } = buildMcpCtx(source, { scopes: ["READ_ISSUES"] });
+    await expect(
+      call(
+        "access.createSession",
+        {
+          workspaceId: target.workspace.id,
+          name: "blocked",
+          scopes: [PluginScope.READ_ISSUES],
+        },
+        nonAdminCtx,
+      ),
+    ).rejects.toThrow(/Missing required scope: ADMIN/);
+
+    const { ctx: adminCtx } = buildMcpCtx(source, { scopes: ["READ_ISSUES", "ADMIN"] });
+    const session = (await call(
+      "access.createSession",
+      {
+        workspaceId: target.workspace.id,
+        name: "PER session",
+        scopes: [PluginScope.READ_ISSUES],
+        ttlHours: 2,
+      },
+      adminCtx,
+    )) as {
+      id: string;
+      kind: string;
+      rawKey: string;
+      linkedAgentId: string | null;
+      expiresAt: Date;
+    };
+    expect(session.kind).toBe("SESSION");
+    expect(session.rawKey).toMatch(/^forge_sk_/);
+    expect(session.linkedAgentId).toBeNull();
+    expect(new Date(session.expiresAt).getTime()).toBeGreaterThan(Date.now());
+
+    const agentKey = (await call(
+      "access.createAgentKey",
+      {
+        workspaceKey: target.workspace.key,
+        profileKey: "victor",
+        scopes: [PluginScope.READ_ISSUES, PluginScope.WRITE_ISSUES, PluginScope.ADMIN],
+      },
+      adminCtx,
+    )) as {
+      id: string;
+      kind: string;
+      rawKey: string;
+      linkedAgentId: string;
+      linkedAgent: { id: string };
+    };
+    expect(agentKey.kind).toBe("AGENT");
+    expect(agentKey.rawKey).toMatch(/^forge_sk_/);
+    expect(agentKey.linkedAgentId).toBe(targetAgent.id);
+    expect(agentKey.linkedAgent.id).toBe(targetAgent.id);
+
+    await expect(
+      call(
+        "access.createAgentKey",
+        {
+          workspaceKey: target.workspace.key,
+          agentId: sourceAgent.id,
+          scopes: [PluginScope.READ_ISSUES],
+        },
+        adminCtx,
+      ),
+    ).rejects.toThrow(/Agent binding not found/);
+
+    const stored = await prisma.apiKey.findMany({
+      where: { id: { in: [session.id, agentKey.id] } },
+      select: { id: true, workspaceId: true, kind: true, linkedAgentId: true },
+    });
+    expect(stored).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: session.id,
+          workspaceId: target.workspace.id,
+          kind: "SESSION",
+          linkedAgentId: null,
+        }),
+        expect.objectContaining({
+          id: agentKey.id,
+          workspaceId: target.workspace.id,
+          kind: "AGENT",
+          linkedAgentId: targetAgent.id,
+        }),
+      ]),
+    );
   });
 });
 
@@ -1494,11 +1704,11 @@ describe("mcp — awareness tools (Stream BA)", () => {
     expect(row.id).toBe(f.workspace.id);
     expect(row.cycleLengthDays).toBe(7);
 
-    const workspaces = dataOf<{ id: string; name: string; slug: string }>(
+    const workspaces = dataOf<{ id: string; key: string; name: string; slug: string }>(
       await call("workspaces.list", {}, ctx),
     );
     expect(workspaces).toEqual([
-      { id: f.workspace.id, name: f.workspace.name, slug: f.workspace.slug },
+      { id: f.workspace.id, key: f.workspace.key, name: f.workspace.name, slug: f.workspace.slug },
     ]);
   });
 
