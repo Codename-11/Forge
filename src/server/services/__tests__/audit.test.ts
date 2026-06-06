@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
 import { EventKind, RuntimeKind } from "@prisma/client";
-import { recordChange } from "@/server/audit";
+import { agentDispatchUrlFor, recordChange } from "@/server/audit";
 import {
   createWorkspaceFixture,
   createIssue,
@@ -227,6 +227,10 @@ describe("audit.ts — watcher fan-out", () => {
       },
     });
     const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
     await prisma.issueWatcher.create({
       data: {
         workspaceId: fixture.workspace.id,
@@ -293,6 +297,10 @@ describe("audit.ts — watcher fan-out", () => {
       },
     });
     const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
     await prisma.issueWatcher.create({
       data: {
         workspaceId: fixture.workspace.id,
@@ -365,6 +373,10 @@ describe("audit.ts — watcher fan-out", () => {
       },
     });
     const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
     await prisma.issueWatcher.create({
       data: {
         workspaceId: fixture.workspace.id,
@@ -408,5 +420,102 @@ describe("audit.ts — watcher fan-out", () => {
       },
     });
     expect(deliveries).toHaveLength(1);
+  });
+
+  it("does not open work for a former assigned-agent watcher when another agent is mentioned", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "WF4" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+
+    const codex = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Codex",
+        profileKey: `wf4-codex-${Date.now()}`,
+        webhookUrl: "https://example.invalid/codex",
+        webhookSecret: "test-secret",
+      },
+    });
+    const victor = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: `wf4-victor-${Date.now()}`,
+        webhookUrl: "https://example.invalid/victor",
+        webhookSecret: "test-secret",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: victor.id },
+    });
+    await prisma.issueWatcher.createMany({
+      data: [
+        {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: codex.id,
+        },
+        {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: victor.id,
+        },
+      ],
+    });
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      entity: "Comment",
+      entityId: "mention-victor-comment-id",
+      action: "create",
+      eventKind: EventKind.COMMENT_CREATED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: {
+        commentId: "mention-victor-comment-id",
+        issueId: issue.id,
+        kind: "BODY",
+        mentions: {
+          agentIds: [victor.id],
+          agents: [{ agentId: victor.id, profileKey: victor.profileKey }],
+          userIds: [],
+        },
+      },
+    });
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.COMMENT_CREATED,
+        subjectId: issue.id,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const runs = await prisma.agentRun.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        triggerEventId: event.id,
+      },
+      orderBy: { agentId: "asc" },
+    });
+    expect(runs.map((run) => run.agentId)).toEqual([victor.id]);
+
+    const deliveries = await prisma.webhookDelivery.findMany({
+      where: {
+        eventId: event.id,
+        webhook: {
+          workspaceId: fixture.workspace.id,
+          url: { startsWith: "agent:dispatch" },
+        },
+      },
+      include: { webhook: true },
+    });
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.webhook.url).toBe(agentDispatchUrlFor(victor.id));
   });
 });

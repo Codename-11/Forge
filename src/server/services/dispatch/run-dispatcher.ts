@@ -263,13 +263,19 @@ async function pollActiveRuns(): Promise<number> {
       // Clear a prior approval block (operator approved → agent resumed)
       // or just advance the step label.
       if (run.awaitingApprovalAt || step !== run.currentStep) {
+        const hasLiveEventStream = Boolean(connector.subscribe);
         await db
           .$transaction(async (tx) => {
-            if (run.awaitingApprovalAt) {
+            if (hasLiveEventStream) {
               await tx.agentRun.update({
                 where: { id: run.id },
-                data: { awaitingApprovalAt: null },
+                data: {
+                  lastEventAt: new Date(),
+                  currentStep: step,
+                  ...(run.awaitingApprovalAt ? { awaitingApprovalAt: null } : {}),
+                },
               });
+              return;
             }
             await appendRunEvent(tx, {
               runId: run.id,
@@ -278,7 +284,7 @@ async function pollActiveRuns(): Promise<number> {
               agentId: run.agentId,
               kind: "STEP",
               currentStep: step,
-              payload: { lastEvent: status.lastEvent ?? null },
+              payload: { lastEvent: status.lastEvent ?? null, currentStep: step },
             });
           })
           .catch((err) =>
