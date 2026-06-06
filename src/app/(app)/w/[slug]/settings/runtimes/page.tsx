@@ -12,6 +12,13 @@ import {
   Users as UsersIcon,
 } from "lucide-react";
 import type { RuntimeKind } from "@prisma/client";
+import {
+  RUNTIME_TOOL_CAPABILITIES,
+  declaredRuntimeToolCapabilities,
+  runtimeDeclaresLocalWorkspaceTools,
+  runtimeWorkspaceRoot,
+  type RuntimeToolCapability,
+} from "@/lib/runtime-tools";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +26,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -80,6 +88,52 @@ const CHATMODE_LABEL: Record<string, string> = {
   none: "pull/act only",
 };
 
+type AdapterCapabilities = {
+  streaming: boolean;
+  approvals: boolean;
+  presence: string;
+};
+
+function AdapterCapabilityBadges({
+  capabilities,
+}: {
+  capabilities?: AdapterCapabilities;
+}) {
+  if (!capabilities) return null;
+  return (
+    <>
+      <span
+        className={cn(
+          "rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+          capabilities.streaming
+            ? "border-success/30 bg-success/10 text-success"
+            : "border-border bg-subtle/40 text-muted-foreground",
+        )}
+        title="Whether this adapter streams run output back to Forge"
+      >
+        {capabilities.streaming ? "streaming" : "no stream"}
+      </span>
+      <span
+        className={cn(
+          "rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+          capabilities.approvals
+            ? "border-ember/30 bg-ember/10 text-ember"
+            : "border-border bg-subtle/40 text-muted-foreground",
+        )}
+        title="Whether this adapter can surface runtime approvals"
+      >
+        {capabilities.approvals ? "approvals" : "no approvals"}
+      </span>
+      <span
+        className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+        title="Presence model"
+      >
+        {capabilities.presence.replace(/-/g, " ")}
+      </span>
+    </>
+  );
+}
+
 function ChatModeBadge({ chatMode }: { chatMode: string }) {
   const servesChat = chatMode !== "none";
   return (
@@ -125,6 +179,7 @@ export default function RuntimesPage() {
 
   const { data: adapters } = trpc.runtime.adapters.useQuery();
   const { data: plannedAdapters } = trpc.runtime.plannedAdapters.useQuery();
+  const adapterByKey = new Map((adapters ?? []).map((a) => [a.key, a]));
 
   function invalidate() {
     void utils.runtime.list.invalidate();
@@ -208,6 +263,7 @@ export default function RuntimesPage() {
                 const KindIcon = KIND_ICON[rt.kind];
                 const isArchived = Boolean(rt.archivedAt);
                 const isDisabled = Boolean(rt.disabledAt);
+                const adapter = rt.adapterKey ? adapterByKey.get(rt.adapterKey) : undefined;
                 return (
                   <li
                     key={rt.id}
@@ -296,6 +352,10 @@ export default function RuntimesPage() {
                             </span>
                           </>
                         )}
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <RuntimeToolSurfaceBadges adapterKey={rt.adapterKey} config={rt.config} />
+                        <AdapterCapabilityBadges capabilities={adapter?.capabilities} />
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
@@ -608,9 +668,128 @@ type AdapterOption = {
   chatMode: string;
   multiAgent: boolean;
   providers: string[];
+  capabilities: AdapterCapabilities;
 };
 
 const fieldLabel = "mb-1 block font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-muted-foreground";
+
+type RuntimeToolPolicy = {
+  localWorkspaceTools: boolean;
+  toolCapabilities: RuntimeToolCapability[];
+  workspaceRoot: string;
+};
+
+const DEFAULT_RUNTIME_TOOL_POLICY: RuntimeToolPolicy = {
+  localWorkspaceTools: false,
+  toolCapabilities: [],
+  workspaceRoot: "",
+};
+
+function runtimeToolPolicyFromConfig(config: unknown): RuntimeToolPolicy {
+  return {
+    localWorkspaceTools: runtimeDeclaresLocalWorkspaceTools(config),
+    toolCapabilities: declaredRuntimeToolCapabilities(config),
+    workspaceRoot: runtimeWorkspaceRoot(config) ?? "",
+  };
+}
+
+function runtimeToolPolicyToConfig(p: RuntimeToolPolicy): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (p.localWorkspaceTools) out.localWorkspaceTools = true;
+  const tools = RUNTIME_TOOL_CAPABILITIES.filter((tool) =>
+    p.toolCapabilities.includes(tool),
+  );
+  if (tools.length > 0) out.toolCapabilities = tools;
+  if (p.workspaceRoot.trim()) out.workspaceRoot = p.workspaceRoot.trim();
+  return out;
+}
+
+function RuntimeToolPolicyFields({
+  value,
+  onChange,
+}: {
+  value: RuntimeToolPolicy;
+  onChange: (v: RuntimeToolPolicy) => void;
+}) {
+  function toggleTool(tool: RuntimeToolCapability, checked: boolean) {
+    const next = new Set(value.toolCapabilities);
+    if (checked) next.add(tool);
+    else next.delete(tool);
+    onChange({
+      ...value,
+      localWorkspaceTools: checked ? value.localWorkspaceTools : false,
+      toolCapabilities: RUNTIME_TOOL_CAPABILITIES.filter((key) => next.has(key)),
+    });
+  }
+
+  return (
+    <div
+      data-testid="runtime-tool-surface-fields"
+      className="space-y-3 rounded-lg border border-border bg-subtle/20 p-3"
+    >
+      <div className="flex items-center gap-1.5">
+        <span className="text-[0.75rem] font-medium text-foreground">Hermes tool surface</span>
+        <span className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+          runtime config
+        </span>
+      </div>
+      <label className="flex items-start gap-2 rounded-md border border-border bg-background/30 px-2.5 py-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={value.localWorkspaceTools}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              localWorkspaceTools: e.target.checked,
+              toolCapabilities: e.target.checked
+                ? [...RUNTIME_TOOL_CAPABILITIES]
+                : value.toolCapabilities,
+            })
+          }
+        />
+        <span className="min-w-0">
+          <span className="block font-medium text-foreground">Local workspace tools enabled</span>
+          <span className="block text-meta text-muted-foreground">
+            Use only when the Hermes host can run commands in the repo.
+          </span>
+        </span>
+      </label>
+      <div>
+        <span className={fieldLabel}>Declared tools</span>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {RUNTIME_TOOL_CAPABILITIES.map((tool) => (
+            <label
+              key={tool}
+              className="flex items-center gap-2 rounded-md border border-border bg-background/30 px-2.5 py-2 text-sm"
+            >
+              <input
+                type="checkbox"
+                checked={value.toolCapabilities.includes(tool)}
+                onChange={(e) => toggleTool(tool, e.target.checked)}
+              />
+              <span className="font-mono text-[0.6875rem] uppercase tracking-wider text-foreground/80">
+                {tool}
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <label className="block">
+        <span className={fieldLabel}>
+          Workspace root{" "}
+          <span className="normal-case text-muted-foreground/70">(optional)</span>
+        </span>
+        <Input
+          value={value.workspaceRoot}
+          onChange={(e) => onChange({ ...value, workspaceRoot: e.target.value })}
+          placeholder="/home/bailey/forge"
+          className="font-mono"
+        />
+      </label>
+    </div>
+  );
+}
 
 function CreateRuntimeModal({
   open,
@@ -636,6 +815,9 @@ function CreateRuntimeModal({
   const [endpoint, setEndpoint] = useState("");
   const [secret, setSecret] = useState("");
   const [codex, setCodex] = useState<CodexPolicy>(DEFAULT_CODEX_POLICY);
+  const [toolPolicy, setToolPolicy] = useState<RuntimeToolPolicy>(
+    DEFAULT_RUNTIME_TOOL_POLICY,
+  );
 
   useEffect(() => {
     if (open) {
@@ -645,11 +827,13 @@ function CreateRuntimeModal({
       setEndpoint("");
       setSecret("");
       setCodex(DEFAULT_CODEX_POLICY);
+      setToolPolicy(DEFAULT_RUNTIME_TOOL_POLICY);
     }
   }, [open, adapters]);
 
   const adapter = adapters.find((a) => a.key === adapterKey);
   const isCodex = adapterKey === "codex-app-server";
+  const isHermes = adapterKey === "hermes";
 
   return (
     <QuickForm
@@ -669,7 +853,11 @@ function CreateRuntimeModal({
             name: name.trim(),
             endpoint: endpoint.trim() || undefined,
             secret: secret.trim() || undefined,
-            config: isCodex ? codexPolicyToConfig(codex) : undefined,
+            config: isCodex
+              ? codexPolicyToConfig(codex)
+              : isHermes
+                ? runtimeToolPolicyToConfig(toolPolicy)
+                : undefined,
           });
         } catch (err) {
           return { error: err instanceof Error ? err.message : "Create failed." };
@@ -717,6 +905,7 @@ function CreateRuntimeModal({
                     multi-agent
                   </span>
                 )}
+                <AdapterCapabilityBadges capabilities={adapter.capabilities} />
               </div>
             </>
           )}
@@ -762,6 +951,9 @@ function CreateRuntimeModal({
           />
         </label>
         {isCodex && <CodexPolicyFields value={codex} onChange={setCodex} />}
+        {isHermes && (
+          <RuntimeToolPolicyFields value={toolPolicy} onChange={setToolPolicy} />
+        )}
       </div>
     </QuickForm>
   );
@@ -794,7 +986,11 @@ function EditRuntimeModal({
   const [endpoint, setEndpoint] = useState("");
   const [secret, setSecret] = useState("");
   const [codex, setCodex] = useState<CodexPolicy>(DEFAULT_CODEX_POLICY);
+  const [toolPolicy, setToolPolicy] = useState<RuntimeToolPolicy>(
+    DEFAULT_RUNTIME_TOOL_POLICY,
+  );
   const isCodex = target?.adapterKey === "codex-app-server";
+  const isHermes = target?.adapterKey === "hermes";
 
   useEffect(() => {
     if (target) {
@@ -802,6 +998,7 @@ function EditRuntimeModal({
       setEndpoint(target.endpoint);
       setSecret("");
       setCodex(codexPolicyFromConfig(target.config));
+      setToolPolicy(runtimeToolPolicyFromConfig(target.config));
     }
   }, [target]);
 
@@ -822,7 +1019,11 @@ function EditRuntimeModal({
             name: name.trim(),
             endpoint: endpoint.trim(),
             secret: secret.trim() || undefined,
-            config: isCodex ? codexPolicyToConfig(codex) : undefined,
+            config: isCodex
+              ? codexPolicyToConfig(codex)
+              : isHermes
+                ? runtimeToolPolicyToConfig(toolPolicy)
+                : undefined,
           });
         } catch (err) {
           return { error: err instanceof Error ? err.message : "Save failed." };
@@ -865,6 +1066,9 @@ function EditRuntimeModal({
           />
         </label>
         {isCodex && <CodexPolicyFields value={codex} onChange={setCodex} />}
+        {isHermes && (
+          <RuntimeToolPolicyFields value={toolPolicy} onChange={setToolPolicy} />
+        )}
       </div>
     </QuickForm>
   );

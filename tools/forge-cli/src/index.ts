@@ -3,7 +3,11 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { loginCommand } from "./login.js";
 import { whoamiCommand } from "./commands/whoami.js";
-import { runtimesListCommand } from "./commands/runtimes.js";
+import {
+  runtimesConfigureCommand,
+  runtimesListCommand,
+  runtimeToolCollector,
+} from "./commands/runtimes.js";
 import { agentsListCommand } from "./commands/agents.js";
 import {
   issuesListCommand,
@@ -104,6 +108,28 @@ runtimes
   .action(async (opts) => {
     try {
       await runtimesListCommand(opts);
+    } catch (err) {
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  });
+runtimes
+  .command("configure")
+  .argument("<runtimeId>", "Runtime id to configure")
+  .option("--local-workspace-tools", "declare that this runtime has local repo tools")
+  .option("--tool <tool>", "declare a tool capability (terminal, filesystem, git); repeatable", runtimeToolCollector, [])
+  .option("--workspace-root <path>", "workspace/repo root exposed to the runtime")
+  .option("--replace", "replace config instead of merging with existing config")
+  .option("--json", "emit raw JSON")
+  .action(async (runtimeId, opts) => {
+    try {
+      await runtimesConfigureCommand(runtimeId, {
+        json: opts.json,
+        localWorkspaceTools: opts.localWorkspaceTools,
+        tool: opts.tool,
+        workspaceRoot: opts.workspaceRoot,
+        replace: opts.replace,
+      });
     } catch (err) {
       console.error(chalk.red(err instanceof Error ? err.message : String(err)));
       process.exit(1);

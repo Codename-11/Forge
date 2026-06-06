@@ -47,6 +47,32 @@ describe("runtime dispatch contract", () => {
     ).rejects.toThrow();
   });
 
+  it("validates + persists Hermes runtime tool-surface config", async () => {
+    const rt = await caller.create({
+      adapterKey: "hermes",
+      name: "Hermes gateway",
+      endpoint: "http://127.0.0.1:8642/v1",
+      config: {
+        localWorkspaceTools: true,
+        toolCapabilities: ["terminal", "filesystem", "git"],
+        workspaceRoot: "  /home/bailey/forge  ",
+      },
+    });
+
+    expect(rt.config).toMatchObject({
+      localWorkspaceTools: true,
+      toolCapabilities: ["terminal", "filesystem", "git"],
+      workspaceRoot: "/home/bailey/forge",
+    });
+
+    await expect(
+      caller.update({
+        id: rt.id,
+        config: { toolCapabilities: ["terminal"], unknown: true },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("verifyConnection runs a handshake-only probe and persists sanitized diagnostics", async () => {
     const rt = await caller.create({ ...codexInput, endpoint: "ws://127.0.0.1:1" });
 

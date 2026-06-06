@@ -98,6 +98,10 @@ On start the daemon:
 
 ```bash
 forge runtimes list                  # via runtimes.list MCP; --json, --archived
+forge runtimes configure <id> \
+  --local-workspace-tools \
+  --tool terminal --tool filesystem --tool git \
+  --workspace-root /home/bailey/forge
 forge agents list                    # workspace bindings via agents.list; --json, --archived, --runtime <id>
 forge agents list --global           # global AgentProfile defs via agents.profiles.list; --mine, --json, --archived
 forge issues list                    # most recent 25 issues

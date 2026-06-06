@@ -21,7 +21,11 @@ the runtime runs the model; the agent answers *as itself*.
 
 - **Hermes** — persistent daemon hosting multiple profiles (Victor, Mizu)
   behind one gateway (`/v1/runs`). Owns the loop, streams, approvals,
-  runtime-level presence. `chatMode: "runs"`.
+  runtime-level presence. `chatMode: "runs"`. Repo tools are a runtime
+  declaration, not an engagement-mode setting: configure the Hermes gateway
+  profile with terminal/filesystem/git access first, then declare
+  `localWorkspaceTools`, `toolCapabilities`, and `workspaceRoot` on the
+  Runtime in Settings or with `forge runtimes configure`.
 - **Codex (app server)** — Codex's long-lived `app server` (stdio JSON-RPC),
   the OpenAI analogue to the Hermes gateway: a managed runtime so a Codex
   agent is first-class exactly like a Hermes profile. `chatMode: "runs"`,

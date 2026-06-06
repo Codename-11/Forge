@@ -176,6 +176,34 @@ required. Forge happily talks to OpenAI or Anthropic directly.
 
 End-to-end onboarding for a real Hermes profile.
 
+### Local repo tools for code work
+
+Forge can dispatch code/repo issues to Hermes, but Wake/Kick only helps when
+the Hermes gateway profile actually has repo tools. Configure Hermes first:
+
+- the routed profile exists, e.g. `victor`;
+- the gateway/profile runs with development or terminal toolsets enabled;
+- the Forge repo is available to the Hermes process; and
+- the profile's working directory points at that repo, e.g.
+  `/home/bailey/forge` or a mounted `/work/forge`.
+
+Then declare the non-secret surface on the Forge Runtime so preflight and
+runtime cards show the truth:
+
+```bash
+forge runtimes configure <runtimeId> \
+  --local-workspace-tools \
+  --tool terminal \
+  --tool filesystem \
+  --tool git \
+  --workspace-root /home/bailey/forge
+```
+
+The declaration does not grant tools by itself; it records what the Hermes
+runtime already exposes. If it is false or missing, code-like issues show a
+runtime tool-surface warning and should be reassigned to a local-tool runtime
+or held until Hermes is configured.
+
 ```bash
 # 1. Create the agent in the Forge workspace.
 curl -sS https://forge.example/api/trpc/agents.create \

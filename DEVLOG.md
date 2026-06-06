@@ -2,6 +2,22 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-06 — Runtime tool-surface config and cards
+
+Made runtime local tool surface a first-class declaration. Hermes Runtime
+config now accepts `{ localWorkspaceTools, toolCapabilities, workspaceRoot }`
+through the same validation service used by tRPC and MCP; Codex app-server
+keeps sandbox/approval config and can share the same workspace-root/tool
+surface shape. Issue preflight now reads the shared helper instead of its own
+JSON parser.
+
+Runtime cards/detail/global settings now show repo-tool state plus adapter
+capabilities (streaming, approvals, presence), and Hermes create/edit dialogs
+include structured controls for local workspace tools, declared tools, and
+workspace root. Added `runtimes.configure` MCP and `forge runtimes configure`
+so operators can set the same config from CLI without direct DB writes.
+Updated runtime, Hermes, provider/transport, MCP, and CLI docs.
+
 ## 2026-06-05 — AXI-40 MCP workspace discovery + scoped access keys
 
 Implemented MCP workspace discovery and API-key provisioning for workspace-scoped agent/home-lab use. `workspaces.list` now returns `id`, `key`, `name`, and `slug`; non-admin API keys remain pinned to their issuing workspace, while user-backed sessions or ADMIN user-backed keys can list/select workspaces where the user is a member.

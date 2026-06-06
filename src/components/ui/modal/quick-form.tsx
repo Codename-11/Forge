@@ -211,7 +211,7 @@ export function QuickForm({
   return (
     <div
       className={cn(
-        "fixed inset-0 z-50 flex items-start justify-center bg-foreground/20 pt-[12vh] backdrop-blur-sm",
+        "fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-foreground/20 p-4 pt-12 backdrop-blur-sm",
         MOTION.fadeIn,
       )}
       onClick={() => handleClose(true)}
@@ -232,7 +232,7 @@ export function QuickForm({
           ref={formRef}
           onSubmit={doSubmit}
           onKeyDown={handleKeyDown}
-          className="space-y-3 p-5"
+          className="flex max-h-[calc(100dvh-5rem)] flex-col gap-3 p-5"
           noValidate
         >
           <div className="flex items-start justify-between gap-3">
@@ -260,9 +260,9 @@ export function QuickForm({
             </div>
           )}
 
-          <div className="space-y-2.5">{children}</div>
+          <div className="-mr-1 min-h-0 space-y-2.5 overflow-y-auto pr-1">{children}</div>
 
-          <div className="flex items-center justify-end gap-2 pt-1">
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 pt-3">
             <Button
               type="button"
               variant="ghost"

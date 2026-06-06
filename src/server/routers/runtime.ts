@@ -1,53 +1,19 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { AgentProvider, RuntimeKind, type Prisma, type Runtime } from "@prisma/client";
+import { AgentProvider, RuntimeKind, type Runtime } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import {
   getRuntimeAdapter,
   managedAdapters,
   PLANNED_ADAPTERS,
 } from "@/server/runtimes/adapters";
-import {
-  CODEX_APPROVAL_POLICIES,
-  CODEX_SANDBOX_MODES,
-} from "@/server/services/dispatch/codex-app-server";
 import { recordRuntimeHeartbeatPresence } from "@/server/services/heartbeat";
 import { probeRuntime, type RuntimeProbeResult } from "@/server/services/dispatch/runtime-probe";
 import {
   deriveRuntimeHealthStatus,
   sanitizeRuntimeProbeDetail,
 } from "@/server/services/runtime-status";
-
-/**
- * Validation for `Runtime.config`. Today only the `codex-app-server` adapter
- * uses it — `{ sandboxMode, approvalPolicy, workspaceRoot }`, the per-turn
- * policy the connector sends. Defaults (omitted keys) reproduce today's
- * full-access, no-prompt behavior. `.strict()` rejects unknown keys so a typo
- * can't silently disable the sandbox.
- */
-const codexConfigSchema = z
-  .object({
-    sandboxMode: z.enum(CODEX_SANDBOX_MODES as [string, ...string[]]).optional(),
-    approvalPolicy: z.enum(CODEX_APPROVAL_POLICIES as [string, ...string[]]).optional(),
-    workspaceRoot: z.string().max(500).optional(),
-  })
-  .strict();
-
-/** Validate a `config` payload for the resolved adapter. */
-function validateRuntimeConfig(adapterKey: string | null | undefined, config: unknown): Prisma.InputJsonValue {
-  if (adapterKey === "codex-app-server") {
-    return codexConfigSchema.parse(config ?? {}) as Prisma.InputJsonValue;
-  }
-  // Other adapters carry no config today; reject non-empty payloads so we
-  // don't persist values nothing reads.
-  if (config && Object.keys(config as object).length > 0) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `Adapter "${adapterKey ?? "unknown"}" takes no config.`,
-    });
-  }
-  return {} as Prisma.InputJsonValue;
-}
+import { validateRuntimeConfig } from "@/server/services/runtime-config";
 
 /** Compute location a managed adapter's transport implies. */
 function kindForAdapterTransport(transport: string): RuntimeKind {

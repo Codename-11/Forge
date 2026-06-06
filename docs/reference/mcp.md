@@ -372,7 +372,8 @@ the broader Runtime primitive.
 |---|---|
 | `register` | Create (or restore) a Runtime row. `{ name, kind, endpoint?, providersAvailable }`. `ownerId` is set from the calling key's `userId`; AGENT-kind keys leave it null. |
 | `heartbeat` | Bump `Runtime.heartbeatAt`. `{ runtimeId }`. |
-| `list` | List workspace runtimes. `{ kind?, includeArchived? = false }` → mirror of `trpc.runtime.list` shape, includes `_count: { agents }` + `owner` summary. |
+| `list` | List workspace runtimes. `{ kind?, includeArchived? = false }` → mirror of `trpc.runtime.list` shape, includes `_count: { agents }` + `owner` summary. Secrets are redacted to `hasSecret`. |
+| `configure` | Update adapter config. `{ runtimeId, config, merge? = true }`. Hermes accepts `localWorkspaceTools`, `toolCapabilities`, and `workspaceRoot`; Codex app-server also accepts sandbox/approval config. |
 
 **`register`** is intentionally not deduping server-side — the CLI caches
 its `runtimeId` in `~/.config/forge/daemon.json` and only re-registers if

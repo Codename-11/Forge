@@ -59,6 +59,7 @@ import {
 import { forgeEntityTypeSchema, type ForgeEntityType } from "@/lib/entity-ref";
 import { hydrateEntityRefs } from "@/server/services/entity-hydration";
 import { computeAlignment, type AlignItem } from "@/server/services/canvas-alignment";
+import { validateRuntimeConfig } from "@/server/services/runtime-config";
 
 /**
  * Forge's MCP (Model Context Protocol) surface — the stable set of tools any
@@ -5199,18 +5200,37 @@ export const mcpTools = {
       includeArchived: z.boolean().default(false),
     }),
     async run(input: { kind?: RuntimeKind; includeArchived: boolean }, ctx: McpContext) {
-      return db.runtime.findMany({
+      const rows = await db.runtime.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           ...(input.kind ? { kind: input.kind } : {}),
           ...(input.includeArchived ? {} : { archivedAt: null }),
         },
         orderBy: [{ kind: "asc" }, { name: "asc" }],
-        include: {
+        select: {
+          id: true,
+          workspaceId: true,
+          name: true,
+          kind: true,
+          adapterKey: true,
+          endpoint: true,
+          secret: true,
+          providersAvailable: true,
+          connectedAt: true,
+          ownerKeyPrefix: true,
+          ownerId: true,
+          instanceShared: true,
+          archivedAt: true,
+          disabledAt: true,
+          config: true,
+          heartbeatAt: true,
+          createdAt: true,
+          updatedAt: true,
           owner: { select: { id: true, name: true, image: true } },
           _count: { select: { agents: true } },
         },
       });
+      return rows.map(({ secret, ...row }) => ({ ...row, hasSecret: !!secret }));
     },
   },
 
@@ -5301,6 +5321,56 @@ export const mcpTools = {
         where: { id: row.id },
         data: { heartbeatAt: new Date() },
         select: { id: true, heartbeatAt: true },
+      });
+    },
+  },
+
+  "runtimes.configure": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      runtimeId: z.string().min(1).max(40).describe("Runtime.id to configure."),
+      config: z
+        .record(z.unknown())
+        .describe(
+          "Adapter config object. Hermes accepts localWorkspaceTools, toolCapabilities, and workspaceRoot.",
+        ),
+      merge: z
+        .boolean()
+        .default(true)
+        .describe("Merge with existing config before validating. Defaults to true."),
+    }),
+    async run(
+      input: { runtimeId: string; config: Record<string, unknown>; merge: boolean },
+      ctx: McpContext,
+    ) {
+      const row = await db.runtime.findFirst({
+        where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          name: true,
+          adapterKey: true,
+          config: true,
+          archivedAt: true,
+        },
+      });
+      if (!row) throw new Error("Runtime not found in this workspace.");
+      if (row.archivedAt) throw new Error("Runtime is archived; restore it before configuring.");
+      const current =
+        row.config && typeof row.config === "object" && !Array.isArray(row.config)
+          ? (row.config as Record<string, unknown>)
+          : {};
+      const next = input.merge ? { ...current, ...input.config } : input.config;
+      const validated = validateRuntimeConfig(row.adapterKey, next);
+      return db.runtime.update({
+        where: { id: row.id },
+        data: { config: validated },
+        select: {
+          id: true,
+          name: true,
+          adapterKey: true,
+          config: true,
+          updatedAt: true,
+        },
       });
     },
   },
