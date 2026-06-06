@@ -2,6 +2,14 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-05 — AXI-40 MCP workspace discovery + scoped access keys
+
+Implemented MCP workspace discovery and API-key provisioning for workspace-scoped agent/home-lab use. `workspaces.list` now returns `id`, `key`, `name`, and `slug`; non-admin API keys remain pinned to their issuing workspace, while user-backed sessions or ADMIN user-backed keys can list/select workspaces where the user is a member.
+
+Added an `access.*` MCP namespace for safe non-plugin key management: `access.list` returns metadata only, `access.createPersonal` creates user-owned personal keys, `access.createSession` creates short-lived session keys, `access.createAgentKey` creates AGENT keys linked to an existing agent binding in the selected workspace, and `access.revoke` revokes selected workspace keys. Workspace selectors accept exactly one of `workspaceId`, `workspaceKey`, or `workspaceSlug`; cross-workspace selection requires ADMIN scope, a user-backed principal, and workspace membership. Narrowing ids are validated against the target workspace, and raw key material is returned only from create calls.
+
+Coverage: `pnpm prisma:generate`, `pnpm lint`, `pnpm typecheck`, and `DATABASE_URL=postgresql://forge:***@localhost:55432/forge?schema=public REDIS_URL=redis://localhost:56379 pnpm test src/server/services/__tests__/mcp.test.ts` (105 pass).
+
 ## 2026-06-05 — AXI-73 runtime health diagnostics
 
 Implemented runtime reachability diagnostics across schema, services, router APIs, and UI. Added persisted sanitized probe fields (`lastProbeAt`, `lastProbeAttempted`, `lastProbeReachable`, `lastProbeDetail`) via migration `0073_runtime_health_diagnostics`; centralized status derivation in `runtime-status`; and added `runtime.verifyConnection` for handshake-only Hermes/Codex probes that never start a run and never expose secrets.

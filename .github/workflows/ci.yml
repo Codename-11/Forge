@@ -33,9 +33,10 @@ jobs:
         image: redis:7-alpine
         ports: ["6379:6379"]
       minio:
-        # bitnami image runs `minio server` by default (GH service containers
-        # can't pass a command), exposing the S3 API on :9000.
-        image: bitnami/minio:latest
+        # Bitnami's Docker Hub namespace moved historical images to
+        # bitnamilegacy. This image runs `minio server` by default (GH service
+        # containers can't pass a command), exposing the S3 API on :9000.
+        image: bitnamilegacy/minio:latest
         env:
           MINIO_ROOT_USER: forgeminio
           MINIO_ROOT_PASSWORD: forgeminio-dev-password
@@ -57,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+        with: { version: 10.33.0 }
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: "pnpm" }
       - run: pnpm install --frozen-lockfile
@@ -108,7 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+        with: { version: 10.33.0 }
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: "pnpm" }
       - run: pnpm install --frozen-lockfile

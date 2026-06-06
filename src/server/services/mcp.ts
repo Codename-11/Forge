@@ -1,9 +1,11 @@
 import "server-only";
+import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import {
   AgentProvider,
   AgentRunStatus,
   AgentStatus,
+  ApiKeyKind,
   ArtifactType,
   CommentKind,
   CycleStatus,
@@ -11,6 +13,7 @@ import {
   ExecutionPlanStatus,
   InitiativeStatus,
   NoteStatus,
+  PluginScope,
   Prisma,
   Priority,
   RelationKind,
@@ -231,6 +234,119 @@ async function resolveActorId(ctx: McpContext): Promise<string> {
   });
   return m.userId;
 }
+
+type WorkspaceSelectorInput = {
+  workspaceId?: string;
+  workspaceKey?: string;
+  workspaceSlug?: string;
+};
+
+const workspaceSelectorShape = {
+  workspaceId: z.string().cuid().optional(),
+  workspaceKey: z
+    .string()
+    .min(2)
+    .max(8)
+    .regex(/^[A-Z0-9]+$/)
+    .optional(),
+  workspaceSlug: z.string().min(1).max(80).optional(),
+};
+
+function assertSingleWorkspaceSelector(input: WorkspaceSelectorInput): void {
+  const provided = [input.workspaceId, input.workspaceKey, input.workspaceSlug].filter(Boolean);
+  if (provided.length > 1) {
+    throw new Error("Provide only one of workspaceId, workspaceKey, or workspaceSlug.");
+  }
+}
+
+async function resolveTargetWorkspace(
+  ctx: McpContext,
+  input: WorkspaceSelectorInput = {},
+): Promise<{ id: string; key: string; slug: string; name: string }> {
+  assertSingleWorkspaceSelector(input);
+  const selector = input.workspaceId
+    ? { id: input.workspaceId }
+    : input.workspaceKey
+      ? { key: input.workspaceKey }
+      : input.workspaceSlug
+        ? { slug: input.workspaceSlug }
+        : { id: ctx.workspaceId };
+
+  const workspace = await db.workspace.findFirst({
+    where: { ...selector, deletedAt: null },
+    select: { id: true, key: true, slug: true, name: true },
+  });
+  if (!workspace) throw new Error("Workspace not found.");
+  if (workspace.id === ctx.workspaceId) return workspace;
+
+  if (ctx.apiKey && !ctx.apiKey.scopes.includes(PluginScope.ADMIN)) {
+    throw new Error("Selecting another workspace requires ADMIN scope.");
+  }
+  if (!ctx.userId) {
+    throw new Error("Selecting another workspace requires a user-backed principal.");
+  }
+  const membership = await db.membership.findUnique({
+    where: { userId_workspaceId: { userId: ctx.userId, workspaceId: workspace.id } },
+    select: { id: true },
+  });
+  if (!membership) throw new Error("Principal is not a member of the selected workspace.");
+  return workspace;
+}
+
+type AccessNarrowingInput = {
+  projectIds?: string[];
+  labelIds?: string[];
+  initiativeIds?: string[];
+};
+
+const accessNarrowingShape = {
+  projectIds: z.array(z.string().cuid()).default([]),
+  labelIds: z.array(z.string().cuid()).default([]),
+  initiativeIds: z.array(z.string().cuid()).default([]),
+};
+
+async function assertMcpIdsInWorkspace(
+  workspaceId: string,
+  ids: AccessNarrowingInput,
+): Promise<void> {
+  const checks: Array<Promise<void>> = [];
+  if (ids.projectIds?.length) {
+    const unique = Array.from(new Set(ids.projectIds));
+    checks.push(
+      db.project.count({ where: { id: { in: unique }, workspaceId } }).then((count) => {
+        if (count !== unique.length)
+          throw new Error("One or more projectIds not in this workspace.");
+      }),
+    );
+  }
+  if (ids.labelIds?.length) {
+    const unique = Array.from(new Set(ids.labelIds));
+    checks.push(
+      db.label.count({ where: { id: { in: unique }, workspaceId } }).then((count) => {
+        if (count !== unique.length) throw new Error("One or more labelIds not in this workspace.");
+      }),
+    );
+  }
+  if (ids.initiativeIds?.length) {
+    const unique = Array.from(new Set(ids.initiativeIds));
+    checks.push(
+      db.initiative.count({ where: { id: { in: unique }, workspaceId } }).then((count) => {
+        if (count !== unique.length)
+          throw new Error("One or more initiativeIds not in this workspace.");
+      }),
+    );
+  }
+  await Promise.all(checks);
+}
+
+function generateMcpApiKey(prefix = "forge_sk"): { raw: string; hashed: string; prefix: string } {
+  const rawBytes = randomBytes(32).toString("base64url");
+  const raw = `${prefix}_${rawBytes}`;
+  const hashed = createHash("sha256").update(raw).digest("hex");
+  return { raw, hashed, prefix: raw.slice(0, prefix.length + 9) };
+}
+
+const allPluginScopes = Object.values(PluginScope);
 
 // Promote helpers — duplicated lightly from `note.ts` so the MCP layer
 // stays self-contained. Both fall back to a numeric suffix on collision
@@ -6035,25 +6151,291 @@ export const mcpTools = {
   },
 
   /**
-   * Workspaces visible to this MCP principal. API keys are workspace-bound,
-   * so they see exactly their issuing workspace; session-authenticated
-   * callers can see every workspace they belong to.
+   * Workspaces visible to this MCP principal. Non-admin API keys remain
+   * pinned to their issuing workspace. Admin/user-backed keys and
+   * session-authenticated callers can discover every workspace the user
+   * belongs to, which lets agents mint or select a PER/WRK-scoped key
+   * without guessing ids.
    */
   "workspaces.list": {
     scopes: ["READ_ISSUES"] as const,
     input: z.object({}).default({}),
     async run(_input: Record<string, never>, ctx: McpContext) {
-      const where: Prisma.WorkspaceWhereInput = ctx.apiKey
-        ? { id: ctx.workspaceId }
-        : ctx.userId
-          ? { deletedAt: null, memberships: { some: { userId: ctx.userId } } }
-          : { id: ctx.workspaceId };
+      const canListMemberships =
+        Boolean(ctx.userId) && (!ctx.apiKey || ctx.apiKey.scopes.includes(PluginScope.ADMIN));
+      const where: Prisma.WorkspaceWhereInput = canListMemberships
+        ? { deletedAt: null, memberships: { some: { userId: ctx.userId! } } }
+        : { id: ctx.workspaceId, deletedAt: null };
       const rows = await db.workspace.findMany({
         where,
         orderBy: { name: "asc" },
-        select: { id: true, name: true, slug: true },
+        select: { id: true, key: true, name: true, slug: true },
       });
       return mcpListEnvelope(rows);
+    },
+  },
+
+  // --------------------------------------------------------------------- Access keys
+  /**
+   * Read non-plugin API keys for the selected workspace. Raw secrets and
+   * hashes are never returned. Cross-workspace selection is limited to
+   * ADMIN + user-backed principals that are members of the target workspace.
+   */
+  "access.list": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({ ...workspaceSelectorShape }).default({}),
+    async run(input: WorkspaceSelectorInput, ctx: McpContext) {
+      const workspace = await resolveTargetWorkspace(ctx, input);
+      const rows = await db.apiKey.findMany({
+        where: { workspaceId: workspace.id, pluginId: null },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          name: true,
+          prefix: true,
+          kind: true,
+          scopes: true,
+          projectIds: true,
+          labelIds: true,
+          initiativeIds: true,
+          linkedAgentId: true,
+          linkedAgent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+          createdAt: true,
+          lastUsedAt: true,
+          expiresAt: true,
+          revokedAt: true,
+          userId: true,
+        },
+      });
+      return mcpListEnvelope(rows);
+    },
+  },
+
+  /**
+   * Create a permanent or optionally expiring user-owned personal key for a
+   * selected workspace. The raw key is returned once; callers must store it
+   * outside Forge. Use this to bootstrap a PER/WRK-scoped Hermes profile.
+   */
+  "access.createPersonal": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      ...workspaceSelectorShape,
+      name: z.string().min(1).max(80),
+      scopes: z.array(z.nativeEnum(PluginScope)).min(1),
+      expiresInDays: z.number().int().min(1).max(365).optional(),
+      ...accessNarrowingShape,
+    }),
+    async run(
+      input: WorkspaceSelectorInput &
+        AccessNarrowingInput & {
+          name: string;
+          scopes: PluginScope[];
+          expiresInDays?: number;
+        },
+      ctx: McpContext,
+    ) {
+      if (!ctx.userId) throw new Error("Creating access keys requires a user-backed principal.");
+      const workspace = await resolveTargetWorkspace(ctx, input);
+      await assertMcpIdsInWorkspace(workspace.id, input);
+      const { raw, hashed, prefix } = generateMcpApiKey();
+      const row = await db.apiKey.create({
+        data: {
+          workspaceId: workspace.id,
+          userId: ctx.userId,
+          kind: ApiKeyKind.PERSONAL,
+          name: input.name,
+          hashedKey: hashed,
+          prefix,
+          scopes: input.scopes,
+          projectIds: input.projectIds ?? [],
+          labelIds: input.labelIds ?? [],
+          initiativeIds: input.initiativeIds ?? [],
+          linkedAgentId: null,
+          expiresAt: input.expiresInDays
+            ? new Date(Date.now() + input.expiresInDays * 86_400_000)
+            : null,
+        },
+        select: {
+          id: true,
+          name: true,
+          prefix: true,
+          kind: true,
+          scopes: true,
+          projectIds: true,
+          labelIds: true,
+          initiativeIds: true,
+          linkedAgentId: true,
+          createdAt: true,
+          expiresAt: true,
+        },
+      });
+      return { ...row, workspace, rawKey: raw };
+    },
+  },
+
+  /**
+   * Create a short-lived user-owned session key in a selected workspace.
+   * Session keys are intentionally not agent-linked; use
+   * access.createAgentKey for persistent Hermes agent identities.
+   */
+  "access.createSession": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      ...workspaceSelectorShape,
+      name: z.string().min(1).max(80),
+      scopes: z.array(z.nativeEnum(PluginScope)).min(1),
+      ttlHours: z.number().int().min(1).max(168).default(24),
+      ...accessNarrowingShape,
+    }),
+    async run(
+      input: WorkspaceSelectorInput &
+        AccessNarrowingInput & {
+          name: string;
+          scopes: PluginScope[];
+          ttlHours: number;
+        },
+      ctx: McpContext,
+    ) {
+      if (!ctx.userId) throw new Error("Creating access keys requires a user-backed principal.");
+      const workspace = await resolveTargetWorkspace(ctx, input);
+      await assertMcpIdsInWorkspace(workspace.id, input);
+      const { raw, hashed, prefix } = generateMcpApiKey();
+      const expiresAt = new Date(Date.now() + input.ttlHours * 3_600_000);
+      const row = await db.apiKey.create({
+        data: {
+          workspaceId: workspace.id,
+          userId: ctx.userId,
+          kind: ApiKeyKind.SESSION,
+          name: input.name,
+          hashedKey: hashed,
+          prefix,
+          scopes: input.scopes,
+          projectIds: input.projectIds ?? [],
+          labelIds: input.labelIds ?? [],
+          initiativeIds: input.initiativeIds ?? [],
+          linkedAgentId: null,
+          expiresAt,
+        },
+        select: {
+          id: true,
+          name: true,
+          prefix: true,
+          kind: true,
+          scopes: true,
+          projectIds: true,
+          labelIds: true,
+          initiativeIds: true,
+          linkedAgentId: true,
+          createdAt: true,
+          expiresAt: true,
+        },
+      });
+      return { ...row, workspace, rawKey: raw };
+    },
+  },
+
+  /**
+   * Create a workspace-scoped AGENT key linked to an existing Agent binding
+   * in that workspace. This is the safe MCP bootstrap path for giving Victor
+   * a PER-scoped key without allowing an AXI key to read PER data directly.
+   */
+  "access.createAgentKey": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      ...workspaceSelectorShape,
+      name: z.string().min(1).max(80).optional(),
+      agentId: agentIdSchema.optional(),
+      profileKey: z.string().min(1).max(120).optional(),
+      scopes: z.array(z.nativeEnum(PluginScope)).min(1).default(allPluginScopes),
+      expiresInDays: z.number().int().min(1).max(365).optional(),
+      ...accessNarrowingShape,
+    }),
+    async run(
+      input: WorkspaceSelectorInput &
+        AccessNarrowingInput & {
+          name?: string;
+          agentId?: string;
+          profileKey?: string;
+          scopes: PluginScope[];
+          expiresInDays?: number;
+        },
+      ctx: McpContext,
+    ) {
+      if (!ctx.userId) throw new Error("Creating access keys requires a user-backed principal.");
+      if (!input.agentId && !input.profileKey) {
+        throw new Error("Provide agentId or profileKey for access.createAgentKey.");
+      }
+      const workspace = await resolveTargetWorkspace(ctx, input);
+      await assertMcpIdsInWorkspace(workspace.id, input);
+      const agent = await db.agent.findFirst({
+        where: {
+          workspaceId: workspace.id,
+          ...(input.agentId ? { id: input.agentId } : {}),
+          ...(input.profileKey ? { profileKey: input.profileKey } : {}),
+          archivedAt: null,
+        },
+        select: { id: true, name: true, profileKey: true },
+      });
+      if (!agent) {
+        throw new Error(
+          "Agent binding not found in selected workspace. Create or bind the agent in that workspace first.",
+        );
+      }
+      const { raw, hashed, prefix } = generateMcpApiKey();
+      const row = await db.apiKey.create({
+        data: {
+          workspaceId: workspace.id,
+          userId: ctx.userId,
+          kind: ApiKeyKind.AGENT,
+          name: input.name ?? `${agent.name} MCP (${workspace.key})`,
+          hashedKey: hashed,
+          prefix,
+          scopes: input.scopes,
+          projectIds: input.projectIds ?? [],
+          labelIds: input.labelIds ?? [],
+          initiativeIds: input.initiativeIds ?? [],
+          linkedAgentId: agent.id,
+          expiresAt: input.expiresInDays
+            ? new Date(Date.now() + input.expiresInDays * 86_400_000)
+            : null,
+        },
+        select: {
+          id: true,
+          name: true,
+          prefix: true,
+          kind: true,
+          scopes: true,
+          projectIds: true,
+          labelIds: true,
+          initiativeIds: true,
+          linkedAgentId: true,
+          createdAt: true,
+          expiresAt: true,
+        },
+      });
+      return { ...row, workspace, linkedAgent: agent, rawKey: raw };
+    },
+  },
+
+  /** Revoke a non-plugin API key in the selected workspace. */
+  "access.revoke": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      ...workspaceSelectorShape,
+      id: z.string().cuid(),
+    }),
+    async run(input: WorkspaceSelectorInput & { id: string }, ctx: McpContext) {
+      const workspace = await resolveTargetWorkspace(ctx, input);
+      const key = await db.apiKey.findFirst({
+        where: { id: input.id, workspaceId: workspace.id, pluginId: null },
+        select: { id: true },
+      });
+      if (!key) throw new Error("Access key not found in selected workspace.");
+      return db.apiKey.update({
+        where: { id: key.id },
+        data: { revokedAt: new Date() },
+        select: { id: true, prefix: true, kind: true, revokedAt: true },
+      });
     },
   },
 
