@@ -1,12 +1,6 @@
 "use client";
 import Link from "next/link";
-import {
-  Eye,
-  ExternalLink,
-  MessageSquare,
-  Paperclip,
-  Workflow,
-} from "lucide-react";
+import { Eye, ExternalLink, MessageSquare, Paperclip, Workflow } from "lucide-react";
 import { Section, Card, EmptyState } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -31,7 +25,13 @@ import { formatIssueId, relativeTime } from "@/lib/utils";
  *     re-query because react-query dedupes.
  *   - `issue.byId`     — populated `attachments[]` and `comments[]`.
  */
-export function AgentContextCard({ agentId }: { agentId: string }) {
+export function AgentContextCard({
+  agentId,
+  agentName,
+}: {
+  agentId: string;
+  agentName?: string | null;
+}) {
   const ws = useWorkspace();
   const { data: pipeline } = trpc.agent.pipeline.useQuery({});
   const lane = pipeline?.lanes.find((l) => l.agent.id === agentId);
@@ -49,13 +49,11 @@ export function AgentContextCard({ agentId }: { agentId: string }) {
         title={
           <span className="flex items-center gap-2">
             <Eye className="h-3.5 w-3.5 text-muted-foreground" />
-            Agent context
+            {agentName ? `What ${agentName} sees next` : "What agent sees next"}
           </span>
         }
       >
-        <Card className="space-y-2 p-3 text-meta text-muted-foreground">
-          Loading…
-        </Card>
+        <Card className="text-meta space-y-2 p-3 text-muted-foreground">Loading…</Card>
       </Section>
     );
   }
@@ -66,7 +64,7 @@ export function AgentContextCard({ agentId }: { agentId: string }) {
         title={
           <span className="flex items-center gap-2">
             <Eye className="h-3.5 w-3.5 text-muted-foreground" />
-            Agent context
+            {agentName ? `What ${agentName} sees next` : "What agent sees next"}
           </span>
         }
         hint="What the agent's next loop iteration will see."
@@ -82,15 +80,14 @@ export function AgentContextCard({ agentId }: { agentId: string }) {
   }
 
   const attachmentCount = issueDetail?.attachments?.length ?? 0;
-  const commentCount =
-    issueDetail?.comments?.length ?? nextIssue._count?.comments ?? 0;
+  const commentCount = issueDetail?.comments?.length ?? nextIssue._count?.comments ?? 0;
 
   return (
     <Section
       title={
         <span className="flex items-center gap-2">
           <Eye className="h-3.5 w-3.5 text-muted-foreground" />
-          Agent context
+          {agentName ? `What ${agentName} sees next` : "What agent sees next"}
         </span>
       }
       hint="What the agent's next loop iteration will see."
@@ -109,16 +106,12 @@ export function AgentContextCard({ agentId }: { agentId: string }) {
             <span className="text-id mr-1.5 text-muted-foreground">
               {formatIssueId(ws.key, nextIssue.number)}
             </span>
-            <span className="font-medium text-foreground">
-              {nextIssue.title}
-            </span>
+            <span className="font-medium text-foreground">{nextIssue.title}</span>
           </span>
           <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
         </Link>
-        <div className="flex flex-wrap items-center gap-3 text-meta text-muted-foreground">
-          <span className="capitalize">
-            {nextIssue.status.name.toLowerCase()}
-          </span>
+        <div className="text-meta flex flex-wrap items-center gap-3 text-muted-foreground">
+          <span className="capitalize">{nextIssue.status.name.toLowerCase()}</span>
           <span className="inline-flex items-center gap-1">
             <MessageSquare className="h-3 w-3" />
             {commentCount} comment{commentCount === 1 ? "" : "s"}
@@ -133,9 +126,9 @@ export function AgentContextCard({ agentId }: { agentId: string }) {
             updated {relativeTime(issueDetail.updatedAt)}
           </div>
         )}
-        <div className="border-t border-border pt-2 text-meta text-muted-foreground">
-          {(lane?.counts.load ?? 0)} active in this agent&apos;s lane ·{" "}
-          {(lane?.counts.recentlyDone ?? 0)} done (7d)
+        <div className="text-meta border-t border-border pt-2 text-muted-foreground">
+          {lane?.counts.load ?? 0} active in this agent&apos;s lane ·{" "}
+          {lane?.counts.recentlyDone ?? 0} done (7d)
         </div>
       </Card>
     </Section>
