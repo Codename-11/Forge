@@ -9,16 +9,22 @@ import {
   AlertTriangle,
   Bot,
   ChevronLeft,
+  CheckCircle2,
   Cloud,
   ExternalLink,
   Globe,
   HardDrive,
   History,
+  Inbox,
+  Loader2,
+  Radio,
   Server,
   Settings2,
+  ShieldAlert,
   UserCheck,
   Users,
   Workflow,
+  XCircle,
   Zap,
 } from "lucide-react";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -153,16 +159,30 @@ export default function AgentDetailPage() {
             <>
               <IdentityStrip agent={agent} />
               {healthFocus && <HealthFocusBanner agent={agent} focus={healthFocus} />}
-              <StatsRow agentId={agent.id} />
-              <UptimeSection agentId={agent.id} />
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                <div className="space-y-4 lg:col-span-2">
-                  <StalledSection agentId={agent.id} slug={ws.slug} wsKey={ws.key} />
+              <AgentIncidentBanner agent={agent} slug={ws.slug} wsKey={ws.key} />
+              <HealthChain agent={agent} />
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(20rem,0.8fr)]">
+                <div className="min-w-0 space-y-4">
+                  <HeldWorkSection agent={agent} slug={ws.slug} wsKey={ws.key} />
                   <CurrentlyWorkingSection agentId={agent.id} />
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <AgentContextCard agentId={agent.id} agentName={agent.name} />
+                    <CrewsAndWorkSection agentId={agent.id} slug={ws.slug} />
+                  </div>
+                  <Section
+                    title={
+                      <span className="flex items-center gap-2">
+                        <History className="h-3.5 w-3.5 text-muted-foreground" />
+                        Recent events
+                      </span>
+                    }
+                  >
+                    <AgentTimeline profileKey={agent.profileKey} />
+                  </Section>
                 </div>
-                <div className="space-y-4">
-                  <AgentContextCard agentId={agent.id} />
-                  <CrewsAndWorkSection agentId={agent.id} slug={ws.slug} />
+                <aside className="min-w-0 space-y-4">
+                  <StatsRow agentId={agent.id} />
+                  <UptimeSection agentId={agent.id} />
                   <ConnectionCard agent={agent} />
                   {/* Webhook trail only matters for webhook-dispatched agents.
                       Hide it for an on-demand managed-runtime agent (Codex app
@@ -171,18 +191,8 @@ export default function AgentDetailPage() {
                     <WebhookHealthCard agentId={agent.id} focus={healthFocus} />
                   )}
                   <DispatchEligibilityCard agent={agent} focus={healthFocus} />
-                </div>
+                </aside>
               </div>
-              <Section
-                title={
-                  <span className="flex items-center gap-2">
-                    <History className="h-3.5 w-3.5 text-muted-foreground" />
-                    Recent activity
-                  </span>
-                }
-              >
-                <AgentTimeline profileKey={agent.profileKey} />
-              </Section>
             </>
           )}
         </div>
@@ -289,8 +299,8 @@ function HealthCallout({
 
 function IdentityStrip({ agent }: { agent: AgentRow }) {
   return (
-    <div className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4 sm:flex-row sm:flex-wrap sm:items-center">
-      <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-subtle text-lg">
+    <div className="flex flex-col gap-4 rounded-lg border border-border bg-card/40 p-4 sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-border bg-background text-lg">
         {agent.avatar ?? <Bot className="h-5 w-5 text-muted-foreground" />}
       </div>
       <div className="min-w-0 flex-1 space-y-1">
@@ -330,6 +340,378 @@ function IdentityStrip({ agent }: { agent: AgentRow }) {
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+function AgentIncidentBanner({
+  agent,
+  slug,
+  wsKey,
+}: {
+  agent: AgentRow;
+  slug: string;
+  wsKey: string;
+}) {
+  const utils = trpc.useUtils();
+  const { data: stalled } = trpc.agent.stalled.useQuery({ agentId: agent.id });
+  const { data: pipeline } = trpc.agent.pipeline.useQuery({});
+  const verify = trpc.agent.verifyConnection.useMutation({
+    onSuccess: (r) => {
+      if (r.probe.attempted && r.probe.reachable === false) {
+        toast.error(`Runtime unreachable: ${r.probe.detail}`);
+      } else if (r.ready) {
+        toast.success(`Connection ready · ${r.transportLabel}`);
+      } else {
+        toast.message("Not ready — check runtime and dispatch settings.");
+      }
+      void utils.agent.byProfileKey.invalidate({ profileKey: agent.profileKey });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const lane = pipeline?.lanes.find((l) => l.agent.id === agent.id);
+  const heldIssueIds = new Set<string>();
+  for (const run of stalled?.stalledRuns ?? []) heldIssueIds.add(run.issueId);
+  for (const issue of stalled?.stalledIssues ?? []) heldIssueIds.add(issue.id);
+  if (agent.status === "OFFLINE") {
+    for (const issue of [...(lane?.inFlight ?? []), ...(lane?.assigned ?? [])]) {
+      heldIssueIds.add(issue.id);
+    }
+  }
+  const heldCount = heldIssueIds.size;
+  const offline = agent.status === "OFFLINE";
+  const runtimeDisabled = Boolean(agent.runtime?.disabledAt);
+  const transportBlocked = agent.transport.ready === false;
+  const incident = offline || runtimeDisabled || transportBlocked || heldCount > 0;
+  const primaryIssue = lane?.inFlight[0] ?? lane?.assigned[0] ?? null;
+
+  return (
+    <section
+      className={cn(
+        "rounded-lg border p-4",
+        incident ? "border-danger/30 bg-danger/5" : "border-success/30 bg-success/5",
+      )}
+    >
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            {incident ? (
+              <AlertTriangle className="h-4 w-4 text-danger" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4 text-success" />
+            )}
+            <h2 className="text-sm font-semibold">
+              {incident
+                ? `${agent.name} needs operator attention`
+                : `${agent.name} is ready for dispatch`}
+            </h2>
+            <span
+              className={cn(
+                "rounded-sm px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wider",
+                incident ? "bg-danger/10 text-danger" : "bg-success/10 text-success",
+              )}
+            >
+              {incident ? "attention" : "ready"}
+            </span>
+          </div>
+          <p className="mt-2 max-w-3xl text-[0.75rem] text-muted-foreground">
+            {incident
+              ? [
+                  offline ? "Agent presence is offline." : null,
+                  runtimeDisabled ? "Attached runtime is disabled." : null,
+                  transportBlocked ? "No ready transport is available." : null,
+                  heldCount > 0
+                    ? `Holding ${heldCount} assignment${heldCount === 1 ? "" : "s"}.`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" ")
+              : "Heartbeat, transport, capacity, and dispatch posture are clear based on the current workspace data."}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={incident ? "default" : "outline"}
+              className="h-8"
+              disabled={verify.isPending}
+              onClick={() => verify.mutate({ id: agent.id })}
+            >
+              {verify.isPending ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Radio className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Verify connection
+            </Button>
+            {primaryIssue && (
+              <Link href={`/w/${slug}/issues/${primaryIssue.id}`}>
+                <Button type="button" size="sm" variant="outline" className="h-8">
+                  <Inbox className="mr-1.5 h-3.5 w-3.5" />
+                  Open {formatIssueId(wsKey, primaryIssue.number)}
+                </Button>
+              </Link>
+            )}
+            {agent.runtime && (
+              <Link href={`/w/${slug}/settings/runtimes/${agent.runtime.id}`}>
+                <Button type="button" size="sm" variant="outline" className="h-8">
+                  <Server className="mr-1.5 h-3.5 w-3.5" />
+                  Open runtime
+                </Button>
+              </Link>
+            )}
+          </div>
+        </div>
+        <div className="grid shrink-0 grid-cols-2 gap-3 text-[0.75rem] sm:grid-cols-4 lg:w-[28rem]">
+          <IncidentMetric label="status" value={agent.status.toLowerCase()} danger={offline} />
+          <IncidentMetric label="held" value={heldCount} danger={heldCount > 0 && incident} />
+          <IncidentMetric
+            label="heartbeat"
+            value={agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "never"}
+            danger={offline || !agent.lastHeartbeatAt}
+          />
+          <IncidentMetric
+            label="transport"
+            value={agent.transport.label}
+            danger={transportBlocked}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function IncidentMetric({
+  label,
+  value,
+  danger = false,
+}: {
+  label: string;
+  value: React.ReactNode;
+  danger?: boolean;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background/50 p-2">
+      <div className="text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className={cn("mt-1 truncate font-mono", danger ? "text-danger" : "text-foreground")}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function HealthChain({ agent }: { agent: AgentRow }) {
+  const { data: pipeline } = trpc.agent.pipeline.useQuery({});
+  const { data: webhook } = trpc.agent.webhookHealth.useQuery({
+    id: agent.id,
+    windowDays: 7,
+  });
+  const lane = pipeline?.lanes.find((l) => l.agent.id === agent.id);
+  const load = lane?.counts.load ?? 0;
+  const cap = agent.maxConcurrent;
+  const atCap = cap > 0 && load >= cap;
+  const onDemand = agent.availability === "on-demand";
+  const heartbeatOk = onDemand || (agent.status !== "OFFLINE" && Boolean(agent.lastHeartbeatAt));
+  const runtimeOk = agent.runtime ? !agent.runtime.disabledAt : agent.transport.mode !== "runs";
+  const webhookOk =
+    agent.transport.mode !== "dispatch" ||
+    Boolean(agent.webhookUrl) ||
+    Boolean(webhook && webhook.totals.deadLetter === 0 && webhook.totals.failed === 0);
+  const dispatchOk = heartbeatOk && runtimeOk && agent.transport.ready && !atCap;
+  const deadLetters = webhook?.totals.deadLetter ?? 0;
+
+  return (
+    <section className="rounded-lg border border-border bg-card/40">
+      <div className="grid grid-cols-2 divide-x-0 divide-y divide-border sm:grid-cols-3 lg:grid-cols-6 lg:divide-x lg:divide-y-0">
+        <HealthStep
+          label="Heartbeat"
+          value={heartbeatOk ? (onDemand ? "on-demand" : "healthy") : "missing"}
+          ok={heartbeatOk}
+          warn={!heartbeatOk && agent.status !== "OFFLINE"}
+        />
+        <HealthStep
+          label="Runtime"
+          value={
+            agent.runtime
+              ? agent.runtime.disabledAt
+                ? "disabled"
+                : agent.runtime.name
+              : "not attached"
+          }
+          ok={runtimeOk}
+          warn={!agent.runtime && agent.transport.mode !== "runs"}
+        />
+        <HealthStep
+          label="Transport"
+          value={agent.transport.label}
+          ok={agent.transport.ready && webhookOk}
+          warn={!webhookOk}
+        />
+        <HealthStep label="Dispatch" value={dispatchOk ? "eligible" : "blocked"} ok={dispatchOk} />
+        <HealthStep
+          label="Load"
+          value={cap === 0 ? `${load}/∞` : `${load}/${cap}`}
+          ok={!atCap}
+          warn={atCap}
+        />
+        <HealthStep label="Dead letters" value={deadLetters} ok={deadLetters === 0} />
+      </div>
+    </section>
+  );
+}
+
+function HealthStep({
+  label,
+  value,
+  ok,
+  warn = false,
+}: {
+  label: string;
+  value: React.ReactNode;
+  ok: boolean;
+  warn?: boolean;
+}) {
+  const Icon = ok ? CheckCircle2 : warn ? AlertTriangle : XCircle;
+  return (
+    <div className="flex min-w-0 items-center gap-2 p-3">
+      <span
+        className={cn(
+          "grid h-7 w-7 shrink-0 place-items-center rounded-full border",
+          ok
+            ? "border-success/30 bg-success/10 text-success"
+            : warn
+              ? "border-warning/30 bg-warning/10 text-warning"
+              : "border-danger/30 bg-danger/10 text-danger",
+        )}
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+          {label}
+        </span>
+        <span className="block truncate text-[0.75rem]">{value}</span>
+      </span>
+    </div>
+  );
+}
+
+function HeldWorkSection({ agent, slug, wsKey }: { agent: AgentRow; slug: string; wsKey: string }) {
+  const { data, isLoading } = trpc.agent.stalled.useQuery({ agentId: agent.id });
+  const { data: pipeline } = trpc.agent.pipeline.useQuery({});
+  const lane = pipeline?.lanes.find((l) => l.agent.id === agent.id);
+  const heldByPresence =
+    agent.status === "OFFLINE" ? [...(lane?.inFlight ?? []), ...(lane?.assigned ?? [])] : [];
+
+  if (isLoading || !data) return <SectionShell title="Held work" />;
+
+  const { stalledRuns, stalledIssues, stalledThresholdDays } = data;
+  const runIssueIds = new Set(stalledRuns.map((r) => r.issueId));
+  const quietAssigned = heldByPresence.filter(
+    (issue) =>
+      !runIssueIds.has(issue.id) && !stalledIssues.some((stalled) => stalled.id === issue.id),
+  );
+  const total = stalledRuns.length + stalledIssues.length + quietAssigned.length;
+
+  return (
+    <Section
+      title={
+        <span className="flex items-center gap-2">
+          <ShieldAlert
+            className={cn("h-3.5 w-3.5", total > 0 ? "text-warning" : "text-muted-foreground")}
+          />
+          Held work
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">{total}</span>
+        </span>
+      }
+      hint="Assignments that are stalled, quiet, or held behind this agent's current presence."
+    >
+      {total === 0 ? (
+        <div className="text-meta rounded-lg border border-border bg-card/40 p-3 text-muted-foreground">
+          No held work. Current assignments are moving or waiting normally.
+        </div>
+      ) : (
+        <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
+          {stalledRuns.length > 0 && (
+            <HeldBucket label="Stalled runs" count={stalledRuns.length}>
+              {stalledRuns.map((r) => (
+                <StalledRunRow key={r.id} run={r} slug={slug} wsKey={wsKey} />
+              ))}
+            </HeldBucket>
+          )}
+          {stalledIssues.length > 0 && (
+            <HeldBucket
+              label={`Stalled issues${stalledThresholdDays > 0 ? ` (${stalledThresholdDays}d+)` : ""}`}
+              count={stalledIssues.length}
+            >
+              {stalledIssues.map((issue) => (
+                <li key={issue.id}>
+                  <Link
+                    href={`/w/${slug}/issues/${issue.id}`}
+                    className="focus-ring flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-[0.75rem] hover:bg-subtle"
+                  >
+                    <span className="text-id text-muted-foreground">
+                      {formatIssueId(wsKey, issue.number)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{issue.title}</span>
+                    {issue.project && (
+                      <span className="text-meta font-mono text-muted-foreground">
+                        {issue.project.key}
+                      </span>
+                    )}
+                    <span className="text-meta text-warning">{relativeTime(issue.updatedAt)}</span>
+                  </Link>
+                </li>
+              ))}
+            </HeldBucket>
+          )}
+          {quietAssigned.length > 0 && (
+            <HeldBucket label="Held by presence" count={quietAssigned.length}>
+              {quietAssigned.slice(0, 8).map((issue) => (
+                <li key={issue.id}>
+                  <Link
+                    href={`/w/${slug}/issues/${issue.id}`}
+                    className="focus-ring flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-[0.75rem] hover:bg-subtle"
+                  >
+                    <span className="text-id text-muted-foreground">
+                      {formatIssueId(wsKey, issue.number)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{issue.title}</span>
+                    <span className="rounded-sm bg-danger/10 px-1 text-[0.625rem] font-semibold uppercase tracking-wider text-danger">
+                      offline
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </HeldBucket>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function HeldBucket({
+  label,
+  count,
+  children,
+}: {
+  label: string;
+  count: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-2 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+        <span>{label}</span>
+        <span className="font-mono">{count}</span>
+      </div>
+      <ul className="space-y-1">{children}</ul>
     </div>
   );
 }
@@ -454,127 +836,6 @@ function LegendDot({ color, label }: { color: string; label: string }) {
 
 // ---------------------------------------------------------------------------
 
-/**
- * Per-agent Stalled bucket. Two flavours surfaced together:
- *
- *  - **Stalled runs (5m+)** — `AgentRun` rows still ACTIVE but quiet
- *    past the shared `STALE_RUN_MS` threshold. Each row carries a
- *    `Kick` button that re-fires the dispatch webhook for the issue
- *    via `agentRun.kick` — assignment isn't changed; the agent is
- *    just nudged.
- *  - **Stalled issues (Nd+)** — issues currently assigned to this
- *    agent past `Workspace.stalledThresholdDays`. No kick affordance:
- *    long stalls usually mean a design / dependency wait, not a runtime
- *    glitch.
- *
- * If an issue appears in both buckets we tag the issue row with "(also
- * stalled run)" so the operator doesn't read the same incident twice
- * without context. The stalled-run row stays primary because it has
- * the kick affordance.
- *
- * Hidden entirely when both lists are empty — no clutter on healthy
- * agents.
- */
-function StalledSection({
-  agentId,
-  slug,
-  wsKey,
-}: {
-  agentId: string;
-  slug: string;
-  wsKey: string;
-}) {
-  const { data, isLoading } = trpc.agent.stalled.useQuery({ agentId });
-
-  if (isLoading || !data) return null;
-  const { stalledRuns, stalledIssues, stalledThresholdDays } = data;
-  if (stalledRuns.length === 0 && stalledIssues.length === 0) return null;
-
-  // Build the set of issue ids that already appear as a stalled run so
-  // the issue list can flag overlap rather than duplicate the line.
-  const runIssueIds = new Set(stalledRuns.map((r) => r.issueId));
-
-  return (
-    <Section
-      title={
-        <span className="flex items-center gap-2">
-          <AlertTriangle className="h-3.5 w-3.5 text-warning" />
-          Stalled
-          <span className="font-mono text-[0.6875rem] text-muted-foreground">
-            {stalledRuns.length + stalledIssues.length} total
-          </span>
-        </span>
-      }
-    >
-      <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
-        {stalledRuns.length > 0 && (
-          <div>
-            <div className="mb-1 flex items-center gap-2 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
-              <span>Stalled runs (5m+)</span>
-              <span className="font-mono">{stalledRuns.length}</span>
-            </div>
-            <ul className="space-y-1">
-              {stalledRuns.map((r) => (
-                <StalledRunRow key={r.id} run={r} slug={slug} wsKey={wsKey} />
-              ))}
-            </ul>
-          </div>
-        )}
-        {stalledIssues.length > 0 && (
-          <div>
-            <div className="mb-1 flex items-center gap-2 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
-              <span>
-                Stalled issues
-                {stalledThresholdDays > 0 ? ` (${stalledThresholdDays}d+)` : ""}
-              </span>
-              <span className="font-mono">{stalledIssues.length}</span>
-            </div>
-            <ul className="space-y-1">
-              {stalledIssues.map((i) => {
-                const alsoRun = runIssueIds.has(i.id);
-                return (
-                  <li key={i.id}>
-                    <Link
-                      href={`/w/${slug}/issues/${i.id}`}
-                      className="focus-ring flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-[0.75rem] hover:bg-subtle"
-                      title={
-                        alsoRun
-                          ? "Also has a stalled run — see the run row above for the Kick action."
-                          : `Quiet since ${relativeTime(i.updatedAt)}`
-                      }
-                    >
-                      <span className="text-id text-muted-foreground">
-                        {formatIssueId(wsKey, i.number)}
-                      </span>
-                      <span className="flex-1 truncate">{i.title}</span>
-                      {alsoRun && (
-                        <span className="rounded-sm bg-warning/15 px-1 text-[0.625rem] font-medium uppercase tracking-wider text-warning">
-                          also stalled run
-                        </span>
-                      )}
-                      {i.project && (
-                        <span className="text-meta font-mono text-muted-foreground">
-                          {i.project.key}
-                        </span>
-                      )}
-                      <span
-                        className="h-1.5 w-1.5 rounded-full"
-                        style={{ background: i.status.color }}
-                        title={i.status.name}
-                      />
-                      <span className="text-meta text-warning">{relativeTime(i.updatedAt)}</span>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-      </div>
-    </Section>
-  );
-}
-
 type StalledRunRowProps = {
   run: NonNullable<RouterOutputs["agent"]["stalled"]>["stalledRuns"][number];
   slug: string;
@@ -665,7 +926,7 @@ function CurrentlyWorkingSection({ agentId }: { agentId: string }) {
         title={
           <span className="flex items-center gap-2">
             <Workflow className="h-3.5 w-3.5 text-muted-foreground" />
-            Currently working on
+            Now
           </span>
         }
       >
@@ -684,7 +945,7 @@ function CurrentlyWorkingSection({ agentId }: { agentId: string }) {
       title={
         <span className="flex items-center gap-2">
           <Workflow className="h-3.5 w-3.5 text-muted-foreground" />
-          Currently working on
+          Now
           <span className="font-mono text-[0.6875rem] text-muted-foreground">
             {lane.counts.load} active · {lane.counts.recentlyDone} done (7d)
           </span>
@@ -967,7 +1228,7 @@ function CrewsAndWorkSection({ agentId, slug }: { agentId: string; slug: string 
       title={
         <span className="flex items-center gap-2">
           <Users className="h-3.5 w-3.5 text-muted-foreground" />
-          Crews &amp; live work
+          Crews &amp; live steps
         </span>
       }
     >
@@ -1087,11 +1348,11 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
       title={
         <span className="flex items-center gap-2">
           <Server className="h-3.5 w-3.5 text-muted-foreground" />
-          Connection
+          Runtime &amp; readiness
         </span>
       }
     >
-      <Card className="space-y-2 p-3 text-[0.75rem]">
+      <Card className="space-y-3 p-3 text-[0.75rem]">
         {/* How chat is served — engine + runtime/transport. */}
         <div className="flex flex-wrap items-center gap-2">
           {transport && <TransportChip mode={transport.mode} label={transport.label} showNone />}
@@ -1105,7 +1366,7 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
         {runtime ? (
           <Link
             href={`/w/${ws.slug}/settings/runtimes/${runtime.id}`}
-            className="focus-ring flex items-start gap-2 rounded-md hover:text-ember"
+            className="focus-ring flex items-start gap-2 rounded-md border border-border bg-background/40 p-2 hover:text-ember"
           >
             <KindIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1">
@@ -1129,13 +1390,16 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
 
         {/* Runtime heartbeat only matters for heartbeat-tracked runtimes. */}
         {runtime && agent.availability === "heartbeat" && (
-          <div className="text-meta flex items-baseline justify-between gap-3 text-muted-foreground">
-            <span>Heartbeat</span>
-            <span className="text-right text-foreground/80">
-              {runtime.heartbeatAt ? `${relativeTime(runtime.heartbeatAt)} ago` : "—"}
-            </span>
-          </div>
+          <ReadinessRow label="Runtime heartbeat">
+            {runtime.heartbeatAt ? `${relativeTime(runtime.heartbeatAt)} ago` : "—"}
+          </ReadinessRow>
         )}
+        <ReadinessRow label="Transport">{agent.transport.label}</ReadinessRow>
+        <ReadinessRow label="Dispatch ready">
+          <span className={agent.transport.ready ? "text-success" : "text-danger"}>
+            {agent.transport.ready ? "Yes" : "No"}
+          </span>
+        </ReadinessRow>
 
         {/* Verify connection — readiness + (runs) endpoint probe. */}
         <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-2">
@@ -1169,6 +1433,15 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
   );
 }
 
+function ReadinessRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="text-meta flex items-baseline justify-between gap-3 text-muted-foreground">
+      <span>{label}</span>
+      <span className="min-w-0 truncate text-right text-foreground/80">{children}</span>
+    </div>
+  );
+}
+
 function DispatchEligibilityCard({
   agent,
   focus,
@@ -1182,6 +1455,10 @@ function DispatchEligibilityCard({
   const cap = agent.maxConcurrent;
   const atCap = cap > 0 && load >= cap;
   const onDemand = agent.availability === "on-demand";
+  const heartbeatOk = onDemand || (agent.status !== "OFFLINE" && Boolean(agent.lastHeartbeatAt));
+  const runtimeOk = !agent.runtime?.disabledAt;
+  const webhookOk = agent.transport.ready;
+  const eligible = heartbeatOk && runtimeOk && webhookOk && !atCap;
   // On-demand agents (managed app server, completions, dispatch) aren't
   // heartbeat-tracked, so don't nag about a stale/absent heartbeat.
   const shouldExplainHeartbeat =
@@ -1206,24 +1483,28 @@ function DispatchEligibilityCard({
           shouldExplainHeartbeat && "border-warning/30 bg-warning/5",
         )}
       >
-        <Row label="Status">
-          {onDemand ? (
-            <span className="inline-flex items-center gap-1.5 text-sky-600 dark:text-sky-400">
-              <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-              on-demand
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1.5">
-              <AgentPresenceDot status={agent.status} size="sm" />
-              <span className="capitalize">{agent.status.toLowerCase()}</span>
-            </span>
-          )}
-        </Row>
-        <Row label="Load">
-          <span className={cn("font-mono", atCap ? "text-warning" : "text-foreground")}>
-            {load}/{cap === 0 ? "∞" : cap}
-          </span>
-        </Row>
+        <ChecklistRow
+          ok={heartbeatOk}
+          label="Heartbeat reachable"
+          value={
+            onDemand
+              ? "on-demand"
+              : agent.lastHeartbeatAt
+                ? `${relativeTime(agent.lastHeartbeatAt)} ago`
+                : "never"
+          }
+        />
+        <ChecklistRow
+          ok={runtimeOk}
+          label="Runtime available"
+          value={agent.runtime?.disabledAt ? "disabled" : (agent.runtime?.name ?? "not required")}
+        />
+        <ChecklistRow ok={webhookOk} label="Transport ready" value={agent.transport.label} />
+        <ChecklistRow
+          ok={!atCap}
+          label="Load under cap"
+          value={`${load}/${cap === 0 ? "∞" : cap}`}
+        />
         <Row label="Capabilities">
           <span className="flex flex-wrap justify-end gap-1">
             {agent.capabilities.length === 0 ? (
@@ -1237,16 +1518,17 @@ function DispatchEligibilityCard({
             )}
           </span>
         </Row>
-        <Row label="Last heartbeat">
-          <span className="text-muted-foreground">
-            {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "never"}
-          </span>
-        </Row>
         <Row label="Last dispatched">
           <span className="text-muted-foreground">
             {agent.lastDispatchedAt ? relativeTime(agent.lastDispatchedAt) : "never"}
           </span>
         </Row>
+        <div className="flex items-center justify-between border-t border-border pt-2">
+          <span className="font-medium">Eligible</span>
+          <span className={cn("font-mono", eligible ? "text-success" : "text-danger")}>
+            {eligible ? "Yes" : "No"}
+          </span>
+        </div>
         {shouldExplainHeartbeat && (
           <div className="text-meta rounded-md border border-border bg-background/40 p-2 text-muted-foreground">
             <div className="font-medium text-foreground">Heartbeat context</div>
@@ -1262,6 +1544,28 @@ function DispatchEligibilityCard({
         )}
       </Card>
     </Section>
+  );
+}
+
+function ChecklistRow({
+  ok,
+  label,
+  value,
+}: {
+  ok: boolean;
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      {ok ? (
+        <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+      ) : (
+        <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" />
+      )}
+      <span className="min-w-0 flex-1 text-muted-foreground">{label}</span>
+      <span className="min-w-0 max-w-[55%] truncate text-right">{value}</span>
+    </div>
   );
 }
 

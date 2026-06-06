@@ -2,6 +2,28 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-06 — Runroom agents views
+
+Enhanced the workspace Agents surface around the selected "Runroom Command"
+mockup. `/w/[slug]/agents` now uses a new `AgentRunroomDashboard` that composes
+existing live queries into an operator dashboard: fleet health, dispatch queue,
+active run count, runtime coverage, missed wakes, compact presence scan, agent
+run lanes, runtime topology with workspace/runtime bindings, attention queue,
+and activity stream. No new server contracts were added; the view reuses
+agent/pipeline/dispatch/runtime/global-runtimes/agent-run/timeline data.
+
+Reworked `/w/[slug]/agents/[profileKey]` for single-agent oversight. The detail
+view now leads with an incident banner, health chain, held-work panel, and
+reordered operational sections: Now, What the agent sees next, Crews & live
+steps, stats, uptime, runtime readiness, webhook health, dispatch eligibility,
+and recent events. Existing actions remain real: connection verification,
+runtime links, delivery links, issue links, and stalled-run Kick.
+
+Verification: `pnpm lint`, `pnpm typecheck`, `pnpm test` (793 passed / 1
+skipped), `pnpm build:app`. Local dev route compilation succeeded for
+`/w/[slug]/agents`; authenticated screenshot capture was blocked by local
+credential drift in the shared dev database.
+
 ## 2026-06-06 — Issue status timeline and Hermes enforcement flag
 
 Issue STATUS comments now stay inside the normal chronological comments
