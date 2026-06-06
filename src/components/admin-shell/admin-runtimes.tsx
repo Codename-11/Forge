@@ -1,6 +1,6 @@
 "use client";
 import { trpc } from "@/lib/trpc";
-import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, relTime } from "./admin-ui";
+import { ADMIN, AdminPanel, AdminLoading, AdminEmpty } from "./admin-ui";
 
 /**
  * Instance-wide runtimes table for `/admin/runtimes`. Reads
@@ -35,13 +35,15 @@ export function AdminRuntimes() {
           <AdminEmpty>No runtimes registered.</AdminEmpty>
         ) : (
           runtimes.data.map((r, i, arr) => {
-            const status = r.disabledAt ? "disabled" : r.online ? "online" : "offline";
+            const status = r.health.label;
             const statusColor =
-              status === "online"
+              r.health.tone === "success"
                 ? "hsl(var(--success))"
-                : status === "disabled"
+                : r.health.tone === "danger"
                   ? "hsl(var(--danger))"
-                  : ADMIN.textMuted;
+                  : r.health.tone === "warning"
+                    ? "hsl(var(--warning))"
+                    : ADMIN.textMuted;
             return (
               <div
                 key={r.id}
@@ -65,6 +67,9 @@ export function AdminRuntimes() {
                       {r.adapterKey}
                     </span>
                   )}
+                  <span className="block truncate text-[10px]" style={{ color: ADMIN.textDim }} title={r.health.reason}>
+                    {r.health.reason}
+                  </span>
                 </span>
                 <span className="truncate text-meta font-mono" style={{ color: ADMIN.textSoft }}>
                   {r.kind.toLowerCase()}
@@ -75,8 +80,8 @@ export function AdminRuntimes() {
                 <span className="text-right font-mono text-[0.8125rem] tabular-nums" style={{ color: ADMIN.text }}>
                   {r.boundAgents}
                 </span>
-                <span className="text-right text-meta tabular-nums" style={{ color: ADMIN.textMuted }}>
-                  {relTime(r.heartbeatAt)}
+                <span className="text-right text-meta tabular-nums" style={{ color: ADMIN.textMuted }} title={r.health.reason}>
+                  {r.health.lastSignal}
                 </span>
                 <span className="text-right">
                   <span className="inline-flex items-center gap-1 text-meta" style={{ color: statusColor }}>

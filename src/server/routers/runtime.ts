@@ -12,6 +12,11 @@ import {
   CODEX_SANDBOX_MODES,
 } from "@/server/services/dispatch/codex-app-server";
 import { recordRuntimeHeartbeatPresence } from "@/server/services/heartbeat";
+import { probeRuntime, type RuntimeProbeResult } from "@/server/services/dispatch/runtime-probe";
+import {
+  deriveRuntimeHealthStatus,
+  sanitizeRuntimeProbeDetail,
+} from "@/server/services/runtime-status";
 
 /**
  * Validation for `Runtime.config`. Today only the `codex-app-server` adapter
@@ -95,6 +100,42 @@ function redactRuntime<T extends Partial<Runtime>>(rt: T): Omit<T, "secret"> & {
   return { ...(rest as Omit<T, "secret">), hasSecret: !!secret };
 }
 
+type RuntimeForHealth = Pick<
+  Runtime,
+  | "kind"
+  | "adapterKey"
+  | "endpoint"
+  | "archivedAt"
+  | "disabledAt"
+  | "heartbeatAt"
+  | "connectedAt"
+  | "lastProbeAt"
+  | "lastProbeAttempted"
+  | "lastProbeReachable"
+  | "lastProbeDetail"
+>;
+
+function withRuntimeHealth<T extends Partial<Runtime> & RuntimeForHealth>(rt: T) {
+  return {
+    ...redactRuntime(rt),
+    health: deriveRuntimeHealthStatus(rt),
+  };
+}
+
+function probeData(res: RuntimeProbeResult, at = new Date()) {
+  return {
+    lastProbeAt: at,
+    lastProbeAttempted: res.attempted,
+    lastProbeReachable: res.reachable,
+    lastProbeDetail: sanitizeRuntimeProbeDetail(res.detail),
+  };
+}
+
+function shouldProbeHeartbeatCountAsRuntimeHeartbeat(rt: RuntimeForHealth): boolean {
+  const adapter = getRuntimeAdapter(rt.adapterKey);
+  return adapter?.transport === "app-server" && adapter.capabilities.presence === "runtime-heartbeat";
+}
+
 /**
  * Runtime registry. A Runtime is the compute environment that hosts one
  * or more agents — the multi-host primitive Forge gained alongside
@@ -139,7 +180,7 @@ export const runtimeRouter = router({
           _count: { select: { agents: true } },
         },
       });
-      return rows.map(redactRuntime);
+      return rows.map(withRuntimeHealth);
     }),
 
   byId: workspaceProcedure
@@ -164,7 +205,7 @@ export const runtimeRouter = router({
         },
       });
       if (!runtime) throw new TRPCError({ code: "NOT_FOUND" });
-      return redactRuntime(runtime);
+      return withRuntimeHealth(runtime);
     }),
 
   register: workspaceProcedure
@@ -301,7 +342,7 @@ export const runtimeRouter = router({
           ownerId: ctx.session.user.id,
         },
       });
-      return redactRuntime(row);
+      return withRuntimeHealth(row);
     }),
 
   update: workspaceProcedure
@@ -346,7 +387,47 @@ export const runtimeRouter = router({
           ...(validatedConfig !== undefined ? { config: validatedConfig } : {}),
         },
       });
-      return redactRuntime(updated);
+      return withRuntimeHealth(updated);
+    }),
+
+  verifyConnection: workspaceProcedure
+    .input(z.object({ id: runtimeId }))
+    .mutation(async ({ ctx, input }) => {
+      const runtime = await ctx.db.runtime.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+      });
+      if (!runtime) throw new TRPCError({ code: "NOT_FOUND" });
+      if (runtime.archivedAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Runtime is archived; restore it before testing." });
+      }
+      const probe = await probeRuntime({
+        adapterKey: runtime.adapterKey,
+        endpoint: runtime.endpoint,
+        secret: runtime.secret,
+      });
+      const now = new Date();
+      const data = probeData(probe, now);
+      const heartbeatData =
+        probe.reachable && shouldProbeHeartbeatCountAsRuntimeHeartbeat(runtime)
+          ? { heartbeatAt: now }
+          : {};
+      const updated = await ctx.db.runtime.update({
+        where: { id: runtime.id },
+        data: { ...data, ...heartbeatData },
+      });
+      if (probe.reachable && heartbeatData.heartbeatAt) {
+        await recordRuntimeHeartbeatPresence(runtime.id, now, ctx.db);
+      }
+      const health = deriveRuntimeHealthStatus(updated);
+      return {
+        runtime: withRuntimeHealth(updated),
+        probe: {
+          attempted: probe.attempted,
+          reachable: probe.reachable,
+          detail: data.lastProbeDetail ?? probe.detail,
+        },
+        health,
+      };
     }),
 
   /**
@@ -367,7 +448,7 @@ export const runtimeRouter = router({
         where: { id: row.id },
         data: { disabledAt: input.enabled ? null : new Date() },
       });
-      return redactRuntime(updated);
+      return withRuntimeHealth(updated);
     }),
 
   /** Adapter catalog for the UI (managed runtimes are creatable). */

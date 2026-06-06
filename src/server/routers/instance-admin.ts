@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { CycleStatus, InstanceRole, Role } from "@prisma/client";
 import { router, instanceAdminProcedure } from "@/server/trpc";
 import { ensureWorkspaceBucket } from "@/server/services/storage";
+import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 
 const slugSchema = z
   .string()
@@ -24,8 +25,6 @@ const keySchema = z
  * fallback). Distinct from the workspace `admin.*` observability router.
  * Part of the multi-workspace restructure.
  */
-
-const HEARTBEAT_ONLINE_MS = 5 * 60 * 1000;
 
 export const instanceAdminRouter = router({
   /** All tenants (non-deleted workspaces) with rollup stats. */
@@ -108,19 +107,29 @@ export const instanceAdminRouter = router({
         kind: true,
         adapterKey: true,
         heartbeatAt: true,
+        lastProbeAt: true,
+        lastProbeAttempted: true,
+        lastProbeReachable: true,
+        lastProbeDetail: true,
+        connectedAt: true,
+        endpoint: true,
         disabledAt: true,
+        archivedAt: true,
         instanceShared: true,
         createdAt: true,
         owner: { select: { id: true, name: true, email: true } },
         _count: { select: { agents: true } },
       },
     });
-    const now = Date.now();
-    return runtimes.map((r) => ({
-      ...r,
-      online: !r.disabledAt && !!r.heartbeatAt && now - r.heartbeatAt.getTime() < HEARTBEAT_ONLINE_MS,
-      boundAgents: r._count.agents,
-    }));
+    return runtimes.map((r) => {
+      const health = deriveRuntimeHealthStatus(r);
+      return {
+        ...r,
+        health,
+        online: health.kind === "online",
+        boundAgents: r._count.agents,
+      };
+    });
   }),
 
   /** Cross-workspace audit feed for the instance audit page. */

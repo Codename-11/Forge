@@ -18,7 +18,15 @@ import { workspaceChipColor } from "@/components/global-shell/global-shell";
 
 type Workspace = { id: string; slug: string; name: string; key: string };
 
-function StatusPip({ online }: { online: boolean }) {
+function StatusPip({ tone }: { tone: "success" | "warning" | "danger" | "muted" }) {
+  const bg =
+    tone === "success"
+      ? "hsl(var(--success))"
+      : tone === "danger"
+        ? "hsl(var(--danger))"
+        : tone === "warning"
+          ? "hsl(var(--warning))"
+          : "hsl(var(--muted-foreground))";
   return (
     <span
       aria-hidden
@@ -26,7 +34,7 @@ function StatusPip({ online }: { online: boolean }) {
         width: 6,
         height: 6,
         borderRadius: 9999,
-        background: online ? "hsl(var(--success))" : "hsl(var(--muted-foreground))",
+        background: bg,
         display: "inline-block",
       }}
     />
@@ -87,9 +95,13 @@ export default function RuntimesPage() {
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {runtimes!.map((r) => {
                 const Ico = r.kind === "CLOUD" ? Sparkles : r.kind === "REMOTE_HTTP" ? Server : Bot;
-                const tone = r.online
+                const tone = r.health.kind === "online"
                   ? "border-success/30 bg-success/5"
-                  : "border-border bg-card/40";
+                  : r.health.tone === "danger"
+                    ? "border-danger/30 bg-danger/5"
+                    : r.health.tone === "warning"
+                      ? "border-warning/30 bg-warning/5"
+                      : "border-border bg-card/40";
                 return (
                   <div key={r.id} className={`flex flex-col gap-3 rounded-lg border p-4 ${tone}`}>
                     <header className="flex items-start gap-2">
@@ -102,9 +114,9 @@ export default function RuntimesPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
                           <span className="truncate text-sm font-semibold">{r.name}</span>
-                          <StatusPip online={r.online} />
+                          <StatusPip tone={r.health.tone} />
                           <span className="text-meta text-muted-foreground">
-                            {r.online ? "online" : r.disabled ? "disabled" : "offline"}
+                            {r.health.label}
                           </span>
                         </div>
                         {r.endpoint && (
@@ -118,21 +130,22 @@ export default function RuntimesPage() {
 
                     <div className="grid grid-cols-3 gap-2 text-meta">
                       <div>
-                        <div className="text-muted-foreground">Kind</div>
+                        <div className="text-muted-foreground">Last signal</div>
+                        <div className="mt-0.5">{r.health.lastSignal}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Probe / sweep</div>
+                        <div className="mt-0.5">{r.health.sweepExpectation}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Adapter</div>
                         <div className="mt-0.5 font-mono text-[11px]">
-                          {r.kind.toLowerCase().replace("_", " ")}
+                          {r.health.adapter}
                         </div>
                       </div>
-                      <div>
-                        <div className="text-muted-foreground">CPU / Mem</div>
-                        <div className="mt-0.5 font-mono text-[11px]">—</div>
-                      </div>
-                      <div>
-                        <div className="text-muted-foreground">Heartbeat</div>
-                        <div className="mt-0.5">
-                          {r.heartbeatAt ? relativeTime(r.heartbeatAt) : "—"}
-                        </div>
-                      </div>
+                    </div>
+                    <div className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-meta text-muted-foreground">
+                      {r.health.reason}
                     </div>
 
                     {/* Bound agents + workspaces */}

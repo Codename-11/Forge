@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { router, globalProcedure } from "@/server/trpc";
+import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 
 /**
  * Cross-workspace, read-only aggregations for the global "concourse"
@@ -9,8 +10,6 @@ import { router, globalProcedure } from "@/server/trpc";
  * (`workspaceProcedure`). Part of the multi-workspace restructure
  * (see docs/plans/multiws-restructure.md, Phase 2).
  */
-
-const HEARTBEAT_ONLINE_MS = 5 * 60 * 1000;
 
 /** Workspace ids the caller is a member of (non-deleted). */
 async function memberWorkspaceIds(db: PrismaClient, userId: string): Promise<string[]> {
@@ -81,13 +80,22 @@ export const globalRouter = router({
       ctx.db.agent.count({ where: { workspaceId: { in: wsIds }, archivedAt: null, status: { in: ["ONLINE", "BUSY"] } } }),
       ctx.db.runtime.findMany({
         where: { ownerId: ctx.session.user.id, archivedAt: null },
-        select: { heartbeatAt: true, disabledAt: true },
+        select: {
+          kind: true,
+          adapterKey: true,
+          endpoint: true,
+          archivedAt: true,
+          disabledAt: true,
+          heartbeatAt: true,
+          connectedAt: true,
+          lastProbeAt: true,
+          lastProbeAttempted: true,
+          lastProbeReachable: true,
+          lastProbeDetail: true,
+        },
       }),
     ]);
-    const now = Date.now();
-    const runtimesOnline = runtimes.filter(
-      (r) => !r.disabledAt && r.heartbeatAt && now - r.heartbeatAt.getTime() < HEARTBEAT_ONLINE_MS,
-    ).length;
+    const runtimesOnline = runtimes.filter((r) => deriveRuntimeHealthStatus(r).kind === "online").length;
     return {
       workspaceCount: wsIds.length,
       openIssues,
@@ -155,8 +163,13 @@ export const globalRouter = router({
         endpoint: true,
         providersAvailable: true,
         heartbeatAt: true,
+        lastProbeAt: true,
+        lastProbeAttempted: true,
+        lastProbeReachable: true,
+        lastProbeDetail: true,
         connectedAt: true,
         disabledAt: true,
+        archivedAt: true,
         createdAt: true,
         agents: {
           where: { archivedAt: null },
@@ -169,10 +182,10 @@ export const globalRouter = router({
         },
       },
     });
-    const now = Date.now();
     return runtimes.map((r) => {
       const workspaces = new Map<string, { id: string; slug: string; name: string; key: string }>();
       for (const a of r.agents) workspaces.set(a.workspace.id, a.workspace);
+      const health = deriveRuntimeHealthStatus(r);
       return {
         id: r.id,
         name: r.name,
@@ -181,9 +194,14 @@ export const globalRouter = router({
         endpoint: r.endpoint,
         providersAvailable: r.providersAvailable,
         heartbeatAt: r.heartbeatAt,
+        lastProbeAt: r.lastProbeAt,
+        lastProbeAttempted: r.lastProbeAttempted,
+        lastProbeReachable: r.lastProbeReachable,
+        lastProbeDetail: r.lastProbeDetail,
+        health,
         connectedAt: r.connectedAt,
         registeredAt: r.createdAt,
-        online: !r.disabledAt && !!r.heartbeatAt && now - r.heartbeatAt.getTime() < HEARTBEAT_ONLINE_MS,
+        online: health.kind === "online",
         disabled: !!r.disabledAt,
         boundAgents: r.agents.map((a) => ({ id: a.id, profileKey: a.profileKey, name: a.name })),
         workspacesInUse: [...workspaces.values()],

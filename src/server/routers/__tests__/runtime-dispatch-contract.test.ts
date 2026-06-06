@@ -47,6 +47,24 @@ describe("runtime dispatch contract", () => {
     ).rejects.toThrow();
   });
 
+  it("verifyConnection runs a handshake-only probe and persists sanitized diagnostics", async () => {
+    const rt = await caller.create({ ...codexInput, endpoint: "ws://127.0.0.1:1" });
+
+    const verified = await caller.verifyConnection({ id: rt.id });
+
+    expect(verified.probe.attempted).toBe(true);
+    expect(verified.probe.reachable).toBe(false);
+    expect(verified.probe.detail).toMatch(/ECONNREFUSED|refused|connect/i);
+    expect(verified.health.kind).toBe("probe_failed");
+
+    const fromDetail = await caller.byId({ id: rt.id });
+    expect(fromDetail.lastProbeAt).not.toBeNull();
+    expect(fromDetail.lastProbeAttempted).toBe(true);
+    expect(fromDetail.lastProbeReachable).toBe(false);
+    expect(fromDetail.lastProbeDetail).toBe(verified.probe.detail);
+    expect(fromDetail.health.kind).toBe("probe_failed");
+  });
+
   it("setEnabled flips disabledAt, and a disabled runtime resolves to the refusing sentinel", async () => {
     const rt = await caller.create(codexInput);
     const disabled = await caller.setEnabled({ id: rt.id, enabled: false });

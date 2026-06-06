@@ -55,20 +55,47 @@ export default function RuntimeDetailPage() {
     { enabled: !!id },
   );
 
-  const [renameOpen, setRenameOpen] = useState(false);
-  const [renameValue, setRenameValue] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editEndpoint, setEditEndpoint] = useState("");
+  const [editSecret, setEditSecret] = useState("");
+  const [editConfig, setEditConfig] = useState("{}");
   const [archiveOpen, setArchiveOpen] = useState(false);
 
   useEffect(() => {
-    if (renameOpen && runtime) setRenameValue(runtime.name);
-    // Only re-seed when the modal toggles open. Subsequent runtime
-    // updates (e.g. after rename invalidation) shouldn't clobber typing.
+    if (editOpen && runtime) {
+      setEditName(runtime.name);
+      setEditEndpoint(runtime.endpoint ?? "");
+      setEditSecret("");
+      setEditConfig(JSON.stringify(runtime.config ?? {}, null, 2));
+    }
+    // Only re-seed when the modal toggles open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renameOpen]);
+  }, [editOpen]);
 
   const update = trpc.runtime.update.useMutation({
     onSuccess: () => {
-      toast.success("Runtime renamed.");
+      toast.success("Runtime saved.");
+      void utils.runtime.byId.invalidate({ id });
+      void utils.runtime.list.invalidate();
+      setEditOpen(false);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const verify = trpc.runtime.verifyConnection.useMutation({
+    onSuccess: (res) => {
+      const title = res.probe.reachable ? "Connection reachable." : "Connection test failed.";
+      (res.probe.reachable ? toast.success : toast.error)(`${title} ${res.probe.detail}`);
+      void utils.runtime.byId.invalidate({ id });
+      void utils.runtime.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const setEnabled = trpc.runtime.setEnabled.useMutation({
+    onSuccess: (rt) => {
+      toast.success(rt.disabledAt ? "Runtime disabled." : "Runtime enabled.");
       void utils.runtime.byId.invalidate({ id });
       void utils.runtime.list.invalidate();
     },
@@ -123,10 +150,28 @@ export default function RuntimeDetailPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => setRenameOpen(true)}
+                onClick={() => verify.mutate({ id })}
+                disabled={verify.isPending}
               >
-                Rename
+                {verify.isPending ? "Testing…" : "Test connection"}
               </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setEditOpen(true)}
+              >
+                Edit
+              </Button>
+              {!runtime.archivedAt && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEnabled.mutate({ id, enabled: Boolean(runtime.disabledAt) })}
+                  disabled={setEnabled.isPending}
+                >
+                  {runtime.disabledAt ? "Enable" : "Disable"}
+                </Button>
+              )}
               {runtime.archivedAt ? (
                 <Button
                   size="sm"
@@ -179,6 +224,7 @@ export default function RuntimeDetailPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-sm font-semibold">{runtime.name}</h2>
                       <KindBadge kind={runtime.kind} />
+                      <RuntimeHealthBadge health={runtime.health} />
                       {runtime.providersAvailable.map((p) => (
                         <span
                           key={p}
@@ -219,6 +265,34 @@ export default function RuntimeDetailPage() {
                           </span>
                         </>
                       )}
+                    </div>
+                    <div className="grid gap-2 rounded-md border border-border/60 bg-background/40 p-3 text-meta text-muted-foreground sm:grid-cols-2">
+                      <div>
+                        <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+                          Reason
+                        </div>
+                        <div className="mt-1 text-foreground/80">{runtime.health.reason}</div>
+                      </div>
+                      <div>
+                        <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+                          Last signal
+                        </div>
+                        <div className="mt-1">{runtime.health.lastSignal}</div>
+                      </div>
+                      <div>
+                        <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+                          Probe / sweep
+                        </div>
+                        <div className="mt-1">{runtime.health.sweepExpectation}</div>
+                      </div>
+                      <div>
+                        <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+                          Endpoint / adapter
+                        </div>
+                        <div className="mt-1 truncate font-mono text-[0.6875rem] text-foreground/80">
+                          {runtime.endpoint ?? "no endpoint"} · {runtime.health.adapter}
+                        </div>
+                      </div>
                     </div>
                     {runtime.endpoint && (
                       <div className="text-meta text-muted-foreground">
@@ -368,36 +442,89 @@ export default function RuntimeDetailPage() {
       </div>
 
       <QuickForm
-        open={renameOpen}
+        open={editOpen}
         onOpenChange={(v) => {
-          if (!v) setRenameOpen(false);
+          if (!v) setEditOpen(false);
         }}
-        title="Rename runtime"
-        description="The runtime keeps its id and the agents pointing at it. Only the display label changes."
+        title="Edit runtime"
+        description="Update runtime connection details. Leave the secret blank to keep the existing value. Config must be a JSON object."
         primaryLabel="Save"
         loading={update.isPending}
         onSubmit={async (e) => {
           e.preventDefault();
-          const trimmed = renameValue.trim();
-          if (!trimmed) {
-            return { error: "Name cannot be empty." };
+          const name = editName.trim();
+          if (!name) return { error: "Name cannot be empty." };
+          let config: Record<string, unknown> | undefined;
+          try {
+            const parsed = JSON.parse(editConfig || "{}");
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              return { error: "Config must be a JSON object." };
+            }
+            config = parsed as Record<string, unknown>;
+          } catch (err) {
+            return { error: err instanceof Error ? err.message : "Invalid JSON config." };
           }
           try {
-            await update.mutateAsync({ id, name: trimmed });
+            await update.mutateAsync({
+              id,
+              name,
+              endpoint: editEndpoint.trim(),
+              secret: editSecret.trim() || undefined,
+              config,
+            });
           } catch (err) {
-            return {
-              error: err instanceof Error ? err.message : "Rename failed.",
-            };
+            return { error: err instanceof Error ? err.message : "Save failed." };
           }
         }}
       >
-        <Input
-          autoFocus
-          value={renameValue}
-          onChange={(e) => setRenameValue(e.target.value)}
-          maxLength={120}
-          placeholder="Runtime name"
-        />
+        <div className="space-y-3">
+          <label className="block">
+            <span className="mb-1 block font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-muted-foreground">
+              Name
+            </span>
+            <Input
+              autoFocus
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              maxLength={120}
+              placeholder="Runtime name"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-muted-foreground">
+              Endpoint
+            </span>
+            <Input
+              value={editEndpoint}
+              onChange={(e) => setEditEndpoint(e.target.value)}
+              placeholder="https://… or wss://…"
+              className="font-mono"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-muted-foreground">
+              Secret {runtime?.hasSecret ? "(configured — blank keeps it)" : "(none set)"}
+            </span>
+            <Input
+              type="password"
+              value={editSecret}
+              onChange={(e) => setEditSecret(e.target.value)}
+              placeholder={runtime?.hasSecret ? "••••••••" : "HMAC / gateway token"}
+              className="font-mono"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-muted-foreground">
+              Config JSON
+            </span>
+            <textarea
+              value={editConfig}
+              onChange={(e) => setEditConfig(e.target.value)}
+              rows={6}
+              className="focus-ring w-full rounded-md border border-input bg-background px-2.5 py-2 font-mono text-xs"
+            />
+          </label>
+        </div>
       </QuickForm>
 
       <Confirm
@@ -425,6 +552,32 @@ function KindBadge({ kind }: { kind: RuntimeKind }) {
       title={KIND_LABEL[kind]}
     >
       {KIND_LABEL[kind]}
+    </span>
+  );
+}
+
+function RuntimeHealthBadge({
+  health,
+}: {
+  health: { label: string; tone: "success" | "warning" | "danger" | "muted"; reason: string };
+}) {
+  const toneClass =
+    health.tone === "success"
+      ? "border-success/30 bg-success/10 text-success"
+      : health.tone === "danger"
+        ? "border-danger/30 bg-danger/10 text-danger"
+        : health.tone === "warning"
+          ? "border-warning/30 bg-warning/10 text-warning"
+          : "border-border bg-subtle/40 text-muted-foreground";
+  return (
+    <span
+      className={cn(
+        "rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+        toneClass,
+      )}
+      title={health.reason}
+    >
+      {health.label}
     </span>
   );
 }

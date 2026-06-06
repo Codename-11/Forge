@@ -2,6 +2,14 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-05 — AXI-73 runtime health diagnostics
+
+Implemented runtime reachability diagnostics across schema, services, router APIs, and UI. Added persisted sanitized probe fields (`lastProbeAt`, `lastProbeAttempted`, `lastProbeReachable`, `lastProbeDetail`) via migration `0073_runtime_health_diagnostics`; centralized status derivation in `runtime-status`; and added `runtime.verifyConnection` for handshake-only Hermes/Codex probes that never start a run and never expose secrets.
+
+The scheduled runtime health sweep now records sanitized probe results for supported adapters. Codex app-server probes still count as runtime heartbeats and propagate persistent-agent liveness; Hermes probes are diagnostic-only so operators can distinguish gateway/auth failures from missing forge-presence / heartbeat / webhook delivery. Runtime list/detail/global/admin surfaces now show server-derived status, reason, last signal, adapter/endpoint, and sweep coverage. Runtime detail now exposes Edit, Test connection, Enable/Disable, Archive, and Unarchive together.
+
+Gate: `pnpm prisma:generate`, `pnpm lint`, `pnpm typecheck`, full `pnpm test` (758 pass / 1 skipped), and `pnpm build:app`.
+
 ## 2026-06-05 — AXI-71 RUNS dispatch + issue run-state UX
 
 Investigated AXI-71 after Victor reported the webhook runtime had no local

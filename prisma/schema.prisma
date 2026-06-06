@@ -1687,6 +1687,13 @@ model Runtime {
   /// heartbeat: an idle runtime can be alive while no agent on it has
   /// done anything recently.
   heartbeatAt        DateTime?
+  /// Last handshake-only reachability probe. This is diagnostic, not a
+  /// substitute for adapter-specific presence: Hermes can answer its gateway
+  /// probe while still missing the forge-presence/agent heartbeat signal.
+  lastProbeAt        DateTime?
+  lastProbeAttempted Boolean         @default(false)
+  lastProbeReachable Boolean?
+  lastProbeDetail    String?
   /// Last connect time for LOCAL_DAEMON (when the SSE subscription
   /// opened). Null for REMOTE_HTTP.
   connectedAt        DateTime?
