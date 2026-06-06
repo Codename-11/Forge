@@ -1,7 +1,7 @@
 # Comments
 
 The `Comment` row is the unit of conversation on an issue. Same model
-covers human prose, agent prose, the rolling agent-run status pin, and
+covers human prose, agent prose, rolling agent-run status updates, and
 server-authored ambient notices. Kind discriminates them.
 
 ```prisma
@@ -39,11 +39,15 @@ enum ConfidenceLevel {
 ```
 
 `STATUS` rows are upserted via `comment.upsertStatus` — one row per
-`AgentRun`. Active / stalled / waiting status rows are pinned above the
-chronological timeline; finished status rows fall back into the timeline
-and render with a soft ember "ran status" chip. `SYSTEM` rows are
-server-authored narration (assignment notices, dispatch provenance) —
-no avatar, no card, rendered as a thin separator-style line.
+`AgentRun`. They render inside the same chronological issue timeline as
+BODY and SYSTEM rows, but their effective timestamp is `updatedAt` so a
+rolling live-status update moves to the point where the agent actually
+reported progress. Active / stalled / waiting status rows render with a
+soft ember "live status" chip; terminal rows render as "run status".
+The always-current control surface lives in the issue run strip above the
+thread and near the composer. `SYSTEM` rows are server-authored narration
+(assignment notices, dispatch provenance) — no avatar, no card, rendered
+as a thin separator-style line.
 
 ## Tool-call directive (`:::tool`)
 
