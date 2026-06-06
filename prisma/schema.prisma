@@ -150,6 +150,7 @@ enum EventKind {
   AGENT_RUN_BLOCKED
   AGENT_RUN_COMPLETED
   AGENT_RUN_STALLED
+  AGENT_RUN_CLEARED
   CHAT_MESSAGE_POSTED
   CHAT_THREAD_COMPACTED
   ISSUE_SNOOZED
@@ -562,6 +563,7 @@ model User {
   chatThreads             ChatThread[]
   runtimes                Runtime[]
   controlRequestedRuns    AgentRun[]               @relation("AgentRunControlRequester")
+  clearedAgentRuns        AgentRun[]               @relation("AgentRunClearer")
   pins                    Pin[]
   recentItems             RecentItem[]
   notes                   Note[]
@@ -2167,6 +2169,12 @@ model AgentRun {
   /// User who requested the control. SetNull on user delete so the
   /// run row survives membership churn.
   controlRequestedById String?
+  /// Operator-cleared terminal failures stay in durable history but are
+  /// hidden from Command Center / pipeline failure queues by default.
+  clearedAt            DateTime?
+  /// User who cleared the terminal failure from operational surfaces.
+  /// SetNull on user delete so the run row survives membership churn.
+  clearedById          String?
 
   /// Optional ExecutionStep this run is executing (migration: AXI-57). Set
   /// when the Goal-orchestration loop opens a run for a step, so orchestrated
@@ -2184,10 +2192,12 @@ model AgentRun {
   agent              Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
   executionStep      ExecutionStep?  @relation("AgentRunStep", fields: [executionStepId], references: [id], onDelete: SetNull)
   controlRequestedBy User?           @relation("AgentRunControlRequester", fields: [controlRequestedById], references: [id], onDelete: SetNull)
+  clearedBy          User?           @relation("AgentRunClearer", fields: [clearedById], references: [id], onDelete: SetNull)
   events             AgentRunEvent[]
   statusComment      Comment?        @relation("AgentRunStatusComment")
 
   @@index([workspaceId, status, lastEventAt])
+  @@index([workspaceId, status, clearedAt, lastEventAt])
   @@index([issueId, startedAt])
   @@index([agentId, status])
   /// Inbox query: "what does Victor owe right now?" Filters unacked

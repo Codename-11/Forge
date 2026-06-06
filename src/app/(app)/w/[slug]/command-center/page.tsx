@@ -10,6 +10,7 @@ import {
   Check,
   CircleDot,
   Clock,
+  Eraser,
   FileText,
   Inbox,
   Loader2,
@@ -100,6 +101,37 @@ export default function CommandCenterPage() {
       counts: { ...prev.counts, reviewGates: Math.max(0, prev.counts.reviewGates - 1) },
     });
   };
+  const dropRunFailures = (ids: string[]) => {
+    const prev = utils.commandCenter.summary.getData(summaryInput);
+    if (!prev) return;
+    const drop = new Set(ids);
+    const stalledRuns = prev.stalledRuns.filter((r) => !drop.has(r.id));
+    utils.commandCenter.summary.setData(summaryInput, {
+      ...prev,
+      stalledRuns,
+      counts: { ...prev.counts, stalledRuns: stalledRuns.length },
+    });
+  };
+  const clearRunFailures = trpc.agentRun.clearMany.useMutation({
+    onMutate: ({ runIds }) => dropRunFailures(runIds),
+    onError: (e) => {
+      toast.error(e.message);
+      void utils.commandCenter.summary.invalidate();
+    },
+    onSuccess: (result) => {
+      if (result.cleared > 0) {
+        toast.success(
+          result.cleared === 1
+            ? "Run failure cleared."
+            : `${result.cleared} run failures cleared.`,
+        );
+      }
+    },
+    onSettled: () => {
+      void utils.commandCenter.summary.invalidate();
+      void utils.agentRun.list.invalidate();
+    },
+  });
 
   return (
     <>
@@ -251,24 +283,42 @@ export default function CommandCenterPage() {
 
             <Section
               icon={<AlertTriangle className="h-3.5 w-3.5" />}
-              title="Stalled runs"
-              empty="No stalled runs."
+              title="Run failures"
+              empty="No uncleared run failures."
               count={data.stalledRuns.length}
               tone="warning"
+              action={
+                data.stalledRuns.length > 0 ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-1.5 text-[0.6875rem] normal-case tracking-normal"
+                    disabled={clearRunFailures.isPending}
+                    onClick={() =>
+                      clearRunFailures.mutate({
+                        runIds: data.stalledRuns.map((row) => row.id),
+                      })
+                    }
+                    title="Clear all run failures from operational queues"
+                  >
+                    {clearRunFailures.isPending ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Eraser className="h-3 w-3" />
+                    )}
+                    Clear all
+                  </Button>
+                ) : null
+              }
             >
               {data.stalledRuns.map((row) => (
-                <Link
+                <RunFailureCard
                   key={row.id}
-                  href={`/w/${ws.slug}/i/${row.issue.workspace.key}-${row.issue.number}`}
-                  className="flex flex-col gap-1 rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning"
-                >
-                  <span className="text-sm font-medium">
-                    {row.issue.workspace.key}-{row.issue.number}
-                  </span>
-                  <span className="text-meta text-muted-foreground">
-                    @{row.agent.profileKey} · last event {new Date(row.lastEventAt).toLocaleString()}
-                  </span>
-                </Link>
+                  run={row}
+                  slug={ws.slug}
+                  clearing={clearRunFailures.isPending}
+                  onClear={() => clearRunFailures.mutate({ runIds: [row.id] })}
+                />
               ))}
             </Section>
 
@@ -807,6 +857,7 @@ function Section({
   empty,
   count,
   tone,
+  action,
   children,
 }: {
   icon: React.ReactNode;
@@ -814,6 +865,7 @@ function Section({
   empty: string;
   count: number;
   tone?: "warning";
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -823,17 +875,20 @@ function Section({
           {icon}
           <span className="truncate">{title}</span>
         </div>
-        {count > 0 ? (
-          <span
-            className={
-              tone === "warning"
-                ? "inline-flex items-center gap-1 rounded bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning"
-                : "inline-flex items-center gap-1 rounded bg-subtle px-1.5 py-0.5 text-[10px]"
-            }
-          >
-            {count}
-          </span>
-        ) : null}
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {action}
+          {count > 0 ? (
+            <span
+              className={
+                tone === "warning"
+                  ? "inline-flex items-center gap-1 rounded bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning"
+                  : "inline-flex items-center gap-1 rounded bg-subtle px-1.5 py-0.5 text-[10px]"
+              }
+            >
+              {count}
+            </span>
+          ) : null}
+        </div>
       </header>
       <div className="flex flex-col gap-2">
         {count === 0 ? (
@@ -845,6 +900,67 @@ function Section({
         )}
       </div>
     </section>
+  );
+}
+
+type CCRunFailure = {
+  id: string;
+  status: string;
+  summary: string | null;
+  currentStep: string | null;
+  lastEventAt: Date | string;
+  finishedAt: Date | string | null;
+  agent: { profileKey: string };
+  issue: {
+    number: number;
+    title: string;
+    workspace: { key: string };
+  };
+};
+
+function RunFailureCard({
+  run,
+  slug,
+  clearing,
+  onClear,
+}: {
+  run: CCRunFailure;
+  slug: string;
+  clearing: boolean;
+  onClear: () => void;
+}) {
+  const ts = run.finishedAt ?? run.lastEventAt;
+  const excerpt = run.summary ?? run.currentStep ?? run.issue.title;
+  return (
+    <div className="flex gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning">
+      <Link
+        href={`/w/${slug}/i/${run.issue.workspace.key}-${run.issue.number}`}
+        className="min-w-0 flex-1"
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="text-sm font-medium">
+            {run.issue.workspace.key}-{run.issue.number}
+          </span>
+          <span className="rounded bg-warning/10 px-1 py-0.5 text-[10px] uppercase text-warning">
+            {run.status.toLowerCase()}
+          </span>
+        </div>
+        <span className="text-meta line-clamp-2 text-muted-foreground">
+          @{run.agent.profileKey} · {new Date(ts).toLocaleString()} · {excerpt}
+        </span>
+      </Link>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-7 shrink-0 px-2 text-muted-foreground"
+        disabled={clearing}
+        onClick={onClear}
+        title="Clear this run failure from operational queues"
+        aria-label="Clear run failure"
+      >
+        {clearing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Eraser className="h-3 w-3" />}
+      </Button>
+    </div>
   );
 }
 

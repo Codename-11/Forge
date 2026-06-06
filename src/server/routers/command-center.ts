@@ -32,7 +32,7 @@ function decisionAskWhere(workspaceId: string, userId: string) {
  *   - open ActionRequests assigned to me
  *   - pending ReviewGates targeting me (or unassigned)
  *   - active agent runs in this workspace (capped for sanity)
- *   - stalled agent runs (status = STALLED)
+ *   - uncleared terminal run failures (status = STALLED / ABANDONED)
  *   - recently updated artifacts (top 10 most recent non-archived)
  *   - issues due soon (within 7 days, not DONE/CANCELED)
  *
@@ -111,9 +111,10 @@ export const commandCenterRouter = router({
         ctx.db.agentRun.findMany({
           where: {
             workspaceId: ctx.workspaceId,
-            status: AgentRunStatus.STALLED,
+            status: { in: [AgentRunStatus.STALLED, AgentRunStatus.ABANDONED] },
+            clearedAt: null,
           },
-          orderBy: { lastEventAt: "desc" },
+          orderBy: [{ finishedAt: "desc" }, { lastEventAt: "desc" }],
           take: input.limit,
           include: {
             agent: { select: { id: true, name: true, profileKey: true, avatar: true } },
