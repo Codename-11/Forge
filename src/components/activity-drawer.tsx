@@ -129,7 +129,8 @@ const LAST_READ_KEY = "forge.activityDrawer.lastReadAt";
 // Module-scoped store so the topbar bell and the drawer panel share state
 // without prop-drilling or wrapping the whole tree in another provider.
 type DrawerState = { open: boolean };
-let drawerState: DrawerState = { open: false };
+const CLOSED_DRAWER_STATE: DrawerState = { open: false };
+let drawerState: DrawerState = CLOSED_DRAWER_STATE;
 const drawerListeners = new Set<() => void>();
 
 function setDrawerState(next: DrawerState) {
@@ -149,7 +150,7 @@ function getDrawerSnapshot(): DrawerState {
 }
 
 function getServerSnapshot(): DrawerState {
-  return { open: false };
+  return CLOSED_DRAWER_STATE;
 }
 
 function readLastRead(): string {

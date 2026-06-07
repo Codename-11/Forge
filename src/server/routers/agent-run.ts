@@ -8,7 +8,7 @@ import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { appendRunEvent, finishRun } from "@/server/services/agent-run";
-import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
+import { getRunsConnectorForAgent, resolveRunEngine } from "@/server/services/dispatch/registry";
 import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { runProtocolDiagnostics } from "@/server/services/run-protocol-diagnostics";
@@ -1287,12 +1287,25 @@ export const agentRunRouter = router({
           status: true,
           lastEventAt: true,
           currentStep: true,
+          externalRunId: true,
           agent: {
             select: {
               id: true,
               profileKey: true,
+              provider: true,
+              runEngine: true,
               webhookUrl: true,
               webhookSecret: true,
+              runtime: {
+                select: {
+                  adapterKey: true,
+                  endpoint: true,
+                  secret: true,
+                  config: true,
+                  disabledAt: true,
+                  name: true,
+                },
+              },
             },
           },
         },
@@ -1313,6 +1326,17 @@ export const agentRunRouter = router({
         return { ok: true, kicked: false, idleMs } as const;
       }
 
+      const runsDriven =
+        resolveRunEngine({
+          runEngine: run.agent.runEngine,
+          provider: run.agent.provider,
+          runtime: run.agent.runtime,
+        }) === "RUNS" &&
+        getRunsConnectorForAgent({
+          provider: run.agent.provider,
+          runtime: run.agent.runtime,
+        }) != null;
+
       await ctx.db.$transaction(async (tx) => {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
@@ -1330,9 +1354,29 @@ export const agentRunRouter = router({
             agentId: run.agent.id,
             idleMs,
             currentStep: run.currentStep,
+            runsDriven,
           },
         });
+        if (runsDriven && !run.externalRunId) {
+          await appendRunEvent(tx, {
+            runId: run.id,
+            workspaceId: ctx.workspaceId,
+            issueId: run.issueId,
+            agentId: run.agent.id,
+            kind: "KICK",
+            currentStep: "kick requested - starting structured run",
+            payload: {
+              idleMs,
+              reason: "operator-kick",
+              dispatch: "runs-api",
+            },
+          });
+        }
       });
+
+      if (runsDriven) {
+        return { ok: true, kicked: true, idleMs } as const;
+      }
 
       // Best-effort webhook ping. Distinct kind so the runtime can
       // treat it differently from a fresh assignment if it wants —

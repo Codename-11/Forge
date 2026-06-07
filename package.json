@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "./scripts/dev-live.sh",
     "dev:live": "./scripts/dev-live.sh",
+    "dev:live:ui": "RUN_WORKERS=0 ./scripts/dev-live.sh --no-workers",
+    "dev:live:stack": "./scripts/dev-live-stack.sh",
+    "dev:live:lan": "./scripts/dev-live-stack.sh --lan",
     "dev:isolated": "next dev --turbo",
     "dev:local": "./scripts/dev-local.sh",
     "dev:host": "DEV_HOST=0.0.0.0 ./scripts/dev-live.sh",
@@ -26,6 +29,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "worker": "NODE_OPTIONS='--require ./scripts/ignore-server-only.cjs' tsx src/server/worker.ts",
+    "worker:live": "./scripts/worker-live.sh",
+    "worker:live:watch": "./scripts/worker-live.sh --watch",
     "format": "prettier --write .",
     "docs:install": "pnpm --dir docs --ignore-workspace install",
     "docs:dev": "pnpm --dir docs --ignore-workspace dev",

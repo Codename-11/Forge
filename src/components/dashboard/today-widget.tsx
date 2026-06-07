@@ -274,7 +274,7 @@ function WeekPeek({
           // page reads the param and threads it into `issue.list`, then
           // surfaces a dismissible "Due on …" chip in the filter bar.
           return (
-            <li key={d.date}>
+            <li key={`${d.date}-${i}`}>
               <Link
                 href={`/w/${slug}/issues?dueOn=${d.date}`}
                 className={cn(

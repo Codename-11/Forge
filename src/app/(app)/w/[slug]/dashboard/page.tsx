@@ -33,7 +33,6 @@ import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CycleChip } from "@/components/cycle-chip";
-import { ProjectChip } from "@/components/project-chip";
 import { QuickNotesWidget } from "@/components/quick-notes-widget";
 import { TodayWidget } from "@/components/dashboard/today-widget";
 import { IdeasTile } from "@/components/dashboard/ideas-tile";
@@ -1397,11 +1396,9 @@ function SuggestionsCard({
                 {PRIORITY_GLYPH[issue.priority] ?? "—"}
               </span>
               {showProjectChip && issue.project ? (
-                <ProjectChip
-                  project={issue.project}
-                  slug={slug}
-                  className="shrink-0 px-1.5 py-0.5"
-                />
+                <Badge className="shrink-0 px-1.5 py-0.5" color={issue.project.color ?? undefined}>
+                  {issue.project.key}
+                </Badge>
               ) : null}
               <span className="text-id shrink-0 text-muted-foreground">
                 {formatIssueId(workspaceKey, issue.number)}
