@@ -39,8 +39,7 @@ function isStorageNotConfiguredError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as TrpcErrorLike;
   if (e.data?.code !== "PRECONDITION_FAILED") return false;
-  return typeof e.message === "string" &&
-    e.message.startsWith("Object storage is not configured");
+  return typeof e.message === "string" && e.message.startsWith("Object storage is not configured");
 }
 
 /**
@@ -205,9 +204,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
         setPending((p) => p.filter((x) => x.localId !== localId));
       } catch (err) {
         const message = err instanceof Error ? err.message : "Upload failed";
-        setPending((p) =>
-          p.map((x) => (x.localId === localId ? { ...x, error: message } : x)),
-        );
+        setPending((p) => p.map((x) => (x.localId === localId ? { ...x, error: message } : x)));
         toast.error(`${file.name}: ${message}`);
       }
     },
@@ -265,7 +262,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
 
   return (
     <section
-      className="mt-8 rounded-lg border border-border bg-card/40"
+      className="rounded-lg border border-border bg-card/40"
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
       onDragOver={onDragOver}
@@ -276,9 +273,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
         <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Attachments
         </h2>
-        <span className="font-mono text-[0.6875rem] text-muted-foreground">
-          {rows.length}
-        </span>
+        <span className="font-mono text-[0.6875rem] text-muted-foreground">{rows.length}</span>
         <div className="ml-auto flex items-center gap-1">
           <input
             ref={inputRef}
@@ -375,8 +370,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
       <div
         className={cn(
           "relative p-3",
-          isDragging &&
-            "outline outline-2 outline-dashed outline-ember/80 outline-offset-[-4px]",
+          isDragging && "outline outline-dashed outline-2 outline-offset-[-4px] outline-ember/80",
         )}
       >
         {isDragging && (
@@ -388,9 +382,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
         {storageMisconfig ? (
           <StorageNotConfiguredBanner />
         ) : isLoading ? (
-          <p className="py-6 text-center text-xs text-muted-foreground">
-            Loading attachments…
-          </p>
+          <p className="py-6 text-center text-xs text-muted-foreground">Loading attachments…</p>
         ) : !hasAnything ? (
           <p className="py-6 text-center text-xs text-muted-foreground">
             Drop files here, paste from clipboard, or click Upload.
@@ -404,9 +396,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
                 allAttachments={rows}
                 issueId={issueId}
                 canDelete={isAdmin}
-                onDelete={() =>
-                  deleteMut.mutate({ attachmentId: a.id })
-                }
+                onDelete={() => deleteMut.mutate({ attachmentId: a.id })}
                 onStorageMisconfig={() => setTileStorageMisconfig(true)}
               />
             ))}
@@ -446,13 +436,10 @@ function StorageNotConfiguredBanner() {
     <div className="flex items-start gap-3 rounded-md border border-border bg-card/40 p-3 text-xs">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
       <div className="min-w-0 flex-1 space-y-2">
-        <p className="font-medium text-foreground">
-          Object storage is not configured.
-        </p>
+        <p className="font-medium text-foreground">Object storage is not configured.</p>
         <p className="text-muted-foreground">
-          Attachments need an S3-compatible backend (MinIO in dev). Ask an
-          admin to set the following environment variables and restart the
-          app:
+          Attachments need an S3-compatible backend (MinIO in dev). Ask an admin to set the
+          following environment variables and restart the app:
         </p>
         <code className="block whitespace-pre rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[0.65625rem] text-muted-foreground">
           {`S3_ENDPOINT=http://localhost:59000\nS3_ACCESS_KEY=...\nS3_SECRET_KEY=...`}
@@ -501,10 +488,7 @@ function AttachmentTile({
   const linkHost = isLink
     ? (() => {
         try {
-          return new URL(attachment.externalUrl ?? "").hostname.replace(
-            /^www\./i,
-            "",
-          );
+          return new URL(attachment.externalUrl ?? "").hostname.replace(/^www\./i, "");
         } catch {
           return "";
         }
@@ -537,9 +521,7 @@ function AttachmentTile({
       return (
         <div className="flex h-full flex-col items-center justify-center gap-1 p-2 text-center">
           <ExternalLink className="h-6 w-6 text-muted-foreground" />
-          <div className="line-clamp-2 text-[0.6875rem] font-medium">
-            {attachment.filename}
-          </div>
+          <div className="line-clamp-2 text-[0.6875rem] font-medium">{attachment.filename}</div>
           <div className="font-mono text-[0.6875rem] text-muted-foreground">
             {linkHost || "external link"}
           </div>
@@ -565,9 +547,7 @@ function AttachmentTile({
         ) : (
           <FileIcon className="h-6 w-6 text-muted-foreground" />
         )}
-        <div className="line-clamp-2 text-[0.6875rem] font-medium">
-          {attachment.filename}
-        </div>
+        <div className="line-clamp-2 text-[0.6875rem] font-medium">{attachment.filename}</div>
         <div className="font-mono text-[0.6875rem] text-muted-foreground">
           {prettyBytes(attachment.size)}
         </div>
@@ -599,7 +579,7 @@ function AttachmentTile({
       </button>
       {/* Overlay footer — filename only on image thumbs (covers the image). */}
       {isImage && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-background/95 to-transparent px-2 py-1 text-filename text-foreground/90">
+        <div className="text-filename pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-background/95 to-transparent px-2 py-1 text-foreground/90">
           {attachment.filename}
         </div>
       )}

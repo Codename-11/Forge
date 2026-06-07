@@ -24,11 +24,19 @@ Cleaned up the issue-detail run status strip so long agent names, restart-mode
 controls, runtime badges, diagnostics, and timestamps wrap instead of
 overlapping at medium widths.
 
+Follow-up in the same deployment: the issue detail right rail now has a real
+desktop height budget. Properties remain above the tab strip, but long
+properties can scroll independently and the active Attachments, Relations, or
+Activity tab owns the remaining scroll area. Removed the old internal top gap
+from those tab bodies so dense activity histories start immediately under the
+tabs instead of wasting vertical space.
+
 Verification: `pnpm install --frozen-lockfile`, `pnpm prisma:generate`,
 focused dispatch/inbox/audit tests, `pnpm typecheck`, `pnpm lint`,
-`pnpm build:app`, and full `pnpm test` pass (795 passed / 1 skipped). The full
-test run still prints pre-existing async notification/storage warning logs, but
-exits cleanly.
+`pnpm build:app`, and full `pnpm test` pass (795 passed / 1 skipped). The
+follow-up rail scroll change was additionally checked with `pnpm typecheck`,
+`pnpm lint`, and `pnpm build:app`. The full test run still prints pre-existing
+async notification/storage warning logs, but exits cleanly.
 
 ## 2026-06-06 — Android PWA install and push notifications
 

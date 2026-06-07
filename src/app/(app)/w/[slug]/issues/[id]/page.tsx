@@ -498,9 +498,9 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
           <aside
             aria-label="Issue detail rail"
-            className="min-w-0 shrink-0 md:sticky md:top-4 md:w-[22rem] md:self-start xl:w-[26rem]"
+            className="min-w-0 shrink-0 md:sticky md:top-4 md:h-[calc(100svh-7rem)] md:w-[22rem] md:self-start xl:w-[26rem]"
           >
-            <div className="overflow-hidden rounded-lg border border-border bg-card/30 md:max-h-[calc(100svh-7rem)]">
+            <div className="flex min-h-0 overflow-hidden rounded-lg border border-border bg-card/30 md:h-full">
               <IssueRail
                 issueId={issue.id}
                 header={
