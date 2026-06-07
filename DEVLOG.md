@@ -2,6 +2,16 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-07 — Issue run strip layout hardening
+
+Fixed a remaining overlap in the issue detail active-run card. The run summary
+now occupies its own line, the restart mode control has its own bounded row,
+and runtime/diagnostic/time metadata wraps separately so WAITING text, mode
+buttons, and policy badges cannot paint over each other at medium widths.
+
+Verification: `pnpm lint`, `pnpm typecheck`, `pnpm build:app`, and
+`git diff --check` pass.
+
 ## 2026-06-06 — Comment wakes use Hermes run dispatch
 
 Investigated AXI-72 after Victor reported the run was blocked because Hermes
