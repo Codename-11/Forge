@@ -1,8 +1,11 @@
 import "server-only";
-import type { Prisma, PrismaClient } from "@prisma/client";
-import { AgentRunStatus, EventKind } from "@prisma/client";
+import type { MentionEngagementPolicy, Prisma, PrismaClient } from "@prisma/client";
+import { AgentRunStatus, EngagementMode, EventKind } from "@prisma/client";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
-import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
+import {
+  FORGE_RUN_CONTRACT_VERSION,
+  resolveEngagementMode,
+} from "@/server/services/engagement-mode";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { publish } from "@/server/realtime";
 import { nanoid } from "nanoid";
@@ -28,6 +31,95 @@ import { nanoid } from "nanoid";
  */
 
 type Tx = PrismaClient | Prisma.TransactionClient;
+type DispatchAgent = {
+  id: string;
+  engagementMode: EngagementMode | null;
+  provider: string;
+  runtime: {
+    name: string | null;
+    adapterKey: string | null;
+    config: Prisma.JsonValue | null;
+  } | null;
+};
+
+const ENGAGEMENT_MODE_VALUES = new Set<string>(Object.values(EngagementMode));
+const COMMENT_WAKE_KINDS = new Set<EventKind>([
+  EventKind.COMMENT_CREATED,
+  EventKind.COMMENT_UPDATED,
+]);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readEngagementMode(value: unknown): EngagementMode | null {
+  return typeof value === "string" && ENGAGEMENT_MODE_VALUES.has(value)
+    ? (value as EngagementMode)
+    : null;
+}
+
+function engagementModeFromPayload(payload: unknown): EngagementMode | null {
+  return readEngagementMode(asRecord(payload)?.engagementMode);
+}
+
+function mentionedAgentIdsFromPayload(payload: unknown): Set<string> {
+  const out = new Set<string>();
+  const mentions = asRecord(payload)?.mentions;
+  if (Array.isArray(mentions)) {
+    for (const item of mentions) {
+      const agentId = asRecord(item)?.agentId;
+      if (typeof agentId === "string") out.add(agentId);
+    }
+    return out;
+  }
+  const mentionRecord = asRecord(mentions);
+  const agentIds = mentionRecord?.agentIds;
+  if (Array.isArray(agentIds)) {
+    for (const agentId of agentIds) {
+      if (typeof agentId === "string") out.add(agentId);
+    }
+  }
+  const legacyAgents = mentionRecord?.agents;
+  if (Array.isArray(legacyAgents)) {
+    for (const item of legacyAgents) {
+      const agentId = asRecord(item)?.agentId;
+      if (typeof agentId === "string") out.add(agentId);
+    }
+  }
+  return out;
+}
+
+async function latestAssignmentModeForIssue(
+  tx: Tx,
+  params: EnsureCanonicalParams,
+  assignedAgentId: string | null,
+): Promise<EngagementMode | null> {
+  if (!assignedAgentId) return null;
+  const latest = await tx.activityEvent.findFirst({
+    where: {
+      workspaceId: params.workspaceId,
+      subjectType: "issue",
+      subjectId: params.subjectId,
+      kind: EventKind.AGENT_ASSIGNED,
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { payload: true },
+  });
+  const payload = asRecord(latest?.payload);
+  const payloadAgentId = payload?.agentId;
+  if (typeof payloadAgentId === "string" && payloadAgentId !== assignedAgentId) {
+    return null;
+  }
+  return engagementModeFromPayload(latest?.payload);
+}
+
+function dispatchReasonEngagementMode(
+  dispatchReason: Prisma.JsonValue | null,
+): EngagementMode | null {
+  return readEngagementMode(asRecord(dispatchReason)?.engagementMode);
+}
 
 // ---------------------------------------------------------------------------
 // Canonical work creation (called from audit.recordChange).
@@ -84,10 +176,7 @@ export async function ensureCanonicalFromEvent(
   if (params.subjectType === "issue") {
     return ensureIssueRuns(tx, params, agentIds);
   }
-  if (
-    params.subjectType === "chat-thread" &&
-    params.eventKind === EventKind.CHAT_MESSAGE_POSTED
-  ) {
+  if (params.subjectType === "chat-thread" && params.eventKind === EventKind.CHAT_MESSAGE_POSTED) {
     return ensureChatMessage(tx, params, agentIds);
   }
   return EMPTY_ENSURE;
@@ -99,23 +188,50 @@ async function ensureIssueRuns(
   agentIds: ReadonlyArray<string>,
 ): Promise<EnsureCanonicalResult> {
   const isAssigned = params.eventKind === EventKind.AGENT_ASSIGNED;
-  // Engagement mode (AXI-53) rides on the event payload when the dispatcher
-  // resolved one (e.g. issues.assign with an explicit/derived mode). Null →
-  // openOrTouchRun keeps the run's EXECUTE default.
-  const payloadMode =
-    params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)
-      ? ((params.payload as Record<string, unknown>).engagementMode as
-          | "EXECUTE"
-          | "RESEARCH"
-          | "REVIEW"
-          | "DISCUSS"
-          | undefined)
-      : undefined;
+  // Engagement mode (AXI-53) rides on assignment/restart payloads. Comment
+  // wakes without an explicit mode inherit the issue's current assignment
+  // mode for the assigned agent; non-assigned @mentions use mention policy.
+  const payloadMode = engagementModeFromPayload(params.payload);
+  const mentionedAgentIds = mentionedAgentIdsFromPayload(params.payload);
+  const activeRuns = await tx.agentRun.findMany({
+    where: {
+      workspaceId: params.workspaceId,
+      issueId: params.subjectId,
+      agentId: { in: [...agentIds] },
+      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+    },
+    select: { agentId: true, engagementMode: true, startedAt: true },
+    orderBy: { startedAt: "desc" },
+  });
+  const activeRunModeByAgentId = new Map<string, EngagementMode>();
+  for (const run of activeRuns) {
+    if (!activeRunModeByAgentId.has(run.agentId)) {
+      activeRunModeByAgentId.set(run.agentId, run.engagementMode);
+    }
+  }
+  const issue = await tx.issue.findFirst({
+    where: { id: params.subjectId, workspaceId: params.workspaceId },
+    select: {
+      assignedAgentId: true,
+      dispatchReason: true,
+      workspace: {
+        select: {
+          assignmentEngagementMode: true,
+          mentionEngagementPolicy: true,
+          mentionDefaultMode: true,
+        },
+      },
+    },
+  });
+  const issueAssignmentMode =
+    (await latestAssignmentModeForIssue(tx, params, issue?.assignedAgentId ?? null)) ??
+    dispatchReasonEngagementMode(issue?.dispatchReason ?? null);
   const runIds: string[] = [];
   const agents = await tx.agent.findMany({
     where: { workspaceId: params.workspaceId, id: { in: [...agentIds] } },
     select: {
       id: true,
+      engagementMode: true,
       provider: true,
       runtime: { select: { name: true, adapterKey: true, config: true } },
     },
@@ -123,7 +239,17 @@ async function ensureIssueRuns(
   const agentById = new Map(agents.map((agent) => [agent.id, agent]));
   for (const agentId of agentIds) {
     const agent = agentById.get(agentId);
-    const engagementMode = payloadMode ?? "EXECUTE";
+    const engagementMode =
+      payloadMode ??
+      activeRunModeByAgentId.get(agentId) ??
+      resolveIssueRunEngagementMode({
+        eventKind: params.eventKind,
+        issue,
+        issueAssignmentMode,
+        mentionedAgentIds,
+        agent: agent ?? null,
+        agentId,
+      });
     const runtimePolicy = agent
       ? buildRuntimePolicySnapshot({
           contractVersion: FORGE_RUN_CONTRACT_VERSION,
@@ -161,6 +287,69 @@ async function ensureIssueRuns(
   return { issueRunIds: runIds, chatMessageIds: [] };
 }
 
+function resolveIssueRunEngagementMode(input: {
+  eventKind: EventKind;
+  issue: {
+    assignedAgentId: string | null;
+    workspace: {
+      assignmentEngagementMode: EngagementMode;
+      mentionEngagementPolicy: MentionEngagementPolicy;
+      mentionDefaultMode: EngagementMode;
+    };
+  } | null;
+  issueAssignmentMode: EngagementMode | null;
+  mentionedAgentIds: Set<string>;
+  agent: DispatchAgent | null;
+  agentId: string;
+}): EngagementMode {
+  const workspace = input.issue?.workspace;
+  if (!workspace) return EngagementMode.EXECUTE;
+
+  if (input.issue?.assignedAgentId === input.agentId) {
+    return (
+      input.issueAssignmentMode ??
+      resolveEngagementMode({
+        surface: "assignment",
+        explicit: null,
+        workspace: {
+          assignmentEngagementMode: workspace.assignmentEngagementMode,
+          assignmentAgentEngagementMode: input.agent?.engagementMode ?? null,
+          mentionEngagementPolicy: workspace.mentionEngagementPolicy,
+          mentionDefaultMode: workspace.mentionDefaultMode,
+        },
+      }).mode
+    );
+  }
+
+  if (COMMENT_WAKE_KINDS.has(input.eventKind) && input.mentionedAgentIds.has(input.agentId)) {
+    return resolveEngagementMode({
+      surface: "mention",
+      explicit: null,
+      workspace: {
+        assignmentEngagementMode: workspace.assignmentEngagementMode,
+        assignmentAgentEngagementMode: input.agent?.engagementMode ?? null,
+        mentionEngagementPolicy: workspace.mentionEngagementPolicy,
+        mentionDefaultMode: workspace.mentionDefaultMode,
+      },
+    }).mode;
+  }
+
+  if (COMMENT_WAKE_KINDS.has(input.eventKind)) {
+    return resolveEngagementMode({
+      surface: "watcher",
+      explicit: null,
+      workspace: {
+        assignmentEngagementMode: workspace.assignmentEngagementMode,
+        assignmentAgentEngagementMode: input.agent?.engagementMode ?? null,
+        mentionEngagementPolicy: workspace.mentionEngagementPolicy,
+        mentionDefaultMode: workspace.mentionDefaultMode,
+      },
+    }).mode;
+  }
+
+  return EngagementMode.EXECUTE;
+}
+
 async function ensureChatMessage(
   tx: Tx,
   params: EnsureCanonicalParams,
@@ -193,9 +382,7 @@ export interface RecordWakeParams {
   workspaceId: string;
   agentId: string;
   /** Pinpoint the canonical work unit. Exactly one branch must be set. */
-  target:
-    | { kind: "issue"; issueId: string }
-    | { kind: "chat-message"; chatMessageId: string };
+  target: { kind: "issue"; issueId: string } | { kind: "chat-message"; chatMessageId: string };
   deliveryId: string;
   eventId: string;
   eventKind: EventKind;
@@ -305,9 +492,7 @@ export async function recordWakeAttempt(
 // agent.inbox.outputStarted, and from chat.startDraft).
 // ---------------------------------------------------------------------------
 
-export type InboxTarget =
-  | { runId: string }
-  | { chatMessageId: string };
+export type InboxTarget = { runId: string } | { chatMessageId: string };
 
 /**
  * Marks the canonical work as acknowledged by the linked agent.
@@ -766,12 +951,7 @@ export type DispatchState =
   | "completed"
   | "abandoned";
 
-export type RecommendedAction =
-  | "wait"
-  | "retry-wake"
-  | "kick"
-  | "abandon"
-  | "none";
+export type RecommendedAction = "wait" | "retry-wake" | "kick" | "abandon" | "none";
 
 interface RunStateInput {
   acknowledgedAt: Date | null;

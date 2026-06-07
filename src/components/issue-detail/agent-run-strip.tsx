@@ -12,9 +12,7 @@ import {
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { relativeTime, cn } from "@/lib/utils";
-import {
-  RuntimePolicyBadges,
-} from "@/components/runtime-tool-surface";
+import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
 import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 
 /**
@@ -98,7 +96,7 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
   return (
     <div
       className={cn(
-        "mb-3 grid gap-2 rounded-md border px-3 py-2 text-[0.75rem] sm:grid-cols-[minmax(0,1fr)_auto]",
+        "mb-3 flex flex-col gap-2 overflow-hidden rounded-md border px-3 py-2 text-[0.75rem] xl:grid xl:grid-cols-[minmax(0,1fr)_auto]",
         state === "running"
           ? "border-ember/30 bg-ember/5"
           : state === "acknowledged"
@@ -110,7 +108,7 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
                 : "border-border bg-card/40",
       )}
     >
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <span className="relative flex h-2 w-2 shrink-0">
           {state === "running" || state === "acknowledged" ? (
             // Live pulse only while events are still arriving. Once the
@@ -151,11 +149,11 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
           </span>
         )}
         <span className="shrink-0 text-muted-foreground">·</span>
-        <span className="min-w-0 truncate text-foreground/80" title={step}>
+        <span className="min-w-[12rem] flex-1 truncate text-foreground/80" title={step}>
           {step}
         </span>
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
         <RunModeControl
           issueId={issueId}
           runId={run.id}
@@ -229,7 +227,8 @@ function RunModeControl({
       void utils.agentRun.activeAll.invalidate();
       void utils.agentRun.recentTerminal.invalidate();
       void utils.issue.byId.invalidate({ id: issueId });
-      if (res.restarted) toast.success(`Restarted as ${MODE_LABEL[res.mode as EngagementModeValue]}`);
+      if (res.restarted)
+        toast.success(`Restarted as ${MODE_LABEL[res.mode as EngagementModeValue]}`);
       else toast.message("Run already uses that mode");
     },
     onError: (err) => toast.error(err.message),

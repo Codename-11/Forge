@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { EventKind } from "@prisma/client";
+import { EngagementMode, EventKind } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import {
   ackInboxItem,
@@ -134,6 +134,69 @@ describe("agent-dispatch-inbox — ensureCanonicalFromEvent", () => {
     expect(runs).toHaveLength(2);
     expect(runs.every((r) => r.triggerKind === EventKind.COMMENT_CREATED)).toBe(true);
     expect(runs.every((r) => r.assignmentEventId === null)).toBe(true);
+    expect(runs.every((r) => r.engagementMode === EngagementMode.DISCUSS)).toBe(true);
+  });
+
+  it("opens assigned-agent comment wakes in the latest assignment mode", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "IMA" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "ima-a1");
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await recordChange(tx, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        entity: "Issue",
+        entityId: issue.id,
+        action: "assign",
+        eventKind: EventKind.AGENT_ASSIGNED,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: {
+          agentId: agent.id,
+          agentProfileKey: "ima-a1",
+          engagementMode: EngagementMode.REVIEW,
+        },
+      });
+    });
+    await prisma.agentRun.updateMany({
+      where: { workspaceId: fixture.workspace.id, issueId: issue.id, agentId: agent.id },
+      data: { status: "COMPLETED", finishedAt: new Date() },
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await recordChange(tx, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        entity: "Comment",
+        entityId: "assigned-comment-id",
+        action: "create",
+        eventKind: EventKind.COMMENT_CREATED,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: {
+          mentions: { agentIds: [agent.id] },
+        },
+      });
+    });
+
+    const run = await prisma.agentRun.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+      orderBy: { startedAt: "desc" },
+    });
+    expect(run.triggerKind).toBe(EventKind.COMMENT_CREATED);
+    expect(run.engagementMode).toBe(EngagementMode.REVIEW);
   });
 
   it("creates the run even when the agent has no webhookUrl", async () => {

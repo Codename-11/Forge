@@ -4,24 +4,21 @@ import type { AgentProvider } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/agent-run";
-import {
-  FORGE_RUN_CONTRACT_VERSION,
-  forgeRunInstruction,
-} from "@/server/services/engagement-mode";
+import { FORGE_RUN_CONTRACT_VERSION, forgeRunInstruction } from "@/server/services/engagement-mode";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from "./registry";
 
 /**
  * Dispatch-via-runs ingestion (worker-hosted, poll-based).
  *
- * Phase 2 of the pluggable-engine work. When an issue is assigned to a
+ * Phase 2 of the pluggable-engine work. When an issue wakes work for a
  * RUNS-engine agent, Forge drives the work through the provider's
- * structured agent-run API (Hermes `/v1/runs`) rather than a webhook:
+ * structured agent-run API (Hermes `/v1/runs`) rather than a webhook.
+ * Assignment events and comment/watcher-created AgentRuns share this path:
  *
- *   1. `startNewRuns` — find recent AGENT_ASSIGNED events whose assignee is
- *      a RUNS-engine agent and that don't yet have a provider run; reuse or
- *      open the AgentRun and `startRun` on the connector, stashing
- *      `externalRunId`.
+ *   1. `startNewRuns` — find recent AGENT_ASSIGNED events and unbacked ACTIVE
+ *      AgentRuns whose agent is RUNS-capable; call `startRun` on the
+ *      connector and stash `externalRunId`.
  *   2. `pollActiveRuns` — for ACTIVE AgentRuns with an `externalRunId`, poll
  *      `getStatus` and mirror it onto the AgentRun (currentStep / token
  *      usage / terminal finish) so Mission Control reflects live progress.
@@ -33,7 +30,7 @@ import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from
  * would double-dispatch).
  */
 
-const ASSIGNMENT_LOOKBACK_MS = 15 * 60_000;
+const RUN_START_LOOKBACK_MS = 15 * 60_000;
 const START_BATCH = 10;
 const POLL_BATCH = 25;
 const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
@@ -64,7 +61,7 @@ function issueMessage(
   const body = issue.description?.trim();
   return (
     (engagementInstruction ? `${engagementInstruction}\n\n` : "") +
-    `You are assigned Forge issue ${issue.key}: ${issue.title}.\n` +
+    `You are dispatched for Forge issue ${issue.key}: ${issue.title}.\n` +
     `Issue id: ${issue.id}.\n` +
     (runId ? `Current AgentRun id: ${runId}.\n` : "") +
     "\n" +
@@ -78,13 +75,28 @@ function issueKey(workspaceKey: string, number: number): string {
   return `${workspaceKey}-${number}`;
 }
 
+function shouldUseRunsEngine(agent: {
+  runEngine: "COMPLETIONS" | "RUNS" | null;
+  provider: AgentProvider;
+  runtime?: AgentRuntimeRef;
+}): boolean {
+  if (!agent.runtime?.adapterKey && agent.runEngine !== "RUNS") return false;
+  return (
+    resolveRunEngine({
+      runEngine: agent.runEngine,
+      provider: agent.provider,
+      runtime: agent.runtime,
+    }) === "RUNS"
+  );
+}
+
 /** Open AgentRuns + start provider runs for fresh RUNS-engine assignments. */
 async function startNewRuns(): Promise<number> {
   const events = await db.activityEvent.findMany({
     where: {
       kind: EventKind.AGENT_ASSIGNED,
       subjectType: "issue",
-      createdAt: { gte: new Date(Date.now() - ASSIGNMENT_LOOKBACK_MS) },
+      createdAt: { gte: new Date(Date.now() - RUN_START_LOOKBACK_MS) },
     },
     orderBy: { createdAt: "desc" },
     take: START_BATCH * 3,
@@ -103,10 +115,7 @@ async function startNewRuns(): Promise<number> {
       where: { assignmentEventId: evt.id },
       select: { id: true, status: true, externalRunId: true },
     });
-    if (
-      already?.externalRunId ||
-      (already && TERMINAL_RUN_STATUSES.has(already.status))
-    ) {
+    if (already?.externalRunId || (already && TERMINAL_RUN_STATUSES.has(already.status))) {
       continue;
     }
 
@@ -124,7 +133,16 @@ async function startNewRuns(): Promise<number> {
             id: true,
             provider: true,
             runEngine: true,
-            runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
+            runtime: {
+              select: {
+                adapterKey: true,
+                endpoint: true,
+                secret: true,
+                config: true,
+                disabledAt: true,
+                name: true,
+              },
+            },
           },
         },
       },
@@ -135,16 +153,13 @@ async function startNewRuns(): Promise<number> {
     // disabled-sentinel connector would only fail). The assignment stays
     // queued and dispatches once the runtime is re-enabled.
     if (agent.runtime?.disabledAt) continue;
-    if (
-      resolveRunEngine({
-        runEngine: agent.runEngine,
-        provider: agent.provider,
-        runtime: agent.runtime,
-      }) !== "RUNS"
-    ) {
+    if (!shouldUseRunsEngine(agent)) {
       continue;
     }
-    const connector = getRunsConnectorForAgent({ provider: agent.provider, runtime: agent.runtime });
+    const connector = getRunsConnectorForAgent({
+      provider: agent.provider,
+      runtime: agent.runtime,
+    });
     if (!connector) continue;
 
     // Engagement mode (AXI-53): the assignment payload carries the resolved
@@ -232,6 +247,148 @@ async function startNewRuns(): Promise<number> {
       logger.warn({ err, eventId: evt.id, issueId: issue.id }, "runs-dispatch: start failed");
     }
   }
+  if (started < START_BATCH) {
+    started += await startUnbackedAgentRuns(START_BATCH - started);
+  }
+  return started;
+}
+
+/** Start structured provider sessions for non-assignment wakes, e.g. comments. */
+async function startUnbackedAgentRuns(limit: number): Promise<number> {
+  if (limit <= 0) return 0;
+  const runs = await db.agentRun.findMany({
+    where: {
+      status: AgentRunStatus.ACTIVE,
+      externalRunId: null,
+      startedAt: { gte: new Date(Date.now() - RUN_START_LOOKBACK_MS) },
+    },
+    orderBy: { lastEventAt: "desc" },
+    take: limit * 3,
+    select: {
+      id: true,
+      workspaceId: true,
+      issueId: true,
+      agentId: true,
+      engagementMode: true,
+      triggerKind: true,
+      triggerEventId: true,
+      issue: {
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          description: true,
+          workspace: { select: { key: true } },
+        },
+      },
+      agent: {
+        select: {
+          id: true,
+          provider: true,
+          runEngine: true,
+          runtime: {
+            select: {
+              adapterKey: true,
+              endpoint: true,
+              secret: true,
+              config: true,
+              disabledAt: true,
+              name: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  let started = 0;
+  for (const run of runs) {
+    if (started >= limit) break;
+    if (run.agent.runtime?.disabledAt) continue;
+    if (!shouldUseRunsEngine(run.agent)) {
+      continue;
+    }
+    const connector = getRunsConnectorForAgent({
+      provider: run.agent.provider,
+      runtime: run.agent.runtime,
+    });
+    if (!connector) continue;
+
+    const engagementMode = run.engagementMode;
+    const instruction = forgeRunInstruction({
+      mode: engagementMode,
+      source: "surface-default",
+      inferable: false,
+    });
+    const runtimePolicy = buildRuntimePolicySnapshot({
+      contractVersion: FORGE_RUN_CONTRACT_VERSION,
+      engagementMode,
+      adapterKey:
+        run.agent.runtime?.adapterKey ?? (run.agent.provider === "HERMES" ? "hermes" : null),
+      runtimeName: run.agent.runtime?.name ?? null,
+      config: run.agent.runtime?.config,
+    });
+
+    try {
+      const { externalRunId } = await connector.startRun({
+        message: issueMessage(
+          {
+            id: run.issue.id,
+            key: issueKey(run.issue.workspace.key, run.issue.number),
+            title: run.issue.title,
+            description: run.issue.description,
+          },
+          instruction,
+          run.id,
+        ),
+        instructions: instruction,
+        engagementMode,
+        contractVersion: FORGE_RUN_CONTRACT_VERSION,
+        toolPolicy: runtimePolicy,
+      });
+      await db.$transaction(async (tx) => {
+        await tx.agentRun.update({
+          where: { id: run.id },
+          data: {
+            externalRunId,
+            acknowledgedAt: new Date(),
+            currentStep: "starting run",
+            runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
+          },
+        });
+        await appendRunEvent(tx, {
+          runId: run.id,
+          workspaceId: run.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          kind: "DISPATCH_STARTED",
+          currentStep: "running",
+          payload: {
+            externalRunId,
+            engine: "RUNS",
+            reusedCanonicalRun: run.id,
+            triggerKind: run.triggerKind,
+            triggerEventId: run.triggerEventId,
+            contractVersion: FORGE_RUN_CONTRACT_VERSION,
+            runtimePolicy: {
+              adapterKey: runtimePolicy.adapterKey,
+              layers: runtimePolicy.layers.map((layer) => ({
+                kind: layer.kind,
+                enforced: layer.enforced,
+              })),
+              allowedHostTools: runtimePolicy.allowedHostTools,
+            },
+          },
+        });
+      });
+      started++;
+    } catch (err) {
+      logger.warn(
+        { err, runId: run.id, issueId: run.issueId },
+        "runs-dispatch: start unbacked run failed",
+      );
+    }
+  }
   return started;
 }
 
@@ -254,7 +411,16 @@ async function pollActiveRuns(): Promise<number> {
       agent: {
         select: {
           provider: true,
-          runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
+          runtime: {
+            select: {
+              adapterKey: true,
+              endpoint: true,
+              secret: true,
+              config: true,
+              disabledAt: true,
+              name: true,
+            },
+          },
         },
       },
     },
@@ -332,9 +498,7 @@ async function pollActiveRuns(): Promise<number> {
               payload: { lastEvent: status.lastEvent ?? null, currentStep: step },
             });
           })
-          .catch((err) =>
-            logger.warn({ err, runId: run.id }, "runs-dispatch: step update failed"),
-          );
+          .catch((err) => logger.warn({ err, runId: run.id }, "runs-dispatch: step update failed"));
       }
       continue;
     }
@@ -479,8 +643,7 @@ async function subscribeRun(run: {
                   awaitingApprovalAt: new Date(),
                   pendingApproval: {
                     command: typeof e.raw.command === "string" ? e.raw.command : null,
-                    description:
-                      typeof e.raw.description === "string" ? e.raw.description : null,
+                    description: typeof e.raw.description === "string" ? e.raw.description : null,
                     choices: e.choices,
                   },
                 },
@@ -527,7 +690,16 @@ async function ensureSubscriptions(): Promise<number> {
       agent: {
         select: {
           provider: true,
-          runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
+          runtime: {
+            select: {
+              adapterKey: true,
+              endpoint: true,
+              secret: true,
+              config: true,
+              disabledAt: true,
+              name: true,
+            },
+          },
         },
       },
     },

@@ -1,5 +1,5 @@
 import "server-only";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { AgentProvider, Prisma, PrismaClient, RunEngine } from "@prisma/client";
 import { EventKind } from "@prisma/client";
 import { publish } from "@/server/realtime";
 import { db } from "@/server/db";
@@ -7,7 +7,11 @@ import { RUNTIME_KIND_LABEL } from "@/lib/runtime-kind";
 import { runtimeToolSurface } from "@/lib/runtime-tools";
 import { nanoid } from "nanoid";
 import { ensureCanonicalFromEvent } from "@/server/services/agent-dispatch-inbox";
-import { resolveRunEngine, getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
+import {
+  resolveRunEngine,
+  getRunsConnectorForAgent,
+  type AgentRuntimeRef,
+} from "@/server/services/dispatch/registry";
 import {
   ALERTABLE_EVENT_KINDS,
   scheduleEventNotificationFanout,
@@ -123,6 +127,22 @@ function adapterLabel(adapterKey: string | null | undefined): string | null {
     .filter(Boolean)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
+}
+
+function isRunsDrivenAgent(agent: {
+  provider: AgentProvider;
+  runEngine: RunEngine | null;
+  runtime?: AgentRuntimeRef;
+}): boolean {
+  if (!agent.runtime?.adapterKey && agent.runEngine !== "RUNS") return false;
+  return (
+    resolveRunEngine({
+      runEngine: agent.runEngine,
+      provider: agent.provider,
+      runtime: agent.runtime,
+    }) === "RUNS" &&
+    getRunsConnectorForAgent({ provider: agent.provider, runtime: agent.runtime }) != null
+  );
 }
 
 type AssignmentAgentContext = {
@@ -657,14 +677,7 @@ export async function recordChange(
       // RUNS-engine agents are driven directly via the provider's
       // agent-run API by the worker (`runs-dispatch-sweep`); skip the
       // webhook so they aren't dispatched twice.
-      const runsDriven =
-        !!a &&
-        resolveRunEngine({
-          runEngine: a.runEngine,
-          provider: a.provider,
-          runtime: a.runtime,
-        }) === "RUNS" &&
-        getRunsConnectorForAgent({ provider: a.provider, runtime: a.runtime }) != null;
+      const runsDriven = !!a && isRunsDrivenAgent(a);
       if (a?.webhookUrl && !runsDriven) {
         const wid = await upsertAgentDispatchWebhook(
           tx,
@@ -686,12 +699,29 @@ export async function recordChange(
         where: { id: params.subjectId },
         select: {
           assignedAgentId: true,
-          assignedAgent: { select: { id: true, webhookUrl: true } },
+          assignedAgent: {
+            select: {
+              id: true,
+              webhookUrl: true,
+              provider: true,
+              runEngine: true,
+              runtime: {
+                select: {
+                  adapterKey: true,
+                  endpoint: true,
+                  secret: true,
+                  config: true,
+                  disabledAt: true,
+                  name: true,
+                },
+              },
+            },
+          },
         },
       });
       if (issue?.assignedAgentId) {
         resolvedAgentIds.push(issue.assignedAgentId);
-        if (issue.assignedAgent?.webhookUrl) {
+        if (issue.assignedAgent?.webhookUrl && !isRunsDrivenAgent(issue.assignedAgent)) {
           const wid = await upsertAgentDispatchWebhook(
             tx,
             params.workspaceId,
@@ -740,11 +770,26 @@ export async function recordChange(
           id: { in: mentionedAgentIds },
           archivedAt: null,
         },
-        select: { id: true, webhookUrl: true },
+        select: {
+          id: true,
+          webhookUrl: true,
+          provider: true,
+          runEngine: true,
+          runtime: {
+            select: {
+              adapterKey: true,
+              endpoint: true,
+              secret: true,
+              config: true,
+              disabledAt: true,
+              name: true,
+            },
+          },
+        },
       });
       for (const a of agents) {
         resolvedAgentIds.push(a.id);
-        if (a.webhookUrl) {
+        if (a.webhookUrl && !isRunsDrivenAgent(a)) {
           const wid = await upsertAgentDispatchWebhook(
             tx,
             params.workspaceId,
@@ -878,7 +923,24 @@ export async function recordChange(
       select: {
         agentId: true,
         wakeOnActivity: true,
-        agent: { select: { id: true, webhookUrl: true } },
+        agent: {
+          select: {
+            id: true,
+            webhookUrl: true,
+            provider: true,
+            runEngine: true,
+            runtime: {
+              select: {
+                adapterKey: true,
+                endpoint: true,
+                secret: true,
+                config: true,
+                disabledAt: true,
+                name: true,
+              },
+            },
+          },
+        },
       },
     });
     for (const w of watchers) {
@@ -906,7 +968,7 @@ export async function recordChange(
       const payloadAgentId = (params.payload as { agentId?: string } | undefined)?.agentId;
       if (payloadAgentId && payloadAgentId === w.agent.id) continue;
       resolvedAgentIds.push(w.agent.id);
-      if (w.agent.webhookUrl) {
+      if (w.agent.webhookUrl && !isRunsDrivenAgent(w.agent)) {
         const wid = await upsertAgentDispatchWebhook(
           tx,
           params.workspaceId,
