@@ -1,11 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import {
-  AgentProvider,
-  EngagementMode,
-  EventKind,
-  RuntimeKind,
-  RunEngine,
-} from "@prisma/client";
+import { AgentProvider, EngagementMode, EventKind, RuntimeKind, RunEngine } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { ingestRunsDispatch } from "@/server/services/dispatch/run-dispatcher";
 import {
@@ -108,6 +102,89 @@ describe("runs dispatcher", () => {
         contractVersion: expect.stringMatching(/^2026-/),
         engagementMode: "REVIEW",
       });
+      expect(after.events.some((e) => e.kind === "DISPATCH_STARTED")).toBe(true);
+    } finally {
+      if (previousE2E === undefined) {
+        delete process.env.FORGE_E2E;
+      } else {
+        process.env.FORGE_E2E = previousE2E;
+      }
+    }
+  });
+
+  it("starts the provider run for comment-created AgentRuns without legacy webhook dispatch", async () => {
+    const previousE2E = process.env.FORGE_E2E;
+    process.env.FORGE_E2E = "1";
+
+    try {
+      const fixture = await createWorkspaceFixture({ keyPrefix: "RDC" });
+      fixtures.push(fixture);
+      const prisma = getPrisma();
+      const runtime = await prisma.runtime.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          ownerId: fixture.user.id,
+          name: "mock runs",
+          kind: RuntimeKind.LOCAL_DAEMON,
+          adapterKey: "mock-runs",
+          providersAvailable: [AgentProvider.HERMES],
+        },
+        select: { id: true },
+      });
+      const agent = await prisma.agent.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          name: "comment runner",
+          profileKey: "comment-runner",
+          provider: AgentProvider.HERMES,
+          runEngine: RunEngine.RUNS,
+          runtimeId: runtime.id,
+          status: "ONLINE",
+          webhookUrl: "https://legacy.example.test/dispatch",
+        },
+        select: { id: true },
+      });
+      const issue = await createIssue(fixture, { title: "comment wake" });
+
+      await prisma.$transaction(async (tx) => {
+        await recordChange(tx, {
+          workspaceId: fixture.workspace.id,
+          actorId: fixture.user.id,
+          entity: "Comment",
+          entityId: "comment-runner-comment",
+          action: "create",
+          eventKind: EventKind.COMMENT_CREATED,
+          subjectType: "issue",
+          subjectId: issue.id,
+          payload: {
+            mentions: { agentIds: [agent.id] },
+          },
+        });
+      });
+
+      const precreated = await prisma.agentRun.findFirstOrThrow({
+        where: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: agent.id,
+        },
+      });
+      expect(precreated.triggerKind).toBe(EventKind.COMMENT_CREATED);
+      expect(precreated.externalRunId).toBeNull();
+
+      const legacyDeliveries = await prisma.webhookDelivery.count({
+        where: { eventId: precreated.triggerEventId! },
+      });
+      expect(legacyDeliveries).toBe(0);
+
+      const tick = await ingestRunsDispatch();
+      expect(tick.started).toBeGreaterThanOrEqual(1);
+
+      const after = await prisma.agentRun.findUniqueOrThrow({
+        where: { id: precreated.id },
+        include: { events: { orderBy: { createdAt: "asc" } } },
+      });
+      expect(after.externalRunId).toMatch(/^mock-/);
       expect(after.events.some((e) => e.kind === "DISPATCH_STARTED")).toBe(true);
     } finally {
       if (previousE2E === undefined) {

@@ -2,6 +2,34 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-06 — Comment wakes use Hermes run dispatch
+
+Investigated AXI-72 after Victor reported the run was blocked because Hermes
+did not expose terminal/filesystem/git tools. Hermes host policy support was
+already present and healthy for structured `/v1/runs` dispatch; the remaining
+Forge bug was that comment-created wakes for RUNS-backed agents could still
+fall through the legacy webhook path. Those runs had no `externalRunId`, so
+Hermes never received the run tool allowlist or runtime policy.
+
+RUNS-backed comment wakes now skip legacy webhook delivery and the run
+dispatcher starts any unbacked active canonical `AgentRun` through the
+configured runs connector. The existing issue instruction, engagement mode,
+tool policy, and runtime policy are preserved when the structured Hermes run is
+created. Fresh comment-triggered issue runs also no longer hard-default to
+EXECUTE: they preserve any active/waiting run mode, otherwise use the latest
+assignment engagement mode for the assigned agent, while non-assigned
+`@mention` wakes use the workspace mention policy.
+
+Cleaned up the issue-detail run status strip so long agent names, restart-mode
+controls, runtime badges, diagnostics, and timestamps wrap instead of
+overlapping at medium widths.
+
+Verification: `pnpm install --frozen-lockfile`, `pnpm prisma:generate`,
+focused dispatch/inbox/audit tests, `pnpm typecheck`, `pnpm lint`,
+`pnpm build:app`, and full `pnpm test` pass (795 passed / 1 skipped). The full
+test run still prints pre-existing async notification/storage warning logs, but
+exits cleanly.
+
 ## 2026-06-06 — Android PWA install and push notifications
 
 Expanded the PWA baseline for Android-first install behavior. `PwaProvider`
