@@ -38,12 +38,12 @@ const ADMIN_NAV: { href: string; icon: LucideIcon; label: string; hint: string }
 function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanceUrl: string }) {
   return (
     <aside
-      className="flex h-full w-60 shrink-0 flex-col border-r"
+      className="flex max-h-64 min-h-0 w-full shrink-0 flex-col overflow-hidden border-b md:h-full md:max-h-none md:w-60 md:border-b-0 md:border-r"
       style={{
         background: "linear-gradient(180deg, hsl(var(--admin-surface)) 0%, hsl(var(--admin-bg)) 100%)",
         color: "hsl(var(--admin-text-hi))",
         borderColor: "var(--admin-border-strong)",
-        minWidth: 240,
+
       }}
     >
       <div className="px-3 pb-3 pt-3" style={{ borderBottom: "1px solid var(--admin-border-strong)" }}>
@@ -135,27 +135,28 @@ export function AdminPage({
   const pathname = usePathname();
   const active = activePath ?? pathname ?? "/admin";
   return (
-    <div className="flex h-svh w-full overflow-hidden" style={{ background: "hsl(var(--admin-bg))", color: "hsl(var(--admin-text-hi))" }}>
+    <div className="flex h-svh w-full flex-col overflow-hidden md:flex-row" style={{ background: "hsl(var(--admin-bg))", color: "hsl(var(--admin-text-hi))" }}>
       <AdminSidebar activePath={active} instanceUrl={instanceUrl} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ background: "hsl(var(--admin-surface))" }}>
         <header
-          className="flex h-12 shrink-0 items-center gap-3 border-b px-4"
+          className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 sm:flex-nowrap sm:gap-3 sm:px-4 sm:py-0"
           style={{ background: "hsl(var(--admin-topbar))", borderColor: "var(--admin-border-strong)", color: "hsl(var(--admin-text-hi))" }}
         >
-          <nav className="flex items-center gap-1 text-meta" style={{ color: "hsl(var(--admin-text-muted))" }}>
+          <nav className="flex min-w-0 items-center gap-1 text-meta" style={{ color: "hsl(var(--admin-text-muted))" }}>
             {crumbs.map((c, i) => (
-              <span key={i} className="flex items-center gap-1">
+              <span key={i} className="flex min-w-0 items-center gap-1">
                 {i > 0 && <ChevronRight size={11} className="opacity-60" />}
-                <span style={i === crumbs.length - 1 ? { color: "hsl(var(--admin-text))" } : undefined}>{c}</span>
+                <span className="truncate" style={i === crumbs.length - 1 ? { color: "hsl(var(--admin-text))" } : undefined}>{c}</span>
               </span>
             ))}
           </nav>
           <span
-            className="ml-2 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta"
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta sm:ml-2"
             style={{ background: "rgba(217,119,87,0.16)", color: "hsl(var(--ember))" }}
           >
             <Shield size={10} />
-            Instance scope · writes affect every tenant
+            <span className="hidden sm:inline">Instance scope · writes affect every tenant</span>
+            <span className="sm:hidden">Instance scope</span>
           </span>
           <div className="ml-auto flex items-center gap-2">
             <span className="text-meta" style={{ color: "hsl(var(--admin-text-muted))" }}>
@@ -167,7 +168,7 @@ export function AdminPage({
 
         {title && (
           <header
-            className="flex shrink-0 items-end gap-4 border-b px-8 pb-5 pt-5"
+            className="flex shrink-0 flex-col items-stretch gap-3 border-b px-4 pb-4 pt-4 sm:flex-row sm:items-end sm:gap-4 sm:px-8 sm:pb-5 sm:pt-5"
             style={{ background: "hsl(var(--admin-tile))", borderColor: "var(--admin-border-strong)", color: "hsl(var(--admin-text))" }}
           >
             <div className="min-w-0 flex-1">
@@ -178,12 +179,12 @@ export function AdminPage({
               )}
               <h1 className="mt-0.5 truncate text-xl font-semibold tracking-tight">{title}</h1>
               {subtitle && (
-                <p className="mt-1 truncate text-sm" style={{ color: "hsl(var(--admin-text-soft))" }}>
+                <p className="mt-1 line-clamp-2 text-sm sm:truncate" style={{ color: "hsl(var(--admin-text-soft))" }}>
                   {subtitle}
                 </p>
               )}
             </div>
-            {actions && <div className="flex items-center gap-1.5">{actions}</div>}
+            {actions && <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:flex-nowrap">{actions}</div>}
           </header>
         )}
 

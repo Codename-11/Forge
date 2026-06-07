@@ -112,7 +112,7 @@ function ActivityPill() {
     <Link
       href="/activity"
       title="Activity · live runs + chat (G 5)"
-      className="focus-ring relative inline-flex items-center gap-2 rounded-full border px-2 py-0.5 text-meta font-medium transition-colors"
+      className="focus-ring relative inline-flex min-h-8 items-center gap-2 rounded-full border px-2 py-0.5 text-meta font-medium transition-colors sm:min-h-0"
       style={{
         background: "hsl(var(--ember) / 0.12)",
         borderColor: "hsl(var(--ember) / 0.35)",
@@ -189,10 +189,10 @@ function GlobalSidebar({
 }) {
   return (
     <aside
-      className="flex h-full w-60 shrink-0 flex-col border-r border-border"
+      className="flex max-h-64 min-h-0 w-full shrink-0 flex-col overflow-hidden border-b border-border md:h-full md:max-h-none md:w-60 md:border-b-0 md:border-r"
       style={{
         background: "linear-gradient(180deg, hsl(var(--card) / 0.6) 0%, hsl(var(--card) / 0.3) 100%)",
-        minWidth: 240,
+
       }}
     >
       <div className="px-3 pb-2 pt-3">
@@ -276,22 +276,23 @@ function GlobalSidebar({
 function GlobalTopBar({ crumbs }: { crumbs: string[] }) {
   return (
     <header
-      className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4"
+      className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 sm:flex-nowrap sm:gap-3 sm:px-4 sm:py-0"
       style={{ background: "hsl(var(--card) / 0.3)" }}
     >
-      <nav className="flex items-center gap-1 text-meta text-muted-foreground">
+      <nav className="flex min-w-0 items-center gap-1 text-meta text-muted-foreground">
         {crumbs.map((c, i) => (
-          <span key={i} className="flex items-center gap-1">
+          <span key={i} className="flex min-w-0 items-center gap-1">
             {i > 0 && <ChevronRight size={11} className="opacity-60" />}
-            <span className={i === crumbs.length - 1 ? "text-foreground" : ""}>{c}</span>
+            <span className={cn("truncate", i === crumbs.length - 1 ? "text-foreground" : "")}>{c}</span>
           </span>
         ))}
       </nav>
-      <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-border/70 bg-card/40 px-1.5 py-0.5 text-meta text-muted-foreground">
+      <span className="inline-flex items-center gap-1 rounded-md border border-border/70 bg-card/40 px-1.5 py-0.5 text-meta text-muted-foreground sm:ml-2">
         <Eye size={10} />
-        Read-only across workspaces
+        <span className="hidden sm:inline">Read-only across workspaces</span>
+        <span className="sm:hidden">Read-only</span>
       </span>
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex min-w-0 items-center gap-2">
         <ActivityPill />
         <button className="focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground">
           <Bell size={14} />
@@ -320,8 +321,8 @@ export function GlobalPageHeader({
   return (
     <header
       className={cn(
-        "flex shrink-0 items-end gap-4 border-b border-border bg-background",
-        big ? "px-8 pb-6 pt-6" : "px-8 pb-4 pt-5",
+        "flex shrink-0 flex-col items-stretch gap-3 border-b border-border bg-background sm:flex-row sm:items-end sm:gap-4",
+        big ? "px-4 pb-4 pt-4 sm:px-8 sm:pb-6 sm:pt-6" : "px-4 pb-3 pt-4 sm:px-8 sm:pb-4 sm:pt-5",
       )}
     >
       <div className="min-w-0 flex-1">
@@ -329,9 +330,9 @@ export function GlobalPageHeader({
           <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">{eyebrow}</div>
         )}
         <h1 className={cn("mt-0.5 truncate font-semibold tracking-tight", big ? "text-[1.65rem]" : "text-xl")}>{title}</h1>
-        {subtitle && <p className="mt-1 truncate text-sm text-muted-foreground">{subtitle}</p>}
+        {subtitle && <p className="mt-1 line-clamp-2 text-sm text-muted-foreground sm:truncate">{subtitle}</p>}
       </div>
-      {actions && <div className="flex items-center gap-1.5">{actions}</div>}
+      {actions && <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:flex-nowrap">{actions}</div>}
     </header>
   );
 }
@@ -364,7 +365,7 @@ export function GlobalShell({
   const pathname = usePathname();
   const active = activePath ?? pathname ?? "/";
   return (
-    <div className="flex h-svh w-full overflow-hidden bg-background text-foreground">
+    <div className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground md:flex-row">
       <GlobalSidebar user={user} workspaces={workspaces} activePath={active} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <GlobalTopBar crumbs={crumbs} />

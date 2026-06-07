@@ -27,6 +27,28 @@ Verification: `pnpm lint`, `pnpm typecheck`, `pnpm build:app`,
 `git diff --check`, shell syntax checks for the live-dev scripts, focused
 `run-dispatcher` Vitest coverage, and a Playwright LAN dashboard smoke all pass.
 
+## 2026-06-06 — AXI-72 mobile settings/admin follow-up
+
+Expanded the AXI-72 mobile usability pass into the previously desktop-weight
+surfaces. The global activity pill now stacks and wraps on phone widths, the
+instance settings shell moves its navigation rail above the content below the
+medium breakpoint, and the admin shell switches from a fixed side rail to a
+compact scrollable top-nav on mobile while preserving the desktop sidebar.
+
+Broadened `tests/e2e/mobile-smoke.spec.ts` to cover `/activity`, global
+settings pages, and admin pages at 360px, 390px, and 430px with the shared
+no-document-horizontal-overflow assertion. The existing primary issue workflow
+coverage still exercises create/open/edit/comment/status/assignment plus agent
+and runtime inspection from a phone viewport. The existing multi-workspace admin
+shell smoke assertion was also scoped to the visible warning badge so the new
+responsive short/long "Instance scope" labels do not trip strict locators.
+
+Verification: `pnpm lint`, `pnpm typecheck`, `pnpm build:app`, full
+`pnpm test` (795 passed / 1 skipped), `E2E_FORCE_BUILD=1 pnpm exec playwright
+test tests/e2e/mobile-smoke.spec.ts --project=chromium` (7 passed),
+`pnpm exec playwright test tests/e2e/multiws-restructure.spec.ts --project=chromium`,
+`git diff --check`, and conflict-marker grep all pass.
+
 ## 2026-06-07 — Issue run strip layout hardening
 
 Fixed a remaining overlap in the issue detail active-run card. The run summary
@@ -179,6 +201,14 @@ explicitly restarted/reconciled.
 
 Verification: `pnpm lint`, `pnpm typecheck`, `pnpm test` (793 passed / 1
 skipped).
+
+## 2026-06-06 — Mobile core app usability pass
+
+Improved the shared topbar for phone-width layouts: the quick-create button now has an explicit accessible name and a larger mobile tap target, while page-level action groups wrap instead of forcing header overflow. Desktop sizing remains the same from the `sm:` breakpoint upward.
+
+Expanded mobile smoke coverage to target 360px, 390px, and 430px widths. The spec now covers dashboard, inbox, issue list, issue detail rail, kanban, command center, agents, runtimes, and a primary phone-width workflow: create issue from the topbar, edit title, comment, change status, assign Victor, inspect agent detail, and open runtime detail. Each changed surface asserts no document-level horizontal overflow.
+
+Verification: `pnpm lint`, `pnpm prisma:generate && pnpm typecheck`, `pnpm test` (793 passed / 1 skipped), `pnpm exec playwright test tests/e2e/mobile-smoke.spec.ts` (4 passed), conflict-marker scan, and `git diff --check`.
 
 ## 2026-06-06 — Run recovery and runtime compliance console
 
