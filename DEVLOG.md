@@ -9,8 +9,14 @@ now occupies its own line, the restart mode control has its own bounded row,
 and runtime/diagnostic/time metadata wraps separately so WAITING text, mode
 buttons, and policy badges cannot paint over each other at medium widths.
 
+CI follow-up: the shared router workspace fixture now keeps workspace keys
+within the eight-character contract while using a hashed suffix tail, avoiding
+occasional `Workspace.key` collisions in the full sequential unit suite.
+
 Verification: `pnpm lint`, `pnpm typecheck`, `pnpm build:app`, and
-`git diff --check` pass.
+`git diff --check` pass. `pnpm test --no-file-parallelism` passes, and the MCP
+workspace-key schema guard was checked with
+`pnpm vitest run src/server/services/__tests__/mcp.test.ts --no-file-parallelism`.
 
 ## 2026-06-06 — Comment wakes use Hermes run dispatch
 
