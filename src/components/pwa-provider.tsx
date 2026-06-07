@@ -16,11 +16,13 @@ const OFFLINE_CACHE_ENABLED_KEY = "forge.pwa.offline-pages.enabled";
 export function PwaProvider() {
   const installPromptRef = useRef<BeforeInstallPromptEvent | null>(null);
   const reloadingRef = useRef(false);
+  const hadControllerRef = useRef(false);
 
   useEffect(() => {
     if (process.env.NODE_ENV !== "production") return;
     if (!("serviceWorker" in navigator)) return;
     if (!window.isSecureContext) return;
+    hadControllerRef.current = Boolean(navigator.serviceWorker.controller);
 
     const register = () => {
       void navigator.serviceWorker
@@ -37,6 +39,10 @@ export function PwaProvider() {
     };
 
     const onControllerChange = () => {
+      if (!hadControllerRef.current) {
+        hadControllerRef.current = true;
+        return;
+      }
       if (reloadingRef.current) return;
       reloadingRef.current = true;
       window.location.reload();
