@@ -145,12 +145,12 @@ function activityCopy(
       readNestedString(payload, "dispatchReason", "picked") ??
       readPayloadString(payload, "agentProfileKey");
     const modeUpdated =
-      payload && typeof payload === "object" && (payload as Record<string, unknown>).modeUpdated === true;
+      payload &&
+      typeof payload === "object" &&
+      (payload as Record<string, unknown>).modeUpdated === true;
     const target = handle ? `@${handle}` : "agent";
     return {
-      label: modeUpdated
-        ? `Mode changed for ${target}`
-        : `Assigned ${target}`,
+      label: modeUpdated ? `Mode changed for ${target}` : `Assigned ${target}`,
       detail: dispatchDetail(payload),
       phase: modeUpdated ? "mode" : "assign",
     };
@@ -242,7 +242,7 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
 
   if (isLoading) {
     return (
-      <section className="mt-8 rounded-lg border border-border bg-card/40">
+      <section className="rounded-lg border border-border bg-card/40">
         <header className="flex h-9 items-center gap-2 border-b border-border px-3">
           <ActivityIcon className="h-3.5 w-3.5 text-muted-foreground" />
           <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -257,7 +257,7 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
   const rows = data ?? [];
 
   return (
-    <section className="mt-8 rounded-lg border border-border bg-card/40">
+    <section className="rounded-lg border border-border bg-card/40">
       <header className="flex h-9 items-center gap-2 border-b border-border px-3">
         <ActivityIcon className="h-3.5 w-3.5 text-muted-foreground" />
         <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">

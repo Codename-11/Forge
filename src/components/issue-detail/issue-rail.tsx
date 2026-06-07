@@ -90,14 +90,14 @@ export function IssueRail({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {header && (
-        <div className="border-b border-border bg-card/20 px-3 py-3">
+        <div className="shrink-0 border-b border-border bg-card/20 px-3 py-3 md:max-h-[40svh] md:overflow-y-auto">
           {header}
         </div>
       )}
       <div
         role="tablist"
         aria-label="Issue detail sections"
-        className="flex items-center gap-px border-b border-border bg-card/30 px-2"
+        className="flex shrink-0 items-center gap-px border-b border-border bg-card/30 px-2"
       >
         {TABS.map((t) => {
           const Icon = t.icon;
@@ -112,25 +112,20 @@ export function IssueRail({
               className={cn(
                 "focus-ring relative flex h-8 items-center gap-1.5 rounded-t-md px-2.5 text-[0.6875rem] font-medium",
                 MOTION.fast,
-                selected
-                  ? "text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
+                selected ? "text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
               title={`${t.label} — ${TABS.indexOf(t) + 1}`}
             >
               <Icon className="h-3 w-3" />
               <span>{t.label}</span>
               {selected && (
-                <span
-                  aria-hidden
-                  className="absolute inset-x-0 -bottom-px h-px bg-ember"
-                />
+                <span aria-hidden className="absolute inset-x-0 -bottom-px h-px bg-ember" />
               )}
             </button>
           );
         })}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3">
         {/* Keep each tab simple — reuse the battle-tested panels as-is. */}
         <ActiveTab tab={active} issueId={issueId} />
       </div>

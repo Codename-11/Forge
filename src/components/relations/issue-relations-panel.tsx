@@ -65,24 +65,20 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
   }, [data]);
 
   return (
-    <section className="mt-8 rounded-lg border border-border bg-card/40">
+    <section className="rounded-lg border border-border bg-card/40">
       <header className="flex h-9 items-center gap-2 border-b border-border px-3">
         <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Relations
         </h2>
-        <span className="font-mono text-[0.6875rem] text-muted-foreground">
-          {totalCount}
-        </span>
+        <span className="font-mono text-[0.6875rem] text-muted-foreground">{totalCount}</span>
         {/* List / Graph view toggle — the graph maps the issue's place in
             its blocks + sub-issue dependency path; the list stays the
             editing surface. */}
         <div className="ml-auto flex items-center rounded-md border border-border p-0.5">
-          {(
-            [
-              { id: "list" as const, label: "List", Icon: List },
-              { id: "graph" as const, label: "Graph", Icon: Workflow },
-            ]
-          ).map(({ id, label, Icon }) => (
+          {[
+            { id: "list" as const, label: "List", Icon: List },
+            { id: "graph" as const, label: "Graph", Icon: Workflow },
+          ].map(({ id, label, Icon }) => (
             <button
               key={id}
               type="button"
@@ -120,97 +116,81 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
         </div>
       ) : (
         <>
-      {adding && (
-        <AddRelationForm
-          issueId={issueId}
-          onDone={() => setAdding(false)}
-        />
-      )}
+          {adding && <AddRelationForm issueId={issueId} onDone={() => setAdding(false)} />}
 
-      <div className="divide-y divide-border">
-        {isLoading && (
-          <div className="px-3 py-3 text-meta text-muted-foreground">Loading…</div>
-        )}
-        {!isLoading &&
-          ORDER.map((kind) => {
-            const rows = data?.[kind] ?? [];
-            if (rows.length === 0) return null;
-            return (
-              <div key={kind} className="px-3 py-2">
-                <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
-                  {LABELS[kind]}
-                </div>
-                <ul className="space-y-1">
-                  {rows.map((r) => (
-                    <li key={r.relationId} className="group flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "inline-block h-2 w-2 shrink-0 rounded-full",
-                          STATUS_DOT[r.target.statusCategory] ?? "bg-muted",
-                        )}
-                        title={r.target.statusCategory}
-                      />
-                      <Link
-                        href={`/w/${ws.slug}/issues/${r.target.id}`}
-                        className="flex min-w-0 flex-1 items-center gap-2 hover:text-ember"
-                      >
-                        <span className="text-id text-muted-foreground">
-                          {formatIssueId(ws.key, r.target.number)}
-                        </span>
-                        <span className="truncate text-xs">{r.target.title}</span>
-                      </Link>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          remove.mutate({ relationId: r.relationId })
-                        }
-                        aria-label="Remove relation"
-                        title="Remove"
-                        className="opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
-                      >
-                        <span className="text-xs">×</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+          <div className="divide-y divide-border">
+            {isLoading && <div className="text-meta px-3 py-3 text-muted-foreground">Loading…</div>}
+            {!isLoading &&
+              ORDER.map((kind) => {
+                const rows = data?.[kind] ?? [];
+                if (rows.length === 0) return null;
+                return (
+                  <div key={kind} className="px-3 py-2">
+                    <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+                      {LABELS[kind]}
+                    </div>
+                    <ul className="space-y-1">
+                      {rows.map((r) => (
+                        <li key={r.relationId} className="group flex items-center gap-2">
+                          <span
+                            className={cn(
+                              "inline-block h-2 w-2 shrink-0 rounded-full",
+                              STATUS_DOT[r.target.statusCategory] ?? "bg-muted",
+                            )}
+                            title={r.target.statusCategory}
+                          />
+                          <Link
+                            href={`/w/${ws.slug}/issues/${r.target.id}`}
+                            className="flex min-w-0 flex-1 items-center gap-2 hover:text-ember"
+                          >
+                            <span className="text-id text-muted-foreground">
+                              {formatIssueId(ws.key, r.target.number)}
+                            </span>
+                            <span className="truncate text-xs">{r.target.title}</span>
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => remove.mutate({ relationId: r.relationId })}
+                            aria-label="Remove relation"
+                            title="Remove"
+                            className="opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+                          >
+                            <span className="text-xs">×</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            {!isLoading && totalCount === 0 && !adding && (
+              <div className="text-meta px-3 py-4 text-center text-muted-foreground">
+                No relations. Use{" "}
+                <button
+                  type="button"
+                  className="text-ember hover:underline"
+                  onClick={() => setAdding(true)}
+                >
+                  Add relation
+                </button>{" "}
+                to link blockers, duplicates, or related work.
               </div>
-            );
-          })}
-        {!isLoading && totalCount === 0 && !adding && (
-          <div className="px-3 py-4 text-center text-meta text-muted-foreground">
-            No relations. Use{" "}
-            <button
-              type="button"
-              className="text-ember hover:underline"
-              onClick={() => setAdding(true)}
-            >
-              Add relation
-            </button>{" "}
-            to link blockers, duplicates, or related work.
+            )}
           </div>
-        )}
-      </div>
         </>
       )}
     </section>
   );
 }
 
-function AddRelationForm({
-  issueId,
-  onDone,
-}: {
-  issueId: string;
-  onDone: () => void;
-}) {
+function AddRelationForm({ issueId, onDone }: { issueId: string; onDone: () => void }) {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
   const [kind, setKind] = useState<Kind>(RelationKind.BLOCKS);
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<
-    | { id: string; number: number; title: string }
-    | null
-  >(null);
+  const [selected, setSelected] = useState<{ id: string; number: number; title: string } | null>(
+    null,
+  );
 
   const debounced = useDebounced(query, 200);
   const search = trpc.issue.list.useQuery(
@@ -279,21 +259,14 @@ function AddRelationForm({
               autoFocus
             />
           )}
-          <Button
-            type="submit"
-            size="sm"
-            variant="ember"
-            disabled={!selected || add.isPending}
-          >
+          <Button type="submit" size="sm" variant="ember" disabled={!selected || add.isPending}>
             {add.isPending ? "Adding…" : "Add"}
           </Button>
         </div>
         {!selected && debounced && (
           <ul className="max-h-52 overflow-y-auto rounded-md border border-border bg-card/40">
             {search.isLoading && (
-              <li className="px-2 py-1.5 text-meta text-muted-foreground">
-                Searching…
-              </li>
+              <li className="text-meta px-2 py-1.5 text-muted-foreground">Searching…</li>
             )}
             {search.data?.items
               ?.filter((i) => i.id !== issueId)
@@ -318,9 +291,7 @@ function AddRelationForm({
                 </li>
               ))}
             {!search.isLoading && (search.data?.items.length ?? 0) === 0 && (
-              <li className="px-2 py-2 text-meta text-muted-foreground">
-                No matches.
-              </li>
+              <li className="text-meta px-2 py-2 text-muted-foreground">No matches.</li>
             )}
           </ul>
         )}
