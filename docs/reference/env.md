@@ -100,6 +100,7 @@ matching the chosen `aiProvider`.
 |------------------------|-------------------------------------------------------------|
 | `HERMES_GATEWAY_URL`   | Hermes gateway base URL.                                    |
 | `HERMES_GATEWAY_TOKEN` | Bearer token for the gateway.                               |
+| `HERMES_GATEWAY_ALLOW_UNAUTH` | Set to `1` only for an intentionally unauthenticated local gateway; otherwise Forge requires a token or runtime secret before showing Hermes Runs as chat-ready. |
 
 ### `aiProvider = openai`
 

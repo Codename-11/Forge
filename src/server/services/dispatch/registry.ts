@@ -1,7 +1,11 @@
 import "server-only";
 import type { AgentProvider } from "@prisma/client";
 import { defaultAdapterForProvider, getRuntimeAdapter } from "@/server/runtimes/adapters";
-import { hermesRunsConnector, makeHermesRunsConnector } from "./hermes-runs";
+import {
+  hermesEnvRunsConfigured,
+  hermesRunsConnector,
+  makeHermesRunsConnector,
+} from "./hermes-runs";
 import {
   makeCodexAppServerConnector,
   parseCodexRuntimeConfig,
@@ -73,7 +77,7 @@ export function resolveRunEngine(agent: {
 export function getRunsConnector(provider: AgentProvider): DispatchConnector | null {
   switch (provider) {
     case "HERMES":
-      return hermesRunsConnector;
+      return hermesEnvRunsConfigured() ? hermesRunsConnector : null;
     default:
       return null;
   }
@@ -83,6 +87,9 @@ export type AgentRuntimeRef = {
   adapterKey: string | null;
   endpoint: string | null;
   secret: string | null;
+  lastProbeAttempted?: boolean | null;
+  lastProbeReachable?: boolean | null;
+  lastProbeDetail?: string | null;
   /** Adapter-specific config (`Runtime.config`); parsed per adapter. */
   config?: unknown;
   /** Set when the runtime is paused — see `makeDisabledConnector`. */
@@ -98,8 +105,10 @@ export type AgentRuntimeRef = {
  *
  * Backfilled "(legacy webhook)" runtimes have their `endpoint` nulled in
  * migration 0060 (a Hermes runtime's endpoint must be the runs gateway base,
- * not the per-agent webhook URL 0018 put there), so they fall through to the
- * env gateway until an operator sets the real base in Settings → Runtimes.
+ * not the per-agent webhook URL 0018 put there), so they fall through only
+ * when the env gateway is explicitly configured. Otherwise chat reports that
+ * a managed runtime must be attached instead of silently dialing localhost
+ * with placeholder credentials.
  */
 export function getRunsConnectorForAgent(agent: {
   provider: AgentProvider;

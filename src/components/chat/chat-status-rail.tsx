@@ -66,6 +66,13 @@ function rowTone(ok: boolean | null) {
   return "border-border/60 bg-background/60";
 }
 
+function runtimeHealthTextClass(tone: string | null | undefined) {
+  if (tone === "success") return "text-emerald-600 dark:text-emerald-400";
+  if (tone === "danger") return "text-danger";
+  if (tone === "warning") return "text-amber-600 dark:text-amber-400";
+  return "text-muted-foreground";
+}
+
 function runtimeKindLabel(kind: string | null | undefined): string {
   switch (kind) {
     case "LOCAL_DAEMON":
@@ -224,6 +231,14 @@ export function ChatStatusRail({
   const engine = readiness?.mode ?? null; // "runs" | "completions"
   const effectiveProvider = readiness?.provider ?? agent?.provider ?? null;
   const runtime = agent?.runtime ?? null;
+  const runtimeHealth = runtime?.health ?? null;
+  const connectionOk = readiness
+    ? readiness.ready &&
+      (!runtimeHealth || runtimeHealth.tone === "success" || runtimeHealth.tone === "muted")
+    : null;
+  const usesHermesEnvFallback = Boolean(
+    readiness?.ready && readiness.mode === "runs" && effectiveProvider === "HERMES" && !runtime,
+  );
   const runStale = Boolean(
     diagnostics?.lastRun &&
       diagnostics.lastRun.status === "ACTIVE" &&
@@ -347,7 +362,7 @@ export function ChatStatusRail({
       </div>
 
       {/* Connection — provider · engine · runtime · readiness. */}
-      <div className={cn("rounded-lg border p-2 text-meta", rowTone(readiness ? readiness.ready : null))}>
+      <div className={cn("rounded-lg border p-2 text-meta", rowTone(connectionOk))}>
         <div className="flex items-center gap-2 font-medium text-foreground">
           <PlugZap className="h-3.5 w-3.5" /> Connection
         </div>
@@ -372,10 +387,31 @@ export function ChatStatusRail({
                 </Link>{" "}
                 · {runtimeKindLabel(runtime.kind)}
               </span>
+            ) : usesHermesEnvFallback ? (
+              <span className="text-amber-600 dark:text-amber-400">
+                Hermes env gateway fallback
+              </span>
             ) : (
               <span className="italic text-muted-foreground/80">no managed runtime attached</span>
             )}
           </div>
+          {runtimeHealth && (
+            <div
+              className={cn(
+                "flex items-start gap-1.5 text-[0.625rem]",
+                runtimeHealthTextClass(runtimeHealth.tone),
+              )}
+            >
+              {runtimeHealth.tone === "success" ? (
+                <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0" />
+              ) : (
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              )}
+              <span className="line-clamp-3">
+                {runtimeHealth.label} · {runtimeHealth.reason}
+              </span>
+            </div>
+          )}
           {readiness && !readiness.ready && (
             <div className="flex items-start gap-1.5 text-[0.625rem] text-amber-600 dark:text-amber-400">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />

@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-07 — Hermes chat runtime contract diagnostics
+
+Repaired the Forge workspace Victor binding by attaching it to a Forge-scoped
+Hermes runtime copied from the working gateway config, created the seeded owner
+default Victor chat thread, and refreshed both Hermes runtime probes. The live
+contract probe now reports the expected `/v1/models` success plus `/v1/runs`
+route availability without starting a run.
+
+Tightened Hermes chat readiness so the env gateway fallback only counts when a
+real token or explicit unauthenticated-local opt-in is configured. Runtime
+contract probe failures now downgrade RUNS chat readiness instead of showing a
+false-ready state, and the chat status rail surfaces attached runtime health so
+operators can see the difference between "chat can reach Hermes" and "profile
+presence heartbeat is stale."
+
+Enhanced the collapsed Chat conversations pane into a narrow recent-thread rail:
+the rail now keeps direct access to recent chat bubbles, highlights the active
+thread, shows status/attachment accents, and exposes a detailed themed tooltip
+without expanding the full sidebar.
+
+Verification: focused Vitest coverage for chat readiness, runs connector
+resolution, transport display, runtime health, and runtime dispatch contracts
+passes; `pnpm lint`, `pnpm exec tsc --noEmit --pretty false`,
+`pnpm build:app`, `git diff --check`, and a Playwright collapsed-rail smoke
+against `http://localhost:3010/w/forge/chat` pass.
+
 ## 2026-06-07 — Hermes RUNS recovery and LAN live-dev loop
 
 Closed the remaining AXI-72 Victor wake failure. The issue already had an

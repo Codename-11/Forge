@@ -18,6 +18,7 @@ import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { resolveChatReadiness } from "@/server/services/chat-readiness";
 import { workspaceChatProviderAvailability } from "@/server/services/ai-providers";
 import { probeRuntime } from "@/server/services/dispatch/runtime-probe";
+import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { agentAvailabilityModel } from "@/lib/transport-display";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { agentIdSchema } from "@/server/validators";
@@ -172,12 +173,31 @@ export const agentRouter = router({
         include: {
           _count: { select: { assignedIssues: true } },
           runtime: {
-            select: { id: true, name: true, kind: true, adapterKey: true, heartbeatAt: true },
+            select: {
+              id: true,
+              name: true,
+              kind: true,
+              adapterKey: true,
+              endpoint: true,
+              heartbeatAt: true,
+              connectedAt: true,
+              archivedAt: true,
+              disabledAt: true,
+              lastProbeAt: true,
+              lastProbeAttempted: true,
+              lastProbeReachable: true,
+              lastProbeDetail: true,
+            },
           },
         },
       });
       if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
-      return agent;
+      return {
+        ...agent,
+        runtime: agent.runtime
+          ? { ...agent.runtime, health: deriveRuntimeHealthStatus(agent.runtime) }
+          : null,
+      };
     }),
 
   /**
@@ -234,7 +254,15 @@ export const agentRouter = router({
           runEngine: true,
           webhookUrl: true,
           runtime: {
-            select: { adapterKey: true, endpoint: true, secret: true, kind: true },
+            select: {
+              adapterKey: true,
+              endpoint: true,
+              secret: true,
+              kind: true,
+              lastProbeAttempted: true,
+              lastProbeReachable: true,
+              lastProbeDetail: true,
+            },
           },
         },
       });
