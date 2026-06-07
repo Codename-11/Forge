@@ -37,7 +37,7 @@ test.describe("multi-workspace restructure", () => {
     await expect(page).toHaveURL(/\/admin$/);
     // Admin shell brand + the instance-scope warning bar.
     await expect(page.getByText("Instance admin").first()).toBeVisible();
-    await expect(page.getByText(/Instance scope/i)).toBeVisible();
+    await expect(page.locator("header").locator("span", { hasText: /Instance scope/i }).first()).toBeVisible();
   });
 
   test("global agents page lists profiles", async ({ page }) => {

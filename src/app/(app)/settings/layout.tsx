@@ -20,7 +20,7 @@ export default async function AccountSettingsLayout({
   if (!session?.user) redirect("/signin");
 
   return (
-    <div className="flex h-svh overflow-hidden bg-background">
+    <div className="flex h-svh flex-col overflow-hidden bg-background md:flex-row">
       <SettingsRail
         scope="account"
         backHref="/"
