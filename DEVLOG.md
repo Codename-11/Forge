@@ -31,12 +31,21 @@ Activity tab owns the remaining scroll area. Removed the old internal top gap
 from those tab bodies so dense activity histories start immediately under the
 tabs instead of wasting vertical space.
 
+CI follow-up: the Android PWA service-worker controller reload now ignores the
+first controller claim on a fresh install, so production-mode E2E sign-in is
+not interrupted by an app-shell reload. The Playwright E2E Postgres health
+check now targets `forge_e2e`, matching the shard database instead of probing
+the default `forge` database.
+
 Verification: `pnpm install --frozen-lockfile`, `pnpm prisma:generate`,
 focused dispatch/inbox/audit tests, `pnpm typecheck`, `pnpm lint`,
 `pnpm build:app`, and full `pnpm test` pass (795 passed / 1 skipped). The
 follow-up rail scroll change was additionally checked with `pnpm typecheck`,
-`pnpm lint`, and `pnpm build:app`. The full test run still prints pre-existing
-async notification/storage warning logs, but exits cleanly.
+`pnpm lint`, and `pnpm build:app`. The CI follow-up was checked with
+`pnpm lint`, `pnpm typecheck`, `pnpm build:app`, `git diff --check`, and
+the focused Playwright issue-flow spec against a fresh `.next-e2e` production
+build. The full test run still prints pre-existing async notification/storage
+warning logs, but exits cleanly.
 
 ## 2026-06-06 — Android PWA install and push notifications
 
