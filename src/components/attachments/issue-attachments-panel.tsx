@@ -18,6 +18,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useAttachmentLightbox } from "@/components/attachments/attachment-lightbox";
+import { LinkFavicon } from "@/components/attachments/attachment-chip";
 
 /**
  * tRPC error shape we care about for the misconfig banner. We can't
@@ -485,15 +486,10 @@ function AttachmentTile({
     }
   }, [error, onStorageMisconfig]);
   const thumbUrl = isImage ? data?.url : undefined;
-  const linkHost = isLink
-    ? (() => {
-        try {
-          return new URL(attachment.externalUrl ?? "").hostname.replace(/^www\./i, "");
-        } catch {
-          return "";
-        }
-      })()
-    : "";
+  const linkMeta = useMemo(
+    () => (isLink ? linkAttachmentMeta(attachment.externalUrl ?? null) : null),
+    [attachment.externalUrl, isLink],
+  );
 
   const openTile = () => {
     if (isLink) {
@@ -519,12 +515,27 @@ function AttachmentTile({
   const body = useMemo(() => {
     if (isLink) {
       return (
-        <div className="flex h-full flex-col items-center justify-center gap-1 p-2 text-center">
-          <ExternalLink className="h-6 w-6 text-muted-foreground" />
-          <div className="line-clamp-2 text-[0.6875rem] font-medium">{attachment.filename}</div>
-          <div className="font-mono text-[0.6875rem] text-muted-foreground">
-            {linkHost || "external link"}
+        <div className="flex min-h-16 items-center gap-2.5 p-2.5">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border bg-card/60">
+            <LinkFavicon url={attachment.externalUrl} size={16} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-medium text-foreground">
+              {attachment.filename}
+            </div>
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+              <span className="shrink-0 font-mono">{linkMeta?.host || "external link"}</span>
+              {linkMeta?.path && (
+                <>
+                  <span className="text-muted-foreground/40">/</span>
+                  <span className="min-w-0 truncate font-mono" title={linkMeta.path}>
+                    {linkMeta.path}
+                  </span>
+                </>
+              )}
+            </div>
           </div>
+          <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
         </div>
       );
     }
@@ -558,13 +569,19 @@ function AttachmentTile({
     isImage,
     thumbUrl,
     attachment.filename,
+    attachment.externalUrl,
     attachment.mimeType,
     attachment.size,
-    linkHost,
+    linkMeta,
   ]);
 
   return (
-    <li className="group relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-background">
+    <li
+      className={cn(
+        "group relative overflow-hidden rounded-md border border-border bg-background",
+        isLink ? "col-span-2 sm:col-span-3" : "aspect-[4/3]",
+      )}
+    >
       <button
         type="button"
         onClick={openTile}
@@ -613,4 +630,20 @@ function AttachmentTile({
 
 function isPdf(mime: string): boolean {
   return mime === "application/pdf";
+}
+
+function linkAttachmentMeta(url: string | null): { host: string; path: string } {
+  if (!url) return { host: "", path: "" };
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./i, "");
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+    const path =
+      host === "github.com" && pathParts.length >= 4 && pathParts[2] === "pull"
+        ? `${pathParts[0]}/${pathParts[1]}#${pathParts[3]}`
+        : pathParts.slice(0, 3).join("/");
+    return { host, path };
+  } catch {
+    return { host: "", path: "" };
+  }
 }

@@ -536,6 +536,13 @@ function renderCanvasToolPreview(call: StreamToolCall): ReactElement | null {
   }
 }
 
+function hasToolArguments(args: unknown): boolean {
+  if (args == null) return false;
+  if (Array.isArray(args)) return args.length > 0;
+  if (typeof args === "object") return Object.keys(args).length > 0;
+  return true;
+}
+
 /**
  * Live tool-call card. Renders started → confirm → executed/error states,
  * surfacing an Approve / Decline pair for write-class tools that need
@@ -565,6 +572,7 @@ function ToolCallCard({
   const awaitingConfirm = call.status === "pending" && call.requiresConfirm;
   const running = call.status === "pending" || call.status === "approved";
   const canvasPreview = useMemo(() => renderCanvasToolPreview(call), [call]);
+  const hasArgs = useMemo(() => hasToolArguments(call.args), [call.args]);
 
   let statusLabel: string;
   switch (call.status) {
@@ -612,7 +620,14 @@ function ToolCallCard({
       </button>
       {open && (
         <div className="space-y-1.5 border-t border-border/40 px-2 py-1.5">
-          {canvasPreview ?? <ChatMarkdown body={"```json\n" + json + "\n```"} />}
+          {canvasPreview ??
+            (hasArgs ? (
+              <ChatMarkdown body={"```json\n" + json + "\n```"} />
+            ) : (
+              <p className="text-[0.625rem] text-muted-foreground">
+                No input arguments.
+              </p>
+            ))}
           {awaitingConfirm && (
             <div className="space-y-1">
               <div className="flex items-center gap-1.5">
@@ -1000,7 +1015,7 @@ export function ChatThreadView({
   // drains FIFO (one stream at a time). Per-item status:
   //   queued  — waiting its turn (muted, "Queued", cancelable)
   //   sending — being streamed now (muted, "Sending…", cancelable)
-  //   sent    — server persisted it (flips on the stream's `meta` event)
+  //   sent    — server persisted it (response accepted; meta supplies row id)
   //   failed  — the send never reached the server; survives with Retry +
   //             Cancel, blocks the queue behind it until resolved.
   // `rawFiles` is kept so retry / deferred sends can re-upload.
@@ -1010,15 +1025,30 @@ export function ChatThreadView({
     rawFiles: File[];
     displayFiles: string[];
     status: "queued" | "sending" | "sent" | "failed";
+    /** Persisted USER ChatMessage id once the stream route acknowledges it. */
+    serverMessageId?: string;
   };
   const [outbox, setOutbox] = useState<Outbound[]>([]);
   const outboxRef = useRef<Outbound[]>([]);
   outboxRef.current = outbox;
   const sendingRef = useRef(false);
   const queueIdRef = useRef(0);
-  const markOutbox = useCallback((id: string, status: Outbound["status"]) => {
-    setOutbox((q) => q.map((m) => (m.id === id ? { ...m, status } : m)));
-  }, []);
+  const markOutbox = useCallback(
+    (id: string, status: Outbound["status"], serverMessageId?: string) => {
+      setOutbox((q) =>
+        q.map((m) =>
+          m.id === id
+            ? {
+                ...m,
+                status,
+                ...(serverMessageId ? { serverMessageId } : {}),
+              }
+            : m,
+        ),
+      );
+    },
+    [],
+  );
   const removeOutbox = useCallback((id: string) => {
     setOutbox((q) => q.filter((m) => m.id !== id));
   }, []);
@@ -1245,12 +1275,19 @@ export function ChatThreadView({
           return;
         }
         if (event === "meta") {
-          const { messageId } = parsed as { messageId?: string };
+          const { messageId, userMessageId } = parsed as {
+            messageId?: string;
+            userMessageId?: string;
+          };
           if (messageId) {
             setStreamBubble((b) => (b ? { ...b, messageId } : b));
           }
+          if (outboxId && userMessageId) {
+            markOutbox(outboxId, "sent", userMessageId);
+          }
           // Receipt already flipped to "Sent" on response acceptance; meta
-          // just carries the agent message id for the streaming bubble.
+          // also carries the persisted USER id so the optimistic bubble can
+          // disappear as soon as the real row refetches.
         } else if (event === "content") {
           const { delta } = parsed as { delta?: string };
           if (typeof delta === "string") {
@@ -1793,6 +1830,10 @@ export function ChatThreadView({
       })),
     [messages],
   );
+  const persistedMessageIds = useMemo(
+    () => new Set(messageRows.map((m) => m.id)),
+    [messageRows],
+  );
 
   // While a stream is in-flight (or held briefly after `done`), the
   // persisted AGENT row with the same messageId may also be in
@@ -1813,6 +1854,13 @@ export function ChatThreadView({
     () => [...visibleMessageRows, ...localMessages],
     [visibleMessageRows, localMessages],
   );
+  const visibleOutbox = useMemo(
+    () =>
+      outbox.filter(
+        (m) => !(m.serverMessageId && persistedMessageIds.has(m.serverMessageId)),
+      ),
+    [outbox, persistedMessageIds],
+  );
 
   // ---------- Presence-aware derived values ----------
   const mode = agentFull ? (agentFull.runtimeMode ?? "PERSISTENT") : "PERSISTENT";
@@ -1826,7 +1874,9 @@ export function ChatThreadView({
     runtimeMode: mode,
     lastHeartbeatAt,
     transportMode: readiness?.mode ?? "none",
-    runtimeHeartbeats: agentFull?.provider === "HERMES",
+    runtimeHeartbeats:
+      agentFull?.provider === "HERMES" ||
+      agentFull?.runtime?.adapterKey === "hermes",
   });
   const isOnDemand = availability === "on-demand";
   const isPersistentOnline = !isEphemeral && !isOnDemand && status === "ONLINE";
@@ -2066,7 +2116,7 @@ export function ChatThreadView({
         ))}
         {/* Active outbound messages (sending / sent / failed) sit above the
             agent's reply. Queued messages render below it as "up next". */}
-        {outbox.filter((m) => m.status !== "queued").map(renderOutbound)}
+        {visibleOutbox.filter((m) => m.status !== "queued").map(renderOutbound)}
         {/* Streaming bubble (new /api/chat/stream path). Takes precedence
             over the legacy MCP draft + thinking/wake diagnostics so the
             direct streaming UI is what the operator sees while the model
@@ -2106,7 +2156,7 @@ export function ChatThreadView({
           />
         ) : null}
         {/* Queued messages waiting their turn ("up next"). */}
-        {outbox.filter((m) => m.status === "queued").map(renderOutbound)}
+        {visibleOutbox.filter((m) => m.status === "queued").map(renderOutbound)}
       </div>
       {boundCanvas && (
         <div className="px-2 pt-1">

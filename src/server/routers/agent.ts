@@ -172,7 +172,7 @@ export const agentRouter = router({
         include: {
           _count: { select: { assignedIssues: true } },
           runtime: {
-            select: { id: true, name: true, kind: true, heartbeatAt: true },
+            select: { id: true, name: true, kind: true, adapterKey: true, heartbeatAt: true },
           },
         },
       });

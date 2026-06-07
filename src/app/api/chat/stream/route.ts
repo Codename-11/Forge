@@ -401,7 +401,7 @@ export async function POST(req: NextRequest) {
         }
       };
 
-      enqueue(sse("meta", { messageId: agentMessageId }));
+      enqueue(sse("meta", { messageId: agentMessageId, agentMessageId, userMessageId }));
 
       const assembled: string[] = [];
       const thinkingChunks: string[] = [];

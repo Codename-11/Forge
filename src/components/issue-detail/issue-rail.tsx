@@ -88,16 +88,16 @@ export function IssueRail({
   }, [setTab]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="min-h-0">
       {header && (
-        <div className="shrink-0 border-b border-border bg-card/20 px-3 py-3 md:max-h-[40svh] md:overflow-y-auto">
+        <div className="border-b border-border bg-card/20 px-3 py-3">
           {header}
         </div>
       )}
       <div
         role="tablist"
         aria-label="Issue detail sections"
-        className="flex shrink-0 items-center gap-px border-b border-border bg-card/30 px-2"
+        className="flex items-center gap-px border-b border-border bg-card/30 px-2"
       >
         {TABS.map((t) => {
           const Icon = t.icon;
@@ -125,7 +125,7 @@ export function IssueRail({
           );
         })}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3">
+      <div className="px-3 py-3">
         {/* Keep each tab simple — reuse the battle-tested panels as-is. */}
         <ActiveTab tab={active} issueId={issueId} />
       </div>

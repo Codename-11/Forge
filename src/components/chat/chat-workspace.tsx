@@ -184,6 +184,9 @@ export function ChatWorkspaceSurface() {
   );
   const createConversationM = trpc.chat.createConversation.useMutation({
     onSuccess: async (result) => {
+      setQuery("");
+      setStateFilter("all");
+      setArchived(false);
       await utils.chat.threads.invalidate();
       setNewConversationOpen(false);
       setNewTitle("");

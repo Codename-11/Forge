@@ -598,6 +598,7 @@ export const chatRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const agent = await requireChatAgent(ctx.db, ctx.workspaceId, input.agentId);
+      const now = new Date();
       const thread = await ctx.db.chatThread.create({
         data: {
           workspaceId: ctx.workspaceId,
@@ -607,6 +608,8 @@ export const chatRouter = router({
           topic: input.topic || null,
           isDefault: false,
           contextMode: input.contextMode,
+          lastMessageAt: now,
+          createdAt: now,
         },
       });
       return { thread, agent, messages: [] };

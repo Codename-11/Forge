@@ -64,6 +64,31 @@ describe("chatRouter deferred dispatch", () => {
     });
   });
 
+  it("lists a newly created side conversation before older default chats even before messages", async () => {
+    const { agent, caller, prisma } = await setup();
+    const defaultThread = await caller.thread({ agentId: agent.id });
+    const oldLastMessageAt = new Date("2024-01-01T00:00:00.000Z");
+    await prisma.chatThread.update({
+      where: { id: defaultThread.thread.id },
+      data: { lastMessageAt: oldLastMessageAt },
+    });
+
+    const conversation = await caller.createConversation({
+      agentId: agent.id,
+      title: "Fresh side chat",
+    });
+
+    const threads = await caller.threads();
+    expect(threads[0]).toMatchObject({
+      id: conversation.thread.id,
+      title: "Fresh side chat",
+      latestMessage: null,
+    });
+    expect(new Date(conversation.thread.lastMessageAt).getTime()).toBeGreaterThan(
+      oldLastMessageAt.getTime(),
+    );
+  });
+
   it("dispatches user messages to a selected named conversation", async () => {
     const { agent, caller } = await setup();
     const conversation = await caller.createConversation({ agentId: agent.id, title: "Named thread" });
