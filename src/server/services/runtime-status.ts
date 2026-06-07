@@ -133,6 +133,8 @@ export function deriveRuntimeHealthStatus(
   const sweep = sweepExpectationFor(input);
   const heartbeatAt = asDate(input.heartbeatAt);
   const heartbeatFresh = !!heartbeatAt && now.getTime() - heartbeatAt.getTime() < onlineMs;
+  const probeAt = asDate(input.lastProbeAt);
+  const probeFresh = !!probeAt && now.getTime() - probeAt.getTime() < onlineMs;
   const failedProbe = input.lastProbeAttempted === true && input.lastProbeReachable === false;
   const successfulProbe = input.lastProbeAttempted === true && input.lastProbeReachable === true;
   const probeDetail = sanitizeRuntimeProbeDetail(input.lastProbeDetail);
@@ -172,6 +174,21 @@ export function deriveRuntimeHealthStatus(
       label: "probe failed",
       tone: "danger",
       reason: probeDetail ?? "Last handshake probe failed.",
+      lastSignal,
+      adapter: adapterLabel,
+      endpoint: input.endpoint,
+      probeSupported,
+      sweepCovered: sweep.covered,
+      sweepExpectation: sweep.text,
+    };
+  }
+  if (adapter?.key === "hermes" && successfulProbe && probeFresh) {
+    return {
+      kind: "online",
+      label: "gateway online",
+      tone: "success",
+      reason:
+        "Gateway handshake passed. Hermes agent presence is reported separately through agent heartbeat / forge-presence or webhook delivery.",
       lastSignal,
       adapter: adapterLabel,
       endpoint: input.endpoint,
