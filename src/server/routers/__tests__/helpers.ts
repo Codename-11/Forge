@@ -29,6 +29,15 @@ function uniq(): string {
   return `${Date.now().toString(36)}${counter.toString(36)}${rand}`;
 }
 
+function compactKeyTail(input: string, length = 6): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36).toUpperCase().padStart(length, "0").slice(-length);
+}
+
 export interface TestFixture {
   workspace: Workspace;
   user: User;
@@ -41,7 +50,12 @@ export async function createWorkspaceFixture(
 ): Promise<TestFixture> {
   const prisma = getPrisma();
   const suffix = uniq();
-  const keyBase = (opts.keyPrefix ?? "TST").toUpperCase().slice(0, 4);
+  const keyBase = (opts.keyPrefix ?? "TST")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 2)
+    .padEnd(2, "X");
+  const workspaceKey = `${keyBase}${compactKeyTail(suffix)}`;
 
   const user = await prisma.user.create({
     data: {
@@ -60,7 +74,7 @@ export async function createWorkspaceFixture(
     data: {
       slug: `t-${suffix}`.slice(0, 48),
       name: `Test ${suffix}`,
-      key: `${keyBase}${suffix.slice(-2).toUpperCase()}`.slice(0, 6),
+      key: workspaceKey,
       cycleLengthDays: 7,
       cycleCooldownDays: 0,
       memberships: {
@@ -84,7 +98,9 @@ export async function createWorkspaceFixture(
   const cleanup = async () => {
     // ON DELETE CASCADE on Workspace fans out to everything tenant-scoped.
     await prisma.workspace.delete({ where: { id: workspace.id } }).catch(() => {});
-    await prisma.user.deleteMany({ where: { id: { in: [user.id, secondUser.id] } } }).catch(() => {});
+    await prisma.user
+      .deleteMany({ where: { id: { in: [user.id, secondUser.id] } } })
+      .catch(() => {});
   };
 
   return { workspace, user, secondUser, cleanup };
@@ -104,7 +120,8 @@ export async function buildContext(
     session: {
       user: {
         id: userId,
-        email: opts.asUserId === fixture.secondUser.id ? fixture.secondUser.email : fixture.user.email,
+        email:
+          opts.asUserId === fixture.secondUser.id ? fixture.secondUser.email : fixture.user.email,
         name: null,
       },
       expires: new Date(Date.now() + 86_400_000).toISOString(),
