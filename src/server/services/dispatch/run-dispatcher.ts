@@ -31,6 +31,7 @@ import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from
  */
 
 const RUN_START_LOOKBACK_MS = 15 * 60_000;
+const UNBACKED_RUN_RECOVERY_LOOKBACK_MS = 60 * 60_000;
 const START_BATCH = 10;
 const POLL_BATCH = 25;
 const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
@@ -260,7 +261,11 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
     where: {
       status: AgentRunStatus.ACTIVE,
       externalRunId: null,
-      startedAt: { gte: new Date(Date.now() - RUN_START_LOOKBACK_MS) },
+      OR: [
+        { startedAt: { gte: new Date(Date.now() - RUN_START_LOOKBACK_MS) } },
+        { lastEventAt: { gte: new Date(Date.now() - UNBACKED_RUN_RECOVERY_LOOKBACK_MS) } },
+        { lastWakeAt: { gte: new Date(Date.now() - UNBACKED_RUN_RECOVERY_LOOKBACK_MS) } },
+      ],
     },
     orderBy: { lastEventAt: "desc" },
     take: limit * 3,

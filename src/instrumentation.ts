@@ -5,6 +5,8 @@
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  if (process.env.FORGE_DISABLE_IN_PROCESS_WORKER === "1") return;
+
   const { startRecurringTicker } = await import("@/server/services/recurring");
   startRecurringTicker();
 

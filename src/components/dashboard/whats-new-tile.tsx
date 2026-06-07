@@ -85,9 +85,9 @@ export function WhatsNewTile({
 
       {rest.length > 0 && (
         <ul className="mt-3 flex flex-col gap-0.5 border-t border-border pt-2">
-          {rest.slice(0, 3).map((entry) => (
+          {rest.slice(0, 3).map((entry, i) => (
             <li
-              key={entry.version}
+              key={`${entry.version}-${entry.heading}-${i}`}
               className="truncate text-meta text-muted-foreground"
               title={entry.heading}
             >

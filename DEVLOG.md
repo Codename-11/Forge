@@ -2,6 +2,31 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-07 — Hermes RUNS recovery and LAN live-dev loop
+
+Closed the remaining AXI-72 Victor wake failure. The issue already had an
+EXECUTE-mode Hermes host policy with terminal/filesystem/git allowed, but the
+canonical `AgentRun` could be touched by comments or kicks while still lacking a
+Hermes `/v1/runs` `externalRunId`. The RUNS dispatcher now recovers recently
+touched unbacked active runs, and operator kicks on RUNS-backed rows record a
+structured dispatch event instead of falling back to the legacy webhook path.
+
+Added a faster live-data development loop for UI/API plus worker debugging:
+`dev:live:ui`, `dev:live:stack`, `dev:live:lan`, and standalone
+`worker:live` scripts. The app can now disable in-process workers while a
+watched host worker runs against live Postgres/Redis/MinIO, and LAN mode binds
+Next to `0.0.0.0` with matching auth/public origins for in-app-browser testing.
+
+Cleaned up the dev overlay issues seen while testing the LAN dashboard: Next
+LAN origins are allowed in dev config, Pino's pretty worker transport is now
+explicit opt-in, the activity drawer has a stable server snapshot, dashboard
+suggestions no longer nest project links inside issue links, and duplicate
+date/version React keys were made unique.
+
+Verification: `pnpm lint`, `pnpm typecheck`, `pnpm build:app`,
+`git diff --check`, shell syntax checks for the live-dev scripts, focused
+`run-dispatcher` Vitest coverage, and a Playwright LAN dashboard smoke all pass.
+
 ## 2026-06-07 — Issue run strip layout hardening
 
 Fixed a remaining overlap in the issue detail active-run card. The run summary

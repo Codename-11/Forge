@@ -6,17 +6,52 @@ into your local database, and how to move a workspace between instances.
 ## Two dev modes
 
 Forge ships two `next dev` entry points. Both give you Hot Module
-Reload — the difference is *which database they talk to*.
+Reload — the difference is _which database they talk to_.
 
-| Command          | Database / services            | Use it for |
-| ---------------- | ------------------------------ | ---------- |
-| `pnpm dev:local` | **Isolated** local docker stack | Rapid UI work in a safe sandbox. Auto-boots Postgres/Redis/MinIO, migrates, and seeds demo data. |
-| `pnpm dev`       | **Deployed** (live) data        | Iterating against real production data. Edits are real. |
+| Command               | Database / services                      | Use it for                                                                                       |
+| --------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `pnpm dev:local`      | **Isolated** local docker stack          | Rapid UI work in a safe sandbox. Auto-boots Postgres/Redis/MinIO, migrates, and seeds demo data. |
+| `pnpm dev`            | **Deployed** (live) data                 | Iterating against real production data. Edits are real.                                          |
+| `pnpm dev:live:ui`    | **Deployed** data, prod worker           | Fast UI/API reproduction against live rows without running a second local worker.                |
+| `pnpm dev:live:stack` | **Deployed** data + watched local worker | Short-lived worker/runtime debugging against live rows and live runtimes.                        |
+| `pnpm dev:live:lan`   | **Deployed** data + watched local worker | Same as `dev:live:stack`, but binds on LAN and uses the LAN URL for auth redirects.              |
 
 `pnpm dev` is an alias for the live-data server (`scripts/dev-live.sh`),
 which resolves the deployed container IPs at boot and points `next dev` at
 them. It's the fastest way to reproduce something against real data, but
 **every write hits production** — use it deliberately.
+
+For most live-data UI work, prefer:
+
+```bash
+pnpm dev:live:ui
+```
+
+That starts `next dev` with in-process background workers disabled. The
+deployed worker remains authoritative, so you can inspect and patch UI/API
+behavior without racing the production worker.
+
+When you need to iterate worker-driven logic such as runtime dispatch,
+stale-run recovery, webhook fan-out, or Hermes/Codex run ingestion, use:
+
+```bash
+pnpm dev:live:stack
+```
+
+It runs the app with workers disabled and a separate `tsx watch`
+`src/server/worker.ts` process against the same live Postgres/Redis/MinIO.
+Keep this mode short-lived: it intentionally runs a local worker against
+live queues and data so code changes can be validated before a Docker build.
+
+For device or in-app-browser testing without a localhost port forward, use:
+
+```bash
+PORT=3002 pnpm dev:live:lan
+```
+
+That binds Next to `0.0.0.0`, detects the primary LAN IP, and sets
+`AUTH_URL` / `NEXT_PUBLIC_APP_URL` to the LAN origin so sign-in callbacks,
+cookies, and app redirects stay on the same host.
 
 `pnpm dev:local` (`scripts/dev-local.sh`) is the isolated loop:
 
@@ -78,7 +113,7 @@ local migrations. `pg_dump` is read-only, so **production is never
 written**.
 
 ::: warning
-Attachment **bytes** live in MinIO and are *not* copied. FILE attachment
+Attachment **bytes** live in MinIO and are _not_ copied. FILE attachment
 rows will point at objects that don't exist in the local bucket; their
 metadata and all LINK attachments are intact. Everything else is a faithful
 copy.

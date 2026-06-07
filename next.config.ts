@@ -1,10 +1,26 @@
 import type { NextConfig } from "next";
 
 const isolatedBuild = !!process.env.NEXT_DIST_DIR && process.env.NEXT_DIST_DIR !== ".next";
+const devOriginHosts = Array.from(
+  new Set(
+    [process.env.AUTH_URL_DEV, process.env.NEXT_PUBLIC_APP_URL, process.env.LAN_IP]
+      .map((value) => {
+        if (!value) return null;
+        if (!value.includes("://")) return value.split(":")[0] || null;
+        try {
+          return new URL(value).hostname;
+        } catch {
+          return null;
+        }
+      })
+      .filter((value): value is string => Boolean(value)),
+  ),
+);
 
 const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  allowedDevOrigins: devOriginHosts.length > 0 ? devOriginHosts : undefined,
   // `standalone` is for the prod Docker image. The E2E build (NEXT_DIST_DIR=
   // .next-e2e) is served with plain `next start`, which doesn't support
   // standalone — so skip it there to keep `next start` clean.
