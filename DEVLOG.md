@@ -27,6 +27,28 @@ Verification: `pnpm lint`, `pnpm typecheck`, `pnpm build:app`,
 `git diff --check`, shell syntax checks for the live-dev scripts, focused
 `run-dispatcher` Vitest coverage, and a Playwright LAN dashboard smoke all pass.
 
+## 2026-06-06 — AXI-72 mobile settings/admin follow-up
+
+Expanded the AXI-72 mobile usability pass into the previously desktop-weight
+surfaces. The global activity pill now stacks and wraps on phone widths, the
+instance settings shell moves its navigation rail above the content below the
+medium breakpoint, and the admin shell switches from a fixed side rail to a
+compact scrollable top-nav on mobile while preserving the desktop sidebar.
+
+Broadened `tests/e2e/mobile-smoke.spec.ts` to cover `/activity`, global
+settings pages, and admin pages at 360px, 390px, and 430px with the shared
+no-document-horizontal-overflow assertion. The existing primary issue workflow
+coverage still exercises create/open/edit/comment/status/assignment plus agent
+and runtime inspection from a phone viewport. The existing multi-workspace admin
+shell smoke assertion was also scoped to the visible warning badge so the new
+responsive short/long "Instance scope" labels do not trip strict locators.
+
+Verification: `pnpm lint`, `pnpm typecheck`, `pnpm build:app`, full
+`pnpm test` (795 passed / 1 skipped), `E2E_FORCE_BUILD=1 pnpm exec playwright
+test tests/e2e/mobile-smoke.spec.ts --project=chromium` (7 passed),
+`pnpm exec playwright test tests/e2e/multiws-restructure.spec.ts --project=chromium`,
+`git diff --check`, and conflict-marker grep all pass.
+
 ## 2026-06-07 — Issue run strip layout hardening
 
 Fixed a remaining overlap in the issue detail active-run card. The run summary

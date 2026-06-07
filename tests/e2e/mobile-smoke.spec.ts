@@ -125,6 +125,48 @@ test.describe("Mobile smoke", () => {
       await expect(page.getByTestId("runtime-row-e2e-codex-runtime")).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `runtimes at ${width}px`);
     });
+
+    test(`global activity, instance settings, and admin surfaces stay usable at ${width}px`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: HEIGHT });
+
+      await page.goto("/");
+      await expect(page.getByText("Mission Control").first()).toBeVisible();
+      const activityPill = page.getByTitle("Activity · live runs + chat (G 5)");
+      await expect(activityPill).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `mission control activity pill at ${width}px`);
+
+      await activityPill.click();
+      await expect(page).toHaveURL(/\/activity$/);
+      await expect(page.getByText("Activity").first()).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `activity feed at ${width}px`);
+
+      await page.goto("/settings/agents");
+      await expect(page.getByPlaceholder("Search settings")).toBeVisible();
+      await expect(page.getByText("Agent profiles").first()).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `instance agent settings at ${width}px`);
+
+      await page.goto("/settings/runtimes");
+      await expect(page.getByPlaceholder("Search settings")).toBeVisible();
+      await expect(page.getByText("Runtimes").first()).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `instance runtimes settings at ${width}px`);
+
+      await page.goto("/settings/appearance");
+      await expect(page.getByPlaceholder("Search settings")).toBeVisible();
+      await expect(page.getByText("Appearance").first()).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `instance appearance settings at ${width}px`);
+
+      await page.goto("/admin");
+      await expect(page.getByText("Instance scope", { exact: true })).toBeVisible();
+      await expect(page.getByText("Forge · self-hosted").first()).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `admin overview at ${width}px`);
+
+      await page.goto("/admin/runtimes");
+      await expect(page.getByText("Instance scope", { exact: true })).toBeVisible();
+      await expect(page.getByText("Runtimes").first()).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `admin runtimes at ${width}px`);
+    });
   }
 
   test("primary phone-width issue workflow supports create, edit, comment, status, assignment, agents, and runtimes", async ({
