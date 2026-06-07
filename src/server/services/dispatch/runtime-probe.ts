@@ -101,7 +101,15 @@ function probeCodexWs(
   });
 }
 
-/** Cheap Hermes gateway handshake. Uses `/models` when the endpoint looks OpenAI-compatible so bad bearer tokens surface as auth failures. */
+/**
+ * Hermes gateway contract probe.
+ *
+ * This is intentionally non-mutating: `/models` proves the configured gateway
+ * base + bearer token are valid, and `GET /runs` proves the structured runs
+ * route exists without starting a run. Current Hermes returns 405 for that
+ * second check, which is a good signal: the path exists, but the method is
+ * not the mutating POST that starts work.
+ */
 async function probeHermesHttp(
   endpoint: string,
   secret: string | null | undefined,
@@ -110,23 +118,61 @@ async function probeHermesHttp(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const url = hermesProbeUrl(endpoint);
-    const res = await fetch(url, {
+    const headers = secret ? { authorization: `Bearer ${secret}` } : undefined;
+    const models = await fetch(hermesProbeUrl(endpoint, "models"), {
       method: "GET",
-      headers: secret ? { authorization: `Bearer ${secret}` } : undefined,
+      headers,
       signal: ctrl.signal,
     });
-    if (res.status === 401 || res.status === 403) {
+    if (models.status === 401 || models.status === 403) {
       return {
         attempted: true,
         reachable: false,
-        detail: `Gateway rejected auth (HTTP ${res.status}).`,
+        detail: `Gateway rejected auth (HTTP ${models.status}).`,
+      };
+    }
+    if (models.status < 200 || models.status >= 300) {
+      return {
+        attempted: true,
+        reachable: false,
+        detail:
+          models.status === 404
+            ? "Hermes model surface missing (HTTP 404); endpoint should point at the gateway /v1 base."
+            : `Hermes model surface failed (HTTP ${models.status}).`,
+      };
+    }
+
+    const runs = await fetch(hermesProbeUrl(endpoint, "runs"), {
+      method: "GET",
+      headers,
+      signal: ctrl.signal,
+    });
+    if (runs.status === 401 || runs.status === 403) {
+      return {
+        attempted: true,
+        reachable: false,
+        detail: `Gateway rejected auth (HTTP ${runs.status}).`,
+      };
+    }
+    if (runs.status === 404) {
+      return {
+        attempted: true,
+        reachable: false,
+        detail:
+          "Hermes runs API missing (HTTP 404); upgrade Hermes or point the runtime at a gateway that exposes /v1/runs.",
+      };
+    }
+    if (runs.status >= 500) {
+      return {
+        attempted: true,
+        reachable: false,
+        detail: `Hermes runs API failed (HTTP ${runs.status}).`,
       };
     }
     return {
       attempted: true,
       reachable: true,
-      detail: `Gateway answered (HTTP ${res.status}).`,
+      detail: `Gateway contract ok (models HTTP ${models.status}; runs route HTTP ${runs.status}).`,
     };
   } catch (err) {
     return {
@@ -139,13 +185,11 @@ async function probeHermesHttp(
   }
 }
 
-function hermesProbeUrl(endpoint: string): string {
+function hermesProbeUrl(endpoint: string, suffix: "models" | "runs"): string {
   try {
     const url = new URL(endpoint);
     const path = url.pathname.replace(/\/+$/, "");
-    if (path.endsWith("/v1")) {
-      url.pathname = `${path}/models`;
-    }
+    url.pathname = `${path}/${suffix}`;
     return url.toString();
   } catch {
     return endpoint;

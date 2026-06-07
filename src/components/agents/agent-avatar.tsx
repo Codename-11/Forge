@@ -17,12 +17,15 @@ export function AgentAvatar({
   shape = "rounded",
   active = false,
   className,
+  title,
 }: {
   agent: AgentAvatarIdentity;
   size?: keyof typeof sizeClass;
   shape?: "circle" | "rounded";
   active?: boolean;
   className?: string;
+  /** `null` suppresses the avatar's own tooltip when a parent owns detail. */
+  title?: string | null;
 }) {
   const avatar = agent.avatar?.trim() || null;
   const imageAvatar = isImageAvatar(avatar) ? avatar : null;
@@ -38,7 +41,11 @@ export function AgentAvatar({
           : "border-border bg-subtle/50 text-muted-foreground",
         className,
       )}
-      title={`${agent.name ?? "Agent"}${agent.profileKey ? ` @${agent.profileKey}` : ""}`}
+      title={
+        title === null
+          ? undefined
+          : title ?? `${agent.name ?? "Agent"}${agent.profileKey ? ` @${agent.profileKey}` : ""}`
+      }
     >
       {imageAvatar ? (
         // eslint-disable-next-line @next/next/no-img-element

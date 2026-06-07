@@ -59,7 +59,11 @@ const PROVIDERS: Record<ProviderId, ProviderDef> = {
       const baseURL =
         process.env.HERMES_GATEWAY_URL ??
         `http://127.0.0.1:${process.env.HERMES_GATEWAY_PORT ?? "8642"}/v1`;
-      const apiKey = process.env.HERMES_GATEWAY_TOKEN ?? "placeholder";
+      const token = process.env.HERMES_GATEWAY_TOKEN;
+      if (!token && process.env.HERMES_GATEWAY_ALLOW_UNAUTH !== "1") {
+        return { ok: false, reason: "HERMES_GATEWAY_TOKEN not set" };
+      }
+      const apiKey = token ?? "unauthenticated-local-gateway";
       return { ok: true, baseURL, apiKey };
     },
   },

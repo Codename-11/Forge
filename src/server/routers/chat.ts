@@ -1037,7 +1037,20 @@ export const chatRouter = router({
           provider: true,
           runEngine: true,
           webhookUrl: true,
-          runtime: { select: { adapterKey: true, endpoint: true, secret: true, kind: true, config: true, disabledAt: true, name: true } },
+          runtime: {
+            select: {
+              adapterKey: true,
+              endpoint: true,
+              secret: true,
+              kind: true,
+              config: true,
+              disabledAt: true,
+              name: true,
+              lastProbeAttempted: true,
+              lastProbeReachable: true,
+              lastProbeDetail: true,
+            },
+          },
         },
       });
       if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });

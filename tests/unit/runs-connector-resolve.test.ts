@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect } from "vitest";
 import {
   getRunsConnector,
   getRunsConnectorForAgent,
@@ -6,14 +6,32 @@ import {
 } from "@/server/services/dispatch/registry";
 
 describe("getRunsConnectorForAgent", () => {
-  const envSingleton = getRunsConnector("HERMES");
+  const saved = { ...process.env };
 
-  it("falls back to the env singleton when no runtime is set", () => {
+  beforeEach(() => {
+    delete process.env.HERMES_GATEWAY_TOKEN;
+    delete process.env.HERMES_GATEWAY_ALLOW_UNAUTH;
+  });
+
+  afterEach(() => {
+    process.env = { ...saved };
+  });
+
+  it("does not expose the env fallback when Hermes env is not configured", () => {
+    const c = getRunsConnectorForAgent({ provider: "HERMES", runtime: null });
+    expect(c).toBeNull();
+  });
+
+  it("falls back to the env singleton when Hermes env is configured", () => {
+    process.env.HERMES_GATEWAY_TOKEN = "test-token";
+    const envSingleton = getRunsConnector("HERMES");
     const c = getRunsConnectorForAgent({ provider: "HERMES", runtime: null });
     expect(c).toBe(envSingleton);
   });
 
-  it("falls back to env when a hermes runtime has no endpoint", () => {
+  it("falls back to env when a hermes runtime has no endpoint and env is configured", () => {
+    process.env.HERMES_GATEWAY_TOKEN = "test-token";
+    const envSingleton = getRunsConnector("HERMES");
     const c = getRunsConnectorForAgent({
       provider: "HERMES",
       runtime: { adapterKey: "hermes", endpoint: null, secret: null },
@@ -22,6 +40,7 @@ describe("getRunsConnectorForAgent", () => {
   });
 
   it("builds a runtime-bound connector when a hermes runtime has an endpoint", () => {
+    const envSingleton = getRunsConnector("HERMES");
     const c = getRunsConnectorForAgent({
       provider: "HERMES",
       runtime: { adapterKey: "hermes", endpoint: "https://gw.example/v1", secret: "tok" },
@@ -42,7 +61,7 @@ describe("getRunsConnectorForAgent", () => {
       provider: "HERMES",
       runtime: { adapterKey: "custom-http", endpoint: "https://hook.example", secret: null },
     });
-    expect(c).toBe(envSingleton);
+    expect(c).toBeNull();
   });
 
   it("builds a Codex app-server connector for a codex-app-server runtime", () => {

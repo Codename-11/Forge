@@ -104,7 +104,63 @@ describe("runtime-health — sweepRuntimeHealth", () => {
     }
   });
 
-  it("sweeps Hermes gateways as diagnostic-only probes without minting a heartbeat", async () => {
+  it("sweeps reachable Hermes gateways as diagnostic-only probes without minting a heartbeat", async () => {
+    const server = createServer((req, res) => {
+      if (req.url?.startsWith("/v1/models")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ object: "list", data: [{ id: "hermes-agent" }] }));
+        return;
+      }
+      if (req.url?.startsWith("/v1/runs")) {
+        res.writeHead(405, { "content-type": "text/plain" });
+        res.end("Method Not Allowed");
+        return;
+      }
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const fixture = await createWorkspaceFixture();
+      fixtures.push(fixture);
+      const prisma = getPrisma();
+      const rt = await prisma.runtime.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          name: "Hermes",
+          kind: RuntimeKind.REMOTE_HTTP,
+          adapterKey: "hermes",
+          endpoint: `http://127.0.0.1:${port}/v1`,
+          heartbeatAt: null,
+        },
+        select: { id: true },
+      });
+
+      await sweepRuntimeHealth();
+
+      const runtime = await prisma.runtime.findUniqueOrThrow({
+        where: { id: rt.id },
+        select: {
+          heartbeatAt: true,
+          lastProbeAt: true,
+          lastProbeAttempted: true,
+          lastProbeReachable: true,
+          lastProbeDetail: true,
+        },
+      });
+      expect(runtime.heartbeatAt).toBeNull();
+      expect(runtime.lastProbeAt).not.toBeNull();
+      expect(runtime.lastProbeAttempted).toBe(true);
+      expect(runtime.lastProbeReachable).toBe(true);
+      expect(runtime.lastProbeDetail).toContain("Gateway contract ok");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("persists redacted Hermes auth mismatch diagnostics", async () => {
     const server = createServer((_req, res) => {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
@@ -147,6 +203,56 @@ describe("runtime-health — sweepRuntimeHealth", () => {
       expect(runtime.lastProbeDetail).toContain("Gateway rejected auth");
       expect(runtime.lastProbeDetail).not.toContain("super-secret");
       expect(runtime.lastProbeDetail).not.toContain("bad-secret");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("flags Hermes gateways that answer models but do not expose the runs API", async () => {
+    const server = createServer((req, res) => {
+      if (req.url?.startsWith("/v1/models")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ object: "list", data: [{ id: "hermes-agent" }] }));
+        return;
+      }
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const fixture = await createWorkspaceFixture();
+      fixtures.push(fixture);
+      const prisma = getPrisma();
+      const rt = await prisma.runtime.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          name: "Hermes",
+          kind: RuntimeKind.REMOTE_HTTP,
+          adapterKey: "hermes",
+          endpoint: `http://127.0.0.1:${port}/v1`,
+        },
+        select: { id: true },
+      });
+
+      await sweepRuntimeHealth();
+
+      const runtime = await prisma.runtime.findUniqueOrThrow({
+        where: { id: rt.id },
+        select: {
+          heartbeatAt: true,
+          lastProbeAt: true,
+          lastProbeAttempted: true,
+          lastProbeReachable: true,
+          lastProbeDetail: true,
+        },
+      });
+      expect(runtime.heartbeatAt).toBeNull();
+      expect(runtime.lastProbeAt).not.toBeNull();
+      expect(runtime.lastProbeAttempted).toBe(true);
+      expect(runtime.lastProbeReachable).toBe(false);
+      expect(runtime.lastProbeDetail).toContain("Hermes runs API missing");
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

@@ -99,6 +99,135 @@ function AgentGlyph({ agent, active }: { agent: AgentLite; active?: boolean }) {
   return <AgentAvatar agent={agent} active={active} size="md" shape="rounded" />;
 }
 
+type CollapsedRailThread = {
+  id: string;
+  title?: string | null;
+  isDefault?: boolean | null;
+  lastMessageAt: Date | string;
+  agent: AgentLite;
+  latestMessage?: {
+    body: string | null;
+    role: string;
+    createdAt: Date | string;
+    attachmentCount?: number | null;
+    hasImageAttachment?: boolean | null;
+  } | null;
+};
+
+function collapsedThreadTooltip(thread: CollapsedRailThread): string {
+  const latest = thread.latestMessage;
+  const meta = statusMeta({ agent: thread.agent, latestMessage: latest });
+  const attachment =
+    latest?.attachmentCount && latest.attachmentCount > 0
+      ? ` · ${latest.attachmentCount} ${latest.hasImageAttachment ? "image/file" : "file"}`
+      : "";
+  return [
+    conversationTitle(thread),
+    `${thread.agent.name} · @${thread.agent.profileKey}`,
+    truncate(latest?.body, latest?.attachmentCount ? "Attachment prompt" : "No messages yet"),
+    `${meta.label} · ${relativeTime(thread.lastMessageAt)}${attachment}`,
+  ].join(" | ");
+}
+
+function collapsedStatusClass(tone: ReturnType<typeof statusMeta>["tone"]): string {
+  switch (tone) {
+    case "green":
+      return "bg-emerald-500";
+    case "ember":
+      return "bg-ember";
+    case "sky":
+      return "bg-sky-500";
+    default:
+      return "bg-muted-foreground/45";
+  }
+}
+
+function CollapsedConversationRail({
+  threads,
+  selectedThreadId,
+  onExpand,
+  onOpenThread,
+}: {
+  threads: CollapsedRailThread[];
+  selectedThreadId: string | null;
+  onExpand: () => void;
+  onOpenThread: (threadId: string, agentId: string) => void;
+}) {
+  const visibleThreads = threads.slice(0, 8);
+  return (
+    <aside className="hidden w-11 shrink-0 flex-col items-center border-r border-border/70 bg-card/30 py-2 md:flex">
+      <Tooltip content="Show conversations">
+        <button
+          type="button"
+          onClick={onExpand}
+          aria-label="Show conversations"
+          className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle/70 hover:text-foreground"
+        >
+          <PanelLeftOpen className="h-4 w-4" />
+        </button>
+      </Tooltip>
+      <div className="my-2 h-px w-6 bg-border/70" />
+      <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto px-1">
+        {visibleThreads.length > 0 ? (
+          visibleThreads.map((thread) => {
+            const active = selectedThreadId === thread.id;
+            const latest = thread.latestMessage;
+            const meta = statusMeta({ agent: thread.agent, latestMessage: latest });
+            return (
+              <Tooltip key={thread.id} content={collapsedThreadTooltip(thread)}>
+                <button
+                  type="button"
+                  onClick={() => onOpenThread(thread.id, thread.agent.id)}
+                  aria-label={conversationTitle(thread)}
+                  className={cn(
+                    "group relative flex h-9 w-9 items-center justify-center rounded-lg border transition-colors",
+                    active
+                      ? "border-ember/50 bg-ember/10"
+                      : "border-transparent hover:border-border hover:bg-subtle/60",
+                  )}
+                >
+                  <AgentAvatar
+                    agent={thread.agent}
+                    active={active}
+                    size="sm"
+                    shape="rounded"
+                    title={null}
+                  />
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "absolute bottom-0.5 right-0.5 h-2 w-2 rounded-full ring-2 ring-card",
+                      collapsedStatusClass(meta.tone),
+                    )}
+                  />
+                  {latest?.attachmentCount ? (
+                    <span
+                      aria-hidden
+                      className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground"
+                    >
+                      {latest.hasImageAttachment ? (
+                        <ImageIcon className="h-2.5 w-2.5" />
+                      ) : (
+                        <Paperclip className="h-2.5 w-2.5" />
+                      )}
+                    </span>
+                  ) : null}
+                </button>
+              </Tooltip>
+            );
+          })
+        ) : (
+          <Tooltip content="No recent conversations">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-border/70 text-muted-foreground/70">
+              <MessageSquare className="h-4 w-4" />
+            </span>
+          </Tooltip>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 export function ChatWorkspaceSurface() {
   const ws = useWorkspace();
   const router = useRouter();
@@ -382,15 +511,12 @@ export function ChatWorkspaceSurface() {
       <div className="min-h-0 flex-1 overflow-hidden">
         <div className="flex h-full min-h-0 border-b border-border/60">
           {convCollapsed && (
-            <button
-              type="button"
-              onClick={() => setConvCollapsed(false)}
-              title="Show conversations"
-              className="hidden w-9 shrink-0 flex-col items-center gap-2 border-r border-border/70 bg-card/30 py-3 text-muted-foreground hover:text-foreground md:flex"
-            >
-              <PanelLeftOpen className="h-4 w-4" />
-              <MessageSquare className="h-4 w-4 text-ember/70" />
-            </button>
+            <CollapsedConversationRail
+              threads={threads ?? []}
+              selectedThreadId={selectedThread?.id ?? null}
+              onExpand={() => setConvCollapsed(false)}
+              onOpenThread={openThread}
+            />
           )}
           <aside
             style={{ width: convCollapsed ? undefined : convWidth }}
@@ -415,6 +541,7 @@ export function ChatWorkspaceSurface() {
                   type="button"
                   onClick={() => setConvCollapsed(true)}
                   title="Collapse conversations"
+                  aria-label="Collapse conversations"
                   className="ml-auto text-muted-foreground hover:text-foreground"
                 >
                   <PanelLeftClose className="h-4 w-4" />

@@ -41,6 +41,7 @@ export type ChatReadiness = {
   reason:
     | "runs-connector"
     | "no-runs-connector"
+    | "runtime-probe-failed"
     | "model-configured"
     | "dispatch-path"
     | "pull-act-only"
@@ -83,11 +84,24 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
   if (engine === "RUNS") {
     const connector = getRunsConnectorForAgent({ provider, runtime: input.runtime });
     if (connector) {
+      if (input.runtime?.lastProbeAttempted === true && input.runtime.lastProbeReachable === false) {
+        return {
+          ready: false,
+          mode: "runs",
+          provider,
+          transportLabel: runtimeLabel(input, adapter?.title) ?? runsFallbackLabel(provider),
+          reason: "runtime-probe-failed",
+          hint:
+            `The attached runtime failed its last contract probe: ` +
+            `${input.runtime.lastProbeDetail || "probe did not succeed"}. ` +
+            `Verify the runtime connection before chatting.`,
+        };
+      }
       return {
         ready: true,
         mode: "runs",
         provider,
-        transportLabel: runtimeLabel(input, adapter?.title) ?? "Runs",
+        transportLabel: runtimeLabel(input, adapter?.title) ?? runsFallbackLabel(provider),
         reason: "runs-connector",
         hint: "",
       };
@@ -101,11 +115,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
         provider,
         transportLabel: "—",
         reason: "no-runs-connector",
-        hint:
-          `This agent uses the Runs engine, but no managed runtime is attached ` +
-          `to serve ${provider} as itself. Attach it to a chat-capable runtime ` +
-          `(Hermes, or a Codex app server), or switch its engine to Streaming ` +
-          `with a configured chat model.`,
+        hint: missingRunsConnectorHint(provider),
       };
     }
   }
@@ -160,11 +170,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
     provider,
     transportLabel: "—",
     reason: "no-model",
-    hint:
-      `No chat model is configured for this agent's provider (${providerId}). ` +
-      `Set its key (OPENAI_API_KEY / ANTHROPIC_API_KEY / FORGE_AI_BASE_URL), ` +
-      `register one in Settings → Workspace → AI, or back the agent with a ` +
-      `chat-capable runtime. It will not fall back to another platform.`,
+    hint: noModelHint(providerId),
   };
 }
 
@@ -196,6 +202,27 @@ function runtimeLabel(input: ChatReadinessInput, fallback?: string): string | nu
   return fallback ?? null;
 }
 
+function runsFallbackLabel(provider: AgentProvider): string {
+  return provider === "HERMES" ? "Hermes env" : "Runs";
+}
+
+function missingRunsConnectorHint(provider: AgentProvider): string {
+  if (provider === "HERMES") {
+    return (
+      `This Hermes agent uses the Runs engine, but no managed runtime is attached ` +
+      `and the env fallback is not configured. Attach it to a Hermes runtime ` +
+      `with endpoint + secret, set HERMES_GATEWAY_TOKEN, or explicitly allow ` +
+      `an unauthenticated local gateway with HERMES_GATEWAY_ALLOW_UNAUTH=1.`
+    );
+  }
+  return (
+    `This agent uses the Runs engine, but no managed runtime is attached ` +
+    `to serve ${provider} as itself. Attach it to a chat-capable runtime ` +
+    `(Hermes, or a Codex app server), or switch its engine to Streaming ` +
+    `with a configured chat model.`
+  );
+}
+
 function providerLabel(providerId: string): string {
   switch (providerId) {
     case "hermes":
@@ -209,4 +236,22 @@ function providerLabel(providerId: string): string {
     default:
       return providerId;
   }
+}
+
+function noModelHint(providerId: string): string {
+  if (providerId === "hermes") {
+    return (
+      `No Hermes chat model is configured. Set HERMES_GATEWAY_TOKEN, ` +
+      `explicitly allow an unauthenticated local gateway with ` +
+      `HERMES_GATEWAY_ALLOW_UNAUTH=1, register a Hermes credential in ` +
+      `Settings → Workspace → AI, or back the agent with a chat-capable ` +
+      `runtime. It will not fall back to another platform.`
+    );
+  }
+  return (
+    `No chat model is configured for this agent's provider (${providerId}). ` +
+    `Set its key (OPENAI_API_KEY / ANTHROPIC_API_KEY / FORGE_AI_BASE_URL), ` +
+    `register one in Settings → Workspace → AI, or back the agent with a ` +
+    `chat-capable runtime. It will not fall back to another platform.`
+  );
 }

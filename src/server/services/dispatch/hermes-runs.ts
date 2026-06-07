@@ -46,7 +46,13 @@ function envGatewayBase(): string {
 }
 
 function envGatewayToken(): string {
-  return process.env.HERMES_GATEWAY_TOKEN ?? "placeholder";
+  return process.env.HERMES_GATEWAY_TOKEN ?? "";
+}
+
+export function hermesEnvRunsConfigured(): boolean {
+  return Boolean(
+    process.env.HERMES_GATEWAY_TOKEN || process.env.HERMES_GATEWAY_ALLOW_UNAUTH === "1",
+  );
 }
 
 /**
@@ -60,9 +66,10 @@ export function makeHermesRunsConnector(opts?: {
   token?: string | null;
 }): DispatchConnector {
   const base = () => opts?.baseUrl || envGatewayBase();
-  const authHeaders = (): Record<string, string> => ({
-    authorization: `Bearer ${opts?.token || envGatewayToken()}`,
-  });
+  const authHeaders = (): Record<string, string> => {
+    const token = opts ? (opts.token ?? "") : envGatewayToken();
+    return token ? { authorization: `Bearer ${token}` } : {};
+  };
 
   return {
     kind: "hermes-runs",

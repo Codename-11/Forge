@@ -2,6 +2,7 @@ import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
+import { getRuntimeAdapter } from "@/server/runtimes/adapters";
 import { probeRuntime } from "@/server/services/dispatch/runtime-probe";
 import { sanitizeRuntimeProbeDetail, supportsRuntimeProbe } from "@/server/services/runtime-status";
 import { recordRuntimeHeartbeatPresence } from "@/server/services/heartbeat";
@@ -31,6 +32,11 @@ export interface RuntimeHealthSweepResult {
 }
 
 const PROBE_TIMEOUT_MS = 6_000;
+
+function probeCountsAsRuntimeHeartbeat(adapterKey: string | null): boolean {
+  const adapter = getRuntimeAdapter(adapterKey);
+  return adapter?.transport === "app-server" && adapter.capabilities.presence === "runtime-heartbeat";
+}
 
 export async function sweepRuntimeHealth(
   client: PrismaClient | Prisma.TransactionClient = db,
@@ -67,11 +73,12 @@ export async function sweepRuntimeHealth(
           return;
         }
         reachable += 1;
+        const countsAsHeartbeat = probeCountsAsRuntimeHeartbeat(rt.adapterKey);
         const updated = await client.runtime.updateMany({
           where: { id: rt.id },
-          data: { ...probeData, heartbeatAt: now },
+          data: countsAsHeartbeat ? { ...probeData, heartbeatAt: now } : probeData,
         });
-        if (updated.count > 0) {
+        if (updated.count > 0 && countsAsHeartbeat) {
           await recordRuntimeHeartbeatPresence(rt.id, now, client);
         }
       } catch (err) {

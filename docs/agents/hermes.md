@@ -388,6 +388,21 @@ path:
 Agent → chat.appendMessage({ threadId, body }) → persisted ChatMessage
 ```
 
+## Runtime contract diagnostics
+
+Forge probes managed Hermes runtimes against the contract it actually uses for
+chat and dispatch:
+
+- `GET /v1/models` verifies the configured gateway base and bearer token.
+- `GET /v1/runs` verifies the structured runs route exists without starting a
+  run. Current Hermes returns `405 Method Not Allowed` for this probe, which is
+  healthy because `POST /v1/runs` is the mutating operation.
+
+A successful Hermes probe is diagnostic-only. It proves the gateway contract is
+reachable, but it does **not** mark Victor/Mizu online; presence still comes
+from `forge-presence`, `agents.heartbeat`, or delivery-derived activity. That
+keeps "chat can reach Hermes" separate from "the profile heartbeat is fresh."
+
 ::: info Implementation note
 The Hermes chat integration relies on patches to Hermes core in Bailey's fork of
 NousResearch/hermes-agent at `~/.hermes/hermes-agent/`: specifically a `Platform` enum
