@@ -96,7 +96,7 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
   return (
     <div
       className={cn(
-        "mb-3 flex flex-col gap-2 overflow-hidden rounded-md border px-3 py-2 text-[0.75rem] xl:grid xl:grid-cols-[minmax(0,1fr)_auto]",
+        "mb-3 flex min-w-0 flex-col gap-2 overflow-hidden rounded-md border px-3 py-2 text-[0.75rem]",
         state === "running"
           ? "border-ember/30 bg-ember/5"
           : state === "acknowledged"
@@ -149,35 +149,48 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
           </span>
         )}
         <span className="shrink-0 text-muted-foreground">·</span>
-        <span className="min-w-[12rem] flex-1 truncate text-foreground/80" title={step}>
+        <span
+          className="min-w-0 basis-full truncate text-foreground/80 sm:flex-1 sm:basis-auto"
+          title={step}
+        >
           {step}
         </span>
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
+      <div className="grid min-w-0 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,auto)_minmax(0,1fr)] lg:items-start">
         <RunModeControl
           issueId={issueId}
           runId={run.id}
           mode={run.engagementMode as EngagementModeValue}
         />
-        <RuntimePolicyBadges
-          compact
-          policy={run.runtimePolicy as RuntimePolicySnapshot | null | undefined}
-        />
-        <ProtocolDiagnostics
-          diagnostics={
-            run.protocolDiagnostics as
-              | Array<{ code: string; severity: string; title: string; description: string }>
-              | undefined
-          }
-        />
-        <span className="text-meta flex shrink-0 items-center gap-2 text-muted-foreground">
-          <Activity className="h-3 w-3" />
-          <span title={`Started ${new Date(run.startedAt).toLocaleString()}`}>{elapsedLabel}</span>
-          <span>·</span>
-          <span title={`Last event ${new Date(run.lastEventAt).toLocaleString()}`}>
-            updated {lastEventLabel}
+        <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end">
+          <RuntimePolicyBadges
+            compact
+            policy={run.runtimePolicy as RuntimePolicySnapshot | null | undefined}
+          />
+          <ProtocolDiagnostics
+            diagnostics={
+              run.protocolDiagnostics as
+                | Array<{ code: string; severity: string; title: string; description: string }>
+                | undefined
+            }
+          />
+          <span className="text-meta flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+            <Activity className="h-3 w-3 shrink-0" />
+            <span
+              className="shrink-0"
+              title={`Started ${new Date(run.startedAt).toLocaleString()}`}
+            >
+              {elapsedLabel}
+            </span>
+            <span className="shrink-0">·</span>
+            <span
+              className="shrink-0"
+              title={`Last event ${new Date(run.lastEventAt).toLocaleString()}`}
+            >
+              updated {lastEventLabel}
+            </span>
           </span>
-        </span>
+        </div>
       </div>
     </div>
   );
@@ -234,13 +247,13 @@ function RunModeControl({
     onError: (err) => toast.error(err.message),
   });
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1">
-      <span className="text-meta text-muted-foreground">restart as</span>
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className="text-meta shrink-0 text-muted-foreground">restart as</span>
       <div
         role="group"
         aria-label="Run engagement mode"
         title="Mode is fixed per run. Pick another mode to stop this run and restart with that contract."
-        className="flex min-w-0 flex-wrap gap-0.5 rounded-md border border-border bg-background/80 p-0.5"
+        className="flex min-w-0 max-w-full gap-0.5 overflow-x-auto rounded-md border border-border bg-background/80 p-0.5"
       >
         {MODE_ORDER.map((m) => {
           const active = mode === m;
@@ -288,7 +301,7 @@ function RunModeControl({
         })}
       </div>
       <span
-        className="text-meta text-muted-foreground"
+        className="text-meta shrink-0 text-muted-foreground"
         title="Active mode is fixed for this run. Other modes stop and restart."
       >
         active mode locked
