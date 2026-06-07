@@ -30,7 +30,7 @@ describe("deriveRuntimeHealthStatus", () => {
     ).toBe("archived");
   });
 
-  it("reports a Hermes heartbeat gap as missing presence rather than gateway-down when the last probe succeeded", () => {
+  it("reports a fresh Hermes probe as gateway-online even without a runtime heartbeat", () => {
     const status = deriveRuntimeHealthStatus(
       {
         ...base,
@@ -42,8 +42,9 @@ describe("deriveRuntimeHealthStatus", () => {
       { now },
     );
 
-    expect(status.kind).toBe("never_seen");
-    expect(status.reason).toMatch(/presence|heartbeat/i);
+    expect(status.kind).toBe("online");
+    expect(status.label).toBe("gateway online");
+    expect(status.reason).toMatch(/agent presence/i);
     expect(status.reason).toMatch(/forge-presence|webhook/i);
     expect(status.lastSignal).toContain("probe reachable");
     expect(status.sweepExpectation).toMatch(/swept by the runtime health worker/i);

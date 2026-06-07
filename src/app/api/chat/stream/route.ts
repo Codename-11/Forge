@@ -792,7 +792,9 @@ export async function POST(req: NextRequest) {
         if (errored) {
           persistedBody = "(no response — provider stream errored; check logs)";
         } else if (abortController.signal.aborted) {
-          persistedBody = "_(Reply interrupted before it finished.)_";
+          if (thinkingFull || toolCalls.length > 0) {
+            persistedBody = "_(Reply interrupted before it finished.)_";
+          }
         } else if (toolCalls.length > 0) {
           const names = Array.from(new Set(toolCalls.map((c) => c.name))).join(", ");
           persistedBody = `_(The agent ran ${toolCalls.length} tool call${

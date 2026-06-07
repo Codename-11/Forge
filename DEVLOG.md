@@ -2,6 +2,23 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-07 — Hermes gateway health display hotfix
+
+Fixed the Hermes runtime health display so a fresh gateway contract probe reads
+as gateway-online instead of stale/offline because `Runtime.heartbeatAt` is old.
+Hermes agent presence remains a separate agent heartbeat / forge-presence /
+webhook-delivery signal.
+
+Adjusted chat stream finalization so a client disconnect before any content,
+thinking, or tool activity does not persist a fake `Reply interrupted before it
+finished` agent bubble. Partial/tool-bearing aborted turns still retain an
+explicit interrupted record.
+
+Verification: focused runtime/chat Vitest coverage, `pnpm exec tsc --noEmit
+--pretty false`, and `pnpm lint` pass. Live diagnostics confirmed the Hermes
+gateway, `/api/chat/stream`, and the actual Chat composer can stream a normal
+Victor reply.
+
 ## 2026-06-07 — Hermes chat runtime contract diagnostics
 
 Repaired the Forge workspace Victor binding by attaching it to a Forge-scoped
