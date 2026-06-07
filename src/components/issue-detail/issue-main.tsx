@@ -137,14 +137,32 @@ const QUICK_REPLY_EVENT = "forge:quick-reply-insert";
 interface QuickReplyEventDetail {
   issueId: string;
   text: string;
+  agentProfileKey?: string | null;
 }
-function dispatchQuickReply(issueId: string, text: string) {
+function dispatchQuickReply(
+  issueId: string,
+  text: string,
+  agentProfileKey?: string | null,
+) {
   if (typeof window === "undefined") return;
   window.dispatchEvent(
     new CustomEvent<QuickReplyEventDetail>(QUICK_REPLY_EVENT, {
-      detail: { issueId, text },
+      detail: { issueId, text, agentProfileKey },
     }),
   );
+}
+
+function quickReplyTextForComposer(text: string, agentProfileKey?: string | null) {
+  const key = agentProfileKey?.trim().replace(/^@+/, "");
+  if (!key) return text;
+
+  const mention = `@${key}`;
+  const trimmedStart = text.trimStart();
+  const alreadyAddressed =
+    trimmedStart.toLowerCase() === mention.toLowerCase() ||
+    trimmedStart.toLowerCase().startsWith(`${mention.toLowerCase()} `);
+
+  return alreadyAddressed ? text : `${mention} ${text}`;
 }
 
 function timestampMs(value: Date | string | null | undefined): number {
@@ -582,12 +600,16 @@ function Comments({
     function onInsert(event: Event) {
       const detail = (event as CustomEvent<QuickReplyEventDetail>).detail;
       if (!detail || detail.issueId !== issueId) return;
+      const text = quickReplyTextForComposer(
+        detail.text,
+        detail.agentProfileKey,
+      );
       setDraft((prev) => {
         // If the composer already has text, separate with a blank
         // line so the chip doesn't trample mid-sentence. Otherwise
         // just seed it.
-        if (prev.trim().length === 0) return detail.text;
-        return `${prev.replace(/\s+$/, "")}\n\n${detail.text}`;
+        if (prev.trim().length === 0) return text;
+        return `${prev.replace(/\s+$/, "")}\n\n${text}`;
       });
       // Focus + scroll the textarea into view so the user can edit
       // before submitting. Defer to next tick so the state update
@@ -1094,7 +1116,13 @@ function TimelineCommentCard({
           {quickReplies.length > 0 && !editing && (
             <QuickReplyChips
               replies={quickReplies}
-              onPick={(text) => dispatchQuickReply(issueId, text)}
+              onPick={(text) =>
+                dispatchQuickReply(
+                  issueId,
+                  text,
+                  comment.authoringAgent?.profileKey,
+                )
+              }
             />
           )}
         </div>

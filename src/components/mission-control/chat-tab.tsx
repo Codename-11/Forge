@@ -42,9 +42,11 @@ export function ChatTab({
   const userPickedRef = useRef(false);
   const utils = trpc.useUtils();
   const createConversation = trpc.chat.createConversation.useMutation({
-    onSuccess: (res) => {
-      void utils.chat.threads.invalidate();
+    onSuccess: async (res) => {
+      userPickedRef.current = true;
+      setSelectedAgentId(res.agent.id);
       setSelectedThreadId(res.thread.id);
+      await utils.chat.threads.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -257,7 +259,7 @@ export function ChatTab({
                 <ChatThreadView
                   key={activeThreadId ?? selectedAgentId}
                   agentId={selectedAgentId}
-                  threadId={selectedThreadId}
+                  threadId={activeThreadId}
                   autoFocus={autoFocus}
                 />
               </div>

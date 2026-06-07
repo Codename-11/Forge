@@ -440,6 +440,13 @@ function StreamedRehydration({ snapshot }: { snapshot: StreamedSnapshot | null }
   );
 }
 
+function hasToolArguments(args: unknown): boolean {
+  if (args == null) return false;
+  if (Array.isArray(args)) return args.length > 0;
+  if (typeof args === "object") return Object.keys(args).length > 0;
+  return true;
+}
+
 function ToolCallCard({ call }: { call: RehydratedToolCall }) {
   const [open, setOpen] = useState(false);
   const json = useMemo(() => {
@@ -449,6 +456,7 @@ function ToolCallCard({ call }: { call: RehydratedToolCall }) {
       return String(call.args);
     }
   }, [call.args]);
+  const hasArgs = useMemo(() => hasToolArguments(call.args), [call.args]);
   let statusLabel: string;
   switch (call.status) {
     case "executed":
@@ -495,7 +503,13 @@ function ToolCallCard({ call }: { call: RehydratedToolCall }) {
       </button>
       {open && (
         <div className="space-y-1 border-t border-border/40 px-2 py-1.5">
-          <ChatMarkdown body={"```json\n" + json + "\n```"} />
+          {hasArgs ? (
+            <ChatMarkdown body={"```json\n" + json + "\n```"} />
+          ) : (
+            <p className="text-[0.625rem] text-muted-foreground">
+              No input arguments.
+            </p>
+          )}
           {call.summary && (
             <p
               className={cn(

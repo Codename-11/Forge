@@ -7,6 +7,7 @@ import {
   FileQuestion,
   Download,
   ExternalLink,
+  Github,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -29,10 +30,27 @@ export function LinkFavicon({
 }) {
   const [errored, setErrored] = useState(false);
   let origin = "";
+  let host = "";
   try {
-    if (url) origin = new URL(url).origin;
+    if (url) {
+      const parsed = new URL(url);
+      origin = parsed.origin;
+      host = parsed.hostname.replace(/^www\./i, "").toLowerCase();
+    }
   } catch {
     // Bad URL → render fallback.
+  }
+  if (host === "github.com") {
+    return (
+      <Github
+        className={cn(
+          "shrink-0 text-[#24292f] dark:text-[#f0f6fc]",
+          className,
+        )}
+        style={{ width: size, height: size }}
+        aria-hidden
+      />
+    );
   }
   if (!origin || errored) {
     return (

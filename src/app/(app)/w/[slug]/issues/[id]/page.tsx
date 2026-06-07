@@ -1,5 +1,5 @@
 "use client";
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { AgentStatus, WorkItemKind } from "@prisma/client";
@@ -75,6 +75,8 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const router = useRouter();
   const workspace = useWorkspace();
   const slug = workspace.slug;
+  const railCardRef = useRef<HTMLDivElement | null>(null);
+  const [railCardHeight, setRailCardHeight] = useState<number | null>(null);
   const { data: ws } = trpc.workspace.current.useQuery();
   // 15s refetch keeps the topbar's RunActivityChip (and other live
   // surfaces on this page) honest without a manual reload while an
@@ -230,6 +232,39 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     },
     [siblings?.next?.id, slug],
   );
+
+  useEffect(() => {
+    let frame = 0;
+
+    const updateRailHeight = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (!window.matchMedia("(min-width: 768px)").matches) {
+          setRailCardHeight(null);
+          return;
+        }
+
+        const el = railCardRef.current;
+        if (!el) return;
+
+        const top = Math.max(16, el.getBoundingClientRect().top);
+        const available = Math.floor(window.innerHeight - top - 16);
+        const next = Math.max(240, available);
+        setRailCardHeight((prev) =>
+          prev !== null && Math.abs(prev - next) < 2 ? prev : next,
+        );
+      });
+    };
+
+    updateRailHeight();
+    window.addEventListener("resize", updateRailHeight);
+    window.addEventListener("scroll", updateRailHeight, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateRailHeight);
+      window.removeEventListener("scroll", updateRailHeight, true);
+    };
+  }, [issue?.id]);
 
   if (error)
     return (
@@ -498,9 +533,13 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
           <aside
             aria-label="Issue detail rail"
-            className="min-w-0 shrink-0 md:sticky md:top-4 md:h-[calc(100svh-7rem)] md:w-[22rem] md:self-start xl:w-[26rem]"
+            className="min-w-0 shrink-0 md:sticky md:top-4 md:w-[22rem] md:self-start xl:w-[26rem]"
           >
-            <div className="flex min-h-0 overflow-hidden rounded-lg border border-border bg-card/30 md:h-full">
+            <div
+              ref={railCardRef}
+              className="min-h-0 overflow-x-hidden overflow-y-visible rounded-lg border border-border bg-card/30 md:overflow-y-auto md:overscroll-contain"
+              style={railCardHeight === null ? undefined : { height: railCardHeight }}
+            >
               <IssueRail
                 issueId={issue.id}
                 header={
