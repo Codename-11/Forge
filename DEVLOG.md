@@ -2,6 +2,29 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-08 — Chat slash command controls
+
+Made chat slash commands work consistently for Hermes, Codex, and standard
+agents. Universal controls now include `/commands`, `/clear`, `/reset`,
+`/localclear`, `/new`, `/newchat`, `/compact`, and `/summarize-context`, while
+Hermes-only commands like `/skills`, `/memory`, and `/hermes` remain
+provider-gated.
+
+Backed `/clear` with a durable `chat.clearThread` mutation that preserves the
+conversation row but removes messages, message attachments, message events,
+message audit rows, and stale summary metadata. Chat composer command execution
+now awaits async commands, shows a command-running state, and avoids sending the
+slash text as a normal prompt while the command is still executing. `/new`
+creates a fresh side conversation and switches the active chat surface to it.
+
+Hardened chat attachment cleanup so clear/delete removes polymorphic attachment
+rows even when object storage cleanup is unavailable, and made the Hermes
+transport preview test explicitly opt into its env fallback instead of depending
+on the developer shell.
+
+Verification: `pnpm lint`, `pnpm typecheck`, focused slash/chat/router Vitest
+coverage, and full `pnpm test` pass.
+
 ## 2026-06-07 — Hermes chat send watchdog and admin prompt visibility
 
 Fixed the live Victor/Fixtor chat failure mode where the browser marked a

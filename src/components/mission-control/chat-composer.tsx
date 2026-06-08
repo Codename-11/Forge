@@ -19,6 +19,7 @@ import {
   isSlashInput,
   matchSlashCommands,
   parseSlashCommand,
+  slashCommandAvailable,
   type SlashCommandContext,
   type SlashCommand,
 } from "@/lib/chat-slash-commands";
@@ -107,10 +108,7 @@ function draftStorageKey(threadId: string): string {
  * unless the caret sits at the end of a `@token` that begins at the
  * start of the buffer or after whitespace. `token` excludes the `@`.
  */
-function detectMentionToken(
-  body: string,
-  caret: number,
-): { token: string; start: number } | null {
+function detectMentionToken(body: string, caret: number): { token: string; start: number } | null {
   if (caret <= 0) return null;
   let i = caret - 1;
   while (i >= 0 && /[A-Za-z0-9_-]/.test(body[i] ?? "")) i--;
@@ -147,6 +145,7 @@ export function ChatComposer({
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [popoverMatches, setPopoverMatches] = useState<SlashCommand[]>([]);
   const [popoverHighlight, setPopoverHighlight] = useState(0);
+  const [commandPending, setCommandPending] = useState(false);
 
   // ---------- @-mention popover state ----------
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -313,7 +312,7 @@ export function ChatComposer({
 
   /** Accept a command from the slash popover. */
   const acceptCommand = useCallback(
-    (cmd: SlashCommand) => {
+    async (cmd: SlashCommand) => {
       closePopover();
       // Fill (don't run) when the command takes arguments, so the operator
       // can type them. `args` metadata is the canonical signal now; keep
@@ -328,8 +327,17 @@ export function ChatComposer({
           ta.setSelectionRange(filled.length, filled.length);
         });
       } else {
-        if (slashContext) {
-          cmd.run("", slashContext);
+        if (slashContext && slashCommandAvailable(cmd, slashContext)) {
+          try {
+            setCommandPending(true);
+            await cmd.run("", slashContext);
+          } catch (err) {
+            slashContext.appendLocal(
+              `_Command failed: ${err instanceof Error ? err.message : "unknown error"}._`,
+            );
+          } finally {
+            setCommandPending(false);
+          }
         }
         setBody("");
       }
@@ -369,11 +377,20 @@ export function ChatComposer({
 
     // Try to intercept as a slash command first when no files are attached.
     if (attachments.length === 0 && slashContext && isSlashInput(trimmed)) {
-      const parsed = parseSlashCommand(trimmed);
+      const parsed = parseSlashCommand(trimmed, slashContext);
       if (parsed) {
-        parsed.command.run(parsed.args, slashContext);
-        setBody("");
-        closePopover();
+        try {
+          setCommandPending(true);
+          await parsed.command.run(parsed.args, slashContext);
+          setBody("");
+          closePopover();
+        } catch (err) {
+          slashContext.appendLocal(
+            `_Command failed: ${err instanceof Error ? err.message : "unknown error"}._`,
+          );
+        } finally {
+          setCommandPending(false);
+        }
         return;
       }
     }
@@ -440,7 +457,7 @@ export function ChatComposer({
         if (e.key === "Enter" || e.key === "Tab") {
           e.preventDefault();
           const cmd = popoverMatches[popoverHighlight];
-          if (cmd) acceptCommand(cmd);
+          if (cmd) void acceptCommand(cmd);
           return;
         }
         if (e.key === "Escape") {
@@ -507,9 +524,8 @@ export function ChatComposer({
   // `isPending` (a send in flight) no longer blocks the composer — new
   // messages queue instead. Only a hard `disabled` gates input. `isPending`
   // still drives the send-button spinner + the "sending…" footer hint.
-  const busy = disabled;
-  const hasMentionables =
-    mentionableAgents.length > 0 || mentionablePeople.length > 0;
+  const busy = disabled || commandPending;
+  const hasMentionables = mentionableAgents.length > 0 || mentionablePeople.length > 0;
 
   const popoverNode = useMemo(() => {
     if (popoverOpen && popoverMatches.length > 0) {
@@ -522,7 +538,7 @@ export function ChatComposer({
                 type="button"
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  acceptCommand(cmd);
+                  void acceptCommand(cmd);
                 }}
                 onMouseEnter={() => setPopoverHighlight(idx)}
                 className={cn(
@@ -535,9 +551,7 @@ export function ChatComposer({
                 )}
               >
                 <span className="text-meta font-mono text-foreground">/{cmd.name}</span>
-                {cmd.args && (
-                  <span className="text-meta font-mono text-ember/80">{cmd.args}</span>
-                )}
+                {cmd.args && <span className="text-meta font-mono text-ember/80">{cmd.args}</span>}
                 {cmd.aliases && cmd.aliases.length > 0 && (
                   <span className="text-meta font-mono text-muted-foreground/70">
                     ({cmd.aliases.map((a) => `/${a}`).join(", ")})
@@ -625,12 +639,10 @@ export function ChatComposer({
                         <span className="truncate text-xs font-medium">
                           {m.kind === "agent" ? m.agent.name : m.person.name}
                         </span>
-                        <span className="text-id text-muted-foreground">
-                          @{insertKey}
-                        </span>
+                        <span className="text-id text-muted-foreground">@{insertKey}</span>
                       </span>
                       {m.kind === "user" && m.person.email && (
-                        <span className="mt-0.5 block truncate text-meta text-muted-foreground">
+                        <span className="text-meta mt-0.5 block truncate text-muted-foreground">
                           {m.person.email}
                         </span>
                       )}
@@ -824,17 +836,19 @@ export function ChatComposer({
               : "bg-subtle text-muted-foreground",
             "disabled:cursor-not-allowed disabled:opacity-50",
           )}
-          title={isPending ? "Sending…" : "Send"}
+          title={commandPending ? "Running command…" : isPending ? "Sending…" : "Send"}
         >
-          {isPending ? (
+          {isPending || commandPending ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <Send className="h-3.5 w-3.5" />
           )}
         </button>
       </div>
-      {isPending ? (
-        <div className="text-meta px-3 pb-1.5 text-muted-foreground">sending…</div>
+      {isPending || commandPending ? (
+        <div className="text-meta px-3 pb-1.5 text-muted-foreground">
+          {commandPending ? "running command…" : "sending…"}
+        </div>
       ) : (
         // Discoverability hint — mirrors the issue composer so @-mentions
         // and / commands read as available everywhere. Shown only while
@@ -850,9 +864,7 @@ export function ChatComposer({
                 <span>mention</span>
               </>
             )}
-            {hasMentionables && slashContext && (
-              <span className="text-muted-foreground/40">·</span>
-            )}
+            {hasMentionables && slashContext && <span className="text-muted-foreground/40">·</span>}
             {slashContext && (
               <>
                 <span className="font-mono">/</span>

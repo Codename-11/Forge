@@ -246,7 +246,9 @@ export function ChatWorkspaceSurface() {
   const [newAgentId, setNewAgentId] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [newTopic, setNewTopic] = useState("");
-  const [newContextMode, setNewContextMode] = useState<"SMART" | "RECENT_ONLY" | "FULL_SUMMARY" | "PINNED_CONTEXT">("SMART");
+  const [newContextMode, setNewContextMode] = useState<
+    "SMART" | "RECENT_ONLY" | "FULL_SUMMARY" | "PINNED_CONTEXT"
+  >("SMART");
 
   // Conversations-pane geometry. Collapse + drag-resize are per-device view
   // state, so they live in localStorage (read once after mount to avoid an
@@ -371,7 +373,10 @@ export function ChatWorkspaceSurface() {
   }, [threadParam, threads, router, ws.slug]);
 
   const threadAgentIds = useMemo(
-    () => new Set((threads ?? []).filter((thread) => thread.isDefault).map((thread) => thread.agent.id)),
+    () =>
+      new Set(
+        (threads ?? []).filter((thread) => thread.isDefault).map((thread) => thread.agent.id),
+      ),
     [threads],
   );
   const starterAgents = useMemo(
@@ -441,14 +446,16 @@ export function ChatWorkspaceSurface() {
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-semibold text-foreground">New conversation</div>
-                <p className="text-meta text-muted-foreground">Create a named agent thread with explicit context policy.</p>
+                <p className="text-meta text-muted-foreground">
+                  Create a named agent thread with explicit context policy.
+                </p>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setNewConversationOpen(false)}>
                 <X className="h-3.5 w-3.5" />
               </Button>
             </div>
             <div className="mt-4 space-y-3">
-              <label className="block text-meta text-muted-foreground">
+              <label className="text-meta block text-muted-foreground">
                 Agent
                 <select
                   data-testid="new-conversation-agent"
@@ -457,15 +464,22 @@ export function ChatWorkspaceSurface() {
                   className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"
                 >
                   {(agents ?? []).map((agent) => (
-                    <option key={agent.id} value={agent.id}>{agent.name} · @{agent.profileKey}</option>
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name} · @{agent.profileKey}
+                    </option>
                   ))}
                 </select>
               </label>
-              <label className="block text-meta text-muted-foreground">
+              <label className="text-meta block text-muted-foreground">
                 Title
-                <input value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="Launch plan, debugging thread, research pass…" className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground" />
+                <input
+                  value={newTitle}
+                  onChange={(event) => setNewTitle(event.target.value)}
+                  placeholder="Launch plan, debugging thread, research pass…"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"
+                />
               </label>
-              <label className="block text-meta text-muted-foreground">
+              <label className="text-meta block text-muted-foreground">
                 Topic
                 <textarea
                   value={newTopic}
@@ -489,9 +503,15 @@ export function ChatWorkspaceSurface() {
                   className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"
                 />
               </label>
-              <label className="block text-meta text-muted-foreground">
+              <label className="text-meta block text-muted-foreground">
                 Context mode
-                <select value={newContextMode} onChange={(event) => setNewContextMode(event.target.value as typeof newContextMode)} className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground">
+                <select
+                  value={newContextMode}
+                  onChange={(event) =>
+                    setNewContextMode(event.target.value as typeof newContextMode)
+                  }
+                  className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"
+                >
                   <option value="SMART">Smart · summary plus recent messages</option>
                   <option value="RECENT_ONLY">Recent only</option>
                   <option value="FULL_SUMMARY">Full summary plus recent</option>
@@ -500,8 +520,15 @@ export function ChatWorkspaceSurface() {
               </label>
             </div>
             <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setNewConversationOpen(false)}>Cancel</Button>
-              <Button variant="subtle" size="sm" disabled={!newAgentId || createConversationM.isPending} onClick={createConversation}>
+              <Button variant="ghost" size="sm" onClick={() => setNewConversationOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="subtle"
+                size="sm"
+                disabled={!newAgentId || createConversationM.isPending}
+                onClick={createConversation}
+              >
                 <Plus className="mr-1.5 h-3.5 w-3.5" /> Create
               </Button>
             </div>
@@ -653,7 +680,9 @@ export function ChatWorkspaceSurface() {
                                   {conversationTitle(thread)}
                                 </span>
                                 {thread.isDefault ? (
-                                  <span className="rounded-full border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">default</span>
+                                  <span className="rounded-full border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">
+                                    default
+                                  </span>
                                 ) : null}
                               </div>
                               <p className="text-meta mt-0.5 truncate text-muted-foreground">
@@ -813,7 +842,8 @@ export function ChatWorkspaceSurface() {
                             {conversationTitle(thread)}
                           </div>
                           <div className="text-meta truncate text-muted-foreground">
-                            {thread.agent.name} · {truncate(thread.latestMessage?.body, "No messages yet")}
+                            {thread.agent.name} ·{" "}
+                            {truncate(thread.latestMessage?.body, "No messages yet")}
                           </div>
                         </div>
                       </button>
@@ -848,7 +878,9 @@ export function ChatWorkspaceSurface() {
                   onClick={(event) => event.stopPropagation()}
                 >
                   <div className="mb-3 flex items-center justify-between">
-                    <div className="text-sm font-semibold text-foreground">Connection &amp; status</div>
+                    <div className="text-sm font-semibold text-foreground">
+                      Connection &amp; status
+                    </div>
                     <Button variant="ghost" size="sm" onClick={() => setInspectorOpen(false)}>
                       <X className="h-3.5 w-3.5" />
                     </Button>
@@ -890,7 +922,14 @@ export function ChatWorkspaceSurface() {
                 </div>
               </div>
             ) : selectedAgentId ? (
-              <ChatThreadView agentId={selectedAgentId} threadId={selectedThread?.id ?? null} />
+              <ChatThreadView
+                agentId={selectedAgentId}
+                threadId={selectedThread?.id ?? null}
+                onThreadCreated={(threadId, agentId) => {
+                  setSelectedAgentId(agentId);
+                  router.replace(`/w/${ws.slug}/chat?thread=${encodeURIComponent(threadId)}`);
+                }}
+              />
             ) : (
               <div className="flex h-full items-center justify-center p-8 text-center text-muted-foreground">
                 <div className="max-w-sm">

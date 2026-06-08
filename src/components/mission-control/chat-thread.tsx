@@ -879,11 +879,14 @@ export function ChatThreadView({
   agentId,
   threadId: selectedThreadId,
   autoFocus = false,
+  onThreadCreated,
 }: {
   agentId: string;
   threadId?: string | null;
   /** Focus the composer textarea on mount (used when the Chat tab becomes active). */
   autoFocus?: boolean;
+  /** Called when this surface creates a new conversation, e.g. `/new`. */
+  onThreadCreated?: (threadId: string, agentId: string) => void;
 }) {
   const utils = trpc.useUtils();
   // Mutation that upserts + loads the default DM. Returns thread + agent + messages.
@@ -1017,6 +1020,19 @@ export function ChatThreadView({
   const finalizeM = trpc.attachment.finalize.useMutation();
   const compactM = trpc.chat.compactThread.useMutation({
     onSuccess: () => void utils.chat.threads.invalidate(),
+  });
+  const clearThreadM = trpc.chat.clearThread.useMutation({
+    onSuccess: async () => {
+      if (threadId) await utils.chat.getThread.invalidate({ threadId });
+      await utils.chat.threadDiagnostics.invalidate();
+      await utils.chat.threads.invalidate();
+    },
+  });
+  const createConversationM = trpc.chat.createConversation.useMutation({
+    onSuccess: async (result) => {
+      await utils.chat.threads.invalidate();
+      onThreadCreated?.(result.thread.id, result.agent.id);
+    },
   });
   // Backs the `/engine` slash command — switches this agent's chat engine.
   const setEngineM = trpc.agent.update.useMutation({
@@ -1738,6 +1754,13 @@ export function ChatThreadView({
       transport: readiness ? { mode: readiness.mode, label: readiness.transportLabel } : null,
       appendLocal,
       clearLocal,
+      clearThread: async () => {
+        if (!threadId) return;
+        await clearThreadM.mutateAsync({ threadId });
+      },
+      newConversation: async () => {
+        await createConversationM.mutateAsync({ agentId });
+      },
       sendPrompt: handleSend,
       compactThread: async () => {
         if (!threadId) return;

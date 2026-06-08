@@ -261,6 +261,12 @@ export function ChatTab({
                   agentId={selectedAgentId}
                   threadId={activeThreadId}
                   autoFocus={autoFocus}
+                  onThreadCreated={(threadId, nextAgentId) => {
+                    userPickedRef.current = true;
+                    setSelectedAgentId(nextAgentId);
+                    setSelectedThreadId(threadId);
+                    void utils.chat.threads.invalidate();
+                  }}
                 />
               </div>
               {inspectorOpen && (

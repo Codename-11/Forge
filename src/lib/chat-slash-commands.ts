@@ -19,8 +19,12 @@ export interface SlashCommandContext {
   transport?: { mode: string; label: string } | null;
   /** Append a SYSTEM-role message to the current thread, locally (no server round-trip). */
   appendLocal: (body: string) => void;
-  /** Clear the local message list (cosmetic — server data unchanged). */
+  /** Clear the local SYSTEM messages emitted by slash commands. */
   clearLocal: () => void;
+  /** Clear the current conversation on the server. */
+  clearThread?: () => Promise<void> | void;
+  /** Start a fresh conversation with the current agent. */
+  newConversation?: () => Promise<void> | void;
   /** Send a structured prompt as if the user typed it. */
   sendPrompt: (body: string) => void;
   /** Request server-side compaction for the current conversation. */
@@ -57,7 +61,7 @@ const isHermes = (ctx: SlashCommandContext) => ctx.provider === "HERMES";
 export const SLASH_COMMANDS: SlashCommand[] = [
   {
     name: "help",
-    aliases: ["?"],
+    aliases: ["?", "commands"],
     description: "List available commands.",
     category: "info",
     run: (_args, ctx) => {
@@ -71,11 +75,42 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     name: "clear",
-    description:
-      "Clear the visible thread (server history unchanged; refresh to restore).",
+    aliases: ["reset"],
+    description: "Clear this conversation's messages and summary context.",
+    category: "control",
+    run: async (_args, ctx) => {
+      if (!ctx.clearThread) {
+        ctx.clearLocal();
+        ctx.appendLocal("_Only local slash-command messages were cleared in this surface._");
+        return;
+      }
+      await ctx.clearThread();
+      ctx.clearLocal();
+      ctx.appendLocal(
+        "_Conversation cleared. Server history and summary context for this thread were reset._",
+      );
+    },
+  },
+  {
+    name: "localclear",
+    aliases: ["clear-local"],
+    description: "Clear only local slash-command output.",
     category: "control",
     run: (_args, ctx) => {
       ctx.clearLocal();
+    },
+  },
+  {
+    name: "new",
+    aliases: ["newchat", "conversation"],
+    description: "Start a fresh conversation with this agent.",
+    category: "control",
+    run: async (_args, ctx) => {
+      if (!ctx.newConversation) {
+        ctx.appendLocal("_Starting a new conversation isn't available in this surface._");
+        return;
+      }
+      await ctx.newConversation();
     },
   },
   {
@@ -84,9 +119,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     category: "info",
     run: (_args, ctx) => {
       const a = ctx.agent;
-      const seen = a.lastHeartbeatAt
-        ? new Date(a.lastHeartbeatAt).toLocaleString()
-        : "never";
+      const seen = a.lastHeartbeatAt ? new Date(a.lastHeartbeatAt).toLocaleString() : "never";
       ctx.appendLocal(
         `### ${a.name} (@${a.profileKey})\n\n` +
           `- **status:** ${a.status}\n` +
@@ -199,9 +232,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
         ctx.appendLocal(`_Usage:_ \`/issue AXI-31\``);
         return;
       }
-      ctx.sendPrompt(
-        `Summarize ${key} — current status, blockers, recent activity.`,
-      );
+      ctx.sendPrompt(`Summarize ${key} — current status, blockers, recent activity.`);
     },
   },
   {
@@ -221,11 +252,14 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     category: "prompt",
     promptDispatch: true,
     run: (_args, ctx) => {
-      ctx.sendPrompt("Summarize this conversation: durable facts, decisions, blockers, and next actions.");
+      ctx.sendPrompt(
+        "Summarize this conversation: durable facts, decisions, blockers, and next actions.",
+      );
     },
   },
   {
     name: "compact",
+    aliases: ["summarize-context"],
     description: "Compact this conversation into Forge-owned summary context.",
     category: "control",
     run: async (_args, ctx) => {
@@ -234,7 +268,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
         return;
       }
       await ctx.compactThread();
-      ctx.appendLocal("_Conversation compacted. Future agent context will include the summary plus recent messages._");
+      ctx.appendLocal(
+        "_Conversation compacted. Future agent context will include the summary plus recent messages._",
+      );
     },
   },
   {
@@ -305,16 +341,19 @@ export interface ParsedCommand {
   args: string;
 }
 
-export function parseSlashCommand(input: string): ParsedCommand | null {
+export function slashCommandAvailable(command: SlashCommand, ctx?: SlashCommandContext): boolean {
+  return !command.available || !ctx || command.available(ctx);
+}
+
+export function parseSlashCommand(input: string, ctx?: SlashCommandContext): ParsedCommand | null {
   const trimmed = input.trimStart();
   if (!trimmed.startsWith("/")) return null;
   const spaceIdx = trimmed.indexOf(" ");
-  const name = (
-    spaceIdx === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIdx)
-  ).toLowerCase();
+  const name = (spaceIdx === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIdx)).toLowerCase();
   const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
   const command = COMMAND_INDEX.get(name);
   if (!command) return null;
+  if (!slashCommandAvailable(command, ctx)) return null;
   return { command, args };
 }
 
@@ -323,19 +362,15 @@ export function isSlashInput(input: string): boolean {
   return trimmed.startsWith("/");
 }
 
-export function matchSlashCommands(
-  input: string,
-  ctx?: SlashCommandContext,
-): SlashCommand[] {
+export function matchSlashCommands(input: string, ctx?: SlashCommandContext): SlashCommand[] {
   const trimmed = input.trimStart();
   if (!trimmed.startsWith("/")) return [];
-  const available = (c: SlashCommand) => !c.available || !ctx || c.available(ctx);
+  const available = (c: SlashCommand) => slashCommandAvailable(c, ctx);
   const fragment = trimmed.slice(1).split(" ")[0]?.toLowerCase() ?? "";
   if (!fragment) return SLASH_COMMANDS.filter(available);
   return SLASH_COMMANDS.filter(
     (c) =>
       available(c) &&
-      (c.name.startsWith(fragment) ||
-        (c.aliases ?? []).some((a) => a.startsWith(fragment))),
+      (c.name.startsWith(fragment) || (c.aliases ?? []).some((a) => a.startsWith(fragment))),
   );
 }

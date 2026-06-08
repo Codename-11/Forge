@@ -72,6 +72,36 @@ function chatEventPayload(input: {
   };
 }
 
+async function purgeChatMessageAttachments(
+  db: Pick<Prisma.TransactionClient, "attachment">,
+  workspaceId: string,
+  messageIds: string[],
+): Promise<number> {
+  if (messageIds.length === 0) return 0;
+  const attachments = await db.attachment.findMany({
+    where: {
+      workspaceId,
+      targetType: "chat-message",
+      targetId: { in: messageIds },
+    },
+    select: { id: true },
+  });
+
+  let purged = 0;
+  for (const attachment of attachments) {
+    try {
+      await deleteAttachment(attachment.id);
+      purged += 1;
+    } catch {
+      // Still remove the polymorphic row so clearing/deleting a chat cannot
+      // leave visible orphan attachments when object storage is unavailable.
+      const deleted = await db.attachment.deleteMany({ where: { id: attachment.id } });
+      purged += deleted.count;
+    }
+  }
+  return purged;
+}
+
 const visibleChatMessageWhere = {
   OR: [{ role: { not: ChatRole.USER } }, { dispatchedAt: { not: null } }],
 } satisfies Prisma.ChatMessageWhereInput;
@@ -690,6 +720,105 @@ export const chatRouter = router({
         actorId: ctx.session.user.id,
         actor: "manual",
       });
+    }),
+
+  clearThread: workspaceProcedure
+    .input(z.object({ threadId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      const thread = await ctx.db.chatThread.findFirst({
+        where: { id: input.threadId, workspaceId: ctx.workspaceId, userId: ctx.session.user.id },
+        select: { id: true, title: true, isDefault: true, agentId: true },
+      });
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Chat thread not found" });
+
+      const messages = await ctx.db.chatMessage.findMany({
+        where: { workspaceId: ctx.workspaceId, threadId: thread.id },
+        select: { id: true },
+      });
+      const messageIds = messages.map((message) => message.id);
+      const purgedAttachments = await purgeChatMessageAttachments(
+        ctx.db,
+        ctx.workspaceId,
+        messageIds,
+      );
+
+      const messageIdSet = new Set(messageIds);
+      const events =
+        messageIds.length > 0
+          ? await ctx.db.activityEvent.findMany({
+              where: {
+                workspaceId: ctx.workspaceId,
+                subjectType: "chat-thread",
+                subjectId: thread.id,
+              },
+              select: { id: true, payload: true },
+            })
+          : [];
+      const eventIds = events
+        .filter((event) => {
+          const payload =
+            event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+              ? (event.payload as Record<string, Prisma.JsonValue>)
+              : null;
+          return typeof payload?.messageId === "string" && messageIdSet.has(payload.messageId);
+        })
+        .map((event) => event.id);
+
+      const now = new Date();
+      await ctx.db.$transaction(async (tx) => {
+        if (eventIds.length > 0) {
+          await tx.webhookDelivery.deleteMany({ where: { eventId: { in: eventIds } } });
+          await tx.notificationState.deleteMany({ where: { eventId: { in: eventIds } } });
+          await tx.activityEvent.deleteMany({ where: { id: { in: eventIds } } });
+        }
+        if (messageIds.length > 0) {
+          await tx.auditLog.deleteMany({
+            where: {
+              workspaceId: ctx.workspaceId,
+              entity: "ChatMessage",
+              entityId: { in: messageIds },
+            },
+          });
+          await tx.chatMessage.deleteMany({
+            where: { workspaceId: ctx.workspaceId, threadId: thread.id },
+          });
+        }
+        await tx.chatThread.update({
+          where: { id: thread.id },
+          data: {
+            summaryMarkdown: null,
+            summarizedUntilMessageId: null,
+            summarizedAt: null,
+            lastMessageAt: now,
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            entity: "ChatThread",
+            entityId: thread.id,
+            action: "clear",
+            before: {
+              title: thread.title,
+              isDefault: thread.isDefault,
+              agentId: thread.agentId,
+              messageCount: messageIds.length,
+            },
+            after: {
+              messageCount: 0,
+              summarizedAt: null,
+            },
+          },
+        });
+      });
+
+      return {
+        ok: true,
+        cleared: true,
+        messageCount: messageIds.length,
+        purgedAttachments,
+      } as const;
     }),
 
   /**
@@ -1422,25 +1551,11 @@ export const chatRouter = router({
         where: { workspaceId: ctx.workspaceId, threadId: thread.id },
         select: { id: true },
       });
-      let purgedAttachments = 0;
-      if (messages.length > 0) {
-        const attachments = await ctx.db.attachment.findMany({
-          where: {
-            workspaceId: ctx.workspaceId,
-            targetType: "chat-message",
-            targetId: { in: messages.map((m) => m.id) },
-          },
-          select: { id: true },
-        });
-        for (const att of attachments) {
-          try {
-            await deleteAttachment(att.id);
-            purgedAttachments += 1;
-          } catch {
-            /* leave orphaned object rather than block the delete */
-          }
-        }
-      }
+      const purgedAttachments = await purgeChatMessageAttachments(
+        ctx.db,
+        ctx.workspaceId,
+        messages.map((m) => m.id),
+      );
 
       // (3) Delete the thread; ChatMessage rows cascade via FK.
       await ctx.db.$transaction(async (tx) => {
