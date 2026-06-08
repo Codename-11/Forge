@@ -53,6 +53,10 @@ function relativeTime(input: Date | string | null | undefined): string {
   return `${Math.floor(ms / 86_400_000)}d ago`;
 }
 
+function normalizeChatBodyForMatch(body: string): string {
+  return body.replace(/\s+/g, " ").trim();
+}
+
 /** Three-dot typing indicator rendered like an agent bubble. */
 function AgentThinkingBubble({ stale, detail }: { stale: boolean; detail?: string }) {
   return (
@@ -1049,6 +1053,7 @@ export function ChatThreadView({
   type Outbound = {
     id: string;
     body: string;
+    createdAt: number;
     rawFiles: File[];
     displayFiles: string[];
     status: "queued" | "sending" | "sent" | "failed";
@@ -1205,6 +1210,10 @@ export function ChatThreadView({
       // agent bubble).
       let serverAccepted = false;
       let aborted = false;
+      const refreshThread = () => {
+        void utils.chat.getThread.invalidate({ threadId: targetThreadId });
+        void utils.chat.threads.invalidate();
+      };
       const failSend = (message: string) => {
         if (serverAccepted) {
           setStreamBubble((b) =>
@@ -1260,6 +1269,7 @@ export function ChatThreadView({
       // delayed by a slow/hanging agent or proxy buffering).
       serverAccepted = true;
       if (outboxId) markOutbox(outboxId, "sent");
+      refreshThread();
       setStreamBubble(initialStreamBubble());
 
       const reader = res.body.getReader();
@@ -1284,6 +1294,7 @@ export function ChatThreadView({
           if (outboxId && userMessageId) {
             markOutbox(outboxId, "sent", userMessageId);
           }
+          refreshThread();
           // Receipt already flipped to "Sent" on response acceptance; meta
           // also carries the persisted USER id so the optimistic bubble can
           // disappear as soon as the real row refetches.
@@ -1489,12 +1500,7 @@ export function ChatThreadView({
 
       // Trigger a refetch so the persisted AGENT row replaces the bubble.
       // We hold the bubble visible briefly so the swap doesn't flicker.
-      if (selectedThreadId) {
-        void utils.chat.getThread.invalidate({ threadId: selectedThreadId });
-      } else {
-        threadM.mutate({ agentId });
-      }
-      void utils.chat.threads.invalidate();
+      refreshThread();
       setTimeout(() => {
         // Clear the finished bubble so the persisted AGENT row takes over —
         // BUT keep it when it carries a real error. An errored reply has no
@@ -1683,6 +1689,7 @@ export function ChatThreadView({
       {
         id,
         body,
+        createdAt: Date.now(),
         rawFiles: files,
         displayFiles: files.map((f) => f.name || "attachment"),
         status: "queued",
@@ -1712,7 +1719,7 @@ export function ChatThreadView({
         body:
           m.body ||
           (m.displayFiles.length > 0 ? m.displayFiles.map((name) => `📎 ${name}`).join("\n") : ""),
-        createdAt: new Date(),
+        createdAt: new Date(m.createdAt),
         // Muted while queued/sending; un-mutes once the server confirms.
         isDraft: m.status === "queued" || m.status === "sending",
         sendState: m.status,
@@ -1832,14 +1839,31 @@ export function ChatThreadView({
   const persistedMessageIds = useMemo(() => new Set(messageRows.map((m) => m.id)), [messageRows]);
 
   // While a stream is in-flight (or held briefly after `done`), the
-  // persisted AGENT row with the same messageId may also be in
-  // `messageRows`. Suppress it so we don't show two copies of the same
-  // reply during the swap window.
+  // persisted AGENT row may also be in `messageRows`. Prefer the live
+  // stream bubble over either the matched row or a fresh empty placeholder
+  // so the reply does not render twice during the swap window.
   const suppressedMessageId = streamBubble?.messageId ?? null;
+  const streamBubbleStartedAt = streamBubble?.startedAt ?? null;
+  const streamBubbleIsLive = Boolean(streamBubble && !streamBubble.finishedAt);
   const visibleMessageRows = useMemo(
     () =>
-      suppressedMessageId ? messageRows.filter((m) => m.id !== suppressedMessageId) : messageRows,
-    [messageRows, suppressedMessageId],
+      messageRows.filter((m) => {
+        if (suppressedMessageId && m.id === suppressedMessageId) return false;
+        if (
+          !suppressedMessageId &&
+          streamBubbleIsLive &&
+          streamBubbleStartedAt !== null &&
+          m.role === "AGENT" &&
+          !m.body.trim()
+        ) {
+          const createdAt = new Date(m.createdAt).getTime();
+          if (Number.isFinite(createdAt) && createdAt >= streamBubbleStartedAt - 5_000) {
+            return false;
+          }
+        }
+        return true;
+      }),
+    [messageRows, streamBubbleIsLive, streamBubbleStartedAt, suppressedMessageId],
   );
 
   // Merged display rows: persisted + local SYSTEM messages interleaved.
@@ -1848,9 +1872,34 @@ export function ChatThreadView({
     () => [...visibleMessageRows, ...localMessages],
     [visibleMessageRows, localMessages],
   );
+  const persistedUserMessages = useMemo(
+    () =>
+      messageRows
+        .filter((m) => m.role === "USER")
+        .map((m) => ({
+          body: normalizeChatBodyForMatch(m.body),
+          createdAt: new Date(m.createdAt).getTime(),
+        }))
+        .filter((m) => m.body && Number.isFinite(m.createdAt)),
+    [messageRows],
+  );
+  // Hide optimistic sends once the persisted USER row is visible. `meta`
+  // provides the exact row id, but realtime/refetch can beat that event, so
+  // fall back to a narrow same-body/same-turn match during active sends.
   const visibleOutbox = useMemo(
-    () => outbox.filter((m) => !(m.serverMessageId && persistedMessageIds.has(m.serverMessageId))),
-    [outbox, persistedMessageIds],
+    () =>
+      outbox.filter((m) => {
+        if (m.serverMessageId && persistedMessageIds.has(m.serverMessageId)) return false;
+        const body = normalizeChatBodyForMatch(m.body);
+        if (body && (m.status === "sending" || m.status === "sent")) {
+          const persistedCopyVisible = persistedUserMessages.some(
+            (p) => p.body === body && Math.abs(p.createdAt - m.createdAt) <= 120_000,
+          );
+          if (persistedCopyVisible) return false;
+        }
+        return true;
+      }),
+    [outbox, persistedMessageIds, persistedUserMessages],
   );
 
   // ---------- Presence-aware derived values ----------
