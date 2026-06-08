@@ -317,7 +317,7 @@ export function ChatComposer({
       // Fill (don't run) when the command takes arguments, so the operator
       // can type them. `args` metadata is the canonical signal now; keep
       // the legacy name set as a fallback.
-      if (cmd.args || cmd.promptDispatch || SLASH_COMMANDS_WITH_ARGS.has(cmd.name)) {
+      if (cmd.args || (SLASH_COMMANDS_WITH_ARGS.has(cmd.name) && !cmd.promptDispatch)) {
         const filled = `/${cmd.name} `;
         setBody(filled);
         requestAnimationFrame(() => {

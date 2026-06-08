@@ -2,6 +2,20 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-08 — Hermes slash command model replies
+
+Aligned Forge chat slash-command behavior with Hermes command expectations.
+No-argument prompt commands such as `/status` now dispatch immediately from the
+slash popover instead of filling a stub. Hermes `/new` still creates a fresh
+Forge conversation, but now also dispatches a starter prompt into that new
+thread so Victor replies there like Hermes does from Discord.
+
+Updated the chat command reference for durable `/clear`, `/new`, and prompt
+dispatch semantics.
+
+Verification: `pnpm lint`, `pnpm typecheck`, focused slash-command Vitest
+coverage, full `pnpm test`, and `pnpm docs:build` pass.
+
 ## 2026-06-08 — Chat slash command controls
 
 Made chat slash commands work consistently for Hermes, Codex, and standard
