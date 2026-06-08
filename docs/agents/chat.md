@@ -6,8 +6,8 @@ channel — it is purpose-built for issuing instructions to a specific agent and
 responses grounded in your current workspace context.
 
 ::: tip Engine
-How replies are produced depends on the agent's **chat engine** — *Completions*
-(Forge owns the loop; the default) or *Runs* (the agent runs as itself with its
+How replies are produced depends on the agent's **chat engine** — _Completions_
+(Forge owns the loop; the default) or _Runs_ (the agent runs as itself with its
 own memory + tools). Both stream. See [Chat & Dispatch Engines](/agents/engines.html).
 :::
 
@@ -90,39 +90,43 @@ No external library dependency. USER and SYSTEM messages are rendered plain.
 The chat header shows the agent's runtime mode and last-heartbeat age. Presence is
 reflected in the composer area:
 
-| Agent state | Composer hint |
-|---|---|
-| ONLINE, PERSISTENT | Normal — no hint needed. |
-| OFFLINE, PERSISTENT | "Queued — delivered on next heartbeat." |
-| ONLINE or OFFLINE, EPHEMERAL | "Session — replies arrive when the session is active." |
-| Any status, no `webhookUrl` | "MCP-only — this agent pulls work; it will not reply here." |
+| Agent state                  | Composer hint                                               |
+| ---------------------------- | ----------------------------------------------------------- |
+| ONLINE, PERSISTENT           | Normal — no hint needed.                                    |
+| OFFLINE, PERSISTENT          | "Queued — delivered on next heartbeat."                     |
+| ONLINE or OFFLINE, EPHEMERAL | "Session — replies arrive when the session is active."      |
+| Any status, no `webhookUrl`  | "MCP-only — this agent pulls work; it will not reply here." |
 
 ## Slash commands
 
 The composer supports client-side slash commands. Type `/` to open the inline popover.
 Arrow keys cycle, Enter or Tab accepts, Escape closes.
 
-| Command | Category | Behavior |
-|---|---|---|
-| `/help` (alias `/`?) | info | Appends a local SYSTEM bubble listing all commands. |
-| `/clear` | control | Clears the visible thread locally (server history unchanged; refresh to restore). |
-| `/info` | info | Appends a local bubble with the agent's profile, status, and runtime mode. |
-| `/agents` | info | Appends a local link to the Agents page. |
-| `/issue <KEY>` | prompt | Transforms into `Summarize <KEY> — current status, blockers, recent activity.` and sends normally. |
-| `/assign <KEY>` | prompt | Asks the agent to take ownership of an issue and start working it. |
-| `/status` | prompt | Transforms into a status-request prompt and sends normally. |
-| `/engine [completions\|runs]` | control | Shows the agent's current [chat engine](/agents/engines.html), or switches it (admin). |
-| `/skills` | info | Lists the agent's **live** Hermes skills (via the gateway `/api/skills`). |
-| `/memory` | info | Shows the agent's **live** Hermes memory (via the gateway `/api/memory`). |
-| `/hermes <status\|usage>` | info | `status` = live gateway health; `usage` = asks the agent for a token report. |
-| `/summarize` | prompt | Asks the agent to summarize the conversation. |
-| `/compact` | control | Compacts the conversation into Forge-owned summary context. |
+| Command                       | Category | Behavior                                                                                                                                                    |
+| ----------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/help` (alias `/`?)          | info     | Appends a local SYSTEM bubble listing all commands.                                                                                                         |
+| `/clear` (alias `/reset`)     | control  | Clears this conversation's persisted messages, chat-message attachments, message events, and summary context while preserving the thread row.               |
+| `/localclear`                 | control  | Clears only local slash-command output bubbles.                                                                                                             |
+| `/new` (alias `/newchat`)     | control  | Starts a fresh conversation with the current agent. For Hermes agents, Forge also dispatches a short starter prompt so the model replies in the new thread. |
+| `/info`                       | info     | Appends a local bubble with the agent's profile, status, and runtime mode.                                                                                  |
+| `/agents`                     | info     | Appends a local link to the Agents page.                                                                                                                    |
+| `/issue <KEY>`                | prompt   | Transforms into `Summarize <KEY> — current status, blockers, recent activity.` and sends normally.                                                          |
+| `/assign <KEY>`               | prompt   | Asks the agent to take ownership of an issue and start working it.                                                                                          |
+| `/status`                     | prompt   | Transforms into a status-request prompt and sends normally. Selecting it from the popover dispatches immediately because it takes no arguments.             |
+| `/engine [completions\|runs]` | control  | Shows the agent's current [chat engine](/agents/engines.html), or switches it (admin).                                                                      |
+| `/skills`                     | info     | Lists the agent's **live** Hermes skills (via the gateway `/api/skills`).                                                                                   |
+| `/memory`                     | info     | Shows the agent's **live** Hermes memory (via the gateway `/api/memory`).                                                                                   |
+| `/hermes <status\|usage>`     | info     | `status` = live gateway health; `usage` = asks the agent for a token report.                                                                                |
+| `/summarize`                  | prompt   | Asks the agent to summarize the conversation.                                                                                                               |
+| `/compact`                    | control  | Compacts the conversation into Forge-owned summary context.                                                                                                 |
 
 Commands that take arguments show a usage hint (e.g. `<KEY>`) in the autocomplete,
 and accepting one fills the stub so you can type the argument.
 
-`info` and `control` commands append a SYSTEM-role bubble client-side only — they never
-hit the server. `prompt` commands (`/issue`, `/status`) dispatch as real user messages.
+Most `info` commands append a SYSTEM-role bubble client-side only. Durable `control`
+commands like `/clear`, `/new`, and `/compact` call Forge server mutations. `prompt`
+commands (`/issue`, `/status`, `/summarize`, `/hermes usage`) dispatch as real user
+messages.
 
 Source: `src/lib/chat-slash-commands.ts`.
 

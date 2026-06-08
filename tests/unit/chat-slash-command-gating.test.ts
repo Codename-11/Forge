@@ -65,6 +65,45 @@ describe("runtime/provider-aware slash commands", () => {
     expect(parseSlashCommand("/skills", forCodex)).toBeNull();
   });
 
+  it("dispatches no-argument prompt commands as model prompts", async () => {
+    const sent: string[] = [];
+    const forHermes = { ...ctx("HERMES"), sendPrompt: (body: string) => sent.push(body) };
+
+    await parseSlashCommand("/status", forHermes)?.command.run("", forHermes);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(/currently working/i);
+  });
+
+  it("starts Hermes /new with a model-visible starter prompt", async () => {
+    const prompts: Array<string | undefined> = [];
+    const forHermes = {
+      ...ctx("HERMES"),
+      newConversation: (options?: { prompt?: string }) => {
+        prompts.push(options?.prompt);
+      },
+    };
+
+    await parseSlashCommand("/new", forHermes)?.command.run("", forHermes);
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toMatch(/fresh Hermes conversation/i);
+  });
+
+  it("keeps non-Hermes /new as a thread-control command only", async () => {
+    const prompts: Array<string | undefined> = [];
+    const forCodex = {
+      ...ctx("CODEX"),
+      newConversation: (options?: { prompt?: string }) => {
+        prompts.push(options?.prompt);
+      },
+    };
+
+    await parseSlashCommand("/new", forCodex)?.command.run("", forCodex);
+
+    expect(prompts).toEqual([undefined]);
+  });
+
   it("without ctx, all commands are returned (back-compat)", () => {
     expect(names("/")).toContain("skills");
     expect(names("/")).toContain("runtime");

@@ -24,7 +24,7 @@ export interface SlashCommandContext {
   /** Clear the current conversation on the server. */
   clearThread?: () => Promise<void> | void;
   /** Start a fresh conversation with the current agent. */
-  newConversation?: () => Promise<void> | void;
+  newConversation?: (options?: { prompt?: string }) => Promise<void> | void;
   /** Send a structured prompt as if the user typed it. */
   sendPrompt: (body: string) => void;
   /** Request server-side compaction for the current conversation. */
@@ -57,6 +57,9 @@ export interface SlashCommand {
 
 /** Commands that only make sense for a Hermes-backed agent. */
 const isHermes = (ctx: SlashCommandContext) => ctx.provider === "HERMES";
+
+const HERMES_NEW_CONVERSATION_PROMPT =
+  "Start a fresh Hermes conversation in this new Forge thread. Reply with a short acknowledgement that the new chat is ready, mention any current page/context you can see, and ask what to work on next.";
 
 export const SLASH_COMMANDS: SlashCommand[] = [
   {
@@ -110,7 +113,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
         ctx.appendLocal("_Starting a new conversation isn't available in this surface._");
         return;
       }
-      await ctx.newConversation();
+      await ctx.newConversation({
+        prompt: isHermes(ctx) ? HERMES_NEW_CONVERSATION_PROMPT : undefined,
+      });
     },
   },
   {

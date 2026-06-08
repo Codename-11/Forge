@@ -1029,9 +1029,8 @@ export function ChatThreadView({
     },
   });
   const createConversationM = trpc.chat.createConversation.useMutation({
-    onSuccess: async (result) => {
+    onSuccess: async () => {
       await utils.chat.threads.invalidate();
-      onThreadCreated?.(result.thread.id, result.agent.id);
     },
   });
   // Backs the `/engine` slash command — switches this agent's chat engine.
@@ -1758,8 +1757,18 @@ export function ChatThreadView({
         if (!threadId) return;
         await clearThreadM.mutateAsync({ threadId });
       },
-      newConversation: async () => {
-        await createConversationM.mutateAsync({ agentId });
+      newConversation: async (options) => {
+        const result = await createConversationM.mutateAsync({ agentId });
+        const prompt = options?.prompt?.trim();
+        if (prompt) {
+          await sendM.mutateAsync({
+            agentId,
+            threadId: result.thread.id,
+            body: prompt,
+            context: currentContext,
+          });
+        }
+        onThreadCreated?.(result.thread.id, result.agent.id);
       },
       sendPrompt: handleSend,
       compactThread: async () => {
