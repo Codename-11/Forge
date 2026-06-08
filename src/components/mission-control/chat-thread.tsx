@@ -963,6 +963,7 @@ export function ChatThreadView({
   // the persisted AGENT message refetches).
   const [streamBubble, setStreamBubble] = useState<StreamBubble | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [localReadReceipts, setLocalReadReceipts] = useState<Record<string, string>>({});
   const streamAbortRef = useRef<AbortController | null>(null);
 
   // Realtime — invalidate on chat events for this thread.
@@ -1047,6 +1048,7 @@ export function ChatThreadView({
   //   queued  — waiting its turn (muted, "Queued", cancelable)
   //   sending — being streamed now (muted, "Sending…", cancelable)
   //   sent    — server persisted it (response accepted; meta supplies row id)
+  //   read    — stream meta acknowledged the turn before refetch catches up
   //   failed  — the send never reached the server; survives with Retry +
   //             Cancel, blocks the queue behind it until resolved.
   // `rawFiles` is kept so retry / deferred sends can re-upload.
@@ -1056,7 +1058,7 @@ export function ChatThreadView({
     createdAt: number;
     rawFiles: File[];
     displayFiles: string[];
-    status: "queued" | "sending" | "sent" | "failed";
+    status: "queued" | "sending" | "sent" | "read" | "failed";
     /** Persisted USER ChatMessage id once the stream route acknowledges it. */
     serverMessageId?: string;
   };
@@ -1284,15 +1286,21 @@ export function ChatThreadView({
           return;
         }
         if (event === "meta") {
-          const { messageId, userMessageId } = parsed as {
+          const { messageId, userMessageId, acknowledgedAt, outputStartedAt } = parsed as {
             messageId?: string;
             userMessageId?: string;
+            acknowledgedAt?: string;
+            outputStartedAt?: string;
           };
           if (messageId) {
             setStreamBubble((b) => (b ? { ...b, messageId } : b));
           }
           if (outboxId && userMessageId) {
-            markOutbox(outboxId, "sent", userMessageId);
+            markOutbox(outboxId, "read", userMessageId);
+          }
+          if (userMessageId) {
+            const readAt = acknowledgedAt ?? outputStartedAt ?? new Date().toISOString();
+            setLocalReadReceipts((prev) => ({ ...prev, [userMessageId]: readAt }));
           }
           refreshThread();
           // Receipt already flipped to "Sent" on response acceptance; meta
@@ -1725,7 +1733,11 @@ export function ChatThreadView({
         sendState: m.status,
       }}
       onRetry={m.status === "failed" ? () => retryOutbox(m) : undefined}
-      onCancel={m.status !== "sent" ? () => cancelOutbox(m) : undefined}
+      onCancel={
+        m.status === "queued" || m.status === "sending" || m.status === "failed"
+          ? () => cancelOutbox(m)
+          : undefined
+      }
     />
   );
 
@@ -1820,21 +1832,26 @@ export function ChatThreadView({
 
   const messageRows: ChatMessageRow[] = useMemo(
     () =>
-      messages.map((m) => ({
-        id: m.id,
-        role: m.role as ChatMessageRow["role"],
-        body: m.body,
-        createdAt: m.createdAt,
-        // Delivery-receipt timestamps (USER messages only render them).
-        dispatchedAt: (m as { dispatchedAt?: Date | string | null }).dispatchedAt ?? null,
-        acknowledgedAt: (m as { acknowledgedAt?: Date | string | null }).acknowledgedAt ?? null,
-        outputStartedAt: (m as { outputStartedAt?: Date | string | null }).outputStartedAt ?? null,
-        // Streaming path stashes thinking/tool_use blocks in
-        // `contextSnapshot`. Forward whatever the router returns —
-        // `chat-message.tsx` guards against missing/unrelated shapes.
-        contextSnapshot: (m as { contextSnapshot?: unknown }).contextSnapshot ?? undefined,
-      })),
-    [messages],
+      messages.map((m) => {
+        const localReadAt = localReadReceipts[m.id] ?? null;
+        return {
+          id: m.id,
+          role: m.role as ChatMessageRow["role"],
+          body: m.body,
+          createdAt: m.createdAt,
+          // Delivery-receipt timestamps (USER messages only render them).
+          dispatchedAt: (m as { dispatchedAt?: Date | string | null }).dispatchedAt ?? null,
+          acknowledgedAt:
+            (m as { acknowledgedAt?: Date | string | null }).acknowledgedAt ?? localReadAt,
+          outputStartedAt:
+            (m as { outputStartedAt?: Date | string | null }).outputStartedAt ?? localReadAt,
+          // Streaming path stashes thinking/tool_use blocks in
+          // `contextSnapshot`. Forward whatever the router returns —
+          // `chat-message.tsx` guards against missing/unrelated shapes.
+          contextSnapshot: (m as { contextSnapshot?: unknown }).contextSnapshot ?? undefined,
+        };
+      }),
+    [messages, localReadReceipts],
   );
   const persistedMessageIds = useMemo(() => new Set(messageRows.map((m) => m.id)), [messageRows]);
 
@@ -1891,7 +1908,7 @@ export function ChatThreadView({
       outbox.filter((m) => {
         if (m.serverMessageId && persistedMessageIds.has(m.serverMessageId)) return false;
         const body = normalizeChatBodyForMatch(m.body);
-        if (body && (m.status === "sending" || m.status === "sent")) {
+        if (body && (m.status === "sending" || m.status === "sent" || m.status === "read")) {
           const persistedCopyVisible = persistedUserMessages.some(
             (p) => p.body === body && Math.abs(p.createdAt - m.createdAt) <= 120_000,
           );
