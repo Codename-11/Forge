@@ -24,10 +24,17 @@ async function setup() {
 
 describe("agent.previewTransport", () => {
   it("a HERMES agent (no runtime) previews as runs (env gateway fallback)", async () => {
+    const previousAllowUnauth = process.env.HERMES_GATEWAY_ALLOW_UNAUTH;
+    process.env.HERMES_GATEWAY_ALLOW_UNAUTH = "1";
     const { caller } = await setup();
-    const p = await caller.previewTransport({ provider: "HERMES" });
-    expect(p.mode).toBe("runs");
-    expect(p.ready).toBe(true);
+    try {
+      const p = await caller.previewTransport({ provider: "HERMES" });
+      expect(p.mode).toBe("runs");
+      expect(p.ready).toBe(true);
+    } finally {
+      if (previousAllowUnauth === undefined) delete process.env.HERMES_GATEWAY_ALLOW_UNAUTH;
+      else process.env.HERMES_GATEWAY_ALLOW_UNAUTH = previousAllowUnauth;
+    }
   });
 
   it("a CODEX agent with no runtime + no model previews as not-ready none", async () => {

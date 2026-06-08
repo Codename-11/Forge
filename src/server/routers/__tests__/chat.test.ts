@@ -1,5 +1,11 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { AgentRunStatus, ChatContextMode, ChatRole, EventKind, WebhookDeliveryStatus } from "@prisma/client";
+import {
+  AgentRunStatus,
+  ChatContextMode,
+  ChatRole,
+  EventKind,
+  WebhookDeliveryStatus,
+} from "@prisma/client";
 import { chatRouter } from "@/server/routers/chat";
 import {
   buildContext,
@@ -51,7 +57,9 @@ describe("chatRouter deferred dispatch", () => {
     expect(defaultThread.thread.isDefault).toBe(true);
     expect(planning.thread.isDefault).toBe(false);
     expect(debugging.thread.isDefault).toBe(false);
-    expect(new Set([defaultThread.thread.id, planning.thread.id, debugging.thread.id]).size).toBe(3);
+    expect(new Set([defaultThread.thread.id, planning.thread.id, debugging.thread.id]).size).toBe(
+      3,
+    );
 
     const threads = await caller.threads();
     expect(threads.map((thread) => thread.id)).toEqual(
@@ -91,7 +99,10 @@ describe("chatRouter deferred dispatch", () => {
 
   it("dispatches user messages to a selected named conversation", async () => {
     const { agent, caller } = await setup();
-    const conversation = await caller.createConversation({ agentId: agent.id, title: "Named thread" });
+    const conversation = await caller.createConversation({
+      agentId: agent.id,
+      title: "Named thread",
+    });
 
     const sent = await caller.send({
       agentId: agent.id,
@@ -107,7 +118,10 @@ describe("chatRouter deferred dispatch", () => {
 
   it("compacts a conversation into durable summary metadata", async () => {
     const { agent, caller, prisma, fixture } = await setup();
-    const conversation = await caller.createConversation({ agentId: agent.id, title: "Compaction" });
+    const conversation = await caller.createConversation({
+      agentId: agent.id,
+      title: "Compaction",
+    });
     for (let i = 0; i < 4; i += 1) {
       await prisma.chatMessage.create({
         data: {
@@ -152,6 +166,104 @@ describe("chatRouter deferred dispatch", () => {
     expect(repeated.summarizedMessageCount).toBe(0);
     expect(repeated.thread.summaryMarkdown).toBe(result.thread.summaryMarkdown);
     expect(eventCountAfterRepeatedCompact).toBe(eventCountAfterFirstCompact);
+  });
+
+  it("clears a conversation without deleting the thread", async () => {
+    const { agent, caller, prisma, fixture } = await setup();
+    const sent = await caller.send({
+      agentId: agent.id,
+      body: "clear this history",
+    });
+    const agentMessage = await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: sent.threadId,
+        role: ChatRole.AGENT,
+        body: "temporary reply",
+      },
+    });
+    const attachment = await prisma.attachment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        targetType: "chat-message",
+        targetId: sent.messageId,
+        kind: "LINK",
+        filename: "Spec",
+        mimeType: "text/url",
+        size: 0,
+        url: "https://example.com/spec",
+        externalUrl: "https://example.com/spec",
+        linkTitle: "Spec",
+      },
+    });
+    await prisma.chatThread.update({
+      where: { id: sent.threadId },
+      data: {
+        summaryMarkdown: "## old summary",
+        summarizedUntilMessageId: agentMessage.id,
+        summarizedAt: new Date(),
+      },
+    });
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.CHAT_MESSAGE_POSTED,
+        subjectId: sent.threadId,
+      },
+    });
+    const webhook = await prisma.webhook.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        url: "https://example.invalid/webhook",
+        secret: "secret",
+        events: [EventKind.CHAT_MESSAGE_POSTED],
+      },
+    });
+    const delivery = await prisma.webhookDelivery.create({
+      data: {
+        webhookId: webhook.id,
+        eventId: event.id,
+        status: WebhookDeliveryStatus.PENDING,
+      },
+    });
+    const notification = await prisma.notificationState.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        userId: fixture.user.id,
+        eventId: event.id,
+        summary: "Chat message posted",
+      },
+    });
+
+    const result = await caller.clearThread({ threadId: sent.threadId });
+
+    expect(result).toMatchObject({
+      ok: true,
+      cleared: true,
+      messageCount: 2,
+      purgedAttachments: 1,
+    });
+    const thread = await prisma.chatThread.findUniqueOrThrow({ where: { id: sent.threadId } });
+    expect(thread.summaryMarkdown).toBeNull();
+    expect(thread.summarizedUntilMessageId).toBeNull();
+    expect(thread.summarizedAt).toBeNull();
+    expect(await prisma.chatMessage.count({ where: { threadId: sent.threadId } })).toBe(0);
+    expect(await prisma.attachment.findUnique({ where: { id: attachment.id } })).toBeNull();
+    expect(await prisma.activityEvent.findUnique({ where: { id: event.id } })).toBeNull();
+    expect(await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } })).toBeNull();
+    expect(
+      await prisma.notificationState.findUnique({ where: { id: notification.id } }),
+    ).toBeNull();
+
+    const audit = await prisma.auditLog.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        entity: "ChatThread",
+        entityId: sent.threadId,
+        action: "clear",
+      },
+    });
+    expect(audit).not.toBeNull();
   });
 
   it("creates pending messages without dispatching until dispatchMessage is called", async () => {
