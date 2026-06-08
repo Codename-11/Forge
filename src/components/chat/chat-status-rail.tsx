@@ -86,6 +86,38 @@ function runtimeKindLabel(kind: string | null | undefined): string {
   }
 }
 
+function toneClass(tone: string | null | undefined): string {
+  if (tone === "success") return "border-emerald-500/20 bg-emerald-500/5";
+  if (tone === "danger") return "border-danger/30 bg-danger/10";
+  if (tone === "warning") return "border-amber-500/30 bg-amber-500/10";
+  if (tone === "info") return "border-sky-500/25 bg-sky-500/10";
+  return "border-border/60 bg-background/60";
+}
+
+function capabilityLabels(capabilities: Record<string, boolean> | null | undefined) {
+  if (!capabilities) return [];
+  const labels: Array<[keyof typeof capabilities, string]> = [
+    ["streaming", "stream"],
+    ["thinking", "thinking"],
+    ["tools", "tools"],
+    ["approvals", "approvals"],
+    ["stop", "stop"],
+    ["files", "files"],
+    ["vision", "vision"],
+    ["runs", "runs"],
+    ["dispatch", "dispatch"],
+    ["memory", "memory"],
+    ["commands", "commands"],
+    ["compact", "compact"],
+    ["diagnostics", "diagnostics"],
+  ];
+  return labels.map(([key, label]) => ({
+    key: String(key),
+    label,
+    enabled: Boolean(capabilities[String(key)]),
+  }));
+}
+
 export function ChatStatusRail({
   workspaceSlug,
   workspaceKey,
@@ -254,6 +286,7 @@ export function ChatStatusRail({
   // managed runtime to terminate it. A completions agent's in-flight turn is
   // stopped from the composer, not here.
   const canStop = Boolean(diagnostics?.lastRun?.id && runActive && engine === "runs");
+  const capabilityRows = capabilityLabels(readiness?.capabilities);
 
   const compactLayout = variant === "compact";
 
@@ -420,7 +453,54 @@ export function ChatStatusRail({
               <CheckCircle2 className="h-3 w-3" /> chat reaches a model
             </div>
           )}
+          {capabilityRows.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {capabilityRows.map((cap) => (
+                <span
+                  key={cap.key}
+                  className={cn(
+                    "rounded border px-1 py-0 text-[0.5625rem] uppercase tracking-wider",
+                    cap.enabled
+                      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                      : "border-border/50 bg-subtle/30 text-muted-foreground/55",
+                  )}
+                  title={cap.enabled ? `${cap.label} supported` : `${cap.label} unavailable`}
+                >
+                  {cap.label}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
+      </div>
+
+      <div
+        className={cn("text-meta rounded-lg border p-2", toneClass(diagnostics?.turnStatus?.tone))}
+      >
+        <div className="flex items-center gap-2 font-medium text-foreground">
+          {diagnostics?.turnStatus?.tone === "danger" ||
+          diagnostics?.turnStatus?.tone === "warning" ? (
+            <AlertTriangle className="h-3.5 w-3.5" />
+          ) : (
+            <CheckCircle2 className="h-3.5 w-3.5" />
+          )}
+          Turn
+          {diagnostics?.turnStatus?.phase && (
+            <span className="ml-auto rounded border border-border/60 bg-background/50 px-1 py-0 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+              {diagnostics.turnStatus.phase}
+            </span>
+          )}
+        </div>
+        <div className="mt-1 text-muted-foreground">
+          {diagnostics?.turnStatus?.label ?? "Ready"}
+          {diagnostics?.turnStatus?.waitingMs != null &&
+            ` · ${duration(diagnostics.turnStatus.waitingMs)}`}
+        </div>
+        {diagnostics?.turnStatus?.detail && (
+          <div className="mt-1 line-clamp-3 text-[0.625rem] text-muted-foreground/80">
+            {diagnostics.turnStatus.detail}
+          </div>
+        )}
       </div>
 
       <div

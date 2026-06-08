@@ -30,6 +30,37 @@ import {
  */
 export type ChatTransportMode = "runs" | "completions" | "dispatch" | "none";
 
+export type ChatRuntimeCapabilities = {
+  /** Provider streams partial output back into the Forge chat surface. */
+  streaming: boolean;
+  /** Provider can surface explicit thinking/reasoning deltas. */
+  thinking: boolean;
+  /** Forge can surface tool calls inline for this turn. */
+  tools: boolean;
+  /** Tool calls can pause for operator approval in Forge. */
+  approvals: boolean;
+  /** The current turn can be stopped from the chat UI. */
+  stop: boolean;
+  /** The latest user turn can be replayed/retried. */
+  retry: boolean;
+  /** Attachments can be persisted and linked to chat turns. */
+  files: boolean;
+  /** Image attachments can be passed to the model/runtime as context. */
+  vision: boolean;
+  /** Runtime owns durable run state that Forge can inspect. */
+  runs: boolean;
+  /** Runtime answers asynchronously via dispatch/webhook/draft events. */
+  dispatch: boolean;
+  /** Slash commands and local chat controls are available. */
+  commands: boolean;
+  /** Forge can compact/summarize conversation context. */
+  compact: boolean;
+  /** Provider/runtime may carry profile memory or durable instructions. */
+  memory: boolean;
+  /** Forge can report connection/run/delivery diagnostics. */
+  diagnostics: boolean;
+};
+
 export type ChatReadiness = {
   ready: boolean;
   mode: ChatTransportMode;
@@ -46,6 +77,8 @@ export type ChatReadiness = {
     | "dispatch-path"
     | "pull-act-only"
     | "no-model";
+  /** Provider-neutral capabilities the chat UI can safely expose. */
+  capabilities: ChatRuntimeCapabilities;
   /** Operator-facing guidance; empty/informational when ready. */
   hint: string;
 };
@@ -84,13 +117,17 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
   if (engine === "RUNS") {
     const connector = getRunsConnectorForAgent({ provider, runtime: input.runtime });
     if (connector) {
-      if (input.runtime?.lastProbeAttempted === true && input.runtime.lastProbeReachable === false) {
+      if (
+        input.runtime?.lastProbeAttempted === true &&
+        input.runtime.lastProbeReachable === false
+      ) {
         return {
           ready: false,
           mode: "runs",
           provider,
           transportLabel: runtimeLabel(input, adapter?.title) ?? runsFallbackLabel(provider),
           reason: "runtime-probe-failed",
+          capabilities: chatCapabilities("runs", provider, false),
           hint:
             `The attached runtime failed its last contract probe: ` +
             `${input.runtime.lastProbeDetail || "probe did not succeed"}. ` +
@@ -103,6 +140,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
         provider,
         transportLabel: runtimeLabel(input, adapter?.title) ?? runsFallbackLabel(provider),
         reason: "runs-connector",
+        capabilities: chatCapabilities("runs", provider, true),
         hint: "",
       };
     }
@@ -115,6 +153,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
         provider,
         transportLabel: "—",
         reason: "no-runs-connector",
+        capabilities: chatCapabilities("none", provider, false),
         hint: missingRunsConnectorHint(provider),
       };
     }
@@ -129,6 +168,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
       provider,
       transportLabel: `Streaming · ${providerLabel(providerId)}`,
       reason: "model-configured",
+      capabilities: chatCapabilities("completions", provider, true),
       hint: "",
     };
   }
@@ -141,6 +181,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
       provider,
       transportLabel: dispatchLabel(input, adapter),
       reason: "dispatch-path",
+      capabilities: chatCapabilities("dispatch", provider, true),
       hint:
         `Replies are delivered by this agent's ${dispatchLabel(input, adapter).toLowerCase()} ` +
         `(not a Forge-side model). Make sure it's running — the reply streams in ` +
@@ -157,6 +198,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
       provider,
       transportLabel: "—",
       reason: "pull-act-only",
+      capabilities: chatCapabilities("none", provider, false),
       hint:
         `${adapter?.title ?? "This connection"} reaches Forge to read context ` +
         `and take actions — it isn't a chat backend, and no daemon is linked to ` +
@@ -170,7 +212,34 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
     provider,
     transportLabel: "—",
     reason: "no-model",
+    capabilities: chatCapabilities("none", provider, false),
     hint: noModelHint(providerId),
+  };
+}
+
+function chatCapabilities(
+  mode: ChatTransportMode,
+  provider: AgentProvider,
+  ready: boolean,
+): ChatRuntimeCapabilities {
+  const active = ready && mode !== "none";
+  const forgeOwnedLoop = active && (mode === "runs" || mode === "completions");
+  const richRuntime = active && (provider === "HERMES" || provider === "CODEX");
+  return {
+    streaming: active && mode !== "dispatch",
+    thinking: forgeOwnedLoop,
+    tools: forgeOwnedLoop,
+    approvals: forgeOwnedLoop,
+    stop: forgeOwnedLoop,
+    retry: true,
+    files: true,
+    vision: forgeOwnedLoop,
+    runs: active && mode === "runs",
+    dispatch: active && mode === "dispatch",
+    commands: true,
+    compact: true,
+    memory: richRuntime,
+    diagnostics: true,
   };
 }
 

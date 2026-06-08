@@ -2,6 +2,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
   Bot,
+  Check,
+  CheckCheck,
   ChevronDown,
   ChevronRight,
   Layers,
@@ -55,6 +57,121 @@ function relativeTime(input: Date | string | null | undefined): string {
 
 function normalizeChatBodyForMatch(body: string): string {
   return body.replace(/\s+/g, " ").trim();
+}
+
+type TurnPhase =
+  | "idle"
+  | "queued"
+  | "delivered"
+  | "read"
+  | "thinking"
+  | "running"
+  | "completed"
+  | "stalled"
+  | "failed";
+
+type TurnStatusView = {
+  phase: TurnPhase;
+  label: string;
+  detail: string;
+  tone: "muted" | "info" | "success" | "warning" | "danger";
+  waitingMs: number | null;
+} | null;
+
+function turnProgressIndex(phase: TurnPhase, hasToolActivity: boolean, hasReplyText: boolean) {
+  if (phase === "failed" || phase === "stalled") return 2;
+  if (phase === "completed") return 4;
+  if (hasReplyText) return 4;
+  if (hasToolActivity) return 3;
+  if (phase === "thinking" || phase === "running") return 2;
+  if (phase === "read") return 1;
+  if (phase === "delivered") return 0;
+  return 0;
+}
+
+function ChatTurnProgress({
+  status,
+  isLive,
+  streamBubble,
+  supportsTools,
+}: {
+  status: TurnStatusView;
+  isLive: boolean;
+  streamBubble: StreamBubble | null;
+  supportsTools: boolean;
+}) {
+  const visible = isLive || (status && status.phase !== "idle" && status.phase !== "completed");
+  if (!visible) return null;
+  const hasToolActivity = Boolean(streamBubble?.toolCalls.length);
+  const hasReplyText = Boolean(streamBubble?.body.trim());
+  const activeIndex = turnProgressIndex(status?.phase ?? "thinking", hasToolActivity, hasReplyText);
+  const steps = [
+    { key: "delivered", label: "Delivered", icon: Check },
+    { key: "read", label: "Read", icon: CheckCheck },
+    { key: "thinking", label: status?.phase === "running" ? "Running" : "Thinking", icon: Bot },
+    { key: "tools", label: "Tools", icon: Wrench, optional: !supportsTools && !hasToolActivity },
+    { key: "reply", label: "Reply", icon: Bot },
+  ];
+  const tone =
+    status?.tone === "danger"
+      ? "border-danger/30 bg-danger/10 text-danger"
+      : status?.tone === "warning"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+        : "border-border/60 bg-card/35 text-muted-foreground";
+  return (
+    <div className={cn("border-b px-3 py-1.5", tone)}>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 text-[0.6875rem] font-medium text-foreground">
+            <Bot className="h-3 w-3 text-ember" />
+            <span>{status?.label ?? (isLive ? "Thinking" : "Working")}</span>
+            {streamBubble?.thinking && (
+              <span className="rounded border border-border/60 bg-background/60 px-1 py-0 font-mono text-[0.5625rem] text-muted-foreground">
+                thinking
+              </span>
+            )}
+            {hasToolActivity && (
+              <span className="rounded border border-ember/30 bg-ember/10 px-1 py-0 font-mono text-[0.5625rem] text-ember">
+                {streamBubble?.toolCalls.length} tool
+                {streamBubble?.toolCalls.length === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+          {status?.detail && (
+            <div className="text-meta mt-0.5 truncate text-muted-foreground/75">
+              {status.detail}
+            </div>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {steps
+            .filter((step) => !step.optional)
+            .map((step, idx) => {
+              const Icon = step.icon;
+              const done = idx < activeIndex || status?.phase === "completed";
+              const active = idx === activeIndex && status?.phase !== "completed";
+              return (
+                <span
+                  key={step.key}
+                  className={cn(
+                    "inline-flex h-6 items-center gap-1 rounded border px-1.5 text-[0.5625rem] uppercase tracking-wider",
+                    done
+                      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                      : active
+                        ? "border-ember/35 bg-ember/10 text-ember"
+                        : "border-border/50 bg-background/40 text-muted-foreground/55",
+                  )}
+                  title={step.label}
+                >
+                  <Icon className={cn("h-3 w-3", active && isLive && "animate-pulse")} />
+                  <span className="hidden sm:inline">{step.label}</span>
+                </span>
+              );
+            })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** Three-dot typing indicator rendered like an agent bubble. */
@@ -1938,6 +2055,8 @@ export function ChatThreadView({
   const isPersistentOnline = !isEphemeral && !isOnDemand && status === "ONLINE";
   const isPersistentBusy = !isEphemeral && !isOnDemand && status === "BUSY";
   const isPersistentOffline = !isEphemeral && !isOnDemand && status === "OFFLINE";
+  const turnStatus = (diagnostics?.turnStatus ?? null) as TurnStatusView;
+  const chatSupportsTools = Boolean(readiness?.capabilities.tools || readiness?.capabilities.runs);
 
   // Composer placeholder copy
   let composerPlaceholder = agent ? `Message ${agent.name}…` : "Message agent…";
@@ -2120,6 +2239,12 @@ export function ChatThreadView({
           </span>
         </div>
       )}
+      <ChatTurnProgress
+        status={turnStatus}
+        isLive={isStreaming}
+        streamBubble={streamBubble}
+        supportsTools={chatSupportsTools}
+      />
       <div ref={scrollerRef} className="flex-1 space-y-2 overflow-y-auto px-2 py-2">
         {displayRows.length === 0 && (
           <div className="px-2 py-4 text-[0.6875rem] text-muted-foreground">

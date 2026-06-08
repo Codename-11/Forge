@@ -2,6 +2,23 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-08 — Provider-neutral chat polish
+
+Added a provider-neutral chat capability contract to `chatReadiness` so Forge
+can expose streaming, thinking, tools, approvals, stop, retry, files, vision,
+runs, dispatch, memory, compact, commands, and diagnostics without hardcoding
+Hermes or Codex assumptions into UI components.
+
+`threadDiagnostics` now returns a normalized `turnStatus` with a single phase,
+label, detail, tone, timing, and run id. Chat renders that as a compact
+Delivered -> Read -> Thinking/Running -> Tools -> Reply progress strip during
+active turns, while the status rail shows the normalized Turn card and runtime
+capability chips. The composer context drawer now shows smart-context metadata,
+an approximate token estimate, and included/excluded file state.
+
+Verification: `pnpm lint`, `pnpm typecheck`, focused `chat-readiness` Vitest
+coverage, and full `pnpm test` pass.
+
 ## 2026-06-08 — Immediate chat read receipts
 
 Made the chat read receipt behave like the Discord bridge: once the stream
