@@ -2,6 +2,17 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-08 — Chat streaming duplicate bubble fix
+
+Fixed the chat streaming handoff that could show a persisted USER row marked
+read and a duplicate optimistic "Sending..." row at the same time while Victor
+was thinking. The client now refreshes the thread as soon as the stream is
+accepted / metadata arrives, suppresses optimistic sends once the matching
+persisted USER message is visible, and hides fresh empty AGENT placeholders
+while the live streaming bubble owns that reply.
+
+Verification: `pnpm lint`, `pnpm typecheck`, and full `pnpm test` pass.
+
 ## 2026-06-08 — Hermes slash command model replies
 
 Aligned Forge chat slash-command behavior with Hermes command expectations.
