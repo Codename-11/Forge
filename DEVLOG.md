@@ -2,6 +2,17 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-08 — Immediate chat read receipts
+
+Made the chat read receipt behave like the Discord bridge: once the stream
+route accepts a turn and creates the agent-side reply/run placeholder, Forge
+persists the USER `acknowledgedAt`/`outputStartedAt` timestamp before emitting
+stream metadata. The first SSE `meta` event now carries that receipt timestamp,
+and the client overlays it locally so the outgoing bubble flips to "Read"
+immediately while thinking/tool/content streaming continues.
+
+Verification: `pnpm lint`, `pnpm typecheck`, and full `pnpm test` pass.
+
 ## 2026-06-08 — Chat streaming duplicate bubble fix
 
 Fixed the chat streaming handoff that could show a persisted USER row marked

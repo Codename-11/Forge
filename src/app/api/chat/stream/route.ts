@@ -387,13 +387,14 @@ export async function POST(req: NextRequest) {
   // Create the placeholder AGENT row up front so the client gets a stable
   // messageId in the `meta` event — we fill its `body` + `contextSnapshot`
   // after the stream finishes (or aborts).
+  const agentStartedAt = new Date();
   const placeholder = await db.chatMessage.create({
     data: {
       workspaceId,
       threadId: thread.id,
       role: ChatRole.AGENT,
       body: "",
-      outputStartedAt: new Date(),
+      outputStartedAt: agentStartedAt,
     },
     select: { id: true },
   });
@@ -401,12 +402,10 @@ export async function POST(req: NextRequest) {
 
   // Acknowledged-flag bookkeeping so the chat panel's dispatch state UI
   // transitions cleanly out of "wake-sent" when the streaming reply lands.
-  void db.chatMessage
-    .update({
-      where: { id: userMessageId },
-      data: { acknowledgedAt: new Date(), outputStartedAt: new Date() },
-    })
-    .catch(() => undefined);
+  await db.chatMessage.update({
+    where: { id: userMessageId },
+    data: { acknowledgedAt: agentStartedAt, outputStartedAt: agentStartedAt },
+  });
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -419,7 +418,15 @@ export async function POST(req: NextRequest) {
         }
       };
       void (async () => {
-        enqueue(sse("meta", { messageId: agentMessageId, agentMessageId, userMessageId }));
+        enqueue(
+          sse("meta", {
+            messageId: agentMessageId,
+            agentMessageId,
+            userMessageId,
+            acknowledgedAt: agentStartedAt.toISOString(),
+            outputStartedAt: agentStartedAt.toISOString(),
+          }),
+        );
 
         const assembled: string[] = [];
         const thinkingChunks: string[] = [];

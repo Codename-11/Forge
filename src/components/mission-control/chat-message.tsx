@@ -45,11 +45,12 @@ export interface ChatMessageRow {
   /**
    * Optimistic-only send state for an in-flight USER bubble (`id` starts
    * with `_`): "queued" (waiting its turn) → "sending" (muted, spinner) →
-   * "sent" (confirmed by the stream's `meta` event, un-mutes) → "failed"
-   * (offer Retry, preserve the text + attachments). Persisted rows leave
-   * this undefined and derive their receipt from the timestamp columns.
+   * "sent" (confirmed by the stream response) → "read" (stream `meta`
+   * acknowledged the turn) → "failed" (offer Retry, preserve the text +
+   * attachments). Persisted rows leave this undefined and derive their
+   * receipt from the timestamp columns.
    */
-  sendState?: "queued" | "sending" | "sent" | "failed";
+  sendState?: "queued" | "sending" | "sent" | "read" | "failed";
   /**
    * Rehydration blob for messages produced by /api/chat/stream — the
    * server stashes `thinking` and `tool_use` here on `contextSnapshot`
@@ -95,9 +96,7 @@ function readStreamedSnapshot(value: unknown): StreamedSnapshot | null {
       .map((b) => {
         const status =
           typeof b.status === "string" &&
-          ["pending", "approved", "declined", "executed", "error"].includes(
-            b.status,
-          )
+          ["pending", "approved", "declined", "executed", "error"].includes(b.status)
             ? (b.status as RehydratedToolCall["status"])
             : "executed";
         return {
@@ -168,14 +167,14 @@ function MessageReceipt({
   if (isOptimistic) {
     if (msg.sendState === "failed") {
       return (
-        <span className="flex items-center gap-1 text-destructive">
+        <span className="text-destructive flex items-center gap-1">
           <AlertCircle className="h-3 w-3" />
           Failed to send
           {onRetry && (
             <button
               type="button"
               onClick={onRetry}
-              className="ml-0.5 inline-flex items-center gap-0.5 rounded border border-destructive/40 px-1 py-0 text-[0.5625rem] hover:bg-destructive/10"
+              className="border-destructive/40 hover:bg-destructive/10 ml-0.5 inline-flex items-center gap-0.5 rounded border px-1 py-0 text-[0.5625rem]"
             >
               <RefreshCw className="h-2.5 w-2.5" />
               Retry
@@ -190,6 +189,14 @@ function MessageReceipt({
         <span className="flex items-center gap-0.5 text-muted-foreground/70">
           <Check className="h-3 w-3" />
           Sent
+        </span>
+      );
+    }
+    if (msg.sendState === "read") {
+      return (
+        <span className="flex items-center gap-0.5 text-ember/80">
+          <CheckCheck className="h-3 w-3" />
+          Read
         </span>
       );
     }
@@ -284,9 +291,7 @@ export function ChatMessageBubble({
       <div
         className={cn(
           "min-w-0 max-w-[85%] rounded-md px-2 py-1.5 text-[0.75rem]",
-          isUser
-            ? "bg-subtle text-foreground"
-            : "border border-border bg-card/60 text-foreground",
+          isUser ? "bg-subtle text-foreground" : "border border-border bg-card/60 text-foreground",
           msg.isDraft && "opacity-70",
         )}
       >
@@ -348,9 +353,7 @@ function ChatMessageAttachments({ messageId }: { messageId: string }) {
   // Local-only id check guard — never let synthetic ids
   // (`_pending`, `_local_…`) hit the server.
   const isPersisted =
-    CHAT_MESSAGE_ATTACHMENTS_ENABLED &&
-    typeof messageId === "string" &&
-    !messageId.startsWith("_");
+    CHAT_MESSAGE_ATTACHMENTS_ENABLED && typeof messageId === "string" && !messageId.startsWith("_");
   const { data } = trpc.attachment.list.useQuery(
     { targetType: "chat-message", targetId: messageId },
     {
@@ -369,24 +372,14 @@ function ChatMessageAttachments({ messageId }: { messageId: string }) {
       {images.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {images.map((a) => (
-            <AttachmentThumb
-              key={a.id}
-              attachment={a}
-              attachments={rows}
-              target={target}
-            />
+            <AttachmentThumb key={a.id} attachment={a} attachments={rows} target={target} />
           ))}
         </div>
       )}
       {others.length > 0 && (
         <div className="flex flex-col gap-1">
           {others.map((a) => (
-            <AttachmentChip
-              key={a.id}
-              attachment={a}
-              attachments={rows}
-              target={target}
-            />
+            <AttachmentChip key={a.id} attachment={a} attachments={rows} target={target} />
           ))}
         </div>
       )}
@@ -405,9 +398,7 @@ function StreamedRehydration({ snapshot }: { snapshot: StreamedSnapshot | null }
   const hasThinking = Boolean(snapshot.thinking);
   const tools = snapshot.tool_calls ?? [];
   if (!hasThinking && tools.length === 0) return null;
-  const elapsed = snapshot.elapsedMs
-    ? (snapshot.elapsedMs / 1000).toFixed(1)
-    : null;
+  const elapsed = snapshot.elapsedMs ? (snapshot.elapsedMs / 1000).toFixed(1) : null;
   return (
     <div className="mb-1.5 space-y-1.5">
       {hasThinking && (
@@ -422,9 +413,7 @@ function StreamedRehydration({ snapshot }: { snapshot: StreamedSnapshot | null }
             ) : (
               <ChevronRight className="h-3 w-3" />
             )}
-            <span className="font-mono">
-              {elapsed ? `Thought for ${elapsed}s` : "Thinking"}
-            </span>
+            <span className="font-mono">{elapsed ? `Thought for ${elapsed}s` : "Thinking"}</span>
           </button>
           {thinkingOpen && snapshot.thinking && (
             <div className="rounded border border-border/40 bg-background/40 px-2 py-1.5 text-[0.6875rem] italic text-muted-foreground">
@@ -483,11 +472,7 @@ function ToolCallCard({ call }: { call: RehydratedToolCall }) {
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-1.5 px-1.5 py-1 text-left text-muted-foreground hover:text-foreground"
       >
-        {open ? (
-          <ChevronDown className="h-3 w-3" />
-        ) : (
-          <ChevronRight className="h-3 w-3" />
-        )}
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <Wrench className="h-3 w-3 text-ember" />
         <span className="font-mono text-foreground">{call.name}</span>
         <span
@@ -506,9 +491,7 @@ function ToolCallCard({ call }: { call: RehydratedToolCall }) {
           {hasArgs ? (
             <ChatMarkdown body={"```json\n" + json + "\n```"} />
           ) : (
-            <p className="text-[0.625rem] text-muted-foreground">
-              No input arguments.
-            </p>
+            <p className="text-[0.625rem] text-muted-foreground">No input arguments.</p>
           )}
           {call.summary && (
             <p
