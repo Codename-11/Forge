@@ -80,6 +80,8 @@ type ChatThreadDiagnostics = {
   latestUserMessageId: string | null;
   latestUserMessageAt: Date | null;
   latestAgentMessageAt: Date | null;
+  lastAgentStreamError: string | null;
+  lastAgentStreamAborted: boolean;
   waitingForReply: boolean;
   waitingMs: number | null;
   lastSourceRunId: string | null;
@@ -104,13 +106,7 @@ type ChatThreadDiagnostics = {
    * lifecycle fields. Drives the chat panel's typing/wake/stalled UI
    * directly — preferred over the `lastMessageAge < 60s` heuristic.
    */
-  dispatchState:
-    | "idle"
-    | "queued"
-    | "wake-sent"
-    | "acknowledged"
-    | "running"
-    | "stalled";
+  dispatchState: "idle" | "queued" | "wake-sent" | "acknowledged" | "running" | "stalled";
   /**
    * USER-message-level lifecycle snapshot. `null` when no dispatched
    * user message exists for the thread (idle).
@@ -138,6 +134,13 @@ function redactDiagnosticText(value: string | null | undefined): string | null {
   return redacted.length > 500 ? `${redacted.slice(0, 497)}…` : redacted;
 }
 
+function jsonObject(
+  value: Prisma.JsonValue | null | undefined,
+): Record<string, Prisma.JsonValue> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, Prisma.JsonValue>;
+}
+
 async function buildThreadDiagnostics(
   tx: Prisma.TransactionClient,
   workspaceId: string,
@@ -160,7 +163,7 @@ async function buildThreadDiagnostics(
     tx.chatMessage.findFirst({
       where: { workspaceId, threadId, role: ChatRole.AGENT },
       orderBy: { createdAt: "desc" },
-      select: { id: true, createdAt: true, sourceRunId: true },
+      select: { id: true, createdAt: true, sourceRunId: true, contextSnapshot: true },
     }),
     tx.chatMessage.findFirst({
       where: { workspaceId, threadId, sourceRunId: { not: null } },
@@ -214,6 +217,11 @@ async function buildThreadDiagnostics(
   );
   const delivery = lastEvent?.deliveries[0] ?? null;
   const now = Date.now();
+  const latestAgentSnapshot = jsonObject(latestAgent?.contextSnapshot);
+  const lastAgentStreamError = redactDiagnosticText(
+    typeof latestAgentSnapshot?.error === "string" ? latestAgentSnapshot.error : null,
+  );
+  const lastAgentStreamAborted = latestAgentSnapshot?.aborted === true;
 
   // Canonical dispatch state derivation. When the latest USER message
   // is "done" (an AGENT message landed after it), report idle; otherwise
@@ -229,14 +237,10 @@ async function buildThreadDiagnostics(
       dispatchState = "running";
     } else if (latestUser.acknowledgedAt) {
       dispatchState =
-        now - latestUser.acknowledgedAt.getTime() > STALE_CHAT_MS
-          ? "stalled"
-          : "acknowledged";
+        now - latestUser.acknowledgedAt.getTime() > STALE_CHAT_MS ? "stalled" : "acknowledged";
     } else if (latestUser.lastWakeAt) {
       dispatchState =
-        now - latestUser.lastWakeAt.getTime() > STALE_CHAT_MS
-          ? "stalled"
-          : "wake-sent";
+        now - latestUser.lastWakeAt.getTime() > STALE_CHAT_MS ? "stalled" : "wake-sent";
     } else if (now - latestUser.createdAt.getTime() > STALE_CHAT_MS) {
       dispatchState = "stalled";
     } else {
@@ -248,6 +252,8 @@ async function buildThreadDiagnostics(
     latestUserMessageId: latestUser?.id ?? null,
     latestUserMessageAt: latestUser?.createdAt ?? null,
     latestAgentMessageAt: latestAgent?.createdAt ?? null,
+    lastAgentStreamError,
+    lastAgentStreamAborted,
     waitingForReply,
     waitingMs:
       waitingForReply && latestUser ? Math.max(0, now - latestUser.createdAt.getTime()) : null,
@@ -1066,10 +1072,7 @@ export const chatRouter = router({
         });
         providerOverride = thread?.providerOverride ?? null;
       }
-      const providerAvailable = await workspaceChatProviderAvailability(
-        ctx.db,
-        ctx.workspaceId,
-      );
+      const providerAvailable = await workspaceChatProviderAvailability(ctx.db, ctx.workspaceId);
       // A daemon/runtime authenticating as this agent (AGENT-kind ApiKey) is
       // the strongest "served via dispatch" signal.
       const daemonLinked =
@@ -1266,7 +1269,16 @@ export const chatRouter = router({
           agent: {
             select: {
               provider: true,
-              runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
+              runtime: {
+                select: {
+                  adapterKey: true,
+                  endpoint: true,
+                  secret: true,
+                  config: true,
+                  disabledAt: true,
+                  name: true,
+                },
+              },
             },
           },
         },
@@ -1342,7 +1354,16 @@ export const chatRouter = router({
           agent: {
             select: {
               provider: true,
-              runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
+              runtime: {
+                select: {
+                  adapterKey: true,
+                  endpoint: true,
+                  secret: true,
+                  config: true,
+                  disabledAt: true,
+                  name: true,
+                },
+              },
             },
           },
         },

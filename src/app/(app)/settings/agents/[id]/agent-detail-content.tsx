@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Server } from "lucide-react";
+import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Spinner, EmptyState, Section } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
@@ -32,7 +34,7 @@ function StatusPip({ status }: { status?: string | null }) {
 
 function WsChipDense({ ws }: { ws: { slug: string; key: string } }) {
   return (
-    <span className="inline-flex items-center gap-1 text-meta">
+    <span className="text-meta inline-flex items-center gap-1">
       <span
         aria-hidden
         className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] text-[8px] font-bold text-white"
@@ -55,7 +57,18 @@ function Def({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 export function AgentDetailContent({ id }: { id: string }) {
+  const utils = trpc.useUtils();
+  const [promptDraft, setPromptDraft] = useState<string | null>(null);
   const { data: a, isLoading, error } = trpc.agents.profiles.get.useQuery({ id });
+  const updateProfile = trpc.agents.profiles.update.useMutation({
+    onSuccess: async () => {
+      toast.success("Agent prompt saved");
+      setPromptDraft(null);
+      await utils.agents.profiles.get.invalidate({ id });
+      await utils.agents.profiles.list.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
 
   if (isLoading) {
     return (
@@ -91,6 +104,17 @@ export function AgentDetailContent({ id }: { id: string }) {
     );
   }
 
+  const template = a.templateMarkdown ?? "";
+  const editingPrompt = promptDraft !== null;
+  const promptValue = promptDraft ?? template;
+  const effectiveSystemPrompt =
+    `You are ${a.name}. You're chatting with the operator inside Forge, a project ` +
+    `management workspace. Be concise and direct. ` +
+    (a.baseCapabilities.length > 0
+      ? `Your capabilities: ${a.baseCapabilities.join(", ")}.\n\n`
+      : "") +
+    (template ? `${template}\n` : "");
+
   return (
     <>
       <Topbar
@@ -108,7 +132,10 @@ export function AgentDetailContent({ id }: { id: string }) {
             <span className="font-mono text-sm text-muted-foreground">@{a.profileKey}</span>
           </span>
         }
-        subtitle={a.description ?? "Identity-level agent profile — applies in every workspace you bind it to."}
+        subtitle={
+          a.description ??
+          "Identity-level agent profile — applies in every workspace you bind it to."
+        }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-6 p-6">
@@ -130,7 +157,9 @@ export function AgentDetailContent({ id }: { id: string }) {
               <Def label="Provider">
                 <span>{a.provider}</span>
                 {a.runEngine && (
-                  <span className="ml-1 font-mono text-[11px] text-muted-foreground">{a.runEngine}</span>
+                  <span className="ml-1 font-mono text-[11px] text-muted-foreground">
+                    {a.runEngine}
+                  </span>
                 )}
               </Def>
               <Def label="Runtime">
@@ -162,7 +191,7 @@ export function AgentDetailContent({ id }: { id: string }) {
                     a.baseCapabilities.map((c) => (
                       <span
                         key={c}
-                        className="inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 text-meta"
+                        className="text-meta inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5"
                       >
                         {c}
                       </span>
@@ -173,13 +202,92 @@ export function AgentDetailContent({ id }: { id: string }) {
             </div>
           </Section>
 
+          <Section
+            title="Prompt & system context"
+            hint="Profile-level prompt used by chat and active workspace bindings."
+          >
+            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-foreground">Template markdown</div>
+                  <div className="text-meta text-muted-foreground">
+                    {a.bindings.length} active binding{a.bindings.length === 1 ? "" : "s"}
+                  </div>
+                </div>
+                {a.canEdit && (
+                  <div className="flex items-center gap-1.5">
+                    {editingPrompt ? (
+                      <>
+                        <button
+                          type="button"
+                          className="focus-ring h-7 rounded-md border border-border px-2 text-[0.75rem] hover:bg-subtle"
+                          disabled={updateProfile.isPending}
+                          onClick={() => setPromptDraft(null)}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="focus-ring h-7 rounded-md bg-ember px-2 text-[0.75rem] font-medium text-ember-foreground disabled:opacity-60"
+                          disabled={updateProfile.isPending}
+                          onClick={() =>
+                            updateProfile.mutate({
+                              id: a.id,
+                              templateMarkdown: promptValue.trim() ? promptValue : null,
+                            })
+                          }
+                        >
+                          {updateProfile.isPending ? "Saving..." : "Save"}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="focus-ring h-7 rounded-md border border-border px-2 text-[0.75rem] hover:bg-subtle"
+                        onClick={() => setPromptDraft(template)}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {editingPrompt ? (
+                <textarea
+                  value={promptValue}
+                  onChange={(event) => setPromptDraft(event.target.value)}
+                  className="min-h-44 w-full resize-y rounded-md border border-border bg-background px-3 py-2 font-mono text-[0.75rem] leading-relaxed outline-none focus:border-ember"
+                  spellCheck={false}
+                />
+              ) : template ? (
+                <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background/70 p-3 font-mono text-[0.75rem] leading-relaxed">
+                  {template}
+                </pre>
+              ) : (
+                <div className="text-meta rounded-md border border-dashed border-border bg-background/40 p-3 text-muted-foreground">
+                  No profile template configured.
+                </div>
+              )}
+
+              <div className="rounded-md border border-border/70 bg-background/60 p-3">
+                <div className="text-meta mb-1 text-muted-foreground">
+                  Effective chat system prompt preview
+                </div>
+                <pre className="max-h-56 overflow-auto whitespace-pre-wrap font-mono text-[0.6875rem] leading-relaxed text-foreground/85">
+                  {effectiveSystemPrompt}
+                </pre>
+              </div>
+            </div>
+          </Section>
+
           {/* Workspace bindings */}
           <Section
             title="Workspace bindings"
             hint="Per-workspace policy: capacity, capability override, auto-dispatch eligibility."
           >
             <div className="overflow-hidden rounded-lg border border-border bg-card/40">
-              <div className="grid grid-cols-[1.4fr_0.6fr_0.7fr_1.2fr_0.6fr] items-center gap-2 border-b border-border bg-subtle/40 px-3 py-2 text-meta text-muted-foreground">
+              <div className="text-meta grid grid-cols-[1.4fr_0.6fr_0.7fr_1.2fr_0.6fr] items-center gap-2 border-b border-border bg-subtle/40 px-3 py-2 text-muted-foreground">
                 <span>Workspace</span>
                 <span>Status</span>
                 <span className="text-right">Max concurrent</span>
@@ -198,7 +306,10 @@ export function AgentDetailContent({ id }: { id: string }) {
                     key={b.id}
                     className="grid grid-cols-[1.4fr_0.6fr_0.7fr_1.2fr_0.6fr] items-center gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0"
                   >
-                    <Link href={`/w/${b.workspace.slug}`} className="flex min-w-0 items-center gap-2 hover:text-ember">
+                    <Link
+                      href={`/w/${b.workspace.slug}`}
+                      className="flex min-w-0 items-center gap-2 hover:text-ember"
+                    >
                       <span
                         aria-hidden
                         className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[11px] font-bold text-white"
@@ -207,21 +318,32 @@ export function AgentDetailContent({ id }: { id: string }) {
                         {b.workspace.key[0]}
                       </span>
                       <span className="min-w-0">
-                        <span className="block truncate text-[0.8125rem] font-medium">{b.workspace.name}</span>
-                        <span className="block font-mono text-[10px] text-muted-foreground">{b.workspace.key}</span>
+                        <span className="block truncate text-[0.8125rem] font-medium">
+                          {b.workspace.name}
+                        </span>
+                        <span className="block font-mono text-[10px] text-muted-foreground">
+                          {b.workspace.key}
+                        </span>
                       </span>
                     </Link>
                     <span className="inline-flex items-center gap-1.5 text-[0.8125rem]">
                       <StatusPip status={b.status} />
                       {b.status.toLowerCase()}
                     </span>
-                    <span className="text-right font-mono text-[0.8125rem] tabular-nums">{b.maxConcurrent}</span>
+                    <span className="text-right font-mono text-[0.8125rem] tabular-nums">
+                      {b.maxConcurrent}
+                    </span>
                     <span className="flex flex-wrap gap-1">
                       {b.capabilities.length === 0 ? (
-                        <span className="text-[10px] italic text-muted-foreground">inherits base</span>
+                        <span className="text-[10px] italic text-muted-foreground">
+                          inherits base
+                        </span>
                       ) : (
                         b.capabilities.map((c) => (
-                          <span key={c} className="rounded border border-border bg-background px-1 text-[10px]">
+                          <span
+                            key={c}
+                            className="rounded border border-border bg-background px-1 text-[10px]"
+                          >
                             {c}
                           </span>
                         ))
@@ -248,14 +370,16 @@ export function AgentDetailContent({ id }: { id: string }) {
               ) : (
                 <div className="flex flex-col gap-1">
                   {a.recentRuns.map((r) => (
-                    <div key={r.id} className="flex items-center gap-2 px-1.5 py-1 text-meta">
+                    <div key={r.id} className="text-meta flex items-center gap-2 px-1.5 py-1">
                       <WsChipDense ws={r.workspace} />
                       <span className="inline-flex items-center gap-1.5">
                         <StatusPip status={r.status === "ACTIVE" ? "BUSY" : r.status} />
                         <span className="text-foreground/80">{r.status.toLowerCase()}</span>
                       </span>
                       {r.issue && (
-                        <span className="font-mono text-muted-foreground/90">#{r.issue.number}</span>
+                        <span className="font-mono text-muted-foreground/90">
+                          #{r.issue.number}
+                        </span>
                       )}
                       <span className="flex-1 truncate text-muted-foreground">
                         {r.currentStep ?? r.issue?.title ?? ""}

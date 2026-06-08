@@ -20,11 +20,7 @@ import { formatChatContextSummary, useChatContext } from "@/hooks/use-chat-conte
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
-import {
-  ChatComposer,
-  type MentionableAgent,
-  type MentionablePerson,
-} from "./chat-composer";
+import { ChatComposer, type MentionableAgent, type MentionablePerson } from "./chat-composer";
 import { uploadAttachmentFile } from "@/components/attachments/attachment-upload-client";
 import { toast } from "sonner";
 import { ChatMarkdown } from "./chat-markdown";
@@ -313,11 +309,7 @@ function AgentStreamBubble({
               <ChevronRight className="h-3 w-3" />
             )}
             <span className="font-mono">
-              {isLive
-                ? "Thinking…"
-                : elapsedSec
-                  ? `Thought for ${elapsedSec}s`
-                  : "Thinking"}
+              {isLive ? "Thinking…" : elapsedSec ? `Thought for ${elapsedSec}s` : "Thinking"}
             </span>
           </button>
         )}
@@ -415,7 +407,9 @@ function renderCanvasToolPreview(call: StreamToolCall): ReactElement | null {
             Add <span className="text-foreground">{targetType}</span>
             {targetId && <span className="ml-1 font-mono text-foreground/80">{targetId}</span>}
             <span className="ml-1">at</span>
-            <span className="ml-1 font-mono">({x}, {y})</span>
+            <span className="ml-1 font-mono">
+              ({x}, {y})
+            </span>
           </p>
           <div className="flex h-12 w-full items-center justify-center rounded border border-dashed border-border bg-card/40 text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
             preview · {targetType}
@@ -472,21 +466,43 @@ function renderCanvasToolPreview(call: StreamToolCall): ReactElement | null {
           <p className="text-[0.625rem] text-muted-foreground">
             Add <span className="text-foreground">{kind}</span>
             <span className="ml-1">at</span>
-            <span className="ml-1 font-mono">({x}, {y})</span>
+            <span className="ml-1 font-mono">
+              ({x}, {y})
+            </span>
           </p>
           <svg viewBox={`0 0 200 80`} className="h-16 w-full">
             {kind === "ellipse" ? (
-              <ellipse cx={100} cy={40} rx={Math.min(80, w / 2)} ry={Math.min(30, h / 2)}
-                className="fill-transparent stroke-foreground/60" strokeWidth={1.5} />
+              <ellipse
+                cx={100}
+                cy={40}
+                rx={Math.min(80, w / 2)}
+                ry={Math.min(30, h / 2)}
+                className="fill-transparent stroke-foreground/60"
+                strokeWidth={1.5}
+              />
             ) : kind === "line" || kind === "arrow" ? (
-              <line x1={20} y1={40} x2={180} y2={40}
-                className="stroke-foreground/60" strokeWidth={1.5} />
+              <line
+                x1={20}
+                y1={40}
+                x2={180}
+                y2={40}
+                className="stroke-foreground/60"
+                strokeWidth={1.5}
+              />
             ) : kind === "text" ? (
-              <text x={100} y={45} textAnchor="middle"
-                className="fill-foreground/80 text-[14px]">{String(a.text ?? "Text")}</text>
+              <text x={100} y={45} textAnchor="middle" className="fill-foreground/80 text-[14px]">
+                {String(a.text ?? "Text")}
+              </text>
             ) : (
-              <rect x={20} y={10} width={160} height={60} rx={6}
-                className="fill-transparent stroke-foreground/60" strokeWidth={1.5} />
+              <rect
+                x={20}
+                y={10}
+                width={160}
+                height={60}
+                rx={6}
+                className="fill-transparent stroke-foreground/60"
+                strokeWidth={1.5}
+              />
             )}
           </svg>
         </div>
@@ -503,10 +519,15 @@ function renderCanvasToolPreview(call: StreamToolCall): ReactElement | null {
       return (
         <div className="space-y-1">
           <p className="text-[0.625rem] text-muted-foreground">
-            <span className="text-foreground">{shapes.length}</span> shape{shapes.length === 1 ? "" : "s"}
+            <span className="text-foreground">{shapes.length}</span> shape
+            {shapes.length === 1 ? "" : "s"}
             {Object.keys(counts).length > 0 && (
               <span className="ml-1">
-                ({Object.entries(counts).map(([k, n]) => `${k}:${n}`).join(", ")})
+                (
+                {Object.entries(counts)
+                  .map(([k, n]) => `${k}:${n}`)
+                  .join(", ")}
+                )
               </span>
             )}
           </p>
@@ -600,11 +621,7 @@ function ToolCallCard({
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-1.5 px-1.5 py-1 text-left text-muted-foreground hover:text-foreground"
       >
-        {open ? (
-          <ChevronDown className="h-3 w-3" />
-        ) : (
-          <ChevronRight className="h-3 w-3" />
-        )}
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <Wrench className="h-3 w-3 text-ember" />
         <span className="font-mono text-foreground">{call.name}</span>
         <span
@@ -624,9 +641,7 @@ function ToolCallCard({
             (hasArgs ? (
               <ChatMarkdown body={"```json\n" + json + "\n```"} />
             ) : (
-              <p className="text-[0.625rem] text-muted-foreground">
-                No input arguments.
-              </p>
+              <p className="text-[0.625rem] text-muted-foreground">No input arguments.</p>
             ))}
           {awaitingConfirm && (
             <div className="space-y-1">
@@ -660,23 +675,17 @@ function ToolCallCard({
             </div>
           )}
           {running && !awaitingConfirm && (
-            <p className="text-[0.5625rem] italic text-muted-foreground/60">
-              Running tool…
-            </p>
+            <p className="text-[0.5625rem] italic text-muted-foreground/60">Running tool…</p>
           )}
           {(call.status === "executed" || call.status === "error" || call.status === "declined") &&
             call.summary && (
               <p
                 className={cn(
                   "text-[0.625rem]",
-                  call.status === "executed"
-                    ? "text-foreground"
-                    : "text-destructive",
+                  call.status === "executed" ? "text-foreground" : "text-destructive",
                 )}
               >
-                <span className="mr-1 font-mono">
-                  {call.status === "executed" ? "ok" : "fail"}
-                </span>
+                <span className="mr-1 font-mono">{call.status === "executed" ? "ok" : "fail"}</span>
                 {call.summary}
               </p>
             )}
@@ -838,11 +847,10 @@ function ProviderOverridePopover({
               <option value="CUSTOM">CUSTOM</option>
             </select>
             <p className="text-[0.5625rem] italic text-muted-foreground/60">
-              Routes this thread to the chosen platform&apos;s configured chat
-              backend — it does not fall back to another. A provider with no
-              chat model (a pull/act CLI, or an unset API key) returns a
-              &ldquo;no chat model configured&rdquo; notice rather than
-              answering as a different platform.
+              Routes this thread to the chosen platform&apos;s configured chat backend — it does not
+              fall back to another. A provider with no chat model (a pull/act CLI, or an unset API
+              key) returns a &ldquo;no chat model configured&rdquo; notice rather than answering as
+              a different platform.
             </p>
           </div>
           <div className="space-y-1">
@@ -890,16 +898,20 @@ export function ChatThreadView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId, selectedThreadId]);
 
-  const data = selectedThreadId && selectedThreadQ.data
-    ? { thread: selectedThreadQ.data, agent: selectedThreadQ.data.agent, messages: selectedThreadQ.data.messages }
-    : threadM.data;
+  const data =
+    selectedThreadId && selectedThreadQ.data
+      ? {
+          thread: selectedThreadQ.data,
+          agent: selectedThreadQ.data.agent,
+          messages: selectedThreadQ.data.messages,
+        }
+      : threadM.data;
   const threadId = data?.thread.id;
   const providerOverride =
-    (data?.thread as { providerOverride?: AgentProvider | null } | undefined)
-      ?.providerOverride ?? null;
-  const modelOverride =
-    (data?.thread as { modelOverride?: string | null } | undefined)?.modelOverride ??
+    (data?.thread as { providerOverride?: AgentProvider | null } | undefined)?.providerOverride ??
     null;
+  const modelOverride =
+    (data?.thread as { modelOverride?: string | null } | undefined)?.modelOverride ?? null;
   const { data: diagnostics } = trpc.chat.threadDiagnostics.useQuery(
     { threadId: threadId ?? "" },
     { enabled: Boolean(threadId), staleTime: 10_000 },
@@ -1155,7 +1167,7 @@ export function ChatThreadView({
       const ctrl = new AbortController();
       streamAbortRef.current = ctrl;
 
-      setStreamBubble({
+      const initialStreamBubble = (): StreamBubble => ({
         messageId: null,
         body: "",
         thinking: "",
@@ -1165,32 +1177,8 @@ export function ChatThreadView({
         error: null,
         lastPrompt: body,
       });
+      setStreamBubble(null);
       setIsStreaming(true);
-
-      // Acceptance watchdog. The route enqueues the `meta` SSE event as its
-      // very first byte (after persisting the USER row), so a healthy stream
-      // resolves `res.ok` in well under a second. If neither acceptance nor a
-      // failure has landed within this window — a dead connection or a proxy
-      // buffering the response so the `fetch` promise never resolves — flip
-      // the optimistic bubble to "failed" so it surfaces Retry instead of
-      // spinning on "Sending…" forever. Cleared the instant the send is
-      // accepted (or otherwise resolves).
-      let acceptanceSettled = false;
-      let watchdogFired = false;
-      const ACCEPTANCE_TIMEOUT_MS = 30_000;
-      const acceptanceTimer = setTimeout(() => {
-        if (acceptanceSettled) return;
-        acceptanceSettled = true;
-        watchdogFired = true;
-        if (outboxId) markOutbox(outboxId, "failed");
-        setStreamBubble(null);
-        // Abort the stalled request so the reader/connection is released.
-        ctrl.abort();
-      }, ACCEPTANCE_TIMEOUT_MS);
-      const clearAcceptanceTimer = () => {
-        acceptanceSettled = true;
-        clearTimeout(acceptanceTimer);
-      };
 
       // Whether the server accepted the send (HTTP response received OK).
       // The route persists the USER row in a transaction *before* it returns
@@ -1229,16 +1217,12 @@ export function ChatThreadView({
           signal: ctrl.signal,
         });
       } catch (err) {
-        clearAcceptanceTimer();
         if (ctrl.signal.aborted) {
-          // Canceled before the request even returned. If the watchdog
-          // tripped, it already marked the bubble "failed" — leave it for
-          // Retry. Otherwise this is a user cancel: the message never reached
-          // the server, so drop the optimistic bubble and agent placeholder.
-          if (!watchdogFired) {
-            if (outboxId) removeOutbox(outboxId);
-            setStreamBubble(null);
-          }
+          // Canceled before the request returned. The message has no
+          // confirmed server receipt, so drop the optimistic bubble; the
+          // operator can send again if needed.
+          if (outboxId) removeOutbox(outboxId);
+          setStreamBubble(null);
           setIsStreaming(false);
           return;
         }
@@ -1247,7 +1231,6 @@ export function ChatThreadView({
         setIsStreaming(false);
         return;
       }
-      clearAcceptanceTimer();
 
       if (!res.ok || !res.body) {
         const text = await res.text().catch(() => "");
@@ -1262,6 +1245,7 @@ export function ChatThreadView({
       // delayed by a slow/hanging agent or proxy buffering).
       serverAccepted = true;
       if (outboxId) markOutbox(outboxId, "sent");
+      setStreamBubble(initialStreamBubble());
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -1296,9 +1280,7 @@ export function ChatThreadView({
         } else if (event === "thinking") {
           const { delta } = parsed as { delta?: string };
           if (typeof delta === "string") {
-            setStreamBubble((b) =>
-              b ? { ...b, thinking: b.thinking + delta } : b,
-            );
+            setStreamBubble((b) => (b ? { ...b, thinking: b.thinking + delta } : b));
           }
         } else if (event === "tool_use") {
           // Legacy fallback — only fires when the loop never surfaced a
@@ -1369,9 +1351,7 @@ export function ChatThreadView({
                 return {
                   ...b,
                   toolCalls: b.toolCalls.map((c) =>
-                    c.id === tb.id
-                      ? { ...c, requiresConfirm: true, status: "pending" }
-                      : c,
+                    c.id === tb.id ? { ...c, requiresConfirm: true, status: "pending" } : c,
                   ),
                 };
               }
@@ -1427,9 +1407,7 @@ export function ChatThreadView({
           const { message } = parsed as { message?: string };
           failSend(message ?? "Stream error");
         } else if (event === "done") {
-          setStreamBubble((b) =>
-            b ? { ...b, finishedAt: Date.now() } : b,
-          );
+          setStreamBubble((b) => (b ? { ...b, finishedAt: Date.now() } : b));
         }
       };
 
@@ -1513,9 +1491,7 @@ export function ChatThreadView({
         // bubble at the top of runStreamingSend. A user-initiated Stop
         // (STREAM_STOP_SENTINEL) is not an error and still clears.
         setStreamBubble((b) =>
-          b && b.finishedAt && (!b.error || b.error === STREAM_STOP_SENTINEL)
-            ? null
-            : b,
+          b && b.finishedAt && (!b.error || b.error === STREAM_STOP_SENTINEL) ? null : b,
         );
       }, 800);
     },
@@ -1666,9 +1642,7 @@ export function ChatThreadView({
   // by `sendingRef`; the `outbox` effect below re-kicks on every change.
   const processQueue = async () => {
     if (sendingRef.current) return;
-    const next = outboxRef.current.find(
-      (m) => m.status === "queued" || m.status === "failed",
-    );
+    const next = outboxRef.current.find((m) => m.status === "queued" || m.status === "failed");
     if (!next || next.status === "failed") return;
     sendingRef.current = true;
     markOutbox(next.id, "sending");
@@ -1722,9 +1696,7 @@ export function ChatThreadView({
         role: "USER",
         body:
           m.body ||
-          (m.displayFiles.length > 0
-            ? m.displayFiles.map((name) => `📎 ${name}`).join("\n")
-            : ""),
+          (m.displayFiles.length > 0 ? m.displayFiles.map((name) => `📎 ${name}`).join("\n") : ""),
         createdAt: new Date(),
         // Muted while queued/sending; un-mutes once the server confirms.
         isDraft: m.status === "queued" || m.status === "sending",
@@ -1763,9 +1735,7 @@ export function ChatThreadView({
             ? "runs (default)"
             : "completions (default)"),
       provider: agentFull?.provider ?? null,
-      transport: readiness
-        ? { mode: readiness.mode, label: readiness.transportLabel }
-        : null,
+      transport: readiness ? { mode: readiness.mode, label: readiness.transportLabel } : null,
       appendLocal,
       clearLocal,
       sendPrompt: handleSend,
@@ -1818,22 +1788,16 @@ export function ChatThreadView({
         createdAt: m.createdAt,
         // Delivery-receipt timestamps (USER messages only render them).
         dispatchedAt: (m as { dispatchedAt?: Date | string | null }).dispatchedAt ?? null,
-        acknowledgedAt:
-          (m as { acknowledgedAt?: Date | string | null }).acknowledgedAt ?? null,
-        outputStartedAt:
-          (m as { outputStartedAt?: Date | string | null }).outputStartedAt ?? null,
+        acknowledgedAt: (m as { acknowledgedAt?: Date | string | null }).acknowledgedAt ?? null,
+        outputStartedAt: (m as { outputStartedAt?: Date | string | null }).outputStartedAt ?? null,
         // Streaming path stashes thinking/tool_use blocks in
         // `contextSnapshot`. Forward whatever the router returns —
         // `chat-message.tsx` guards against missing/unrelated shapes.
-        contextSnapshot:
-          (m as { contextSnapshot?: unknown }).contextSnapshot ?? undefined,
+        contextSnapshot: (m as { contextSnapshot?: unknown }).contextSnapshot ?? undefined,
       })),
     [messages],
   );
-  const persistedMessageIds = useMemo(
-    () => new Set(messageRows.map((m) => m.id)),
-    [messageRows],
-  );
+  const persistedMessageIds = useMemo(() => new Set(messageRows.map((m) => m.id)), [messageRows]);
 
   // While a stream is in-flight (or held briefly after `done`), the
   // persisted AGENT row with the same messageId may also be in
@@ -1842,9 +1806,7 @@ export function ChatThreadView({
   const suppressedMessageId = streamBubble?.messageId ?? null;
   const visibleMessageRows = useMemo(
     () =>
-      suppressedMessageId
-        ? messageRows.filter((m) => m.id !== suppressedMessageId)
-        : messageRows,
+      suppressedMessageId ? messageRows.filter((m) => m.id !== suppressedMessageId) : messageRows,
     [messageRows, suppressedMessageId],
   );
 
@@ -1855,10 +1817,7 @@ export function ChatThreadView({
     [visibleMessageRows, localMessages],
   );
   const visibleOutbox = useMemo(
-    () =>
-      outbox.filter(
-        (m) => !(m.serverMessageId && persistedMessageIds.has(m.serverMessageId)),
-      ),
+    () => outbox.filter((m) => !(m.serverMessageId && persistedMessageIds.has(m.serverMessageId))),
     [outbox, persistedMessageIds],
   );
 
@@ -1875,8 +1834,7 @@ export function ChatThreadView({
     lastHeartbeatAt,
     transportMode: readiness?.mode ?? "none",
     runtimeHeartbeats:
-      agentFull?.provider === "HERMES" ||
-      agentFull?.runtime?.adapterKey === "hermes",
+      agentFull?.provider === "HERMES" || agentFull?.runtime?.adapterKey === "hermes",
   });
   const isOnDemand = availability === "on-demand";
   const isPersistentOnline = !isEphemeral && !isOnDemand && status === "ONLINE";
@@ -1934,37 +1892,31 @@ export function ChatThreadView({
   // heuristic so the first paint is sensible.
   const canonicalKnown = dispatchState !== null;
   const canonicalShowsThinking =
-    canonicalKnown &&
-    (dispatchState === "acknowledged" || dispatchState === "running");
-  const fallbackShowsThinking =
-    !canonicalKnown && lastMessageIsUser && lastMessageAge < 300_000;
-  const showThinking =
-    !composerBusy &&
-    !draft &&
-    (canonicalShowsThinking || fallbackShowsThinking);
+    canonicalKnown && (dispatchState === "acknowledged" || dispatchState === "running");
+  const fallbackShowsThinking = !canonicalKnown && lastMessageIsUser && lastMessageAge < 300_000;
+  const showThinking = !composerBusy && !draft && (canonicalShowsThinking || fallbackShowsThinking);
   const thinkingIsStale = canonicalKnown
     ? dispatchState === "stalled"
     : showThinking && lastMessageAge >= 60_000;
-  const thinkingDetail =
-    canonicalKnown
-      ? dispatchState === "wake-sent"
-        ? `Wake delivered · waiting for ${agent?.name ?? "agent"} to ack.`
-        : dispatchState === "queued"
-          ? "Queued · waking…"
-          : dispatchState === "stalled"
-            ? `${agent?.name ?? "Agent"} hasn't replied. Retry wake or kick from the status rail.`
-            : dispatchState === "acknowledged"
-              ? `${agent?.name ?? "Agent"} acknowledged the message · drafting…`
-              : diagnostics?.lastRun?.status === "ACTIVE"
-                ? `Still active: ${diagnostics.lastRun.currentStep ?? "running"}`
-                : undefined
-      : diagnostics?.lastRun
-        ? diagnostics.lastRun.status === "ACTIVE"
-          ? `Still active: ${diagnostics.lastRun.currentStep ?? "running"}`
-          : `Run ${diagnostics.lastRun.status.toLowerCase()} · inspect status rail.`
-        : diagnostics?.lastDelivery?.status === "FAILED"
-          ? "Webhook delivery failed; retry is available in the status rail."
-          : "No run/delivery record found yet; inspect agent status.";
+  const thinkingDetail = canonicalKnown
+    ? dispatchState === "wake-sent"
+      ? `Wake delivered · waiting for ${agent?.name ?? "agent"} to ack.`
+      : dispatchState === "queued"
+        ? "Queued · waking…"
+        : dispatchState === "stalled"
+          ? `${agent?.name ?? "Agent"} hasn't replied. Retry wake or kick from the status rail.`
+          : dispatchState === "acknowledged"
+            ? `${agent?.name ?? "Agent"} acknowledged the message · drafting…`
+            : diagnostics?.lastRun?.status === "ACTIVE"
+              ? `Still active: ${diagnostics.lastRun.currentStep ?? "running"}`
+              : undefined
+    : diagnostics?.lastRun
+      ? diagnostics.lastRun.status === "ACTIVE"
+        ? `Still active: ${diagnostics.lastRun.currentStep ?? "running"}`
+        : `Run ${diagnostics.lastRun.status.toLowerCase()} · inspect status rail.`
+      : diagnostics?.lastDelivery?.status === "FAILED"
+        ? "Webhook delivery failed; retry is available in the status rail."
+        : "No run/delivery record found yet; inspect agent status.";
 
   // Show a pre-typing diagnostic rail when the wake was sent but the
   // agent hasn't acknowledged yet — replaces the misleading
@@ -1974,9 +1926,7 @@ export function ChatThreadView({
     !draft &&
     !showThinking &&
     canonicalKnown &&
-    (dispatchState === "queued" ||
-      dispatchState === "wake-sent" ||
-      dispatchState === "stalled");
+    (dispatchState === "queued" || dispatchState === "wake-sent" || dispatchState === "stalled");
 
   // Suppress unused var warning — lastMessage is used for list rendering logic.
   void lastMessage;
@@ -1993,7 +1943,9 @@ export function ChatThreadView({
           {(isPersistentOnline || isPersistentBusy || isOnDemand) && (
             <span
               className="forge-breath shrink-0"
-              title={isOnDemand ? "live · on-demand" : isPersistentBusy ? "live · busy" : "live · online"}
+              title={
+                isOnDemand ? "live · on-demand" : isPersistentBusy ? "live · busy" : "live · online"
+              }
             />
           )}
           <span className="text-[0.75rem] font-medium text-foreground">{agent.name}</span>
@@ -2015,16 +1967,14 @@ export function ChatThreadView({
               Driven by chatReadiness so it reflects the attached runtime, not
               just the explicit runEngine field. Shared with the agents tab,
               status rail, wizard, and checklist via <TransportChip>. */}
-          {readiness && (
-            <TransportChip mode={readiness.mode} label={readiness.transportLabel} />
-          )}
+          {readiness && <TransportChip mode={readiness.mode} label={readiness.transportLabel} />}
 
           {/* Override pill — only when at least one override is set. */}
           {(providerOverride || modelOverride) && (
             <span className="rounded-full border border-ember/30 bg-ember/10 px-1.5 py-0 text-[0.5625rem] uppercase tracking-wider text-ember">
               via {providerOverride ?? agentFull?.provider ?? "default"}
               {modelOverride && (
-                <span className="ml-1 normal-case tracking-normal font-mono text-foreground/80">
+                <span className="ml-1 font-mono normal-case tracking-normal text-foreground/80">
                   {modelOverride}
                 </span>
               )}
@@ -2081,10 +2031,7 @@ export function ChatThreadView({
                   Talk to <span className="font-medium">{agent.name}</span>. They can read your
                   current page, look up issues, and take actions on your behalf.
                 </p>
-                <div
-                  className="grid grid-cols-2 gap-1.5"
-                  data-testid="chat-suggested-prompts"
-                >
+                <div className="grid grid-cols-2 gap-1.5" data-testid="chat-suggested-prompts">
                   {buildSuggestedPrompts(agent.name, ctx.route, ctx.issueId).map((p) => (
                     <button
                       key={p.label}
@@ -2127,9 +2074,7 @@ export function ChatThreadView({
             agentName={agent?.name}
             threadId={threadId ?? undefined}
             onRetry={
-              streamBubble.error &&
-              streamBubble.error !== STREAM_STOP_SENTINEL &&
-              threadId
+              streamBubble.error && streamBubble.error !== STREAM_STOP_SENTINEL && threadId
                 ? () => {
                     const prompt = streamBubble.lastPrompt;
                     setStreamBubble(null);
@@ -2147,9 +2092,7 @@ export function ChatThreadView({
           <AgentThinkingBubble stale={thinkingIsStale} detail={thinkingDetail} />
         ) : showWakeDiagnostic ? (
           <AgentWakeDiagnostic
-            state={
-              dispatchState as "queued" | "wake-sent" | "stalled"
-            }
+            state={dispatchState as "queued" | "wake-sent" | "stalled"}
             agentName={agent?.name}
             wakeAttempts={diagnostics?.latestUserMessage?.wakeAttempts ?? 0}
             lastWakeAt={diagnostics?.latestUserMessage?.lastWakeAt ?? null}
@@ -2160,7 +2103,7 @@ export function ChatThreadView({
       </div>
       {boundCanvas && (
         <div className="px-2 pt-1">
-          <div className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/40 px-2 py-0.5 text-meta text-muted-foreground">
+          <div className="text-meta inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/40 px-2 py-0.5 text-muted-foreground">
             <Layers className="h-3 w-3 text-ember" />
             Bound to canvas
             <span className="font-mono text-foreground">{boundCanvas.name}</span>

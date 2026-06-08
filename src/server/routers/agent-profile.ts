@@ -7,12 +7,7 @@ import {
   RunEngine,
   type PrismaClient,
 } from "@prisma/client";
-import {
-  router,
-  globalProcedure,
-  protectedProcedure,
-  instanceAdminProcedure,
-} from "@/server/trpc";
+import { router, globalProcedure, protectedProcedure, instanceAdminProcedure } from "@/server/trpc";
 
 /**
  * Global agent **profiles** — the user-owned definitions in the
@@ -38,11 +33,17 @@ async function instanceRoleOf(db: PrismaClient, userId: string) {
 
 /** Throws unless the caller owns the profile or is an instance admin. */
 async function assertCanEdit(db: PrismaClient, userId: string, profileId: string) {
-  const p = await db.agentProfile.findUnique({ where: { id: profileId }, select: { ownerId: true } });
+  const p = await db.agentProfile.findUnique({
+    where: { id: profileId },
+    select: { ownerId: true },
+  });
   if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
   if (p.ownerId === userId) return;
   if ((await instanceRoleOf(db, userId)) === "INSTANCE_ADMIN") return;
-  throw new TRPCError({ code: "FORBIDDEN", message: "Only the owner or an instance admin can edit this profile." });
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: "Only the owner or an instance admin can edit this profile.",
+  });
 }
 
 export const agentProfileRouter = router({
@@ -93,7 +94,9 @@ export const agentProfileRouter = router({
       },
     });
     if (!p) throw new TRPCError({ code: "NOT_FOUND" });
-    const visible = p.ownerId === ctx.session.user.id || p.instanceShared || (await instanceRoleOf(ctx.db, ctx.session.user.id)) === "INSTANCE_ADMIN";
+    const instanceRole = await instanceRoleOf(ctx.db, ctx.session.user.id);
+    const canEdit = p.ownerId === ctx.session.user.id || instanceRole === "INSTANCE_ADMIN";
+    const visible = canEdit || p.instanceShared;
     if (!visible) throw new TRPCError({ code: "FORBIDDEN" });
 
     // Recent runs across all this profile's bindings (read-only, cross-WS).
@@ -116,7 +119,7 @@ export const agentProfileRouter = router({
           },
         })
       : [];
-    return { ...p, ownedByMe: p.ownerId === ctx.session.user.id, recentRuns };
+    return { ...p, ownedByMe: p.ownerId === ctx.session.user.id, canEdit, recentRuns };
   }),
 
   /** Pending profile requests awaiting approval. INSTANCE_ADMIN only. */
@@ -148,6 +151,7 @@ export const agentProfileRouter = router({
         provider: z.nativeEnum(AgentProvider).default(AgentProvider.HERMES),
         runEngine: z.nativeEnum(RunEngine).nullish(),
         baseCapabilities: z.array(z.string().min(1).max(40)).default([]),
+        templateMarkdown: z.string().nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -156,7 +160,11 @@ export const agentProfileRouter = router({
         where: { ownerId_profileKey: { ownerId, profileKey: input.profileKey } },
         select: { id: true },
       });
-      if (dupe) throw new TRPCError({ code: "CONFLICT", message: "You already have a profile with this key." });
+      if (dupe)
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "You already have a profile with this key.",
+        });
       return ctx.db.agentProfile.create({
         data: {
           ...input,
@@ -211,6 +219,7 @@ export const agentProfileRouter = router({
         runtimeId: z.string().cuid().nullish(),
         baseCapabilities: z.array(z.string().min(1).max(40)).default([]),
         role: z.nativeEnum(AgentRole).default(AgentRole.WORKER),
+        templateMarkdown: z.string().nullish(),
         webhookUrl: z.string().url().max(2048).nullish(),
         instanceShared: z.boolean().default(false),
         ownerId: z.string().cuid().optional(),
@@ -222,7 +231,11 @@ export const agentProfileRouter = router({
         where: { ownerId_profileKey: { ownerId, profileKey: input.profileKey } },
         select: { id: true },
       });
-      if (dupe) throw new TRPCError({ code: "CONFLICT", message: "That owner already has a profile with this key." });
+      if (dupe)
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "That owner already has a profile with this key.",
+        });
       const { ownerId: _drop, ...rest } = input;
       // Admin-created profiles are pre-approved (requestedById stays null).
       return ctx.db.agentProfile.create({ data: { ...rest, ownerId, approvedAt: new Date() } });
@@ -242,20 +255,33 @@ export const agentProfileRouter = router({
         runtimeId: z.string().cuid().nullish(),
         baseCapabilities: z.array(z.string().min(1).max(40)).optional(),
         role: z.nativeEnum(AgentRole).optional(),
+        templateMarkdown: z.string().nullable().optional(),
         webhookUrl: z.string().url().max(2048).nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       await assertCanEdit(ctx.db, ctx.session.user.id, input.id);
       const { id, ...data } = input;
-      return ctx.db.agentProfile.update({ where: { id }, data });
+      return ctx.db.$transaction(async (tx) => {
+        const profile = await tx.agentProfile.update({ where: { id }, data });
+        if (Object.prototype.hasOwnProperty.call(data, "templateMarkdown")) {
+          await tx.agent.updateMany({
+            where: { profileId: id, archivedAt: null },
+            data: { templateMarkdown: data.templateMarkdown ?? null },
+          });
+        }
+        return profile;
+      });
     }),
 
   /** Instance admin: mark a profile available to every workspace's catalog. */
   setInstanceShared: instanceAdminProcedure
     .input(z.object({ id: z.string().cuid(), instanceShared: z.boolean() }))
     .mutation(async ({ ctx, input }) =>
-      ctx.db.agentProfile.update({ where: { id: input.id }, data: { instanceShared: input.instanceShared } }),
+      ctx.db.agentProfile.update({
+        where: { id: input.id },
+        data: { instanceShared: input.instanceShared },
+      }),
     ),
 
   /** Instance admin: force-disable (or re-enable) a profile and all its bindings. */
@@ -273,6 +299,9 @@ export const agentProfileRouter = router({
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
       await assertCanEdit(ctx.db, ctx.session.user.id, input.id);
-      return ctx.db.agentProfile.update({ where: { id: input.id }, data: { archivedAt: new Date() } });
+      return ctx.db.agentProfile.update({
+        where: { id: input.id },
+        data: { archivedAt: new Date() },
+      });
     }),
 });

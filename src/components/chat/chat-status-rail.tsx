@@ -209,9 +209,7 @@ export function ChatStatusRail({
   const remove = trpc.chat.deleteThread.useMutation({
     onSuccess: async (result) => {
       toast.success(
-        result.stoppedRun
-          ? "Conversation deleted · runtime run stopped"
-          : "Conversation deleted",
+        result.stoppedRun ? "Conversation deleted · runtime run stopped" : "Conversation deleted",
       );
       setConfirmDelete(false);
       await invalidate();
@@ -222,7 +220,7 @@ export function ChatStatusRail({
 
   if (!threadId || !agentId) {
     return (
-      <div className="rounded-xl border border-border bg-card/50 p-4 text-meta text-muted-foreground">
+      <div className="text-meta rounded-xl border border-border bg-card/50 p-4 text-muted-foreground">
         Select a conversation to inspect its connection, delivery, and run state.
       </div>
     );
@@ -241,12 +239,15 @@ export function ChatStatusRail({
   );
   const runStale = Boolean(
     diagnostics?.lastRun &&
-      diagnostics.lastRun.status === "ACTIVE" &&
-      diagnostics.lastRun.idleMs >= 60_000,
+    diagnostics.lastRun.status === "ACTIVE" &&
+    diagnostics.lastRun.idleMs >= 60_000,
   );
   const runActive = diagnostics?.lastRun?.status === "ACTIVE";
   const runBad = diagnostics?.lastRun?.status === "STALLED" || runStale;
   const deliveryBad = diagnostics?.lastDelivery?.status === "FAILED";
+  const streamBad = Boolean(
+    diagnostics?.lastAgentStreamError || diagnostics?.lastAgentStreamAborted,
+  );
   const canRetry = Boolean(diagnostics?.waitingForReply || deliveryBad);
   const canKick = Boolean(diagnostics?.lastRun?.id && runBad);
   // Stop only makes sense for a runs-backed live session — Forge can ask the
@@ -293,11 +294,7 @@ export function ChatStatusRail({
             <li className="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-subtle/60">
               {me.image ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={me.image}
-                  alt=""
-                  className="h-4 w-4 shrink-0 rounded-full object-cover"
-                />
+                <img src={me.image} alt="" className="h-4 w-4 shrink-0 rounded-full object-cover" />
               ) : (
                 <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-subtle text-[0.625rem] text-muted-foreground">
                   {(me.name ?? me.email ?? "?").slice(0, 1).toUpperCase()}
@@ -306,7 +303,7 @@ export function ChatStatusRail({
               <span className="truncate text-sm text-foreground">
                 {me.name ?? me.email ?? "You"}
               </span>
-              <span className="ml-auto text-meta text-muted-foreground">you</span>
+              <span className="text-meta ml-auto text-muted-foreground">you</span>
             </li>
           )}
         </ul>
@@ -324,7 +321,7 @@ export function ChatStatusRail({
           // the card is a div and the issue id carries the issue link (no
           // nested <a>, which is invalid HTML).
           <div className="mt-2 rounded-md border border-border bg-card/40 p-2 transition-colors hover:border-border">
-            <div className="flex items-center gap-1.5 text-meta text-muted-foreground">
+            <div className="text-meta flex items-center gap-1.5 text-muted-foreground">
               <StatusDot status={linkedIssue.status} />
               <Link
                 href={`/w/${workspaceSlug}/issues/${linkedIssue.id}`}
@@ -348,7 +345,7 @@ export function ChatStatusRail({
             </Link>
           </div>
         ) : (
-          <p className="mt-2 rounded-md border border-dashed border-border/60 bg-background/40 px-2 py-1.5 text-meta text-muted-foreground">
+          <p className="text-meta mt-2 rounded-md border border-dashed border-border/60 bg-background/40 px-2 py-1.5 text-muted-foreground">
             No linked work for this conversation.
           </p>
         )}
@@ -356,13 +353,13 @@ export function ChatStatusRail({
 
       <div className="border-t border-border/60 pt-3">
         <div className="text-sm font-semibold text-foreground">Status</div>
-        <p className="mt-1 text-meta text-muted-foreground">
+        <p className="text-meta mt-1 text-muted-foreground">
           Connection and operational state for this conversation.
         </p>
       </div>
 
       {/* Connection — provider · engine · runtime · readiness. */}
-      <div className={cn("rounded-lg border p-2 text-meta", rowTone(connectionOk))}>
+      <div className={cn("text-meta rounded-lg border p-2", rowTone(connectionOk))}>
         <div className="flex items-center gap-2 font-medium text-foreground">
           <PlugZap className="h-3.5 w-3.5" /> Connection
         </div>
@@ -426,7 +423,12 @@ export function ChatStatusRail({
         </div>
       </div>
 
-      <div className={cn("rounded-lg border p-2 text-meta", rowTone(agent ? agent.status !== "OFFLINE" : null))}>
+      <div
+        className={cn(
+          "text-meta rounded-lg border p-2",
+          rowTone(agent ? agent.status !== "OFFLINE" : null),
+        )}
+      >
         <div className="flex items-center gap-2 font-medium text-foreground">
           <Radio className="h-3.5 w-3.5" /> Agent
         </div>
@@ -443,9 +445,14 @@ export function ChatStatusRail({
         </div>
       </div>
 
-      <div className={cn("rounded-lg border p-2 text-meta", rowTone(!diagnostics?.waitingForReply))}>
+      <div
+        className={cn(
+          "text-meta rounded-lg border p-2",
+          rowTone(diagnostics ? !diagnostics.waitingForReply && !streamBad : null),
+        )}
+      >
         <div className="flex items-center gap-2 font-medium text-foreground">
-          {diagnostics?.waitingForReply ? (
+          {diagnostics?.waitingForReply || streamBad ? (
             <AlertTriangle className="h-3.5 w-3.5" />
           ) : (
             <CheckCircle2 className="h-3.5 w-3.5" />
@@ -457,9 +464,24 @@ export function ChatStatusRail({
             ? `Waiting ${duration(diagnostics.waitingMs)}`
             : "No unreplied user message"}
         </div>
+        {diagnostics?.lastAgentStreamError && (
+          <div className="mt-1 line-clamp-3 text-[0.625rem] text-amber-600 dark:text-amber-400">
+            {diagnostics.lastAgentStreamError}
+          </div>
+        )}
+        {!diagnostics?.lastAgentStreamError && diagnostics?.lastAgentStreamAborted && (
+          <div className="mt-1 line-clamp-2 text-[0.625rem] text-amber-600 dark:text-amber-400">
+            Last reply stream was interrupted before completion.
+          </div>
+        )}
       </div>
 
-      <div className={cn("rounded-lg border p-2 text-meta", rowTone(diagnostics?.lastRun ? !runBad : null))}>
+      <div
+        className={cn(
+          "text-meta rounded-lg border p-2",
+          rowTone(diagnostics?.lastRun ? !runBad : null),
+        )}
+      >
         <div className="flex items-center gap-2 font-medium text-foreground">
           <ShieldAlert className="h-3.5 w-3.5" /> Run
         </div>
@@ -471,7 +493,12 @@ export function ChatStatusRail({
       </div>
 
       {!compactLayout && (
-        <div className={cn("rounded-lg border p-2 text-meta", rowTone(diagnostics?.lastDelivery ? !deliveryBad : null))}>
+        <div
+          className={cn(
+            "text-meta rounded-lg border p-2",
+            rowTone(diagnostics?.lastDelivery ? !deliveryBad : null),
+          )}
+        >
           <div className="flex items-center gap-2 font-medium text-foreground">
             <RefreshCw className="h-3.5 w-3.5" /> Delivery
           </div>
@@ -489,7 +516,7 @@ export function ChatStatusRail({
       )}
 
       {!compactLayout && context && (
-        <div className="rounded-lg border border-border/60 bg-background/60 p-2 text-meta">
+        <div className="text-meta rounded-lg border border-border/60 bg-background/60 p-2">
           <div className="flex items-center gap-2 font-medium text-foreground">
             <Sparkles className="h-3.5 w-3.5" /> Context
           </div>
@@ -525,8 +552,7 @@ export function ChatStatusRail({
             className="w-full justify-start"
             disabled={stop.isPending || !diagnostics?.lastRun?.id}
             onClick={() =>
-              diagnostics?.lastRun?.id &&
-              stop.mutate({ threadId, runId: diagnostics.lastRun.id })
+              diagnostics?.lastRun?.id && stop.mutate({ threadId, runId: diagnostics.lastRun.id })
             }
           >
             <Square className="mr-1.5 h-3.5 w-3.5" /> Stop run
@@ -538,8 +564,7 @@ export function ChatStatusRail({
           className="w-full justify-start"
           disabled={!canKick || kick.isPending || !diagnostics?.lastRun?.id}
           onClick={() =>
-            diagnostics?.lastRun?.id &&
-            kick.mutate({ threadId, runId: diagnostics.lastRun.id })
+            diagnostics?.lastRun?.id && kick.mutate({ threadId, runId: diagnostics.lastRun.id })
           }
         >
           <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Kick run
@@ -558,9 +583,7 @@ export function ChatStatusRail({
           size="sm"
           className="w-full justify-start"
           disabled={archive.isPending || restore.isPending}
-          onClick={() =>
-            archived ? restore.mutate({ threadId }) : archive.mutate({ threadId })
-          }
+          onClick={() => (archived ? restore.mutate({ threadId }) : archive.mutate({ threadId }))}
         >
           <CircleSlash className="mr-1.5 h-3.5 w-3.5" />
           {archived ? "Restore conversation" : "Archive conversation"}
