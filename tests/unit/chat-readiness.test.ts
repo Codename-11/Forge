@@ -36,6 +36,17 @@ describe("resolveChatReadiness", () => {
     expect(r.mode).toBe("runs");
     expect(r.reason).toBe("runs-connector");
     expect(r.transportLabel).toBe("Hermes env");
+    expect(r.capabilities).toMatchObject({
+      streaming: true,
+      thinking: true,
+      tools: true,
+      approvals: true,
+      stop: true,
+      runs: true,
+      dispatch: false,
+      memory: true,
+      diagnostics: true,
+    });
   });
 
   it("Hermes RUNS agent is ready with a bound runtime", () => {
@@ -113,6 +124,16 @@ describe("resolveChatReadiness", () => {
     const r = resolveChatReadiness({ provider: "CODEX", runEngine: "COMPLETIONS", runtime: null });
     expect(r.ready).toBe(true);
     expect(r.reason).toBe("model-configured");
+    expect(r.capabilities).toMatchObject({
+      streaming: true,
+      thinking: true,
+      tools: true,
+      approvals: true,
+      stop: true,
+      runs: false,
+      dispatch: false,
+      vision: true,
+    });
   });
 
   it("a DB-aware providerAvailable predicate marks a keyless provider ready", () => {
@@ -138,6 +159,17 @@ describe("resolveChatReadiness", () => {
     expect(r.ready).toBe(true);
     expect(r.mode).toBe("dispatch");
     expect(r.reason).toBe("dispatch-path");
+    expect(r.capabilities).toMatchObject({
+      streaming: false,
+      thinking: false,
+      tools: false,
+      approvals: false,
+      stop: false,
+      dispatch: true,
+      retry: true,
+      files: true,
+      diagnostics: true,
+    });
   });
 
   it("a per-agent webhook counts as a dispatch path", () => {

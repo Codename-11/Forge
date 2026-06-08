@@ -526,6 +526,10 @@ export function ChatComposer({
   // still drives the send-button spinner + the "sending…" footer hint.
   const busy = disabled || commandPending;
   const hasMentionables = mentionableAgents.length > 0 || mentionablePeople.length > 0;
+  const includedAttachments = attachments.filter((a) => a.includeInContext);
+  const approximateContextTokens =
+    Math.ceil((body.length + contextSummary.join(" ").length) / 4) +
+    includedAttachments.length * 120;
 
   const popoverNode = useMemo(() => {
     if (popoverOpen && popoverMatches.length > 0) {
@@ -702,33 +706,50 @@ export function ChatComposer({
             Context to send
             <span className="text-muted-foreground/70">
               · {contextSummary.length} page item{contextSummary.length === 1 ? "" : "s"},{" "}
-              {attachments.filter((a) => a.includeInContext).length}/{attachments.length} file
+              {includedAttachments.length}/{attachments.length} file
               {attachments.length === 1 ? "" : "s"}
             </span>
           </button>
           {contextOpen && (
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {contextSummary.map((item) => (
-                <span
-                  key={item}
-                  className="rounded border border-border/60 bg-background/60 px-1.5 py-0.5 font-mono text-[0.625rem]"
-                >
-                  {item}
+            <div className="mt-1.5 space-y-1.5">
+              <div className="flex flex-wrap gap-1.5">
+                <span className="rounded border border-border/60 bg-background/60 px-1.5 py-0.5 text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                  smart context
                 </span>
-              ))}
-              {attachments.map((draft) => (
-                <span
-                  key={draft.id}
-                  className={cn(
-                    "rounded border px-1.5 py-0.5 font-mono text-[0.625rem]",
-                    draft.includeInContext
-                      ? "border-emerald-500/30 bg-emerald-500/10"
-                      : "border-border bg-subtle/40 line-through opacity-70",
-                  )}
-                >
-                  {draft.includeInContext ? "file" : "excluded"}: {draft.file.name || "attachment"}
+                <span className="rounded border border-border/60 bg-background/60 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">
+                  approx {Math.max(0, approximateContextTokens).toLocaleString()} tokens
                 </span>
-              ))}
+                {includedAttachments.length > 0 && (
+                  <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[0.625rem] text-emerald-700 dark:text-emerald-300">
+                    {includedAttachments.length} file
+                    {includedAttachments.length === 1 ? "" : "s"} included
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {contextSummary.map((item) => (
+                  <span
+                    key={item}
+                    className="rounded border border-border/60 bg-background/60 px-1.5 py-0.5 font-mono text-[0.625rem]"
+                  >
+                    {item}
+                  </span>
+                ))}
+                {attachments.map((draft) => (
+                  <span
+                    key={draft.id}
+                    className={cn(
+                      "rounded border px-1.5 py-0.5 font-mono text-[0.625rem]",
+                      draft.includeInContext
+                        ? "border-emerald-500/30 bg-emerald-500/10"
+                        : "border-border bg-subtle/40 line-through opacity-70",
+                    )}
+                  >
+                    {draft.includeInContext ? "file" : "excluded"}:{" "}
+                    {draft.file.name || "attachment"}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
         </div>
