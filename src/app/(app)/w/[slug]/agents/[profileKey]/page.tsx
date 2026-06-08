@@ -191,6 +191,7 @@ export default function AgentDetailPage() {
                     <WebhookHealthCard agentId={agent.id} focus={healthFocus} />
                   )}
                   <DispatchEligibilityCard agent={agent} focus={healthFocus} />
+                  <PromptConfigCard agent={agent} />
                 </aside>
               </div>
             </>
@@ -1439,6 +1440,54 @@ function ReadinessRow({ label, children }: { label: string; children: React.Reac
       <span>{label}</span>
       <span className="min-w-0 truncate text-right text-foreground/80">{children}</span>
     </div>
+  );
+}
+
+function PromptConfigCard({ agent }: { agent: AgentRow }) {
+  const template = agent.templateMarkdown ?? "";
+  const effectiveSystemPrompt =
+    `You are ${agent.name}. You're chatting with the operator inside Forge, a project ` +
+    `management workspace. Be concise and direct. ` +
+    (agent.capabilities.length > 0
+      ? `Your capabilities: ${agent.capabilities.join(", ")}.\n\n`
+      : "") +
+    (template ? `${template}\n` : "");
+
+  return (
+    <Section
+      title={
+        <span className="flex items-center gap-2">
+          <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+          Prompt &amp; config
+        </span>
+      }
+    >
+      <Card className="space-y-3 p-3 text-[0.75rem]">
+        <ReadinessRow label="Provider">{agent.provider}</ReadinessRow>
+        <ReadinessRow label="Engine">{agent.runEngine ?? "integration default"}</ReadinessRow>
+        <ReadinessRow label="Runtime mode">
+          {agent.runtimeMode.toLowerCase().replace("_", " ")}
+        </ReadinessRow>
+        <div>
+          <div className="text-meta text-muted-foreground">Template markdown</div>
+          {template ? (
+            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background/60 p-2 font-mono text-[0.6875rem] leading-relaxed">
+              {template}
+            </pre>
+          ) : (
+            <div className="text-meta mt-1 rounded-md border border-dashed border-border/70 bg-background/40 p-2 text-muted-foreground">
+              No binding-level template configured.
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="text-meta text-muted-foreground">Effective chat system prompt</div>
+          <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background/60 p-2 font-mono text-[0.6875rem] leading-relaxed text-foreground/85">
+            {effectiveSystemPrompt}
+          </pre>
+        </div>
+      </Card>
+    </Section>
   );
 }
 

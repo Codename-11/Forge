@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-07 — Hermes chat send watchdog and admin prompt visibility
+
+Fixed the live Victor/Fixtor chat failure mode where the browser marked a
+message "Failed to send" even though Forge had already persisted the USER row.
+The cause was the chat client's 30s acceptance watchdog: Hermes RUNS turns with
+tool activity were being aborted at ~30s, leaving interrupted AGENT rows and a
+false failed outbox bubble. The client no longer aborts accepted-but-slow
+streams on a fixed timer, and it no longer renders a blank agent stream bubble
+before the server has accepted the stream.
+
+Hardened `/api/chat/stream` so the SSE route starts its async run bridge in the
+background instead of returning an async `ReadableStream.start` promise, making
+headers/meta available immediately. RUNS start failures, provider error events,
+and client disconnects are now logged and persisted into the AGENT message
+`contextSnapshot` with redaction; `chat.threadDiagnostics` exposes those fields
+and the chat status rail shows the latest stream error/interrupt.
+
+Exposed agent prompt/runtime config more cleanly: global agent profile detail now
+shows and edits `templateMarkdown` with an effective system-prompt preview, the
+profile router accepts prompt data on create/request/update, and profile prompt
+saves sync active workspace bindings. Workspace agent detail now shows a
+read-only effective prompt/config card for the live binding.
+
+Verification: focused runtime/chat Vitest coverage, `pnpm exec tsc --noEmit
+--pretty false`, and `pnpm lint` pass.
+
 ## 2026-06-07 — Hermes gateway health display hotfix
 
 Fixed the Hermes runtime health display so a fresh gateway contract probe reads
