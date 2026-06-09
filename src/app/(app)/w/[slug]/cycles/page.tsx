@@ -12,6 +12,7 @@ import { CyclePlanningBoard } from "@/components/cycles/cycle-planning-board";
 import { CycleBacklogPanel } from "@/components/cycles/cycle-backlog-panel";
 import { EditCycleDialog } from "@/components/cycles/edit-cycle-dialog";
 import { NewCycleDialog } from "@/components/cycles/new-cycle-dialog";
+import { RolloverCycleDialog } from "@/components/cycles/rollover-cycle-dialog";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 
@@ -43,8 +44,12 @@ export default function CyclesPage() {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const activeIdx = selectedIdx ?? defaultIndex;
   const cycle = ordered[activeIdx] ?? null;
+  const activeCycleName = ordered.find((c) => c.status === CycleStatus.ACTIVE)?.name ?? null;
+  const otherActiveCycleName =
+    ordered.find((c) => c.status === CycleStatus.ACTIVE && c.id !== cycle?.id)?.name ?? null;
   const [backlogOpen, setBacklogOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
+  const [rolloverOpen, setRolloverOpen] = useState(false);
 
   const { data: detail } = trpc.cycle.get.useQuery({ id: cycle?.id ?? "" }, { enabled: !!cycle });
 
@@ -53,18 +58,6 @@ export default function CyclesPage() {
       utils.issue.list.invalidate();
       utils.cycle.get.invalidate({ id: cycle?.id });
       toast.success("Planned into sprint.");
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const rollover = trpc.cycle.rollover.useMutation({
-    onSuccess: (res) => {
-      utils.cycle.list.invalidate();
-      utils.cycle.get.invalidate();
-      utils.issue.list.invalidate();
-      toast.success(`Rolled over ${res.rolled} issue(s).`);
-      setSelectedIdx(null);
-      router.refresh();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -166,15 +159,15 @@ export default function CyclesPage() {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={cycle.status !== CycleStatus.ACTIVE || rollover.isPending}
+                disabled={cycle.status !== CycleStatus.ACTIVE}
                 title={
                   cycle.status !== CycleStatus.ACTIVE
                     ? "Rollover is only available for the active sprint"
                     : "Move incomplete issues into the next sprint"
                 }
-                onClick={() => rollover.mutate({ fromCycleId: cycle.id })}
+                onClick={() => setRolloverOpen(true)}
               >
-                {rollover.isPending ? "Rolling over…" : "Rollover incomplete"}
+                Rollover incomplete
               </Button>
             )}
             <Button variant="ember" size="sm" onClick={() => setCreateOpen(true)}>
@@ -210,8 +203,7 @@ export default function CyclesPage() {
               <CycleSummaryCard
                 cycle={cycle}
                 issues={detail?.issues ?? []}
-                onRollover={() => rollover.mutate({ fromCycleId: cycle.id })}
-                rolloverPending={rollover.isPending}
+                onRollover={() => setRolloverOpen(true)}
               />
             </div>
 
@@ -228,7 +220,11 @@ export default function CyclesPage() {
                   }
                 />
               </div>
-              <CycleBacklogPanel open={backlogOpen} onOpenChange={setBacklogOpen} />
+              <CycleBacklogPanel
+                open={backlogOpen}
+                onOpenChange={setBacklogOpen}
+                onPlanIssue={(issueId) => plan.mutate({ cycleId: cycle.id, issueIds: [issueId] })}
+              />
             </div>
           </>
         ) : null}
@@ -242,11 +238,27 @@ export default function CyclesPage() {
           utils.cycle.list.invalidate();
           if (cycle?.id) utils.cycle.get.invalidate({ id: cycle.id });
         }}
+        onDeleted={() => {
+          setSelectedIdx(null);
+          router.refresh();
+        }}
+        activeCycleName={otherActiveCycleName}
+      />
+      <RolloverCycleDialog
+        open={rolloverOpen}
+        cycle={cycle}
+        onClose={() => setRolloverOpen(false)}
+        onRolled={() => {
+          setSelectedIdx(null);
+          router.refresh();
+        }}
       />
       <NewCycleDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         onCreated={() => setSelectedIdx(null)}
+        defaultLengthDays={ws.cycleLengthDays}
+        activeCycleName={activeCycleName}
       />
     </>
   );

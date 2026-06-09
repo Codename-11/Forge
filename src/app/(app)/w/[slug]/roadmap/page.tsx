@@ -1,17 +1,22 @@
 "use client";
 import type { CSSProperties } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { CalendarRange, Filter, Map as MapIcon } from "lucide-react";
+import { CalendarDays, CalendarRange, Filter, Map as MapIcon, Pencil, X } from "lucide-react";
 import { CycleStatus, InitiativeStatus } from "@prisma/client";
+import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, MOTION, Skeleton } from "@/components/ui";
+import { Input } from "@/components/ui/input";
+import { QuickForm, SidePanel } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 
 type Grain = "week" | "month";
+type DateFilter = "all" | "dated" | "partial" | "missing";
+type ProgressFilter = "all" | "no-issues" | "not-started" | "in-progress" | "complete";
 
 type TimelineTick = {
   date: Date;
@@ -32,6 +37,7 @@ type RoadmapProject = {
   name: string;
   key: string;
   color: string | null;
+  initiativeId?: string | null;
   startDate: Date | string | null;
   targetDate: Date | string | null;
   _count?: { issues: number; doneIssues?: number };
@@ -78,6 +84,11 @@ export default function RoadmapPage() {
   const { data: cycles } = trpc.cycle.list.useQuery({});
 
   const [grain, setGrain] = useState<Grain>("week");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [initiativeFilter, setInitiativeFilter] = useState<string>("all");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [progressFilter, setProgressFilter] = useState<ProgressFilter>("all");
+  const [editingProject, setEditingProject] = useState<RoadmapProject | null>(null);
 
   const active = useMemo(
     () =>
@@ -88,15 +99,48 @@ export default function RoadmapPage() {
   );
 
   const today = useMemo(() => startOfUtcDay(new Date()), []);
+  const projectItems = useMemo(() => projects?.items ?? [], [projects]);
+  const projectFiltersActive = dateFilter !== "all" || progressFilter !== "all";
+  const filtersActive =
+    initiativeFilter !== "all" || dateFilter !== "all" || progressFilter !== "all";
+
+  const filteredProjects = useMemo(() => {
+    return projectItems.filter((p) => {
+      if (initiativeFilter !== "all" && (p.initiativeId ?? "_none") !== initiativeFilter) {
+        return false;
+      }
+
+      const hasStart = !!p.startDate;
+      const hasTarget = !!p.targetDate;
+      if (dateFilter === "dated" && (!hasStart || !hasTarget)) return false;
+      if (dateFilter === "partial" && Number(hasStart) + Number(hasTarget) !== 1) return false;
+      if (dateFilter === "missing" && (hasStart || hasTarget)) return false;
+
+      const total = p._count?.issues ?? 0;
+      const done = p._count?.doneIssues ?? 0;
+      if (progressFilter === "no-issues" && total !== 0) return false;
+      if (progressFilter === "not-started" && (total === 0 || done !== 0)) return false;
+      if (progressFilter === "in-progress" && (total === 0 || done === 0 || done >= total)) {
+        return false;
+      }
+      if (progressFilter === "complete" && (total === 0 || done < total)) return false;
+
+      return true;
+    });
+  }, [dateFilter, initiativeFilter, progressFilter, projectItems]);
+
+  const visibleInitiatives = useMemo(() => {
+    if (initiativeFilter === "_none") return [];
+    return active.filter((ini) => initiativeFilter === "all" || ini.id === initiativeFilter);
+  }, [active, initiativeFilter]);
 
   const { rangeStart, rangeEnd, totalDays } = useMemo(() => {
-    const projs = projects?.items ?? [];
     const anchors: Date[] = [];
-    for (const p of projs) {
+    for (const p of filteredProjects) {
       if (p.startDate) anchors.push(new Date(p.startDate));
       if (p.targetDate) anchors.push(new Date(p.targetDate));
     }
-    for (const i of active) {
+    for (const i of visibleInitiatives) {
       if (i.targetDate) anchors.push(new Date(i.targetDate));
     }
     for (const c of cycles ?? []) {
@@ -106,9 +150,7 @@ export default function RoadmapPage() {
     }
 
     const earliest =
-      anchors.length > 0
-        ? new Date(Math.min(...anchors.map((d) => d.getTime())))
-        : today;
+      anchors.length > 0 ? new Date(Math.min(...anchors.map((d) => d.getTime()))) : today;
     const latest =
       anchors.length > 0
         ? new Date(Math.max(...anchors.map((d) => d.getTime())))
@@ -121,7 +163,9 @@ export default function RoadmapPage() {
       start.setUTCDate(1);
     }
 
-    const end = startOfUtcDay(new Date(Math.max(latest.getTime(), addUtcDays(today, 60).getTime())));
+    const end = startOfUtcDay(
+      new Date(Math.max(latest.getTime(), addUtcDays(today, 60).getTime())),
+    );
     if (grain === "week") {
       end.setUTCDate(end.getUTCDate() + (7 - (end.getUTCDay() || 7)));
     } else {
@@ -133,7 +177,7 @@ export default function RoadmapPage() {
       rangeEnd: end,
       totalDays: Math.max(14, dayDiff(start, end)),
     };
-  }, [projects, active, cycles, grain, today]);
+  }, [filteredProjects, visibleInitiatives, cycles, grain, today]);
 
   const dayWidth = grain === "week" ? 14 : 6;
   const timelineWidth = Math.max(MIN_TIMELINE_WIDTH, totalDays * dayWidth);
@@ -180,27 +224,34 @@ export default function RoadmapPage() {
 
   const projectsByInitiative = useMemo(() => {
     const map = new Map<string | null, RoadmapProject[]>();
-    for (const p of projects?.items ?? []) {
+    for (const p of filteredProjects) {
       const key = p.initiativeId ?? null;
       const arr = map.get(key) ?? [];
       arr.push(p);
       map.set(key, arr);
     }
     return map;
-  }, [projects]);
+  }, [filteredProjects]);
 
   const rows = useMemo(() => {
-    const initiativeRows = active.map((ini) => ({
-      initiative: {
-        id: ini.id,
-        name: ini.name,
-        color: ini.color,
-      },
-      href: `/w/${ws.slug}/initiatives/${ini.slug}`,
-      projects: projectsByInitiative.get(ini.id) ?? [],
-    }));
+    const initiativeRows = visibleInitiatives
+      .map((ini) => ({
+        initiative: {
+          id: ini.id,
+          name: ini.name,
+          color: ini.color,
+        },
+        href: `/w/${ws.slug}/initiatives/${ini.slug}`,
+        projects: projectsByInitiative.get(ini.id) ?? [],
+      }))
+      .filter((row) => !projectFiltersActive || row.projects.length > 0);
     const looseProjects = projectsByInitiative.get(null) ?? [];
-    if (looseProjects.length === 0) return initiativeRows;
+    if (
+      looseProjects.length === 0 ||
+      (initiativeFilter !== "all" && initiativeFilter !== "_none")
+    ) {
+      return initiativeRows;
+    }
     return [
       ...initiativeRows,
       {
@@ -213,7 +264,7 @@ export default function RoadmapPage() {
         projects: looseProjects,
       },
     ];
-  }, [active, projectsByInitiative, ws.slug]);
+  }, [initiativeFilter, projectFiltersActive, projectsByInitiative, visibleInitiatives, ws.slug]);
 
   if (iLoading) {
     return (
@@ -228,7 +279,7 @@ export default function RoadmapPage() {
     );
   }
 
-  const totalProjects = projects?.items.length ?? 0;
+  const totalProjects = projectItems.length;
   if (active.length === 0 && totalProjects === 0) {
     return (
       <>
@@ -260,11 +311,11 @@ export default function RoadmapPage() {
         actions={
           <div className="flex items-center gap-2">
             <Button
-              variant="outline"
+              variant={filtersOpen || filtersActive ? "subtle" : "outline"}
               size="sm"
               className="h-7"
-              title="Filters are not wired yet"
-              disabled
+              onClick={() => setFiltersOpen((open) => !open)}
+              aria-pressed={filtersOpen}
             >
               <Filter className="h-3.5 w-3.5" />
               Filter
@@ -292,6 +343,75 @@ export default function RoadmapPage() {
       />
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
+        {filtersOpen && (
+          <div
+            data-testid="roadmap-filters"
+            className="mb-3 flex w-max min-w-full flex-wrap items-end gap-2 rounded-lg border border-border bg-card/40 p-3"
+          >
+            <label className="space-y-1">
+              <span className="text-meta block text-muted-foreground">Initiative</span>
+              <select
+                value={initiativeFilter}
+                onChange={(e) => setInitiativeFilter(e.target.value)}
+                className="focus-ring h-8 min-w-44 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+              >
+                <option value="all">All initiatives</option>
+                <option value="_none">Unaffiliated projects</option>
+                {active.map((ini) => (
+                  <option key={ini.id} value={ini.id}>
+                    {ini.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-meta block text-muted-foreground">Dates</span>
+              <select
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value as DateFilter)}
+                className="focus-ring h-8 min-w-36 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+              >
+                <option value="all">All dates</option>
+                <option value="dated">Fully dated</option>
+                <option value="partial">Partial dates</option>
+                <option value="missing">Missing dates</option>
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-meta block text-muted-foreground">Progress</span>
+              <select
+                value={progressFilter}
+                onChange={(e) => setProgressFilter(e.target.value as ProgressFilter)}
+                className="focus-ring h-8 min-w-36 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+              >
+                <option value="all">All progress</option>
+                <option value="no-issues">No issues</option>
+                <option value="not-started">Not started</option>
+                <option value="in-progress">In progress</option>
+                <option value="complete">Complete</option>
+              </select>
+            </label>
+            {filtersActive && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8"
+                onClick={() => {
+                  setInitiativeFilter("all");
+                  setDateFilter("all");
+                  setProgressFilter("all");
+                }}
+              >
+                <X className="h-3.5 w-3.5" />
+                Clear
+              </Button>
+            )}
+            <span className="text-meta ml-auto self-center text-muted-foreground">
+              {filteredProjects.length} of {totalProjects} projects
+            </span>
+          </div>
+        )}
         <div className="w-max min-w-full overflow-hidden rounded-lg border border-border bg-card/40">
           <div
             className="sticky top-0 z-20 grid border-b border-border bg-card/95 backdrop-blur"
@@ -300,41 +420,45 @@ export default function RoadmapPage() {
             <div className="sticky left-0 z-30 flex h-11 items-center gap-2 border-r border-border bg-card/95 px-3">
               <CalendarRange className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="text-xs font-medium">Initiatives</span>
-              <span className="ml-auto text-meta text-muted-foreground">
-                {rows.length}
-              </span>
+              <span className="text-meta ml-auto text-muted-foreground">{rows.length}</span>
             </div>
             <div className="relative h-11" style={{ width: timelineWidth }}>
-              <TimelineScaffold
-                ticks={ticks}
-                cycleBands={cycleBands}
-                todayX={todayX}
-                showLabels
-              />
+              <TimelineScaffold ticks={ticks} cycleBands={cycleBands} todayX={todayX} showLabels />
             </div>
           </div>
 
-          <ul>
-            {rows.map((row) => (
-              <li key={row.initiative.id} className="border-b border-border last:border-0">
-                <RoadmapRow
-                  initiative={row.initiative}
-                  projects={row.projects}
-                  href={row.href}
-                  labelWidth={LABEL_WIDTH}
-                  timelineWidth={timelineWidth}
-                  ticks={ticks}
-                  cycleBands={cycleBands}
-                  todayX={todayX}
-                  xFor={xFor}
-                  dayWidth={dayWidth}
-                />
-              </li>
-            ))}
-          </ul>
+          {rows.length === 0 ? (
+            <div className="flex min-h-40 items-center justify-center p-6">
+              <EmptyState
+                variant="card"
+                title="No roadmap items match"
+                description="Clear filters or update project dates to bring work back into this view."
+              />
+            </div>
+          ) : (
+            <ul>
+              {rows.map((row) => (
+                <li key={row.initiative.id} className="border-b border-border last:border-0">
+                  <RoadmapRow
+                    initiative={row.initiative}
+                    projects={row.projects}
+                    href={row.href}
+                    labelWidth={LABEL_WIDTH}
+                    timelineWidth={timelineWidth}
+                    ticks={ticks}
+                    cycleBands={cycleBands}
+                    todayX={todayX}
+                    xFor={xFor}
+                    dayWidth={dayWidth}
+                    onEditProject={setEditingProject}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
-        <div className="mt-3 flex w-max min-w-full flex-wrap items-center gap-3 text-meta text-muted-foreground">
+        <div className="text-meta mt-3 flex w-max min-w-full flex-wrap items-center gap-3 text-muted-foreground">
           <LegendSwatch style={{ background: "hsl(var(--ember) / 0.18)" }} label="Active sprint" />
           <LegendSwatch style={{ background: "hsl(var(--ember) / 0.06)" }} label="Planned sprint" />
           <LegendSwatch
@@ -356,6 +480,11 @@ export default function RoadmapPage() {
           </span>
         </div>
       </div>
+      <RoadmapDateEditor
+        project={editingProject}
+        open={!!editingProject}
+        onClose={() => setEditingProject(null)}
+      />
     </>
   );
 }
@@ -416,6 +545,7 @@ function RoadmapRow({
   todayX,
   xFor,
   dayWidth,
+  onEditProject,
 }: {
   initiative: { id: string; name: string; color: string | null };
   projects: RoadmapProject[];
@@ -427,6 +557,7 @@ function RoadmapRow({
   todayX: number | null;
   xFor: (d: Date) => number;
   dayWidth: number;
+  onEditProject: (project: RoadmapProject) => void;
 }) {
   const ws = useWorkspace();
   const datedCount = projects.filter((p) => p.startDate || p.targetDate).length;
@@ -462,16 +593,14 @@ function RoadmapRow({
         <div className="text-meta ml-5 mt-0.5 text-muted-foreground">
           {projects.length} {projects.length === 1 ? "project" : "projects"}
         </div>
-        <div className="text-meta ml-5 mt-0.5 text-muted-foreground/70">
-          {datedCount} dated
-        </div>
+        <div className="text-meta ml-5 mt-0.5 text-muted-foreground/70">{datedCount} dated</div>
       </div>
 
       <div className="relative px-2 py-3" style={{ minHeight: rowHeight }}>
         <TimelineScaffold ticks={ticks} cycleBands={cycleBands} todayX={todayX} />
         <div className="relative">
           {projects.length === 0 && (
-            <div className="flex h-7 items-center text-meta italic text-muted-foreground/70">
+            <div className="text-meta flex h-7 items-center italic text-muted-foreground/70">
               No projects
             </div>
           )}
@@ -484,6 +613,7 @@ function RoadmapRow({
               timelineWidth={timelineWidth}
               dayWidth={dayWidth}
               href={`/w/${ws.slug}/projects/${project.id}`}
+              onEdit={() => onEditProject(project)}
             />
           ))}
         </div>
@@ -499,6 +629,7 @@ function ProjectTimelineItem({
   timelineWidth,
   dayWidth,
   href,
+  onEdit,
 }: {
   project: RoadmapProject;
   initiativeColor: string | null;
@@ -506,6 +637,7 @@ function ProjectTimelineItem({
   timelineWidth: number;
   dayWidth: number;
   href: string;
+  onEdit: () => void;
 }) {
   const accent = project.color ?? initiativeColor ?? "hsl(var(--muted-foreground))";
   const start = project.startDate ? new Date(project.startDate) : null;
@@ -516,18 +648,26 @@ function ProjectTimelineItem({
 
   if (!start && !end) {
     return (
-      <Link
-        href={href}
+      <div
         className={cn(
-          "mb-1.5 flex h-6 max-w-[360px] items-center gap-1.5 rounded-md border border-dashed border-border bg-background/60 px-2 text-meta text-muted-foreground hover:border-ember/40 hover:text-foreground",
+          "text-meta mb-1.5 flex h-6 max-w-[360px] items-center gap-1.5 rounded-md border border-dashed border-border bg-background/60 px-2 text-muted-foreground hover:border-ember/40 hover:text-foreground",
           MOTION.fast,
         )}
         title={`${project.key} · ${project.name} has no roadmap dates`}
       >
-        <span className="text-id shrink-0 font-mono tabular-nums">{project.key}</span>
-        <span className="truncate">{project.name}</span>
-        <span className="ml-auto shrink-0 text-[0.625rem] uppercase tracking-wider">No dates</span>
-      </Link>
+        <Link href={href} className="flex min-w-0 flex-1 items-center gap-1.5">
+          <span className="text-id shrink-0 font-mono tabular-nums">{project.key}</span>
+          <span className="truncate">{project.name}</span>
+        </Link>
+        <button
+          type="button"
+          className="focus-ring ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[0.625rem] uppercase tracking-wider hover:bg-subtle hover:text-foreground"
+          onClick={onEdit}
+          title="Set roadmap dates"
+        >
+          Set dates
+        </button>
+      </div>
     );
   }
 
@@ -536,8 +676,7 @@ function ProjectTimelineItem({
   const width = Math.max(48, Math.min(timelineWidth - left, targetRight - left));
 
   return (
-    <Link
-      href={href}
+    <div
       className={cn(
         "relative mb-1.5 flex h-6 items-center overflow-hidden rounded-md border text-[0.6875rem] font-medium hover:opacity-90",
         MOTION.fast,
@@ -565,26 +704,159 @@ function ProjectTimelineItem({
           }}
         />
       ) : null}
-      <span className="relative flex min-w-0 items-center gap-1.5 px-2 text-foreground">
+      <Link
+        href={href}
+        className="relative flex min-w-0 flex-1 items-center gap-1.5 px-2 text-foreground"
+      >
         <span className="text-id shrink-0 font-mono tabular-nums text-muted-foreground">
           {project.key}
         </span>
         <span className="truncate">{project.name}</span>
-      </span>
-    </Link>
+      </Link>
+      <button
+        type="button"
+        className="focus-ring relative mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-background/70 hover:text-foreground"
+        onClick={onEdit}
+        aria-label={`Edit dates for ${project.name}`}
+        title="Edit dates"
+      >
+        <Pencil className="h-3 w-3" />
+      </button>
+    </div>
   );
 }
 
-function LegendSwatch({
-  style,
-  label,
+function dateInputValue(value: Date | string | null | undefined): string {
+  return value ? new Date(value).toISOString().slice(0, 10) : "";
+}
+
+function parseDateInput(value: string): Date | null {
+  return value ? new Date(`${value}T00:00:00.000Z`) : null;
+}
+
+function RoadmapDateEditor({
+  project,
+  open,
+  onClose,
 }: {
-  style: CSSProperties;
-  label: string;
+  project: RoadmapProject | null;
+  open: boolean;
+  onClose: () => void;
 }) {
+  const utils = trpc.useUtils();
+  const [startDate, setStartDate] = useState("");
+  const [targetDate, setTargetDate] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !project) return;
+    setStartDate(dateInputValue(project.startDate));
+    setTargetDate(dateInputValue(project.targetDate));
+    setError(null);
+  }, [open, project]);
+
+  const update = trpc.project.update.useMutation({
+    onSuccess: () => {
+      toast.success("Roadmap dates updated.");
+      utils.project.list.invalidate();
+      onClose();
+    },
+    onError: (e) => setError(e.message),
+  });
+
+  async function handleSave() {
+    if (!project) return;
+    const start = parseDateInput(startDate);
+    const target = parseDateInput(targetDate);
+    if (start && target && target.getTime() < start.getTime()) {
+      setError("Target date must be on or after the start date.");
+      return;
+    }
+    setError(null);
+    await update.mutateAsync({
+      id: project.id,
+      startDate: start,
+      targetDate: target,
+    });
+  }
+
+  return (
+    <SidePanel
+      open={open && !!project}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+      title="Project roadmap dates"
+      description={project ? `${project.key} · ${project.name}` : undefined}
+      footer={
+        <div className="flex w-full items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setStartDate("");
+              setTargetDate("");
+            }}
+            disabled={update.isPending}
+          >
+            Clear dates
+          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onClose}
+              disabled={update.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="ember"
+              size="sm"
+              onClick={handleSave}
+              disabled={update.isPending}
+            >
+              <CalendarDays className="h-3.5 w-3.5" />
+              {update.isPending ? "Saving..." : "Save dates"}
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        {error && (
+          <div className="rounded-md border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-foreground">
+            {error}
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <QuickForm.Field label="Start date">
+            <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </QuickForm.Field>
+          <QuickForm.Field label="Target date">
+            <Input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />
+          </QuickForm.Field>
+        </div>
+        <div className="text-meta rounded-md border border-border bg-background/40 px-3 py-2 text-muted-foreground">
+          Projects with both dates render as bars. Projects with partial dates still reserve a short
+          planning bar.
+        </div>
+      </div>
+    </SidePanel>
+  );
+}
+
+function LegendSwatch({ style, label }: { style: CSSProperties; label: string }) {
   return (
     <span className="flex items-center gap-1.5">
-      <span aria-hidden="true" className="h-3 w-4 rounded-sm border border-border/60" style={style} />
+      <span
+        aria-hidden="true"
+        className="h-3 w-4 rounded-sm border border-border/60"
+        style={style}
+      />
       {label}
     </span>
   );

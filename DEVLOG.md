@@ -2,6 +2,34 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Sprint lifecycle and roadmap management hardening
+
+Hardened sprint lifecycle semantics across tRPC and MCP. Creating or updating a
+sprint to ACTIVE now rejects when another active sprint exists. Rollover is now
+an explicit workflow that moves unfinished issues into the next planned sprint,
+can complete the source sprint, can start the target sprint, and records audit
+events for created/updated sprint rows and moved issues.
+
+Added full sprint management affordances: a rollover side panel, delete with
+type-to-confirm that clears issue sprint assignments back to backlog, guarded
+active-status choices in create/edit dialogs, settings-driven create length
+placeholder text, and a mobile/touch "Plan" action in the collapsible backlog.
+
+Extended Roadmap with real filters for initiative, date coverage, and progress
+state. Project rows now expose inline date editing from the timeline, and
+project date order is validated in tRPC and MCP. Modal primitives now mark the
+body while open so Mission Control cannot intercept side-panel footer clicks.
+
+Added focused router and Playwright coverage for sprint management and Roadmap
+editing/filtering.
+
+Verification: `pnpm typecheck`, `pnpm lint`,
+`AUTH_SECRET=test-auth-secret-for-vitest DATABASE_URL=postgresql://forge:forge@localhost:55432/forge?schema=public REDIS_URL=redis://localhost:56379 pnpm vitest run src/server/routers/__tests__/cycle.test.ts`,
+full `AUTH_SECRET=test-auth-secret-for-vitest DATABASE_URL=postgresql://forge:forge@localhost:55432/forge?schema=public REDIS_URL=redis://localhost:56379 pnpm test`,
+focused `E2E_FORCE_BUILD=1 E2E_PORT=3215 PLAYWRIGHT_BASE_URL=http://localhost:3215 pnpm test:e2e -- tests/e2e/sprints-roadmap.spec.ts`,
+and full `E2E_PORT=3215 PLAYWRIGHT_BASE_URL=http://localhost:3215 pnpm test:e2e`
+pass.
+
 ## 2026-06-09 — Sprint management and roadmap layout
 
 Added visible sprint lifecycle management to the Sprints surface. The sprint

@@ -14,9 +14,11 @@ import { useWorkspace } from "@/hooks/use-workspace";
 export function CycleBacklogPanel({
   open = true,
   onOpenChange,
+  onPlanIssue,
 }: {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onPlanIssue?: (issueId: string) => void;
 }) {
   const ws = useWorkspace();
   const { data, isLoading } = trpc.issue.list.useQuery({
@@ -37,10 +39,8 @@ export function CycleBacklogPanel({
           aria-label="Open backlog"
         >
           <PanelRightOpen className="h-4 w-4" />
-          <span className="font-mono text-[0.6875rem] tabular-nums">
-            {items.length}
-          </span>
-          <span className="[writing-mode:vertical-rl] text-meta">Backlog</span>
+          <span className="font-mono text-[0.6875rem] tabular-nums">{items.length}</span>
+          <span className="text-meta [writing-mode:vertical-rl]">Backlog</span>
         </button>
       </aside>
     );
@@ -68,7 +68,7 @@ export function CycleBacklogPanel({
           <span className="font-mono text-[0.6875rem] tabular-nums text-muted-foreground">
             {items.length}
           </span>
-          <span className="ml-auto text-meta text-muted-foreground">drag {"->"} plan</span>
+          <span className="text-meta ml-auto text-muted-foreground">drag {"->"} plan</span>
           <Button
             type="button"
             variant="ghost"
@@ -119,12 +119,27 @@ export function CycleBacklogPanel({
                       {formatIssueId(ws.key, i.number)}
                     </span>
                     {i.project && (
-                      <span className="ml-auto text-id text-muted-foreground">
-                        {i.project.key}
-                      </span>
+                      <span className="text-id ml-auto text-muted-foreground">{i.project.key}</span>
                     )}
                   </div>
-                  <div className="mt-1 truncate text-xs">{i.title}</div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <div className="min-w-0 flex-1 truncate text-xs">{i.title}</div>
+                    {onPlanIssue && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-6 shrink-0 px-2 lg:hidden"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPlanIssue(i.id);
+                          onOpenChange?.(false);
+                        }}
+                      >
+                        Plan
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </li>
             ))}

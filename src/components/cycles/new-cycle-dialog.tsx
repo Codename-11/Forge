@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CycleStatus } from "@prisma/client";
 import { toast } from "sonner";
 import { QuickForm } from "@/components/ui/modal";
@@ -19,16 +19,26 @@ export function NewCycleDialog({
   open,
   onClose,
   onCreated,
+  defaultLengthDays,
+  activeCycleName,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated?: () => void;
+  defaultLengthDays?: number;
+  activeCycleName?: string | null;
 }) {
   const [name, setName] = useState("");
   const [startsAt, setStartsAt] = useState("");
   const [lengthDays, setLengthDays] = useState("");
   const [status, setStatus] = useState<CycleStatus>(CycleStatus.PLANNED);
   const utils = trpc.useUtils();
+
+  useEffect(() => {
+    if (activeCycleName && status === CycleStatus.ACTIVE) {
+      setStatus(CycleStatus.PLANNED);
+    }
+  }, [activeCycleName, status]);
 
   const create = trpc.cycle.create.useMutation({
     onSuccess: () => {
@@ -49,12 +59,22 @@ export function NewCycleDialog({
         if (!o) onClose();
       }}
       title="New sprint"
+      description={
+        defaultLengthDays
+          ? `Defaults to ${defaultLengthDays} days when length is blank.`
+          : undefined
+      }
       primaryLabel={create.isPending ? "Creating…" : "Create"}
       loading={create.isPending}
       draftKey="cycle.create"
       onSubmit={async () => {
         if (!name.trim()) {
           return { error: "Name required." };
+        }
+        if (status === CycleStatus.ACTIVE && activeCycleName) {
+          return {
+            error: `Sprint "${activeCycleName}" is already active. Complete it before starting another sprint.`,
+          };
         }
         try {
           await create.mutateAsync({
@@ -94,11 +114,18 @@ export function NewCycleDialog({
             max={365}
             value={lengthDays}
             onChange={(e) => setLengthDays(e.target.value)}
-            placeholder="7"
+            placeholder={defaultLengthDays ? String(defaultLengthDays) : undefined}
           />
         </QuickForm.Field>
       </div>
-      <QuickForm.Field label="Status">
+      <QuickForm.Field
+        label="Status"
+        hint={
+          activeCycleName
+            ? `Active is unavailable while "${activeCycleName}" is active.`
+            : undefined
+        }
+      >
         <select
           name="status"
           value={status}
@@ -106,7 +133,9 @@ export function NewCycleDialog({
           className="focus-ring h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
         >
           <option value={CycleStatus.PLANNED}>Planned</option>
-          <option value={CycleStatus.ACTIVE}>Active</option>
+          <option value={CycleStatus.ACTIVE} disabled={!!activeCycleName}>
+            Active
+          </option>
           <option value={CycleStatus.COMPLETED}>Completed</option>
           <option value={CycleStatus.CANCELED}>Canceled</option>
         </select>

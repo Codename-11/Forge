@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import type { Prisma } from "@prisma/client";
 import { CycleStatus, EventKind } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -53,6 +54,10 @@ export const archiveInput = z.object({
   id: z.string().cuid(),
 });
 
+export const deleteInput = z.object({
+  id: z.string().cuid(),
+});
+
 export const planInput = z.object({
   cycleId: z.string().cuid(),
   issueIds: z.array(z.string().cuid()).min(1).max(500),
@@ -60,21 +65,42 @@ export const planInput = z.object({
 
 export const rolloverInput = z.object({
   fromCycleId: z.string().cuid(),
+  completeSource: z.boolean().optional().default(false),
+  activateTarget: z.boolean().optional().default(false),
 });
 
+async function assertNoOtherActiveCycle(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  currentCycleId?: string,
+) {
+  const existing = await tx.cycle.findFirst({
+    where: {
+      workspaceId,
+      status: CycleStatus.ACTIVE,
+      ...(currentCycleId ? { id: { not: currentCycleId } } : {}),
+    },
+    select: { name: true },
+  });
+  if (existing) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Sprint "${existing.name}" is already active. Complete it before starting another sprint.`,
+    });
+  }
+}
+
 export const cycleRouter = router({
-  list: workspaceProcedure
-    .input(listInput.default({}))
-    .query(async ({ ctx, input }) => {
-      return ctx.db.cycle.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          ...(input.status ? { status: input.status } : {}),
-        },
-        orderBy: { startsAt: "desc" },
-        include: { _count: { select: { issues: true } } },
-      });
-    }),
+  list: workspaceProcedure.input(listInput.default({})).query(async ({ ctx, input }) => {
+    return ctx.db.cycle.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        ...(input.status ? { status: input.status } : {}),
+      },
+      orderBy: { startsAt: "desc" },
+      include: { _count: { select: { issues: true } } },
+    });
+  }),
 
   get: workspaceProcedure.input(getInput).query(async ({ ctx, input }) => {
     const cycle = await ctx.db.cycle.findFirst({
@@ -167,6 +193,10 @@ export const cycleRouter = router({
     }
 
     return ctx.db.$transaction(async (tx) => {
+      if (input.status === CycleStatus.ACTIVE) {
+        await assertNoOtherActiveCycle(tx, ctx.workspaceId);
+      }
+
       const cycle = await tx.cycle.create({
         data: {
           workspaceId: ctx.workspaceId,
@@ -203,6 +233,10 @@ export const cycleRouter = router({
       const before = await tx.cycle.findFirstOrThrow({
         where: { id, workspaceId: ctx.workspaceId },
       });
+      if (patch.status === CycleStatus.ACTIVE && before.status !== CycleStatus.ACTIVE) {
+        await assertNoOtherActiveCycle(tx, ctx.workspaceId, id);
+      }
+
       const startsAt = patch.startsAt ?? before.startsAt;
       const endsAt = patch.endsAt ?? before.endsAt;
       if (endsAt.getTime() <= startsAt.getTime()) {
@@ -270,6 +304,69 @@ export const cycleRouter = router({
     });
   }),
 
+  delete: workspaceProcedure.input(deleteInput).mutation(async ({ ctx, input }) => {
+    return ctx.db.$transaction(async (tx) => {
+      const before = await tx.cycle.findFirstOrThrow({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+      });
+      const assignedIssues = await tx.issue.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          cycleId: before.id,
+          deletedAt: null,
+        },
+        select: { id: true, cycleId: true },
+      });
+
+      if (assignedIssues.length) {
+        await tx.issue.updateMany({
+          where: {
+            id: { in: assignedIssues.map((issue) => issue.id) },
+            workspaceId: ctx.workspaceId,
+          },
+          data: { cycleId: null },
+        });
+        for (const issue of assignedIssues) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            entity: "Issue",
+            entityId: issue.id,
+            action: "cycle.clear",
+            before: { cycleId: issue.cycleId },
+            after: { cycleId: null },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "issue",
+            subjectId: issue.id,
+            payload: { cycleId: null, deletedCycleId: before.id },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
+      }
+
+      await tx.cycle.delete({ where: { id: before.id } });
+      await recordChange(tx, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        entity: "Cycle",
+        entityId: before.id,
+        action: "delete",
+        before,
+        eventKind: EventKind.PROJECT_UPDATED,
+        subjectType: "cycle",
+        subjectId: before.id,
+        payload: { name: before.name, clearedIssueCount: assignedIssues.length },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+
+      return { deletedId: before.id, clearedIssueCount: assignedIssues.length };
+    });
+  }),
+
   /**
    * Bulk-assign issues to a cycle. Records one ISSUE_UPDATED event per
    * moved issue — mirrors how single-issue updates are audited so plugins
@@ -322,15 +419,22 @@ export const cycleRouter = router({
   }),
 
   /**
-   * Move every unfinished issue from `fromCycleId` into the next ACTIVE
-   * cycle. If no ACTIVE cycle exists we create one using the workspace
-   * defaults — keeps the operator flow single-click.
+   * Move every unfinished issue from `fromCycleId` into the next planned
+   * sprint. Callers choose whether to also complete the source sprint and
+   * whether the target should become active. Activating the target enforces
+   * the workspace invariant that only one sprint can be ACTIVE at a time.
    */
   rollover: workspaceProcedure.input(rolloverInput).mutation(async ({ ctx, input }) => {
     return ctx.db.$transaction(async (tx) => {
       const fromCycle = await tx.cycle.findFirstOrThrow({
         where: { id: input.fromCycleId, workspaceId: ctx.workspaceId },
       });
+      const shouldActivateTarget = input.activateTarget;
+      const shouldCompleteSource = input.completeSource || shouldActivateTarget;
+
+      if (shouldActivateTarget) {
+        await assertNoOtherActiveCycle(tx, ctx.workspaceId, fromCycle.id);
+      }
 
       const unfinished = await tx.issue.findMany({
         where: {
@@ -345,8 +449,9 @@ export const cycleRouter = router({
       let targetCycle = await tx.cycle.findFirst({
         where: {
           workspaceId: ctx.workspaceId,
-          status: CycleStatus.ACTIVE,
+          status: CycleStatus.PLANNED,
           id: { not: fromCycle.id },
+          startsAt: { gte: fromCycle.endsAt },
         },
         orderBy: { startsAt: "asc" },
       });
@@ -366,8 +471,49 @@ export const cycleRouter = router({
             endsAt,
             lengthDays: workspace.cycleLengthDays,
             cooldownDays: workspace.cycleCooldownDays,
-            status: CycleStatus.ACTIVE,
+            status: shouldActivateTarget ? CycleStatus.ACTIVE : CycleStatus.PLANNED,
           },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "Cycle",
+          entityId: targetCycle.id,
+          action: "create",
+          after: targetCycle,
+          eventKind: EventKind.PROJECT_CREATED,
+          subjectType: "cycle",
+          subjectId: targetCycle.id,
+          payload: {
+            name: targetCycle.name,
+            fromCycleId: fromCycle.id,
+            source: "rollover",
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+      } else if (shouldActivateTarget && targetCycle.status !== CycleStatus.ACTIVE) {
+        const before = targetCycle;
+        targetCycle = await tx.cycle.update({
+          where: { id: targetCycle.id },
+          data: { status: CycleStatus.ACTIVE },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "Cycle",
+          entityId: targetCycle.id,
+          action: "update",
+          before,
+          after: targetCycle,
+          eventKind: EventKind.PROJECT_UPDATED,
+          subjectType: "cycle",
+          subjectId: targetCycle.id,
+          payload: { status: CycleStatus.ACTIVE, source: "rollover" },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
         });
       }
 
@@ -396,7 +542,37 @@ export const cycleRouter = router({
         }
       }
 
-      return { rolled: unfinished.length, targetCycleId: targetCycle.id };
+      let sourceCompleted = false;
+      if (shouldCompleteSource && fromCycle.status !== CycleStatus.COMPLETED) {
+        const after = await tx.cycle.update({
+          where: { id: fromCycle.id },
+          data: { status: CycleStatus.COMPLETED },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "Cycle",
+          entityId: fromCycle.id,
+          action: "update",
+          before: fromCycle,
+          after,
+          eventKind: EventKind.PROJECT_UPDATED,
+          subjectType: "cycle",
+          subjectId: fromCycle.id,
+          payload: { status: CycleStatus.COMPLETED, source: "rollover" },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+        sourceCompleted = true;
+      }
+
+      return {
+        rolled: unfinished.length,
+        targetCycleId: targetCycle.id,
+        sourceCompleted,
+        targetActivated: targetCycle.status === CycleStatus.ACTIVE,
+      };
     });
   }),
 });

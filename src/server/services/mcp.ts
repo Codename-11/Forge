@@ -620,6 +620,31 @@ const addDays = (date: Date, days: number): Date => {
   return d;
 };
 
+const MS_PER_DAY = 86_400_000;
+
+const daysBetween = (start: Date, end: Date): number =>
+  Math.max(1, Math.round((end.getTime() - start.getTime()) / MS_PER_DAY));
+
+async function assertNoOtherMcpActiveCycle(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  currentCycleId?: string,
+): Promise<void> {
+  const existing = await tx.cycle.findFirst({
+    where: {
+      workspaceId,
+      status: CycleStatus.ACTIVE,
+      ...(currentCycleId ? { id: { not: currentCycleId } } : {}),
+    },
+    select: { name: true },
+  });
+  if (existing) {
+    throw new Error(
+      `Sprint "${existing.name}" is already active. Complete it before starting another sprint.`,
+    );
+  }
+}
+
 const projectKey = z
   .string()
   .min(2)
@@ -3110,6 +3135,13 @@ export const mcpTools = {
       if (ctx.apiKey?.projectIds.length) {
         throw new Error("API key scope does not include this resource.");
       }
+      if (
+        input.startDate &&
+        input.targetDate &&
+        input.targetDate.getTime() < input.startDate.getTime()
+      ) {
+        throw new Error("Project targetDate must be on or after startDate.");
+      }
       const actorId = await resolveActorId(ctx);
       return db.$transaction(async (tx) => {
         const project = await tx.project.create({
@@ -3168,6 +3200,11 @@ export const mcpTools = {
         const before = await tx.project.findFirstOrThrow({
           where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
         });
+        const startDate = patch.startDate === undefined ? before.startDate : patch.startDate;
+        const targetDate = patch.targetDate === undefined ? before.targetDate : patch.targetDate;
+        if (startDate && targetDate && targetDate.getTime() < startDate.getTime()) {
+          throw new Error("Project targetDate must be on or after startDate.");
+        }
         const after = await tx.project.update({ where: { id: before.id }, data: patch });
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
@@ -3316,6 +3353,7 @@ export const mcpTools = {
       endsAt: z.coerce.date().optional(),
       lengthDays: z.number().int().min(1).max(365).optional(),
       cooldownDays: z.number().int().min(0).max(90).optional(),
+      status: z.nativeEnum(CycleStatus).optional(),
     }),
     async run(
       input: {
@@ -3324,6 +3362,7 @@ export const mcpTools = {
         endsAt?: Date;
         lengthDays?: number;
         cooldownDays?: number;
+        status?: CycleStatus;
       },
       ctx: McpContext,
     ) {
@@ -3338,15 +3377,21 @@ export const mcpTools = {
       if (endsAt.getTime() <= startsAt.getTime()) {
         throw new Error("Cycle `endsAt` must be after `startsAt`.");
       }
-      return db.cycle.create({
-        data: {
-          workspaceId: ctx.workspaceId,
-          name: input.name,
-          startsAt,
-          endsAt,
-          lengthDays,
-          cooldownDays,
-        },
+      return db.$transaction(async (tx) => {
+        if (input.status === CycleStatus.ACTIVE) {
+          await assertNoOtherMcpActiveCycle(tx, ctx.workspaceId);
+        }
+        return tx.cycle.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            name: input.name,
+            startsAt,
+            endsAt,
+            lengthDays,
+            cooldownDays,
+            status: input.status,
+          },
+        });
       });
     },
   },
@@ -3371,11 +3416,28 @@ export const mcpTools = {
       ctx: McpContext,
     ) {
       const { id, ...patch } = input;
-      const cycle = await db.cycle.findFirstOrThrow({
-        where: { id, workspaceId: ctx.workspaceId },
-        select: { id: true },
+      return db.$transaction(async (tx) => {
+        const before = await tx.cycle.findFirstOrThrow({
+          where: { id, workspaceId: ctx.workspaceId },
+        });
+        if (patch.status === CycleStatus.ACTIVE && before.status !== CycleStatus.ACTIVE) {
+          await assertNoOtherMcpActiveCycle(tx, ctx.workspaceId, id);
+        }
+        const startsAt = patch.startsAt ?? before.startsAt;
+        const endsAt = patch.endsAt ?? before.endsAt;
+        if (endsAt.getTime() <= startsAt.getTime()) {
+          throw new Error("Cycle `endsAt` must be after `startsAt`.");
+        }
+        return tx.cycle.update({
+          where: { id: before.id },
+          data: {
+            ...patch,
+            ...((patch.startsAt || patch.endsAt) && {
+              lengthDays: daysBetween(startsAt, endsAt),
+            }),
+          },
+        });
       });
-      return db.cycle.update({ where: { id: cycle.id }, data: patch });
     },
   },
 
@@ -3480,12 +3542,26 @@ export const mcpTools = {
 
   "cycles.rollover": {
     scopes: ["WRITE_ISSUES"] as const,
-    input: z.object({ fromCycleId: z.string() }),
-    async run(input: { fromCycleId: string }, ctx: McpContext) {
+    input: z.object({
+      fromCycleId: z.string(),
+      completeSource: z.boolean().optional().default(false),
+      activateTarget: z.boolean().optional().default(false),
+    }),
+    async run(
+      input: { fromCycleId: string; completeSource?: boolean; activateTarget?: boolean },
+      ctx: McpContext,
+    ) {
       return db.$transaction(async (tx) => {
         const fromCycle = await tx.cycle.findFirstOrThrow({
           where: { id: input.fromCycleId, workspaceId: ctx.workspaceId },
         });
+        const shouldActivateTarget = input.activateTarget ?? false;
+        const shouldCompleteSource = (input.completeSource ?? false) || shouldActivateTarget;
+
+        if (shouldActivateTarget) {
+          await assertNoOtherMcpActiveCycle(tx, ctx.workspaceId, fromCycle.id);
+        }
+
         const unfinished = await tx.issue.findMany({
           where: {
             workspaceId: ctx.workspaceId,
@@ -3499,8 +3575,9 @@ export const mcpTools = {
         let target = await tx.cycle.findFirst({
           where: {
             workspaceId: ctx.workspaceId,
-            status: CycleStatus.ACTIVE,
+            status: CycleStatus.PLANNED,
             id: { not: fromCycle.id },
+            startsAt: { gte: fromCycle.endsAt },
           },
           orderBy: { startsAt: "asc" },
         });
@@ -3519,8 +3596,13 @@ export const mcpTools = {
               endsAt,
               lengthDays: ws.cycleLengthDays,
               cooldownDays: ws.cycleCooldownDays,
-              status: CycleStatus.ACTIVE,
+              status: shouldActivateTarget ? CycleStatus.ACTIVE : CycleStatus.PLANNED,
             },
+          });
+        } else if (shouldActivateTarget && target.status !== CycleStatus.ACTIVE) {
+          target = await tx.cycle.update({
+            where: { id: target.id },
+            data: { status: CycleStatus.ACTIVE },
           });
         }
         if (unfinished.length) {
@@ -3529,7 +3611,20 @@ export const mcpTools = {
             data: { cycleId: target.id },
           });
         }
-        return { rolled: unfinished.length, targetCycleId: target.id };
+        let sourceCompleted = false;
+        if (shouldCompleteSource && fromCycle.status !== CycleStatus.COMPLETED) {
+          await tx.cycle.update({
+            where: { id: fromCycle.id },
+            data: { status: CycleStatus.COMPLETED },
+          });
+          sourceCompleted = true;
+        }
+        return {
+          rolled: unfinished.length,
+          targetCycleId: target.id,
+          sourceCompleted,
+          targetActivated: target.status === CycleStatus.ACTIVE,
+        };
       });
     },
   },
@@ -3729,7 +3824,11 @@ export const mcpTools = {
       if (input.fromIssueId === input.toIssueId) {
         throw new Error("Cannot relate an issue to itself.");
       }
-      await assertAgentIssueMutationsAllowed(ctx, [input.fromIssueId, input.toIssueId], "relations.add");
+      await assertAgentIssueMutationsAllowed(
+        ctx,
+        [input.fromIssueId, input.toIssueId],
+        "relations.add",
+      );
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.fromIssueId });
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.toIssueId });
 
@@ -5691,7 +5790,9 @@ export const mcpTools = {
         issueLinkedArtifactIds,
       });
       if (completionErrors.length > 0) {
-        throw new Error(`Run completion does not satisfy ${run.engagementMode}: ${completionErrors.join(" ")}`);
+        throw new Error(
+          `Run completion does not satisfy ${run.engagementMode}: ${completionErrors.join(" ")}`,
+        );
       }
 
       const completionMeta = runCompletionMeta(run.engagementMode, input);
