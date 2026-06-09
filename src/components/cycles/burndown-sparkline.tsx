@@ -20,16 +20,19 @@ export function BurndownSparkline({
   const { actualPath, idealPath, max } = useMemo(() => {
     const pts = [...actual.filter((v) => !Number.isNaN(v)), ...ideal];
     const peak = Math.max(1, ...pts);
+    const pad = 2;
+    const plotWidth = Math.max(1, width - pad * 2);
+    const plotHeight = Math.max(1, height - pad * 2);
     const stepX = (series: number[]) =>
-      series.length > 1 ? width / (series.length - 1) : width;
+      series.length > 1 ? plotWidth / (series.length - 1) : plotWidth;
     const toPath = (series: number[]) => {
       const points: string[] = [];
       const sx = stepX(series);
       for (let i = 0; i < series.length; i++) {
         const v = series[i]!;
         if (Number.isNaN(v)) continue;
-        const x = i * sx;
-        const y = height - (v / peak) * height;
+        const x = pad + i * sx;
+        const y = pad + plotHeight - (v / peak) * plotHeight;
         points.push(`${points.length === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`);
       }
       return points.join(" ");
@@ -50,6 +53,14 @@ export function BurndownSparkline({
       role="img"
       aria-label={`Burndown: peak ${max} issues`}
     >
+      <line
+        x1={2}
+        x2={width - 2}
+        y1={height - 2}
+        y2={height - 2}
+        stroke="hsl(var(--border))"
+        strokeWidth={1}
+      />
       {idealPath && (
         <path
           d={idealPath}

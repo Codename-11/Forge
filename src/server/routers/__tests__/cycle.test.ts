@@ -56,10 +56,17 @@ describe("cycleRouter", () => {
   it("current() returns the single ACTIVE cycle or null", async () => {
     const { caller } = await setup();
     expect(await caller.current()).toBeNull();
-    const created = await caller.create({ name: "Active" });
-    await caller.update({ id: created.id, status: CycleStatus.ACTIVE });
+    const created = await caller.create({ name: "Active", status: CycleStatus.ACTIVE });
     const current = await caller.current();
     expect(current?.id).toBe(created.id);
+
+    const second = await caller.create({ name: "Second" });
+    await expect(caller.update({ id: second.id, status: CycleStatus.ACTIVE })).rejects.toThrow(
+      /already active/i,
+    );
+    await expect(caller.create({ name: "Third", status: CycleStatus.ACTIVE })).rejects.toThrow(
+      /already active/i,
+    );
   });
 
   it("plan() bulk-assigns issues and records audit events", async () => {
@@ -84,11 +91,10 @@ describe("cycleRouter", () => {
     expect(events.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("rollover() moves unfinished issues to a new ACTIVE cycle and verifies counts", async () => {
+  it("rollover() moves unfinished issues, completes source, and can activate target", async () => {
     const { caller, fixture } = await setup();
     const prisma = getPrisma();
-    const cycle = await caller.create({ name: "Old" });
-    await caller.update({ id: cycle.id, status: CycleStatus.ACTIVE });
+    const cycle = await caller.create({ name: "Old", status: CycleStatus.ACTIVE });
 
     const ongoing = await createIssue(fixture, { title: "ongoing", statusCategory: "IN_PROGRESS" });
     const todo = await createIssue(fixture, { title: "todo", statusCategory: "TODO" });
@@ -100,9 +106,15 @@ describe("cycleRouter", () => {
       issueIds: [ongoing.id, todo.id, done.id, canceled.id],
     });
 
-    const res = await caller.rollover({ fromCycleId: cycle.id });
+    const res = await caller.rollover({
+      fromCycleId: cycle.id,
+      completeSource: true,
+      activateTarget: true,
+    });
     expect(res.rolled).toBe(2);
     expect(res.targetCycleId).not.toBe(cycle.id);
+    expect(res.sourceCompleted).toBe(true);
+    expect(res.targetActivated).toBe(true);
 
     const rolled = await prisma.issue.findMany({
       where: { id: { in: [ongoing.id, todo.id] } },
@@ -115,6 +127,18 @@ describe("cycleRouter", () => {
       select: { id: true, cycleId: true },
     });
     expect(stayed.every((i) => i.cycleId === cycle.id)).toBe(true);
+
+    const cycles = await prisma.cycle.findMany({
+      where: { id: { in: [cycle.id, res.targetCycleId] } },
+      select: { id: true, status: true },
+    });
+    expect(cycles.find((c) => c.id === cycle.id)?.status).toBe(CycleStatus.COMPLETED);
+    expect(cycles.find((c) => c.id === res.targetCycleId)?.status).toBe(CycleStatus.ACTIVE);
+    expect(
+      await prisma.cycle.count({
+        where: { workspaceId: fixture.workspace.id, status: CycleStatus.ACTIVE },
+      }),
+    ).toBe(1);
   });
 
   it("archive() sets status to COMPLETED", async () => {
@@ -122,6 +146,21 @@ describe("cycleRouter", () => {
     const cycle = await caller.create({ name: "to-archive" });
     const after = await caller.archive({ id: cycle.id });
     expect(after.status).toBe(CycleStatus.COMPLETED);
+  });
+
+  it("delete() clears assigned issues and removes the sprint", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const cycle = await caller.create({ name: "to-delete" });
+    const issue = await createIssue(fixture, { title: "return to backlog" });
+    await caller.plan({ cycleId: cycle.id, issueIds: [issue.id] });
+
+    const res = await caller.delete({ id: cycle.id });
+    expect(res).toMatchObject({ deletedId: cycle.id, clearedIssueCount: 1 });
+
+    await expect(prisma.cycle.findUnique({ where: { id: cycle.id } })).resolves.toBeNull();
+    const moved = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(moved.cycleId).toBeNull();
   });
 
   it("list() respects status filter", async () => {
