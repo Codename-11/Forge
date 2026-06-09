@@ -2,6 +2,22 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — v0.6.0 release verification
+
+Verified the merged GitHub support and sprint/roadmap worktrees on `main`,
+bumped Forge to v0.6.0, and added the release changelog entry for GitHub App
+support, synced external resources, sprint lifecycle management, and the roadmap
+timeline improvements.
+
+Applied the pending `0078_github_external_resources` migration to the local
+verification database before rerunning tests so Prisma Client and the local
+schema matched the merged migration set.
+
+Verification: `pnpm prisma:generate`, `pnpm typecheck`, `pnpm lint`,
+`pnpm docs:build`, `pnpm prisma:deploy` against local Postgres,
+`pnpm test`, `E2E_FORCE_BUILD=1 pnpm exec playwright test --workers=1`, and
+`git diff --check` pass.
+
 ## 2026-06-09 — MCP build identity visibility
 
 MCP JSON-RPC `initialize` and the REST `describe` catalog now report the same

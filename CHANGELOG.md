@@ -11,6 +11,30 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-06-09] — v0.6.0 · GitHub support and sprint planning
+
+### Added
+
+- **GitHub App support.** Added GitHub connection setup, install callbacks,
+  webhook ingest, synced external resource mappings, issue-detail GitHub links,
+  and MCP tooling/docs for linked GitHub work.
+- **Sprint management workflows.** Added sprint edit, rollover, guarded create,
+  backlog planning, and delete flows with audit-backed issue movement.
+
+### Changed
+
+- **Roadmap is now a working timeline.** Added initiative, date coverage, and
+  progress filters, visible sprint bands, no-date rows, and inline project date
+  editing.
+- **Issue creation now has a shared service path.** UI, API, and MCP creation
+  paths share the same issue-create behavior.
+
+### Fixed
+
+- **Sprint and project date guards are enforced server-side.** Forge now rejects
+  overlapping active sprints and invalid project date ranges through tRPC and MCP.
+- **Side-panel interactions no longer leak to Mission Control shortcuts.**
+
 ## [2026-06-06] — v0.5.1 · Android PWA install and push
 
 ### Added
