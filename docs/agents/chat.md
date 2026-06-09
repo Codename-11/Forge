@@ -20,10 +20,11 @@ default thread; named side conversations use concrete `threadId` links.
 `chat.thread({ agentId })` keeps the default DM behavior, while
 `chat.getThread({ threadId })` opens a specific conversation.
 
-Viewing a thread on either the full Chat page or Mission Control's Chat tab calls
-`chat.markRead({ threadId })`. Forge stores that read anchor per `(threadId, userId)` and
-also writes a browser-local marker so badges clear immediately while the server write is
-in flight.
+Viewing a thread on the full Chat page, Mission Control's Chat tab, or the Activity
+drawer calls `chat.markRead({ threadId })`. Forge stores that read anchor per
+`(threadId, userId)` and also writes a browser-local marker so badges clear
+immediately while the server write is in flight. The server never moves a read
+anchor backward.
 
 ### Context bundle
 
@@ -48,24 +49,33 @@ Source: `src/hooks/use-chat-context.ts`, `src/server/services/chat-context.ts`.
 ### The reply path
 
 ```
-User types → chat.send (tRPC)
+User types → /api/chat/stream
+  → chatReadiness resolves the effective provider, engine, runtime, and transport
   → ChatMessage persisted (role: USER)
   → CHAT_MESSAGE_POSTED event recorded
-  → agent:dispatch:{agentId} WebhookDelivery enqueued
-  → worker POSTs to agent.webhookUrl
+  → one of three transport paths runs:
+       runs        Forge streams through a managed runtime connector
+       completions Forge streams through the configured model provider
+       dispatch    Forge wakes the agent runtime/daemon and waits for its draft/reply
 
-Agent processes → chat.appendMessage OR chat.startDraft / appendDraftChunk / finalizeDraft (MCP)
-  → ChatMessage persisted (role: AGENT)
-  → client picks up via SSE fan-out
+Agent/runtime replies → chat.appendMessage OR chat.startDraft / appendDraftChunk / finalizeDraft
+  → latest unfinished USER turn is acknowledged/output-started
+  → ChatMessage persisted (role: AGENT) or draft stream finalized
+  → client picks up via SSE fan-out and cache invalidation
 ```
 
 The `CHAT_MESSAGE_POSTED` dispatch branch in `src/server/audit.ts` (branch d) fires only
 when `role === "USER"` — the agent's own reply does not loop back to the agent.
+Dispatch-backed sends deliberately do not create an empty AGENT placeholder and
+do not mark the operator message read until the agent/runtime acknowledges the
+turn. That keeps the outbox at `Sent` while Forge is waking the runtime, then
+moves it to `Read` when `acknowledgedAt` or `outputStartedAt` is present.
 
 ### Streaming replies
 
-When the agent runtime is wired to a Forge platform adapter (see [Hermes
-Integration](/agents/hermes.html)) replies stream token-by-token:
+When Forge owns the loop (`runs` or `completions` readiness), replies stream
+token-by-token from `/api/chat/stream`. When a runtime owns the loop through the
+dispatch path, it can still stream drafts through the MCP chat draft tools:
 
 1. **`chat.startDraft({ threadId })`** — allocates a `draftId`, publishes a `started`
    event on the `chat-thread-stream` pub/sub channel. No DB row yet.
@@ -75,9 +85,9 @@ Integration](/agents/hermes.html)) replies stream token-by-token:
    full `ChatMessage`, publishes `finalized` with `draftId` so the client can swap the
    draft bubble for the committed row without flicker.
 
-Agents that have not yet been wired to the platform adapter use the single-shot fallback:
-**`chat.appendMessage({ threadId, body, sourceRunId? })`** — writes one complete message,
-no streaming.
+Agents that have not wired draft streaming use the single-shot fallback:
+**`chat.appendMessage({ threadId, body, sourceRunId? })`** — writes one complete
+message, no streaming.
 
 > **Either/or:** use streaming or single-shot for a given reply, never both. Calling
 > `appendMessage` after `startDraft` (without finalizing) leaves an open draft bubble.
@@ -85,22 +95,51 @@ no streaming.
 
 ### Markdown rendering
 
-AGENT-role messages render through a hand-rolled lightweight markdown renderer
-(`src/components/mission-control/chat-tab.tsx`). Supported: headings, bold/italic,
-inline code, fenced code blocks (with copy buttons), blockquotes, unordered lists.
-No external library dependency. USER and SYSTEM messages are rendered plain.
+AGENT-role messages render through the shared chat message renderer
+(`src/components/mission-control/chat-message.tsx`). Supported: headings,
+bold/italic, inline code, fenced code blocks (with copy buttons), blockquotes,
+unordered lists, attachments, tool-call cards, and local SYSTEM bubbles from
+slash commands.
+
+## Status and diagnostics
+
+The right-hand Chat status rail is the operator-facing source of truth for a
+weird conversation. It shows:
+
+- Members and linked work inferred from message context snapshots.
+- Effective provider, transport, runtime, runtime health, and whether chat can
+  reach a model/runtime.
+- Turn lifecycle (`queued`, `delivered`, `read`, `thinking`, `running`,
+  `stalled`, `failed`) derived from the latest USER message, delivery rows, and
+  linked runs.
+- Last run, webhook delivery, stream error/interruption, and context summary
+  state.
+- Actions for retry, stop, kick, compact, archive/restore, delete, plus a
+  **Copy diagnostic report** button.
+
+Diagnostic reports are redacted client-side before copying. They include the
+thread, agent, runtime, readiness, turn, run, delivery, and linked-work state,
+but redact bearer tokens, secrets/keys/signatures, and URLs. Runtime names in
+the rail deep-link to the exact runtime detail page for probe/config inspection.
 
 ## Presence honesty
 
-The chat header shows the agent's runtime mode and last-heartbeat age. Presence is
-reflected in the composer area:
+The chat header and connection chip use the same provider-neutral readiness
+resolver as `/api/chat/stream`. Presence and availability are deliberately
+separate:
 
-| Agent state                  | Composer hint                                               |
-| ---------------------------- | ----------------------------------------------------------- |
-| ONLINE, PERSISTENT           | Normal — no hint needed.                                    |
-| OFFLINE, PERSISTENT          | "Queued — delivered on next heartbeat."                     |
-| ONLINE or OFFLINE, EPHEMERAL | "Session — replies arrive when the session is active."      |
-| Any status, no `webhookUrl`  | "MCP-only — this agent pulls work; it will not reply here." |
+| Transport / state               | Composer or rail behavior                                                                       |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `runs` ready                    | Managed runtime owns the loop; stop/run diagnostics are available.                              |
+| `completions` ready             | Forge owns the model loop; streaming/tool UI is available when the provider supports it.         |
+| `dispatch` ready                | Runtime/daemon answers asynchronously; the send stays `Sent` until the runtime acknowledges it. |
+| Runtime probe failed            | Composer warns with the last probe detail and points the operator at runtime settings.           |
+| No model/runtime/dispatch path  | Composer disables sends and explains what to configure.                                         |
+
+Hermes gateway reachability is also distinct from agent presence. A gateway can
+probe reachable while the `@victor` presence heartbeat is stale or missing; the
+runtime page labels that as `presence stale` / `presence missing` instead of
+collapsing every case into generic offline.
 
 ## Slash commands
 
