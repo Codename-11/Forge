@@ -240,13 +240,14 @@ export async function POST(req: NextRequest) {
   }
 
   // Persist the USER row and the audit/event in one transaction. Mirrors
-  // `chat.send` so the inbox lifecycle stays honest, but tags the payload
-  // `streamed: true` so the dispatch worker can no-op for this row. Any
-  // resolved attachments get re-targeted at the new ChatMessage so the
-  // thread surface (and getThread reads) see them attached to the right
-  // turn — the upload flow targets `chat-message` placeholders by id, but
-  // streaming uploads at the composer happen *before* the message row
-  // exists, so we point them at this row here.
+  // `chat.send` so the inbox lifecycle stays honest. Forge-owned streaming
+  // turns tag the payload `streamed: true` so the dispatch worker can no-op
+  // and avoid a duplicate reply; dispatch-backed turns leave it false so the
+  // addressed daemon/runtime is actually woken. Any resolved attachments get
+  // re-targeted at the new ChatMessage so the thread surface (and getThread
+  // reads) see them attached to the right turn — the upload flow targets
+  // `chat-message` placeholders by id, but streaming uploads at the composer
+  // happen *before* the message row exists, so we point them at this row here.
   const attachmentIds = attachmentRows.map((a) => a.id);
   const { userMessageId } = await db.$transaction(async (tx) => {
     const now = new Date();
@@ -303,7 +304,7 @@ export async function POST(req: NextRequest) {
         role: "USER",
         body,
         context: contextSnapshot,
-        streamed: true,
+        streamed: !useDispatch,
         attachments: attachmentRows.map((a) => ({
           id: a.id,
           filename: a.filename,
@@ -390,6 +391,42 @@ export async function POST(req: NextRequest) {
     } else {
       messages.push({ role, content: m.body });
     }
+  }
+
+  if (useDispatch) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const enqueue = (chunk: string) => {
+          try {
+            controller.enqueue(encoder.encode(chunk));
+          } catch {
+            /* controller already closed */
+          }
+        };
+        enqueue(
+          sse("meta", {
+            userMessageId,
+            dispatch: true,
+            transport: transport.transportLabel,
+          }),
+        );
+        enqueue(sse("done", { userMessageId, dispatch: true }));
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        "x-accel-buffering": "no",
+      },
+    });
   }
 
   // Create the placeholder AGENT row up front so the client gets a stable

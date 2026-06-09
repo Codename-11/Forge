@@ -1410,9 +1410,9 @@ export function ChatThreadView({
    * inline; updates `streamBubble` for every delta so React paints the
    * partial response. Resolves once the server emits `done` or `error`.
    *
-   * The dispatch path is NOT invoked — the route persists the USER row
-   * with `streamed: true` and audit.ts short-circuits the webhook fan-out
-   * for that case (see audit.ts branch (d)).
+   * Forge-owned runs/completions stream the reply directly. Dispatch-backed
+   * agents get the same persisted USER row, but the route closes after the
+   * wake handoff so the daemon/runtime can answer via chat drafts.
    */
   const runStreamingSend = useCallback(
     async (
@@ -1460,9 +1460,10 @@ export function ChatThreadView({
       };
       const failSend = (message: string) => {
         if (serverAccepted) {
-          setStreamBubble((b) =>
-            b ? { ...b, error: message, finishedAt: b.finishedAt ?? Date.now() } : b,
-          );
+          setStreamBubble((b) => {
+            const base = b ?? initialStreamBubble();
+            return { ...base, error: message, finishedAt: base.finishedAt ?? Date.now() };
+          });
         } else {
           if (outboxId) markOutbox(outboxId, "failed");
           setStreamBubble(null);
@@ -1515,7 +1516,6 @@ export function ChatThreadView({
       serverAccepted = true;
       if (outboxId) markOutbox(outboxId, "sent");
       refreshThread();
-      setStreamBubble(initialStreamBubble());
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -1535,13 +1535,20 @@ export function ChatThreadView({
             acknowledgedAt?: string;
             outputStartedAt?: string;
           };
+          const dispatchOnly = (parsed as { dispatch?: boolean }).dispatch === true;
           if (messageId) {
-            setStreamBubble((b) => (b ? { ...b, messageId } : b));
+            setStreamBubble((b) => ({ ...(b ?? initialStreamBubble()), messageId }));
+          } else if (dispatchOnly) {
+            setStreamBubble(null);
           }
           if (outboxId && userMessageId) {
-            markOutbox(outboxId, "read", userMessageId);
+            markOutbox(
+              outboxId,
+              acknowledgedAt || outputStartedAt ? "read" : "sent",
+              userMessageId,
+            );
           }
-          if (userMessageId) {
+          if (userMessageId && (acknowledgedAt || outputStartedAt)) {
             const readAt = acknowledgedAt ?? outputStartedAt ?? new Date().toISOString();
             setLocalReadReceipts((prev) => ({ ...prev, [userMessageId]: readAt }));
           }
@@ -1552,12 +1559,18 @@ export function ChatThreadView({
         } else if (event === "content") {
           const { delta } = parsed as { delta?: string };
           if (typeof delta === "string") {
-            setStreamBubble((b) => (b ? { ...b, body: b.body + delta } : b));
+            setStreamBubble((b) => {
+              const base = b ?? initialStreamBubble();
+              return { ...base, body: base.body + delta };
+            });
           }
         } else if (event === "thinking") {
           const { delta } = parsed as { delta?: string };
           if (typeof delta === "string") {
-            setStreamBubble((b) => (b ? { ...b, thinking: b.thinking + delta } : b));
+            setStreamBubble((b) => {
+              const base = b ?? initialStreamBubble();
+              return { ...base, thinking: base.thinking + delta };
+            });
           }
         } else if (event === "tool_use") {
           // Legacy fallback — only fires when the loop never surfaced a
@@ -1568,24 +1581,20 @@ export function ChatThreadView({
             args?: Record<string, unknown>;
           };
           if (tb.id && tb.name) {
-            setStreamBubble((b) =>
-              b
-                ? {
-                    ...b,
-                    toolCalls: [
-                      ...b.toolCalls,
-                      {
-                        id: tb.id!,
-                        name: tb.name!,
-                        args: tb.args ?? {},
-                        requiresConfirm: false,
-                        status: "executed",
-                        summary: "(intent only — not executed)",
-                      },
-                    ],
-                  }
-                : b,
-            );
+            setStreamBubble((b) => ({
+              ...(b ?? initialStreamBubble()),
+              toolCalls: [
+                ...(b?.toolCalls ?? []),
+                {
+                  id: tb.id!,
+                  name: tb.name!,
+                  args: tb.args ?? {},
+                  requiresConfirm: false,
+                  status: "executed",
+                  summary: "(intent only — not executed)",
+                },
+              ],
+            }));
           }
         } else if (event === "tool_call_started") {
           const tb = parsed as {
@@ -1596,13 +1605,13 @@ export function ChatThreadView({
           };
           if (tb.id && tb.name) {
             setStreamBubble((b) => {
-              if (!b) return b;
-              const existing = b.toolCalls.find((c) => c.id === tb.id);
-              if (existing) return b;
+              const base = b ?? initialStreamBubble();
+              const existing = base.toolCalls.find((c) => c.id === tb.id);
+              if (existing) return base;
               return {
-                ...b,
+                ...base,
                 toolCalls: [
-                  ...b.toolCalls,
+                  ...base.toolCalls,
                   {
                     id: tb.id!,
                     name: tb.name!,
@@ -1622,20 +1631,20 @@ export function ChatThreadView({
           };
           if (tb.id && tb.name) {
             setStreamBubble((b) => {
-              if (!b) return b;
-              const existing = b.toolCalls.find((c) => c.id === tb.id);
+              const base = b ?? initialStreamBubble();
+              const existing = base.toolCalls.find((c) => c.id === tb.id);
               if (existing) {
                 return {
-                  ...b,
-                  toolCalls: b.toolCalls.map((c) =>
+                  ...base,
+                  toolCalls: base.toolCalls.map((c) =>
                     c.id === tb.id ? { ...c, requiresConfirm: true, status: "pending" } : c,
                   ),
                 };
               }
               return {
-                ...b,
+                ...base,
                 toolCalls: [
-                  ...b.toolCalls,
+                  ...base.toolCalls,
                   {
                     id: tb.id!,
                     name: tb.name!,
@@ -1659,10 +1668,10 @@ export function ChatThreadView({
           };
           if (tr.id) {
             setStreamBubble((b) => {
-              if (!b) return b;
+              const base = b ?? initialStreamBubble();
               return {
-                ...b,
-                toolCalls: b.toolCalls.map((c) =>
+                ...base,
+                toolCalls: base.toolCalls.map((c) =>
                   c.id === tr.id
                     ? {
                         ...c,
