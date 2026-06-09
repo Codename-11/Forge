@@ -17,6 +17,9 @@ Content-Type: application/json
 
 The endpoint speaks the standard MCP envelope. Two methods are exposed:
 
+- `initialize` — returns protocol capabilities and `serverInfo`. Forge includes
+  `version`, `gitSha`, and `buildTime` in `serverInfo` so clients and operators
+  can tell which deployed Forge build an MCP connection is talking to.
 - `tools/list` — returns the tool catalog, filtered to the calling key's
   scopes.
 - `tools/call` — invokes a tool by `{ name, arguments }`.
@@ -26,6 +29,8 @@ The endpoint speaks the standard MCP envelope. Two methods are exposed:
 Every tool also responds at `POST /api/mcp/<namespace>.<tool>` — for example
 `POST /api/mcp/issues.create`. The body is the tool's input directly (no
 JSON-RPC envelope), and the response is the tool's output directly.
+`GET /api/mcp/describe` returns the REST catalog plus the same `serverInfo`
+build identity for curl-based diagnostics.
 
 ::: tip
 Use JSON-RPC for agents (single endpoint, batchable, MCP-native). Use REST

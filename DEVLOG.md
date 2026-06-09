@@ -2,6 +2,18 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — MCP build identity visibility
+
+MCP JSON-RPC `initialize` and the REST `describe` catalog now report the same
+Forge build identity as the app shell: package version, baked git SHA, and build
+time. This gives MCP clients and operators a direct stale-version check instead
+of the previous hardcoded `serverInfo.version`.
+
+Verification: `pnpm vitest run tests/unit/build-info.test.ts
+src/server/services/__tests__/mcp.test.ts
+src/server/services/__tests__/mcp-exec.test.ts`, `pnpm docs:build`,
+`pnpm typecheck`, `pnpm lint`, and `git diff --check` pass.
+
 ## 2026-06-09 — Chat docs alignment
 
 Aligned the Chat guide and tRPC reference with the current chat implementation.
