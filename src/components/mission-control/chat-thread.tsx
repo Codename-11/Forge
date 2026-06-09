@@ -357,6 +357,7 @@ export type StreamToolCall = {
 
 type StreamBubble = {
   messageId: string | null;
+  runExternalId: string | null;
   body: string;
   thinking: string;
   toolCalls: StreamToolCall[];
@@ -1096,6 +1097,8 @@ export function ChatThreadView({
   // means we're either mid-stream or just finished (held briefly while
   // the persisted AGENT message refetches).
   const [streamBubble, setStreamBubble] = useState<StreamBubble | null>(null);
+  const streamBubbleRef = useRef<StreamBubble | null>(null);
+  streamBubbleRef.current = streamBubble;
   const [isStreaming, setIsStreaming] = useState(false);
   const [localReadReceipts, setLocalReadReceipts] = useState<Record<string, string>>({});
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -1433,6 +1436,7 @@ export function ChatThreadView({
 
       const initialStreamBubble = (): StreamBubble => ({
         messageId: null,
+        runExternalId: null,
         body: "",
         thinking: "",
         toolCalls: [],
@@ -1535,9 +1539,19 @@ export function ChatThreadView({
             acknowledgedAt?: string;
             outputStartedAt?: string;
           };
+          const runExternalId =
+            typeof (parsed as { runExternalId?: unknown }).runExternalId === "string"
+              ? ((parsed as { runExternalId: string }).runExternalId)
+              : undefined;
           const dispatchOnly = (parsed as { dispatch?: boolean }).dispatch === true;
           if (messageId) {
-            setStreamBubble((b) => ({ ...(b ?? initialStreamBubble()), messageId }));
+            setStreamBubble((b) => ({
+              ...(b ?? initialStreamBubble()),
+              messageId,
+              ...(runExternalId ? { runExternalId } : {}),
+            }));
+          } else if (runExternalId) {
+            setStreamBubble((b) => ({ ...(b ?? initialStreamBubble()), runExternalId }));
           } else if (dispatchOnly) {
             setStreamBubble(null);
           }
@@ -1781,6 +1795,21 @@ export function ChatThreadView({
     [agentId, selectedThreadId],
   );
 
+  const stopActiveStream = useCallback(() => {
+    const active = streamBubbleRef.current;
+    if (threadId && active?.messageId) {
+      void fetch("/api/chat/stream/stop", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ threadId, messageId: active.messageId }),
+      }).catch(() => {
+        /* The local stream still detaches below; status rail/logs carry failures. */
+      });
+    }
+    streamAbortRef.current?.abort();
+  }, [threadId]);
+
   // Abort any in-flight stream on unmount.
   useEffect(() => {
     return () => {
@@ -1965,9 +1994,9 @@ export function ChatThreadView({
   };
   const cancelOutbox = (item: Outbound) => {
     if (item.status === "sending") {
-      // Abort the in-flight stream; runStreamingSend's abort path drops the
-      // optimistic bubble (and the empty agent placeholder).
-      streamAbortRef.current?.abort();
+      // Ask the runtime to stop, then detach this browser stream locally.
+      // Passive browser disconnects do not stop provider work server-side.
+      stopActiveStream();
     } else {
       removeOutbox(item.id);
     }
@@ -2489,7 +2518,7 @@ export function ChatThreadView({
                   }
                 : undefined
             }
-            onStop={() => streamAbortRef.current?.abort()}
+            onStop={stopActiveStream}
             onApprove={(callId, alwaysAllow) => void respondToTool(callId, true, alwaysAllow)}
             onDecline={(callId) => void respondToTool(callId, false)}
           />
