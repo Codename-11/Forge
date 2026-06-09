@@ -97,6 +97,106 @@ describe("chatRouter deferred dispatch", () => {
     );
   });
 
+  it("forks a conversation through a selected message and clones chat attachments", async () => {
+    const { agent, caller, prisma, fixture } = await setup();
+    const conversation = await caller.createConversation({
+      agentId: agent.id,
+      title: "Original thread",
+      contextMode: ChatContextMode.FULL_SUMMARY,
+    });
+    const readAt = new Date("2026-01-01T00:00:00.000Z");
+    const firstUser = await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: conversation.thread.id,
+        role: ChatRole.USER,
+        body: "Here is the spec",
+        contextSnapshot: { route: "/w/acme/issues/1", issueId: "issue_1" },
+        dispatchedAt: readAt,
+        acknowledgedAt: readAt,
+        outputStartedAt: readAt,
+      },
+    });
+    await prisma.attachment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        targetType: "chat-message",
+        targetId: firstUser.id,
+        kind: "LINK",
+        filename: "Spec",
+        mimeType: "text/url",
+        size: 0,
+        url: "https://example.com/spec",
+        externalUrl: "https://example.com/spec",
+        linkTitle: "Spec",
+      },
+    });
+    const agentReply = await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: conversation.thread.id,
+        role: ChatRole.AGENT,
+        body: "I read the spec.",
+        sourceRunId: "old-run",
+      },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: conversation.thread.id,
+        role: ChatRole.USER,
+        body: "Do not include this later turn",
+        dispatchedAt: readAt,
+      },
+    });
+
+    const fork = await caller.forkThread({
+      threadId: conversation.thread.id,
+      messageId: agentReply.id,
+    });
+
+    expect(fork.thread.id).not.toBe(conversation.thread.id);
+    expect(fork.thread.title).toBe("Fork: Original thread");
+    expect(fork.thread.contextMode).toBe(ChatContextMode.FULL_SUMMARY);
+    expect(fork.messages.map((message) => message.body)).toEqual([
+      "Here is the spec",
+      "I read the spec.",
+    ]);
+    expect(fork.messages[0].attachments).toHaveLength(1);
+    expect(fork.messages[0].attachments[0]).toMatchObject({
+      filename: "Spec",
+      externalUrl: "https://example.com/spec",
+    });
+
+    const clonedRows = await prisma.chatMessage.findMany({
+      where: { threadId: fork.thread.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(clonedRows).toHaveLength(2);
+    expect(clonedRows[0].id).not.toBe(firstUser.id);
+    expect(clonedRows[0].acknowledgedAt).toBeInstanceOf(Date);
+    expect(clonedRows[1].sourceRunId).toBeNull();
+    expect(
+      await prisma.attachment.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          targetType: "chat-message",
+          targetId: clonedRows[0].id,
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.auditLog.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          entity: "ChatThread",
+          entityId: fork.thread.id,
+          action: "fork",
+        },
+      }),
+    ).toBe(1);
+  });
+
   it("dispatches user messages to a selected named conversation", async () => {
     const { agent, caller } = await setup();
     const conversation = await caller.createConversation({

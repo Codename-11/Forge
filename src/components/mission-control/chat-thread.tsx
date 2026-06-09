@@ -22,7 +22,12 @@ import { formatChatContextSummary, useChatContext } from "@/hooks/use-chat-conte
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
-import { ChatComposer, type MentionableAgent, type MentionablePerson } from "./chat-composer";
+import {
+  ChatComposer,
+  type ComposerContextItem,
+  type MentionableAgent,
+  type MentionablePerson,
+} from "./chat-composer";
 import { uploadAttachmentFile } from "@/components/attachments/attachment-upload-client";
 import { toast } from "sonner";
 import { ChatMarkdown } from "./chat-markdown";
@@ -821,6 +826,16 @@ interface SuggestedPrompt {
   body: string;
 }
 
+type ChatSendContext = {
+  route?: string;
+  slug?: string;
+  issueId?: string;
+  selectedIds?: string[];
+  pinnedRunIds?: string[];
+  liveRunIds?: string[];
+  visibleEntities?: Array<{ kind: string; ids: string[] }>;
+};
+
 /**
  * Contextual prompt suggestions for an empty thread. We build a small,
  * route-aware grid (3-4 items) so the operator has somewhere to land.
@@ -1155,6 +1170,15 @@ export function ChatThreadView({
       await utils.chat.threads.invalidate();
     },
   });
+  const forkThreadM = trpc.chat.forkThread.useMutation({
+    onSuccess: async (result) => {
+      toast.success("Conversation forked");
+      await utils.chat.threads.invalidate();
+      await utils.chat.getThread.invalidate({ threadId: result.thread.id });
+      onThreadCreated?.(result.thread.id, result.agent.id);
+    },
+    onError: (err) => toast.error(err.message),
+  });
   // Backs the `/engine` slash command — switches this agent's chat engine.
   const setEngineM = trpc.agent.update.useMutation({
     onSuccess: () => void utils.agent.byId.invalidate({ id: agentId }),
@@ -1172,6 +1196,7 @@ export function ChatThreadView({
   type Outbound = {
     id: string;
     body: string;
+    context: ChatSendContext;
     createdAt: number;
     rawFiles: File[];
     displayFiles: string[];
@@ -1262,7 +1287,7 @@ export function ChatThreadView({
     [workspaceMembers],
   );
 
-  const currentContext = useMemo(
+  const currentContext = useMemo<ChatSendContext>(
     () => ({
       route: ctx.route,
       slug: ctx.slug,
@@ -1283,7 +1308,94 @@ export function ChatThreadView({
     ],
   );
 
-  const contextSummary = useMemo(() => formatChatContextSummary(currentContext), [currentContext]);
+  const [excludedContextKeys, setExcludedContextKeys] = useState<Set<string>>(() => new Set());
+  const contextItems = useMemo<ComposerContextItem[]>(() => {
+    const items: ComposerContextItem[] = [];
+    if (currentContext.route) {
+      items.push({
+        key: "route",
+        label: `route:${currentContext.route.replace(/https?:\/\/[^\s]+/gi, "[redacted-url]")}`,
+        included: !excludedContextKeys.has("route"),
+      });
+    }
+    if (currentContext.issueId) {
+      items.push({
+        key: "issueId",
+        label: `issue:${currentContext.issueId}`,
+        included: !excludedContextKeys.has("issueId"),
+      });
+    }
+    if (currentContext.selectedIds?.length) {
+      items.push({
+        key: "selectedIds",
+        label: `selected:${currentContext.selectedIds.length}`,
+        included: !excludedContextKeys.has("selectedIds"),
+      });
+    }
+    const visibleCount =
+      currentContext.visibleEntities?.reduce((sum, entity) => sum + entity.ids.length, 0) ?? 0;
+    if (visibleCount) {
+      items.push({
+        key: "visibleEntities",
+        label: `visible:${visibleCount}`,
+        included: !excludedContextKeys.has("visibleEntities"),
+      });
+    }
+    if (currentContext.pinnedRunIds?.length) {
+      items.push({
+        key: "pinnedRunIds",
+        label: `pinned-runs:${currentContext.pinnedRunIds.length}`,
+        included: !excludedContextKeys.has("pinnedRunIds"),
+      });
+    }
+    if (currentContext.liveRunIds?.length) {
+      items.push({
+        key: "liveRunIds",
+        label: `live-runs:${currentContext.liveRunIds.length}`,
+        included: !excludedContextKeys.has("liveRunIds"),
+      });
+    }
+    if (currentContext.slug) {
+      items.push({
+        key: "slug",
+        label: `workspace:${currentContext.slug}`,
+        included: !excludedContextKeys.has("slug"),
+      });
+    }
+    return items;
+  }, [currentContext, excludedContextKeys]);
+  useEffect(() => {
+    const validKeys = new Set(contextItems.map((item) => item.key));
+    setExcludedContextKeys((prev) => {
+      const next = new Set([...prev].filter((key) => validKeys.has(key)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [contextItems]);
+  const toggleContextItem = useCallback((key: string) => {
+    setExcludedContextKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  const sendContext = useMemo<ChatSendContext>(
+    () => ({
+      route: excludedContextKeys.has("route") ? undefined : currentContext.route,
+      slug: excludedContextKeys.has("slug") ? undefined : currentContext.slug,
+      issueId: excludedContextKeys.has("issueId") ? undefined : currentContext.issueId,
+      selectedIds: excludedContextKeys.has("selectedIds") ? undefined : currentContext.selectedIds,
+      pinnedRunIds: excludedContextKeys.has("pinnedRunIds")
+        ? undefined
+        : currentContext.pinnedRunIds,
+      liveRunIds: excludedContextKeys.has("liveRunIds") ? undefined : currentContext.liveRunIds,
+      visibleEntities: excludedContextKeys.has("visibleEntities")
+        ? undefined
+        : currentContext.visibleEntities,
+    }),
+    [currentContext, excludedContextKeys],
+  );
+  const contextSummary = useMemo(() => formatChatContextSummary(sendContext), [sendContext]);
 
   /**
    * Run a streamed reply against /api/chat/stream. Parses SSE event blocks
@@ -1298,7 +1410,12 @@ export function ChatThreadView({
     async (
       targetThreadId: string,
       body: string,
-      opts?: { attachmentIds?: string[]; pendingMessageId?: string; outboxId?: string },
+      opts?: {
+        attachmentIds?: string[];
+        pendingMessageId?: string;
+        outboxId?: string;
+        context?: ChatSendContext;
+      },
     ) => {
       const outboxId = opts?.outboxId;
       // Cancel any in-flight stream before starting a new one.
@@ -1354,6 +1471,7 @@ export function ChatThreadView({
             threadId: targetThreadId,
             body,
             canvasId: canvasIdRef.current ?? undefined,
+            context: opts?.context ?? {},
             attachments: opts?.attachmentIds,
             pendingMessageId: opts?.pendingMessageId,
           }),
@@ -1698,7 +1816,7 @@ export function ChatThreadView({
   // item's lifecycle (sent / failed / removed) to `runStreamingSend` via
   // `outboxId`; the no-threadId fallback resolves it here.
   const sendOne = async (item: Outbound) => {
-    const { id, body, rawFiles: files } = item;
+    const { id, body, context, rawFiles: files } = item;
     try {
       // Streaming path with optional attachments. Uploads target the
       // *pending* message id we create first; the streaming route then
@@ -1712,7 +1830,7 @@ export function ChatThreadView({
             agentId,
             threadId: selectedThreadId ?? undefined,
             body,
-            context: currentContext,
+            context,
           });
           pendingMessageId = pending.messageId;
           for (const file of files) {
@@ -1734,6 +1852,7 @@ export function ChatThreadView({
           attachmentIds,
           pendingMessageId,
           outboxId: id,
+          context,
         });
         return;
       }
@@ -1745,14 +1864,14 @@ export function ChatThreadView({
           agentId,
           threadId: selectedThreadId ?? undefined,
           body,
-          context: currentContext,
+          context,
         });
       } else {
         const pending = await createPendingM.mutateAsync({
           agentId,
           threadId: selectedThreadId ?? undefined,
           body,
-          context: currentContext,
+          context,
         });
         for (const file of files) {
           await uploadAttachmentFile({
@@ -1814,6 +1933,7 @@ export function ChatThreadView({
       {
         id,
         body,
+        context: sendContext,
         createdAt: Date.now(),
         rawFiles: files,
         displayFiles: files.map((f) => f.name || "attachment"),
@@ -1901,7 +2021,7 @@ export function ChatThreadView({
             agentId,
             threadId: result.thread.id,
             body: prompt,
-            context: currentContext,
+            context: sendContext,
           });
         }
         onThreadCreated?.(result.thread.id, result.agent.id);
@@ -1935,6 +2055,7 @@ export function ChatThreadView({
     agentFull?.provider,
     readiness?.mode,
     readiness?.transportLabel,
+    sendContext,
     threadId,
     workspace?.slug,
   ]);
@@ -2034,6 +2155,31 @@ export function ChatThreadView({
         return true;
       }),
     [outbox, persistedMessageIds, persistedUserMessages],
+  );
+
+  const fillComposer = useCallback((body: string) => {
+    setFillRequest((prev) => ({ body, nonce: (prev?.nonce ?? 0) + 1 }));
+  }, []);
+
+  const findPreviousUserBody = useCallback(
+    (messageId: string) => {
+      const idx = displayRows.findIndex((row) => row.id === messageId);
+      if (idx === -1) return null;
+      for (let i = idx - 1; i >= 0; i -= 1) {
+        const row = displayRows[i];
+        if (row?.role === "USER" && row.body.trim().length > 0) return row.body;
+      }
+      return null;
+    },
+    [displayRows],
+  );
+
+  const forkFromMessage = useCallback(
+    (messageId: string) => {
+      if (!threadId || messageId.startsWith("_")) return;
+      forkThreadM.mutate({ threadId, messageId });
+    },
+    [forkThreadM, threadId],
   );
 
   // ---------- Presence-aware derived values ----------
@@ -2281,9 +2427,30 @@ export function ChatThreadView({
             )}
           </div>
         )}
-        {displayRows.map((m) => (
-          <ChatMessageBubble key={m.id} msg={m} agentName={agent?.name} />
-        ))}
+        {displayRows.map((m) => {
+          const persisted = !m.id.startsWith("_") && m.role !== "SYSTEM";
+          return (
+            <ChatMessageBubble
+              key={m.id}
+              msg={m}
+              agentName={agent?.name}
+              onEditMessage={persisted && m.role === "USER" ? fillComposer : undefined}
+              onResendMessage={
+                persisted && m.role === "USER" ? (body) => handleSend(body) : undefined
+              }
+              onRegenerateFromMessage={
+                persisted && m.role === "AGENT"
+                  ? () => {
+                      const prompt = findPreviousUserBody(m.id);
+                      if (prompt) handleSend(prompt);
+                      else toast.info("No previous user turn to regenerate");
+                    }
+                  : undefined
+              }
+              onForkFromMessage={persisted ? () => forkFromMessage(m.id) : undefined}
+            />
+          );
+        })}
         {/* Active outbound messages (sending / sent / failed) sit above the
             agent's reply. Queued messages render below it as "up next". */}
         {visibleOutbox.filter((m) => m.status !== "queued").map(renderOutbound)}
@@ -2301,7 +2468,7 @@ export function ChatThreadView({
                 ? () => {
                     const prompt = streamBubble.lastPrompt;
                     setStreamBubble(null);
-                    void runStreamingSend(threadId, prompt);
+                    void runStreamingSend(threadId, prompt, { context: sendContext });
                   }
                 : undefined
             }
@@ -2404,6 +2571,8 @@ export function ChatThreadView({
         banner={composerBanner}
         slashContext={slashContext}
         contextSummary={contextSummary}
+        contextItems={contextItems}
+        onToggleContextItem={toggleContextItem}
         autoFocus={autoFocus}
         threadId={threadId}
         mentionableAgents={mentionableAgents}

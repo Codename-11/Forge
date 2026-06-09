@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   CircleSlash,
+  Copy,
   LinkIcon,
   PlugZap,
   Radio,
@@ -92,6 +93,16 @@ function toneClass(tone: string | null | undefined): string {
   if (tone === "warning") return "border-amber-500/30 bg-amber-500/10";
   if (tone === "info") return "border-sky-500/25 bg-sky-500/10";
   return "border-border/60 bg-background/60";
+}
+
+function shortId(id: string | null | undefined): string {
+  if (!id) return "";
+  return id.length <= 10 ? id : `${id.slice(0, 4)}...${id.slice(-4)}`;
+}
+
+function timelineTime(input: Date | string | null | undefined): string {
+  if (!input) return "";
+  return new Date(input).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function capabilityLabels(capabilities: Record<string, boolean> | null | undefined) {
@@ -250,14 +261,6 @@ export function ChatStatusRail({
     onError: (err) => toast.error(err.message),
   });
 
-  if (!threadId || !agentId) {
-    return (
-      <div className="text-meta rounded-xl border border-border bg-card/50 p-4 text-muted-foreground">
-        Select a conversation to inspect its connection, delivery, and run state.
-      </div>
-    );
-  }
-
   const engine = readiness?.mode ?? null; // "runs" | "completions"
   const effectiveProvider = readiness?.provider ?? agent?.provider ?? null;
   const runtime = agent?.runtime ?? null;
@@ -287,8 +290,93 @@ export function ChatStatusRail({
   // stopped from the composer, not here.
   const canStop = Boolean(diagnostics?.lastRun?.id && runActive && engine === "runs");
   const capabilityRows = capabilityLabels(readiness?.capabilities);
+  const copyDiagnosticId = async (id: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(id);
+      toast.success(`${label} id copied`);
+    } catch {
+      toast.error("Could not copy id");
+    }
+  };
+  const timelineRows = useMemo(() => {
+    const rows: Array<{
+      key: string;
+      label: string;
+      detail: string;
+      at?: Date | string | null;
+      id?: string | null;
+      tone?: "success" | "warning" | "danger" | "muted";
+    }> = [];
+    if (diagnostics?.latestUserMessage) {
+      rows.push({
+        key: "message",
+        label: "Message",
+        detail: "user turn persisted",
+        at: diagnostics.latestUserMessage.createdAt,
+        id: diagnostics.latestUserMessage.id,
+        tone: "success",
+      });
+      const readAt =
+        diagnostics.latestUserMessage.acknowledgedAt ??
+        diagnostics.latestUserMessage.outputStartedAt;
+      if (readAt) {
+        rows.push({
+          key: "read",
+          label: "Read",
+          detail: "agent acknowledged",
+          at: readAt,
+          id: diagnostics.latestUserMessage.id,
+          tone: "success",
+        });
+      } else if (diagnostics.latestUserMessage.lastWakeAt) {
+        rows.push({
+          key: "wake",
+          label: "Wake",
+          detail: `${diagnostics.latestUserMessage.wakeAttempts} attempt${
+            diagnostics.latestUserMessage.wakeAttempts === 1 ? "" : "s"
+          }`,
+          at: diagnostics.latestUserMessage.lastWakeAt,
+          id: diagnostics.latestUserMessage.lastWakeDeliveryId,
+          tone: diagnostics.dispatchState === "stalled" ? "warning" : "muted",
+        });
+      }
+    }
+    if (diagnostics?.lastRun) {
+      rows.push({
+        key: "run",
+        label: "Run",
+        detail: `${diagnostics.lastRun.status.toLowerCase()} · ${
+          diagnostics.lastRun.currentStep ?? "no current step"
+        }`,
+        at: diagnostics.lastRun.lastEventAt ?? diagnostics.lastRun.startedAt,
+        id: diagnostics.lastRun.id,
+        tone: runBad ? "warning" : "success",
+      });
+    }
+    if (diagnostics?.lastDelivery) {
+      rows.push({
+        key: "delivery",
+        label: "Delivery",
+        detail: `${diagnostics.lastDelivery.status.toLowerCase()} · ${
+          diagnostics.lastDelivery.attempts
+        } attempt${diagnostics.lastDelivery.attempts === 1 ? "" : "s"}`,
+        at: diagnostics.lastDelivery.updatedAt,
+        id: diagnostics.lastDelivery.id,
+        tone: deliveryBad ? "danger" : "success",
+      });
+    }
+    return rows;
+  }, [deliveryBad, diagnostics, runBad]);
 
   const compactLayout = variant === "compact";
+
+  if (!threadId || !agentId) {
+    return (
+      <div className="text-meta rounded-xl border border-border bg-card/50 p-4 text-muted-foreground">
+        Select a conversation to inspect its connection, delivery, and run state.
+      </div>
+    );
+  }
 
   return (
     <div
@@ -502,6 +590,58 @@ export function ChatStatusRail({
           </div>
         )}
       </div>
+
+      {timelineRows.length > 0 && (
+        <div className="text-meta rounded-lg border border-border/60 bg-background/60 p-2">
+          <div className="flex items-center gap-2 font-medium text-foreground">
+            <Sparkles className="h-3.5 w-3.5" /> Timeline
+          </div>
+          <div className="mt-2 space-y-1.5">
+            {timelineRows.map((row) => (
+              <div key={row.key} className="flex items-start gap-2">
+                <span
+                  className={cn(
+                    "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
+                    row.tone === "danger"
+                      ? "bg-danger"
+                      : row.tone === "warning"
+                        ? "bg-amber-500"
+                        : row.tone === "success"
+                          ? "bg-emerald-500"
+                          : "bg-muted-foreground/40",
+                  )}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[0.625rem] font-medium text-foreground">
+                      {row.label}
+                    </span>
+                    {row.at && (
+                      <span className="text-[0.5625rem] text-muted-foreground/70">
+                        {timelineTime(row.at)}
+                      </span>
+                    )}
+                    {row.id && (
+                      <button
+                        type="button"
+                        onClick={() => void copyDiagnosticId(row.id!, row.label)}
+                        className="ml-auto inline-flex items-center gap-1 rounded border border-border/50 bg-card/40 px-1 py-0 font-mono text-[0.5625rem] text-muted-foreground hover:border-ember/40 hover:text-foreground"
+                        title={`Copy ${row.label.toLowerCase()} id`}
+                      >
+                        <Copy className="h-2.5 w-2.5" />
+                        {shortId(row.id)}
+                      </button>
+                    )}
+                  </div>
+                  <div className="truncate text-[0.625rem] text-muted-foreground">
+                    {row.detail}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div
         className={cn(

@@ -8,6 +8,8 @@ import {
   Image as ImageIcon,
   Loader2,
   Paperclip,
+  Pin,
+  PinOff,
   Send,
   X,
 } from "lucide-react";
@@ -53,6 +55,12 @@ export interface MentionablePerson {
   email?: string | null;
 }
 
+export interface ComposerContextItem {
+  key: string;
+  label: string;
+  included: boolean;
+}
+
 type MentionItem =
   | { kind: "agent"; agent: MentionableAgent }
   | { kind: "user"; person: MentionablePerson };
@@ -73,6 +81,9 @@ interface ChatComposerProps {
   slashContext?: SlashCommandContext;
   /** Human-readable summary of route/entity context that will be attached to the dispatch payload. */
   contextSummary?: string[];
+  /** Rich context rows when the caller supports per-item include/exclude. */
+  contextItems?: ComposerContextItem[];
+  onToggleContextItem?: (key: string) => void;
   /** Auto-focus the textarea on mount (used when Chat tab becomes active). */
   autoFocus?: boolean;
   /** Thread id — drafts are persisted to localStorage keyed by this id. */
@@ -128,6 +139,8 @@ export function ChatComposer({
   banner,
   slashContext,
   contextSummary = [],
+  contextItems,
+  onToggleContextItem,
   autoFocus = false,
   threadId,
   mentionableAgents = [],
@@ -527,8 +540,16 @@ export function ChatComposer({
   const busy = disabled || commandPending;
   const hasMentionables = mentionableAgents.length > 0 || mentionablePeople.length > 0;
   const includedAttachments = attachments.filter((a) => a.includeInContext);
+  const contextRows =
+    contextItems ??
+    contextSummary.map((label) => ({
+      key: label,
+      label,
+      included: true,
+    }));
+  const includedContextRows = contextRows.filter((item) => item.included);
   const approximateContextTokens =
-    Math.ceil((body.length + contextSummary.join(" ").length) / 4) +
+    Math.ceil((body.length + includedContextRows.map((item) => item.label).join(" ").length) / 4) +
     includedAttachments.length * 120;
 
   const popoverNode = useMemo(() => {
@@ -691,7 +712,7 @@ export function ChatComposer({
         <div className="text-meta bg-subtle/60 px-3 py-1.5 text-muted-foreground">{banner}</div>
       )}
 
-      {(contextSummary.length > 0 || attachments.length > 0) && (
+      {(contextRows.length > 0 || attachments.length > 0) && (
         <div className="text-meta border-b border-border/50 bg-card/25 px-3 py-1.5 text-muted-foreground">
           <button
             type="button"
@@ -705,7 +726,8 @@ export function ChatComposer({
             )}
             Context to send
             <span className="text-muted-foreground/70">
-              · {contextSummary.length} page item{contextSummary.length === 1 ? "" : "s"},{" "}
+              · {includedContextRows.length}/{contextRows.length} page item
+              {contextRows.length === 1 ? "" : "s"},{" "}
               {includedAttachments.length}/{attachments.length} file
               {attachments.length === 1 ? "" : "s"}
             </span>
@@ -727,13 +749,27 @@ export function ChatComposer({
                 )}
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {contextSummary.map((item) => (
-                  <span
-                    key={item}
-                    className="rounded border border-border/60 bg-background/60 px-1.5 py-0.5 font-mono text-[0.625rem]"
+                {contextRows.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => onToggleContextItem?.(item.key)}
+                    disabled={!onToggleContextItem || busy}
+                    title={item.included ? "Exclude from next send" : "Include in next send"}
+                    className={cn(
+                      "inline-flex max-w-full items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[0.625rem] transition-colors disabled:cursor-default",
+                      item.included
+                        ? "border-border/60 bg-background/60 text-foreground/90 hover:border-ember/40"
+                        : "border-border bg-subtle/40 text-muted-foreground/60 line-through opacity-75 hover:text-muted-foreground",
+                    )}
                   >
-                    {item}
-                  </span>
+                    {item.included ? (
+                      <Pin className="h-2.5 w-2.5 shrink-0 text-ember" />
+                    ) : (
+                      <PinOff className="h-2.5 w-2.5 shrink-0" />
+                    )}
+                    <span className="truncate">{item.label}</span>
+                  </button>
                 ))}
                 {attachments.map((draft) => (
                   <span

@@ -784,6 +784,182 @@ export const chatRouter = router({
       return { thread, agent, messages: [] };
     }),
 
+  forkThread: workspaceProcedure
+    .input(
+      z.object({
+        threadId: idString,
+        messageId: idString,
+        title: z.string().trim().min(1).max(120).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        const source = await tx.chatThread.findFirst({
+          where: {
+            id: input.threadId,
+            workspaceId: ctx.workspaceId,
+            userId: ctx.session.user.id,
+            archivedAt: null,
+          },
+          include: {
+            agent: {
+              select: {
+                id: true,
+                name: true,
+                profileKey: true,
+                avatar: true,
+                status: true,
+                role: true,
+              },
+            },
+          },
+        });
+        if (!source) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Chat thread not found" });
+        }
+
+        const sourceMessages = await tx.chatMessage.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            threadId: source.id,
+            ...visibleChatMessageWhere,
+          },
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            role: true,
+            body: true,
+            contextSnapshot: true,
+            dispatchedAt: true,
+            acknowledgedAt: true,
+            outputStartedAt: true,
+            createdAt: true,
+          },
+        });
+        const targetIndex = sourceMessages.findIndex((message) => message.id === input.messageId);
+        if (targetIndex === -1) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Message not found in thread" });
+        }
+        const selectedMessages = sourceMessages.slice(0, targetIndex + 1);
+        const now = new Date();
+        const baseTitle =
+          source.title?.trim() ||
+          source.topic?.trim() ||
+          `Chat with ${source.agent.name || source.agent.profileKey}`;
+        const thread = await tx.chatThread.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            userId: ctx.session.user.id,
+            agentId: source.agentId,
+            title: input.title ?? `Fork: ${baseTitle}`.slice(0, 120),
+            topic: source.topic,
+            isDefault: false,
+            contextMode: source.contextMode,
+            summaryMarkdown: source.summaryMarkdown,
+            summarizedUntilMessageId: null,
+            summarizedAt: source.summarizedAt,
+            providerOverride: source.providerOverride,
+            modelOverride: source.modelOverride,
+            lastMessageAt: now,
+            createdAt: now,
+          },
+        });
+
+        const messageIdMap = new Map<string, string>();
+        const clonedMessages = [];
+        for (const [idx, message] of selectedMessages.entries()) {
+          const createdAt = new Date(now.getTime() + idx);
+          const receiptAt =
+            message.acknowledgedAt ?? message.outputStartedAt ?? message.dispatchedAt ?? createdAt;
+          const cloned = await tx.chatMessage.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              threadId: thread.id,
+              role: message.role,
+              body: message.body,
+              contextSnapshot: (message.contextSnapshot ?? undefined) as
+                | Prisma.InputJsonValue
+                | undefined,
+              // Historical fork rows should stay visible/readable, but must
+              // not wake agents or point the new thread at an old runtime run.
+              sourceRunId: null,
+              dispatchedAt: message.role === ChatRole.USER ? (message.dispatchedAt ?? now) : null,
+              acknowledgedAt: message.role === ChatRole.USER ? receiptAt : null,
+              outputStartedAt: message.role === ChatRole.USER ? receiptAt : null,
+              lastWakeAt: null,
+              wakeAttempts: 0,
+              lastWakeDeliveryId: null,
+              createdAt,
+            },
+          });
+          messageIdMap.set(message.id, cloned.id);
+          clonedMessages.push(cloned);
+        }
+
+        const sourceMessageIds = selectedMessages.map((message) => message.id);
+        const sourceAttachments =
+          sourceMessageIds.length > 0
+            ? await tx.attachment.findMany({
+                where: {
+                  workspaceId: ctx.workspaceId,
+                  targetType: "chat-message",
+                  targetId: { in: sourceMessageIds },
+                  NOT: { url: { startsWith: "pending:" } },
+                },
+                orderBy: { createdAt: "asc" },
+              })
+            : [];
+        if (sourceAttachments.length > 0) {
+          await tx.attachment.createMany({
+            data: sourceAttachments
+              .map((attachment) => {
+                const targetId = attachment.targetId
+                  ? messageIdMap.get(attachment.targetId)
+                  : undefined;
+                if (!targetId) return null;
+                return {
+                  workspaceId: ctx.workspaceId,
+                  issueId: null,
+                  targetType: "chat-message",
+                  targetId,
+                  kind: attachment.kind,
+                  filename: attachment.filename,
+                  mimeType: attachment.mimeType,
+                  size: attachment.size,
+                  url: attachment.url,
+                  externalUrl: attachment.externalUrl,
+                  linkTitle: attachment.linkTitle,
+                  createdAt: now,
+                };
+              })
+              .filter((row): row is NonNullable<typeof row> => row !== null),
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            entity: "ChatThread",
+            entityId: thread.id,
+            action: "fork",
+            before: {
+              sourceThreadId: source.id,
+              sourceMessageId: input.messageId,
+            },
+            after: {
+              messageCount: clonedMessages.length,
+              attachmentCount: sourceAttachments.length,
+            },
+          },
+        });
+
+        const messages = await attachChatMessageMetadata(tx, ctx.workspaceId, clonedMessages);
+        return { thread, agent: source.agent, messages };
+      });
+    }),
+
   updateConversation: workspaceProcedure
     .input(
       z.object({

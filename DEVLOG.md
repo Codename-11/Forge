@@ -2,6 +2,23 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-08 — Chat completion controls and branching
+
+Added message-level chat actions for copy, edit in composer, resend, regenerate
+from the previous user turn, and fork from a selected message. Forking creates a
+new owned conversation, copies visible history through that turn, preserves
+chat-message attachment metadata on the new rows, avoids re-dispatching old
+turns, and records an audit entry.
+
+The composer now snapshots context per queued send, persists text-only streaming
+context snapshots through `/api/chat/stream`, and lets operators include/exclude
+individual route/workspace/issue/run context chips before sending. The status
+rail also shows a compact diagnostic timeline with copyable message, run, and
+delivery ids.
+
+Verification: `pnpm lint`, `pnpm typecheck`, focused chat router Vitest
+coverage, and full `pnpm test` pass.
+
 ## 2026-06-08 — Provider-neutral chat polish
 
 Added a provider-neutral chat capability contract to `chatReadiness` so Forge
