@@ -37,10 +37,10 @@ export const INBOUND: ConnectionRow[] = [
   {
     key: "github",
     title: "GitHub",
-    blurb: "Two-way sync: issues, PR status, mentions.",
+    blurb: "Import and link issues and PRs through a GitHub App.",
     icon: GitBranch,
-    transport: "OAuth",
-    status: "available",
+    transport: "GitHub App",
+    status: "connected",
     scope: null,
   },
   {

@@ -4,6 +4,7 @@ import { notFound, useParams } from "next/navigation";
 import {
   ArrowRight,
   ChevronLeft,
+  GitBranch,
   KeyRound,
   Lock,
   PlugZap,
@@ -40,6 +41,7 @@ export default function ConnectionDetailPage() {
   const { connection: c, direction } = found;
   const Icon = c.icon;
   const isReal = c.key === "email-issue";
+  const isGitHub = c.key === "github";
   const isConnected = c.status === "connected";
 
   return (
@@ -128,6 +130,8 @@ export default function ConnectionDetailPage() {
           {/* Configuration */}
           {isReal ? (
             <RealEmailIssueSection slug={ws.slug} />
+          ) : isGitHub ? (
+            <RealGitHubSection slug={ws.slug} />
           ) : (
             <PlaceholderConfigSection
               connectVerb={isConnected ? "Configure" : "Connect"}
@@ -136,7 +140,7 @@ export default function ConnectionDetailPage() {
           )}
 
           {/* Danger zone — only for connected channels */}
-          {isConnected && !isReal && (
+          {isConnected && !isReal && !isGitHub && (
             <Section title="Danger zone">
               <div className="rounded-lg border border-danger/30 bg-danger/5">
                 <div className="flex items-start justify-between gap-4 p-4">
@@ -274,6 +278,48 @@ function RealEmailIssueSection({ slug }: { slug: string }) {
               Open email-to-issue controls
               <ArrowRight className="h-3 w-3" />
             </Link>
+          </div>
+        </div>
+      </Card>
+    </Section>
+  );
+}
+
+function RealGitHubSection({ slug }: { slug: string }) {
+  return (
+    <Section
+      title="Configuration"
+      hint="Install the GitHub App globally, then map repositories into this workspace."
+    >
+      <Card as="div">
+        <div className="flex items-start gap-3 p-4">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-subtle">
+            <GitBranch className="h-3.5 w-3.5 text-foreground" />
+          </span>
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="text-sm font-semibold text-foreground">
+              GitHub App-backed sync is available
+            </div>
+            <p className="text-[0.8125rem] text-muted-foreground">
+              Forge can import GitHub issues, link issues and PRs, receive
+              signed webhooks, and use PR/check state to update local Forge
+              workflow. GitHub writeback is not enabled.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href={`/api/connections/github/install?returnTo=${encodeURIComponent(`/w/${slug}/settings/connections`)}`}
+                className="focus-ring inline-flex h-7 items-center gap-1.5 rounded-md bg-ember px-2 text-xs font-medium text-ember-foreground hover:bg-ember/90"
+              >
+                Install GitHub App
+              </a>
+              <Link
+                href={`/w/${slug}/settings/connections`}
+                className="inline-flex items-center gap-1 text-meta text-ember hover:underline"
+              >
+                Map repositories
+                <ArrowRight className="h-3 w-3" />
+              </Link>
+            </div>
           </div>
         </div>
       </Card>

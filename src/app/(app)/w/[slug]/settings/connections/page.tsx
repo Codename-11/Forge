@@ -1,9 +1,11 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   GitBranch,
+  Github,
   MessageSquare,
   MoreHorizontal,
   Pause,
@@ -67,6 +69,37 @@ const PROVIDER_META: Record<
 type ConnectionRow = inferRouterOutputs<AppRouter>["connection"]["list"][number];
 type MappingRow = inferRouterOutputs<AppRouter>["connectionMapping"]["list"][number];
 type LabelRow = inferRouterOutputs<AppRouter>["label"]["list"][number];
+type StatusRow = inferRouterOutputs<AppRouter>["status"]["list"][number];
+type ProjectRow = inferRouterOutputs<AppRouter>["project"]["list"]["items"][number];
+type AgentRow = inferRouterOutputs<AppRouter>["agent"]["list"][number];
+
+const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
+type PriorityValue = (typeof PRIORITIES)[number];
+
+const GITHUB_STATUS_RULES = [
+  { key: "issueClosedStatusId", label: "GitHub issue closed" },
+  { key: "issueReopenedStatusId", label: "GitHub issue reopened" },
+  { key: "prOpenedStatusId", label: "PR opened" },
+  { key: "prReadyForReviewStatusId", label: "PR ready for review" },
+  { key: "prChangesRequestedStatusId", label: "PR changes requested" },
+  { key: "prMergedStatusId", label: "PR merged" },
+  { key: "checksFailedStatusId", label: "Checks failed" },
+] as const;
+type GitHubStatusRuleKey = (typeof GITHUB_STATUS_RULES)[number]["key"];
+
+type GitHubMappingUiConfig = {
+  autoCreateIssues: boolean;
+  syncTitle: boolean;
+  syncDescription: boolean;
+  syncComments: boolean;
+  defaultProjectId: string;
+  defaultPriority: PriorityValue;
+  queueOnCreate: boolean;
+  assignedAgentId: string;
+  claimedById: string;
+  labelMap: Record<string, string>;
+  statusRules: Record<GitHubStatusRuleKey, string>;
+};
 
 type EditingState = {
   id?: string;
@@ -76,10 +109,100 @@ type EditingState = {
   direction: Direction;
   routeTo: string;
   labelIds: string[];
+  github: GitHubMappingUiConfig;
 };
+
+function emptyGitHubRules(): Record<GitHubStatusRuleKey, string> {
+  return Object.fromEntries(GITHUB_STATUS_RULES.map((r) => [r.key, ""])) as Record<
+    GitHubStatusRuleKey,
+    string
+  >;
+}
+
+function defaultGitHubConfig(): GitHubMappingUiConfig {
+  return {
+    autoCreateIssues: false,
+    syncTitle: true,
+    syncDescription: false,
+    syncComments: false,
+    defaultProjectId: "",
+    defaultPriority: "NONE",
+    queueOnCreate: false,
+    assignedAgentId: "",
+    claimedById: "",
+    labelMap: {},
+    statusRules: emptyGitHubRules(),
+  };
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function booleanValue(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function priorityValue(value: unknown): PriorityValue {
+  return PRIORITIES.includes(value as PriorityValue) ? (value as PriorityValue) : "NONE";
+}
+
+function readGitHubConfig(config: unknown): GitHubMappingUiConfig {
+  const root = objectValue(config);
+  const github = objectValue(root.github);
+  const statusRules = objectValue(github.statusRules);
+  const next = defaultGitHubConfig();
+  return {
+    ...next,
+    autoCreateIssues: booleanValue(github.autoCreateIssues, next.autoCreateIssues),
+    syncTitle: booleanValue(github.syncTitle, next.syncTitle),
+    syncDescription: booleanValue(github.syncDescription, next.syncDescription),
+    syncComments: booleanValue(github.syncComments, next.syncComments),
+    defaultProjectId: stringValue(github.defaultProjectId),
+    defaultPriority: priorityValue(github.defaultPriority),
+    queueOnCreate: booleanValue(github.queueOnCreate, next.queueOnCreate),
+    assignedAgentId: stringValue(github.assignedAgentId),
+    claimedById: stringValue(github.claimedById),
+    labelMap: objectValue(github.labelMap) as Record<string, string>,
+    statusRules: Object.fromEntries(
+      GITHUB_STATUS_RULES.map((rule) => [rule.key, stringValue(statusRules[rule.key])]),
+    ) as Record<GitHubStatusRuleKey, string>,
+  };
+}
+
+function githubConfigForSave(config: GitHubMappingUiConfig): Record<string, unknown> {
+  return {
+    github: {
+      autoCreateIssues: config.autoCreateIssues,
+      syncTitle: config.syncTitle,
+      syncDescription: config.syncDescription,
+      syncComments: config.syncComments,
+      defaultProjectId: config.defaultProjectId || null,
+      defaultLabelIds: [],
+      labelMap: config.labelMap,
+      defaultPriority: config.defaultPriority,
+      queueOnCreate: config.queueOnCreate,
+      assignedAgentId: config.assignedAgentId || null,
+      claimedById: config.claimedById || null,
+      statusRules: Object.fromEntries(
+        GITHUB_STATUS_RULES.map((rule) => [
+          rule.key,
+          config.statusRules[rule.key] || null,
+        ]),
+      ),
+    },
+  };
+}
 
 export default function ConnectionsMappingPage() {
   const ws = useWorkspace();
+  const router = useRouter();
   const utils = trpc.useUtils();
   const isAdmin = ws.role === "OWNER" || ws.role === "ADMIN";
 
@@ -88,6 +211,9 @@ export default function ConnectionsMappingPage() {
   const { data: mappings, isLoading: mappingsLoading } =
     trpc.connectionMapping.list.useQuery();
   const { data: labels } = trpc.label.list.useQuery();
+  const { data: statuses } = trpc.status.list.useQuery();
+  const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
+  const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false });
 
   // Quick lookup so mapping rows can render chosen labels by id.
   const labelById = useMemo(
@@ -100,7 +226,41 @@ export default function ConnectionsMappingPage() {
     id: string;
     target: string;
   } | null>(null);
+  const [importing, setImporting] = useState<{
+    mappingId: string;
+    repo: string;
+    number: string;
+    projectId: string;
+    queue: boolean;
+  } | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const selectedConnection = useMemo(
+    () => (connections ?? []).find((c) => c.id === editing?.connectionId) ?? null,
+    [connections, editing?.connectionId],
+  );
+  const isGitHubRepoEditing = selectedConnection?.provider === "GITHUB" && editing?.kind === "repo";
+  const { data: installationRepos, isLoading: installationReposLoading } =
+    trpc.github.listInstallationRepos.useQuery(
+      { connectionId: editing?.connectionId ?? "" },
+      { enabled: !!editing?.connectionId && selectedConnection?.provider === "GITHUB" },
+    );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const ok = url.searchParams.get("connection_connected");
+    const err = url.searchParams.get("connection_error");
+    if (!ok && !err) return;
+    if (ok) toast.success("GitHub App connected.", { description: ok });
+    if (err) toast.error("GitHub App setup failed.", { description: err });
+    url.searchParams.delete("connection_connected");
+    url.searchParams.delete("connection_error");
+    window.history.replaceState({}, "", url.pathname + url.search);
+    invalidate();
+    // `invalidate` closes over tRPC utils; the callback is intentionally
+    // one-shot for URL params on first render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function invalidate() {
     void utils.connectionMapping.list.invalidate();
@@ -127,6 +287,15 @@ export default function ConnectionsMappingPage() {
     onSuccess: () => {
       toast.success("Mapping removed.");
       invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const importIssue = trpc.github.importIssue.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.created ? "GitHub issue imported." : "GitHub issue already linked.");
+      setImporting(null);
+      void utils.issue.list.invalidate();
+      router.push(`/w/${ws.slug}/issues/${data.issueId}`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -168,6 +337,7 @@ export default function ConnectionsMappingPage() {
       direction: "inbound+outbound",
       routeTo: "",
       labelIds: [],
+      github: defaultGitHubConfig(),
     });
   }
 
@@ -180,6 +350,7 @@ export default function ConnectionsMappingPage() {
       direction: row.direction as Direction,
       routeTo: row.routeTo ?? "",
       labelIds: row.labelIds ?? [],
+      github: readGitHubConfig(row.config),
     });
   }
 
@@ -187,6 +358,11 @@ export default function ConnectionsMappingPage() {
     if (!editing) return;
     if (!editing.connectionId) return { error: "Pick a connection." };
     if (!editing.target.trim()) return { error: "Target required." };
+    const selected = (connections ?? []).find((c) => c.id === editing.connectionId);
+    const config =
+      selected?.provider === "GITHUB" && editing.kind === "repo"
+        ? githubConfigForSave(editing.github)
+        : undefined;
     try {
       if (editing.id) {
         await update.mutateAsync({
@@ -195,6 +371,7 @@ export default function ConnectionsMappingPage() {
           direction: editing.direction,
           routeTo: editing.routeTo.trim() || null,
           labelIds: editing.labelIds,
+          config,
         });
       } else {
         await create.mutateAsync({
@@ -204,6 +381,7 @@ export default function ConnectionsMappingPage() {
           direction: editing.direction,
           routeTo: editing.routeTo.trim() || undefined,
           labelIds: editing.labelIds,
+          config,
         });
       }
       return undefined;
@@ -224,6 +402,15 @@ export default function ConnectionsMappingPage() {
                 My connections
               </Button>
             </Link>
+            {isAdmin && (
+              <a
+                href={`/api/connections/github/install?returnTo=${encodeURIComponent(`/w/${ws.slug}/settings/connections`)}`}
+                className="focus-ring inline-flex h-7 items-center justify-center gap-1.5 rounded-md bg-subtle px-2 text-xs font-medium text-foreground hover:bg-muted"
+              >
+                <Github className="h-3.5 w-3.5" />
+                Install GitHub App
+              </a>
+            )}
             {isAdmin && hasAnyConnection && (
               <Button size="sm" variant="ember" onClick={() => openAdd()}>
                 <Plus className="h-3.5 w-3.5" />
@@ -284,6 +471,15 @@ export default function ConnectionsMappingPage() {
               setOpenMenuId={setOpenMenuId}
               onAdd={() => openAdd(conn.id, defaultKindFor(conn.provider))}
               onEdit={openEdit}
+              onImport={(row) =>
+                setImporting({
+                  mappingId: row.id,
+                  repo: row.target,
+                  number: "",
+                  projectId: "",
+                  queue: readGitHubConfig(row.config).queueOnCreate,
+                })
+              }
               onDelete={(row) =>
                 setDeleteTarget({ id: row.id, target: row.target })
               }
@@ -379,9 +575,16 @@ export default function ConnectionsMappingPage() {
               <select
                 value={editing.connectionId}
                 disabled={!!editing.id}
-                onChange={(e) =>
-                  setEditing({ ...editing, connectionId: e.target.value })
-                }
+                onChange={(e) => {
+                  const connectionId = e.target.value;
+                  const next = (connections ?? []).find((c) => c.id === connectionId);
+                  setEditing({
+                    ...editing,
+                    connectionId,
+                    kind: next ? defaultKindFor(next.provider) : editing.kind,
+                    target: "",
+                  });
+                }}
                 className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm disabled:opacity-60"
               >
                 <option value="">Pick a connection…</option>
@@ -434,16 +637,38 @@ export default function ConnectionsMappingPage() {
               required
               hint={targetHint(editing.kind)}
             >
-              <Input
-                value={editing.target}
-                onChange={(e) =>
-                  setEditing({ ...editing, target: e.target.value })
-                }
-                maxLength={400}
-                placeholder={targetPlaceholder(editing.kind)}
-                className="font-mono"
-                autoFocus
-              />
+              {isGitHubRepoEditing && (installationRepos?.length ?? 0) > 0 ? (
+                <select
+                  value={editing.target}
+                  onChange={(e) => setEditing({ ...editing, target: e.target.value })}
+                  className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 font-mono text-sm"
+                  autoFocus
+                >
+                  <option value="">Pick a repository...</option>
+                  {(installationRepos ?? []).map((repo) => (
+                    <option key={repo.id} value={repo.full_name}>
+                      {repo.full_name}
+                      {repo.private ? " · private" : ""}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <Input
+                  value={editing.target}
+                  onChange={(e) =>
+                    setEditing({ ...editing, target: e.target.value })
+                  }
+                  maxLength={400}
+                  placeholder={targetPlaceholder(editing.kind)}
+                  className="font-mono"
+                  autoFocus
+                />
+              )}
+              {isGitHubRepoEditing && installationReposLoading && (
+                <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+                  Loading GitHub installation repositories...
+                </p>
+              )}
             </QuickForm.Field>
             <QuickForm.Field
               label="Routes to"
@@ -501,6 +726,81 @@ export default function ConnectionsMappingPage() {
                 </div>
               )}
             </QuickForm.Field>
+            {isGitHubRepoEditing && (
+              <GitHubMappingFields
+                config={editing.github}
+                statuses={statuses ?? []}
+                projects={projects?.items ?? []}
+                agents={agents ?? []}
+                onChange={(github) => setEditing({ ...editing, github })}
+              />
+            )}
+          </>
+        )}
+      </QuickForm>
+
+      <QuickForm
+        open={!!importing}
+        onOpenChange={(v) => !v && setImporting(null)}
+        title="Import GitHub issue"
+        description={importing ? `Create or open the Forge issue sourced from ${importing.repo}.` : ""}
+        primaryLabel="Import"
+        loading={importIssue.isPending}
+        onSubmit={async () => {
+          if (!importing) return;
+          const number = Number(importing.number);
+          if (!Number.isInteger(number) || number <= 0) {
+            return { error: "Issue number must be a positive integer." };
+          }
+          await importIssue.mutateAsync({
+            mappingId: importing.mappingId,
+            number,
+            projectId: importing.projectId || null,
+            queue: importing.queue,
+          });
+          return undefined;
+        }}
+      >
+        {importing && (
+          <>
+            <QuickForm.Field label="Repository">
+              <div className="rounded-md border border-border bg-subtle/40 px-2 py-1.5 font-mono text-xs">
+                {importing.repo}
+              </div>
+            </QuickForm.Field>
+            <QuickForm.Field label="GitHub issue number" required>
+              <Input
+                value={importing.number}
+                onChange={(e) => setImporting({ ...importing, number: e.target.value })}
+                inputMode="numeric"
+                placeholder="123"
+                className="font-mono"
+                autoFocus
+              />
+            </QuickForm.Field>
+            <QuickForm.Field label="Project">
+              <select
+                value={importing.projectId}
+                onChange={(e) => setImporting({ ...importing, projectId: e.target.value })}
+                className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="">Use mapping default</option>
+                {(projects?.items ?? []).map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </QuickForm.Field>
+            <label className="flex items-center gap-2 rounded-md border border-border bg-card/40 p-2 text-[0.8125rem]">
+              <input
+                type="checkbox"
+                checked={importing.queue}
+                onChange={(e) => setImporting({ ...importing, queue: e.target.checked })}
+                className="h-3.5 w-3.5"
+              />
+              Queue imported issue
+            </label>
           </>
         )}
       </QuickForm>
@@ -523,6 +823,187 @@ export default function ConnectionsMappingPage() {
   );
 }
 
+function GitHubMappingFields({
+  config,
+  statuses,
+  projects,
+  agents,
+  onChange,
+}: {
+  config: GitHubMappingUiConfig;
+  statuses: StatusRow[];
+  projects: ProjectRow[];
+  agents: AgentRow[];
+  onChange: (config: GitHubMappingUiConfig) => void;
+}) {
+  const set = (patch: Partial<GitHubMappingUiConfig>) =>
+    onChange({ ...config, ...patch });
+  const setRule = (key: GitHubStatusRuleKey, value: string) =>
+    onChange({
+      ...config,
+      statusRules: { ...config.statusRules, [key]: value },
+    });
+
+  return (
+    <>
+      <QuickForm.Field
+        label="GitHub sync policy"
+        hint="Read-only against GitHub. These rules only create or update Forge issues."
+      >
+        <div className="space-y-2 rounded-md border border-border bg-card/40 p-2">
+          <div className="flex items-center gap-2 border-b border-border/60 pb-2">
+            <Github className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-[0.8125rem] font-medium">Repository events</span>
+          </div>
+          <ToggleRow
+            label="Create Forge issues from new GitHub issues"
+            hint="Applies when GitHub sends an issues.opened webhook."
+            checked={config.autoCreateIssues}
+            onChange={(autoCreateIssues) => set({ autoCreateIssues })}
+          />
+          <ToggleRow
+            label="Queue created issues"
+            hint="Makes imported GitHub issues available to agent claim/dispatch."
+            checked={config.queueOnCreate}
+            onChange={(queueOnCreate) => set({ queueOnCreate })}
+          />
+          <ToggleRow
+            label="Sync source issue titles"
+            hint="Keeps Forge titles aligned for SOURCE links."
+            checked={config.syncTitle}
+            onChange={(syncTitle) => set({ syncTitle })}
+          />
+          <ToggleRow
+            label="Mirror GitHub comments"
+            hint="Creates Forge system comments for new GitHub comments."
+            checked={config.syncComments}
+            onChange={(syncComments) => set({ syncComments })}
+          />
+        </div>
+      </QuickForm.Field>
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <QuickForm.Field label="Default project">
+          <select
+            value={config.defaultProjectId}
+            onChange={(e) => set({ defaultProjectId: e.target.value })}
+            className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+          >
+            <option value="">No default project</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        </QuickForm.Field>
+        <QuickForm.Field label="Default priority">
+          <select
+            value={config.defaultPriority}
+            onChange={(e) => set({ defaultPriority: e.target.value as PriorityValue })}
+            className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+          >
+            {PRIORITIES.map((priority) => (
+              <option key={priority} value={priority}>
+                {priority}
+              </option>
+            ))}
+          </select>
+        </QuickForm.Field>
+      </div>
+
+      <QuickForm.Field
+        label="Assigned agent"
+        hint="Optional — imported issues can start assigned to a known agent."
+      >
+        <select
+          value={config.assignedAgentId}
+          onChange={(e) => set({ assignedAgentId: e.target.value })}
+          className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+        >
+          <option value="">No default agent</option>
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              @{agent.profileKey} · {agent.name}
+            </option>
+          ))}
+        </select>
+      </QuickForm.Field>
+
+      <QuickForm.Field
+        label="Status rules"
+        hint="Optional Forge status transitions driven by GitHub webhooks."
+      >
+        <div className="grid grid-cols-1 gap-2">
+          {GITHUB_STATUS_RULES.map((rule) => (
+            <label
+              key={rule.key}
+              className="grid grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)] items-center gap-2"
+            >
+              <span className="text-[0.8125rem] text-muted-foreground">
+                {rule.label}
+              </span>
+              <select
+                value={config.statusRules[rule.key]}
+                onChange={(e) => setRule(rule.key, e.target.value)}
+                className="focus-ring h-8 min-w-0 rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="">No change</option>
+                {statuses.map((status) => (
+                  <option key={status.id} value={status.id}>
+                    {status.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+      </QuickForm.Field>
+    </>
+  );
+}
+
+function ToggleRow({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex items-start gap-2 rounded-md border border-border/60 bg-background/60 p-2">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-3.5 w-3.5"
+      />
+      <span className="min-w-0">
+        <span className="block text-[0.8125rem] font-medium">{label}</span>
+        <span className="block text-[0.6875rem] text-muted-foreground">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
+function githubPolicyChips(row: MappingRow): string[] {
+  const config = readGitHubConfig(row.config);
+  const chips: string[] = [];
+  if (config.autoCreateIssues) chips.push("auto-create");
+  if (config.queueOnCreate) chips.push("queue");
+  if (config.syncTitle) chips.push("sync title");
+  if (config.syncComments) chips.push("comments");
+  if (config.defaultProjectId) chips.push("project default");
+  if (config.assignedAgentId) chips.push("agent default");
+  const hasRules = GITHUB_STATUS_RULES.some((rule) => config.statusRules[rule.key]);
+  if (hasRules) chips.push("status rules");
+  return chips;
+}
+
 /* ── Per-connection mapping table ───────────────────────────────────── */
 function ConnectionMappingSection({
   conn,
@@ -533,6 +1014,7 @@ function ConnectionMappingSection({
   setOpenMenuId,
   onAdd,
   onEdit,
+  onImport,
   onDelete,
   onTogglePause,
   saving,
@@ -545,6 +1027,7 @@ function ConnectionMappingSection({
   setOpenMenuId: (id: string | null) => void;
   onAdd: () => void;
   onEdit: (row: MappingRow) => void;
+  onImport: (row: MappingRow) => void;
   onDelete: (row: MappingRow) => void;
   onTogglePause: (row: MappingRow) => void;
   saving: boolean;
@@ -573,7 +1056,10 @@ function ConnectionMappingSection({
           <span />
         </div>
 
-        {rows.map((m) => (
+        {rows.map((m) => {
+          const githubChips =
+            conn.provider === "GITHUB" && m.kind === "repo" ? githubPolicyChips(m) : [];
+          return (
           <div
             key={m.id}
             className="grid grid-cols-[minmax(0,1fr)_28px] items-start gap-x-3 gap-y-2 border-b border-border/60 px-4 py-3 last:border-b-0 md:grid-cols-[1.4fr_0.8fr_0.7fr_0.4fr_28px] md:items-center"
@@ -601,6 +1087,18 @@ function ConnectionMappingSection({
                       </span>
                     );
                   })}
+                </span>
+              )}
+              {githubChips.length > 0 && (
+                <span className="flex flex-wrap items-center gap-1">
+                  {githubChips.map((chip) => (
+                    <span
+                      key={chip}
+                      className="inline-flex items-center rounded border border-border/60 bg-card/40 px-1 py-0.5 text-[10px] text-muted-foreground"
+                    >
+                      {chip}
+                    </span>
+                  ))}
                 </span>
               )}
             </span>
@@ -651,6 +1149,19 @@ function ConnectionMappingSection({
                   className="absolute right-0 top-7 z-10 w-40 overflow-hidden rounded-md border border-border bg-card py-1 shadow-md"
                   onMouseLeave={() => setOpenMenuId(null)}
                 >
+                  {conn.provider === "GITHUB" && m.kind === "repo" && (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setOpenMenuId(null);
+                        onImport(m);
+                      }}
+                      className="flex w-full items-center px-3 py-1.5 text-left text-sm hover:bg-subtle"
+                    >
+                      Import issue
+                    </button>
+                  )}
                   <button
                     role="menuitem"
                     type="button"
@@ -697,7 +1208,8 @@ function ConnectionMappingSection({
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {isAdmin && (
           <button

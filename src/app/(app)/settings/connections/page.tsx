@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { PlugZap, KeyRound, RotateCw, Plus } from "lucide-react";
+import { Github, PlugZap, KeyRound, RotateCw, Plus } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Spinner, EmptyState, Button, Input, QuickForm, toast } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
@@ -119,9 +119,17 @@ export default function ConnectionsPage() {
         title="Connections"
         subtitle="OAuth identities you've authorized. These belong to you, not a workspace — workspaces map channels, repos, and webhooks onto them."
         actions={
-          <Button size="sm" variant="subtle" onClick={() => setAddOpen(true)}>
-            <Plus className="h-3.5 w-3.5" /> Add connection
-          </Button>
+          <div className="flex items-center gap-2">
+            <a
+              href="/api/connections/github/install"
+              className="focus-ring inline-flex h-7 items-center justify-center gap-1.5 rounded-md bg-ember px-2 text-xs font-medium text-ember-foreground hover:bg-ember/90"
+            >
+              <Github className="h-3.5 w-3.5" /> Install GitHub App
+            </a>
+            <Button size="sm" variant="subtle" onClick={() => setAddOpen(true)}>
+              <Plus className="h-3.5 w-3.5" /> Add OAuth
+            </Button>
+          </div>
         }
       />
 
