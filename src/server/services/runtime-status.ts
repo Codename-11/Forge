@@ -214,6 +214,22 @@ export function deriveRuntimeHealthStatus(
     };
   }
   if (heartbeatAt) {
+    if (adapter?.key === "hermes") {
+      return {
+        kind: "stale",
+        label: "presence stale",
+        tone: "warning",
+        reason: successfulProbe
+          ? "Last Hermes gateway handshake succeeded, but the agent presence heartbeat is stale. Check forge-presence, agent heartbeat, or webhook delivery; run Test connection if gateway reachability is uncertain."
+          : "Hermes agent presence heartbeat is stale. Run Test connection to separate gateway reachability from presence heartbeat state.",
+        lastSignal,
+        adapter: adapterLabel,
+        endpoint: input.endpoint,
+        probeSupported,
+        sweepCovered: sweep.covered,
+        sweepExpectation: sweep.text,
+      };
+    }
     return {
       kind: "stale",
       label: "stale / offline",
@@ -239,6 +255,22 @@ export function deriveRuntimeHealthStatus(
       reason: input.endpoint
         ? "No handshake probe is configured for this adapter; rely on adapter-specific delivery or session signals."
         : "No endpoint is configured, so Forge cannot run a handshake probe.",
+      lastSignal,
+      adapter: adapterLabel,
+      endpoint: input.endpoint,
+      probeSupported,
+      sweepCovered: sweep.covered,
+      sweepExpectation: sweep.text,
+    };
+  }
+  if (adapter?.key === "hermes") {
+    return {
+      kind: "never_seen",
+      label: "presence missing",
+      tone: "warning",
+      reason: successfulProbe
+        ? "Hermes gateway handshake succeeded, but no agent presence heartbeat has arrived yet. Check forge-presence, agent heartbeat, or webhook delivery."
+        : "No Hermes agent presence heartbeat has arrived yet. Run Test connection to verify the gateway, then check forge-presence, agent heartbeat, or webhook delivery.",
       lastSignal,
       adapter: adapterLabel,
       endpoint: input.endpoint,

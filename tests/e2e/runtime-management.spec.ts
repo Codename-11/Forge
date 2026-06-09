@@ -56,7 +56,16 @@ test.describe("Runtime management", () => {
     await expect(row).toContainText("filesystem");
     await expect(row).toContainText("git");
 
-    await row.getByRole("button", { name: /^edit$/i }).click();
+    await row.getByRole("link", { name }).click();
+    await expect(page.getByText("presence missing").first()).toBeVisible();
+    await expect(page.getByText("Probe / presence")).toBeVisible();
+    await expect(page.getByText(/No Hermes agent presence heartbeat has arrived yet/i)).toBeVisible();
+
+    await page.goto("/w/forge/settings/runtimes");
+    const refreshedRow = page.locator("li").filter({ hasText: name });
+    await expect(refreshedRow).toBeVisible();
+
+    await refreshedRow.getByRole("button", { name: /^edit$/i }).click();
     await expect(page.getByTestId("runtime-tool-surface-fields")).toBeVisible();
     await expect(dialog.locator('input[placeholder="/home/bailey/forge"]')).toHaveValue(
       "/home/bailey/forge",

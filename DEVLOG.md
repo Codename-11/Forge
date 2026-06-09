@@ -2,6 +2,25 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Hermes runtime presence wording
+
+Separated Hermes gateway reachability from agent presence in runtime health
+labels. A reachable gateway with stale or missing agent heartbeat now reports
+`presence stale` / `presence missing` instead of generic `stale / offline` or
+`never seen`, and the runtime detail page shows the combined probe/presence
+signal rather than a raw heartbeat-only line.
+
+Added unit coverage for fresh gateway, stale presence, and missing presence
+states, plus browser coverage on the Hermes runtime detail view.
+
+Verification: `pnpm vitest run src/server/services/__tests__/runtime-status.test.ts
+src/server/services/__tests__/runtime-health.test.ts
+src/server/routers/__tests__/runtime-dispatch-contract.test.ts`, `pnpm
+typecheck`, `pnpm lint`, `git diff --check`, `E2E_FORCE_BUILD=1 pnpm exec
+playwright test tests/e2e/runtime-management.spec.ts --workers=1`,
+`pnpm docs:build`, full `pnpm test`, and full serial `pnpm exec playwright test
+--workers=1` pass.
+
 ## 2026-06-09 — Collapsed chat history previews
 
 Upgraded the collapsed Chat conversation rail from compact glyphs with a cramped
