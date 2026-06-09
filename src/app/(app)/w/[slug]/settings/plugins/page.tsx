@@ -23,6 +23,7 @@ const statusTone: Record<string, string> = {
 
 export default function PluginsPage() {
   const ws = useWorkspace();
+  const utils = trpc.useUtils();
   const { data: plugins, refetch } = trpc.plugin.list.useQuery();
   const approve = trpc.plugin.approve.useMutation({ onSuccess: () => refetch() });
   const suspend = trpc.plugin.suspend.useMutation({ onSuccess: () => refetch() });
@@ -31,28 +32,45 @@ export default function PluginsPage() {
   const [rawManifest, setRawManifest] = useState("");
   const [webhookUrl, setWebhookUrl] = useState("");
 
+  const resetInstallDialog = () => {
+    setRegisterOpen(false);
+    setRawManifest("");
+    setWebhookUrl("");
+  };
+
+  const handleInstallResult = (result: {
+    installAction: "registered" | "restored" | "updated" | "unchanged";
+    addedScopes: string[];
+    priorVersion: string | null;
+    version: string;
+  }) => {
+    if (result.installAction === "updated") {
+      const scopeNote =
+        result.addedScopes.length > 0 ? ` New scopes: ${result.addedScopes.join(", ")}.` : "";
+      toast.success(
+        `Plugin manifest updated from v${result.priorVersion} to v${result.version}; review required.${scopeNote}`,
+      );
+    } else if (result.installAction === "unchanged") {
+      toast.success("Plugin manifest already matches the installed registration.");
+    } else if (result.installAction === "restored") {
+      toast.success("Plugin restored from backup (pending review). Re-issue API keys after approval.");
+    } else {
+      toast.success("Plugin registered (pending approval).");
+    }
+    resetInstallDialog();
+    void refetch();
+    void utils.plugin.list.invalidate();
+  };
+
   const register = trpc.plugin.register.useMutation({
-    onSuccess: (result) => {
-      if (result.installAction === "updated") {
-        const scopeNote =
-          result.addedScopes.length > 0
-            ? ` New scopes: ${result.addedScopes.join(", ")}.`
-            : "";
-        toast.success(
-          `Plugin manifest updated from v${result.priorVersion} to v${result.version}; review required.${scopeNote}`,
-        );
-      } else if (result.installAction === "unchanged") {
-        toast.success("Plugin manifest already matches the installed registration.");
-      } else {
-        toast.success("Plugin registered (pending approval).");
-      }
-      setRegisterOpen(false);
-      setRawManifest("");
-      setWebhookUrl("");
-      refetch();
-    },
+    onSuccess: handleInstallResult,
     onError: (e) => toast.error(e.message),
   });
+  const restoreBackup = trpc.plugin.restoreBackup.useMutation({
+    onSuccess: handleInstallResult,
+    onError: (e) => toast.error(e.message),
+  });
+  const saving = register.isPending || restoreBackup.isPending;
 
   return (
     <>
@@ -169,20 +187,29 @@ export default function PluginsPage() {
           onSubmit={(e) => {
             e.preventDefault();
             try {
-              const manifest = JSON.parse(rawManifest);
-              register.mutate({ manifest, webhookUrl: webhookUrl || undefined });
+              const parsed = JSON.parse(rawManifest);
+              if (
+                parsed &&
+                typeof parsed === "object" &&
+                (parsed as { kind?: unknown }).kind === "forge.plugin.backup"
+              ) {
+                restoreBackup.mutate({ backup: parsed });
+              } else {
+                register.mutate({ manifest: parsed, webhookUrl: webhookUrl || undefined });
+              }
             } catch {
-              toast.error("Manifest is not valid JSON.");
+              toast.error("Manifest or backup is not valid JSON.");
             }
           }}
           className="space-y-3 p-5"
         >
-          <div className="text-sm font-semibold">Install or update plugin</div>
+          <div className="text-sm font-semibold">Install, update, or restore plugin</div>
           <p className="text-meta text-muted-foreground">
             Re-submit a manifest with the same slug to update version, scopes, skills, or webhook
-            configuration. Forge preserves existing keys and requires review for changed manifests.
+            configuration, or paste a Forge plugin backup to restore it. Forge preserves existing
+            keys on updates; backup restores require review and new API keys.
           </p>
-          <label className="block text-xs text-muted-foreground">Manifest (JSON)</label>
+          <label className="block text-xs text-muted-foreground">Manifest or backup (JSON)</label>
           <textarea
             value={rawManifest}
             onChange={(e) => setRawManifest(e.target.value)}
@@ -199,8 +226,8 @@ export default function PluginsPage() {
             <Button type="button" variant="ghost" onClick={() => setRegisterOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" variant="ember" disabled={register.isPending}>
-              {register.isPending ? "Saving…" : "Install/update"}
+            <Button type="submit" variant="ember" disabled={saving}>
+              {saving ? "Saving…" : "Install/update/restore"}
             </Button>
           </div>
         </form>

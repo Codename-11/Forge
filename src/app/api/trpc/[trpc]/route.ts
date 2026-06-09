@@ -11,6 +11,10 @@ const handler = (req: NextRequest) =>
     router: appRouter,
     createContext: () => createContext(req),
     onError({ error, path, type, input }) {
+      const cause = error.cause instanceof Error ? error.cause.message : undefined;
+      if (error.code === "BAD_REQUEST" && cause === "aborted") {
+        return;
+      }
       // Log every tRPC error in every env. In prod this is the only way we
       // hear about failing procedures — the client only sees TRPCClientError
       // with no stack. Keep it structured so grepping `docker logs forge`
@@ -20,7 +24,7 @@ const handler = (req: NextRequest) =>
           path,
           type,
           code: error.code,
-          cause: error.cause instanceof Error ? error.cause.message : undefined,
+          cause,
           stack: error.stack,
           // Input is superjson-encoded; stringify defensively.
           input: safeStringify(input),

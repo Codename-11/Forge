@@ -15,10 +15,15 @@ own memory + tools). Both stream. See [Chat & Dispatch Engines](/agents/engines.
 
 ### Opening a thread
 
-Mission Control → Chat renders your thread list. Clicking an agent (or pressing Enter on
-a selected row) opens the per-agent thread. `chat.thread({ agentId })` on the tRPC side
-upserts the `ChatThread` row via the `(workspaceId, userId, agentId)` unique, so the same
-thread is opened regardless of which device or session you're in.
+Mission Control → Chat renders your thread list. Clicking an agent opens the agent's
+default thread; named side conversations use concrete `threadId` links.
+`chat.thread({ agentId })` keeps the default DM behavior, while
+`chat.getThread({ threadId })` opens a specific conversation.
+
+Viewing a thread on either the full Chat page or Mission Control's Chat tab calls
+`chat.markRead({ threadId })`. Forge stores that read anchor per `(threadId, userId)` and
+also writes a browser-local marker so badges clear immediately while the server write is
+in flight.
 
 ### Context bundle
 

@@ -14,7 +14,7 @@ import {
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { markChatThreadRead } from "@/lib/chat-read-state";
+import { useChatThreadReadMarker } from "@/hooks/use-chat-read-state";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ChatThreadView } from "./chat-thread";
 import { ChatStatusRail } from "@/components/chat/chat-status-rail";
@@ -147,11 +147,11 @@ export function ChatTab({
   const activeThreadId = selectedThreadId ?? lastActiveThreadId;
   const activeThreadLatestAt =
     agentThreads.find((thread) => thread.id === activeThreadId)?.latestMessage?.createdAt ?? null;
-
-  useEffect(() => {
-    if (!activeThreadId) return;
-    markChatThreadRead(slug, activeThreadId);
-  }, [slug, activeThreadId, activeThreadLatestAt]);
+  const markThreadRead = useChatThreadReadMarker({
+    slug,
+    threadId: activeThreadId,
+    latestMessageAt: activeThreadLatestAt,
+  });
 
   return (
     <div className="flex h-full min-w-0 flex-col sm:flex-row">
@@ -266,7 +266,7 @@ export function ChatTab({
                     type="button"
                     onClick={() => {
                       userPickedRef.current = true;
-                      markChatThreadRead(slug, t.id);
+                      markThreadRead(t.id);
                       setSelectedThreadId(t.id);
                     }}
                     className={cn(

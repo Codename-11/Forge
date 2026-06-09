@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import {
   AgentProvider,
   AgentRunStatus,
@@ -593,6 +594,43 @@ async function attachChatMessageMetadata(
   }));
 }
 
+async function requireOwnedChatThread(
+  tx: Prisma.TransactionClient,
+  input: { workspaceId: string; userId: string; threadId: string },
+) {
+  const thread = await tx.chatThread.findFirst({
+    where: {
+      id: input.threadId,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      archivedAt: null,
+    },
+    select: { id: true, workspaceId: true, userId: true },
+  });
+  if (!thread) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Chat thread not found" });
+  }
+  return thread;
+}
+
+async function markOwnedChatThreadRead(
+  tx: Prisma.TransactionClient,
+  input: { workspaceId: string; userId: string; threadId: string; readAt: Date },
+) {
+  const thread = await requireOwnedChatThread(tx, input);
+  const id = randomUUID();
+  const now = new Date();
+  const rows = await tx.$queryRaw<Array<{ readAt: Date }>>`
+    INSERT INTO "ChatThreadRead" ("id", "workspaceId", "threadId", "userId", "readAt", "createdAt", "updatedAt")
+    VALUES (${id}, ${input.workspaceId}, ${thread.id}, ${input.userId}, ${input.readAt}, ${now}, ${now})
+    ON CONFLICT ("threadId", "userId") DO UPDATE
+      SET "readAt" = GREATEST("ChatThreadRead"."readAt", EXCLUDED."readAt"),
+          "updatedAt" = CURRENT_TIMESTAMP
+    RETURNING "readAt"
+  `;
+  return { threadId: thread.id, readAt: rows[0]?.readAt ?? input.readAt };
+}
+
 export const chatRouter = router({
   /**
    * List chat threads the current user has with any agent. Empty when
@@ -651,6 +689,11 @@ export const chatRouter = router({
             take: 20,
             select: { id: true, role: true, body: true, createdAt: true, sourceRunId: true },
           },
+          reads: {
+            where: { userId: ctx.session.user.id },
+            select: { readAt: true },
+            take: 1,
+          },
           _count: { select: { messages: true } },
         },
         take: 75,
@@ -663,7 +706,7 @@ export const chatRouter = router({
       );
       const byId = new Map(latestWithAttachments.map((message) => [message.id, message]));
       const enriched = [];
-      for (const { messages, ...thread } of threads) {
+      for (const { messages, reads, ...thread } of threads) {
         const latest = messages[0] ? byId.get(messages[0].id) : null;
         const diagnostics = await buildThreadDiagnostics(ctx.db, ctx.workspaceId, thread.id);
         const hasAttachments = await threadHasFinalizedAttachments(
@@ -673,6 +716,7 @@ export const chatRouter = router({
         );
         enriched.push({
           ...thread,
+          lastReadAt: reads[0]?.readAt ?? null,
           diagnostics,
           hasAttachments,
           latestMessage: latest
@@ -707,6 +751,24 @@ export const chatRouter = router({
         if (state === "has_attachments") return thread.hasAttachments;
         return true;
       });
+    }),
+
+  markRead: workspaceProcedure
+    .input(
+      z.object({
+        threadId: idString,
+        readAt: z.date().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const readAt = input.readAt ?? new Date();
+      const result = await markOwnedChatThreadRead(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+        threadId: input.threadId,
+        readAt,
+      });
+      return { ok: true, ...result };
     }),
 
   /**
@@ -1156,6 +1218,11 @@ export const chatRouter = router({
               role: true,
             },
           },
+          reads: {
+            where: { userId: ctx.session.user.id },
+            select: { readAt: true },
+            take: 1,
+          },
         },
       });
       if (!thread) return null;
@@ -1191,7 +1258,13 @@ export const chatRouter = router({
         messages,
       );
       const diagnostics = await buildThreadDiagnostics(ctx.db, ctx.workspaceId, thread.id);
-      return { ...thread, messages: messagesWithAttachments, diagnostics };
+      const { reads, ...threadWithoutReads } = thread;
+      return {
+        ...threadWithoutReads,
+        lastReadAt: reads[0]?.readAt ?? null,
+        messages: messagesWithAttachments,
+        diagnostics,
+      };
     }),
 
   /**

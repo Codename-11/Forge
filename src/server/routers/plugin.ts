@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { Prisma, PluginStatus, PluginScope } from "@prisma/client";
+import { EventKind, Prisma, PluginStatus, PluginScope } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
 import { router, adminProcedure, workspaceProcedure } from "@/server/trpc";
 import { manifestSchema, type PluginManifest } from "@/server/services/plugin-manifest";
@@ -53,14 +53,140 @@ function manifestFingerprint(value: unknown): string {
   return JSON.stringify(parsed.success ? normalizeManifest(parsed.data) : value);
 }
 
+function withoutSecret<T extends { secret?: string | null }>(plugin: T): Omit<T, "secret"> {
+  const { secret: _secret, ...rest } = plugin;
+  return rest;
+}
+
+const pluginBackupSchema = z.object({
+  schemaVersion: z.literal(1),
+  kind: z.literal("forge.plugin.backup"),
+  exportedAt: z.string().datetime().optional(),
+  plugin: z.object({
+    manifest: manifestSchema,
+    webhookUrl: z.string().url().nullable().optional(),
+  }),
+  webhooks: z
+    .array(
+      z.object({
+        url: z.string().url(),
+        events: z.array(z.nativeEnum(EventKind)),
+        active: z.boolean().optional(),
+      }),
+    )
+    .default([]),
+  apiKeys: z.array(z.record(z.unknown())).default([]),
+});
+
+async function upsertPluginRegistration({
+  tx,
+  workspaceId,
+  manifest: m,
+  webhookUrl,
+  newAction,
+}: {
+  tx: Prisma.TransactionClient;
+  workspaceId: string;
+  manifest: PluginManifest;
+  webhookUrl?: string;
+  newAction: "registered" | "restored";
+}) {
+  const existing = await tx.plugin.findUnique({
+    where: { workspaceId_slug: { workspaceId, slug: m.slug } },
+    include: { skills: true },
+  });
+
+  if (existing) {
+    const { addedScopes, removedScopes } = scopeDelta(existing.scopes, m.scopes);
+    const webhookChanged = webhookUrl !== undefined && webhookUrl !== existing.webhookUrl;
+    const manifestChanged = manifestFingerprint(existing.manifest) !== manifestFingerprint(m);
+    const reviewRequired = manifestChanged || webhookChanged;
+    const nextStatus = reviewRequired ? PluginStatus.PENDING : existing.status;
+
+    const plugin = await tx.plugin.update({
+      where: { id: existing.id },
+      data: {
+        name: m.name,
+        description: m.description ?? null,
+        version: m.version,
+        manifest: m as unknown as Prisma.InputJsonValue,
+        scopes: m.scopes,
+        status: nextStatus,
+        ...(webhookUrl !== undefined ? { webhookUrl } : {}),
+      },
+    });
+    await tx.skill.deleteMany({ where: { pluginId: existing.id } });
+    for (const s of m.skills ?? []) {
+      await tx.skill.create({
+        data: {
+          workspaceId,
+          pluginId: plugin.id,
+          name: s.name,
+          description: s.description ?? null,
+          inputSchema: s.inputSchema as Prisma.InputJsonValue,
+          outputSchema: (s.outputSchema ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+          runtime: s.runtime,
+        },
+      });
+    }
+    return {
+      ...withoutSecret(plugin),
+      installAction: reviewRequired ? ("updated" as const) : ("unchanged" as const),
+      reviewRequired,
+      priorVersion: existing.version,
+      priorStatus: existing.status,
+      addedScopes,
+      removedScopes,
+    };
+  }
+
+  const plugin = await tx.plugin.create({
+    data: {
+      workspaceId,
+      slug: m.slug,
+      name: m.name,
+      description: m.description ?? null,
+      version: m.version,
+      manifest: m as unknown as Prisma.InputJsonValue,
+      scopes: m.scopes,
+      status: PluginStatus.PENDING,
+      webhookUrl,
+      secret: randomBytes(24).toString("base64url"),
+    },
+  });
+  for (const s of m.skills ?? []) {
+    await tx.skill.create({
+      data: {
+        workspaceId,
+        pluginId: plugin.id,
+        name: s.name,
+        description: s.description ?? null,
+        inputSchema: s.inputSchema as Prisma.InputJsonValue,
+        outputSchema: (s.outputSchema ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+        runtime: s.runtime,
+      },
+    });
+  }
+  return {
+    ...withoutSecret(plugin),
+    installAction: newAction,
+    reviewRequired: true,
+    priorVersion: null,
+    priorStatus: null,
+    addedScopes: m.scopes,
+    removedScopes: [],
+  };
+}
+
 export const pluginRouter = router({
-  list: workspaceProcedure.query(async ({ ctx }) =>
-    ctx.db.plugin.findMany({
+  list: workspaceProcedure.query(async ({ ctx }) => {
+    const plugins = await ctx.db.plugin.findMany({
       where: { workspaceId: ctx.workspaceId },
       orderBy: { createdAt: "desc" },
       include: { skills: true },
-    }),
-  ),
+    });
+    return plugins.map(withoutSecret);
+  }),
 
   byId: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
@@ -101,115 +227,111 @@ export const pluginRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const m = input.manifest;
-      const existing = await ctx.db.plugin.findUnique({
-        where: { workspaceId_slug: { workspaceId: ctx.workspaceId, slug: m.slug } },
-        include: { skills: true },
-      });
+      return ctx.db.$transaction((tx) =>
+        upsertPluginRegistration({
+          tx,
+          workspaceId: ctx.workspaceId,
+          manifest: input.manifest,
+          webhookUrl: input.webhookUrl,
+          newAction: "registered",
+        }),
+      );
+    }),
 
-      return ctx.db.$transaction(async (tx) => {
-        if (existing) {
-          const { addedScopes, removedScopes } = scopeDelta(existing.scopes, m.scopes);
-          const webhookChanged =
-            input.webhookUrl !== undefined && input.webhookUrl !== existing.webhookUrl;
-          const manifestChanged =
-            manifestFingerprint(existing.manifest) !== manifestFingerprint(m);
-          const reviewRequired = manifestChanged || webhookChanged;
-          const nextStatus = reviewRequired ? PluginStatus.PENDING : existing.status;
+  restoreBackup: adminProcedure
+    .input(z.object({ backup: pluginBackupSchema }))
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.$transaction((tx) =>
+        upsertPluginRegistration({
+          tx,
+          workspaceId: ctx.workspaceId,
+          manifest: input.backup.plugin.manifest,
+          webhookUrl: input.backup.plugin.webhookUrl ?? undefined,
+          newAction: "restored",
+        }),
+      ),
+    ),
 
-          const plugin = await tx.plugin.update({
-            where: { id: existing.id },
-            data: {
-              name: m.name,
-              description: m.description ?? null,
-              version: m.version,
-              manifest: m as unknown as Prisma.InputJsonValue,
-              scopes: m.scopes,
-              status: nextStatus,
-              ...(input.webhookUrl !== undefined ? { webhookUrl: input.webhookUrl } : {}),
+  exportBackup: adminProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const plugin = await ctx.db.plugin.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        include: {
+          apiKeys: {
+            orderBy: { createdAt: "desc" },
+            select: {
+              name: true,
+              prefix: true,
+              scopes: true,
+              projectIds: true,
+              labelIds: true,
+              initiativeIds: true,
+              linkedAgentId: true,
+              lastUsedAt: true,
+              expiresAt: true,
+              revokedAt: true,
+              createdAt: true,
             },
-          });
-          await tx.skill.deleteMany({ where: { pluginId: existing.id } });
-          for (const s of m.skills ?? []) {
-            await tx.skill.create({
-              data: {
-                workspaceId: ctx.workspaceId,
-                pluginId: plugin.id,
-                name: s.name,
-                description: s.description ?? null,
-                inputSchema: s.inputSchema as Prisma.InputJsonValue,
-                outputSchema: (s.outputSchema ?? Prisma.JsonNull) as Prisma.InputJsonValue,
-                runtime: s.runtime,
-              },
-            });
-          }
-          return {
-            ...plugin,
-            installAction: reviewRequired ? ("updated" as const) : ("unchanged" as const),
-            reviewRequired,
-            priorVersion: existing.version,
-            priorStatus: existing.status,
-            addedScopes,
-            removedScopes,
-          };
-        }
-
-        const plugin = await tx.plugin.create({
-          data: {
-            workspaceId: ctx.workspaceId,
-            slug: m.slug,
-            name: m.name,
-            description: m.description ?? null,
-            version: m.version,
-            manifest: m as unknown as Prisma.InputJsonValue,
-            scopes: m.scopes,
-            status: PluginStatus.PENDING,
-            webhookUrl: input.webhookUrl,
-            secret: randomBytes(24).toString("base64url"),
           },
-        });
-        for (const s of m.skills ?? []) {
-          await tx.skill.create({
-            data: {
-              workspaceId: ctx.workspaceId,
-              pluginId: plugin.id,
-              name: s.name,
-              description: s.description ?? null,
-              inputSchema: s.inputSchema as Prisma.InputJsonValue,
-              outputSchema: (s.outputSchema ?? Prisma.JsonNull) as Prisma.InputJsonValue,
-              runtime: s.runtime,
-            },
-          });
-        }
-        return {
-          ...plugin,
-          installAction: "registered" as const,
-          reviewRequired: true,
-          priorVersion: null,
-          priorStatus: null,
-          addedScopes: m.scopes,
-          removedScopes: [],
-        };
+          webhooks: {
+            orderBy: { createdAt: "desc" },
+            select: { url: true, events: true, active: true, createdAt: true },
+          },
+        },
       });
+      if (!plugin) throw new TRPCError({ code: "NOT_FOUND" });
+      const manifest = manifestSchema.parse(plugin.manifest);
+      return {
+        schemaVersion: 1 as const,
+        kind: "forge.plugin.backup" as const,
+        exportedAt: new Date().toISOString(),
+        plugin: {
+          slug: plugin.slug,
+          name: plugin.name,
+          version: plugin.version,
+          status: plugin.status,
+          manifest,
+          webhookUrl: plugin.webhookUrl,
+        },
+        webhooks: plugin.webhooks,
+        apiKeys: plugin.apiKeys,
+        notes: [
+          "Raw API keys, API-key hashes, webhook secrets, and the plugin signing secret are intentionally excluded.",
+          "Restoring this backup recreates the plugin registration and requires review before new API keys can be issued.",
+        ],
+      };
     }),
 
   approve: adminProcedure
     .input(z.object({ id: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.plugin.update({
-        where: { id: input.id },
+    .mutation(async ({ ctx, input }) => {
+      const plugin = await ctx.db.plugin.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!plugin) throw new TRPCError({ code: "NOT_FOUND" });
+      const updated = await ctx.db.plugin.update({
+        where: { id: plugin.id },
         data: { status: PluginStatus.APPROVED },
-      }),
-    ),
+      });
+      return withoutSecret(updated);
+    }),
 
   suspend: adminProcedure
     .input(z.object({ id: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.plugin.update({
-        where: { id: input.id },
+    .mutation(async ({ ctx, input }) => {
+      const plugin = await ctx.db.plugin.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!plugin) throw new TRPCError({ code: "NOT_FOUND" });
+      const updated = await ctx.db.plugin.update({
+        where: { id: plugin.id },
         data: { status: PluginStatus.SUSPENDED },
-      }),
-    ),
+      });
+      return withoutSecret(updated);
+    }),
 
   issueApiKey: adminProcedure
     .input(
@@ -259,12 +381,17 @@ export const pluginRouter = router({
 
   revokeApiKey: adminProcedure
     .input(z.object({ id: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.apiKey.update({
-        where: { id: input.id },
+    .mutation(async ({ ctx, input }) => {
+      const key = await ctx.db.apiKey.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId, pluginId: { not: null } },
+        select: { id: true },
+      });
+      if (!key) throw new TRPCError({ code: "NOT_FOUND" });
+      return ctx.db.apiKey.update({
+        where: { id: key.id },
         data: { revokedAt: new Date() },
-      }),
-    ),
+      });
+    }),
 
   // Hard-delete the registration. Cascades drop the plugin's skills,
   // api keys, and webhooks (FK onDelete: Cascade). Linked issues are

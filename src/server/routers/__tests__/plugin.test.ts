@@ -145,4 +145,73 @@ describe("pluginRouter lifecycle", () => {
     expect(unchanged.reviewRequired).toBe(false);
     expect(unchanged.status).toBe("APPROVED");
   });
+
+  it("exports a backup, removes the plugin, and restores without secrets or old keys", async () => {
+    const { caller } = await setup();
+    const db = getPrisma();
+
+    const created = await caller.register({
+      manifest: manifest(),
+      webhookUrl: "https://plugin.example.com/forge",
+    });
+    expect("secret" in created).toBe(false);
+    const listed = await caller.list();
+    expect(listed).toHaveLength(1);
+    expect("secret" in listed[0]).toBe(false);
+    await caller.approve({ id: created.id });
+    const key = await caller.issueApiKey({
+      pluginId: created.id,
+      name: "read-key",
+      scopes: [PluginScope.READ_ISSUES],
+    });
+    const storedKey = await db.apiKey.findUniqueOrThrow({ where: { id: key.id } });
+    const storedPlugin = await db.plugin.findUniqueOrThrow({ where: { id: created.id } });
+
+    const backup = await caller.exportBackup({ id: created.id });
+    const backupJson = JSON.stringify(backup);
+    expect(backup.kind).toBe("forge.plugin.backup");
+    expect(backup.plugin.manifest.slug).toBe("qa-helper");
+    expect(backup.plugin.webhookUrl).toBe("https://plugin.example.com/forge");
+    expect(backup.apiKeys[0]?.prefix).toBe(key.prefix);
+    expect(backupJson).not.toContain(key.rawKey);
+    expect(backupJson).not.toContain(storedKey.hashedKey);
+    expect(backupJson).not.toContain(storedPlugin.secret ?? "");
+
+    await caller.remove({ id: created.id });
+    await expect(caller.byId({ id: created.id })).rejects.toThrow();
+
+    const restored = await caller.restoreBackup({ backup });
+    expect(restored.installAction).toBe("restored");
+    expect(restored.status).toBe("PENDING");
+    expect(restored.reviewRequired).toBe(true);
+    expect(restored.webhookUrl).toBe("https://plugin.example.com/forge");
+
+    const detail = await caller.byId({ id: restored.id });
+    expect(detail.apiKeys).toHaveLength(0);
+    expect(detail.skills.map((skill) => skill.name)).toEqual(["triage"]);
+  });
+
+  it("scopes admin lifecycle mutations to the current workspace", async () => {
+    const { caller } = await setup();
+    const other = await createWorkspaceFixture({ keyPrefix: "PLB" });
+    fixtures.push(other);
+    const otherCaller = pluginRouter.createCaller(await buildContext(other));
+
+    const created = await caller.register({ manifest: manifest() });
+    await caller.approve({ id: created.id });
+    const key = await caller.issueApiKey({
+      pluginId: created.id,
+      name: "read-key",
+      scopes: [PluginScope.READ_ISSUES],
+    });
+
+    await expect(otherCaller.approve({ id: created.id })).rejects.toThrow();
+    await expect(otherCaller.suspend({ id: created.id })).rejects.toThrow();
+    await expect(otherCaller.revokeApiKey({ id: key.id })).rejects.toThrow();
+    await expect(otherCaller.exportBackup({ id: created.id })).rejects.toThrow();
+
+    const detail = await caller.byId({ id: created.id });
+    expect(detail.status).toBe("APPROVED");
+    expect(detail.apiKeys).toHaveLength(1);
+  });
 });

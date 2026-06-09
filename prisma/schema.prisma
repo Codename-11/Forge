@@ -562,6 +562,7 @@ model User {
   issueSavedViews         IssueSavedView[]
   timeEntries             TimeEntry[]
   chatThreads             ChatThread[]
+  chatThreadReads         ChatThreadRead[]
   runtimes                Runtime[]
   controlRequestedRuns    AgentRun[]               @relation("AgentRunControlRequester")
   clearedAgentRuns        AgentRun[]               @relation("AgentRunClearer")
@@ -821,6 +822,7 @@ model Workspace {
   agentRuns               AgentRun[]
   agentRunEvents          AgentRunEvent[]
   chatThreads             ChatThread[]
+  chatThreadReads         ChatThreadRead[]
   chatMessages            ChatMessage[]
   runtimes                Runtime[]
   providerCredentials     ProviderCredential[]
@@ -2285,9 +2287,27 @@ model ChatThread {
   user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   agent     Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
+  reads     ChatThreadRead[]
 
   @@index([workspaceId, userId, agentId, lastMessageAt])
   @@index([workspaceId, userId, archivedAt, lastMessageAt])
+}
+
+model ChatThreadRead {
+  id          String   @id @default(cuid())
+  workspaceId String
+  threadId    String
+  userId      String
+  readAt      DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  thread    ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([threadId, userId])
+  @@index([workspaceId, userId, readAt])
 }
 
 model ChatMessage {

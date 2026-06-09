@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   Check,
   ChevronLeft,
+  Download,
   KeyRound,
   Plug,
   Plus,
@@ -65,6 +66,7 @@ export default function PluginDetailPage() {
 
   const [removeOpen, setRemoveOpen] = useState(false);
   const [tab, setTab] = useState<TabId>("overview");
+  const [backupPending, setBackupPending] = useState(false);
 
   // 1 / 2 / 3 / 4 switch tabs — mirrors the issue-detail rail pattern.
   // Bail out while typing or with modifier keys held.
@@ -121,6 +123,30 @@ export default function PluginDetailPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const downloadBackup = async () => {
+    if (!plugin || backupPending) return;
+    setBackupPending(true);
+    try {
+      const backup = await utils.plugin.exportBackup.fetch({ id });
+      const blob = new Blob([JSON.stringify(backup, null, 2)], {
+        type: "application/json;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `forge-plugin-${plugin.slug}-backup.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Plugin backup downloaded.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not export plugin backup.");
+    } finally {
+      setBackupPending(false);
+    }
+  };
+
   if (!isLoading && !plugin) notFound();
 
   // Manifest is opaque JSON on the model — narrow the few fields we read.
@@ -162,6 +188,15 @@ export default function PluginDetailPage() {
         actions={
           plugin && (
             <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={downloadBackup}
+                disabled={backupPending}
+              >
+                <Download className="mr-1.5 h-3.5 w-3.5" />
+                Backup
+              </Button>
               {plugin.status === "PENDING" && (
                 <Button
                   size="sm"
@@ -620,7 +655,9 @@ export default function PluginDetailPage() {
                       </div>
                       <div className="mt-0.5 text-meta text-muted-foreground">
                         Deletes the registration, its skills, API keys, and
-                        webhooks. Linked issues stay; sync stops immediately.
+                        webhooks. Download a backup first if this plugin may
+                        need to be restored. Linked issues stay; sync stops
+                        immediately.
                       </div>
                     </div>
                     <Button
@@ -713,7 +750,7 @@ export default function PluginDetailPage() {
         open={removeOpen}
         onOpenChange={(v) => !v && setRemoveOpen(false)}
         title={`Remove ${plugin?.name ?? "plugin"}?`}
-        description="This deletes the registration along with its skills, API keys, and webhooks. Linked issues are untouched. This can't be undone."
+        description="This deletes the registration along with its skills, API keys, and webhooks. Linked issues are untouched. Download a backup first if this may need to be restored."
         primaryLabel="Remove plugin"
         variant="destructive"
         typeToConfirm="REMOVE"

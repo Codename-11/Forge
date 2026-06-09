@@ -25,8 +25,8 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { ChatThreadView } from "@/components/mission-control/chat-thread";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { markChatThreadRead } from "@/lib/chat-read-state";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useChatThreadReadMarker } from "@/hooks/use-chat-read-state";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { ChatStatusRail } from "@/components/chat/chat-status-rail";
@@ -402,11 +402,11 @@ export function ChatWorkspaceSurface() {
   );
   const selectedThreadIdForRead = selectedThread?.id ?? null;
   const selectedThreadLatestAt = selectedThread?.latestMessage?.createdAt ?? null;
-
-  useEffect(() => {
-    if (!selectedThreadIdForRead) return;
-    markChatThreadRead(ws.slug, selectedThreadIdForRead);
-  }, [ws.slug, selectedThreadIdForRead, selectedThreadLatestAt]);
+  const markThreadRead = useChatThreadReadMarker({
+    slug: ws.slug,
+    threadId: selectedThreadIdForRead,
+    latestMessageAt: selectedThreadLatestAt,
+  });
 
   useEffect(() => {
     if (selectedThread) {
@@ -466,6 +466,7 @@ export function ChatWorkspaceSurface() {
   }, [agents, newAgentId]);
 
   const openThread = (threadId: string, agentId: string) => {
+    markThreadRead(threadId);
     setSelectedAgentId(agentId);
     router.replace(`/w/${ws.slug}/chat?thread=${encodeURIComponent(threadId)}`);
     setMobilePickerOpen(false);
