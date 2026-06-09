@@ -28,6 +28,7 @@ import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
+import { createIssueWithSideEffects } from "@/server/services/issue-create";
 import { setIssueAgentWakeTarget } from "@/server/services/issue-watchers";
 import {
   abandonRunsForAgentReassignment,
@@ -83,6 +84,17 @@ import {
   type RunCompletionConfidence,
   type RunReviewVerdict,
 } from "@/server/services/run-completion-contract";
+import {
+  importGitHubIssue,
+  linkGitHubUrlToIssue,
+  listLinkedGitHubResources,
+  resolveGitHubRepoMapping,
+  syncGitHubExternalResource,
+} from "@/server/services/github/resource-sync";
+import { searchGitHubIssuesAndPulls } from "@/server/services/github/client";
+import { githubInstallationId } from "@/server/services/github/mapping-policy";
+import { parseGitHubUrl } from "@/server/services/github/url";
+import { EXTERNAL_LINK_KINDS } from "@/server/services/github/types";
 
 /**
  * Forge's MCP (Model Context Protocol) surface — the stable set of tools any
@@ -1377,29 +1389,20 @@ export const mcpTools = {
           id: input.projectId,
         });
       }
-      const status = await db.status.findFirstOrThrow({
-        where: { workspaceId: ctx.workspaceId, isDefault: true },
-      });
-      const last = await db.issue.findFirst({
-        where: { workspaceId: ctx.workspaceId },
-        orderBy: { number: "desc" },
-        select: { number: true },
-      });
       const authorId = await resolveActorId(ctx);
-      const issue = await db.issue.create({
-        data: {
-          workspaceId: ctx.workspaceId,
-          number: (last?.number ?? 0) + 1,
+      const issue = await createIssueWithSideEffects({
+        db,
+        workspaceId: ctx.workspaceId,
+        actorId: authorId,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        input: {
           title: input.title,
           description: input.description,
           projectId: input.projectId,
-          statusId: status.id,
-          priority: input.priority ?? "NONE",
-          authorId,
+          priority: (input.priority ?? Priority.NONE) as Priority,
         },
-        select: mcpIssueDtoSelect,
       });
-      return toMcpIssueDto(issue);
+      return mcpIssueDtoById(issue.id);
     },
   },
 
@@ -6684,6 +6687,164 @@ export const mcpTools = {
     },
   },
 
+  // --------------------------------------------------------------------- GitHub
+  "github.parseUrl": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      url: z.string().url().max(2048),
+    }),
+    async run(input: { url: string }) {
+      return parseGitHubUrl(input.url);
+    },
+  },
+
+  "github.listLinked": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().cuid(),
+    }),
+    async run(input: { issueId: string }, ctx: McpContext) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      return listLinkedGitHubResources({
+        db,
+        workspaceId: ctx.workspaceId,
+        issueId: input.issueId,
+      });
+    },
+  },
+
+  "github.link": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().cuid(),
+      url: z.string().url().max(2048),
+      kind: z.enum(EXTERNAL_LINK_KINDS).default("RELATES_TO"),
+      mappingId: z.string().cuid().optional(),
+    }),
+    async run(
+      input: {
+        issueId: string;
+        url: string;
+        kind: (typeof EXTERNAL_LINK_KINDS)[number];
+        mappingId?: string;
+      },
+      ctx: McpContext,
+    ) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      const actorId = await resolveActorId(ctx);
+      return linkGitHubUrlToIssue({
+        db,
+        workspaceId: ctx.workspaceId,
+        issueId: input.issueId,
+        url: input.url,
+        kind: input.kind,
+        mappingId: input.mappingId,
+        actor: {
+          actorId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        },
+      });
+    },
+  },
+
+  "github.importIssue": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      mappingId: z.string().cuid().optional(),
+      repoFullName: z.string().min(3).max(200).optional(),
+      number: z.number().int().positive(),
+      projectId: z.string().cuid().nullable().optional(),
+      labelIds: z.array(z.string().cuid()).default([]),
+      queue: z.boolean().optional(),
+    }),
+    async run(
+      input: {
+        mappingId?: string;
+        repoFullName?: string;
+        number: number;
+        projectId?: string | null;
+        labelIds: string[];
+        queue?: boolean;
+      },
+      ctx: McpContext,
+    ) {
+      if (input.projectId) {
+        await assertKeyScope(scopeCtx(ctx), { entity: "project", id: input.projectId });
+      }
+      const actorId = await resolveActorId(ctx);
+      const result = await importGitHubIssue({
+        db,
+        workspaceId: ctx.workspaceId,
+        mappingId: input.mappingId,
+        repoFullName: input.repoFullName,
+        number: input.number,
+        projectId: input.projectId,
+        labelIds: input.labelIds,
+        queue: input.queue,
+        actor: {
+          actorId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        },
+      });
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: result.issueId });
+      return result;
+    },
+  },
+
+  "github.sync": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      externalResourceId: z.string().cuid(),
+    }),
+    async run(input: { externalResourceId: string }, ctx: McpContext) {
+      const links = await db.externalResourceLink.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          externalResourceId: input.externalResourceId,
+        },
+        select: { issueId: true },
+      });
+      for (const link of links) {
+        await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: link.issueId });
+      }
+      const actorId = await resolveActorId(ctx);
+      return syncGitHubExternalResource({
+        db,
+        workspaceId: ctx.workspaceId,
+        externalResourceId: input.externalResourceId,
+        actor: {
+          actorId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        },
+      });
+    },
+  },
+
+  "github.search": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      mappingId: z.string().cuid(),
+      query: z.string().min(1).max(200),
+      type: z.enum(["issue", "pr"]).optional(),
+    }),
+    async run(
+      input: { mappingId: string; query: string; type?: "issue" | "pr" },
+      ctx: McpContext,
+    ) {
+      const mapping = await resolveGitHubRepoMapping({
+        db,
+        workspaceId: ctx.workspaceId,
+        mappingId: input.mappingId,
+      });
+      return searchGitHubIssuesAndPulls({
+        installationId: githubInstallationId(mapping.connection),
+        repoFullName: mapping.target,
+        query: input.query,
+        type: input.type,
+      });
+    },
+  },
+
   // --------------------------------------------------------------------- Statuses
   /**
    * List the workspace's status rows ordered by `position`. Optional
@@ -6779,7 +6940,7 @@ export const mcpTools = {
         });
         if (!issue) throw new Error("Issue not found in this workspace.");
 
-        const [rawComments, attachments, relations, currentRun, artifacts] = await Promise.all([
+        const [rawComments, attachments, relations, currentRun, artifacts, externalResources] = await Promise.all([
           db.comment.findMany({
             where: {
               workspaceId: ctx.workspaceId,
@@ -6851,6 +7012,11 @@ export const mcpTools = {
               updatedAt: true,
             },
           }),
+          db.externalResourceLink.findMany({
+            where: { workspaceId: ctx.workspaceId, issueId },
+            orderBy: { createdAt: "asc" },
+            include: { externalResource: true },
+          }),
         ]);
 
         // Wave 5: completion contract — surfaced so agents know
@@ -6884,6 +7050,7 @@ export const mcpTools = {
           relations,
           currentRun,
           artifacts,
+          externalResources,
           completionContract,
           runProtocol,
         };

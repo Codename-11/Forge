@@ -39,6 +39,7 @@ import { IssueAgentPanel } from "@/components/issue-detail/issue-agent-panel";
 import { TerminalRunFailureBanner } from "@/components/issue-detail/run-failure-banner";
 import { RuntimePreflightBanner } from "@/components/issue-detail/runtime-preflight-banner";
 import { RunActivityChip } from "@/components/issue-detail/run-activity-chip";
+import { GitHubLinksPanel } from "@/components/issue-detail/github-links-panel";
 import { AiTriageCard } from "@/components/ai-triage-card";
 import { Breadcrumb } from "@/components/breadcrumb";
 import { ProjectChip } from "@/components/project-chip";
@@ -548,6 +549,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                       issueId={issue.id}
                       assignedAgent={issue.assignedAgent ?? null}
                     />
+                    <GitHubLinksPanel issueId={issue.id} />
                     <SidebarField label="Project">
                       <ProjectPickerField
                         value={issue.projectId ?? null}

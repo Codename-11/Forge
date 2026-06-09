@@ -42,6 +42,7 @@ import { eventRouter } from "./event";
 import { executionPlanRouter } from "./execution-plan";
 import { globalRouter } from "./global";
 import { goalRouter } from "./goal";
+import { githubRouter } from "./github";
 import { inboxRouter } from "./inbox";
 import { initiativeRouter } from "./initiative";
 import { noteRouter } from "./note";
@@ -87,6 +88,7 @@ export const appRouter = router({
   executionPlan: executionPlanRouter,
   global: globalRouter,
   goal: goalRouter,
+  github: githubRouter,
   inbox: inboxRouter,
   initiative: initiativeRouter,
   integration: integrationRouter,

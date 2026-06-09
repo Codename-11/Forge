@@ -22,7 +22,7 @@ globally; workspaces decide what those identities point at.
 
 | Provider | Shape |
 |---|---|
-| `GITHUB` | First-party GitHub OAuth |
+| `GITHUB` | GitHub App installation for repo import/link/sync; generic OAuth remains available for account auth experiments |
 | `GOOGLE` | First-party Google OAuth |
 | `SLACK` | First-party Slack auth |
 | `OIDC` | Any OpenID-Connect IdP via discovery (Authelia, Authentik, Keycloak, Okta, …) |
@@ -60,6 +60,37 @@ same screen — the flow is identical to the first authorize.
 `CUSTOM` connections carry no live token; they're a place to record an
 identity you manage out-of-band.
 
+### GitHub App
+
+GitHub repository sync uses the **Install GitHub App** action on
+`/settings/connections` or `/w/[slug]/settings/connections`. The install
+callback creates or updates a `Connection(provider = GITHUB)` whose
+`config.authKind` is `github_app_installation` and whose `config.installationId`
+identifies the GitHub App installation. Forge stores installation metadata, not
+installation access tokens.
+
+After installation, map repositories from
+`/w/[slug]/settings/connections`. A GitHub repo mapping can configure:
+
+- auto-create Forge issues when GitHub sends `issues.opened`;
+- default labels, project, priority, queue behavior, and assigned agent for
+  imported GitHub issues;
+- title sync for SOURCE links;
+- optional GitHub comment mirroring into Forge system comments;
+- local Forge status transitions for issue closed/reopened, PR ready/merged,
+  review changes requested, and failed checks.
+
+The mapping menu also has **Import issue** for one-off creation from a GitHub
+issue number. Existing Forge issues can link GitHub issue/PR URLs from the
+issue detail rail.
+
+::: warning GitHub writeback
+This integration is inbound/read-only against GitHub in the current phase.
+Forge can create/update local Forge issue context from GitHub state, but it does
+not post GitHub comments, close/reopen GitHub issues, edit PRs, or apply GitHub
+labels.
+:::
+
 ## Mapping into a workspace
 
 A bare connection does nothing on its own. A **mapping** binds it to a
@@ -74,6 +105,7 @@ concrete target *for one workspace* (the mapping always carries its own
 | `labelIds` | Default labels applied to inbound work from this mapping |
 | `routeTo` | Where inbound events route (display: "Issue · auto-create", "Chat · @victor", …) |
 | `status` | `active` \| `paused` |
+| `config` | Provider-specific policy; GitHub stores repo sync/import/status rules here |
 
 So one GitHub connection can map to `acme/api` in one workspace and
 `acme/web` in another, each with its own default labels and direction.

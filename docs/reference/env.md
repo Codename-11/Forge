@@ -63,6 +63,35 @@ on the next request) **and** the encrypted SSO client secrets — re-enter each
 provider's secret in Settings → Authentication after a rotation.
 :::
 
+## GitHub App integration
+
+Required only when enabling GitHub issue/PR import, linking, and webhook sync.
+Forge uses a GitHub App installation as durable repo auth and mints short-lived
+installation tokens just in time. Installation access tokens are not stored.
+
+| Var                         | Required | Notes |
+|-----------------------------|----------|-------|
+| `GITHUB_APP_ID`             | Yes      | Numeric GitHub App id used for JWT signing. |
+| `GITHUB_APP_SLUG`           | Yes      | App slug for `/api/connections/github/install` redirects. |
+| `GITHUB_APP_PRIVATE_KEY`    | Yes      | PEM private key. Newlines may be literal or escaped as `\n`. |
+| `GITHUB_APP_WEBHOOK_SECRET` | Yes      | HMAC secret used to verify `/api/ingest/github`. |
+
+```bash
+GITHUB_APP_ID="123456"
+GITHUB_APP_SLUG="forge"
+GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+GITHUB_APP_WEBHOOK_SECRET="..."
+```
+
+Configure the GitHub App with:
+
+- Setup URL: `https://forge.example/api/connections/github/setup`
+- Webhook URL: `https://forge.example/api/ingest/github`
+- Webhook events: `issues`, `issue_comment`, `pull_request`,
+  `pull_request_review`, `check_suite`, `check_run`
+- Read permissions for issues and pull requests. Repository metadata access is
+  needed for repository selection/listing.
+
 ## Storage (MinIO / S3)
 
 Forge stores attachments in any S3-compatible object store. The split between
