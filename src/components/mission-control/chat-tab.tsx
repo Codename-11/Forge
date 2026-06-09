@@ -7,7 +7,9 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  Search,
   SquareArrowOutUpRight,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
@@ -15,6 +17,8 @@ import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ChatThreadView } from "./chat-thread";
 import { ChatStatusRail } from "@/components/chat/chat-status-rail";
+
+type ThreadStateFilter = "all" | "waiting" | "stalled" | "has_attachments";
 
 /**
  * Chat tab: left rail of agents (existing threads + all known agents),
@@ -28,7 +32,16 @@ export function ChatTab({
   /** Focus the composer when the tab becomes active. */
   autoFocus?: boolean;
 }) {
-  const { data: threads } = trpc.chat.threads.useQuery(undefined, { staleTime: 30_000 });
+  const [threadQuery, setThreadQuery] = useState("");
+  const [threadState, setThreadState] = useState<ThreadStateFilter>("all");
+  const normalizedThreadQuery = threadQuery.trim().toLowerCase();
+  const { data: threads } = trpc.chat.threads.useQuery(
+    {
+      query: threadQuery.trim() || undefined,
+      state: threadState,
+    },
+    { staleTime: 30_000 },
+  );
   const { data: agents } = trpc.agent.list.useQuery(
     { includeArchived: false },
     { staleTime: 60_000 },
@@ -72,6 +85,11 @@ export function ChatTab({
     lastMessageAt?: string | Date | null;
   };
   const byAgentId = new Map<string, RailAgent>();
+  const agentMatchesQuery = (agent: { name: string; profileKey: string }) => {
+    if (!normalizedThreadQuery) return true;
+    const haystack = `${agent.name} ${agent.profileKey}`.toLowerCase();
+    return haystack.includes(normalizedThreadQuery);
+  };
   for (const t of threads ?? []) {
     const prior = byAgentId.get(t.agent.id);
     const ts = t.lastMessageAt ? new Date(t.lastMessageAt).getTime() : 0;
@@ -89,6 +107,8 @@ export function ChatTab({
     }
   }
   for (const a of agents ?? []) {
+    if (threadState !== "all") continue;
+    if (!agentMatchesQuery(a)) continue;
     if (byAgentId.has(a.id)) continue;
     byAgentId.set(a.id, {
       id: a.id,
@@ -129,9 +149,56 @@ export function ChatTab({
     <div className="flex h-full min-w-0 flex-col sm:flex-row">
       {/* Agent rail */}
       <aside className="flex max-h-24 w-full shrink-0 overflow-x-auto overflow-y-hidden border-b border-border/60 bg-card/30 sm:block sm:max-h-none sm:w-32 sm:overflow-y-auto sm:border-b-0 sm:border-r">
+        <div className="w-44 shrink-0 border-r border-border/50 p-1.5 sm:w-full sm:border-b sm:border-r-0">
+          <div className="flex items-center gap-1 rounded border border-border bg-background/65 px-1.5 py-1">
+            <Search className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <input
+              value={threadQuery}
+              onChange={(event) => setThreadQuery(event.target.value)}
+              aria-label="Search Mission Control chats"
+              placeholder="Search chats..."
+              className="min-w-0 flex-1 bg-transparent text-[0.625rem] text-foreground outline-none placeholder:text-muted-foreground/60"
+            />
+            {threadQuery && (
+              <button
+                type="button"
+                onClick={() => setThreadQuery("")}
+                aria-label="Clear chat search"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {(
+              [
+                ["all", "All"],
+                ["waiting", "Wait"],
+                ["stalled", "Stall"],
+                ["has_attachments", "Files"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setThreadState(value)}
+                className={cn(
+                  "rounded-full border px-1.5 py-0.5 text-[0.5625rem]",
+                  threadState === value
+                    ? "border-ember/40 bg-ember/10 text-ember"
+                    : "border-border bg-card/40 text-muted-foreground hover:border-border/80 hover:text-foreground",
+                )}
+                title={`Show ${label.toLowerCase()} chats`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         {railAgents.length === 0 && (
-          <div className="px-2 py-3 text-center text-[0.625rem] text-muted-foreground">
-            No agents yet
+          <div className="w-32 shrink-0 px-2 py-3 text-center text-[0.625rem] text-muted-foreground sm:w-full">
+            {threadQuery || threadState !== "all" ? "No matching chats" : "No agents yet"}
           </div>
         )}
         {railAgents.map((a) => {

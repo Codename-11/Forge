@@ -2,6 +2,20 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Mission Control chat filters
+
+Added compact conversation search and state filters to the Mission Control Chat
+tab, reusing the existing `chat.threads` query contract. Operators can now find
+recent chats, narrow to waiting/stalled/file-backed threads, and clear search
+without leaving the quick-access chat widget.
+
+Added Playwright coverage for the Mission Control chat search empty state and
+clear action.
+
+Verification: `pnpm lint`, `pnpm typecheck`,
+`E2E_FORCE_BUILD=1 pnpm test:e2e tests/e2e/mission-control-chat-filters.spec.ts`,
+full `pnpm test`, and full `pnpm test:e2e` pass.
+
 ## 2026-06-09 — Chat action browser coverage
 
 Added browser coverage for the completed chat action surface. The Playwright
