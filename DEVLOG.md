@@ -2,6 +2,21 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Collapsed chat history previews
+
+Upgraded the collapsed Chat conversation rail from compact glyphs with a cramped
+string tooltip into hover/focus preview cards. Each collapsed chat now previews
+the thread title, agent handle, current status, latest message body, age, and
+attachment count while preserving the compact avatar/status-dot rail.
+
+Added Playwright coverage that creates a real chat thread, collapses the
+conversation pane, verifies the collapsed history rail, and checks the preview
+content before expanding the pane again.
+
+Verification: `pnpm typecheck`, `E2E_FORCE_BUILD=1 pnpm exec playwright test
+tests/e2e/chat-surface.spec.ts --workers=1`, `pnpm lint`, full `pnpm test`, and
+full serial `pnpm exec playwright test --workers=1` pass.
+
 ## 2026-06-09 — Chat activity read markers and plugin restore webhooks
 
 Included owned chat-thread events in the Activity drawer feed without exposing
