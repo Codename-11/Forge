@@ -131,7 +131,7 @@ export function CyclePlanningBoard({
           so it never touches the drag-drop transitions below. */}
       <div className="flex shrink-0 items-center gap-3 px-3 pt-3 pb-1">
         <span className="text-meta text-muted-foreground/70">
-          Drag to reorder · drag across columns to retransition
+          Drag cards across columns to transition status
         </span>
         {projectOptions.length > 0 && (
           <label className="ml-auto flex items-center gap-1.5 text-meta text-muted-foreground">

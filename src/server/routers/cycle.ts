@@ -19,6 +19,11 @@ const addDays = (date: Date, days: number): Date => {
   return d;
 };
 
+const MS_PER_DAY = 86_400_000;
+
+const daysBetween = (start: Date, end: Date): number =>
+  Math.max(1, Math.round((end.getTime() - start.getTime()) / MS_PER_DAY));
+
 export const listInput = z.object({
   status: z.nativeEnum(CycleStatus).optional(),
 });
@@ -33,6 +38,7 @@ export const createInput = z.object({
   endsAt: z.date().optional(),
   lengthDays: z.number().int().min(1).max(365).optional(),
   cooldownDays: z.number().int().min(0).max(90).optional(),
+  status: z.nativeEnum(CycleStatus).optional(),
 });
 
 export const updateInput = z.object({
@@ -169,6 +175,7 @@ export const cycleRouter = router({
           endsAt,
           lengthDays,
           cooldownDays,
+          status: input.status,
         },
       });
       await recordChange(tx, {
@@ -196,7 +203,24 @@ export const cycleRouter = router({
       const before = await tx.cycle.findFirstOrThrow({
         where: { id, workspaceId: ctx.workspaceId },
       });
-      const after = await tx.cycle.update({ where: { id }, data: patch });
+      const startsAt = patch.startsAt ?? before.startsAt;
+      const endsAt = patch.endsAt ?? before.endsAt;
+      if (endsAt.getTime() <= startsAt.getTime()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cycle `endsAt` must be after `startsAt`.",
+        });
+      }
+
+      const after = await tx.cycle.update({
+        where: { id },
+        data: {
+          ...patch,
+          ...((patch.startsAt || patch.endsAt) && {
+            lengthDays: daysBetween(startsAt, endsAt),
+          }),
+        },
+      });
       await recordChange(tx, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,

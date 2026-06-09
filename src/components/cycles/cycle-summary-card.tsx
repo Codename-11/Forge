@@ -95,7 +95,7 @@ export function CycleSummaryCard({
             {remaining === 0 ? "ended" : `${remaining}d remaining`}
           </span>
         </div>
-        <div className="mt-3 grid grid-cols-4 gap-3">
+        <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Scope" value={total} hint="issues" />
           <Stat label="Done" value={done} hint="complete" />
           <Stat label="In progress" value={inProgress} hint="running" />
@@ -110,18 +110,21 @@ export function CycleSummaryCard({
         </div>
       </div>
 
-      <div className="flex shrink-0 flex-col items-end gap-2">
-        <BurndownSparkline actual={series.actual} ideal={series.ideal} />
-        {paceCaption && (
-          <span
-            className={cn(
-              "text-meta tabular-nums",
-              paceCaption.behind ? "text-ember" : "text-muted-foreground",
-            )}
-          >
-            {paceCaption.text}
-          </span>
-        )}
+      <div className="flex shrink-0 flex-col items-stretch gap-2 md:w-44 md:border-l md:border-border md:pl-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-meta text-muted-foreground">Burndown</span>
+          {paceCaption && (
+            <span
+              className={cn(
+                "text-meta tabular-nums",
+                paceCaption.behind ? "text-ember" : "text-muted-foreground",
+              )}
+            >
+              {paceCaption.text}
+            </span>
+          )}
+        </div>
+        <BurndownSparkline actual={series.actual} ideal={series.ideal} width={160} height={44} />
         {onRollover && finalDay && cycle.status === CycleStatus.ACTIVE && (
           <Button
             size="sm"
