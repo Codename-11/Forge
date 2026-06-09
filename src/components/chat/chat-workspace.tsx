@@ -25,6 +25,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { ChatThreadView } from "@/components/mission-control/chat-thread";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { markChatThreadRead } from "@/lib/chat-read-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
@@ -94,6 +95,7 @@ function statusMeta(input: {
 }
 
 type ThreadStateFilter = "all" | "waiting" | "stalled" | "has_attachments";
+type ChatContextModeValue = "SMART" | "RECENT_ONLY" | "FULL_SUMMARY" | "PINNED_CONTEXT";
 
 function AgentGlyph({ agent, active }: { agent: AgentLite; active?: boolean }) {
   return <AgentAvatar agent={agent} active={active} size="md" shape="rounded" />;
@@ -243,12 +245,14 @@ export function ChatWorkspaceSurface() {
   // keep parity (stop / archive / delete / connection info).
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [newConversationOpen, setNewConversationOpen] = useState(false);
+  const [conversationSettingsOpen, setConversationSettingsOpen] = useState(false);
   const [newAgentId, setNewAgentId] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [newTopic, setNewTopic] = useState("");
-  const [newContextMode, setNewContextMode] = useState<
-    "SMART" | "RECENT_ONLY" | "FULL_SUMMARY" | "PINNED_CONTEXT"
-  >("SMART");
+  const [newContextMode, setNewContextMode] = useState<ChatContextModeValue>("SMART");
+  const [settingsTitle, setSettingsTitle] = useState("");
+  const [settingsTopic, setSettingsTopic] = useState("");
+  const [settingsContextMode, setSettingsContextMode] = useState<ChatContextModeValue>("SMART");
 
   // Conversations-pane geometry. Collapse + drag-resize are per-device view
   // state, so they live in localStorage (read once after mount to avoid an
@@ -305,10 +309,13 @@ export function ChatWorkspaceSurface() {
     [convWidth],
   );
 
-  const { data: threads, isLoading: threadsLoading } = trpc.chat.threads.useQuery(
-    { query: query.trim() || undefined, state: stateFilter, archived },
-    { staleTime: 20_000 },
+  const threadsInput = useMemo(
+    () => ({ query: query.trim() || undefined, state: stateFilter, archived }),
+    [archived, query, stateFilter],
   );
+  const { data: threads, isLoading: threadsLoading } = trpc.chat.threads.useQuery(threadsInput, {
+    staleTime: 20_000,
+  });
   const { data: agents, isLoading: agentsLoading } = trpc.agent.list.useQuery(
     { includeArchived: false },
     { staleTime: 60_000 },
@@ -318,12 +325,43 @@ export function ChatWorkspaceSurface() {
       setQuery("");
       setStateFilter("all");
       setArchived(false);
-      await utils.chat.threads.invalidate();
       setNewConversationOpen(false);
       setNewTitle("");
       setNewTopic("");
       setSelectedAgentId(result.agent.id);
       router.replace(`/w/${ws.slug}/chat?thread=${encodeURIComponent(result.thread.id)}`);
+      await utils.chat.threads.invalidate();
+    },
+  });
+  const updateConversationM = trpc.chat.updateConversation.useMutation({
+    onSuccess: async (result, variables) => {
+      utils.chat.getThread.setData({ threadId: variables.threadId }, (old) =>
+        old
+          ? {
+              ...old,
+              title: result.title,
+              topic: result.topic,
+              contextMode: result.contextMode,
+            }
+          : old,
+      );
+      utils.chat.threads.setData(threadsInput, (old) =>
+        old?.map((thread) =>
+          thread.id === variables.threadId
+            ? {
+                ...thread,
+                title: result.title,
+                topic: result.topic,
+                contextMode: result.contextMode,
+              }
+            : thread,
+        ),
+      );
+      setConversationSettingsOpen(false);
+      await Promise.all([
+        utils.chat.threads.invalidate(),
+        utils.chat.getThread.invalidate({ threadId: variables.threadId }),
+      ]);
     },
   });
 
@@ -339,6 +377,13 @@ export function ChatWorkspaceSurface() {
     () => (threadParam ? (threads ?? []).find((thread) => thread.id === threadParam) : null),
     [threadParam, threads],
   );
+  const selectedThreadIdForRead = selectedThread?.id ?? null;
+  const selectedThreadLatestAt = selectedThread?.latestMessage?.createdAt ?? null;
+
+  useEffect(() => {
+    if (!selectedThreadIdForRead) return;
+    markChatThreadRead(ws.slug, selectedThreadIdForRead);
+  }, [ws.slug, selectedThreadIdForRead, selectedThreadLatestAt]);
 
   useEffect(() => {
     if (selectedThread) {
@@ -418,6 +463,24 @@ export function ChatWorkspaceSurface() {
     });
   };
 
+  const openConversationSettings = () => {
+    if (!selectedThread) return;
+    setSettingsTitle(selectedThread.title ?? "");
+    setSettingsTopic(selectedThread.topic ?? "");
+    setSettingsContextMode((selectedThread.contextMode ?? "SMART") as ChatContextModeValue);
+    setConversationSettingsOpen(true);
+  };
+
+  const saveConversationSettings = () => {
+    if (!selectedThread || updateConversationM.isPending) return;
+    updateConversationM.mutate({
+      threadId: selectedThread.id,
+      title: settingsTitle.trim() || null,
+      topic: settingsTopic.trim() || null,
+      contextMode: settingsContextMode,
+    });
+  };
+
   const hasRows = (threads?.length ?? 0) > 0 || starterAgents.length > 0;
 
   return (
@@ -427,6 +490,12 @@ export function ChatWorkspaceSurface() {
         subtitle="Agent conversations, file-backed prompts, and dispatch state."
         actions={
           <div className="flex items-center gap-2">
+            {selectedThread && (
+              <Button variant="ghost" size="sm" onClick={openConversationSettings}>
+                <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />
+                Conversation
+              </Button>
+            )}
             <Button variant="subtle" size="sm" onClick={() => setNewConversationOpen(true)}>
               <Plus className="mr-1.5 h-3.5 w-3.5" />
               New conversation
@@ -440,6 +509,114 @@ export function ChatWorkspaceSurface() {
           </div>
         }
       />
+      {conversationSettingsOpen && selectedThread && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur"
+          data-testid="conversation-settings-modal"
+        >
+          <div className="w-full max-w-lg rounded-xl border border-border bg-card p-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-foreground">Conversation settings</div>
+                <p className="text-meta text-muted-foreground">
+                  Rename this thread and adjust its context policy.
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setConversationSettingsOpen(false)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            <div className="mt-4 space-y-3">
+              <label className="text-meta block text-muted-foreground">
+                Title
+                <input
+                  value={settingsTitle}
+                  onChange={(event) => setSettingsTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      (event.metaKey || event.ctrlKey) &&
+                      event.key === "Enter" &&
+                      !updateConversationM.isPending
+                    ) {
+                      event.preventDefault();
+                      saveConversationSettings();
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      setConversationSettingsOpen(false);
+                    }
+                  }}
+                  placeholder={
+                    selectedThread.isDefault ? `Chat with ${selectedThread.agent.name}` : "Untitled"
+                  }
+                  className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"
+                />
+              </label>
+              <label className="text-meta block text-muted-foreground">
+                Topic
+                <textarea
+                  value={settingsTopic}
+                  onChange={(event) => setSettingsTopic(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      (event.metaKey || event.ctrlKey) &&
+                      event.key === "Enter" &&
+                      !updateConversationM.isPending
+                    ) {
+                      event.preventDefault();
+                      saveConversationSettings();
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      setConversationSettingsOpen(false);
+                    }
+                  }}
+                  rows={3}
+                  placeholder="Optional operator note for this conversation."
+                  className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"
+                />
+              </label>
+              <label className="text-meta block text-muted-foreground">
+                Context mode
+                <select
+                  value={settingsContextMode}
+                  onChange={(event) =>
+                    setSettingsContextMode(event.target.value as ChatContextModeValue)
+                  }
+                  className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"
+                >
+                  <option value="SMART">Smart · summary plus recent messages</option>
+                  <option value="RECENT_ONLY">Recent only</option>
+                  <option value="FULL_SUMMARY">Full summary plus recent</option>
+                  <option value="PINNED_CONTEXT">Pinned context</option>
+                </select>
+              </label>
+              <div className="rounded-md border border-border bg-background/50 p-2 text-meta text-muted-foreground">
+                Provider and model overrides stay in the gear menu inside the chat header.
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setConversationSettingsOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="subtle"
+                size="sm"
+                disabled={updateConversationM.isPending}
+                onClick={saveConversationSettings}
+              >
+                Save settings
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       {newConversationOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur">
           <div className="w-full max-w-lg rounded-xl border border-border bg-card p-4 shadow-xl">
@@ -508,7 +685,7 @@ export function ChatWorkspaceSurface() {
                 <select
                   value={newContextMode}
                   onChange={(event) =>
-                    setNewContextMode(event.target.value as typeof newContextMode)
+                    setNewContextMode(event.target.value as ChatContextModeValue)
                   }
                   className="mt-1 w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground"
                 >

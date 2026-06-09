@@ -2,6 +2,24 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Chat read state and conversation settings
+
+Added a full Chat conversation settings action for renaming an existing thread,
+editing its topic, and changing its context mode. New conversation creation and
+settings saves now close/navigate promptly instead of waiting on thread-list
+refetches, while still refreshing the caches after the successful mutation.
+
+Centralized browser chat read-state handling behind `chat-read-state`, so the
+full Chat page, Mission Control Chat tab, and the shared thread renderer all
+mark the active visible thread read. Mission Control now listens for same-tab
+and cross-tab read updates and no longer marks every chat read merely because
+the Chat tab is open.
+
+Verification: `pnpm lint`, `pnpm typecheck`,
+`pnpm vitest run tests/unit/chat-read-state.test.ts`,
+`E2E_FORCE_BUILD=1 pnpm test:e2e tests/e2e/chat-conversation-settings-read-state.spec.ts`,
+full `pnpm test`, and full `pnpm test:e2e` pass.
+
 ## 2026-06-09 — Mission Control chat filters
 
 Added compact conversation search and state filters to the Mission Control Chat
