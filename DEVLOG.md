@@ -2,6 +2,28 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Plugin updates and chat deep-link hydration
+
+Made plugin manifest registration idempotent by slug. Re-submitting a manifest
+with the same slug now updates the existing registration, replaces declared
+skills, preserves existing keys and signing secret, reports version/scope deltas,
+and moves the plugin back to PENDING when version, scopes, skills, or webhook
+configuration changed. Plugin API-key issuance is now blocked until the plugin is
+approved, including after a manifest update that needs review.
+
+Updated the Plugins settings flow to present install/update clearly and tell the
+operator whether a submitted manifest was newly registered, unchanged, or updated
+with review required.
+
+Hardened full Chat deep links and freshly-created conversations by hydrating the
+selected thread directly when the conversation list has not caught up yet. This
+keeps conversation settings, status rail context, and read-state marking working
+from `/w/{slug}/chat?thread=...`, the Chat page, and Mission Control handoffs.
+
+Verification: `pnpm lint`, `pnpm typecheck`, full `pnpm test`,
+`E2E_FORCE_BUILD=1 pnpm exec playwright test tests/e2e/chat-conversation-settings-read-state.spec.ts`,
+and full `pnpm test:e2e` pass.
+
 ## 2026-06-09 — Chat read state and conversation settings
 
 Added a full Chat conversation settings action for renaming an existing thread,

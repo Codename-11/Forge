@@ -32,8 +32,20 @@ export default function PluginsPage() {
   const [webhookUrl, setWebhookUrl] = useState("");
 
   const register = trpc.plugin.register.useMutation({
-    onSuccess: () => {
-      toast.success("Plugin registered (pending approval).");
+    onSuccess: (result) => {
+      if (result.installAction === "updated") {
+        const scopeNote =
+          result.addedScopes.length > 0
+            ? ` New scopes: ${result.addedScopes.join(", ")}.`
+            : "";
+        toast.success(
+          `Plugin manifest updated from v${result.priorVersion} to v${result.version}; review required.${scopeNote}`,
+        );
+      } else if (result.installAction === "unchanged") {
+        toast.success("Plugin manifest already matches the installed registration.");
+      } else {
+        toast.success("Plugin registered (pending approval).");
+      }
       setRegisterOpen(false);
       setRawManifest("");
       setWebhookUrl("");
@@ -46,10 +58,10 @@ export default function PluginsPage() {
     <>
       <Topbar
         title="Plugins"
-        subtitle="Extensible agents with scoped access to your workspace. Approve, configure, or suspend installed plugins."
+        subtitle="Extensible agents with scoped access to your workspace. Install, update, approve, configure, or suspend plugins."
         actions={
           <Button variant="ember" size="sm" onClick={() => setRegisterOpen(true)}>
-            Register plugin
+            Install/update plugin
           </Button>
         }
       />
@@ -165,7 +177,11 @@ export default function PluginsPage() {
           }}
           className="space-y-3 p-5"
         >
-          <div className="text-sm font-semibold">Register plugin</div>
+          <div className="text-sm font-semibold">Install or update plugin</div>
+          <p className="text-meta text-muted-foreground">
+            Re-submit a manifest with the same slug to update version, scopes, skills, or webhook
+            configuration. Forge preserves existing keys and requires review for changed manifests.
+          </p>
           <label className="block text-xs text-muted-foreground">Manifest (JSON)</label>
           <textarea
             value={rawManifest}
@@ -184,7 +200,7 @@ export default function PluginsPage() {
               Cancel
             </Button>
             <Button type="submit" variant="ember" disabled={register.isPending}>
-              {register.isPending ? "Registering…" : "Register"}
+              {register.isPending ? "Saving…" : "Install/update"}
             </Button>
           </div>
         </form>

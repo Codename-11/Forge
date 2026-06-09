@@ -264,11 +264,10 @@ export default function PluginDetailPage() {
               </Card>
 
               {/* Tab strip — underline-active, ember underline. Mirrors the
-                  issue-detail rail. Keys 1/2/3/4 switch tabs. The design's
-                  "vX wants new permissions" version-bump banner is intentionally
-                  omitted: it needs a plugin-upgrade model (pending version +
-                  requestedScopes) that the Plugin row doesn't expose today.
-                  Wire it in here once such a field lands. */}
+                  issue-detail rail. Keys 1/2/3/4 switch tabs. Manifest updates
+                  now move the registration back to PENDING when review is
+                  required, so this detail page uses the normal pending review
+                  banner instead of a separate upgrade model. */}
               <div
                 role="tablist"
                 aria-label="Plugin detail sections"

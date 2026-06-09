@@ -3,13 +3,54 @@ import { TRPCError } from "@trpc/server";
 import { Prisma, PluginStatus, PluginScope } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
 import { router, adminProcedure, workspaceProcedure } from "@/server/trpc";
-import { manifestSchema } from "@/server/services/plugin-manifest";
+import { manifestSchema, type PluginManifest } from "@/server/services/plugin-manifest";
 
 function generateApiKey(prefix = "forge_sk"): { raw: string; hashed: string; prefix: string } {
   const rawBytes = randomBytes(32).toString("base64url");
   const raw = `${prefix}_${rawBytes}`;
   const hashed = createHash("sha256").update(raw).digest("hex");
   return { raw, hashed, prefix: raw.slice(0, prefix.length + 9) };
+}
+
+function sorted<T extends string>(values: T[]): T[] {
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
+function scopeDelta(previous: PluginScope[], next: PluginScope[]) {
+  const prior = new Set(previous);
+  const current = new Set(next);
+  return {
+    addedScopes: next.filter((scope) => !prior.has(scope)),
+    removedScopes: previous.filter((scope) => !current.has(scope)),
+  };
+}
+
+function normalizeManifest(manifest: PluginManifest) {
+  return {
+    schemaVersion: manifest.schemaVersion,
+    slug: manifest.slug,
+    name: manifest.name,
+    description: manifest.description ?? null,
+    version: manifest.version,
+    author: manifest.author ?? null,
+    scopes: sorted(manifest.scopes),
+    events: sorted(manifest.events),
+    skills: [...manifest.skills]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((skill) => ({
+        name: skill.name,
+        description: skill.description ?? null,
+        inputSchema: skill.inputSchema,
+        outputSchema: skill.outputSchema ?? null,
+        runtime: skill.runtime,
+      })),
+    rateLimit: manifest.rateLimit,
+  };
+}
+
+function manifestFingerprint(value: unknown): string {
+  const parsed = manifestSchema.safeParse(value);
+  return JSON.stringify(parsed.success ? normalizeManifest(parsed.data) : value);
 }
 
 export const pluginRouter = router({
@@ -63,16 +104,62 @@ export const pluginRouter = router({
       const m = input.manifest;
       const existing = await ctx.db.plugin.findUnique({
         where: { workspaceId_slug: { workspaceId: ctx.workspaceId, slug: m.slug } },
+        include: { skills: true },
       });
-      if (existing) throw new TRPCError({ code: "CONFLICT", message: "Slug already registered." });
 
       return ctx.db.$transaction(async (tx) => {
+        if (existing) {
+          const { addedScopes, removedScopes } = scopeDelta(existing.scopes, m.scopes);
+          const webhookChanged =
+            input.webhookUrl !== undefined && input.webhookUrl !== existing.webhookUrl;
+          const manifestChanged =
+            manifestFingerprint(existing.manifest) !== manifestFingerprint(m);
+          const reviewRequired = manifestChanged || webhookChanged;
+          const nextStatus = reviewRequired ? PluginStatus.PENDING : existing.status;
+
+          const plugin = await tx.plugin.update({
+            where: { id: existing.id },
+            data: {
+              name: m.name,
+              description: m.description ?? null,
+              version: m.version,
+              manifest: m as unknown as Prisma.InputJsonValue,
+              scopes: m.scopes,
+              status: nextStatus,
+              ...(input.webhookUrl !== undefined ? { webhookUrl: input.webhookUrl } : {}),
+            },
+          });
+          await tx.skill.deleteMany({ where: { pluginId: existing.id } });
+          for (const s of m.skills ?? []) {
+            await tx.skill.create({
+              data: {
+                workspaceId: ctx.workspaceId,
+                pluginId: plugin.id,
+                name: s.name,
+                description: s.description ?? null,
+                inputSchema: s.inputSchema as Prisma.InputJsonValue,
+                outputSchema: (s.outputSchema ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+                runtime: s.runtime,
+              },
+            });
+          }
+          return {
+            ...plugin,
+            installAction: reviewRequired ? ("updated" as const) : ("unchanged" as const),
+            reviewRequired,
+            priorVersion: existing.version,
+            priorStatus: existing.status,
+            addedScopes,
+            removedScopes,
+          };
+        }
+
         const plugin = await tx.plugin.create({
           data: {
             workspaceId: ctx.workspaceId,
             slug: m.slug,
             name: m.name,
-            description: m.description,
+            description: m.description ?? null,
             version: m.version,
             manifest: m as unknown as Prisma.InputJsonValue,
             scopes: m.scopes,
@@ -87,14 +174,22 @@ export const pluginRouter = router({
               workspaceId: ctx.workspaceId,
               pluginId: plugin.id,
               name: s.name,
-              description: s.description,
+              description: s.description ?? null,
               inputSchema: s.inputSchema as Prisma.InputJsonValue,
               outputSchema: (s.outputSchema ?? Prisma.JsonNull) as Prisma.InputJsonValue,
               runtime: s.runtime,
             },
           });
         }
-        return plugin;
+        return {
+          ...plugin,
+          installAction: "registered" as const,
+          reviewRequired: true,
+          priorVersion: null,
+          priorStatus: null,
+          addedScopes: m.scopes,
+          removedScopes: [],
+        };
       });
     }),
 
@@ -129,6 +224,12 @@ export const pluginRouter = router({
       const plugin = await ctx.db.plugin.findFirstOrThrow({
         where: { id: input.pluginId, workspaceId: ctx.workspaceId },
       });
+      if (plugin.status !== PluginStatus.APPROVED) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Plugin must be approved before issuing API keys.",
+        });
+      }
       // Enforce that requested scopes are a subset of declared plugin scopes.
       const allowed = new Set(plugin.scopes);
       const bad = input.scopes.filter((s) => !allowed.has(s));
