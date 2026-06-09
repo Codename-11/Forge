@@ -14,6 +14,55 @@ src/server/services/__tests__/mcp.test.ts
 src/server/services/__tests__/mcp-exec.test.ts`, `pnpm docs:build`,
 `pnpm typecheck`, `pnpm lint`, and `git diff --check` pass.
 
+## 2026-06-09 — Sprint lifecycle and roadmap management hardening
+
+Hardened sprint lifecycle semantics across tRPC and MCP. Creating or updating a
+sprint to ACTIVE now rejects when another active sprint exists. Rollover is now
+an explicit workflow that moves unfinished issues into the next planned sprint,
+can complete the source sprint, can start the target sprint, and records audit
+events for created/updated sprint rows and moved issues.
+
+Added full sprint management affordances: a rollover side panel, delete with
+type-to-confirm that clears issue sprint assignments back to backlog, guarded
+active-status choices in create/edit dialogs, settings-driven create length
+placeholder text, and a mobile/touch "Plan" action in the collapsible backlog.
+
+Extended Roadmap with real filters for initiative, date coverage, and progress
+state. Project rows now expose inline date editing from the timeline, and
+project date order is validated in tRPC and MCP. Modal primitives now mark the
+body while open so Mission Control cannot intercept side-panel footer clicks.
+
+Added focused router and Playwright coverage for sprint management and Roadmap
+editing/filtering.
+
+Verification: `pnpm typecheck`, `pnpm lint`,
+`AUTH_SECRET=test-auth-secret-for-vitest DATABASE_URL=postgresql://forge:forge@localhost:55432/forge?schema=public REDIS_URL=redis://localhost:56379 pnpm vitest run src/server/routers/__tests__/cycle.test.ts`,
+full `AUTH_SECRET=test-auth-secret-for-vitest DATABASE_URL=postgresql://forge:forge@localhost:55432/forge?schema=public REDIS_URL=redis://localhost:56379 pnpm test`,
+focused `E2E_FORCE_BUILD=1 E2E_PORT=3215 PLAYWRIGHT_BASE_URL=http://localhost:3215 pnpm test:e2e -- tests/e2e/sprints-roadmap.spec.ts`,
+and full `E2E_PORT=3215 PLAYWRIGHT_BASE_URL=http://localhost:3215 pnpm test:e2e`
+pass.
+
+## 2026-06-09 — Sprint management and roadmap layout
+
+Added visible sprint lifecycle management to the Sprints surface. The sprint
+picker now exposes all existing sprints, the create dialog can set an initial
+status, and a new manage side panel edits name, dates, status, and completion
+without hard-deleting cycle rows or issue assignments.
+
+Converted the sprint backlog from a persistent right column into a collapsible
+planning panel. Desktop keeps a narrow rail when collapsed; mobile uses an
+overlay panel. The sprint summary burndown now has stable chart padding and the
+summary metrics wrap at narrower widths.
+
+Rebuilt Roadmap as a sticky-label, scrollable timeline grid with visible sprint
+bands, today markers, dated project bars, progress fill, and explicit "No dates"
+rows so missing project dates no longer make the calendar look blank.
+
+Verification: `pnpm prisma:generate`, `pnpm typecheck`, `pnpm lint`,
+`AUTH_SECRET=test-auth-secret-for-vitest DATABASE_URL=postgresql://forge:forge@localhost:55432/forge?schema=public REDIS_URL=redis://localhost:56379 pnpm test`,
+and `E2E_PORT=3211 PLAYWRIGHT_BASE_URL=http://localhost:3211 pnpm test:e2e`
+pass.
+
 ## 2026-06-09 — Chat docs alignment
 
 Aligned the Chat guide and tRPC reference with the current chat implementation.

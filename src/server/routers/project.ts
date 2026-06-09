@@ -5,7 +5,11 @@ import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 
 const cursorSchema = z.string().optional();
-const projectKey = z.string().min(2).max(8).regex(/^[A-Z0-9]+$/);
+const projectKey = z
+  .string()
+  .min(2)
+  .max(8)
+  .regex(/^[A-Z0-9]+$/);
 
 export const projectRouter = router({
   list: workspaceProcedure
@@ -55,9 +59,7 @@ export const projectRouter = router({
           })
         : [];
       const isTerminal = new Map(
-        statuses.map(
-          (s) => [s.id, s.category === "DONE" || s.category === "CANCELED"] as const,
-        ),
+        statuses.map((s) => [s.id, s.category === "DONE" || s.category === "CANCELED"] as const),
       );
       const totals = new Map<string, { total: number; done: number }>();
       for (const g of grouped) {
@@ -78,13 +80,15 @@ export const projectRouter = router({
       return { items, nextCursor };
     }),
 
-  byId: workspaceProcedure.input(z.object({ id: z.string().cuid() })).query(async ({ ctx, input }) => {
-    const project = await ctx.db.project.findFirst({
-      where: { id: input.id, workspaceId: ctx.workspaceId },
-    });
-    if (!project) throw new TRPCError({ code: "NOT_FOUND" });
-    return project;
-  }),
+  byId: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const project = await ctx.db.project.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+      });
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      return project;
+    }),
 
   /**
    * Narrow "card-shape" summary used by the project chip hover preview.
@@ -253,22 +257,20 @@ export const projectRouter = router({
         orderBy: { startsAt: "desc" },
         select: { id: true, name: true, status: true, endsAt: true },
       });
-      let currentCycleSlice:
-        | {
-            id: string;
-            name: string;
-            status: string;
-            endsAt: Date;
-            total: number;
-            issues: Array<{
-              id: string;
-              number: number;
-              title: string;
-              priority: string;
-              status: { id: string; name: string; color: string; category: StatusCategory };
-            }>;
-          }
-        | null = null;
+      let currentCycleSlice: {
+        id: string;
+        name: string;
+        status: string;
+        endsAt: Date;
+        total: number;
+        issues: Array<{
+          id: string;
+          number: number;
+          title: string;
+          priority: string;
+          status: { id: string; name: string; color: string; category: StatusCategory };
+        }>;
+      } | null = null;
       if (activeCycle) {
         const cycleWhere = {
           workspaceId: ctx.workspaceId,
@@ -338,9 +340,7 @@ export const projectRouter = router({
             },
           })
         : [];
-      const activityIssueIds = Array.from(
-        new Set(activityRows.map((e) => e.subjectId)),
-      );
+      const activityIssueIds = Array.from(new Set(activityRows.map((e) => e.subjectId)));
       const activityIssues = activityIssueIds.length
         ? await ctx.db.issue.findMany({
             where: { id: { in: activityIssueIds } },
@@ -396,9 +396,7 @@ export const projectRouter = router({
           });
         }
       }
-      const members = Array.from(memberMap.values()).sort(
-        (a, b) => b.openCount - a.openCount,
-      );
+      const members = Array.from(memberMap.values()).sort((a, b) => b.openCount - a.openCount);
 
       return {
         project: {
@@ -439,6 +437,16 @@ export const projectRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (
+        input.startDate &&
+        input.targetDate &&
+        input.targetDate.getTime() < input.startDate.getTime()
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Project targetDate must be on or after startDate.",
+        });
+      }
       return ctx.db.$transaction(async (tx) => {
         const project = await tx.project.create({
           data: { ...input, workspaceId: ctx.workspaceId, createdById: ctx.session.user.id },
@@ -484,6 +492,14 @@ export const projectRouter = router({
         const before = await tx.project.findFirstOrThrow({
           where: { id, workspaceId: ctx.workspaceId },
         });
+        const startDate = patch.startDate === undefined ? before.startDate : patch.startDate;
+        const targetDate = patch.targetDate === undefined ? before.targetDate : patch.targetDate;
+        if (startDate && targetDate && targetDate.getTime() < startDate.getTime()) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Project targetDate must be on or after startDate.",
+          });
+        }
         const after = await tx.project.update({ where: { id }, data: patch });
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,

@@ -51,6 +51,27 @@ export function useModalBehavior({
   React.useEffect(() => {
     if (disabled) return;
     if (!open) return;
+    if (typeof document === "undefined") return;
+
+    const body = document.body;
+    const count = Number(body.dataset.forgeModalOpenCount ?? "0") + 1;
+    body.dataset.forgeModalOpenCount = String(count);
+    body.dataset.forgeModalOpen = "true";
+
+    return () => {
+      const next = Math.max(0, Number(body.dataset.forgeModalOpenCount ?? "1") - 1);
+      if (next === 0) {
+        delete body.dataset.forgeModalOpenCount;
+        delete body.dataset.forgeModalOpen;
+      } else {
+        body.dataset.forgeModalOpenCount = String(next);
+      }
+    };
+  }, [open, disabled]);
+
+  React.useEffect(() => {
+    if (disabled) return;
+    if (!open) return;
 
     // Remember what had focus before we opened.
     triggerRef.current =
