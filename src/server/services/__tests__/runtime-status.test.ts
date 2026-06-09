@@ -50,6 +50,45 @@ describe("deriveRuntimeHealthStatus", () => {
     expect(status.sweepExpectation).toMatch(/swept by the runtime health worker/i);
   });
 
+  it("labels stale Hermes heartbeats as stale presence, not stale gateway", () => {
+    const status = deriveRuntimeHealthStatus(
+      {
+        ...base,
+        heartbeatAt: new Date("2026-06-05T11:00:00Z"),
+        lastProbeAt: new Date("2026-06-05T11:30:00Z"),
+        lastProbeAttempted: true,
+        lastProbeReachable: true,
+        lastProbeDetail: "Gateway contract ok.",
+      },
+      { now },
+    );
+
+    expect(status.kind).toBe("stale");
+    expect(status.label).toBe("presence stale");
+    expect(status.reason).toMatch(/gateway handshake succeeded/i);
+    expect(status.reason).toMatch(/presence heartbeat is stale/i);
+    expect(status.lastSignal).toContain("heartbeat 1h ago");
+    expect(status.lastSignal).toContain("probe reachable 30m ago");
+  });
+
+  it("labels Hermes with a prior successful probe but no heartbeat as missing presence", () => {
+    const status = deriveRuntimeHealthStatus(
+      {
+        ...base,
+        lastProbeAt: new Date("2026-06-05T11:30:00Z"),
+        lastProbeAttempted: true,
+        lastProbeReachable: true,
+        lastProbeDetail: "Gateway contract ok.",
+      },
+      { now },
+    );
+
+    expect(status.kind).toBe("never_seen");
+    expect(status.label).toBe("presence missing");
+    expect(status.reason).toMatch(/gateway handshake succeeded/i);
+    expect(status.reason).toMatch(/no agent presence heartbeat/i);
+  });
+
   it("prioritizes a failed supported probe as an actionable failed state", () => {
     const status = deriveRuntimeHealthStatus(
       {

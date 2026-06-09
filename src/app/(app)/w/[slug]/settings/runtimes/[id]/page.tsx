@@ -37,6 +37,12 @@ const KIND_ICON: Record<RuntimeKind, typeof Server> = {
   CLOUD: Cloud,
 };
 
+function agentPresenceText(input: Date | string | null | undefined): string {
+  return input
+    ? `presence heartbeat ${relativeTime(input)} ago`
+    : "no presence heartbeat yet";
+}
+
 /**
  * Runtime detail — header, agents on this runtime, optional connect-a-
  * daemon block (LOCAL_DAEMON only when no agents are attached yet), plus
@@ -240,11 +246,7 @@ export default function RuntimeDetailPage() {
                         id <span className="text-id">{runtime.id}</span>
                       </span>
                       <span>·</span>
-                      <span>
-                        {runtime.heartbeatAt
-                          ? `heartbeat ${relativeTime(runtime.heartbeatAt)} ago`
-                          : "no heartbeat yet"}
-                      </span>
+                      <span>{runtime.health.lastSignal}</span>
                       {runtime.connectedAt && (
                         <>
                           <span>·</span>
@@ -276,7 +278,7 @@ export default function RuntimeDetailPage() {
                       </div>
                       <div>
                         <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
-                          Last signal
+                          {runtime.adapterKey === "hermes" ? "Probe / presence" : "Last signal"}
                         </div>
                         <div className="mt-1">{runtime.health.lastSignal}</div>
                       </div>
@@ -388,9 +390,7 @@ export default function RuntimeDetailPage() {
                               </span>
                             </div>
                             <div className="mt-0.5 text-meta text-muted-foreground">
-                              {a.lastHeartbeatAt
-                                ? `heartbeat ${relativeTime(a.lastHeartbeatAt)} ago`
-                                : "no heartbeat yet"}
+                              {agentPresenceText(a.lastHeartbeatAt)}
                             </div>
                           </div>
                           <Link href={`/w/${ws.slug}/agents/${a.profileKey}`}>
