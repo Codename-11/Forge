@@ -20,6 +20,7 @@ import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatChatContextSummary, useChatContext } from "@/hooks/use-chat-context";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { markChatThreadRead } from "@/lib/chat-read-state";
 import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
 import {
@@ -1071,6 +1072,7 @@ export function ChatThreadView({
   // Use agentFull for rich presence fields, fall back to thread data for basics.
   const agent = agentFull ?? data?.agent;
   const messages = useMemo(() => data?.messages ?? [], [data?.messages]);
+  const latestVisibleMessageAt = messages.at(-1)?.createdAt ?? null;
 
   // ---------- Local (cosmetic) messages from slash commands ----------
   const [localMessages, setLocalMessages] = useState<ChatMessageRow[]>([]);
@@ -1233,6 +1235,11 @@ export function ChatThreadView({
   const ctx = useChatContext();
   const workspace = useMaybeWorkspace();
   const pathname = usePathname();
+
+  useEffect(() => {
+    if (!workspace?.slug || !threadId) return;
+    markChatThreadRead(workspace.slug, threadId);
+  }, [workspace?.slug, threadId, latestVisibleMessageAt]);
 
   // Detect the canvas the operator is currently viewing. URL shape is
   // `/w/{slug}/canvas/{canvasId}`. The id is passed to /api/chat/stream

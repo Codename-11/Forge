@@ -19,6 +19,12 @@ import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { STALE_RUN_MS } from "@/lib/agent-stale";
 import {
+  CHAT_LAST_SEEN_EVENT,
+  chatLastSeenStorageKey,
+  readChatLastSeen,
+  type ChatLastSeenEventDetail,
+} from "@/lib/chat-read-state";
+import {
   cornerToClass,
   useDragHandle,
   useMissionControl,
@@ -217,38 +223,30 @@ export function MissionControl() {
 
   // ---------- Unread chat tracking ----------
   // Per-thread "last seen" timestamp. Bumped whenever the user has the
-  // chat tab open in panel mode; threads with `latestMessage.createdAt`
-  // newer than `lastSeen` and `role === "AGENT"` count as unread.
-  const lastSeenKey = `forge.chat.lastSeen.${slug}`;
+  // active chat thread open in either /chat or Mission Control. Threads
+  // with `latestMessage.createdAt` newer than `lastSeen` and
+  // `role === "AGENT"` count as unread.
   const [lastSeen, setLastSeen] = useState<Record<string, number>>({});
   useEffect(() => {
     if (typeof window === "undefined" || !slug) return;
-    try {
-      const raw = window.localStorage.getItem(lastSeenKey);
-      setLastSeen(raw ? (JSON.parse(raw) as Record<string, number>) : {});
-    } catch {
-      setLastSeen({});
-    }
-  }, [slug, lastSeenKey]);
-
-  // Bump lastSeen for every thread when the chat tab is active.
-  useEffect(() => {
-    if (typeof window === "undefined" || !slug) return;
-    if (!(state.size === "panel" && state.tab === "chat")) return;
-    if (!chatThreads || chatThreads.length === 0) return;
-    const next: Record<string, number> = { ...lastSeen };
-    const now = Date.now();
-    for (const t of chatThreads) {
-      next[t.id] = now;
-    }
-    setLastSeen(next);
-    try {
-      window.localStorage.setItem(lastSeenKey, JSON.stringify(next));
-    } catch {
-      /* ignore */
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.size, state.tab, chatThreads, slug]);
+    const refresh = () => setLastSeen(readChatLastSeen(slug));
+    refresh();
+    const onRead = (event: Event) => {
+      const detail = (event as CustomEvent<ChatLastSeenEventDetail>).detail;
+      if (detail?.slug !== slug) return;
+      refresh();
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== chatLastSeenStorageKey(slug)) return;
+      refresh();
+    };
+    window.addEventListener(CHAT_LAST_SEEN_EVENT, onRead);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(CHAT_LAST_SEEN_EVENT, onRead);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [slug]);
 
   const { unreadCount, unreadPreview } = useMemo(() => {
     if (!chatThreads) return { unreadCount: 0, unreadPreview: null as null | string };

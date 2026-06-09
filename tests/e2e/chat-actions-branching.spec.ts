@@ -1,5 +1,15 @@
 import { expect, test } from "@playwright/test";
 
+function createdThreadIdFromResponse(payload: unknown): string {
+  const row = Array.isArray(payload) ? payload[0] : payload;
+  const threadId = (row as { result?: { data?: { json?: { thread?: { id?: unknown } } } } })
+    ?.result?.data?.json?.thread?.id;
+  if (typeof threadId !== "string") {
+    throw new Error("Expected chat.createConversation response to include thread.id");
+  }
+  return threadId;
+}
+
 test.describe("Chat action controls", () => {
   test("context chips, edit, regenerate, and fork work in a real chat thread", async ({
     page,
@@ -17,11 +27,14 @@ test.describe("Chat action controls", () => {
       .getAttribute("value");
     await agentSelect.selectOption(value!);
     await page.getByLabel(/^Title$/).fill(title);
+    const createResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/trpc/chat.createConversation") &&
+        response.request().method() === "POST",
+    );
     await page.getByRole("button", { name: /^create$/i }).click();
-
-    await expect(page).toHaveURL(/thread=/);
-    const originalThreadId = new URL(page.url()).searchParams.get("thread");
-    expect(originalThreadId).toBeTruthy();
+    const originalThreadId = createdThreadIdFromResponse(await (await createResponse).json());
+    await expect(page).toHaveURL(new RegExp(`thread=${originalThreadId}`));
 
     const composer = page.getByTestId("chat-composer");
     await expect(composer).toBeVisible();
