@@ -2,6 +2,20 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Chat diagnostic report polish
+
+Added a one-click redacted diagnostic report to the Chat status rail so an
+operator can copy the current thread, agent, runtime, readiness, turn, run, and
+delivery state when a conversation behaves oddly. Runtime names in the rail now
+deep-link to the exact runtime detail page instead of the runtime list.
+
+Verification: `pnpm vitest run tests/unit/chat-diagnostic-report.test.ts
+src/server/routers/__tests__/chat.test.ts tests/unit/chat-readiness.test.ts
+tests/unit/chat-slash-command-gating.test.ts`, `pnpm typecheck`, `pnpm lint`,
+`git diff --check`, full `pnpm test`, and `E2E_FORCE_BUILD=1 pnpm exec
+playwright test tests/e2e/chat-surface.spec.ts
+tests/e2e/chat-conversation-settings-read-state.spec.ts --workers=1` pass.
+
 ## 2026-06-09 — Chat dispatch handoff receipts
 
 Fixed the interactive chat stream handoff for dispatch-backed agents. Forge now
