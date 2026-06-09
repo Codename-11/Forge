@@ -2,6 +2,33 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Plugin backup and durable chat reads
+
+Added explicit plugin backup/export and restore/import support. Plugin detail can
+download a Forge backup containing the manifest, webhook URL, webhook metadata,
+and API-key metadata while intentionally excluding raw keys, key hashes, webhook
+secrets, and the plugin signing secret. The install dialog now accepts either a
+manifest or a backup JSON; restored plugins return to PENDING review before new
+keys are issued.
+
+Hardened plugin lifecycle responses and admin mutations so plugin signing
+secrets are not exposed through list/register/approve/suspend/detail responses,
+and approve/suspend/plugin-key revocation/backup export are scoped to the current
+workspace.
+
+Persisted chat read anchors per `(threadId, userId)` with a new
+`ChatThreadRead` table and `chat.markRead`. The full Chat page, Mission Control
+Chat tab, and shared thread renderer now use one hook that writes the instant
+browser marker and the durable server marker; the server write is atomic so
+concurrent first reads do not log unique-constraint errors.
+
+Verification: `pnpm prisma:generate`, `pnpm lint`, `pnpm typecheck`,
+`pnpm vitest run src/server/routers/__tests__/chat.test.ts`,
+`pnpm vitest run src/server/routers/__tests__/plugin.test.ts tests/unit/chat-read-state.test.ts`,
+`pnpm docs:build`, full `pnpm test`, full `E2E_FORCE_BUILD=1 pnpm test:e2e`
+build plus targeted reruns for Chromium worker segfaults, and full serial
+`pnpm exec playwright test --workers=1` pass.
+
 ## 2026-06-09 — Plugin updates and chat deep-link hydration
 
 Made plugin manifest registration idempotent by slug. Re-submitting a manifest

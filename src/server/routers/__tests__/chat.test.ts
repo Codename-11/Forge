@@ -518,6 +518,72 @@ describe("chatRouter deferred dispatch", () => {
     expect(fetched).toBeNull();
   });
 
+  it("marks chat threads read per owner and never moves the read anchor backwards", async () => {
+    const { agent, caller, fixture, prisma } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "read state" });
+    await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: sent.threadId,
+        role: ChatRole.AGENT,
+        body: "Read state reply",
+      },
+    });
+
+    const readAt = new Date("2026-01-01T00:00:00.000Z");
+    const older = new Date("2025-01-01T00:00:00.000Z");
+
+    const marked = await caller.markRead({ threadId: sent.threadId, readAt });
+    const repeated = await caller.markRead({ threadId: sent.threadId, readAt: older });
+    const listed = await caller.threads();
+    const detail = await caller.getThread({ threadId: sent.threadId });
+
+    expect(marked).toMatchObject({ ok: true, threadId: sent.threadId, readAt });
+    expect(repeated.readAt).toEqual(readAt);
+    expect(listed.find((thread) => thread.id === sent.threadId)?.lastReadAt).toEqual(readAt);
+    expect(detail?.lastReadAt).toEqual(readAt);
+  });
+
+  it("handles concurrent first read markers idempotently", async () => {
+    const { agent, caller, prisma } = await setup();
+    const conversation = await caller.createConversation({
+      agentId: agent.id,
+      title: "Concurrent read",
+    });
+    const first = new Date("2026-01-01T00:00:00.000Z");
+    const second = new Date("2026-01-01T00:00:01.000Z");
+
+    const results = await Promise.all([
+      caller.markRead({ threadId: conversation.thread.id, readAt: first }),
+      caller.markRead({ threadId: conversation.thread.id, readAt: second }),
+    ]);
+
+    expect(results.map((result) => result.threadId)).toEqual([
+      conversation.thread.id,
+      conversation.thread.id,
+    ]);
+    const rows = await prisma.chatThreadRead.findMany({
+      where: { threadId: conversation.thread.id },
+      select: { readAt: true },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].readAt).toEqual(second);
+  });
+
+  it("does not let another workspace member mark someone else's chat read", async () => {
+    const { agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "private read marker" });
+    const secondCtx = await buildContext(fixture, { asUserId: fixture.secondUser.id });
+    const secondCaller = chatRouter.createCaller(secondCtx);
+
+    await expect(
+      secondCaller.markRead({
+        threadId: sent.threadId,
+        readAt: new Date("2026-01-01T00:00:00.000Z"),
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
   it("includes finalized chat attachments in the dispatch payload and allows bodyless attachment dispatch", async () => {
     const { prisma, agent, caller, fixture } = await setup();
     const pending = await caller.createPendingMessage({ agentId: agent.id, body: "" });

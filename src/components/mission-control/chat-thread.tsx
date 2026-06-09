@@ -19,8 +19,8 @@ import { usePathname } from "next/navigation";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatChatContextSummary, useChatContext } from "@/hooks/use-chat-context";
+import { useChatThreadReadMarker } from "@/hooks/use-chat-read-state";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
-import { markChatThreadRead } from "@/lib/chat-read-state";
 import { cn } from "@/lib/utils";
 import { ChatMessageBubble, type ChatMessageRow } from "./chat-message";
 import {
@@ -1236,10 +1236,11 @@ export function ChatThreadView({
   const workspace = useMaybeWorkspace();
   const pathname = usePathname();
 
-  useEffect(() => {
-    if (!workspace?.slug || !threadId) return;
-    markChatThreadRead(workspace.slug, threadId);
-  }, [workspace?.slug, threadId, latestVisibleMessageAt]);
+  useChatThreadReadMarker({
+    slug: workspace?.slug,
+    threadId,
+    latestMessageAt: latestVisibleMessageAt,
+  });
 
   // Detect the canvas the operator is currently viewing. URL shape is
   // `/w/{slug}/canvas/{canvasId}`. The id is passed to /api/chat/stream

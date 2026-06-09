@@ -102,7 +102,12 @@ admins, by design. See [Workspaces](/guide/workspaces.html#members-and-roles).
 The plugin manifest panel.
 
 - Register a manifest (paste JSON or upload).
-- Approve, suspend, or revoke.
+- Re-submit the same slug to update version, scopes, skills, or webhook URL.
+- Download a plugin backup before removal; paste that backup back into the
+  install dialog to restore the registration. Backups intentionally exclude raw
+  API keys, key hashes, webhook secrets, and the plugin signing secret, so
+  restored plugins require review and fresh API keys.
+- Approve, suspend, or remove.
 - Issue API keys for an installed plugin (admin-gated). Keys can be
   scoped further by `projectIds`, `labelIds`, `initiativeIds`,
   `linkedAgentId`.

@@ -258,7 +258,8 @@ export function MissionControl() {
       if (!last) continue;
       if (last.role !== "AGENT") continue;
       const lastMs = new Date(last.createdAt).getTime();
-      const seenMs = lastSeen[t.id] ?? 0;
+      const serverReadMs = t.lastReadAt ? new Date(t.lastReadAt).getTime() : 0;
+      const seenMs = Math.max(lastSeen[t.id] ?? 0, serverReadMs);
       if (lastMs <= seenMs) continue;
       count++;
       if (lastMs > latestUnreadAt) {

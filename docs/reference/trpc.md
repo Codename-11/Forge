@@ -32,13 +32,13 @@ error shapes all flow from this router definition.
 | `issue`           | `list`, `byId`, `create`, `update`, `assign`, `softDelete`, `snooze`, `unsnooze`, `snoozeMany`, `nudge`, `bulkTransition`, `bulkAddLabel`, `bulkRemoveLabel`, `bulkAssign`, `bulkAssignAgent`, `bulkArchive`, `applyCommands`, `watch`, `unwatch`, `watchers`, `watching` |
 | `comment`         | `create`, `update`, `softDelete`                                                                                 |
 | `analytics`       | `summary`, `statusDistribution`, `throughput`, `cycleTime`, `slaBreaches`, `dispatch.summary`, `dispatch.timeseries` |
-| `plugin`          | `list`, `register`, `approve`, `suspend`, `issueApiKey`, `revokeApiKey`                                          |
+| `plugin`          | `list`, `byId`, `register`, `restoreBackup`, `exportBackup`, `approve`, `suspend`, `issueApiKey`, `revokeApiKey`, `remove`, `rotateSecret` |
 | `status`          | `list`, `create`, `reorder`                                                                                      |
 | `template`        | `list`, `byId`, `create`, `update`, `delete` (issue templates)                                                   |
 | `projectTemplate` | `list`, `create`, `update`, `delete`                                                                             |
 | `agent`           | `list`, `byId`, `byProfileKey`, `create`, `update`, `archive`, `delete`, `testWebhook`, `heartbeat`, `pipeline`, `timeline`, `uptime`, `webhookHealth` |
 | `agentRun`        | `activeForIssue`, `events`, `activeAll`, `recentTerminal`, `heatmap`, `eventsInRange`, `recentEventCounts`, `coachDiagnosis`, `runsInRange`, `eta`, `abandon`, `redispatch`, `nudge` |
-| `chat`            | `threads`, `thread`, `send`, `appendAgentMessage`, `history`                                                     |
+| `chat`            | `threads`, `thread`, `getThread`, `markRead`, `send`, `appendAgentMessage`, `history`                           |
 | `event`           | `recent`, `unreadCount`                                                                                          |
 | `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                |
 | `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                      |
@@ -238,8 +238,10 @@ The chat router manages per-(workspace, user, agent) persistent threads.
 
 | Procedure | Type | Summary |
 |---|---|---|
-| `threads` | query | List the caller's threads with all agents. Returns up to 50, newest last-message first. |
+| `threads` | query | List the caller's threads with all agents. Returns up to 75, newest last-message first, including `lastReadAt` for unread badges. |
 | `thread({ agentId })` | mutation | Upsert and open a thread. Returns `{ thread, agent, messages }` (last 50 messages). |
+| `getThread({ threadId })` | query | Fetch a concrete thread by id. Owner-scoped and includes `lastReadAt`, diagnostics, recent messages, and attachments. |
+| `markRead({ threadId, readAt? })` | mutation | Move the caller's per-thread read anchor forward. Used by the Chat page and Mission Control Chat tab; timestamps never move backward. |
 | `send({ agentId, body, context? })` | mutation | Persist a USER message and trigger agent dispatch. `context` is the optional context snapshot (see [Chat](/agents/chat.html)). Returns `{ threadId, messageId }`. |
 | `appendAgentMessage({ threadId, body, sourceRunId? })` | mutation | Agent-only path. Requires the calling API key's `linkedAgentId` to match the thread's agent. Returns `{ messageId }`. |
 | `history({ threadId, before?, limit })` | query | Paginate older messages. `before` is a date cursor; `limit` max 100. Scoped to the caller's own threads. |
