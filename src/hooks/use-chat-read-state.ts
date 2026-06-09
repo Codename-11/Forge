@@ -32,6 +32,7 @@ export function useChatThreadReadMarker({
       ): T => (thread.id === result.threadId ? { ...thread, lastReadAt: readAt } : thread);
 
       utils.chat.threads.setData(undefined, (old) => old?.map(patch));
+      void utils.chat.threads.invalidate();
     },
   });
 

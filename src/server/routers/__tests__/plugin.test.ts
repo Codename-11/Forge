@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { PluginScope } from "@prisma/client";
+import { EventKind, PluginScope } from "@prisma/client";
 import { pluginRouter } from "@/server/routers/plugin";
 import type { PluginManifest } from "@/server/services/plugin-manifest";
 import {
@@ -164,6 +164,16 @@ describe("pluginRouter lifecycle", () => {
       name: "read-key",
       scopes: [PluginScope.READ_ISSUES],
     });
+    const webhook = await db.webhook.create({
+      data: {
+        workspaceId: created.workspaceId,
+        pluginId: created.id,
+        url: "https://plugin.example.com/events",
+        secret: "old-webhook-secret",
+        events: [EventKind.ISSUE_CREATED],
+        active: false,
+      },
+    });
     const storedKey = await db.apiKey.findUniqueOrThrow({ where: { id: key.id } });
     const storedPlugin = await db.plugin.findUniqueOrThrow({ where: { id: created.id } });
 
@@ -173,9 +183,16 @@ describe("pluginRouter lifecycle", () => {
     expect(backup.plugin.manifest.slug).toBe("qa-helper");
     expect(backup.plugin.webhookUrl).toBe("https://plugin.example.com/forge");
     expect(backup.apiKeys[0]?.prefix).toBe(key.prefix);
+    expect(backup.webhooks).toHaveLength(1);
+    expect(backup.webhooks[0]).toMatchObject({
+      url: "https://plugin.example.com/events",
+      events: [EventKind.ISSUE_CREATED],
+      active: false,
+    });
     expect(backupJson).not.toContain(key.rawKey);
     expect(backupJson).not.toContain(storedKey.hashedKey);
     expect(backupJson).not.toContain(storedPlugin.secret ?? "");
+    expect(backupJson).not.toContain(webhook.secret);
 
     await caller.remove({ id: created.id });
     await expect(caller.byId({ id: created.id })).rejects.toThrow();
@@ -189,6 +206,17 @@ describe("pluginRouter lifecycle", () => {
     const detail = await caller.byId({ id: restored.id });
     expect(detail.apiKeys).toHaveLength(0);
     expect(detail.skills.map((skill) => skill.name)).toEqual(["triage"]);
+    expect(detail.webhooks).toHaveLength(1);
+    expect(detail.webhooks[0]).toMatchObject({
+      url: "https://plugin.example.com/events",
+      events: [EventKind.ISSUE_CREATED],
+      active: false,
+    });
+
+    const restoredWebhook = await db.webhook.findFirstOrThrow({
+      where: { workspaceId: created.workspaceId, pluginId: restored.id },
+    });
+    expect(restoredWebhook.secret).not.toBe(webhook.secret);
   });
 
   it("scopes admin lifecycle mutations to the current workspace", async () => {
