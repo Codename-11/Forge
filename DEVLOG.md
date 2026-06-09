@@ -2,6 +2,33 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Chat stream detach hotfix
+
+Investigated live Hermes and Codex chat rows after operator reports that turns
+were marked read but replies stopped or disappeared. Recent rows showed RUNS
+chat turns with `acknowledgedAt` / `outputStartedAt` set immediately, followed
+by `Client disconnected before the reply finished` in the persisted agent
+context. The stream route was treating any browser/SSE abort as an instruction
+to abort/stop the provider-side runtime run, so navigation, remounts, retries,
+or transient disconnects could kill an otherwise healthy Hermes/Codex run and
+persist a partial or interrupted reply.
+
+Changed `/api/chat/stream` so passive browser disconnects detach only the UI
+stream while the server keeps listening to the provider run and persists the
+final answer. Added `/api/chat/stream/stop` for explicit operator stops, and
+wired the live chat bubble Stop/Cancel path to call it before detaching locally.
+
+Also cleaned up stale Forge worktree directories for the old AXI-40 and mobile
+UI branches, leaving their branch refs intact because their tips are not direct
+ancestors of `main`.
+
+Verification: `pnpm typecheck`, `pnpm lint`, `pnpm vitest run
+src/server/routers/__tests__/chat.test.ts tests/unit/chat-readiness.test.ts
+tests/unit/chat-read-state.test.ts`, `E2E_FORCE_BUILD=1 pnpm exec playwright
+test tests/e2e/chat-runs-streaming.spec.ts tests/e2e/chat-surface.spec.ts
+tests/e2e/chat-conversation-settings-read-state.spec.ts --workers=1`, and
+`git diff --check` pass.
+
 ## 2026-06-09 — v0.6.0 release verification
 
 Verified the merged GitHub support and sprint/roadmap worktrees on `main`,

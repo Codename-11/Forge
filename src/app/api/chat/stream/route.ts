@@ -494,19 +494,15 @@ export async function POST(req: NextRequest) {
         // Provider-side run id when streaming via the RUNS engine — lets the
         // Stop button interrupt the live Hermes run, not just the local read.
         let runExternalId: string | null = null;
+        let clientDetached = false;
         const onAbort = () => {
-          streamError ??= "Client disconnected before the reply finished.";
-          abortController.abort();
-          if (runExternalId && runsConnector?.stop) {
-            void runsConnector.stop(runExternalId);
-          }
-          for (const id of registeredApprovalIds) {
-            const resolver = pendingApprovals.get(id);
-            if (resolver) {
-              pendingApprovals.delete(id);
-              resolver({ approved: false });
-            }
-          }
+          // A browser/SSE disconnect is not the same as "stop the agent".
+          // Navigation, React remounts, proxy hiccups, retries, and tab
+          // sleeps all abort the fetch. Keep the provider run alive and keep
+          // this server task subscribed so the final answer is still persisted
+          // and other tabs refresh through the durable CHAT_MESSAGE_POSTED
+          // event. Explicit user stops go through /api/chat/stream/stop.
+          clientDetached = true;
         };
         req.signal.addEventListener("abort", onAbort);
 
@@ -629,6 +625,26 @@ export async function POST(req: NextRequest) {
               toolPolicy: runtimePolicy,
             });
             runExternalId = started.externalRunId;
+            await db.chatMessage
+              .update({
+                where: { id: agentMessageId },
+                data: {
+                  contextSnapshot: {
+                    streamed: true,
+                    provider: effectiveProvider,
+                    model: effectiveModel ?? undefined,
+                    runExternalId,
+                    running: true,
+                  } as never,
+                },
+              })
+              .catch((err) =>
+                logger.warn(
+                  { err, threadId: thread.id, agentMessageId, runExternalId },
+                  "chat-stream: failed to persist running run id",
+                ),
+              );
+            enqueue(sse("meta", { messageId: agentMessageId, agentMessageId, runExternalId }));
           } catch (err) {
             errored = true;
             streamError = streamErrorMessage(err, "Failed to start run.");
@@ -888,6 +904,7 @@ export async function POST(req: NextRequest) {
                   tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
                   error: streamError ?? undefined,
                   aborted: abortController.signal.aborted || undefined,
+                  clientDetached: clientDetached || undefined,
                   runExternalId: runExternalId ?? undefined,
                   elapsedMs,
                 } as never,
