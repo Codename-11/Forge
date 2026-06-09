@@ -2,6 +2,16 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Chat docs alignment
+
+Aligned the Chat guide and tRPC reference with the current chat implementation.
+The docs now describe `/api/chat/stream`, provider-neutral readiness,
+runs/completions/dispatch transports, durable read markers from Chat/Mission
+Control/Activity, dispatch acknowledgement semantics, the status rail diagnostic
+report, and the current chat router procedures.
+
+Verification: `pnpm docs:build` passes.
+
 ## 2026-06-09 — Chat diagnostic report polish
 
 Added a one-click redacted diagnostic report to the Chat status rail so an

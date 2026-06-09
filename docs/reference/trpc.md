@@ -38,7 +38,7 @@ error shapes all flow from this router definition.
 | `projectTemplate` | `list`, `create`, `update`, `delete`                                                                             |
 | `agent`           | `list`, `byId`, `byProfileKey`, `create`, `update`, `archive`, `delete`, `testWebhook`, `heartbeat`, `pipeline`, `timeline`, `uptime`, `webhookHealth` |
 | `agentRun`        | `activeForIssue`, `events`, `activeAll`, `recentTerminal`, `heatmap`, `eventsInRange`, `recentEventCounts`, `coachDiagnosis`, `runsInRange`, `eta`, `abandon`, `redispatch`, `nudge` |
-| `chat`            | `threads`, `thread`, `getThread`, `markRead`, `send`, `appendAgentMessage`, `history`                           |
+| `chat`            | `threads`, `defaultThread`, `thread`, `createConversation`, `forkThread`, `updateConversation`, `setOverride`, `markRead`, `compactThread`, `clearThread`, `getThread`, `send`, `createPendingMessage`, `dispatchMessage`, `appendAgentMessage`, `threadDiagnostics`, `chatReadiness`, `retryLastUserMessage`, `kickThreadRun`, `stopThreadRun`, `deleteThread`, `archiveThread`, `restoreThread`, `history` |
 | `event`           | `recent`, `unreadCount`                                                                                          |
 | `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                |
 | `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                      |
@@ -242,8 +242,23 @@ The chat router manages per-(workspace, user, agent) persistent threads.
 | `thread({ agentId })` | mutation | Upsert and open a thread. Returns `{ thread, agent, messages }` (last 50 messages). |
 | `getThread({ threadId })` | query | Fetch a concrete thread by id. Owner-scoped and includes `lastReadAt`, diagnostics, recent messages, and attachments. |
 | `markRead({ threadId, readAt? })` | mutation | Move the caller's per-thread read anchor forward. Used by the Chat page and Mission Control Chat tab; timestamps never move backward. |
-| `send({ agentId, body, context? })` | mutation | Persist a USER message and trigger agent dispatch. `context` is the optional context snapshot (see [Chat](/agents/chat.html)). Returns `{ threadId, messageId }`. |
-| `appendAgentMessage({ threadId, body, sourceRunId? })` | mutation | Agent-only path. Requires the calling API key's `linkedAgentId` to match the thread's agent. Returns `{ messageId }`. |
+| `defaultThread({ agentId })` / `thread({ agentId })` | mutation | Upsert and open the caller's always-on DM thread for one agent. |
+| `createConversation({ agentId, title?, topic?, ... })` | mutation | Create a named side conversation with an agent. |
+| `forkThread({ threadId, fromMessageId? })` | mutation | Start a new conversation copied from an existing thread prefix. |
+| `updateConversation({ threadId, title?, topic?, contextMode? })` | mutation | Update conversation metadata and context policy. |
+| `setOverride({ threadId, provider? })` | mutation | Set or clear a per-thread provider override. |
+| `compactThread({ threadId })` | mutation | Summarize older messages into durable context and keep recent messages live. |
+| `clearThread({ threadId })` | mutation | Delete the thread's messages/attachments/events and reset summary context while preserving the thread row. |
+| `send({ agentId, body, context? })` | mutation | Legacy tRPC send path: persist a USER message and trigger dispatch. The interactive UI now uses `/api/chat/stream` so runs/completions can stream. |
+| `createPendingMessage({ threadId, ... })` / `dispatchMessage({ messageId })` | mutation | Two-step dispatch path used by clients that need an optimistic pending row before waking an agent. |
+| `appendAgentMessage({ threadId, body, sourceRunId? })` | mutation | Agent-only path. Requires the calling API key's `linkedAgentId` to match the thread's agent; acknowledges the latest unfinished USER turn and returns `{ messageId }`. |
+| `threadDiagnostics({ threadId })` | query | Return provider-neutral turn state, latest USER lifecycle, stream error/interruption, last run, and last delivery for the status rail. |
+| `chatReadiness({ agentId, threadId? })` | query | Resolve whether chat reaches a model/runtime and report the effective transport/capabilities/hint. |
+| `retryLastUserMessage({ threadId })` | mutation | Re-wake the latest dispatched USER message when a reply or delivery stalls. |
+| `kickThreadRun({ threadId, runId })` | mutation | Emit a kick event for a stale active run linked to the conversation. |
+| `stopThreadRun({ threadId, runId })` | mutation | Best-effort stop a live managed-runtime run and close the Forge mirror. |
+| `archiveThread({ threadId })` / `restoreThread({ threadId })` | mutation | Hide or restore a conversation without deleting its history. |
+| `deleteThread({ threadId })` | mutation | Permanently delete a conversation, its messages, and attachments; stops a live managed run when possible. |
 | `history({ threadId, before?, limit })` | query | Paginate older messages. `before` is a date cursor; `limit` max 100. Scoped to the caller's own threads. |
 
 ### `agentRun.*` additions
