@@ -517,6 +517,7 @@ export function MissionControl() {
     return (
       <div
         ref={containerRef}
+        data-mission-control-root
         className={cn(
           "group fixed z-40 flex select-none items-center gap-1",
           cornerClass,
@@ -645,6 +646,7 @@ export function MissionControl() {
     return (
       <div
         ref={containerRef}
+        data-mission-control-root
         className={cn(
           "fixed z-40 flex flex-col rounded-lg border border-border bg-card shadow-md backdrop-blur",
           cornerClass,
@@ -684,6 +686,7 @@ export function MissionControl() {
   return (
     <div
       ref={containerRef}
+      data-mission-control-root
       className={cn(
         "fixed z-40 flex flex-col rounded-lg border border-border bg-card shadow-md backdrop-blur",
         cornerClass,

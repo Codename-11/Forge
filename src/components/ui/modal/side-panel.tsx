@@ -83,7 +83,7 @@ export function SidePanel({
   return (
     <div
       className={cn(
-        "fixed inset-0 z-50 flex justify-end bg-foreground/20 backdrop-blur-sm",
+        "fixed inset-0 z-[80] flex justify-end bg-foreground/20 backdrop-blur-sm",
         MOTION.fadeIn,
       )}
       onClick={() => dismissOnBackdrop && onOpenChange(false)}
