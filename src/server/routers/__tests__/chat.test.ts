@@ -6,6 +6,7 @@ import {
   EventKind,
   WebhookDeliveryStatus,
 } from "@prisma/client";
+import type { PluginScope } from "@prisma/client";
 import { chatRouter } from "@/server/routers/chat";
 import {
   buildContext,
@@ -214,6 +215,47 @@ describe("chatRouter deferred dispatch", () => {
     expect(sent.threadId).toBe(conversation.thread.id);
     expect(defaultThread.thread.id).not.toBe(conversation.thread.id);
     expect(defaultThread.messages).toHaveLength(0);
+  });
+
+  it("marks the latest user turn read when an agent appends through tRPC", async () => {
+    const { agent, caller, prisma, fixture } = await setup();
+    const conversation = await caller.createConversation({
+      agentId: agent.id,
+      title: "Agent append lifecycle",
+    });
+    const sent = await caller.send({
+      agentId: agent.id,
+      threadId: conversation.thread.id,
+      body: "Please reply through your generic adapter.",
+    });
+
+    const agentContext = await buildContext(fixture);
+    const agentCaller = chatRouter.createCaller({
+      ...agentContext,
+      apiKey: {
+        keyId: "test-agent-key",
+        workspaceId: fixture.workspace.id,
+        userId: null,
+        pluginId: null,
+        scopes: [] as PluginScope[],
+        projectIds: [],
+        labelIds: [],
+        initiativeIds: [],
+        linkedAgentId: agent.id,
+      },
+    });
+
+    await agentCaller.appendAgentMessage({
+      threadId: sent.threadId,
+      body: "Adapter reply landed.",
+    });
+
+    const userMessage = await prisma.chatMessage.findUniqueOrThrow({
+      where: { id: sent.messageId },
+      select: { acknowledgedAt: true, outputStartedAt: true },
+    });
+    expect(userMessage.acknowledgedAt).toBeInstanceOf(Date);
+    expect(userMessage.outputStartedAt).toBeInstanceOf(Date);
   });
 
   it("compacts a conversation into durable summary metadata", async () => {

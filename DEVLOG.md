@@ -2,6 +2,27 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Chat dispatch handoff receipts
+
+Fixed the interactive chat stream handoff for dispatch-backed agents. Forge now
+tags only Forge-owned runs/completions turns as `streamed:true`; dispatch-backed
+chat turns stay dispatchable so the addressed daemon/runtime receives its normal
+chat wake instead of being suppressed as a duplicate server stream.
+
+Dispatch handoff no longer fabricates an empty AGENT placeholder or marks the
+operator message as read before the daemon actually acknowledges it. The client
+now creates a live agent bubble only when the stream metadata names an agent
+message or actual content/tool events arrive, which removes the blank duplicate
+reply bubble during daemon thinking. Agent-side tRPC append now also marks the
+latest unfinished user turn acknowledged/output-started, matching the MCP
+`chat.appendMessage` and `chat.startDraft` lifecycle.
+
+Verification: `pnpm vitest run src/server/routers/__tests__/chat.test.ts
+tests/unit/chat-readiness.test.ts tests/unit/chat-slash-command-gating.test.ts`,
+`pnpm typecheck`, `pnpm lint`, and `E2E_FORCE_BUILD=1 pnpm exec playwright test
+tests/e2e/chat-runs-streaming.spec.ts tests/e2e/chat-surface.spec.ts --workers=1`
+pass.
+
 ## 2026-06-09 — Hermes runtime presence wording
 
 Separated Hermes gateway reachability from agent presence in runtime health

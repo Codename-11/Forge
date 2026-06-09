@@ -1491,6 +1491,26 @@ export const chatRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Only the thread's agent may append" });
       }
       return ctx.db.$transaction(async (tx) => {
+        const now = new Date();
+        const pendingUserMessage = await tx.chatMessage.findFirst({
+          where: {
+            workspaceId: ctx.workspaceId,
+            threadId: thread.id,
+            role: ChatRole.USER,
+            outputStartedAt: null,
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, acknowledgedAt: true },
+        });
+        if (pendingUserMessage) {
+          await tx.chatMessage.update({
+            where: { id: pendingUserMessage.id },
+            data: {
+              acknowledgedAt: pendingUserMessage.acknowledgedAt ?? now,
+              outputStartedAt: now,
+            },
+          });
+        }
         const message = await tx.chatMessage.create({
           data: {
             workspaceId: ctx.workspaceId,
@@ -1502,7 +1522,7 @@ export const chatRouter = router({
         });
         await tx.chatThread.update({
           where: { id: thread.id },
-          data: { lastMessageAt: new Date() },
+          data: { lastMessageAt: now },
         });
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
