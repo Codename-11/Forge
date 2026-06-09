@@ -2,6 +2,20 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Chat action browser coverage
+
+Added browser coverage for the completed chat action surface. The Playwright
+spec creates a real E2E Bot conversation, verifies context chip include/exclude
+state, sends a message, edits the sent text back into the composer, regenerates
+the agent response, and forks the conversation while preserving visible history.
+
+Added stable test ids to the message bubble action buttons so the E2E can target
+the real controls without depending on icon-only labels or layout.
+
+Verification: `pnpm lint`, `pnpm typecheck`,
+`pnpm test:e2e tests/e2e/chat-actions-branching.spec.ts`, and full
+`pnpm test` pass.
+
 ## 2026-06-08 — Chat completion controls and branching
 
 Added message-level chat actions for copy, edit in composer, resend, regenerate

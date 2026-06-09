@@ -312,29 +312,48 @@ export function ChatMessageBubble({
           <Copy className="h-3 w-3" />
         </MessageActionButton>
         {isUser && onEditMessage && (
-          <MessageActionButton title="Edit in composer" onClick={() => onEditMessage(msg.body)}>
+          <MessageActionButton
+            title="Edit in composer"
+            testId="chat-message-action-edit"
+            onClick={() => onEditMessage(msg.body)}
+          >
             <PencilLine className="h-3 w-3" />
           </MessageActionButton>
         )}
         {isUser && onResendMessage && (
-          <MessageActionButton title="Send again" onClick={() => onResendMessage(msg.body)}>
+          <MessageActionButton
+            title="Send again"
+            testId="chat-message-action-resend"
+            onClick={() => onResendMessage(msg.body)}
+          >
             <RefreshCw className="h-3 w-3" />
           </MessageActionButton>
         )}
         {!isUser && onRegenerateFromMessage && (
-          <MessageActionButton title="Regenerate response" onClick={onRegenerateFromMessage}>
+          <MessageActionButton
+            title="Regenerate response"
+            testId="chat-message-action-regenerate"
+            onClick={onRegenerateFromMessage}
+          >
             <RotateCcw className="h-3 w-3" />
           </MessageActionButton>
         )}
         {onForkFromMessage && (
-          <MessageActionButton title="Fork conversation from here" onClick={onForkFromMessage}>
+          <MessageActionButton
+            title="Fork conversation from here"
+            testId="chat-message-action-fork"
+            onClick={onForkFromMessage}
+          >
             <GitFork className="h-3 w-3" />
           </MessageActionButton>
         )}
       </span>
     ) : null;
   return (
-    <div className={cn("flex items-start gap-2", isUser && "flex-row-reverse")}>
+    <div
+      className={cn("flex items-start gap-2", isUser && "flex-row-reverse")}
+      data-testid={`chat-message-${msg.role.toLowerCase()}`}
+    >
       <span
         className={cn(
           "flex h-5 w-5 shrink-0 items-center justify-center rounded-full",
@@ -401,10 +420,12 @@ export function ChatMessageBubble({
 
 function MessageActionButton({
   title,
+  testId,
   onClick,
   children,
 }: {
   title: string;
+  testId?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -413,6 +434,7 @@ function MessageActionButton({
       type="button"
       title={title}
       aria-label={title}
+      data-testid={testId}
       onClick={onClick}
       className="inline-flex h-4 w-4 items-center justify-center rounded border border-border/50 bg-background/40 text-muted-foreground transition-colors hover:border-ember/40 hover:bg-ember/10 hover:text-foreground"
     >
