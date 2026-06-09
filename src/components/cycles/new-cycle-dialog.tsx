@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { CycleStatus } from "@prisma/client";
 import { toast } from "sonner";
 import { QuickForm } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,7 @@ export function NewCycleDialog({
   const [name, setName] = useState("");
   const [startsAt, setStartsAt] = useState("");
   const [lengthDays, setLengthDays] = useState("");
+  const [status, setStatus] = useState<CycleStatus>(CycleStatus.PLANNED);
   const utils = trpc.useUtils();
 
   const create = trpc.cycle.create.useMutation({
@@ -34,6 +36,7 @@ export function NewCycleDialog({
       setName("");
       setStartsAt("");
       setLengthDays("");
+      setStatus(CycleStatus.PLANNED);
       utils.cycle.list.invalidate();
       onCreated?.();
     },
@@ -58,6 +61,7 @@ export function NewCycleDialog({
             name: name.trim(),
             startsAt: startsAt ? new Date(startsAt) : undefined,
             lengthDays: lengthDays ? Number(lengthDays) : undefined,
+            status,
           });
         } catch (e) {
           return { error: e instanceof Error ? e.message : "Failed to create sprint." };
@@ -94,6 +98,19 @@ export function NewCycleDialog({
           />
         </QuickForm.Field>
       </div>
+      <QuickForm.Field label="Status">
+        <select
+          name="status"
+          value={status}
+          onChange={(e) => setStatus(e.target.value as CycleStatus)}
+          className="focus-ring h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
+        >
+          <option value={CycleStatus.PLANNED}>Planned</option>
+          <option value={CycleStatus.ACTIVE}>Active</option>
+          <option value={CycleStatus.COMPLETED}>Completed</option>
+          <option value={CycleStatus.CANCELED}>Canceled</option>
+        </select>
+      </QuickForm.Field>
     </QuickForm>
   );
 }

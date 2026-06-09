@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, CalendarRange, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, CalendarRange, Inbox, Plus, Settings2 } from "lucide-react";
 import { CycleStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { EmptyState, SkeletonList } from "@/components/ui";
 import { CycleSummaryCard } from "@/components/cycles/cycle-summary-card";
 import { CyclePlanningBoard } from "@/components/cycles/cycle-planning-board";
 import { CycleBacklogPanel } from "@/components/cycles/cycle-backlog-panel";
+import { EditCycleDialog } from "@/components/cycles/edit-cycle-dialog";
 import { NewCycleDialog } from "@/components/cycles/new-cycle-dialog";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -42,6 +43,8 @@ export default function CyclesPage() {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const activeIdx = selectedIdx ?? defaultIndex;
   const cycle = ordered[activeIdx] ?? null;
+  const [backlogOpen, setBacklogOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
 
   const { data: detail } = trpc.cycle.get.useQuery({ id: cycle?.id ?? "" }, { enabled: !!cycle });
 
@@ -67,6 +70,12 @@ export default function CyclesPage() {
   });
 
   const [createOpen, setCreateOpen] = useState(false);
+
+  useEffect(() => {
+    if (selectedIdx !== null && selectedIdx >= ordered.length) {
+      setSelectedIdx(null);
+    }
+  }, [ordered.length, selectedIdx]);
 
   // Support `/cycles?new` so the sidebar chord / quick-create can deep-link
   // directly into the create dialog.
@@ -105,9 +114,21 @@ export default function CyclesPage() {
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
                 </button>
-                <span className="border-x border-border px-2.5 text-xs font-medium tabular-nums">
-                  {cycle.name}
-                </span>
+                <select
+                  value={cycle.id}
+                  onChange={(e) => {
+                    const next = ordered.findIndex((c) => c.id === e.target.value);
+                    if (next !== -1) setSelectedIdx(next);
+                  }}
+                  aria-label="Select sprint"
+                  className="focus-ring h-7 max-w-[16rem] border-x border-border bg-transparent px-2 text-xs font-medium tabular-nums text-foreground"
+                >
+                  {ordered.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} · {c.status}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   disabled={activeIdx >= ordered.length - 1}
@@ -119,6 +140,23 @@ export default function CyclesPage() {
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </div>
+            )}
+            {cycle && (
+              <Button variant="outline" size="sm" onClick={() => setManageOpen(true)}>
+                <Settings2 className="h-3.5 w-3.5" />
+                Manage
+              </Button>
+            )}
+            {cycle && (
+              <Button
+                variant={backlogOpen ? "subtle" : "outline"}
+                size="sm"
+                onClick={() => setBacklogOpen((open) => !open)}
+                aria-pressed={backlogOpen}
+              >
+                <Inbox className="h-3.5 w-3.5" />
+                Backlog
+              </Button>
             )}
             {/* Always-available rollover. Reuses the same mutation the
                 summary card fires. The server enforces the active-sprint
@@ -182,23 +220,34 @@ export default function CyclesPage() {
                 <CyclePlanningBoard
                   cycleId={cycle.id}
                   onPlanCurrentSprint={() => {
-                    document
-                      .querySelector("[data-cycle-backlog-panel]")
-                      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-                    toast.message("Drag backlog issues into any sprint column.");
+                    setBacklogOpen(true);
+                    toast.message("Backlog opened. Drag issues into any sprint column.");
                   }}
                   onDropFromBacklog={(issueId) =>
                     plan.mutate({ cycleId: cycle.id, issueIds: [issueId] })
                   }
                 />
               </div>
-              <CycleBacklogPanel />
+              <CycleBacklogPanel open={backlogOpen} onOpenChange={setBacklogOpen} />
             </div>
           </>
         ) : null}
       </div>
 
-      <NewCycleDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+      <EditCycleDialog
+        open={manageOpen}
+        cycle={cycle}
+        onClose={() => setManageOpen(false)}
+        onUpdated={() => {
+          utils.cycle.list.invalidate();
+          if (cycle?.id) utils.cycle.get.invalidate({ id: cycle.id });
+        }}
+      />
+      <NewCycleDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={() => setSelectedIdx(null)}
+      />
     </>
   );
 }

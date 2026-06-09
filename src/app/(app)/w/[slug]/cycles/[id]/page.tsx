@@ -1,6 +1,7 @@
 "use client";
-import { use, useEffect } from "react";
+import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Inbox, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { EmptyState, SkeletonList } from "@/components/ui";
 import { CycleSummaryCard } from "@/components/cycles/cycle-summary-card";
 import { CyclePlanningBoard } from "@/components/cycles/cycle-planning-board";
 import { CycleBacklogPanel } from "@/components/cycles/cycle-backlog-panel";
+import { EditCycleDialog } from "@/components/cycles/edit-cycle-dialog";
 import { PinButton } from "@/components/pins/pin-button";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -22,6 +24,8 @@ export default function CycleDetailPage({ params }: { params: Promise<{ id: stri
   const router = useRouter();
   const ws = useWorkspace();
   const utils = trpc.useUtils();
+  const [backlogOpen, setBacklogOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
 
   const { data: cycle, error, isLoading } = trpc.cycle.get.useQuery({ id });
 
@@ -90,6 +94,19 @@ export default function CycleDetailPage({ params }: { params: Promise<{ id: stri
               targetId={cycle.id}
               workspaceId={ws.id}
             />
+            <Button variant="outline" size="sm" onClick={() => setManageOpen(true)}>
+              <Settings2 className="h-3.5 w-3.5" />
+              Manage
+            </Button>
+            <Button
+              variant={backlogOpen ? "subtle" : "outline"}
+              size="sm"
+              onClick={() => setBacklogOpen((open) => !open)}
+              aria-pressed={backlogOpen}
+            >
+              <Inbox className="h-3.5 w-3.5" />
+              Backlog
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => router.push(`/w/${ws.slug}/cycles`)}>
               All sprints
             </Button>
@@ -110,19 +127,26 @@ export default function CycleDetailPage({ params }: { params: Promise<{ id: stri
             <CyclePlanningBoard
               cycleId={cycle.id}
               onPlanCurrentSprint={() => {
-                document
-                  .querySelector("[data-cycle-backlog-panel]")
-                  ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-                toast.message("Drag backlog issues into any sprint column.");
+                setBacklogOpen(true);
+                toast.message("Backlog opened. Drag issues into any sprint column.");
               }}
               onDropFromBacklog={(issueId) =>
                 plan.mutate({ cycleId: cycle.id, issueIds: [issueId] })
               }
             />
           </div>
-          <CycleBacklogPanel />
+          <CycleBacklogPanel open={backlogOpen} onOpenChange={setBacklogOpen} />
         </div>
       </div>
+      <EditCycleDialog
+        open={manageOpen}
+        cycle={cycle}
+        onClose={() => setManageOpen(false)}
+        onUpdated={() => {
+          utils.cycle.list.invalidate();
+          utils.cycle.get.invalidate({ id: cycle.id });
+        }}
+      />
     </>
   );
 }

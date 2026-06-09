@@ -2,6 +2,27 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Sprint management and roadmap layout
+
+Added visible sprint lifecycle management to the Sprints surface. The sprint
+picker now exposes all existing sprints, the create dialog can set an initial
+status, and a new manage side panel edits name, dates, status, and completion
+without hard-deleting cycle rows or issue assignments.
+
+Converted the sprint backlog from a persistent right column into a collapsible
+planning panel. Desktop keeps a narrow rail when collapsed; mobile uses an
+overlay panel. The sprint summary burndown now has stable chart padding and the
+summary metrics wrap at narrower widths.
+
+Rebuilt Roadmap as a sticky-label, scrollable timeline grid with visible sprint
+bands, today markers, dated project bars, progress fill, and explicit "No dates"
+rows so missing project dates no longer make the calendar look blank.
+
+Verification: `pnpm prisma:generate`, `pnpm typecheck`, `pnpm lint`,
+`AUTH_SECRET=test-auth-secret-for-vitest DATABASE_URL=postgresql://forge:forge@localhost:55432/forge?schema=public REDIS_URL=redis://localhost:56379 pnpm test`,
+and `E2E_PORT=3211 PLAYWRIGHT_BASE_URL=http://localhost:3211 pnpm test:e2e`
+pass.
+
 ## 2026-06-09 — Mission Control chat filters
 
 Added compact conversation search and state filters to the Mission Control Chat

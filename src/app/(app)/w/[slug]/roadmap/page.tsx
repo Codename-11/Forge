@@ -1,7 +1,8 @@
 "use client";
+import type { CSSProperties } from "react";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Filter, Map as MapIcon } from "lucide-react";
+import { CalendarRange, Filter, Map as MapIcon } from "lucide-react";
 import { CycleStatus, InitiativeStatus } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -12,15 +13,64 @@ import { useWorkspace } from "@/hooks/use-workspace";
 
 type Grain = "week" | "month";
 
+type TimelineTick = {
+  date: Date;
+  label: string;
+  x: number;
+};
+
+type CycleBand = {
+  id: string;
+  name: string;
+  status: CycleStatus;
+  left: number;
+  width: number;
+};
+
+type RoadmapProject = {
+  id: string;
+  name: string;
+  key: string;
+  color: string | null;
+  startDate: Date | string | null;
+  targetDate: Date | string | null;
+  _count?: { issues: number; doneIssues?: number };
+};
+
+const MS_PER_DAY = 86_400_000;
+const LABEL_WIDTH = 228;
+const MIN_TIMELINE_WIDTH = 920;
+
+function startOfUtcDay(value: Date): Date {
+  const d = new Date(value);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
+function dayDiff(start: Date, end: Date): number {
+  return Math.round((end.getTime() - start.getTime()) / MS_PER_DAY);
+}
+
+function addUtcDays(value: Date, days: number): Date {
+  const d = new Date(value);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d;
+}
+
+function formatTick(date: Date, grain: Grain): string {
+  return grain === "week"
+    ? date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : date.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+}
+
 /**
- * Lightweight roadmap. Horizontal timeline with initiative rows and
- * project bars spanning `startDate` → `targetDate`. Cycle boundaries
- * render as dotted vertical markers. CSS grid, no external chart lib.
+ * Roadmap calendar. Initiative/project labels stay pinned on the left;
+ * the dated timeline scrolls horizontally. Projects without dates are
+ * shown as explicit unscheduled rows so the view does not look blank.
  */
 export default function RoadmapPage() {
   const ws = useWorkspace();
-  const { data: initiatives, isLoading: iLoading } =
-    trpc.initiative.list.useQuery({});
+  const { data: initiatives, isLoading: iLoading } = trpc.initiative.list.useQuery({});
   const { data: projects } = trpc.project.list.useQuery({
     archived: false,
     limit: 200,
@@ -32,19 +82,14 @@ export default function RoadmapPage() {
   const active = useMemo(
     () =>
       (initiatives ?? []).filter(
-        (i) => i.status !== InitiativeStatus.COMPLETED,
+        (i) => i.status !== InitiativeStatus.COMPLETED && i.status !== InitiativeStatus.CANCELED,
       ),
     [initiatives],
   );
 
-  // Determine timeline bounds. Default: today → +12 weeks / +6 months.
-  const today = useMemo(() => {
-    const d = new Date();
-    d.setUTCHours(0, 0, 0, 0);
-    return d;
-  }, []);
+  const today = useMemo(() => startOfUtcDay(new Date()), []);
 
-  const { rangeStart, rangeEnd, totalDays, ticks } = useMemo(() => {
+  const { rangeStart, rangeEnd, totalDays } = useMemo(() => {
     const projs = projects?.items ?? [];
     const anchors: Date[] = [];
     for (const p of projs) {
@@ -55,9 +100,11 @@ export default function RoadmapPage() {
       if (i.targetDate) anchors.push(new Date(i.targetDate));
     }
     for (const c of cycles ?? []) {
+      if (c.status === CycleStatus.CANCELED) continue;
       anchors.push(new Date(c.startsAt));
       anchors.push(new Date(c.endsAt));
     }
+
     const earliest =
       anchors.length > 0
         ? new Date(Math.min(...anchors.map((d) => d.getTime())))
@@ -65,63 +112,74 @@ export default function RoadmapPage() {
     const latest =
       anchors.length > 0
         ? new Date(Math.max(...anchors.map((d) => d.getTime())))
-        : new Date(today.getTime() + 90 * 86_400_000);
+        : addUtcDays(today, 90);
 
-    // Align range to nicer boundaries.
-    const start = new Date(Math.min(earliest.getTime(), today.getTime()));
-    start.setUTCHours(0, 0, 0, 0);
-    start.setUTCDate(
-      grain === "week" ? start.getUTCDate() - start.getUTCDay() : 1,
-    );
+    const start = startOfUtcDay(new Date(Math.min(earliest.getTime(), today.getTime())));
+    if (grain === "week") {
+      start.setUTCDate(start.getUTCDate() - start.getUTCDay());
+    } else {
+      start.setUTCDate(1);
+    }
 
-    const end = new Date(
-      Math.max(latest.getTime(), today.getTime() + 60 * 86_400_000),
-    );
-    end.setUTCHours(0, 0, 0, 0);
+    const end = startOfUtcDay(new Date(Math.max(latest.getTime(), addUtcDays(today, 60).getTime())));
     if (grain === "week") {
       end.setUTCDate(end.getUTCDate() + (7 - (end.getUTCDay() || 7)));
     } else {
       end.setUTCMonth(end.getUTCMonth() + 1, 1);
     }
 
-    const totalDays = Math.max(
-      14,
-      Math.round((end.getTime() - start.getTime()) / 86_400_000),
-    );
-
-    // Tick marks per grain unit.
-    const ticks: { date: Date; label: string }[] = [];
-    const cursor = new Date(start);
-    while (cursor <= end) {
-      ticks.push({
-        date: new Date(cursor),
-        label:
-          grain === "week"
-            ? `${cursor.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
-            : cursor.toLocaleDateString(undefined, {
-                month: "short",
-                year: "2-digit",
-              }),
-      });
-      if (grain === "week") cursor.setUTCDate(cursor.getUTCDate() + 7);
-      else cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-    }
-    return { rangeStart: start, rangeEnd: end, totalDays, ticks };
+    return {
+      rangeStart: start,
+      rangeEnd: end,
+      totalDays: Math.max(14, dayDiff(start, end)),
+    };
   }, [projects, active, cycles, grain, today]);
 
-  function dayOffset(d: Date): number {
-    return Math.max(
-      0,
-      Math.round((d.getTime() - rangeStart.getTime()) / 86_400_000),
-    );
-  }
-  function pct(days: number): number {
-    return (days / totalDays) * 100;
+  const dayWidth = grain === "week" ? 14 : 6;
+  const timelineWidth = Math.max(MIN_TIMELINE_WIDTH, totalDays * dayWidth);
+
+  function rawX(date: Date): number {
+    return dayDiff(rangeStart, startOfUtcDay(date)) * dayWidth;
   }
 
-  // Group projects by initiativeId (undefined → "Unaffiliated").
+  function xFor(date: Date): number {
+    return Math.max(0, Math.min(timelineWidth, rawX(date)));
+  }
+
+  const ticks: TimelineTick[] = [];
+  const tickCursor = new Date(rangeStart);
+  while (tickCursor <= rangeEnd) {
+    ticks.push({
+      date: new Date(tickCursor),
+      label: formatTick(tickCursor, grain),
+      x: xFor(tickCursor),
+    });
+    if (grain === "week") tickCursor.setUTCDate(tickCursor.getUTCDate() + 7);
+    else tickCursor.setUTCMonth(tickCursor.getUTCMonth() + 1);
+  }
+
+  const cycleBands: CycleBand[] = (cycles ?? [])
+    .filter((c) => c.status !== CycleStatus.CANCELED)
+    .map((c) => {
+      const start = rawX(new Date(c.startsAt));
+      const end = rawX(new Date(c.endsAt));
+      const left = Math.max(0, start);
+      const right = Math.min(timelineWidth, end);
+      if (right <= 0 || left >= timelineWidth) return null;
+      return {
+        id: c.id,
+        name: c.name,
+        status: c.status,
+        left,
+        width: Math.max(3, right - left),
+      };
+    })
+    .filter((band): band is CycleBand => !!band);
+
+  const todayX = today >= rangeStart && today <= rangeEnd ? xFor(today) : null;
+
   const projectsByInitiative = useMemo(() => {
-    const map = new Map<string | null, NonNullable<typeof projects>["items"]>();
+    const map = new Map<string | null, RoadmapProject[]>();
     for (const p of projects?.items ?? []) {
       const key = p.initiativeId ?? null;
       const arr = map.get(key) ?? [];
@@ -130,6 +188,32 @@ export default function RoadmapPage() {
     }
     return map;
   }, [projects]);
+
+  const rows = useMemo(() => {
+    const initiativeRows = active.map((ini) => ({
+      initiative: {
+        id: ini.id,
+        name: ini.name,
+        color: ini.color,
+      },
+      href: `/w/${ws.slug}/initiatives/${ini.slug}`,
+      projects: projectsByInitiative.get(ini.id) ?? [],
+    }));
+    const looseProjects = projectsByInitiative.get(null) ?? [];
+    if (looseProjects.length === 0) return initiativeRows;
+    return [
+      ...initiativeRows,
+      {
+        initiative: {
+          id: "_none",
+          name: "Unaffiliated projects",
+          color: null,
+        },
+        href: undefined,
+        projects: looseProjects,
+      },
+    ];
+  }, [active, projectsByInitiative, ws.slug]);
 
   if (iLoading) {
     return (
@@ -172,14 +256,15 @@ export default function RoadmapPage() {
     <>
       <Topbar
         title="Roadmap"
-        subtitle={`${ticks[0]?.label ?? ""} → ${ticks[ticks.length - 1]?.label ?? ""}`}
+        subtitle={`${ticks[0]?.label ?? ""} -> ${ticks[ticks.length - 1]?.label ?? ""}`}
         actions={
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
               className="h-7"
-              title="Filter (coming soon)"
+              title="Filters are not wired yet"
+              disabled
             >
               <Filter className="h-3.5 w-3.5" />
               Filter
@@ -206,145 +291,65 @@ export default function RoadmapPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto p-4">
-        <div className="min-w-[960px] rounded-lg border border-border bg-card/40">
-          {/* Tick header */}
-          <div className="relative h-8 border-b border-border">
-            {ticks.map((t, i) => {
-              const left = pct(dayOffset(t.date));
-              return (
-                <div
-                  key={i}
-                  className="absolute top-0 flex h-full items-center text-[0.6875rem] text-muted-foreground"
-                  style={{ left: `${left}%` }}
-                >
-                  <span className="ml-1">{t.label}</span>
-                </div>
-              );
-            })}
-            {/* Today line */}
-            {today >= rangeStart && today <= rangeEnd && (
-              <div
-                className="absolute top-0 h-full border-l border-ember"
-                style={{ left: `${pct(dayOffset(today))}%` }}
-                aria-label="today"
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="w-max min-w-full overflow-hidden rounded-lg border border-border bg-card/40">
+          <div
+            className="sticky top-0 z-20 grid border-b border-border bg-card/95 backdrop-blur"
+            style={{ gridTemplateColumns: `${LABEL_WIDTH}px ${timelineWidth}px` }}
+          >
+            <div className="sticky left-0 z-30 flex h-11 items-center gap-2 border-r border-border bg-card/95 px-3">
+              <CalendarRange className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs font-medium">Initiatives</span>
+              <span className="ml-auto text-meta text-muted-foreground">
+                {rows.length}
+              </span>
+            </div>
+            <div className="relative h-11" style={{ width: timelineWidth }}>
+              <TimelineScaffold
+                ticks={ticks}
+                cycleBands={cycleBands}
+                todayX={todayX}
+                showLabels
               />
-            )}
+            </div>
           </div>
 
-          {/* Cycle markers — active sprints tint stronger than planned. */}
-          <div className="relative h-2 border-b border-border bg-card/20">
-            {(cycles ?? []).map((c) => {
-              const left = pct(dayOffset(new Date(c.startsAt)));
-              const end = pct(dayOffset(new Date(c.endsAt)));
-              return (
-                <div
-                  key={c.id}
-                  className="absolute top-0 h-full"
-                  style={{
-                    left: `${left}%`,
-                    width: `${Math.max(0.2, end - left)}%`,
-                    background:
-                      c.status === CycleStatus.ACTIVE
-                        ? "hsl(var(--ember) / 0.18)"
-                        : "hsl(var(--ember) / 0.05)",
-                  }}
-                  title={`${c.name} (${c.status})`}
-                />
-              );
-            })}
-          </div>
-
-          {/* Rows */}
           <ul>
-            {active.map((ini) => (
-              <li key={ini.id} className="border-b border-border last:border-0">
+            {rows.map((row) => (
+              <li key={row.initiative.id} className="border-b border-border last:border-0">
                 <RoadmapRow
-                  initiative={ini}
-                  projects={projectsByInitiative.get(ini.id) ?? []}
-                  rangeStart={rangeStart}
-                  totalDays={totalDays}
-                  pct={pct}
-                  dayOffset={dayOffset}
-                  href={`/w/${ws.slug}/initiatives/${ini.slug}`}
+                  initiative={row.initiative}
+                  projects={row.projects}
+                  href={row.href}
+                  labelWidth={LABEL_WIDTH}
+                  timelineWidth={timelineWidth}
+                  ticks={ticks}
+                  cycleBands={cycleBands}
+                  todayX={todayX}
+                  xFor={xFor}
+                  dayWidth={dayWidth}
                 />
               </li>
             ))}
-            {(projectsByInitiative.get(null)?.length ?? 0) > 0 && (
-              <li>
-                <RoadmapRow
-                  initiative={{
-                    id: "_none",
-                    name: "Unaffiliated projects",
-                    color: null,
-                  }}
-                  projects={projectsByInitiative.get(null) ?? []}
-                  rangeStart={rangeStart}
-                  totalDays={totalDays}
-                  pct={pct}
-                  dayOffset={dayOffset}
-                />
-              </li>
-            )}
           </ul>
-
-          {/* Cycle boundary grid (dotted verticals) */}
-          <div className="pointer-events-none relative h-0">
-            {(cycles ?? []).flatMap((c) => {
-              const markers: { when: Date; key: string }[] = [
-                { when: new Date(c.startsAt), key: `${c.id}-s` },
-                { when: new Date(c.endsAt), key: `${c.id}-e` },
-              ];
-              return markers.map((m) => (
-                <div
-                  key={m.key}
-                  className="absolute -top-[9999px]"
-                  style={{ left: `${pct(dayOffset(m.when))}%` }}
-                />
-              ));
-            })}
-          </div>
         </div>
 
-        {/* Legend */}
-        <div className="mt-3 flex min-w-[960px] flex-wrap items-center gap-3 text-meta text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <span
-              aria-hidden="true"
-              className="h-3 w-4 rounded-sm"
-              style={{ background: "hsl(var(--ember) / 0.18)" }}
-            />
-            Active sprint
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              aria-hidden="true"
-              className="h-3 w-4 rounded-sm"
-              style={{ background: "hsl(var(--ember) / 0.05)" }}
-            />
-            Planned sprint
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              aria-hidden="true"
-              className="inline-block h-3 w-4 rounded-md"
-              style={{
-                backgroundColor: "#78716c",
-                borderLeft: "3px solid color-mix(in srgb, #78716c 60%, #000)",
-              }}
-            />
-            Project bar
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              aria-hidden="true"
-              className="inline-flex h-3 w-4 items-stretch overflow-hidden rounded-md"
-              style={{ backgroundColor: "#78716c" }}
-            >
-              <span className="h-full w-1/2 bg-black/25" />
-            </span>
-            Progress fill = done so far
-          </span>
+        <div className="mt-3 flex w-max min-w-full flex-wrap items-center gap-3 text-meta text-muted-foreground">
+          <LegendSwatch style={{ background: "hsl(var(--ember) / 0.18)" }} label="Active sprint" />
+          <LegendSwatch style={{ background: "hsl(var(--ember) / 0.06)" }} label="Planned sprint" />
+          <LegendSwatch
+            style={{
+              background: "hsl(var(--muted-foreground) / 0.18)",
+              borderLeft: "3px solid hsl(var(--muted-foreground))",
+            }}
+            label="Project bar"
+          />
+          <LegendSwatch
+            style={{
+              background: "hsl(var(--muted-foreground) / 0.12)",
+            }}
+            label="Progress fill = done so far"
+          />
           <span className="flex items-center gap-1.5">
             <span aria-hidden="true" className="h-3 w-px bg-ember" />
             Today
@@ -355,50 +360,99 @@ export default function RoadmapPage() {
   );
 }
 
+function TimelineScaffold({
+  ticks,
+  cycleBands,
+  todayX,
+  showLabels = false,
+}: {
+  ticks: TimelineTick[];
+  cycleBands: CycleBand[];
+  todayX: number | null;
+  showLabels?: boolean;
+}) {
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      {cycleBands.map((band) => (
+        <div
+          key={band.id}
+          className={cn(
+            "absolute inset-y-0",
+            band.status === CycleStatus.ACTIVE ? "bg-ember/15" : "bg-ember/5",
+          )}
+          style={{ left: band.left, width: band.width }}
+          title={`${band.name} (${band.status})`}
+        />
+      ))}
+      {ticks.map((tick) => (
+        <div key={tick.date.toISOString()} className="absolute inset-y-0" style={{ left: tick.x }}>
+          <span className="block h-full w-px bg-border/60" aria-hidden="true" />
+          {showLabels && (
+            <span className="absolute left-1 top-3 whitespace-nowrap text-[0.6875rem] text-muted-foreground">
+              {tick.label}
+            </span>
+          )}
+        </div>
+      ))}
+      {todayX !== null && (
+        <div
+          className="absolute inset-y-0 z-10 border-l border-ember"
+          style={{ left: todayX }}
+          aria-label="Today"
+        />
+      )}
+    </div>
+  );
+}
+
 function RoadmapRow({
   initiative,
   projects,
-  rangeStart,
-  totalDays: _totalDays,
-  pct,
-  dayOffset,
   href,
+  labelWidth,
+  timelineWidth,
+  ticks,
+  cycleBands,
+  todayX,
+  xFor,
+  dayWidth,
 }: {
   initiative: { id: string; name: string; color: string | null };
-  projects: Array<{
-    id: string;
-    name: string;
-    key: string;
-    color: string | null;
-    startDate: Date | string | null;
-    targetDate: Date | string | null;
-    _count?: { issues: number; doneIssues: number };
-  }>;
-  rangeStart: Date;
-  totalDays: number;
-  pct: (days: number) => number;
-  dayOffset: (d: Date) => number;
+  projects: RoadmapProject[];
   href?: string;
+  labelWidth: number;
+  timelineWidth: number;
+  ticks: TimelineTick[];
+  cycleBands: CycleBand[];
+  todayX: number | null;
+  xFor: (d: Date) => number;
+  dayWidth: number;
 }) {
   const ws = useWorkspace();
+  const datedCount = projects.filter((p) => p.startDate || p.targetDate).length;
+  const rowHeight = Math.max(72, 42 + Math.max(1, projects.length) * 30);
+
   return (
-    <div className="grid grid-cols-[180px_1fr] items-start gap-2 px-3 py-3">
-      <div className="min-w-0">
+    <div
+      className="grid"
+      style={{
+        gridTemplateColumns: `${labelWidth}px ${timelineWidth}px`,
+      }}
+    >
+      <div className="sticky left-0 z-10 border-r border-border bg-card/95 px-3 py-3">
         {href ? (
           <Link href={href} className="flex items-center gap-2 hover:text-ember">
             <span
               className="inline-block h-3 w-3 shrink-0 rounded-sm"
-              style={{ backgroundColor: initiative.color ?? "#78716c" }}
+              style={{ backgroundColor: initiative.color ?? "hsl(var(--muted-foreground))" }}
             />
-            <span className="truncate text-xs font-medium">
-              {initiative.name}
-            </span>
+            <span className="truncate text-xs font-medium">{initiative.name}</span>
           </Link>
         ) : (
           <div className="flex items-center gap-2">
             <span
               className="inline-block h-3 w-3 shrink-0 rounded-sm"
-              style={{ backgroundColor: initiative.color ?? "#78716c" }}
+              style={{ backgroundColor: initiative.color ?? "hsl(var(--muted-foreground))" }}
             />
             <span className="truncate text-xs font-medium text-muted-foreground">
               {initiative.name}
@@ -408,81 +462,130 @@ function RoadmapRow({
         <div className="text-meta ml-5 mt-0.5 text-muted-foreground">
           {projects.length} {projects.length === 1 ? "project" : "projects"}
         </div>
+        <div className="text-meta ml-5 mt-0.5 text-muted-foreground/70">
+          {datedCount} dated
+        </div>
       </div>
-      <div className="relative min-h-[32px]">
-        {projects.length === 0 && (
-          <div className="py-1 text-[0.6875rem] italic text-muted-foreground/70">
-            No dated projects
-          </div>
-        )}
-        {projects.map((p, i) => {
-          const start = p.startDate ? new Date(p.startDate) : null;
-          const end = p.targetDate ? new Date(p.targetDate) : null;
-          if (!start && !end) {
-            return (
-              <div
-                key={p.id}
-                className="mb-1 text-[0.6875rem] text-muted-foreground/70"
-              >
-                {p.key} · no dates
-              </div>
-            );
-          }
-          const actualStart = start ?? rangeStart;
-          const actualEnd = end ?? actualStart;
-          const left = pct(dayOffset(actualStart));
-          const width = Math.max(
-            1,
-            pct(dayOffset(actualEnd)) - left + (end ? 0 : 1),
-          );
-          const bar = Math.min(width, 100 - left);
-          const accent = p.color ?? initiative.color ?? "#78716c";
-          // Inset interior progress fill — done/total clipped to the
-          // bar width. A subtly darker tint of the bar's own surface.
-          const total = p._count?.issues ?? 0;
-          const done = p._count?.doneIssues ?? 0;
-          const fillPct =
-            total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
-          return (
-            <Link
-              key={p.id}
-              href={`/w/${ws.slug}/projects/${p.id}`}
-              className={cn(
-                "relative mb-1.5 flex h-5 items-center overflow-hidden rounded-md text-[0.6875rem] font-medium hover:opacity-90",
-                MOTION.fast,
-              )}
-              style={{
-                marginLeft: `${left}%`,
-                width: `${bar}%`,
-                backgroundColor: accent,
-                color: "#fff",
-                borderLeft: `3px solid color-mix(in srgb, ${accent} 60%, #000)`,
-                marginTop: i === 0 ? 0 : undefined,
-              }}
-              title={
-                total > 0
-                  ? `${p.key} · ${p.name} — ${done}/${total} done`
-                  : `${p.key} · ${p.name}`
-              }
-            >
-              {/* Inset interior progress fill — done so far. */}
-              {fillPct > 0 ? (
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-y-0 left-0 bg-black/25"
-                  style={{ width: `${fillPct}%` }}
-                />
-              ) : null}
-              <span className="relative flex min-w-0 items-center gap-1.5 px-2">
-                <span className="text-id shrink-0 font-mono tabular-nums opacity-80">
-                  {p.key}
-                </span>
-                <span className="truncate">{p.name}</span>
-              </span>
-            </Link>
-          );
-        })}
+
+      <div className="relative px-2 py-3" style={{ minHeight: rowHeight }}>
+        <TimelineScaffold ticks={ticks} cycleBands={cycleBands} todayX={todayX} />
+        <div className="relative">
+          {projects.length === 0 && (
+            <div className="flex h-7 items-center text-meta italic text-muted-foreground/70">
+              No projects
+            </div>
+          )}
+          {projects.map((project) => (
+            <ProjectTimelineItem
+              key={project.id}
+              project={project}
+              initiativeColor={initiative.color}
+              xFor={xFor}
+              timelineWidth={timelineWidth}
+              dayWidth={dayWidth}
+              href={`/w/${ws.slug}/projects/${project.id}`}
+            />
+          ))}
+        </div>
       </div>
     </div>
+  );
+}
+
+function ProjectTimelineItem({
+  project,
+  initiativeColor,
+  xFor,
+  timelineWidth,
+  dayWidth,
+  href,
+}: {
+  project: RoadmapProject;
+  initiativeColor: string | null;
+  xFor: (d: Date) => number;
+  timelineWidth: number;
+  dayWidth: number;
+  href: string;
+}) {
+  const accent = project.color ?? initiativeColor ?? "hsl(var(--muted-foreground))";
+  const start = project.startDate ? new Date(project.startDate) : null;
+  const end = project.targetDate ? new Date(project.targetDate) : null;
+  const total = project._count?.issues ?? 0;
+  const done = project._count?.doneIssues ?? 0;
+  const fillPct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+
+  if (!start && !end) {
+    return (
+      <Link
+        href={href}
+        className={cn(
+          "mb-1.5 flex h-6 max-w-[360px] items-center gap-1.5 rounded-md border border-dashed border-border bg-background/60 px-2 text-meta text-muted-foreground hover:border-ember/40 hover:text-foreground",
+          MOTION.fast,
+        )}
+        title={`${project.key} · ${project.name} has no roadmap dates`}
+      >
+        <span className="text-id shrink-0 font-mono tabular-nums">{project.key}</span>
+        <span className="truncate">{project.name}</span>
+        <span className="ml-auto shrink-0 text-[0.625rem] uppercase tracking-wider">No dates</span>
+      </Link>
+    );
+  }
+
+  const left = start ? xFor(start) : 0;
+  const targetRight = end ? xFor(end) : Math.min(timelineWidth, left + 7 * dayWidth);
+  const width = Math.max(48, Math.min(timelineWidth - left, targetRight - left));
+
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "relative mb-1.5 flex h-6 items-center overflow-hidden rounded-md border text-[0.6875rem] font-medium hover:opacity-90",
+        MOTION.fast,
+      )}
+      style={{
+        marginLeft: left,
+        width,
+        background: `color-mix(in srgb, ${accent} 18%, transparent)`,
+        borderColor: `color-mix(in srgb, ${accent} 45%, hsl(var(--border)))`,
+        borderLeft: `3px solid ${accent}`,
+      }}
+      title={
+        total > 0
+          ? `${project.key} · ${project.name} — ${done}/${total} done`
+          : `${project.key} · ${project.name}`
+      }
+    >
+      {fillPct > 0 ? (
+        <span
+          aria-hidden="true"
+          className="absolute inset-y-0 left-0"
+          style={{
+            width: `${fillPct}%`,
+            background: `color-mix(in srgb, ${accent} 28%, transparent)`,
+          }}
+        />
+      ) : null}
+      <span className="relative flex min-w-0 items-center gap-1.5 px-2 text-foreground">
+        <span className="text-id shrink-0 font-mono tabular-nums text-muted-foreground">
+          {project.key}
+        </span>
+        <span className="truncate">{project.name}</span>
+      </span>
+    </Link>
+  );
+}
+
+function LegendSwatch({
+  style,
+  label,
+}: {
+  style: CSSProperties;
+  label: string;
+}) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span aria-hidden="true" className="h-3 w-4 rounded-sm border border-border/60" style={style} />
+      {label}
+    </span>
   );
 }
