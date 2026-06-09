@@ -2,6 +2,24 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Chat activity read markers and plugin restore webhooks
+
+Included owned chat-thread events in the Activity drawer feed without exposing
+other operators' private chat threads. Visible chat message rows in the Activity
+tab now update the same browser and durable `ChatThreadRead` anchors used by the
+full Chat page and Mission Control, and chat activity links deep-link to
+`/w/{slug}/chat?thread=...` while marking the thread read.
+
+Restored plugin backups now recreate webhook subscription rows with fresh
+webhook secrets instead of only restoring the plugin row and skills. API keys
+remain metadata-only in backups and must still be reissued after approval.
+
+Verification: `pnpm vitest run src/server/routers/__tests__/plugin.test.ts
+src/server/routers/__tests__/event.test.ts`, `pnpm typecheck`, `pnpm lint`,
+`pnpm docs:build`, full `pnpm test`, `E2E_FORCE_BUILD=1 pnpm exec playwright
+test tests/e2e/chat-conversation-settings-read-state.spec.ts --workers=1`, and
+full serial `pnpm exec playwright test --workers=1` pass.
+
 ## 2026-06-09 — Runtime config drift visibility
 
 Added server-side runtime config status checks for stored adapter config. Runtime

@@ -35,6 +35,10 @@ const RELEVANT_KINDS: EventKind[] = [
   EventKind.AGENT_RUN_CONTROL_REQUESTED,
   EventKind.AGENT_RUN_KICKED,
 ];
+const CHAT_ACTIVITY_KINDS: EventKind[] = [
+  EventKind.CHAT_MESSAGE_POSTED,
+  EventKind.CHAT_THREAD_COMPACTED,
+];
 
 export const eventRouter = router({
   recent: workspaceProcedure
@@ -58,9 +62,26 @@ export const eventRouter = router({
           })
         : null;
 
+      const myChatThreadIds = (
+        await ctx.db.chatThread.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            userId: ctx.session.user.id,
+            archivedAt: null,
+          },
+          select: { id: true },
+        })
+      ).map((thread) => thread.id);
+      const ownedChatWhere: Prisma.ActivityEventWhereInput | null = myChatThreadIds.length
+        ? {
+            kind: { in: CHAT_ACTIVITY_KINDS },
+            subjectType: "chat-thread",
+            subjectId: { in: myChatThreadIds },
+          }
+        : null;
+
       const where: Prisma.ActivityEventWhereInput = {
         workspaceId: ctx.workspaceId,
-        kind: { in: RELEVANT_KINDS },
         ...(cursorRow ? { createdAt: { lt: cursorRow.createdAt } } : {}),
       };
 
@@ -81,11 +102,19 @@ export const eventRouter = router({
         });
         const myIssueIds = myIssues.map((i) => i.id);
         where.OR = [
-          { actorId: userId },
-          ...(myIssueIds.length
-            ? [{ subjectType: "issue" as const, subjectId: { in: myIssueIds } }]
-            : []),
+          {
+            kind: { in: RELEVANT_KINDS },
+            OR: [
+              { actorId: userId },
+              ...(myIssueIds.length
+                ? [{ subjectType: "issue" as const, subjectId: { in: myIssueIds } }]
+                : []),
+            ],
+          },
+          ...(ownedChatWhere ? [ownedChatWhere] : []),
         ];
+      } else {
+        where.OR = [{ kind: { in: RELEVANT_KINDS } }, ...(ownedChatWhere ? [ownedChatWhere] : [])];
       }
 
       const rows = await ctx.db.activityEvent.findMany({
@@ -217,11 +246,32 @@ export const eventRouter = router({
       // if the user has never opened the drawer. Keeps the badge bounded.
       const since =
         input.since ?? new Date(Date.now() - 24 * 60 * 60_000);
+      const myChatThreadIds = (
+        await ctx.db.chatThread.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            userId: ctx.session.user.id,
+            archivedAt: null,
+          },
+          select: { id: true },
+        })
+      ).map((thread) => thread.id);
       const count = await ctx.db.activityEvent.count({
         where: {
           workspaceId: ctx.workspaceId,
-          kind: { in: RELEVANT_KINDS },
           createdAt: { gte: since },
+          OR: [
+            { kind: { in: RELEVANT_KINDS } },
+            ...(myChatThreadIds.length
+              ? [
+                  {
+                    kind: { in: CHAT_ACTIVITY_KINDS },
+                    subjectType: "chat-thread" as const,
+                    subjectId: { in: myChatThreadIds },
+                  },
+                ]
+              : []),
+          ],
         },
       });
       return { count, since: since.toISOString() };

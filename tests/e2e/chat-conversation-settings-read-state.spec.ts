@@ -124,4 +124,57 @@ test.describe("Chat conversation settings and read state", () => {
       )
       .toBeGreaterThan(0);
   });
+
+  test("viewing chat activity marks the thread read", async ({ page }) => {
+    const title = `E2E activity read ${Date.now()}`;
+
+    await page.goto("/w/forge/chat");
+    await page.getByRole("button", { name: /new conversation/i }).click();
+
+    const agentSelect = page.getByTestId("new-conversation-agent");
+    const value = await agentSelect
+      .locator("option", { hasText: "e2ebot" })
+      .getAttribute("value");
+    await agentSelect.selectOption(value!);
+    await page.getByLabel(/^Title$/).fill(title);
+    const createResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/trpc/chat.createConversation") &&
+        response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: /^create$/i }).click();
+    const threadId = createdThreadIdFromResponse(await (await createResponse).json());
+    await expect(page).toHaveURL(new RegExp(`thread=${threadId}`));
+
+    const composer = page.getByTestId("chat-composer");
+    await composer.getByRole("textbox").first().fill("activity read marker");
+    await composer.getByRole("textbox").first().press("Enter");
+    await expect(page.getByText(/E2E mock reply: pong/i).first()).toBeVisible({
+      timeout: 25_000,
+    });
+
+    await page.evaluate(
+      ([key, id]) => {
+        localStorage.setItem(key, JSON.stringify({ [id]: 0 }));
+      },
+      [readStateKey, threadId],
+    );
+
+    await page.goto("/w/forge/inbox");
+    await page.getByRole("button", { name: /unread item|unread items|no unread items/i }).click();
+    await page.getByRole("button", { name: /^Activity$/ }).click();
+    await expect(page.getByText(/replied in chat|messaged/i).first()).toBeVisible();
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          ([key, id]) => {
+            const raw = localStorage.getItem(key);
+            return raw ? (JSON.parse(raw)[id] as number | undefined) ?? 0 : 0;
+          },
+          [readStateKey, threadId],
+        ),
+      )
+      .toBeGreaterThan(0);
+  });
 });

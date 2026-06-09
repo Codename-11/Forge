@@ -135,6 +135,18 @@ Pending plugins receive no events and can mint no keys. Approval is a one-way
 gate the workspace admin owns — there is no auto-approve.
 :::
 
+## Backup and restore
+
+Plugin detail pages can download a Forge backup JSON containing the manifest,
+registered webhook URL, webhook subscription metadata, and API-key metadata.
+Secrets are intentionally excluded: raw API keys, key hashes, webhook secrets,
+and the plugin signing secret are never exported.
+
+Restoring a backup recreates the plugin registration, declared skills, and
+webhook subscriptions with fresh webhook secrets. The plugin returns to
+`PENDING` review before it can receive events or mint new keys. API keys are
+not restored; issue new keys after approving the restored registration.
+
 ## Issuing API keys
 
 After approval, mint a scoped key:

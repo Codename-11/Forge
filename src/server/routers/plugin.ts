@@ -178,6 +178,32 @@ async function upsertPluginRegistration({
   };
 }
 
+async function restorePluginWebhooks({
+  tx,
+  workspaceId,
+  pluginId,
+  webhooks,
+}: {
+  tx: Prisma.TransactionClient;
+  workspaceId: string;
+  pluginId: string;
+  webhooks: z.infer<typeof pluginBackupSchema>["webhooks"];
+}) {
+  await tx.webhook.deleteMany({ where: { workspaceId, pluginId } });
+  if (webhooks.length === 0) return;
+
+  await tx.webhook.createMany({
+    data: webhooks.map((webhook) => ({
+      workspaceId,
+      pluginId,
+      url: webhook.url,
+      secret: randomBytes(24).toString("base64url"),
+      events: webhook.events,
+      active: webhook.active ?? true,
+    })),
+  });
+}
+
 export const pluginRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const plugins = await ctx.db.plugin.findMany({
@@ -241,15 +267,22 @@ export const pluginRouter = router({
   restoreBackup: adminProcedure
     .input(z.object({ backup: pluginBackupSchema }))
     .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction((tx) =>
-        upsertPluginRegistration({
+      ctx.db.$transaction(async (tx) => {
+        const restored = await upsertPluginRegistration({
           tx,
           workspaceId: ctx.workspaceId,
           manifest: input.backup.plugin.manifest,
           webhookUrl: input.backup.plugin.webhookUrl ?? undefined,
           newAction: "restored",
-        }),
-      ),
+        });
+        await restorePluginWebhooks({
+          tx,
+          workspaceId: ctx.workspaceId,
+          pluginId: restored.id,
+          webhooks: input.backup.webhooks,
+        });
+        return restored;
+      }),
     ),
 
   exportBackup: adminProcedure

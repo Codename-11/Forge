@@ -34,6 +34,7 @@ import { useCrossTab, useRealtime } from "@/hooks/use-realtime";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn, relativeTime } from "@/lib/utils";
 import { activityActorName, activityActorOwnerTitle } from "@/lib/activity-actor";
+import { markChatThreadRead } from "@/lib/chat-read-state";
 import {
   getEventNotificationActionLinks,
   mapActivityEventToNotification,
@@ -59,7 +60,9 @@ type Kind =
   | "AGENT_RUN_STALLED"
   | "AGENT_RUN_CLEARED"
   | "AGENT_RUN_CONTROL_REQUESTED"
-  | "AGENT_RUN_KICKED";
+  | "AGENT_RUN_KICKED"
+  | "CHAT_MESSAGE_POSTED"
+  | "CHAT_THREAD_COMPACTED";
 
 type TimelineEvent = {
   id: string;
@@ -122,6 +125,8 @@ const KINDS: Kind[] = [
   "AGENT_RUN_CLEARED",
   "AGENT_RUN_CONTROL_REQUESTED",
   "AGENT_RUN_KICKED",
+  "CHAT_MESSAGE_POSTED",
+  "CHAT_THREAD_COMPACTED",
 ];
 
 const LAST_READ_KEY = "forge.activityDrawer.lastReadAt";
@@ -334,6 +339,8 @@ function iconFor(kind: Kind) {
     case "ISSUE_QUEUED":
       return <Inbox className="h-3.5 w-3.5 text-muted-foreground" />;
     case "COMMENT_CREATED":
+    case "CHAT_MESSAGE_POSTED":
+    case "CHAT_THREAD_COMPACTED":
       return <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />;
     case "AGENT_RUN_KICKED":
       return <Bot className="h-3.5 w-3.5 text-muted-foreground" />;
@@ -366,6 +373,28 @@ function readPayloadBoolean(payload: unknown, key: string): boolean | null {
   if (!payload || typeof payload !== "object" || !(key in payload)) return null;
   const v = (payload as Record<string, unknown>)[key];
   return typeof v === "boolean" ? v : null;
+}
+
+function chatThreadIdForEvent(evt: TimelineEvent): string | null {
+  if (evt.subjectType === "chat-thread") return evt.subjectId;
+  return readPayloadString(evt.payload, "threadId");
+}
+
+function isChatMessageEvent(evt: TimelineEvent): boolean {
+  return evt.kind === "CHAT_MESSAGE_POSTED" && Boolean(chatThreadIdForEvent(evt));
+}
+
+function eventTimeMs(evt: TimelineEvent): number {
+  const value = evt.createdAt instanceof Date ? evt.createdAt : new Date(evt.createdAt);
+  const ms = value.getTime();
+  return Number.isFinite(ms) ? ms : Date.now();
+}
+
+function compactPreview(value: string | null, length = 140): string | null {
+  if (!value) return null;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  return normalized.length > length ? `${normalized.slice(0, length - 3)}...` : normalized;
 }
 
 function readNestedString(payload: unknown, objectKey: string, valueKey: string): string | null {
@@ -515,6 +544,7 @@ function alertStatusLabel(status: NotificationRow["status"]): string | null {
 function summarizeEvent(
   evt: TimelineEvent,
   wsSlug: string,
+  options: { onChatOpen?: (evt: TimelineEvent) => void } = {},
 ): { headline: ReactNode; meta?: ReactNode } {
   const actorLabel = activityActorName(evt);
   const actorOwnerTitle = activityActorOwnerTitle(evt);
@@ -534,8 +564,49 @@ function summarizeEvent(
     ) : (
       <span className="text-muted-foreground">an issue</span>
     );
+  const chatThreadId = chatThreadIdForEvent(evt);
+  const chatLink = chatThreadId ? (
+    <Link
+      href={`/w/${wsSlug}/chat?thread=${encodeURIComponent(chatThreadId)}`}
+      onClick={() => options.onChatOpen?.(evt)}
+      className="text-foreground hover:text-ember"
+    >
+      chat
+    </Link>
+  ) : (
+    <span className="text-muted-foreground">chat</span>
+  );
 
   switch (evt.kind) {
+    case "CHAT_MESSAGE_POSTED": {
+      const role = readPayloadString(evt.payload, "role");
+      const handle = activityAgentHandle(evt);
+      const body = compactPreview(readPayloadString(evt.payload, "body"));
+      return {
+        headline:
+          role === "AGENT" ? (
+            <>
+              {agentHandleNode(handle)} replied in {chatLink}
+            </>
+          ) : (
+            <>
+              {actorName} messaged {agentHandleNode(handle)} in {chatLink}
+            </>
+          ),
+        meta: body ? (
+          <span className="truncate">{body}</span>
+        ) : handle ? (
+          <span className="font-mono">@{handle}</span>
+        ) : undefined,
+      };
+    }
+    case "CHAT_THREAD_COMPACTED": {
+      const summary = compactPreview(readPayloadString(evt.payload, "summary"));
+      return {
+        headline: <>Context compacted for {chatLink}</>,
+        meta: summary ? <span className="truncate">{summary}</span> : undefined,
+      };
+    }
     case "ISSUE_CREATED":
       return {
         headline: (
@@ -961,6 +1032,7 @@ export default function ActivityDrawer() {
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [pages, setPages] = useState<TimelineEvent[]>([]);
   const utils = trpc.useUtils();
+  const chatReadSentRef = useRef<Record<string, number>>({});
 
   const invalidateNotifications = useCallback(() => {
     void utils.notification.list.invalidate();
@@ -970,6 +1042,10 @@ export default function ActivityDrawer() {
   const markNotificationRead = trpc.notification.markRead.useMutation({
     onSuccess: invalidateNotifications,
   });
+  const markChatRead = trpc.chat.markRead.useMutation({
+    onSuccess: () => void utils.chat.threads.invalidate(),
+  });
+  const markChatReadMutate = markChatRead.mutate;
   const markNotificationReadMutate = markNotificationRead.mutate;
   const acknowledgeNotification = trpc.notification.acknowledge.useMutation({
     onSuccess: invalidateNotifications,
@@ -1071,6 +1147,27 @@ export default function ActivityDrawer() {
     });
   }, [data, cursor]);
 
+  const events = pages;
+  const markChatActivityRead = useCallback(
+    (evt: TimelineEvent, seenAt = eventTimeMs(evt)) => {
+      if (!ws || !isChatMessageEvent(evt)) return;
+      const threadId = chatThreadIdForEvent(evt);
+      if (!threadId) return;
+      markChatThreadRead(ws.slug, threadId, seenAt);
+
+      const lastSentAt = chatReadSentRef.current[threadId] ?? 0;
+      if (seenAt <= lastSentAt) return;
+      chatReadSentRef.current[threadId] = seenAt;
+      markChatReadMutate({ threadId, readAt: new Date(seenAt) });
+    },
+    [markChatReadMutate, ws],
+  );
+
+  useEffect(() => {
+    if (!open || tab !== "activity") return;
+    for (const evt of events) markChatActivityRead(evt);
+  }, [events, markChatActivityRead, open, tab]);
+
   const markAllRead = useCallback(() => {
     writeLastRead(new Date().toISOString());
     notifyLastRead();
@@ -1079,7 +1176,6 @@ export default function ActivityDrawer() {
 
   if (!ws || !open) return null;
 
-  const events = pages;
   const nextCursor = data?.nextCursor ?? null;
   const attentionRows = attentionData?.notifications.map(notificationRowFromPersisted) ?? [];
   const unreadAlertCount = attentionRows.filter((row) => row.status === "UNREAD").length;
@@ -1092,7 +1188,6 @@ export default function ActivityDrawer() {
     <div
       className={cn("fixed inset-0 z-40 bg-foreground/20 backdrop-blur-sm", MOTION.fadeIn)}
       onClick={close}
-      aria-hidden="true"
     >
       <aside
         role="dialog"
@@ -1233,7 +1328,12 @@ export default function ActivityDrawer() {
                     />
                   );
                 }
-                const { headline, meta } = summarizeEvent(evt, ws.slug);
+                const { headline, meta } = summarizeEvent(evt, ws.slug, {
+                  onChatOpen: (chatEvt) => {
+                    markChatActivityRead(chatEvt, Date.now());
+                    close();
+                  },
+                });
                 return (
                   <li key={evt.id} className="flex items-start gap-2 px-4 py-2.5 text-[0.75rem]">
                     <span className="mt-0.5 shrink-0">{iconFor(evt.kind)}</span>
