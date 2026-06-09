@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   Bot,
@@ -8,12 +8,17 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Copy,
+  GitFork,
   Loader2,
+  PencilLine,
   RefreshCw,
+  RotateCcw,
   User as UserIcon,
   Wrench,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { ChatMarkdown } from "./chat-markdown";
@@ -251,6 +256,10 @@ export function ChatMessageBubble({
   agentName,
   onRetry,
   onCancel,
+  onEditMessage,
+  onResendMessage,
+  onRegenerateFromMessage,
+  onForkFromMessage,
 }: {
   msg: ChatMessageRow;
   agentName?: string;
@@ -258,6 +267,14 @@ export function ChatMessageBubble({
   onRetry?: () => void;
   /** Cancel a queued / sending / failed optimistic send (USER bubbles). */
   onCancel?: () => void;
+  /** Fill the composer with this message for editing. */
+  onEditMessage?: (body: string) => void;
+  /** Send this user message again as a new turn. */
+  onResendMessage?: (body: string) => void;
+  /** Regenerate the nearest preceding user turn for an agent response. */
+  onRegenerateFromMessage?: () => void;
+  /** Create a new conversation containing history through this message. */
+  onForkFromMessage?: () => void;
 }) {
   const isUser = msg.role === "USER";
   const isSystem = msg.role === "SYSTEM";
@@ -278,6 +295,44 @@ export function ChatMessageBubble({
       </div>
     );
   }
+  const persisted = !msg.isDraft && !msg.id.startsWith("_");
+  const hasCopyableBody = msg.body.trim().length > 0;
+  const copyBody = async () => {
+    try {
+      await navigator.clipboard.writeText(msg.body);
+      toast.success("Message copied");
+    } catch {
+      toast.error("Could not copy message");
+    }
+  };
+  const actionButtons =
+    persisted && hasCopyableBody ? (
+      <span className="inline-flex items-center gap-0.5">
+        <MessageActionButton title="Copy message" onClick={copyBody}>
+          <Copy className="h-3 w-3" />
+        </MessageActionButton>
+        {isUser && onEditMessage && (
+          <MessageActionButton title="Edit in composer" onClick={() => onEditMessage(msg.body)}>
+            <PencilLine className="h-3 w-3" />
+          </MessageActionButton>
+        )}
+        {isUser && onResendMessage && (
+          <MessageActionButton title="Send again" onClick={() => onResendMessage(msg.body)}>
+            <RefreshCw className="h-3 w-3" />
+          </MessageActionButton>
+        )}
+        {!isUser && onRegenerateFromMessage && (
+          <MessageActionButton title="Regenerate response" onClick={onRegenerateFromMessage}>
+            <RotateCcw className="h-3 w-3" />
+          </MessageActionButton>
+        )}
+        {onForkFromMessage && (
+          <MessageActionButton title="Fork conversation from here" onClick={onForkFromMessage}>
+            <GitFork className="h-3 w-3" />
+          </MessageActionButton>
+        )}
+      </span>
+    ) : null;
   return (
     <div className={cn("flex items-start gap-2", isUser && "flex-row-reverse")}>
       <span
@@ -322,22 +377,47 @@ export function ChatMessageBubble({
         )}
         {!msg.isDraft && <ChatMessageAttachments messageId={msg.id} />}
         <div className="mt-0.5 flex items-center justify-between gap-2 text-[0.5625rem] text-muted-foreground/60">
-          {isUser ? (
-            <MessageReceipt msg={msg} onRetry={onRetry} onCancel={onCancel} />
-          ) : !msg.isDraft && !msg.id.startsWith("_") ? (
-            <PromoteToArtifactButton
-              sourceType="chat-message"
-              sourceId={msg.id}
-              defaultTitle={msg.body.slice(0, 60)}
-              size="icon"
-            />
-          ) : (
-            <span />
-          )}
+          <span className="inline-flex min-w-0 items-center gap-1">
+            {isUser ? (
+              <MessageReceipt msg={msg} onRetry={onRetry} onCancel={onCancel} />
+            ) : persisted ? (
+              <PromoteToArtifactButton
+                sourceType="chat-message"
+                sourceId={msg.id}
+                defaultTitle={msg.body.slice(0, 60)}
+                size="icon"
+              />
+            ) : (
+              <span />
+            )}
+            {actionButtons}
+          </span>
           <span>{relativeTime(msg.createdAt)}</span>
         </div>
       </div>
     </div>
+  );
+}
+
+function MessageActionButton({
+  title,
+  onClick,
+  children,
+}: {
+  title: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className="inline-flex h-4 w-4 items-center justify-center rounded border border-border/50 bg-background/40 text-muted-foreground transition-colors hover:border-ember/40 hover:bg-ember/10 hover:text-foreground"
+    >
+      {children}
+    </button>
   );
 }
 

@@ -64,6 +64,7 @@ function streamErrorMessage(err: unknown, fallback: string): string {
 interface RequestBody {
   threadId: string;
   body: string;
+  context?: unknown;
   attachments?: string[];
   /** Optional cuid — the canvas the operator is currently viewing.
    * Validated to belong to the same workspace as the thread before
@@ -73,6 +74,11 @@ interface RequestBody {
    * attachment uploads. Deleted server-side after we re-target the
    * uploads at the real USER row this route persists. */
   pendingMessageId?: string;
+}
+
+function readContextSnapshot(value: unknown): Prisma.InputJsonObject {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Prisma.InputJsonObject;
 }
 
 export async function POST(req: NextRequest) {
@@ -99,6 +105,7 @@ export async function POST(req: NextRequest) {
   if (body.length > 8000) {
     return NextResponse.json({ error: "body exceeds 8000 chars" }, { status: 400 });
   }
+  const contextSnapshot = readContextSnapshot(parsed.context);
   const canvasId =
     typeof parsed.canvasId === "string" && parsed.canvasId.length > 0 ? parsed.canvasId : null;
 
@@ -253,7 +260,7 @@ export async function POST(req: NextRequest) {
         threadId: thread.id,
         role: ChatRole.USER,
         body,
-        contextSnapshot: {} as never,
+        contextSnapshot,
         dispatchedAt: now,
       },
     });
@@ -295,6 +302,7 @@ export async function POST(req: NextRequest) {
         agentId: agent.id,
         role: "USER",
         body,
+        context: contextSnapshot,
         streamed: true,
         attachments: attachmentRows.map((a) => ({
           id: a.id,
