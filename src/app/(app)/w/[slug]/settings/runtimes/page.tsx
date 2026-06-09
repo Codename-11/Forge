@@ -355,7 +355,11 @@ export default function RuntimesPage() {
                         )}
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <RuntimeToolSurfaceBadges adapterKey={rt.adapterKey} config={rt.config} />
+                        <RuntimeToolSurfaceBadges
+                          adapterKey={rt.adapterKey}
+                          config={rt.config}
+                          configStatus={rt.configStatus}
+                        />
                         <AdapterCapabilityBadges capabilities={adapter?.capabilities} />
                       </div>
                     </div>

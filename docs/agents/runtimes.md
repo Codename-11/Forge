@@ -113,6 +113,14 @@ forge runtimes configure <runtimeId> \
 Code/repo issue preflight uses this declaration to decide whether Wake/Kick is
 likely to help or whether the work should move to a local-tool runtime.
 
+Forge validates stored runtime config against the current adapter schema when it
+builds runtime lists and the Mission Control compliance scorecard. Rows written
+by older builds, direct SQL, or external tools surface as `config-mismatch`,
+`legacy config`, or `unknown adapter` until an operator re-saves the runtime or
+fixes the adapter key. This is intentionally diagnostic: valid config stays
+quiet, while stale config appears beside the runtime's tool-surface badges and
+as a compliance signal for bound agents.
+
 For Codex app-server, the same runtime config also carries the per-turn sandbox
 policy. Setting `workspaceRoot` is the important bit: Forge sends it as the
 Codex turn `cwd`, and the UI saves `localWorkspaceTools` plus

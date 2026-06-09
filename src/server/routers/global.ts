@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { router, globalProcedure } from "@/server/trpc";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
+import { runtimeConfigStatus } from "@/server/services/runtime-config";
 
 /**
  * Cross-workspace, read-only aggregations for the global "concourse"
@@ -201,6 +202,7 @@ export const globalRouter = router({
         lastProbeReachable: r.lastProbeReachable,
         lastProbeDetail: r.lastProbeDetail,
         health,
+        configStatus: runtimeConfigStatus(r.adapterKey, r.config),
         connectedAt: r.connectedAt,
         registeredAt: r.createdAt,
         online: health.kind === "online",
