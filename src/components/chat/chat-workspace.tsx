@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
+import { HoverPreviewPortal } from "@/components/ui/hover-preview-portal";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ChatThreadView } from "@/components/mission-control/chat-thread";
 import { trpc } from "@/lib/trpc";
@@ -116,18 +117,28 @@ type CollapsedRailThread = {
   } | null;
 };
 
-function collapsedThreadTooltip(thread: CollapsedRailThread): string {
+function latestMessageLabel(role: string | undefined): string {
+  switch (role) {
+    case "USER":
+      return "Latest prompt";
+    case "ASSISTANT":
+      return "Latest reply";
+    case "TOOL":
+      return "Latest tool note";
+    case "SYSTEM":
+      return "Latest system note";
+    default:
+      return "Latest message";
+  }
+}
+
+function collapsedThreadLabel(thread: CollapsedRailThread): string {
   const latest = thread.latestMessage;
   const meta = statusMeta({ agent: thread.agent, latestMessage: latest });
-  const attachment =
-    latest?.attachmentCount && latest.attachmentCount > 0
-      ? ` · ${latest.attachmentCount} ${latest.hasImageAttachment ? "image/file" : "file"}`
-      : "";
   return [
     conversationTitle(thread),
     `${thread.agent.name} · @${thread.agent.profileKey}`,
-    truncate(latest?.body, latest?.attachmentCount ? "Attachment prompt" : "No messages yet"),
-    `${meta.label} · ${relativeTime(thread.lastMessageAt)}${attachment}`,
+    `${meta.label} · ${relativeTime(thread.lastMessageAt)}`,
   ].join(" | ");
 }
 
@@ -144,6 +155,72 @@ function collapsedStatusClass(tone: ReturnType<typeof statusMeta>["tone"]): stri
   }
 }
 
+function CollapsedThreadPreview({ thread }: { thread: CollapsedRailThread }) {
+  const latest = thread.latestMessage;
+  const meta = statusMeta({ agent: thread.agent, latestMessage: latest });
+  const attachmentCount = latest?.attachmentCount ?? 0;
+  const attachmentLabel =
+    attachmentCount > 0
+      ? `${attachmentCount} ${latest?.hasImageAttachment ? "image/file" : "file"}${
+          attachmentCount === 1 ? "" : "s"
+        }`
+      : null;
+  return (
+    <div className="p-3" data-testid="collapsed-chat-preview">
+      <div className="flex items-start gap-2">
+        <AgentAvatar agent={thread.agent} size="sm" shape="rounded" title={null} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold text-foreground">
+            {conversationTitle(thread)}
+          </div>
+          <div className="text-meta mt-0.5 flex min-w-0 items-center gap-1 text-muted-foreground">
+            <span className="truncate">{thread.agent.name}</span>
+            <span className="text-id shrink-0">@{thread.agent.profileKey}</span>
+          </div>
+        </div>
+        <span
+          className={cn(
+            "shrink-0 rounded-full px-1.5 py-0.5 text-[0.625rem] uppercase tracking-wider",
+            meta.tone === "green"
+              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              : meta.tone === "ember"
+                ? "bg-ember/15 text-ember"
+                : meta.tone === "sky"
+                  ? "bg-sky-500/10 text-sky-600 dark:text-sky-400"
+                  : "bg-subtle text-muted-foreground",
+          )}
+        >
+          {meta.label}
+        </span>
+      </div>
+      <div className="mt-3 rounded-md border border-border/70 bg-background/55 p-2">
+        <div className="text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground/70">
+          {latest ? latestMessageLabel(latest.role) : "No messages"}
+        </div>
+        <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-foreground/90">
+          {truncate(latest?.body, attachmentLabel ? "Attachment prompt" : "No messages yet")}
+        </p>
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2 text-[0.6875rem] text-muted-foreground">
+        <span className="flex min-w-0 items-center gap-1">
+          <Clock3 className="h-3 w-3 shrink-0" />
+          <span className="truncate">{relativeTime(thread.lastMessageAt)}</span>
+        </span>
+        {attachmentLabel ? (
+          <span className="flex shrink-0 items-center gap-1">
+            {latest?.hasImageAttachment ? (
+              <ImageIcon className="h-3 w-3" />
+            ) : (
+              <Paperclip className="h-3 w-3" />
+            )}
+            {attachmentLabel}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function CollapsedConversationRail({
   threads,
   selectedThreadId,
@@ -157,7 +234,10 @@ function CollapsedConversationRail({
 }) {
   const visibleThreads = threads.slice(0, 8);
   return (
-    <aside className="hidden w-11 shrink-0 flex-col items-center border-r border-border/70 bg-card/30 py-2 md:flex">
+    <aside
+      className="hidden w-11 shrink-0 flex-col items-center border-r border-border/70 bg-card/30 py-2 md:flex"
+      data-testid="collapsed-conversation-rail"
+    >
       <Tooltip content="Show conversations">
         <button
           type="button"
@@ -176,11 +256,17 @@ function CollapsedConversationRail({
             const latest = thread.latestMessage;
             const meta = statusMeta({ agent: thread.agent, latestMessage: latest });
             return (
-              <Tooltip key={thread.id} content={collapsedThreadTooltip(thread)}>
+              <HoverPreviewPortal
+                key={thread.id}
+                className="block"
+                widthPx={300}
+                render={() => <CollapsedThreadPreview thread={thread} />}
+              >
                 <button
                   type="button"
                   onClick={() => onOpenThread(thread.id, thread.agent.id)}
-                  aria-label={conversationTitle(thread)}
+                  aria-label={collapsedThreadLabel(thread)}
+                  data-testid="collapsed-chat-thread"
                   className={cn(
                     "group relative flex h-9 w-9 items-center justify-center rounded-lg border transition-colors",
                     active
@@ -215,7 +301,7 @@ function CollapsedConversationRail({
                     </span>
                   ) : null}
                 </button>
-              </Tooltip>
+              </HoverPreviewPortal>
             );
           })
         ) : (
