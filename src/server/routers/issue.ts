@@ -11,6 +11,7 @@ import {
 } from "@/server/services/dispatcher";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
+import { createIssueWithSideEffects } from "@/server/services/issue-create";
 import {
   abandonRunsForAgentReassignment,
   finishRunsForIssue,
@@ -19,7 +20,6 @@ import {
 import { runtimePreflightForIssue } from "@/server/services/runtime-preflight";
 import { runProtocolDiagnostics } from "@/server/services/run-protocol-diagnostics";
 import {
-  autoWatchActor,
   autoWatchAgent,
   autoWatchUser,
   setIssueAgentWakeTarget,
@@ -851,205 +851,47 @@ export const issueRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      return ctx.db.$transaction(async (tx) => {
-        const status = input.statusId
-          ? await tx.status.findFirstOrThrow({
-              where: { id: input.statusId, workspaceId: ctx.workspaceId },
-            })
-          : await tx.status.findFirstOrThrow({
-              where: { workspaceId: ctx.workspaceId, isDefault: true },
-            });
+      const { applyCommands, ...createInput } = input;
+      const issue = await createIssueWithSideEffects({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+        input: createInput,
+      });
 
-        let assignedAgentForCreate: {
-          profileKey: string;
-          engagementMode: EngagementMode | null;
-        } | null = null;
-
-        // Cross-tenant guard: agent must live in this workspace.
-        if (input.assignedAgentId) {
-          const agent = await tx.agent.findFirst({
-            where: { id: input.assignedAgentId, workspaceId: ctx.workspaceId },
-            select: { profileKey: true, engagementMode: true },
-          });
-          if (!agent) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "Agent not found in this workspace.",
-            });
-          }
-          assignedAgentForCreate = agent;
-        }
-
-        const last = await tx.issue.findFirst({
-          where: { workspaceId: ctx.workspaceId },
-          orderBy: { number: "desc" },
-          select: { number: true },
-        });
-        const number = (last?.number ?? 0) + 1;
-
-        const issue = await tx.issue.create({
-          data: {
-            workspaceId: ctx.workspaceId,
-            number,
-            kind: input.kind,
-            title: input.title,
-            description: input.description,
-            projectId: input.projectId,
-            parentId: input.parentId,
-            statusId: status.id,
-            priority: input.priority,
-            authorId: ctx.session.user.id,
-            assignedAgentId: input.assignedAgentId,
-            dueDate: input.dueDate,
-            estimate: input.estimate,
-            slaMinutes: input.slaMinutes,
-            assignees: {
-              create: input.assigneeIds.map((userId) => ({ userId })),
-            },
-            labels: {
-              create: input.labelIds.map((labelId) => ({ labelId })),
-            },
-          },
-          include: { status: true, assignees: true, labels: true },
-        });
-        // Auto-watch on create. The author (or authoring agent) is the
-        // de-facto first watcher — every modern PM tool does this. When
-        // the create comes via an agent-linked API key we watch the
-        // agent instead; system-created issues (no actor) skip.
-        await autoWatchActor(tx, {
+      // Apply slash commands AFTER the create transaction commits, so
+      // a missing label or unknown agent doesn't roll the issue back.
+      // Each step has its own small transaction (assign also writes
+      // an AGENT_ASSIGNED event) — see `applySlashCommandsToIssue`.
+      let commandResults:
+        | Array<{ kind: string; status: "applied" | "skipped"; reason?: string }>
+        | undefined;
+      if (applyCommands && applyCommands.length > 0) {
+        commandResults = await applySlashCommandsToIssue({
+          db: ctx.db,
           workspaceId: ctx.workspaceId,
           issueId: issue.id,
-          userId: ctx.session.user.id,
-          callerAgentId: ctx.apiKey?.linkedAgentId ?? null,
-        });
-        // Human assignees specified at create time are auto-watched too,
-        // so they get the post-create event fan-out (status changes,
-        // comments) without having to manually click WatchButton.
-        for (const userId of input.assigneeIds) {
-          await autoWatchUser(tx, {
-            workspaceId: ctx.workspaceId,
-            issueId: issue.id,
-            userId,
-          });
-        }
-        // Pre-assigned agent at create time also becomes the issue's
-        // activity-wake target. The watcher row stays visible, while
-        // wake fan-out is explicit.
-        if (input.assignedAgentId) {
-          await setIssueAgentWakeTarget(tx, {
-            workspaceId: ctx.workspaceId,
-            issueId: issue.id,
-            agentId: input.assignedAgentId,
-          });
-        }
-
-        await recordChange(tx, {
-          workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
-          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
-          entity: "Issue",
-          entityId: issue.id,
-          action: "create",
-          after: issue,
-          eventKind: EventKind.ISSUE_CREATED,
-          subjectType: "issue",
-          subjectId: issue.id,
-          payload: { number: issue.number, title: issue.title },
+          callerAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          commands: applyCommands,
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
-        if (input.assignedAgentId) {
-          // Stamp a manual `dispatchReason` blob so the attribution
-          // chip can render even when an operator picked the agent
-          // directly (rather than the auto-dispatcher).
-          const reasonBlob = await recordManualDispatchReason(tx, {
-            issueId: issue.id,
-            agentProfileKey: assignedAgentForCreate?.profileKey ?? input.assignedAgentId,
-            actorId: ctx.session.user.id,
-          });
-          const { resolveEngagementMode } = await import(
-            "@/server/services/engagement-mode"
-          );
-          const ws = await tx.workspace.findUniqueOrThrow({
-            where: { id: ctx.workspaceId },
-            select: {
-              assignmentEngagementMode: true,
-              mentionEngagementPolicy: true,
-              mentionDefaultMode: true,
-            },
-          });
-          const engagementMode = resolveEngagementMode({
-            surface: "assignment",
-            explicit: null,
-            workspace: {
-              ...ws,
-              assignmentAgentEngagementMode:
-                assignedAgentForCreate?.engagementMode ?? null,
-            },
-          }).mode;
-          await recordChange(tx, {
-            workspaceId: ctx.workspaceId,
-            actorId: ctx.session.user.id,
-            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
-            entity: "Issue",
-            entityId: issue.id,
-            action: "assign-agent",
-            after: { assignedAgentId: input.assignedAgentId },
-            eventKind: EventKind.AGENT_ASSIGNED,
-            subjectType: "issue",
-            subjectId: issue.id,
-            payload: {
-              agentId: input.assignedAgentId,
-              previousAgentId: null,
-              dispatchReason: reasonBlob,
-              engagementMode,
-            },
-            ip: ctx.ip,
-            userAgent: ctx.userAgent,
-          });
-          // Apply the agent's template if the description is empty. No-op
-          // when the caller supplied a description or the agent has no
-          // template configured.
-          await maybeApplyAgentTemplate(tx, issue.id, input.assignedAgentId);
-        }
-        // `maybeAutoDispatch` handles its own template application when it
-        // picks an agent — no need to double-call from here.
-        await maybeAutoDispatch(tx, issue.id);
-        return issue;
-      }).then(async (issue) => {
-        // Apply slash commands AFTER the create transaction commits, so
-        // a missing label or unknown agent doesn't roll the issue back.
-        // Each step has its own small transaction (assign also writes
-        // an AGENT_ASSIGNED event) — see `applySlashCommandsToIssue`.
-        let commandResults:
-          | Array<{ kind: string; status: "applied" | "skipped"; reason?: string }>
-          | undefined;
-        if (input.applyCommands && input.applyCommands.length > 0) {
-          commandResults = await applySlashCommandsToIssue({
-            db: ctx.db,
-            workspaceId: ctx.workspaceId,
-            issueId: issue.id,
-            actorId: ctx.session.user.id,
-            callerAgentId: ctx.apiKey?.linkedAgentId ?? null,
-            commands: input.applyCommands,
-            ip: ctx.ip,
-            userAgent: ctx.userAgent,
-          });
-        }
-        // Fire-and-forget AI triage. Skipped server-side when AI is off
-        // or already-triaged. Runs out-of-band so create stays sub-100ms
-        // even when the LLM call takes seconds. We don't await — clients
-        // poll via the issue.byId query (toaster/realtime invalidation
-        // surfaces the chip when ready).
-        if (!ctx.apiKey) {
-          // Only auto-triage human-authored issues. Skip when an agent
-          // creates an issue via API key (saves cost on bulk creates).
-          void triageIssue(issue.id);
-        }
-        return commandResults
-          ? { ...issue, commandResults }
-          : issue;
-      });
+      }
+      // Fire-and-forget AI triage. Skipped server-side when AI is off
+      // or already-triaged. Runs out-of-band so create stays sub-100ms
+      // even when the LLM call takes seconds. We don't await — clients
+      // poll via the issue.byId query (toaster/realtime invalidation
+      // surfaces the chip when ready).
+      if (!ctx.apiKey) {
+        // Only auto-triage human-authored issues. Skip when an agent
+        // creates an issue via API key (saves cost on bulk creates).
+        void triageIssue(issue.id);
+      }
+      return commandResults ? { ...issue, commandResults } : issue;
     }),
 
   update: workspaceProcedure

@@ -546,6 +546,7 @@ model User {
   agentProfiles          AgentProfile[]
   requestedAgentProfiles AgentProfile[] @relation("AgentProfileRequester")
   connections            Connection[]
+  externalResourceLinks  ExternalResourceLink[] @relation("ExternalResourceLinkCreator")
 
   authoredIssues          Issue[]                  @relation("IssueAuthor")
   assignedIssues          IssueAssignee[]
@@ -825,6 +826,9 @@ model Workspace {
   runtimes                Runtime[]
   providerCredentials     ProviderCredential[]
   connectionMappings      ConnectionMapping[]
+  externalResources       ExternalResource[]
+  externalResourceLinks   ExternalResourceLink[]
+  externalWebhookEvents   ExternalWebhookEvent[]
   pins                    Pin[]
   recentItems             RecentItem[]
   notes                   Note[]
@@ -1047,6 +1051,7 @@ model Issue {
   executionSteps ExecutionStep[] @relation("ExecutionStepIssue")
   goals          Goal[]
   actionRequests ActionRequest[]
+  externalLinks  ExternalResourceLink[]
 
   @@unique([workspaceId, number])
   @@index([workspaceId, statusId])
@@ -1862,9 +1867,104 @@ model ConnectionMapping {
 
   workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  externalResources ExternalResource[]
 
   @@index([workspaceId])
   @@index([connectionId])
+}
+
+/// Workspace-scoped snapshot of an object in an external work system.
+/// GitHub is the first provider; the table stays provider-generic so
+/// future integrations can reuse the identity/link/sync layer without
+/// adding a parallel model per vendor.
+model ExternalResource {
+  id                  String   @id @default(cuid())
+  workspaceId         String
+  /// Provider key, e.g. "GITHUB".
+  provider            String
+  /// Optional repo/channel/webhook mapping that supplied this resource.
+  connectionMappingId String?
+  /// Provider object type, e.g. "ISSUE" or "PULL_REQUEST".
+  resourceType        String
+  /// Repository full name for GitHub resources (`owner/name`).
+  repoFullName        String
+  /// Provider numeric id, stored as string because providers differ.
+  externalId          String?
+  /// Provider stable node id when available.
+  externalNodeId      String?
+  number              Int
+  url                 String
+  apiUrl              String?
+  title               String
+  /// Provider state snapshot (`open`, `closed`, `merged`, `draft`, ...).
+  state               String
+  authorLogin         String?
+  labels              Json?
+  assignees           Json?
+  /// Bounded provider-specific metadata such as PR checks/review state.
+  metadata            Json?
+  externalCreatedAt   DateTime?
+  externalUpdatedAt   DateTime?
+  lastSyncedAt        DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connectionMapping ConnectionMapping? @relation(fields: [connectionMappingId], references: [id], onDelete: SetNull)
+  links             ExternalResourceLink[]
+
+  @@unique([workspaceId, provider, repoFullName, resourceType, number])
+  @@index([workspaceId, provider, repoFullName])
+  @@index([workspaceId, provider, externalNodeId])
+  @@index([connectionMappingId])
+}
+
+/// Join between a Forge issue and an external resource. The link kind is
+/// intentionally a string so integrations can add new semantics without
+/// forcing a core enum migration for every provider-specific relation.
+model ExternalResourceLink {
+  id                 String   @id @default(cuid())
+  workspaceId        String
+  issueId            String
+  externalResourceId String
+  /// SOURCE | IMPLEMENTS | REVIEWS | RELATES_TO.
+  kind               String
+  createdById        String?
+  createdAt          DateTime @default(now())
+
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue            Issue            @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  externalResource ExternalResource @relation(fields: [externalResourceId], references: [id], onDelete: Cascade)
+  createdBy        User?            @relation("ExternalResourceLinkCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([issueId, externalResourceId, kind])
+  @@index([workspaceId, issueId])
+  @@index([workspaceId, externalResourceId])
+  @@index([createdById])
+}
+
+/// Inbound external webhook idempotency and diagnostics. For GitHub this
+/// stores `X-GitHub-Delivery` plus event/action so redeliveries can be
+/// acknowledged without duplicating Forge side effects.
+model ExternalWebhookEvent {
+  id                 String    @id @default(cuid())
+  workspaceId        String?
+  provider           String
+  deliveryId         String
+  event              String
+  action             String?
+  repoFullName       String?
+  externalResourceId String?
+  status             String
+  error              String?   @db.Text
+  receivedAt         DateTime  @default(now())
+  processedAt        DateTime?
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, deliveryId])
+  @@index([workspaceId, status, receivedAt])
+  @@index([provider, repoFullName])
 }
 
 // ----------------------------------------------------------------------------

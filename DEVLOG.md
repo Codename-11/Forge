@@ -8914,3 +8914,55 @@ master too (shared/drifted local DB from the parallel session) — unrelated to 
 work. typecheck + lint clean. Committed 9aa542d; deployed live (stamped
 GIT_SHA=9aa542d). Migration 0068 applied cleanly to prod — prod enum now
 EPIC,ISSUE,TASK; Next.js Ready.
+
+---
+
+## 2026-06-09 — GitHub support integration plan
+
+Bailey chose the GitHub support direction: implement phases 1-4, defer GitHub
+writeback, prefer GitHub App installation, and include MCP support. Added
+`docs/plans/github-support-integration.md` as an execution-ready plan.
+
+Key decisions captured: native first-party integration rather than plugin-only;
+GitHub App installation as primary durable auth; generic `ExternalResource` /
+`ExternalResourceLink` / `ExternalWebhookEvent` layer for idempotent import,
+linking, webhook dedupe, and PR state; per-repo policy in
+`ConnectionMapping.config`; `github.*` MCP tools gated by existing issue scopes;
+linked resources included in `agent.context.bundle`; no GitHub mutation/writeback
+calls in this phase.
+
+No code changes. Docs-only planning pass; tests not run.
+
+---
+
+## 2026-06-09 — GitHub support integration phases 1-4
+
+Implemented the GitHub App-backed integration from
+`docs/plans/github-support-integration.md`; GitHub writeback remains deferred.
+
+- **External resource layer**: added `ExternalResource`,
+  `ExternalResourceLink`, and `ExternalWebhookEvent` plus migration 0078 for
+  durable GitHub issue/PR snapshots, Forge issue links, and webhook dedupe.
+- **Shared issue creation**: extracted `createIssueWithSideEffects()` so UI,
+  MCP, GitHub import, and webhook auto-create all share status defaults,
+  labels, watchers, audit/events, agent assignment, and auto-dispatch behavior.
+- **GitHub services/routes**: added GitHub App JWT/install-token auth,
+  read-only issue/PR/repo/search clients, URL parsing, mapping policy,
+  link/import/sync services, setup/install routes, and signed webhook ingest
+  for issues, comments, PRs, reviews, check suites, and check runs.
+- **Product UI**: global/workspace GitHub App install actions; repo mapping
+  policy controls for auto-create, queueing, defaults, comment mirroring, and
+  status rules; per-mapping GitHub issue import; issue-detail GitHub link/sync
+  rail; connection catalog copy updated from placeholder to live integration.
+- **MCP/docs**: added `github.parseUrl`, `github.listLinked`, `github.link`,
+  `github.importIssue`, `github.sync`, and `github.search`; included linked
+  GitHub resources in `agent.context.bundle`; updated env, connections, and MCP
+  references.
+
+Verification: `DATABASE_URL=postgresql://user:pass@localhost:5432/forge pnpm exec
+prisma validate` pass; `DATABASE_URL=postgresql://user:pass@localhost:5432/forge
+pnpm prisma:generate` pass; `pnpm lint` clean; `pnpm typecheck` pass;
+`pnpm test tests/unit/github-support.test.ts` pass (3). Full `pnpm test` was
+attempted but the local shell has no `DATABASE_URL`/`AUTH_SECRET` and no test
+Redis wiring, so DB-backed suites failed during Prisma/env initialization rather
+than GitHub-specific assertions.

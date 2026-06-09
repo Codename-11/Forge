@@ -1,6 +1,6 @@
 # MCP Tools
 
-Forge exposes 70 tools across 19 namespaces. Two transports — JSON-RPC 2.0 at
+Forge exposes a workspace-scoped tool catalog across multiple namespaces. Two transports — JSON-RPC 2.0 at
 `POST /api/mcp/rpc` (preferred for agent clients) and REST aliases at
 `POST /api/mcp/<tool>`. Both are gated by the same API-key auth and the same
 scope/narrowing checks.
@@ -189,6 +189,28 @@ capped at 20 entries — oldest dropped first). Read history via
 | `listForIssue` | List both inbound and outbound relations for an issue.           |
 
 `kind` is one of `BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `RELATES_TO`.
+
+### `github`
+
+GitHub App-backed issue/PR context. These tools read from GitHub through the
+workspace's active `ConnectionMapping(kind="repo")` and only mutate Forge
+state. They do not comment on GitHub, close GitHub issues, edit PRs, or apply
+GitHub labels.
+
+| Tool | Summary |
+|---|---|
+| `parseUrl` | Parse a GitHub issue/PR URL into `{ owner, repo, repoFullName, type, number, url }`. Scope: `READ_ISSUES`. |
+| `listLinked` | List GitHub resources linked to a Forge issue. Scope: `READ_ISSUES`. |
+| `link` | Link a GitHub issue or PR URL to an existing Forge issue with `kind: SOURCE \| IMPLEMENTS \| REVIEWS \| RELATES_TO`. Scope: `WRITE_ISSUES`. |
+| `importIssue` | Create or return the Forge issue sourced from a mapped GitHub issue number. Scope: `WRITE_ISSUES`. |
+| `sync` | Refresh a linked GitHub resource snapshot and apply configured Forge status/title rules. Scope: `WRITE_ISSUES`. |
+| `search` | Search issues/PRs within a mapped repository. Scope: `READ_ISSUES`. |
+
+`importIssue` input accepts `{ mappingId?, repoFullName?, number, projectId?,
+labelIds?, queue? }`; pass either `mappingId` or a repo full name that has an
+active mapping. The returned shape includes `{ issueId, created, resource,
+link }` so clients can navigate to an existing issue when the GitHub issue was
+already imported.
 
 ### `time`
 
@@ -613,7 +635,7 @@ round-trips on dispatch — bundles workspace + issue (or thread) + comments
 
 | Tool | Summary |
 |---|---|
-| `context.bundle` | `{ issueId? }` xor `{ threadId? }`. For `issueId`: returns `{ workspace, issue (full row), description, comments (last 50), attachments, relations, currentRun, artifacts, completionContract, runProtocol }`. `runProtocol` includes `{ contractVersion, runId, engagementMode, modeInstruction, protocolInstruction, mayMutateIssue }` so agents can ack/output-start/complete the correct run and know whether issue mutations are allowed. For `threadId`: returns `{ workspace, thread, messages (last 50), agent (peer summary), linkedIssues (any issues mentioned in messages' contextSnapshots) }`. Addressee gating mirrors `chat.getThread` for the threadId branch; issue-narrowing applies for the issueId branch. |
+| `context.bundle` | `{ issueId? }` xor `{ threadId? }`. For `issueId`: returns `{ workspace, issue (full row), description, comments (last 50), attachments, relations, currentRun, artifacts, completionContract, runProtocol, externalResources }`. `externalResources` contains linked GitHub issues/PRs with their link kind and latest local snapshot. `runProtocol` includes `{ contractVersion, runId, engagementMode, modeInstruction, protocolInstruction, mayMutateIssue }` so agents can ack/output-start/complete the correct run and know whether issue mutations are allowed. For `threadId`: returns `{ workspace, thread, messages (last 50), agent (peer summary), linkedIssues (any issues mentioned in messages' contextSnapshots) }`. Addressee gating mirrors `chat.getThread` for the threadId branch; issue-narrowing applies for the issueId branch. |
 
 ## Not on MCP
 
