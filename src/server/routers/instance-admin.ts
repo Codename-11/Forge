@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { CycleStatus, InstanceRole, Role } from "@prisma/client";
 import { router, instanceAdminProcedure } from "@/server/trpc";
 import { ensureWorkspaceBucket } from "@/server/services/storage";
+import { runtimeConfigStatus } from "@/server/services/runtime-config";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 
 const slugSchema = z
@@ -127,6 +128,7 @@ export const instanceAdminRouter = router({
       return {
         ...r,
         health,
+        configStatus: runtimeConfigStatus(r.adapterKey, r.config),
         online: health.kind === "online",
         boundAgents: r._count.agents,
       };

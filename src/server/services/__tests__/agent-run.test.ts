@@ -534,6 +534,37 @@ describe("agent-run lifecycle", () => {
     );
   });
 
+  it("runtimeCompliance reports stale runtime config that no longer validates", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARC" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Hermes stale config",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "hermes",
+        endpoint: "http://127.0.0.1:8642/v1",
+        config: { toolCapabilities: ["shell"] },
+      },
+    });
+    const agent = await createAgent(fixture.workspace.id, "arc-a1");
+    await prisma.agent.update({
+      where: { id: agent.id },
+      data: { runtimeId: runtime.id },
+    });
+    const caller = agentRunRouter.createCaller(await buildContext(fixture));
+
+    const scorecard = await caller.runtimeCompliance();
+    const card = scorecard.agents.find((row) => row.agentId === agent.id);
+    expect(card?.signals.map((signal) => signal.code)).toEqual(
+      expect.arrayContaining(["config-mismatch"]),
+    );
+    expect(card?.signals.find((signal) => signal.code === "config-mismatch")?.detail).toMatch(
+      /current Hermes adapter schema/i,
+    );
+  });
+
   it("abandons only the previous assignee run on reassignment", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "ARR" });
     fixtures.push(fixture);

@@ -7,6 +7,7 @@ import {
   type RuntimeToolCapability,
 } from "@/lib/runtime-tools";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
+import { runtimeConfigStatus } from "@/server/services/runtime-config";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { listRunRecoveryItems } from "@/server/services/agent-run-recovery";
 
@@ -108,7 +109,16 @@ function runtimeSignals(runtime: RuntimeRow | null): RuntimeComplianceSignal[] {
 
   const health = deriveRuntimeHealthStatus(runtime);
   const surface = runtimeToolSurface(runtime.adapterKey, runtime.config);
+  const configStatus = runtimeConfigStatus(runtime.adapterKey, runtime.config);
   const signals: RuntimeComplianceSignal[] = [];
+  if (!configStatus.ok && configStatus.tone !== "muted") {
+    signals.push({
+      code: configStatus.code,
+      tone: configStatus.tone,
+      label: configStatus.label,
+      detail: configStatus.detail,
+    });
+  }
   if (health.tone === "danger") {
     signals.push({
       code: `runtime-${health.kind}`,

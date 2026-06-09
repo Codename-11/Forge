@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   CheckCircle2,
   FolderOpen,
   GitBranch,
@@ -41,18 +42,61 @@ function ToolChip({ tool }: { tool: RuntimeToolCapability }) {
   );
 }
 
+export type RuntimeConfigStatusLike = {
+  ok: boolean;
+  code: string;
+  tone: "ok" | "warning" | "danger" | "muted";
+  label: string;
+  detail: string;
+};
+
+export function RuntimeConfigStatusBadge({
+  status,
+}: {
+  status: RuntimeConfigStatusLike | null | undefined;
+}) {
+  if (!status || status.ok) return null;
+  const Icon =
+    status.tone === "danger" || status.tone === "warning"
+      ? AlertTriangle
+      : ShieldAlert;
+  const toneClass =
+    status.tone === "ok"
+      ? "border-success/30 bg-success/10 text-success"
+      : status.tone === "danger"
+        ? "border-danger/30 bg-danger/10 text-danger"
+        : status.tone === "warning"
+          ? "border-warning/30 bg-warning/10 text-warning"
+          : "border-border bg-subtle/40 text-muted-foreground";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+        toneClass,
+      )}
+      title={status.detail}
+    >
+      <Icon className="h-3 w-3" />
+      {status.label}
+    </span>
+  );
+}
+
 export function RuntimeToolSurfaceBadges({
   adapterKey,
   config,
+  configStatus,
   className,
 }: {
   adapterKey: string | null | undefined;
   config: unknown;
+  configStatus?: RuntimeConfigStatusLike | null;
   className?: string;
 }) {
   const surface = runtimeToolSurface(adapterKey, config);
   return (
     <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
+      <RuntimeConfigStatusBadge status={configStatus} />
       <span
         className={cn(
           "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
@@ -183,9 +227,11 @@ export function RuntimePolicyBadges({
 export function RuntimeToolSurfacePanel({
   adapterKey,
   config,
+  configStatus,
 }: {
   adapterKey: string | null | undefined;
   config: unknown;
+  configStatus?: RuntimeConfigStatusLike | null;
 }) {
   const surface = runtimeToolSurface(adapterKey, config);
   const declared = new Set(surface.capabilities);
@@ -200,7 +246,11 @@ export function RuntimeToolSurfacePanel({
             {surface.label}
           </div>
         </div>
-        <RuntimeToolSurfaceBadges adapterKey={adapterKey} config={config} />
+        <RuntimeToolSurfaceBadges
+          adapterKey={adapterKey}
+          config={config}
+          configStatus={configStatus}
+        />
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-3">
         {RUNTIME_TOOL_CAPABILITIES.map((tool) => {

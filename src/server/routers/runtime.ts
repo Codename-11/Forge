@@ -13,7 +13,7 @@ import {
   deriveRuntimeHealthStatus,
   sanitizeRuntimeProbeDetail,
 } from "@/server/services/runtime-status";
-import { validateRuntimeConfig } from "@/server/services/runtime-config";
+import { runtimeConfigStatus, validateRuntimeConfig } from "@/server/services/runtime-config";
 
 /** Compute location a managed adapter's transport implies. */
 function kindForAdapterTransport(transport: string): RuntimeKind {
@@ -85,6 +85,7 @@ function withRuntimeHealth<T extends Partial<Runtime> & RuntimeForHealth>(rt: T)
   return {
     ...redactRuntime(rt),
     health: deriveRuntimeHealthStatus(rt),
+    configStatus: runtimeConfigStatus(rt.adapterKey, rt.config),
   };
 }
 

@@ -156,7 +156,11 @@ export default function RuntimesPage() {
                     <div className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-meta text-muted-foreground">
                       {r.health.reason}
                     </div>
-                    <RuntimeToolSurfaceBadges adapterKey={r.adapterKey} config={r.config} />
+                    <RuntimeToolSurfaceBadges
+                      adapterKey={r.adapterKey}
+                      config={r.config}
+                      configStatus={r.configStatus}
+                    />
 
                     {/* Bound agents + workspaces */}
                     <div className="flex items-start gap-2 border-t border-border/60 pt-3">

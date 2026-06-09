@@ -2,6 +2,23 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Runtime config drift visibility
+
+Added server-side runtime config status checks for stored adapter config. Runtime
+lists and detail responses now report whether `Runtime.config` still matches the
+current adapter schema, and Mission Control compliance raises `config-mismatch`,
+`legacy config`, or `unknown adapter` signals for bound agents when stale rows
+are found.
+
+Surfaced those warnings beside the existing runtime tool-surface badges in the
+workspace runtime list/detail page, the global runtime cards, and the instance
+admin runtimes table. Valid config stays quiet so the dense runtime views remain
+focused on actionable problems.
+
+Verification: `pnpm vitest run src/server/services/__tests__/agent-run.test.ts`,
+`pnpm typecheck`, `pnpm lint`, full `pnpm test`, `pnpm docs:build`, and full
+serial `pnpm exec playwright test --workers=1` pass.
+
 ## 2026-06-09 — Plugin backup and durable chat reads
 
 Added explicit plugin backup/export and restore/import support. Plugin detail can

@@ -79,6 +79,7 @@ export function AdminRuntimes() {
                 <RuntimeToolSurfaceBadges
                   adapterKey={r.adapterKey}
                   config={r.config}
+                  configStatus={r.configStatus}
                   className="min-w-0"
                 />
                 <span className="truncate text-meta" style={{ color: ADMIN.textSoft }}>

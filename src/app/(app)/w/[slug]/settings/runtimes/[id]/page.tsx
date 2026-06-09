@@ -306,6 +306,7 @@ export default function RuntimeDetailPage() {
                     <RuntimeToolSurfacePanel
                       adapterKey={runtime.adapterKey}
                       config={runtime.config}
+                      configStatus={runtime.configStatus}
                     />
                   </div>
                 </div>
