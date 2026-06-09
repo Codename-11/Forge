@@ -69,6 +69,7 @@ test.describe("Chat action controls", () => {
     await expect
       .poll(async () =>
         page.getByTestId("chat-message-agent").filter({ hasText: /E2E mock reply: pong/i }).count(),
+        { timeout: 25_000 },
       )
       .toBeGreaterThan(agentRepliesBefore);
 

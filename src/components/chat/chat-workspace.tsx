@@ -373,9 +373,32 @@ export function ChatWorkspaceSurface() {
 
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
-  const selectedThread = useMemo(
+  const selectedThreadFromList = useMemo(
     () => (threadParam ? (threads ?? []).find((thread) => thread.id === threadParam) : null),
     [threadParam, threads],
+  );
+  const { data: selectedThreadDirect, isLoading: selectedThreadDirectLoading } =
+    trpc.chat.getThread.useQuery(
+      { threadId: threadParam ?? "" },
+      {
+        enabled: Boolean(threadParam && !selectedThreadFromList),
+        staleTime: 10_000,
+      },
+    );
+  const selectedThread = useMemo(() => {
+    if (selectedThreadFromList) return selectedThreadFromList;
+    if (!selectedThreadDirect) return null;
+    const latestMessage = selectedThreadDirect.messages.at(-1) ?? null;
+    return {
+      ...selectedThreadDirect,
+      latestMessage,
+      hasAttachments: selectedThreadDirect.messages.some(
+        (message) => message.attachments.length > 0,
+      ),
+    };
+  }, [selectedThreadDirect, selectedThreadFromList]);
+  const threadSelectionUnavailable = Boolean(
+    threadParam && threads && !selectedThread && !selectedThreadDirectLoading,
   );
   const selectedThreadIdForRead = selectedThread?.id ?? null;
   const selectedThreadLatestAt = selectedThread?.latestMessage?.createdAt ?? null;
@@ -390,7 +413,7 @@ export function ChatWorkspaceSurface() {
       setSelectedAgentId(selectedThread.agent.id);
       return;
     }
-    if (threadParam && threads && !selectedThread) {
+    if (threadSelectionUnavailable) {
       setSelectedAgentId(null);
       return;
     }
@@ -398,7 +421,7 @@ export function ChatWorkspaceSurface() {
       const fallbackAgentId = threads?.[0]?.agent.id ?? agents?.[0]?.id ?? null;
       if (fallbackAgentId) setSelectedAgentId(fallbackAgentId);
     }
-  }, [agents, selectedAgentId, selectedThread, threadParam, threads]);
+  }, [agents, selectedAgentId, selectedThread, threadSelectionUnavailable, threads]);
 
   // First load with no ?thread → drop into the most-recently-active thread
   // (chat.threads is ordered lastMessageAt desc) instead of an empty pane.
@@ -1079,7 +1102,7 @@ export function ChatWorkspaceSurface() {
                 </div>
               </div>
             )}
-            {threadParam && threads && !selectedThread ? (
+            {threadSelectionUnavailable ? (
               <div className="flex h-full items-center justify-center p-8 text-center">
                 <div className="max-w-sm rounded-xl border border-border bg-card/40 p-6 shadow-sm">
                   <MessageSquare className="mx-auto h-8 w-8 text-muted-foreground/60" />
@@ -1101,7 +1124,7 @@ export function ChatWorkspaceSurface() {
             ) : selectedAgentId ? (
               <ChatThreadView
                 agentId={selectedAgentId}
-                threadId={selectedThread?.id ?? null}
+                threadId={selectedThread?.id ?? threadParam ?? null}
                 onThreadCreated={(threadId, agentId) => {
                   setSelectedAgentId(agentId);
                   router.replace(`/w/${ws.slug}/chat?thread=${encodeURIComponent(threadId)}`);
