@@ -29,6 +29,7 @@ import { StatusDot } from "@/components/ui/status-dot";
 import { ProjectChip } from "@/components/project-chip";
 import { presenceAvailability } from "@/lib/transport-display";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { buildChatDiagnosticReport } from "@/lib/chat-diagnostic-report";
 
 /**
  * Right-hand status rail for a chat thread. Surfaces, top to bottom:
@@ -298,6 +299,33 @@ export function ChatStatusRail({
       toast.error("Could not copy id");
     }
   };
+  const copyDiagnosticReport = async () => {
+    if (!threadId) return;
+    try {
+      await navigator.clipboard.writeText(
+        buildChatDiagnosticReport({
+          workspaceSlug,
+          threadId,
+          generatedAt: new Date(),
+          agent,
+          runtime,
+          readiness,
+          diagnostics,
+          linkedIssue: linkedIssue
+            ? {
+                id: linkedIssue.id,
+                number: linkedIssue.number,
+                status: linkedIssue.status.name,
+                title: linkedIssue.title,
+              }
+            : null,
+        }),
+      );
+      toast.success("Diagnostic report copied");
+    } catch {
+      toast.error("Could not copy diagnostic report");
+    }
+  };
   const timelineRows = useMemo(() => {
     const rows: Array<{
       key: string;
@@ -498,7 +526,11 @@ export function ChatStatusRail({
             {runtime ? (
               <span>
                 <Link
-                  href={`/w/${workspaceSlug}/settings/runtimes`}
+                  href={
+                    runtime.id
+                      ? `/w/${workspaceSlug}/settings/runtimes/${runtime.id}`
+                      : `/w/${workspaceSlug}/settings/runtimes`
+                  }
                   className="underline decoration-dotted hover:text-foreground"
                 >
                   {runtime.name}
@@ -756,6 +788,14 @@ export function ChatStatusRail({
       )}
 
       <div className="space-y-2 border-t border-border/60 pt-3">
+        <Button
+          variant="subtle"
+          size="sm"
+          className="w-full justify-start"
+          onClick={() => void copyDiagnosticReport()}
+        >
+          <Copy className="mr-1.5 h-3.5 w-3.5" /> Copy diagnostic report
+        </Button>
         <Button
           variant="subtle"
           size="sm"
