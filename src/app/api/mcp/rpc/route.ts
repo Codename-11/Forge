@@ -6,6 +6,7 @@ import { mcpToolPolicy } from "@/server/services/mcp-policy";
 import { authenticateApiKey, ApiKeyError } from "@/server/services/api-key-auth";
 import { rateLimit } from "@/server/rate-limit";
 import { logger } from "@/server/logger";
+import { mcpServerInfo } from "@/server/build-info";
 
 /**
  * Standard MCP (Model Context Protocol) endpoint — Streamable HTTP transport
@@ -28,7 +29,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const PROTOCOL_VERSION = "2025-03-26";
-const SERVER_INFO = { name: "forge", version: "1.0.0", title: "Forge" };
 
 type JsonRpcRequest = {
   jsonrpc: "2.0";
@@ -97,7 +97,7 @@ async function handleRpc(
       return ok(id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: SERVER_INFO,
+        serverInfo: await mcpServerInfo(),
         instructions:
           "Forge - project management. Tools cover issues, projects, comments, analytics, and the agent queue.",
       });

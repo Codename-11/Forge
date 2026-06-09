@@ -61,6 +61,7 @@ import { forgeEntityTypeSchema, type ForgeEntityType } from "@/lib/entity-ref";
 import { hydrateEntityRefs } from "@/server/services/entity-hydration";
 import { computeAlignment, type AlignItem } from "@/server/services/canvas-alignment";
 import { validateRuntimeConfig } from "@/server/services/runtime-config";
+import { mcpServerInfo } from "@/server/build-info";
 import {
   engagementInstruction,
   FORGE_RUN_CONTRACT_VERSION,
@@ -12562,6 +12563,7 @@ export type McpToolName = keyof typeof mcpTools;
 export async function describeMcp() {
   return {
     version: 1,
+    serverInfo: await mcpServerInfo(),
     tools: Object.entries(mcpTools).map(([name, t]) => ({
       name,
       scopes: t.scopes,

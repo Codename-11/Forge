@@ -3,6 +3,7 @@ import { z } from "zod";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { router, protectedProcedure } from "@/server/trpc";
+import { forgeBuildIdentity } from "@/server/build-info";
 
 /**
  * System-wide read-only data — currently just the parsed CHANGELOG.md
@@ -39,23 +40,8 @@ interface CachedChangelog {
 }
 
 let _cache: CachedChangelog | null = null;
-let _packageVersion: string | null | undefined;
-
 function changelogPath(): string {
   return path.join(process.cwd(), "CHANGELOG.md");
-}
-
-async function readPackageVersion(): Promise<string> {
-  if (process.env.npm_package_version) return process.env.npm_package_version;
-  if (_packageVersion !== undefined) return _packageVersion ?? "1.0.0";
-  try {
-    const raw = await fs.readFile(path.join(process.cwd(), "package.json"), "utf8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    _packageVersion = typeof parsed.version === "string" ? parsed.version : null;
-  } catch {
-    _packageVersion = null;
-  }
-  return _packageVersion ?? "1.0.0";
 }
 
 async function readChangelog(): Promise<CachedChangelog> {
@@ -184,11 +170,9 @@ export const systemRouter = router({
    */
   buildInfo: protectedProcedure.query(async () => {
     const cache = await readChangelog();
-    const version = await readPackageVersion();
+    const build = await forgeBuildIdentity();
     return {
-      version,
-      gitSha: process.env.FORGE_GIT_SHA || null,
-      buildTime: process.env.FORGE_BUILD_TIME || null,
+      ...build,
       release: cache.entries.find((e) => e.date)?.version ?? null,
     };
   }),
