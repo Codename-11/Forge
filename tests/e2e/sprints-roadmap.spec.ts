@@ -38,6 +38,7 @@ test.describe("Sprints and roadmap management", () => {
     await expect(filters).toBeVisible();
     await filters.locator("select").nth(1).selectOption("missing");
     await expect(filters.getByText(/of \d+ projects/)).toBeVisible();
+    await filters.locator("select").nth(1).selectOption("all");
 
     const dateButton = page.getByRole("button", { name: /set dates|edit dates/i }).first();
     await expect(dateButton).toBeVisible();

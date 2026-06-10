@@ -19,6 +19,8 @@ export interface SlashCommandContext {
   transport?: { mode: string; label: string } | null;
   /** Append a SYSTEM-role message to the current thread, locally (no server round-trip). */
   appendLocal: (body: string) => void;
+  /** Show a transient command acknowledgement when the surface supports toasts. */
+  notify?: (message: string) => void;
   /** Clear the local SYSTEM messages emitted by slash commands. */
   clearLocal: () => void;
   /** Clear the current conversation on the server. */
@@ -89,9 +91,11 @@ export const SLASH_COMMANDS: SlashCommand[] = [
       }
       await ctx.clearThread();
       ctx.clearLocal();
-      ctx.appendLocal(
-        "_Conversation cleared. Server history and summary context for this thread were reset._",
-      );
+      if (ctx.notify) {
+        ctx.notify("Conversation cleared");
+      } else {
+        ctx.appendLocal("_Conversation cleared. Server history and summary context were reset._");
+      }
     },
   },
   {

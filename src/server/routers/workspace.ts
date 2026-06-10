@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import {
   CycleStatus,
+  DefaultIssueAssigneeMode,
   EngagementMode,
   EventKind,
   MentionEngagementPolicy,
@@ -101,6 +102,11 @@ export const workspaceRouter = router({
         cycleCooldownDays: true,
         timeTrackingEnabled: true,
         attachmentQuotaMb: true,
+        defaultIssueAssigneeMode: true,
+        defaultIssueAssigneeUserId: true,
+        defaultIssueAssigneeUser: {
+          select: { id: true, name: true, email: true, image: true },
+        },
         autoDispatch: true,
         autoDispatchMode: true,
         autoStartOnAssign: true,
@@ -224,6 +230,8 @@ export const workspaceRouter = router({
         cycleCooldownDays: z.number().int().min(0).max(30).optional(),
         timeTrackingEnabled: z.boolean().optional(),
         attachmentQuotaMb: z.number().int().min(0).max(1_024_000).optional(),
+        defaultIssueAssigneeMode: z.nativeEnum(DefaultIssueAssigneeMode).optional(),
+        defaultIssueAssigneeUserId: z.string().cuid().nullable().optional(),
         agentIdleTimeoutMinutes: z.number().int().min(0).max(1440).optional(),
         assignmentSlaMinutes: z.number().int().min(0).max(10080).optional(),
         agentRunStaleMinutes: z.number().int().min(0).max(10080).optional(),
@@ -244,6 +252,7 @@ export const workspaceRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const data = { ...input };
       // Validate startedStatusId belongs to this workspace and is in the
       // IN_PROGRESS category. Setting null to disable is fine.
       if (input.startedStatusId) {
@@ -265,9 +274,54 @@ export const workspaceRouter = router({
           });
         }
       }
+      if (
+        input.defaultIssueAssigneeMode !== undefined ||
+        input.defaultIssueAssigneeUserId !== undefined
+      ) {
+        const current = await ctx.db.workspace.findUniqueOrThrow({
+          where: { id: ctx.workspaceId },
+          select: {
+            defaultIssueAssigneeMode: true,
+            defaultIssueAssigneeUserId: true,
+          },
+        });
+        const nextMode =
+          input.defaultIssueAssigneeMode ?? current.defaultIssueAssigneeMode;
+        const nextUserId =
+          input.defaultIssueAssigneeUserId === undefined
+            ? current.defaultIssueAssigneeUserId
+            : input.defaultIssueAssigneeUserId;
+
+        if (nextMode === DefaultIssueAssigneeMode.USER) {
+          if (!nextUserId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Choose a workspace member for the default issue assignee.",
+            });
+          }
+          const member = await ctx.db.membership.findUnique({
+            where: {
+              userId_workspaceId: {
+                userId: nextUserId,
+                workspaceId: ctx.workspaceId,
+              },
+            },
+            select: { id: true },
+          });
+          if (!member) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Default issue assignee must be a workspace member.",
+            });
+          }
+          data.defaultIssueAssigneeUserId = nextUserId;
+        } else {
+          data.defaultIssueAssigneeUserId = null;
+        }
+      }
       return ctx.db.workspace.update({
         where: { id: ctx.workspaceId },
-        data: input,
+        data,
       });
     }),
 
@@ -694,6 +748,16 @@ export const workspaceRouter = router({
         }
 
         await tx.membership.delete({ where: { id: target.id } });
+        await tx.workspace.updateMany({
+          where: {
+            id: ctx.workspaceId,
+            defaultIssueAssigneeUserId: target.userId,
+          },
+          data: {
+            defaultIssueAssigneeMode: DefaultIssueAssigneeMode.NONE,
+            defaultIssueAssigneeUserId: null,
+          },
+        });
 
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,

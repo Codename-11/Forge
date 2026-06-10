@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { Role } from "@prisma/client";
+import { DefaultIssueAssigneeMode, Role } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { workspaceRouter } from "@/server/routers/workspace";
 import {
@@ -57,6 +57,26 @@ describe("workspaceRouter — admin member management", () => {
       select: { agentRunStaleMinutes: true },
     });
     expect(workspace.agentRunStaleMinutes).toBe(45);
+  });
+
+  it("updates and validates the workspace default issue assignee", async () => {
+    const { caller, fixture } = await adminSetup();
+    const prisma = getPrisma();
+
+    await caller.update({
+      defaultIssueAssigneeMode: DefaultIssueAssigneeMode.USER,
+      defaultIssueAssigneeUserId: fixture.secondUser.id,
+    });
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: fixture.workspace.id },
+      select: {
+        defaultIssueAssigneeMode: true,
+        defaultIssueAssigneeUserId: true,
+      },
+    });
+    expect(workspace.defaultIssueAssigneeMode).toBe(DefaultIssueAssigneeMode.USER);
+    expect(workspace.defaultIssueAssigneeUserId).toBe(fixture.secondUser.id);
   });
 
   it("listMembers returns all memberships including the caller", async () => {
@@ -211,6 +231,27 @@ describe("workspaceRouter — admin member management", () => {
     await expect(
       caller.setMemberRole({ userId: fixture.user.id, role: Role.MEMBER }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("removeMember clears that user as the workspace default issue assignee", async () => {
+    const { caller, fixture } = await adminSetup();
+    const prisma = getPrisma();
+    await caller.update({
+      defaultIssueAssigneeMode: DefaultIssueAssigneeMode.USER,
+      defaultIssueAssigneeUserId: fixture.secondUser.id,
+    });
+
+    await caller.removeMember({ userId: fixture.secondUser.id });
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: fixture.workspace.id },
+      select: {
+        defaultIssueAssigneeMode: true,
+        defaultIssueAssigneeUserId: true,
+      },
+    });
+    expect(workspace.defaultIssueAssigneeMode).toBe(DefaultIssueAssigneeMode.NONE);
+    expect(workspace.defaultIssueAssigneeUserId).toBeNull();
   });
 
   it("setMemberRole allows self-demote when another admin exists", async () => {

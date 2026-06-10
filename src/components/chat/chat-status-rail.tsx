@@ -273,23 +273,27 @@ export function ChatStatusRail({
   const usesHermesEnvFallback = Boolean(
     readiness?.ready && readiness.mode === "runs" && effectiveProvider === "HERMES" && !runtime,
   );
+  const hasOpenTurn = Boolean(diagnostics?.waitingForReply);
   const runStale = Boolean(
+    hasOpenTurn &&
     diagnostics?.lastRun &&
     diagnostics.lastRun.status === "ACTIVE" &&
     diagnostics.lastRun.idleMs >= 60_000,
   );
-  const runActive = diagnostics?.lastRun?.status === "ACTIVE";
-  const runBad = diagnostics?.lastRun?.status === "STALLED" || runStale;
-  const deliveryBad = diagnostics?.lastDelivery?.status === "FAILED";
+  const runActive = hasOpenTurn && diagnostics?.lastRun?.status === "ACTIVE";
+  const runBad = hasOpenTurn && (diagnostics?.lastRun?.status === "STALLED" || runStale);
+  const deliveryBad = hasOpenTurn && diagnostics?.lastDelivery?.status === "FAILED";
   const streamBad = Boolean(
     diagnostics?.lastAgentStreamError || diagnostics?.lastAgentStreamAborted,
   );
-  const canRetry = Boolean(diagnostics?.waitingForReply || deliveryBad);
-  const canKick = Boolean(diagnostics?.lastRun?.id && runBad);
+  const canRetry = Boolean(diagnostics?.waitingForReply || deliveryBad || streamBad);
+  const canKick = Boolean(hasOpenTurn && diagnostics?.lastRun?.id && runBad);
   // Stop only makes sense for a runs-backed live session — Forge can ask the
   // managed runtime to terminate it. A completions agent's in-flight turn is
   // stopped from the composer, not here.
-  const canStop = Boolean(diagnostics?.lastRun?.id && runActive && engine === "runs");
+  const canStop = Boolean(
+    hasOpenTurn && diagnostics?.lastRun?.id && runActive && engine === "runs",
+  );
   const capabilityRows = capabilityLabels(readiness?.capabilities);
   const copyDiagnosticId = async (id: string, label: string) => {
     try {
@@ -645,9 +649,7 @@ export function ChatStatusRail({
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[0.625rem] font-medium text-foreground">
-                      {row.label}
-                    </span>
+                    <span className="text-[0.625rem] font-medium text-foreground">{row.label}</span>
                     {row.at && (
                       <span className="text-[0.5625rem] text-muted-foreground/70">
                         {timelineTime(row.at)}
@@ -665,9 +667,7 @@ export function ChatStatusRail({
                       </button>
                     )}
                   </div>
-                  <div className="truncate text-[0.625rem] text-muted-foreground">
-                    {row.detail}
-                  </div>
+                  <div className="truncate text-[0.625rem] text-muted-foreground">{row.detail}</div>
                 </div>
               </div>
             ))}
@@ -731,7 +731,7 @@ export function ChatStatusRail({
       <div
         className={cn(
           "text-meta rounded-lg border p-2",
-          rowTone(diagnostics?.lastRun ? !runBad : null),
+          rowTone(diagnostics?.lastRun && hasOpenTurn ? !runBad : null),
         )}
       >
         <div className="flex items-center gap-2 font-medium text-foreground">
@@ -748,7 +748,7 @@ export function ChatStatusRail({
         <div
           className={cn(
             "text-meta rounded-lg border p-2",
-            rowTone(diagnostics?.lastDelivery ? !deliveryBad : null),
+            rowTone(diagnostics?.lastDelivery && hasOpenTurn ? !deliveryBad : null),
           )}
         >
           <div className="flex items-center gap-2 font-medium text-foreground">

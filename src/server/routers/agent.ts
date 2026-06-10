@@ -187,6 +187,7 @@ export const agentRouter = router({
               lastProbeAttempted: true,
               lastProbeReachable: true,
               lastProbeDetail: true,
+              config: true,
             },
           },
         },

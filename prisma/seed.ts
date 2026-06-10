@@ -296,9 +296,10 @@ async function main() {
   // connector (registry.ts, also FORGE_E2E-gated); `e2e-codex` exists so the
   // Codex sandbox config panel + enable/disable toggle have a real row.
   if (process.env.FORGE_E2E === "1") {
+    const e2eNow = new Date();
     const mockRuntime = await prisma.runtime.upsert({
       where: { id: "e2e-mock-runtime" },
-      update: { disabledAt: null },
+      update: { disabledAt: null, heartbeatAt: e2eNow, connectedAt: e2eNow },
       create: {
         id: "e2e-mock-runtime",
         workspaceId: wid,
@@ -307,13 +308,18 @@ async function main() {
         adapterKey: "mock-runs",
         endpoint: "mock://e2e",
         ownerId: owner.id,
-        heartbeatAt: new Date(),
-        connectedAt: new Date(),
+        heartbeatAt: e2eNow,
+        connectedAt: e2eNow,
       },
     });
     await prisma.agent.upsert({
       where: { workspaceId_profileKey: { workspaceId: wid, profileKey: "e2ebot" } },
-      update: { runtimeId: mockRuntime.id, runEngine: RunEngine.RUNS, status: AgentStatus.ONLINE },
+      update: {
+        runtimeId: mockRuntime.id,
+        runEngine: RunEngine.RUNS,
+        status: AgentStatus.ONLINE,
+        lastHeartbeatAt: e2eNow,
+      },
       create: {
         workspaceId: wid,
         profileKey: "e2ebot",
@@ -327,7 +333,7 @@ async function main() {
         runtimeId: mockRuntime.id,
         capabilities: ["e2e"],
         maxConcurrent: 2,
-        lastHeartbeatAt: new Date(),
+        lastHeartbeatAt: e2eNow,
       },
     });
     await prisma.runtime.upsert({

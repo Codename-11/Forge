@@ -150,6 +150,7 @@ export async function POST(req: NextRequest) {
   // Per-thread overrides win over the agent's default provider/model.
   const effectiveProvider = thread.providerOverride ?? agent.provider;
   const effectiveModel = thread.modelOverride ?? undefined;
+  const yoloModeOverride = thread.yoloModeOverride ?? undefined;
   // Resolve the chat engine. RUNS delegates to the provider's structured
   // agent-run API (Hermes /v1/runs) instead of Forge's own completions
   // loop; falls back to completions when the provider has no runs connector.
@@ -620,9 +621,12 @@ export async function POST(req: NextRequest) {
               message: body,
               history: priorTurns,
               instructions: systemPrompt,
+              model: effectiveModel,
+              yoloMode: yoloModeOverride,
               engagementMode: "DISCUSS",
               contractVersion: FORGE_RUN_CONTRACT_VERSION,
               toolPolicy: runtimePolicy,
+              sessionKey: agent.profileKey,
             });
             runExternalId = started.externalRunId;
             await db.chatMessage
@@ -633,6 +637,7 @@ export async function POST(req: NextRequest) {
                     streamed: true,
                     provider: effectiveProvider,
                     model: effectiveModel ?? undefined,
+                    yoloModeOverride,
                     runExternalId,
                     running: true,
                   } as never,
@@ -900,6 +905,7 @@ export async function POST(req: NextRequest) {
                   streamed: true,
                   provider: effectiveProvider,
                   model: effectiveModel ?? undefined,
+                  yoloModeOverride,
                   thinking: thinkingFull || undefined,
                   tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
                   error: streamError ?? undefined,

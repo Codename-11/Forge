@@ -1,14 +1,15 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
-  StatusCategory,
-  Priority,
-  WorkItemKind,
-  CycleStatus,
-  InitiativeStatus,
-  RelationKind,
   AgentProvider,
   AgentRole,
+  InitiativeStatus,
+  CycleStatus,
+  DefaultIssueAssigneeMode,
+  Priority,
+  RelationKind,
+  StatusCategory,
+  WorkItemKind,
 } from "@prisma/client";
 import { router, adminProcedure } from "@/server/trpc";
 
@@ -127,6 +128,8 @@ const snapshotSchema = z.object({
     cycleCooldownDays: z.number().int(),
     timeTrackingEnabled: z.boolean(),
     attachmentQuotaMb: z.number().int(),
+    defaultIssueAssigneeMode: z.nativeEnum(DefaultIssueAssigneeMode).optional(),
+    defaultIssueAssigneeUserEmail: z.string().email().nullable().optional(),
   }),
   statuses: z.array(statusSnap),
   labels: z.array(labelSnap),
@@ -150,7 +153,12 @@ export const dataPortabilityRouter = router({
     const wid = ctx.workspaceId;
     const [workspace, statuses, labels, initiatives, projects, cycles, agents, issues] =
       await Promise.all([
-        ctx.db.workspace.findUniqueOrThrow({ where: { id: wid } }),
+        ctx.db.workspace.findUniqueOrThrow({
+          where: { id: wid },
+          include: {
+            defaultIssueAssigneeUser: { select: { email: true } },
+          },
+        }),
         ctx.db.status.findMany({ where: { workspaceId: wid }, orderBy: { position: "asc" } }),
         ctx.db.label.findMany({ where: { workspaceId: wid } }),
         ctx.db.initiative.findMany({ where: { workspaceId: wid } }),
@@ -194,6 +202,9 @@ export const dataPortabilityRouter = router({
         cycleCooldownDays: workspace.cycleCooldownDays,
         timeTrackingEnabled: workspace.timeTrackingEnabled,
         attachmentQuotaMb: workspace.attachmentQuotaMb,
+        defaultIssueAssigneeMode: workspace.defaultIssueAssigneeMode,
+        defaultIssueAssigneeUserEmail:
+          workspace.defaultIssueAssigneeUser?.email ?? null,
       },
       statuses: statuses.map((s) => ({
         name: s.name,
@@ -299,6 +310,9 @@ export const dataPortabilityRouter = router({
         if (i.authorEmail) emails.add(i.authorEmail);
         i.assigneeEmails.forEach((e) => emails.add(e));
       });
+      if (snap.workspace.defaultIssueAssigneeUserEmail) {
+        emails.add(snap.workspace.defaultIssueAssigneeUserEmail);
+      }
       snap.comments.forEach((c) => c.authorEmail && emails.add(c.authorEmail));
       const users = await ctx.db.user.findMany({
         where: { email: { in: [...emails] } },
@@ -322,6 +336,43 @@ export const dataPortabilityRouter = router({
 
       await ctx.db.$transaction(
         async (tx) => {
+          if (snap.workspace.defaultIssueAssigneeMode) {
+            let defaultIssueAssigneeUserId: string | null = null;
+            const email = snap.workspace.defaultIssueAssigneeUserEmail;
+            if (
+              snap.workspace.defaultIssueAssigneeMode ===
+                DefaultIssueAssigneeMode.USER &&
+              email
+            ) {
+              const candidateId = userIdByEmail.get(email) ?? null;
+              const membership = candidateId
+                ? await tx.membership.findUnique({
+                    where: {
+                      userId_workspaceId: {
+                        userId: candidateId,
+                        workspaceId: wid,
+                      },
+                    },
+                    select: { id: true },
+                  })
+                : null;
+              defaultIssueAssigneeUserId = membership ? candidateId : null;
+            }
+
+            await tx.workspace.update({
+              where: { id: wid },
+              data: {
+                defaultIssueAssigneeMode:
+                  snap.workspace.defaultIssueAssigneeMode ===
+                    DefaultIssueAssigneeMode.USER &&
+                  !defaultIssueAssigneeUserId
+                    ? DefaultIssueAssigneeMode.NONE
+                    : snap.workspace.defaultIssueAssigneeMode,
+                defaultIssueAssigneeUserId,
+              },
+            });
+          }
+
           // Statuses (by name)
           for (const s of snap.statuses) {
             await tx.status.upsert({

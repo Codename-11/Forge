@@ -16,6 +16,8 @@ import {
   isStorageConfigured,
   MAX_FILE_SIZE_BYTES,
 } from "@/server/services/storage";
+import { resolveDefaultIssueAssigneeIds } from "@/server/services/issue-create";
+import { autoWatchUser } from "@/server/services/issue-watchers";
 
 /**
  * Inbound email-to-issue webhook.
@@ -170,6 +172,10 @@ export async function POST(req: NextRequest) {
 
   const composedBody = `From: ${parsed.from}\n\n${parsed.body}`;
   const issueId = await db.$transaction(async (tx) => {
+    const assigneeIds = await resolveDefaultIssueAssigneeIds(tx, {
+      workspaceId: workspace.id,
+      authorId: effectiveAuthorId,
+    });
     const issue = await tx.issue.create({
       data: {
         workspaceId: workspace.id,
@@ -181,9 +187,19 @@ export async function POST(req: NextRequest) {
         priority: "NONE",
         authorId: effectiveAuthorId,
         claimedById: authorId, // null if from-email isn't a member
+        assignees: {
+          create: assigneeIds.map((userId) => ({ userId })),
+        },
       },
       select: { id: true, number: true, title: true },
     });
+    for (const userId of assigneeIds) {
+      await autoWatchUser(tx, {
+        workspaceId: workspace.id,
+        issueId: issue.id,
+        userId,
+      });
+    }
 
     await recordChange(tx, {
       workspaceId: workspace.id,

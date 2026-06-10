@@ -377,11 +377,20 @@ function readPayloadBoolean(payload: unknown, key: string): boolean | null {
 
 function chatThreadIdForEvent(evt: TimelineEvent): string | null {
   if (evt.subjectType === "chat-thread") return evt.subjectId;
-  return readPayloadString(evt.payload, "threadId");
+  const direct = readPayloadString(evt.payload, "threadId");
+  if (direct) return direct;
+  const alternate = readPayloadString(evt.payload, "chatThreadId");
+  if (alternate) return alternate;
+  const nested = readPayloadRecord(evt.payload, "thread");
+  const nestedId = nested?.id;
+  return typeof nestedId === "string" && nestedId.length > 0 ? nestedId : null;
 }
 
-function isChatMessageEvent(evt: TimelineEvent): boolean {
-  return evt.kind === "CHAT_MESSAGE_POSTED" && Boolean(chatThreadIdForEvent(evt));
+function isChatActivityEvent(evt: TimelineEvent): boolean {
+  return (
+    (evt.kind === "CHAT_MESSAGE_POSTED" || evt.kind === "CHAT_THREAD_COMPACTED") &&
+    Boolean(chatThreadIdForEvent(evt))
+  );
 }
 
 function eventTimeMs(evt: TimelineEvent): number {
@@ -1150,7 +1159,7 @@ export default function ActivityDrawer() {
   const events = pages;
   const markChatActivityRead = useCallback(
     (evt: TimelineEvent, seenAt = eventTimeMs(evt)) => {
-      if (!ws || !isChatMessageEvent(evt)) return;
+      if (!ws || !isChatActivityEvent(evt)) return;
       const threadId = chatThreadIdForEvent(evt);
       if (!threadId) return;
       markChatThreadRead(ws.slug, threadId, seenAt);
@@ -1167,6 +1176,11 @@ export default function ActivityDrawer() {
     if (!open || tab !== "activity") return;
     for (const evt of events) markChatActivityRead(evt);
   }, [events, markChatActivityRead, open, tab]);
+
+  useEffect(() => {
+    if (!open || tab !== "activity" || !data?.events) return;
+    for (const evt of data.events as TimelineEvent[]) markChatActivityRead(evt);
+  }, [data?.events, markChatActivityRead, open, tab]);
 
   const markAllRead = useCallback(() => {
     writeLastRead(new Date().toISOString());

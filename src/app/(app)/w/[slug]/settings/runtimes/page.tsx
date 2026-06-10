@@ -692,6 +692,21 @@ const DEFAULT_RUNTIME_TOOL_POLICY: RuntimeToolPolicy = {
   modeToolPolicyEnforced: false,
 };
 
+type HermesRuntimePolicy = RuntimeToolPolicy & {
+  profile: string;
+  mode: string;
+  model: string;
+  yoloMode: boolean;
+};
+
+const DEFAULT_HERMES_RUNTIME_POLICY: HermesRuntimePolicy = {
+  ...DEFAULT_RUNTIME_TOOL_POLICY,
+  profile: "",
+  mode: "",
+  model: "",
+  yoloMode: false,
+};
+
 function runtimeToolPolicyFromConfig(config: unknown): RuntimeToolPolicy {
   return {
     localWorkspaceTools: runtimeDeclaresLocalWorkspaceTools(config),
@@ -718,6 +733,94 @@ function runtimeToolPolicyToConfig(p: RuntimeToolPolicy): Record<string, unknown
   out.toolCapabilities = tools;
   if (p.workspaceRoot.trim()) out.workspaceRoot = p.workspaceRoot.trim();
   return out;
+}
+
+function hermesRuntimePolicyFromConfig(config: unknown): HermesRuntimePolicy {
+  const c = (config && typeof config === "object" ? config : {}) as Record<string, unknown>;
+  return {
+    ...runtimeToolPolicyFromConfig(config),
+    profile: typeof c.profile === "string" ? c.profile : "",
+    mode: typeof c.mode === "string" ? c.mode : "",
+    model: typeof c.model === "string" ? c.model : "",
+    yoloMode: c.yoloMode === true,
+  };
+}
+
+function hermesRuntimePolicyToConfig(p: HermesRuntimePolicy): Record<string, unknown> {
+  const out = runtimeToolPolicyToConfig(p);
+  if (p.profile.trim()) out.profile = p.profile.trim();
+  if (p.mode.trim()) out.mode = p.mode.trim();
+  if (p.model.trim()) out.model = p.model.trim();
+  out.yoloMode = p.yoloMode;
+  return out;
+}
+
+function HermesRuntimeFields({
+  value,
+  onChange,
+}: {
+  value: HermesRuntimePolicy;
+  onChange: (v: HermesRuntimePolicy) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div
+        data-testid="hermes-runtime-fields"
+        className="space-y-3 rounded-lg border border-border bg-subtle/20 p-3"
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="text-[0.75rem] font-medium text-foreground">Hermes run defaults</span>
+          <span className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+            runtime config
+          </span>
+        </div>
+        <label className="flex items-start gap-2 rounded-md border border-border bg-background/30 px-2.5 py-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={value.yoloMode}
+            onChange={(e) => onChange({ ...value, yoloMode: e.target.checked })}
+          />
+          <span className="min-w-0">
+            <span className="block font-medium text-foreground">YOLO auto-approve</span>
+            <span className="block text-meta text-muted-foreground">
+              Forge auto-resolves Hermes approval requests for runs from this runtime.
+            </span>
+          </span>
+        </label>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <label className="block">
+            <span className={fieldLabel}>Profile</span>
+            <Input
+              value={value.profile}
+              onChange={(e) => onChange({ ...value, profile: e.target.value })}
+              placeholder="victor"
+              className="font-mono"
+            />
+          </label>
+          <label className="block">
+            <span className={fieldLabel}>Mode</span>
+            <Input
+              value={value.mode}
+              onChange={(e) => onChange({ ...value, mode: e.target.value })}
+              placeholder="default"
+              className="font-mono"
+            />
+          </label>
+          <label className="block">
+            <span className={fieldLabel}>Model</span>
+            <Input
+              value={value.model}
+              onChange={(e) => onChange({ ...value, model: e.target.value })}
+              placeholder="provider/model"
+              className="font-mono"
+            />
+          </label>
+        </div>
+      </div>
+      <RuntimeToolPolicyFields value={value} onChange={(next) => onChange({ ...value, ...next })} />
+    </div>
+  );
 }
 
 function RuntimeToolPolicyFields({
@@ -850,8 +953,8 @@ function CreateRuntimeModal({
   const [endpoint, setEndpoint] = useState("");
   const [secret, setSecret] = useState("");
   const [codex, setCodex] = useState<CodexPolicy>(DEFAULT_CODEX_POLICY);
-  const [toolPolicy, setToolPolicy] = useState<RuntimeToolPolicy>(
-    DEFAULT_RUNTIME_TOOL_POLICY,
+  const [hermes, setHermes] = useState<HermesRuntimePolicy>(
+    DEFAULT_HERMES_RUNTIME_POLICY,
   );
 
   useEffect(() => {
@@ -862,7 +965,7 @@ function CreateRuntimeModal({
       setEndpoint("");
       setSecret("");
       setCodex(DEFAULT_CODEX_POLICY);
-      setToolPolicy(DEFAULT_RUNTIME_TOOL_POLICY);
+      setHermes(DEFAULT_HERMES_RUNTIME_POLICY);
     }
   }, [open, adapters]);
 
@@ -891,7 +994,7 @@ function CreateRuntimeModal({
             config: isCodex
               ? codexPolicyToConfig(codex)
               : isHermes
-                ? runtimeToolPolicyToConfig(toolPolicy)
+                ? hermesRuntimePolicyToConfig(hermes)
                 : undefined,
           });
         } catch (err) {
@@ -986,9 +1089,7 @@ function CreateRuntimeModal({
           />
         </label>
         {isCodex && <CodexPolicyFields value={codex} onChange={setCodex} />}
-        {isHermes && (
-          <RuntimeToolPolicyFields value={toolPolicy} onChange={setToolPolicy} />
-        )}
+        {isHermes && <HermesRuntimeFields value={hermes} onChange={setHermes} />}
       </div>
     </QuickForm>
   );
@@ -1021,8 +1122,8 @@ function EditRuntimeModal({
   const [endpoint, setEndpoint] = useState("");
   const [secret, setSecret] = useState("");
   const [codex, setCodex] = useState<CodexPolicy>(DEFAULT_CODEX_POLICY);
-  const [toolPolicy, setToolPolicy] = useState<RuntimeToolPolicy>(
-    DEFAULT_RUNTIME_TOOL_POLICY,
+  const [hermes, setHermes] = useState<HermesRuntimePolicy>(
+    DEFAULT_HERMES_RUNTIME_POLICY,
   );
   const isCodex = target?.adapterKey === "codex-app-server";
   const isHermes = target?.adapterKey === "hermes";
@@ -1033,7 +1134,7 @@ function EditRuntimeModal({
       setEndpoint(target.endpoint);
       setSecret("");
       setCodex(codexPolicyFromConfig(target.config));
-      setToolPolicy(runtimeToolPolicyFromConfig(target.config));
+      setHermes(hermesRuntimePolicyFromConfig(target.config));
     }
   }, [target]);
 
@@ -1057,7 +1158,7 @@ function EditRuntimeModal({
             config: isCodex
               ? codexPolicyToConfig(codex)
               : isHermes
-                ? runtimeToolPolicyToConfig(toolPolicy)
+                ? hermesRuntimePolicyToConfig(hermes)
                 : undefined,
           });
         } catch (err) {
@@ -1101,9 +1202,7 @@ function EditRuntimeModal({
           />
         </label>
         {isCodex && <CodexPolicyFields value={codex} onChange={setCodex} />}
-        {isHermes && (
-          <RuntimeToolPolicyFields value={toolPolicy} onChange={setToolPolicy} />
-        )}
+        {isHermes && <HermesRuntimeFields value={hermes} onChange={setHermes} />}
       </div>
     </QuickForm>
   );
@@ -1113,12 +1212,16 @@ function EditRuntimeModal({
 type CodexPolicy = {
   sandboxMode: "danger-full-access" | "workspace-write" | "read-only";
   approvalPolicy: "never" | "on-request" | "on-failure" | "untrusted";
+  model: string;
+  yoloMode: boolean;
   workspaceRoot: string;
 };
 
 const DEFAULT_CODEX_POLICY: CodexPolicy = {
   sandboxMode: "danger-full-access",
   approvalPolicy: "never",
+  model: "",
+  yoloMode: false,
   workspaceRoot: "",
 };
 
@@ -1146,6 +1249,8 @@ function codexPolicyFromConfig(config: unknown): CodexPolicy {
       (APPROVAL_POLICY_OPTIONS.find((o) => o.value === c.approvalPolicy)?.value as
         | CodexPolicy["approvalPolicy"]
         | undefined) ?? DEFAULT_CODEX_POLICY.approvalPolicy,
+    model: typeof c.model === "string" ? c.model : "",
+    yoloMode: c.yoloMode === true,
     workspaceRoot: typeof c.workspaceRoot === "string" ? c.workspaceRoot : "",
   };
 }
@@ -1154,7 +1259,9 @@ function codexPolicyToConfig(p: CodexPolicy): Record<string, unknown> {
   const out: Record<string, unknown> = {
     sandboxMode: p.sandboxMode,
     approvalPolicy: p.approvalPolicy,
+    yoloMode: p.yoloMode,
   };
+  if (p.model.trim()) out.model = p.model.trim();
   if (p.workspaceRoot.trim()) {
     out.workspaceRoot = p.workspaceRoot.trim();
     out.localWorkspaceTools = true;
@@ -1189,6 +1296,37 @@ function CodexPolicyFields({
           per-turn
         </span>
       </div>
+      <label className="flex items-start gap-2 rounded-md border border-border bg-background/30 px-2.5 py-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={value.yoloMode}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              yoloMode: e.target.checked,
+              ...(e.target.checked
+                ? { sandboxMode: "danger-full-access" as const, approvalPolicy: "never" as const }
+                : {}),
+            })
+          }
+        />
+        <span className="min-w-0">
+          <span className="block font-medium text-foreground">YOLO mode</span>
+          <span className="block text-meta text-muted-foreground">
+            Chat and discuss turns keep full access and skip approval prompts.
+          </span>
+        </span>
+      </label>
+      <label className="block">
+        <span className={fieldLabel}>Model</span>
+        <Input
+          value={value.model}
+          onChange={(e) => onChange({ ...value, model: e.target.value })}
+          placeholder="gpt-5.5-codex"
+          className="font-mono"
+        />
+      </label>
       <label className="block">
         <span className={fieldLabel}>Sandbox mode</span>
         <select

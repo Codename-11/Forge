@@ -1,12 +1,10 @@
 "use client";
-import { useMemo, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import {
   AlertCircle,
   Bot,
   Check,
   CheckCheck,
-  ChevronDown,
-  ChevronRight,
   Clock,
   Copy,
   GitFork,
@@ -15,13 +13,13 @@ import {
   RefreshCw,
   RotateCcw,
   User as UserIcon,
-  Wrench,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { ChatMarkdown } from "./chat-markdown";
+import { ChatWorkTrace, type ChatTraceToolCall } from "./chat-work-trace";
 import {
   AttachmentChip,
   AttachmentThumb,
@@ -64,14 +62,7 @@ export interface ChatMessageRow {
   contextSnapshot?: unknown;
 }
 
-interface RehydratedToolCall {
-  id: string;
-  name: string;
-  args: Record<string, unknown>;
-  status: "pending" | "approved" | "declined" | "executed" | "error";
-  summary?: string;
-  result?: unknown;
-}
+type RehydratedToolCall = ChatTraceToolCall;
 
 interface StreamedSnapshot {
   thinking?: string;
@@ -286,7 +277,10 @@ export function ChatMessageBubble({
       msg.body.includes("- ") ||
       msg.body.includes("_");
     return (
-      <div className="my-0.5 rounded-md border border-border/50 bg-subtle/30 px-2.5 py-1.5 text-[0.6875rem] text-muted-foreground">
+      <div
+        className="my-0.5 rounded-md border border-border/50 bg-subtle/30 px-2.5 py-1.5 text-[0.6875rem] text-muted-foreground"
+        data-testid="chat-message-system"
+      >
         {isRichBody ? (
           <ChatMarkdown body={msg.body} className="text-muted-foreground" />
         ) : (
@@ -495,125 +489,16 @@ function ChatMessageAttachments({ messageId }: { messageId: string }) {
  * markdown body, matching the in-flight `AgentStreamBubble` layout.
  */
 function StreamedRehydration({ snapshot }: { snapshot: StreamedSnapshot | null }) {
-  const [thinkingOpen, setThinkingOpen] = useState(false);
   if (!snapshot) return null;
   const hasThinking = Boolean(snapshot.thinking);
   const tools = snapshot.tool_calls ?? [];
   if (!hasThinking && tools.length === 0) return null;
-  const elapsed = snapshot.elapsedMs ? (snapshot.elapsedMs / 1000).toFixed(1) : null;
   return (
-    <div className="mb-1.5 space-y-1.5">
-      {hasThinking && (
-        <>
-          <button
-            type="button"
-            onClick={() => setThinkingOpen((v) => !v)}
-            className="flex w-full items-center gap-1 rounded border border-border/60 bg-subtle/30 px-1.5 py-1 text-left text-[0.6875rem] text-muted-foreground hover:bg-subtle/50"
-          >
-            {thinkingOpen ? (
-              <ChevronDown className="h-3 w-3" />
-            ) : (
-              <ChevronRight className="h-3 w-3" />
-            )}
-            <span className="font-mono">{elapsed ? `Thought for ${elapsed}s` : "Thinking"}</span>
-          </button>
-          {thinkingOpen && snapshot.thinking && (
-            <div className="rounded border border-border/40 bg-background/40 px-2 py-1.5 text-[0.6875rem] italic text-muted-foreground">
-              <ChatMarkdown body={snapshot.thinking} className="text-muted-foreground" />
-            </div>
-          )}
-        </>
-      )}
-      {tools.map((tb) => (
-        <ToolCallCard key={tb.id} call={tb} />
-      ))}
-    </div>
-  );
-}
-
-function hasToolArguments(args: unknown): boolean {
-  if (args == null) return false;
-  if (Array.isArray(args)) return args.length > 0;
-  if (typeof args === "object") return Object.keys(args).length > 0;
-  return true;
-}
-
-function ToolCallCard({ call }: { call: RehydratedToolCall }) {
-  const [open, setOpen] = useState(false);
-  const json = useMemo(() => {
-    try {
-      return JSON.stringify(call.args, null, 2);
-    } catch {
-      return String(call.args);
-    }
-  }, [call.args]);
-  const hasArgs = useMemo(() => hasToolArguments(call.args), [call.args]);
-  let statusLabel: string;
-  switch (call.status) {
-    case "executed":
-      statusLabel = "done";
-      break;
-    case "declined":
-      statusLabel = "declined";
-      break;
-    case "error":
-      statusLabel = "error";
-      break;
-    case "approved":
-      statusLabel = "approved";
-      break;
-    case "pending":
-    default:
-      statusLabel = "pending";
-      break;
-  }
-  return (
-    <div className="rounded border border-border/60 bg-subtle/30 text-[0.6875rem]">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-1.5 py-1 text-left text-muted-foreground hover:text-foreground"
-      >
-        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <Wrench className="h-3 w-3 text-ember" />
-        <span className="font-mono text-foreground">{call.name}</span>
-        <span
-          className={cn(
-            "ml-auto text-[0.5625rem] uppercase tracking-wider",
-            call.status === "error" || call.status === "declined"
-              ? "text-destructive"
-              : "text-muted-foreground/70",
-          )}
-        >
-          {statusLabel}
-        </span>
-      </button>
-      {open && (
-        <div className="space-y-1 border-t border-border/40 px-2 py-1.5">
-          {hasArgs ? (
-            <ChatMarkdown body={"```json\n" + json + "\n```"} />
-          ) : (
-            <p className="text-[0.625rem] text-muted-foreground">No input arguments.</p>
-          )}
-          {call.summary && (
-            <p
-              className={cn(
-                "text-[0.625rem]",
-                call.status === "executed"
-                  ? "text-foreground"
-                  : call.status === "error" || call.status === "declined"
-                    ? "text-destructive"
-                    : "text-muted-foreground",
-              )}
-            >
-              <span className="mr-1 font-mono">
-                {call.status === "executed" ? "ok" : call.status}
-              </span>
-              {call.summary}
-            </p>
-          )}
-        </div>
-      )}
-    </div>
+    <ChatWorkTrace
+      thinking={snapshot.thinking}
+      tools={tools}
+      elapsedMs={snapshot.elapsedMs ?? null}
+      className="mb-1.5"
+    />
   );
 }

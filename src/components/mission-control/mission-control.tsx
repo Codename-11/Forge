@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import {
   Activity,
   ChevronUp,
@@ -85,6 +86,7 @@ const BASE_TABS: { id: MissionControlTab; label: string; chord: string; adminOnl
 export function MissionControl() {
   const workspace = useMaybeWorkspace();
   const slug = workspace?.slug ?? "";
+  const pathname = usePathname();
   const isAdmin = workspace?.role === "OWNER" || workspace?.role === "ADMIN";
   // Filter tabs: adminOnly tabs only visible to OWNER/ADMIN.
   const TABS = BASE_TABS.filter((t) => !t.adminOnly || isAdmin);
@@ -498,6 +500,11 @@ export function MissionControl() {
   // mutates inline styles during a drag, then we reset to corner-anchor
   // mode on drop.
   const cornerClass = cornerToClass(state.corner);
+  const isFullChatRoute = Boolean(slug && pathname?.startsWith(`/w/${slug}/chat`));
+  const pillCornerClass =
+    isFullChatRoute && (state.corner === "br" || state.corner === "bl")
+      ? cn(cornerClass, "bottom-24")
+      : cornerClass;
 
   // Pill summary: agent presence dots (up to 3) + count + first row's
   // current step if there is one.
@@ -519,7 +526,7 @@ export function MissionControl() {
         data-mission-control-root
         className={cn(
           "group fixed z-40 flex select-none items-center gap-1",
-          cornerClass,
+          pillCornerClass,
           isDragging && "cursor-grabbing",
         )}
       >

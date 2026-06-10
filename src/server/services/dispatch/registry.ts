@@ -5,6 +5,7 @@ import {
   hermesEnvRunsConfigured,
   hermesRunsConnector,
   makeHermesRunsConnector,
+  parseHermesRuntimeConfig,
 } from "./hermes-runs";
 import {
   makeCodexAppServerConnector,
@@ -127,7 +128,15 @@ export function getRunsConnectorForAgent(agent: {
   }
   if (rt && rt.endpoint) {
     if (rt.adapterKey === "hermes") {
-      return makeHermesRunsConnector({ baseUrl: rt.endpoint, token: rt.secret });
+      const hermes = parseHermesRuntimeConfig(rt.config);
+      return makeHermesRunsConnector({
+        baseUrl: rt.endpoint,
+        token: rt.secret,
+        profile: hermes.profile,
+        mode: hermes.mode,
+        model: hermes.model,
+        yoloMode: hermes.yoloMode,
+      });
     }
     if (rt.adapterKey === "codex-app-server") {
       // Codex app server (WebSocket JSON-RPC). Only resolvable when the
@@ -139,6 +148,8 @@ export function getRunsConnectorForAgent(agent: {
         token: rt.secret,
         sandboxMode: codex.sandboxMode,
         approvalPolicy: codex.approvalPolicy,
+        model: codex.model,
+        yoloMode: codex.yoloMode,
         workspaceRoot: codex.workspaceRoot,
       });
     }

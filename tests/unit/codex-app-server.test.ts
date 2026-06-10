@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { WebSocketServer, type WebSocket } from "ws";
+import type { AddressInfo } from "node:net";
 import {
   mapCodexNotification,
   mapCodexUsage,
@@ -111,6 +113,127 @@ describe("makeCodexAppServerConnector", () => {
     expect(typeof c?.approve).toBe("function");
     expect(typeof c?.stop).toBe("function");
   });
+
+  it("shares active run state across connector instances for the same process", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const sockets = new Set<WebSocket>();
+    const threadId = `thread-${Date.now()}`;
+    const turnId = `turn-${Date.now()}`;
+
+    server.on("connection", (ws) => {
+      sockets.add(ws);
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(raw.toString()) as {
+          id?: number;
+          method?: string;
+        };
+        if (msg.id === undefined) return;
+        if (msg.method === "initialize") {
+          ws.send(JSON.stringify({ id: msg.id, result: {} }));
+        } else if (msg.method === "thread/start") {
+          ws.send(JSON.stringify({ id: msg.id, result: { thread: { id: threadId } } }));
+        } else if (msg.method === "turn/start") {
+          ws.send(JSON.stringify({ id: msg.id, result: { turn: { id: turnId } } }));
+        }
+      });
+    });
+
+    try {
+      const first = makeCodexAppServerConnector({ baseUrl: `ws://127.0.0.1:${port}` });
+      const second = makeCodexAppServerConnector({ baseUrl: `ws://127.0.0.1:${port}` });
+      const { externalRunId } = await first!.startRun({ message: "hello" });
+
+      await expect(second!.getStatus!(externalRunId)).resolves.toMatchObject({
+        state: "running",
+      });
+
+      const subscribed = second!.subscribe(externalRunId, () => undefined);
+      for (const ws of sockets) {
+        ws.send(
+          JSON.stringify({
+            method: "turn/completed",
+            params: { turn: { status: "completed" } },
+          }),
+        );
+      }
+      await subscribed;
+    } finally {
+      for (const ws of sockets) ws.close();
+      server.close();
+    }
+  });
+
+  it("sends model and YOLO turn policy for discuss runs", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const threadId = `thread-yolo-${Date.now()}`;
+    const turnId = `turn-yolo-${Date.now()}`;
+    let threadStartParams: Record<string, unknown> | null = null;
+    let turnStartParams: Record<string, unknown> | null = null;
+
+    server.on("connection", (ws) => {
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(raw.toString()) as {
+          id?: number;
+          method?: string;
+          params?: Record<string, unknown>;
+        };
+        if (msg.id === undefined) return;
+        if (msg.method === "initialize") {
+          ws.send(JSON.stringify({ id: msg.id, result: {} }));
+        } else if (msg.method === "thread/start") {
+          threadStartParams = msg.params ?? {};
+          ws.send(JSON.stringify({ id: msg.id, result: { thread: { id: threadId } } }));
+        } else if (msg.method === "turn/start") {
+          turnStartParams = msg.params ?? {};
+          ws.send(JSON.stringify({ id: msg.id, result: { turn: { id: turnId } } }));
+          ws.send(
+            JSON.stringify({
+              method: "turn/completed",
+              params: { turn: { status: "completed" } },
+            }),
+          );
+        }
+      });
+    });
+
+    try {
+      const connector = makeCodexAppServerConnector({
+        baseUrl: `ws://127.0.0.1:${port}`,
+        sandboxMode: "workspace-write",
+        approvalPolicy: "on-request",
+        model: "gpt-5.5-codex",
+        yoloMode: true,
+        workspaceRoot: "/work",
+      });
+      const { externalRunId } = await connector!.startRun({
+        message: "hello",
+        engagementMode: "DISCUSS",
+      });
+      await connector!.subscribe(externalRunId, () => undefined);
+
+      expect(threadStartParams).toMatchObject({ cwd: "/work", model: "gpt-5.5-codex" });
+      expect(turnStartParams).toMatchObject({
+        cwd: "/work",
+        model: "gpt-5.5-codex",
+        approvalPolicy: "never",
+        sandboxPolicy: { type: "dangerFullAccess" },
+      });
+    } finally {
+      server.close();
+    }
+  });
+
+  it("reports unknown runs as unknown instead of completed", async () => {
+    const c = makeCodexAppServerConnector({ baseUrl: "ws://127.0.0.1:4500" });
+
+    await expect(c!.getStatus!("missing#run")).resolves.toMatchObject({
+      state: "unknown",
+    });
+  });
 });
 
 describe("parseCodexRuntimeConfig", () => {
@@ -124,11 +247,15 @@ describe("parseCodexRuntimeConfig", () => {
       parseCodexRuntimeConfig({
         sandboxMode: "workspace-write",
         approvalPolicy: "on-request",
+        model: "gpt-5.5-codex",
+        yoloMode: true,
         workspaceRoot: "/work",
       }),
     ).toEqual({
       sandboxMode: "workspace-write",
       approvalPolicy: "on-request",
+      model: "gpt-5.5-codex",
+      yoloMode: true,
       workspaceRoot: "/work",
     });
   });

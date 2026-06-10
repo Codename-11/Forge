@@ -55,6 +55,24 @@ export function hermesEnvRunsConfigured(): boolean {
   );
 }
 
+export interface HermesRuntimeConfig {
+  profile?: string;
+  mode?: string;
+  model?: string;
+  yoloMode?: boolean;
+}
+
+export function parseHermesRuntimeConfig(config: unknown): HermesRuntimeConfig {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return {};
+  const c = config as Record<string, unknown>;
+  const out: HermesRuntimeConfig = {};
+  if (typeof c.profile === "string" && c.profile.trim()) out.profile = c.profile.trim();
+  if (typeof c.mode === "string" && c.mode.trim()) out.mode = c.mode.trim();
+  if (typeof c.model === "string" && c.model.trim()) out.model = c.model.trim();
+  if (typeof c.yoloMode === "boolean") out.yoloMode = c.yoloMode;
+  return out;
+}
+
 /**
  * Build a Hermes runs connector. With no opts (or null fields) it uses the
  * env gateway — identical to the historical singleton. A managed runtime
@@ -64,11 +82,30 @@ export function hermesEnvRunsConfigured(): boolean {
 export function makeHermesRunsConnector(opts?: {
   baseUrl?: string | null;
   token?: string | null;
+  profile?: string | null;
+  mode?: string | null;
+  model?: string | null;
+  yoloMode?: boolean | null;
 }): DispatchConnector {
   const base = () => opts?.baseUrl || envGatewayBase();
+  const runtimeProfile = opts?.profile?.trim() || undefined;
+  const runtimeMode = opts?.mode?.trim() || undefined;
+  const runtimeModel = opts?.model?.trim() || undefined;
+  const runtimeYoloMode = opts?.yoloMode === true;
+  const runYoloOverrides = new Map<string, boolean>();
   const authHeaders = (): Record<string, string> => {
     const token = opts ? (opts.token ?? "") : envGatewayToken();
     return token ? { authorization: `Bearer ${token}` } : {};
+  };
+
+  const approveRun = async (externalRunId: string, choice: string): Promise<void> => {
+    await fetch(`${base()}/runs/${externalRunId}/approval`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ choice }),
+    }).catch((err) => {
+      logger.warn({ err, externalRunId }, "hermes-runs: approval post failed");
+    });
   };
 
   return {
@@ -76,7 +113,21 @@ export function makeHermesRunsConnector(opts?: {
 
     async startRun(input: RunInput): Promise<StartedRun> {
       const body: Record<string, unknown> = { input: input.message };
+      const effectiveProfile = input.runtimeProfile?.trim() || runtimeProfile;
+      const effectiveMode = input.runtimeMode?.trim() || runtimeMode;
+      const effectiveModel = input.model?.trim() || runtimeModel;
+      const yoloMode = input.yoloMode ?? runtimeYoloMode;
       if (input.instructions) body.instructions = input.instructions;
+      if (effectiveModel) body.model = effectiveModel;
+      if (effectiveProfile) {
+        body.profile = effectiveProfile;
+        body.profile_key = effectiveProfile;
+      }
+      if (effectiveMode) body.mode = effectiveMode;
+      if (yoloMode) {
+        body.yolo_mode = true;
+        body.permission_mode = "yolo";
+      }
       if (input.engagementMode) body.engagement_mode = input.engagementMode;
       if (input.contractVersion) body.forge_contract_version = input.contractVersion;
       if (input.toolPolicy) {
@@ -109,6 +160,7 @@ export function makeHermesRunsConnector(opts?: {
       const json = (await res.json()) as { run_id?: string; id?: string };
       const externalRunId = json.run_id ?? json.id;
       if (!externalRunId) throw new Error("Hermes runs start: no run_id in response");
+      runYoloOverrides.set(externalRunId, yoloMode);
       return { externalRunId };
     },
 
@@ -178,6 +230,11 @@ export function makeHermesRunsConnector(opts?: {
             });
             break;
           case "approval.request":
+            if (runYoloOverrides.get(externalRunId) ?? runtimeYoloMode) {
+              void approveRun(externalRunId, "once");
+              onEvent({ type: "approval_resolved", choice: "once" });
+              break;
+            }
             onEvent({
               type: "approval_required",
               choices: Array.isArray(evt.choices)
@@ -253,6 +310,7 @@ export function makeHermesRunsConnector(opts?: {
       }
       // Defensive: if the stream closed without a terminal event, synthesise one.
       if (!terminal) onEvent({ type: "completed" });
+      runYoloOverrides.delete(externalRunId);
     },
 
     async getStatus(externalRunId: string): Promise<RunStatus> {
@@ -282,13 +340,7 @@ export function makeHermesRunsConnector(opts?: {
     },
 
     async approve(externalRunId: string, choice: string): Promise<void> {
-      await fetch(`${base()}/runs/${externalRunId}/approval`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ choice }),
-      }).catch((err) => {
-        logger.warn({ err, externalRunId }, "hermes-runs: approval post failed");
-      });
+      await approveRun(externalRunId, choice);
     },
 
     async stop(externalRunId: string): Promise<void> {

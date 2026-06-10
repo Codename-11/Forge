@@ -13,11 +13,14 @@ import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { workspaceColor } from "@/lib/workspace-color";
 
+type DefaultIssueAssigneeMode = "NONE" | "CREATOR" | "USER";
+
 export default function WorkspaceSettingsPage() {
   const router = useRouter();
   const ws = useWorkspace();
   const utils = trpc.useUtils();
   const { data: current, refetch } = trpc.workspace.current.useQuery();
+  const { data: members } = trpc.workspace.members.useQuery();
 
   const canEdit = ws.role === "OWNER" || ws.role === "ADMIN";
   const canDelete = ws.role === "OWNER";
@@ -43,6 +46,10 @@ export default function WorkspaceSettingsPage() {
   >("hermes");
   const [aiModel, setAiModel] = useState("");
   const [startedStatusId, setStartedStatusId] = useState<string | null>(null);
+  const [defaultIssueAssigneeMode, setDefaultIssueAssigneeMode] =
+    useState<DefaultIssueAssigneeMode>("NONE");
+  const [defaultIssueAssigneeUserId, setDefaultIssueAssigneeUserId] =
+    useState<string | null>(null);
 
   const { data: aiStatus, refetch: refetchAi } = trpc.ai.status.useQuery();
   const ensureCoach = trpc.ai.ensureCoach.useMutation({
@@ -79,6 +86,10 @@ export default function WorkspaceSettingsPage() {
     );
     setAiModel(current.aiModel ?? "");
     setStartedStatusId(current.startedStatusId ?? null);
+    setDefaultIssueAssigneeMode(
+      (current.defaultIssueAssigneeMode ?? "NONE") as DefaultIssueAssigneeMode,
+    );
+    setDefaultIssueAssigneeUserId(current.defaultIssueAssigneeUserId ?? null);
   }, [current]);
 
   useEffect(() => {
@@ -118,6 +129,8 @@ export default function WorkspaceSettingsPage() {
   const badge = workspaceColor(ws.key);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const normalizedDefaultIssueAssigneeUserId =
+    defaultIssueAssigneeMode === "USER" ? defaultIssueAssigneeUserId : null;
 
   // Field-by-field diff against the server snapshot. Drives the save bar's
   // pending count and the dirty gate, so we only push when something moved.
@@ -143,6 +156,18 @@ export default function WorkspaceSettingsPage() {
       ["aiProvider", aiProvider !== (current.aiProvider ?? "hermes")],
       ["aiModel", (aiModel.trim() || "") !== (current.aiModel ?? "")],
       ["startedStatusId", (startedStatusId ?? null) !== (current.startedStatusId ?? null)],
+      [
+        "defaultIssueAssigneeMode",
+        defaultIssueAssigneeMode !==
+          ((current.defaultIssueAssigneeMode ?? "NONE") as DefaultIssueAssigneeMode),
+      ],
+      [
+        "defaultIssueAssigneeUserId",
+        normalizedDefaultIssueAssigneeUserId !==
+          (current.defaultIssueAssigneeMode === "USER"
+            ? (current.defaultIssueAssigneeUserId ?? null)
+            : null),
+      ],
     ];
     return fields.filter(([, changed]) => changed).map(([k]) => k);
   }, [
@@ -166,6 +191,8 @@ export default function WorkspaceSettingsPage() {
     aiProvider,
     aiModel,
     startedStatusId,
+    defaultIssueAssigneeMode,
+    normalizedDefaultIssueAssigneeUserId,
   ]);
 
   const pending = dirtyFields.length;
@@ -173,6 +200,10 @@ export default function WorkspaceSettingsPage() {
 
   const save = useCallback(() => {
     if (!canEdit || !dirty || update.isPending) return;
+    if (defaultIssueAssigneeMode === "USER" && !defaultIssueAssigneeUserId) {
+      toast.error("Choose a workspace member for the default issue assignee.");
+      return;
+    }
     update.mutate({
       name: name.trim() || undefined,
       avatarUrl: avatarUrl.trim() ? avatarUrl.trim() : null,
@@ -193,6 +224,8 @@ export default function WorkspaceSettingsPage() {
       aiProvider,
       aiModel: aiModel.trim() ? aiModel.trim() : null,
       startedStatusId,
+      defaultIssueAssigneeMode,
+      defaultIssueAssigneeUserId: normalizedDefaultIssueAssigneeUserId,
     });
   }, [
     canEdit,
@@ -217,6 +250,9 @@ export default function WorkspaceSettingsPage() {
     aiProvider,
     aiModel,
     startedStatusId,
+    defaultIssueAssigneeMode,
+    defaultIssueAssigneeUserId,
+    normalizedDefaultIssueAssigneeUserId,
   ]);
 
   // ⌘S / Ctrl+S saves when there are pending changes.
@@ -362,6 +398,61 @@ export default function WorkspaceSettingsPage() {
                     disabled={!canEdit}
                   />
                 </Field>
+              </div>
+            </FormCard>
+          </Section>
+
+          <Section
+            title="Issue defaults"
+            hint="Defaults are applied only when the create caller did not choose any human assignees."
+          >
+            <FormCard className="space-y-5 p-5">
+              <Field
+                label="Default human assignee"
+                hint="Controls new issues only. Agent assignment and auto-dispatch remain separate."
+              >
+                <select
+                  value={defaultIssueAssigneeMode}
+                  onChange={(e) => {
+                    const mode = e.target.value as DefaultIssueAssigneeMode;
+                    setDefaultIssueAssigneeMode(mode);
+                    if (mode !== "USER") setDefaultIssueAssigneeUserId(null);
+                  }}
+                  disabled={!canEdit}
+                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+                >
+                  <option value="NONE">No default</option>
+                  <option value="CREATOR">Issue creator</option>
+                  <option value="USER">Specific member</option>
+                </select>
+              </Field>
+
+              {defaultIssueAssigneeMode === "USER" && (
+                <Field
+                  label="Member"
+                  hint="Must be an active workspace member. Removing the member clears this default."
+                >
+                  <select
+                    value={defaultIssueAssigneeUserId ?? ""}
+                    onChange={(e) =>
+                      setDefaultIssueAssigneeUserId(e.target.value || null)
+                    }
+                    disabled={!canEdit}
+                    className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+                  >
+                    <option value="">Choose a member...</option>
+                    {(members ?? []).map((m) => (
+                      <option key={m.user.id} value={m.user.id}>
+                        {m.user.name ?? m.user.email}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+
+              <div className="rounded-md border border-border/60 bg-background/40 px-3 py-2 text-meta text-muted-foreground">
+                Existing issues are unchanged. New issues with an explicit
+                assignee keep that explicit choice.
               </div>
             </FormCard>
           </Section>
