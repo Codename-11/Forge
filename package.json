@@ -1,6 +1,6 @@
 {
   "name": "forge",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Forge — a fast, minimalist, keyboard-driven project management platform with pluggable agents.",
   "scripts": {
@@ -28,6 +28,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "ci:local": "pnpm lint && pnpm typecheck && pnpm test && E2E_FORCE_BUILD=1 pnpm exec playwright test --workers=1",
     "worker": "NODE_OPTIONS='--require ./scripts/ignore-server-only.cjs' tsx src/server/worker.ts",
     "worker:live": "./scripts/worker-live.sh",
     "worker:live:watch": "./scripts/worker-live.sh --watch",

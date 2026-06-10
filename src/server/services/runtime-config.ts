@@ -26,6 +26,8 @@ const runtimeToolSurfaceShape = {
   modeToolProfiles: runtimeModeToolProfilesSchema.optional(),
 };
 
+const optionalTextConfigSchema = (max = 160) => z.string().trim().max(max).optional();
+
 type RuntimeToolSurfaceInput = {
   localWorkspaceTools?: boolean;
   toolCapabilities?: RuntimeToolCapability[];
@@ -63,11 +65,26 @@ const codexConfigSchema = z
   .object({
     sandboxMode: z.enum(CODEX_SANDBOX_MODES as [string, ...string[]]).optional(),
     approvalPolicy: z.enum(CODEX_APPROVAL_POLICIES as [string, ...string[]]).optional(),
+    model: optionalTextConfigSchema(160),
+    yoloMode: z.boolean().optional(),
     ...runtimeToolSurfaceShape,
   })
   .strict();
 
-const hermesConfigSchema = z.object(runtimeToolSurfaceShape).strict();
+const hermesConfigSchema = z
+  .object({
+    profile: optionalTextConfigSchema(120),
+    mode: optionalTextConfigSchema(80),
+    model: optionalTextConfigSchema(160),
+    yoloMode: z.boolean().optional(),
+    ...runtimeToolSurfaceShape,
+  })
+  .strict();
+
+function cleanOptionalText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 export type RuntimeConfigStatus = {
   ok: boolean;
@@ -110,13 +127,20 @@ export function validateRuntimeConfig(
     return {
       ...(parsed.sandboxMode ? { sandboxMode: parsed.sandboxMode } : {}),
       ...(parsed.approvalPolicy ? { approvalPolicy: parsed.approvalPolicy } : {}),
+      ...(cleanOptionalText(parsed.model) ? { model: cleanOptionalText(parsed.model) } : {}),
+      ...(parsed.yoloMode !== undefined ? { yoloMode: parsed.yoloMode } : {}),
       ...cleanRuntimeToolSurface(parsed),
     } as Prisma.InputJsonValue;
   }
   if (adapterKey === "hermes") {
-    return cleanRuntimeToolSurface(
-      hermesConfigSchema.parse(config ?? {}),
-    ) as Prisma.InputJsonValue;
+    const parsed = hermesConfigSchema.parse(config ?? {});
+    return {
+      ...(cleanOptionalText(parsed.profile) ? { profile: cleanOptionalText(parsed.profile) } : {}),
+      ...(cleanOptionalText(parsed.mode) ? { mode: cleanOptionalText(parsed.mode) } : {}),
+      ...(cleanOptionalText(parsed.model) ? { model: cleanOptionalText(parsed.model) } : {}),
+      ...(parsed.yoloMode !== undefined ? { yoloMode: parsed.yoloMode } : {}),
+      ...cleanRuntimeToolSurface(parsed),
+    } as Prisma.InputJsonValue;
   }
   if (config && Object.keys(config as object).length > 0) {
     throw new TRPCError({

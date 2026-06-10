@@ -11,6 +11,26 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-06-09] — v0.7.0 · Chat runtime controls
+
+### Added
+
+- **Runtime model and mode controls.** Codex runtimes can set a default model and YOLO mode; Hermes runtimes can set profile, mode, model, and YOLO auto-approval.
+- **Conversation-level YOLO overrides.** Chat threads can inherit, force-enable, or force-disable YOLO from the chat header settings menu.
+- **Workspace default issue assignee.** Workspaces can automatically assign new issues to nobody, the creator, or a selected member.
+
+### Changed
+
+- **Chat status is calmer and more accurate.** Stale failed turns no longer keep active conversations stuck in attention/thinking states, `/clear` restores suggestions, and chat work traces render in a shared compact format.
+- **Codex app-server run tracking is durable across connector instances.** Forge now retains active run state long enough for pollers and reports unknown or prematurely closed Codex runs as failures.
+
+### Fixed
+
+- **Provider permissions now reach the runtime.** Codex chat turns forward model and YOLO policy, and Hermes approval prompts are auto-resolved when YOLO is enabled.
+- **Issue creation paths honor the same assignee defaults.** UI, email ingest, recurring issues, note promotion, MCP promotion, and execution-step materialization now share the same default assignment behavior.
+- **The Activity launcher no longer blocks Chat send.** The collapsed Mission Control launcher lifts above the full Chat composer instead of intercepting the Send button.
+- **Chat read and composer state are steadier.** Activity views mark visible chat activity read, and newly opened thread drafts finish loading before the composer accepts input.
+
 ## [2026-06-09] — v0.6.0 · GitHub support and sprint planning
 
 ### Added

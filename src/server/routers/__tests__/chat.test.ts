@@ -764,6 +764,48 @@ describe("chatRouter deferred dispatch", () => {
     expect(diagnostics.latestAgentMessageAt).toBeInstanceOf(Date);
   });
 
+  it("does not carry an older failed stream error into a newer user turn", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const base = new Date("2026-06-09T12:00:00.000Z");
+    const failedTurn = await caller.send({ agentId: agent.id, body: "first attempt" });
+    await prisma.chatMessage.update({
+      where: { id: failedTurn.messageId },
+      data: { createdAt: base, dispatchedAt: base },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: failedTurn.threadId,
+        role: ChatRole.AGENT,
+        body: "_(Reply interrupted before it finished.)_",
+        createdAt: new Date(base.getTime() + 1_000),
+        contextSnapshot: {
+          streamed: true,
+          error: "Client disconnected before the reply finished.",
+          aborted: true,
+        },
+      },
+    });
+
+    const retryTurn = await caller.send({
+      agentId: agent.id,
+      threadId: failedTurn.threadId,
+      body: "try again",
+    });
+    const retryAt = new Date(base.getTime() + 2_000);
+    await prisma.chatMessage.update({
+      where: { id: retryTurn.messageId },
+      data: { createdAt: retryAt, dispatchedAt: retryAt },
+    });
+
+    const diagnostics = await caller.threadDiagnostics({ threadId: failedTurn.threadId });
+    expect(diagnostics.latestUserMessageId).toBe(retryTurn.messageId);
+    expect(diagnostics.waitingForReply).toBe(true);
+    expect(diagnostics.lastAgentStreamError).toBeNull();
+    expect(diagnostics.lastAgentStreamAborted).toBe(false);
+    expect(diagnostics.turnStatus.phase).not.toBe("failed");
+  });
+
   it("resolves linked sourceRunId diagnostics and redacts failed delivery text", async () => {
     const { prisma, agent, caller, fixture } = await setup();
     const issue = await createIssue(fixture, { title: "Chat-linked run" });
@@ -830,6 +872,9 @@ describe("chatRouter deferred dispatch", () => {
     expect(diagnostics.lastDelivery?.lastError).toContain("[REDACTED]");
     expect(diagnostics.lastDelivery?.lastError).not.toContain("super-secret-token");
     expect(diagnostics.lastDelivery?.lastError).not.toContain("forge.axiom-labs.dev");
+    await expect(caller.threads({ state: "stalled" })).resolves.not.toContainEqual(
+      expect.objectContaining({ id: sent.threadId }),
+    );
   });
 
   it("archives and restores owner-scoped chat threads", async () => {

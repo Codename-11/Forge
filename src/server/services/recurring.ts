@@ -3,6 +3,8 @@ import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { EventKind } from "@prisma/client";
 import { recordChange } from "@/server/audit";
+import { resolveDefaultIssueAssigneeIds } from "@/server/services/issue-create";
+import { autoWatchUser } from "@/server/services/issue-watchers";
 
 /**
  * Instantiate a single RecurringIssue row — create the actual Issue + bump
@@ -21,6 +23,10 @@ export async function runRecurringOnce(recurringId: string) {
       orderBy: { number: "desc" },
       select: { number: true },
     });
+    const assigneeIds = await resolveDefaultIssueAssigneeIds(tx, {
+      workspaceId: row.workspaceId,
+      authorId: row.createdById,
+    });
     const issue = await tx.issue.create({
       data: {
         workspaceId: row.workspaceId,
@@ -31,9 +37,19 @@ export async function runRecurringOnce(recurringId: string) {
         statusId: status.id,
         priority: row.defaultPriority,
         authorId: row.createdById,
+        assignees: {
+          create: assigneeIds.map((userId) => ({ userId })),
+        },
       },
       include: { status: true },
     });
+    for (const userId of assigneeIds) {
+      await autoWatchUser(tx, {
+        workspaceId: row.workspaceId,
+        issueId: issue.id,
+        userId,
+      });
+    }
 
     await recordChange(tx, {
       workspaceId: row.workspaceId,

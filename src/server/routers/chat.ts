@@ -272,7 +272,15 @@ async function buildThreadDiagnostics(
   );
   const delivery = lastEvent?.deliveries[0] ?? null;
   const now = Date.now();
-  const latestAgentSnapshot = jsonObject(latestAgent?.contextSnapshot);
+  const currentAgentReplyExists = Boolean(
+    latestUser && latestAgent && latestAgent.createdAt.getTime() >= latestUser.createdAt.getTime(),
+  );
+  const agentReplySupersededByUser = Boolean(
+    latestUser && latestAgent && latestAgent.createdAt.getTime() < latestUser.createdAt.getTime(),
+  );
+  const latestAgentSnapshot = agentReplySupersededByUser
+    ? null
+    : jsonObject(latestAgent?.contextSnapshot);
   const lastAgentStreamError = redactDiagnosticText(
     typeof latestAgentSnapshot?.error === "string" ? latestAgentSnapshot.error : null,
   );
@@ -318,69 +326,69 @@ async function buildThreadDiagnostics(
         waitingMs: null,
         runId: null,
       }
-    : !waitingForReply
+    : currentAgentReplyExists && lastAgentStreamError
       ? {
-          phase: "completed",
-          label: "Replied",
-          detail: latestAgent
-            ? `Latest reply landed ${Math.max(0, Math.floor((now - latestAgent.createdAt.getTime()) / 1000))}s ago.`
-            : "No pending reply.",
-          tone: "success",
+          phase: "failed",
+          label: "Needs attention",
+          detail: lastAgentStreamError,
+          tone: "danger",
           startedAt: latestUser.createdAt,
           readAt,
           outputStartedAt: latestUser.outputStartedAt,
           waitingMs: null,
           runId: run?.id ?? null,
         }
-      : deliveryFailed || lastAgentStreamError
+      : !waitingForReply
         ? {
-            phase: "failed",
-            label: "Needs attention",
-            detail:
-              lastAgentStreamError ??
-              redactDiagnosticText(
-                delivery?.responseBody ??
-                  (delivery?.responseStatus ? `HTTP ${delivery.responseStatus}` : null),
-              ) ??
-              "Delivery failed before the agent could reply.",
-            tone: "danger",
+            phase: "completed",
+            label: "Replied",
+            detail: latestAgent
+              ? `Latest reply landed ${Math.max(0, Math.floor((now - latestAgent.createdAt.getTime()) / 1000))}s ago.`
+              : "No pending reply.",
+            tone: "success",
             startedAt: latestUser.createdAt,
             readAt,
             outputStartedAt: latestUser.outputStartedAt,
-            waitingMs,
+            waitingMs: null,
             runId: run?.id ?? null,
           }
-        : dispatchState === "stalled"
+        : deliveryFailed || (!agentReplySupersededByUser && lastAgentStreamError)
           ? {
-              phase: "stalled",
-              label: "Stalled",
-              detail: run?.currentStep
-                ? `Waiting on ${run.currentStep}; idle ${Math.max(0, Math.floor((now - run.lastEventAt.getTime()) / 1000))}s.`
-                : `No reply after ${Math.max(0, Math.floor((waitingMs ?? 0) / 1000))}s.`,
-              tone: "warning",
+              phase: "failed",
+              label: "Needs attention",
+              detail:
+                lastAgentStreamError ??
+                redactDiagnosticText(
+                  delivery?.responseBody ??
+                    (delivery?.responseStatus ? `HTTP ${delivery.responseStatus}` : null),
+                ) ??
+                "Delivery failed before the agent could reply.",
+              tone: "danger",
               startedAt: latestUser.createdAt,
               readAt,
               outputStartedAt: latestUser.outputStartedAt,
               waitingMs,
               runId: run?.id ?? null,
             }
-          : dispatchState === "running"
+          : dispatchState === "stalled"
             ? {
-                phase: run ? "running" : "thinking",
-                label: run ? "Running" : "Thinking",
-                detail: run?.currentStep ?? "Agent accepted the turn and is drafting.",
-                tone: "info",
+                phase: "stalled",
+                label: "Stalled",
+                detail: run?.currentStep
+                  ? `Waiting on ${run.currentStep}; idle ${Math.max(0, Math.floor((now - run.lastEventAt.getTime()) / 1000))}s.`
+                  : `No reply after ${Math.max(0, Math.floor((waitingMs ?? 0) / 1000))}s.`,
+                tone: "warning",
                 startedAt: latestUser.createdAt,
                 readAt,
                 outputStartedAt: latestUser.outputStartedAt,
                 waitingMs,
                 runId: run?.id ?? null,
               }
-            : dispatchState === "acknowledged"
+            : dispatchState === "running"
               ? {
-                  phase: "read",
-                  label: "Read",
-                  detail: "Agent acknowledged the turn.",
+                  phase: run ? "running" : "thinking",
+                  label: run ? "Running" : "Thinking",
+                  detail: run?.currentStep ?? "Agent accepted the turn and is drafting.",
                   tone: "info",
                   startedAt: latestUser.createdAt,
                   readAt,
@@ -388,11 +396,11 @@ async function buildThreadDiagnostics(
                   waitingMs,
                   runId: run?.id ?? null,
                 }
-              : dispatchState === "wake-sent"
+              : dispatchState === "acknowledged"
                 ? {
-                    phase: "delivered",
-                    label: "Delivered",
-                    detail: "Wake delivered; waiting for agent acknowledgement.",
+                    phase: "read",
+                    label: "Read",
+                    detail: "Agent acknowledged the turn.",
                     tone: "info",
                     startedAt: latestUser.createdAt,
                     readAt,
@@ -400,17 +408,29 @@ async function buildThreadDiagnostics(
                     waitingMs,
                     runId: run?.id ?? null,
                   }
-                : {
-                    phase: "queued",
-                    label: "Queued",
-                    detail: "Forge persisted the turn and is preparing delivery.",
-                    tone: "muted",
-                    startedAt: latestUser.createdAt,
-                    readAt,
-                    outputStartedAt: latestUser.outputStartedAt,
-                    waitingMs,
-                    runId: run?.id ?? null,
-                  };
+                : dispatchState === "wake-sent"
+                  ? {
+                      phase: "delivered",
+                      label: "Delivered",
+                      detail: "Wake delivered; waiting for agent acknowledgement.",
+                      tone: "info",
+                      startedAt: latestUser.createdAt,
+                      readAt,
+                      outputStartedAt: latestUser.outputStartedAt,
+                      waitingMs,
+                      runId: run?.id ?? null,
+                    }
+                  : {
+                      phase: "queued",
+                      label: "Queued",
+                      detail: "Forge persisted the turn and is preparing delivery.",
+                      tone: "muted",
+                      startedAt: latestUser.createdAt,
+                      readAt,
+                      outputStartedAt: latestUser.outputStartedAt,
+                      waitingMs,
+                      runId: run?.id ?? null,
+                    };
 
   return {
     latestUserMessageId: latestUser?.id ?? null,
@@ -740,12 +760,13 @@ export const chatRouter = router({
         if (state === "waiting") return thread.diagnostics.waitingForReply;
         if (state === "stalled") {
           return (
-            thread.diagnostics.lastRun?.status === AgentRunStatus.STALLED ||
-            Boolean(
-              thread.diagnostics.lastRun &&
-              thread.diagnostics.lastRun.status === AgentRunStatus.ACTIVE &&
-              thread.diagnostics.lastRun.idleMs >= STALE_RUN_MS,
-            )
+            thread.diagnostics.waitingForReply &&
+            (thread.diagnostics.lastRun?.status === AgentRunStatus.STALLED ||
+              Boolean(
+                thread.diagnostics.lastRun &&
+                thread.diagnostics.lastRun.status === AgentRunStatus.ACTIVE &&
+                thread.diagnostics.lastRun.idleMs >= STALE_RUN_MS,
+              ))
           );
         }
         if (state === "has_attachments") return thread.hasAttachments;
@@ -922,6 +943,7 @@ export const chatRouter = router({
             summarizedAt: source.summarizedAt,
             providerOverride: source.providerOverride,
             modelOverride: source.modelOverride,
+            yoloModeOverride: source.yoloModeOverride,
             lastMessageAt: now,
             createdAt: now,
           },
@@ -1059,6 +1081,7 @@ export const chatRouter = router({
         threadId: idString,
         provider: z.nativeEnum(AgentProvider).nullable().optional(),
         model: z.string().trim().max(120).nullable().optional(),
+        yoloMode: z.boolean().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -1073,6 +1096,7 @@ export const chatRouter = router({
         const trimmed = input.model?.trim() ?? null;
         data.modelOverride = trimmed && trimmed.length > 0 ? trimmed : null;
       }
+      if (input.yoloMode !== undefined) data.yoloModeOverride = input.yoloMode;
       await ctx.db.chatThread.update({ where: { id: thread.id }, data });
       return { ok: true } as const;
     }),

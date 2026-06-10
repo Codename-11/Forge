@@ -1,5 +1,10 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { AgentProvider, AgentRunStatus, RelationKind } from "@prisma/client";
+import {
+  AgentProvider,
+  AgentRunStatus,
+  DefaultIssueAssigneeMode,
+  RelationKind,
+} from "@prisma/client";
 import { issueRouter } from "@/server/routers/issue";
 import type { ApiKeyContext } from "@/server/services/api-key-auth";
 import {
@@ -527,6 +532,76 @@ describe("issueRouter — auto-watch on create / assign / agent-assign", () => {
       where: { issueId: created.id, userId: fixture.secondUser.id },
     });
     expect(watcher).not.toBeNull();
+  });
+
+  it("create applies the workspace default human assignee when none is supplied", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: {
+        defaultIssueAssigneeMode: DefaultIssueAssigneeMode.USER,
+        defaultIssueAssigneeUserId: fixture.secondUser.id,
+      },
+    });
+
+    const created = await caller.create({
+      title: "Default-assigned",
+      assigneeIds: [],
+      labelIds: [],
+      priority: "NONE",
+      kind: "ISSUE",
+    });
+
+    expect(created.assignees.map((a) => a.userId)).toEqual([fixture.secondUser.id]);
+    const watcher = await prisma.issueWatcher.findFirst({
+      where: { issueId: created.id, userId: fixture.secondUser.id },
+    });
+    expect(watcher).not.toBeNull();
+  });
+
+  it("create keeps explicit human assignees over the workspace default", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: {
+        defaultIssueAssigneeMode: DefaultIssueAssigneeMode.USER,
+        defaultIssueAssigneeUserId: fixture.secondUser.id,
+      },
+    });
+
+    const created = await caller.create({
+      title: "Explicitly assigned",
+      assigneeIds: [fixture.user.id],
+      labelIds: [],
+      priority: "NONE",
+      kind: "ISSUE",
+    });
+
+    expect(created.assignees.map((a) => a.userId)).toEqual([fixture.user.id]);
+  });
+
+  it("create can default human assignment to the issue creator", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: {
+        defaultIssueAssigneeMode: DefaultIssueAssigneeMode.CREATOR,
+        defaultIssueAssigneeUserId: null,
+      },
+    });
+
+    const created = await caller.create({
+      title: "Creator assigned",
+      assigneeIds: [],
+      labelIds: [],
+      priority: "NONE",
+      kind: "ISSUE",
+    });
+
+    expect(created.assignees.map((a) => a.userId)).toEqual([fixture.user.id]);
   });
 
   it("create via agent-linked API key auto-watches the agent (not the human key owner)", async () => {

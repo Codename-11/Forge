@@ -41,6 +41,14 @@ export interface RunInput {
   history?: RunMessage[];
   /** System prompt / instructions for this run. */
   instructions?: string;
+  /** Provider model override for this run, when the runtime supports it. */
+  model?: string;
+  /** Provider profile/session override for runtimes that host multiple profiles. */
+  runtimeProfile?: string;
+  /** Provider-native runtime mode/profile selector. Distinct from Forge engagement mode. */
+  runtimeMode?: string;
+  /** Force or disable YOLO/approval-bypass behavior for this run. Undefined inherits runtime config. */
+  yoloMode?: boolean;
   /** Resolved Forge engagement mode for this run. Connectors may harden policy from it. */
   engagementMode?: RunEngagementMode;
   /** Forge run protocol/contract version injected into this dispatch. */

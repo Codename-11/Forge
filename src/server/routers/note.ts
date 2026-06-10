@@ -9,6 +9,8 @@ import {
 } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import { resolveDefaultIssueAssigneeIds } from "@/server/services/issue-create";
+import { autoWatchUser } from "@/server/services/issue-watchers";
 
 /**
  * Compute "today's date" (UTC midnight) anchored in the user's
@@ -371,6 +373,10 @@ export const noteRouter = router({
           select: { number: true },
         });
         const number = (last?.number ?? 0) + 1;
+        const assigneeIds = await resolveDefaultIssueAssigneeIds(tx, {
+          workspaceId: ctx.workspaceId,
+          authorId: ctx.session.user.id,
+        });
         const created = await tx.issue.create({
           data: {
             workspaceId: ctx.workspaceId,
@@ -382,9 +388,19 @@ export const noteRouter = router({
             priority: Priority.NONE,
             authorId: ctx.session.user.id,
             sourceNoteId: note.id,
+            assignees: {
+              create: assigneeIds.map((userId) => ({ userId })),
+            },
           },
           include: { status: true },
         });
+        for (const userId of assigneeIds) {
+          await autoWatchUser(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: created.id,
+            userId,
+          });
+        }
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
@@ -526,6 +542,10 @@ export const noteRouter = router({
             select: { number: true },
           });
           const number = (last?.number ?? 0) + 1;
+          const assigneeIds = await resolveDefaultIssueAssigneeIds(tx, {
+            workspaceId: ctx.workspaceId,
+            authorId: ctx.session.user.id,
+          });
           const issue = await tx.issue.create({
             data: {
               workspaceId: ctx.workspaceId,
@@ -537,9 +557,19 @@ export const noteRouter = router({
               priority: Priority.NONE,
               authorId: ctx.session.user.id,
               sourceNoteId: note.id,
+              assignees: {
+                create: assigneeIds.map((userId) => ({ userId })),
+              },
             },
             include: { status: true },
           });
+          for (const userId of assigneeIds) {
+            await autoWatchUser(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: issue.id,
+              userId,
+            });
+          }
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,

@@ -2,6 +2,63 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-09 — Local release gate and Roadmap e2e stability
+
+Added `pnpm ci:local` as a one-command local release gate matching the practical
+pre-push workflow: lint, typecheck, unit/integration tests, then a forced
+production Playwright run with one worker. Documented the command in
+`RELEASE.md` so direct releases can catch e2e failures locally before GitHub
+Actions sends failure notifications.
+
+Stabilized the Roadmap e2e date-editor check by clearing the temporary "missing
+dates" filter before looking for an editable project row. The previous assertion
+could fail whenever the seeded projects all had dates, leaving the view empty.
+
+Fixed a real full-Chat hit-target conflict caught by the new gate: the collapsed
+Mission Control launcher could sit over the Chat composer send button on
+`/w/:slug/chat`. The launcher now lifts above the composer on the full Chat
+route, and the `/clear` e2e uses the explicit Send button with a stream-response
+wait instead of racing textarea Enter handling.
+
+Fixed the recurring chat e2e fixture instability behind the GitHub failure
+emails: the `FORGE_E2E` seed refreshed `e2ebot` to ONLINE without refreshing
+its heartbeat, so the heartbeat sweep could flip the mock chat agent OFFLINE
+mid-suite and disable the composer. The seed now refreshes the mock runtime and
+agent heartbeat timestamps every e2e boot.
+
+Tightened the Chat composer around a real draft-hydration race caught by the
+full suite. Per-thread draft loading now briefly gates input until the selected
+thread's draft is ready, preventing a just-created thread from wiping freshly
+typed text. The activity-read e2e now waits for the active thread's prompt UI,
+posts a real chat turn, and verifies the current thread's message rows before
+checking that Mission Control/Activity read-state is updated.
+
+Verification: `pnpm ci:local` pass (lint, typecheck, 846 Vitest tests with 1
+skipped live Codex test, and 34 Playwright tests).
+
+## 2026-06-09 — Runtime YOLO and chat controls
+
+Added explicit runtime permission controls for managed chat backends. Codex
+app-server runtime config now supports `model` and `yoloMode` alongside the
+existing sandbox/approval/workspace-root fields. When YOLO is enabled, Codex
+chat/discuss turns keep full access and use `approvalPolicy: "never"` instead
+of being downshifted to read-only.
+
+Hermes runtime config now exposes profile, mode, model, and YOLO
+auto-approval. Forge passes profile/model/mode metadata through to `/v1/runs`
+and auto-resolves Hermes approval events for YOLO runs so chat does not block
+on permission cards. Per-conversation chat settings now include a tri-state
+YOLO override: inherit runtime default, force on, or force off.
+
+Added a nullable `ChatThread.yoloModeOverride` column plus connector coverage
+for Codex turn parameters and Hermes auto-approval behavior.
+
+Verification: `pnpm prisma migrate deploy`, `pnpm prisma generate`, `pnpm
+vitest run tests/unit/codex-app-server.test.ts tests/unit/hermes-runs.test.ts`,
+`pnpm typecheck`, `pnpm lint`, `pnpm vitest run
+src/server/routers/__tests__/chat.test.ts tests/unit/codex-app-server.test.ts
+tests/unit/hermes-runs.test.ts`, and `git diff --check` pass.
+
 ## 2026-06-09 — Chat stream detach hotfix
 
 Investigated live Hermes and Codex chat rows after operator reports that turns
@@ -9265,3 +9322,47 @@ pnpm prisma:generate` pass; `pnpm lint` clean; `pnpm typecheck` pass;
 attempted but the local shell has no `DATABASE_URL`/`AUTH_SECRET` and no test
 Redis wiring, so DB-backed suites failed during Prisma/env initialization rather
 than GitHub-specific assertions.
+
+---
+
+## 2026-06-09 — Chat polish and default issue assignee preview
+
+Prepared during local preview before the release gate and deployment.
+
+- **Chat polish**: extracted shared chat work trace rendering, tightened stale
+  failed-turn diagnostics so old failures do not keep conversations in
+  attention/thinking states, scoped the status rail controls to open unanswered
+  turns, and made `/clear` restore an empty conversation with suggested prompts
+  plus a toast instead of a persistent system row.
+- **Issue defaults**: added workspace-backed default human assignee settings
+  (`NONE`, `CREATOR`, `USER`) with migration 0079. New issues with no explicit
+  human assignees now receive the configured default assignee through
+  `IssueAssignee[]`; explicit assignees win. The shared issue-create path plus
+  email ingest, recurring issues, note promotion, MCP note promotion, and
+  execution-step materialization all resolve the same default and auto-watch the
+  assigned user.
+- **Admin cleanup**: workspace settings validate that a specific default user is
+  a member, and member removal clears the workspace default if it pointed at the
+  removed user. Stale default-user config is ignored during issue creation
+  rather than blocking the create.
+- **Portability**: workspace export/import now carries the default assignee
+  mode and specific default member by email when present; older snapshots remain
+  importable.
+- **Codex runtime diagnosis**: inspected Forge/Codex logs for AXI-45 run
+  `cmq77qepg00a70twh0gbhpu1m` / external `019eae81…`. Codex accepted the
+  turn and continued model/tool work after Forge had already marked it stalled;
+  root cause was Forge constructing fresh Codex connector instances whose
+  instance-local run maps did not know the just-started WebSocket run. The
+  Codex connector now shares active run state across connector instances,
+  retains terminal state long enough for the poller, and reports unknown /
+  socket-closed-before-terminal runs as failures instead of successful
+  completions.
+
+Verification: `pnpm prisma format`; `pnpm prisma generate`; local
+`pnpm prisma migrate deploy` applied 0079; `pnpm typecheck` pass; `pnpm lint`
+clean; `pnpm vitest run src/server/routers/__tests__/issue.test.ts
+src/server/routers/__tests__/workspace-members.test.ts` pass (40);
+`pnpm vitest run tests/unit/codex-app-server.test.ts
+src/server/services/__tests__/run-dispatcher.test.ts` pass (22);
+`git diff --check` clean. LAN preview restarted at
+`http://<internal-host>:3020/w/axiom-labs/chat`.

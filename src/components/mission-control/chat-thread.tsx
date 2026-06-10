@@ -1,11 +1,9 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   Check,
   CheckCheck,
-  ChevronDown,
-  ChevronRight,
   Layers,
   PlugZap,
   RefreshCw,
@@ -32,6 +30,7 @@ import {
 import { uploadAttachmentFile } from "@/components/attachments/attachment-upload-client";
 import { toast } from "sonner";
 import { ChatMarkdown } from "./chat-markdown";
+import { ChatWorkTrace, type ChatTraceToolCall } from "./chat-work-trace";
 import type { SlashCommandContext } from "@/lib/chat-slash-commands";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { TransportChip } from "@/components/agents/transport-chip";
@@ -345,14 +344,8 @@ function rememberAlwaysAllowed(threadId: string, toolName: string): void {
 /** In-flight streaming bubble from /api/chat/stream (distinct from the
  * legacy MCP-driven draft bubble above, which is still used by the
  * dispatch path when Hermes streams via `chat.startDraft`). */
-export type StreamToolCall = {
-  id: string;
-  name: string;
-  args: Record<string, unknown>;
+export type StreamToolCall = ChatTraceToolCall & {
   requiresConfirm: boolean;
-  status: "pending" | "approved" | "declined" | "executed" | "error";
-  summary?: string;
-  result?: unknown;
 };
 
 type StreamBubble = {
@@ -369,9 +362,8 @@ type StreamBubble = {
 };
 
 /**
- * Streaming bubble UI. Shows a collapsible thinking section, the live
- * content, and one card per tool_use intent. Writes pause the loop with
- * an Approve/Decline confirm card.
+ * Streaming bubble UI. Shows the compact work trace, live content, and
+ * approval controls for write-class tools that pause the loop.
  */
 function AgentStreamBubble({
   bubble,
@@ -390,12 +382,9 @@ function AgentStreamBubble({
   onDecline?: (callId: string) => void;
   threadId?: string;
 }) {
-  const [thinkingOpen, setThinkingOpen] = useState(false);
-  const elapsedSec = bubble.finishedAt
-    ? ((bubble.finishedAt - bubble.startedAt) / 1000).toFixed(1)
-    : null;
   const isLive = bubble.finishedAt === null && !bubble.error;
   const wasStopped = bubble.error === STREAM_STOP_SENTINEL;
+  const elapsedMs = bubble.finishedAt ? bubble.finishedAt - bubble.startedAt : null;
   return (
     <div className="flex items-start gap-2">
       <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ember/15 text-ember">
@@ -425,27 +414,15 @@ function AgentStreamBubble({
           </div>
         )}
 
-        {bubble.thinking && (
-          <button
-            type="button"
-            onClick={() => setThinkingOpen((v) => !v)}
-            className="flex w-full items-center gap-1 rounded border border-border/60 bg-subtle/30 px-1.5 py-1 text-left text-[0.6875rem] text-muted-foreground hover:bg-subtle/50"
-          >
-            {thinkingOpen ? (
-              <ChevronDown className="h-3 w-3" />
-            ) : (
-              <ChevronRight className="h-3 w-3" />
-            )}
-            <span className="font-mono">
-              {isLive ? "Thinking…" : elapsedSec ? `Thought for ${elapsedSec}s` : "Thinking"}
-            </span>
-          </button>
-        )}
-        {bubble.thinking && thinkingOpen && (
-          <div className="rounded border border-border/40 bg-background/40 px-2 py-1.5 text-[0.6875rem] italic text-muted-foreground">
-            <ChatMarkdown body={bubble.thinking} className="text-muted-foreground" />
-          </div>
-        )}
+        <ChatWorkTrace
+          thinking={bubble.thinking}
+          tools={bubble.toolCalls}
+          elapsedMs={elapsedMs}
+          live={isLive}
+          threadId={threadId}
+          onApprove={onApprove}
+          onDecline={onDecline}
+        />
 
         {bubble.body ? (
           isLive ? (
@@ -478,20 +455,6 @@ function AgentStreamBubble({
           </span>
         ) : null}
 
-        {bubble.toolCalls.length > 0 && (
-          <div className="space-y-1">
-            {bubble.toolCalls.map((tb) => (
-              <ToolCallCard
-                key={tb.id}
-                call={tb}
-                onApprove={onApprove}
-                onDecline={onDecline}
-                threadId={threadId}
-              />
-            ))}
-          </div>
-        )}
-
         {bubble.error && !wasStopped && (
           <div className="flex items-center justify-between gap-2 rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-1 text-[0.6875rem] text-amber-700 dark:text-amber-300">
             <span className="truncate">{bubble.error}</span>
@@ -508,317 +471,6 @@ function AgentStreamBubble({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-/**
- * Render a canvas-specific preview block for write-class canvas tools so
- * the operator sees what they're approving (where it lands, what shape
- * kind, etc.) instead of only a JSON dump.
- *
- * Returns null when the tool isn't a canvas write — the card falls back
- * to the generic JSON preview.
- */
-function renderCanvasToolPreview(call: StreamToolCall): ReactElement | null {
-  const a = call.args as Record<string, unknown>;
-  switch (call.name) {
-    case "canvases.addNode":
-    case "canvases_addNode": {
-      const targetType = String(a.targetType ?? "node");
-      const targetId = a.targetId ? String(a.targetId) : null;
-      const x = typeof a.x === "number" ? Math.round(a.x) : 0;
-      const y = typeof a.y === "number" ? Math.round(a.y) : 0;
-      return (
-        <div className="space-y-1">
-          <p className="text-[0.625rem] text-muted-foreground">
-            Add <span className="text-foreground">{targetType}</span>
-            {targetId && <span className="ml-1 font-mono text-foreground/80">{targetId}</span>}
-            <span className="ml-1">at</span>
-            <span className="ml-1 font-mono">
-              ({x}, {y})
-            </span>
-          </p>
-          <div className="flex h-12 w-full items-center justify-center rounded border border-dashed border-border bg-card/40 text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-            preview · {targetType}
-          </div>
-        </div>
-      );
-    }
-    case "canvases.addEdge":
-    case "canvases_addEdge": {
-      const from = a.fromNodeId ? String(a.fromNodeId).slice(-6) : "?";
-      const to = a.toNodeId ? String(a.toNodeId).slice(-6) : "?";
-      const label = a.label ? String(a.label) : null;
-      return (
-        <div className="space-y-1">
-          <p className="text-[0.625rem] text-muted-foreground">
-            Connect <span className="font-mono text-foreground">{from}</span>
-            <span className="mx-1">→</span>
-            <span className="font-mono text-foreground">{to}</span>
-            {label && <span className="ml-1 italic">&ldquo;{label}&rdquo;</span>}
-          </p>
-          <svg viewBox="0 0 200 40" className="h-10 w-full">
-            <defs>
-              <marker
-                id="tcc-arrow"
-                viewBox="0 0 10 10"
-                refX="9"
-                refY="5"
-                markerWidth="6"
-                markerHeight="6"
-                orient="auto"
-              >
-                <path d="M0,0 L10,5 L0,10 z" className="fill-foreground/60" />
-              </marker>
-            </defs>
-            <path
-              d="M 20,20 C 80,20 120,20 180,20"
-              className="fill-none stroke-foreground/60"
-              strokeWidth={1.5}
-              markerEnd="url(#tcc-arrow)"
-            />
-          </svg>
-        </div>
-      );
-    }
-    case "canvases.shapeAdd":
-    case "canvases_shapeAdd": {
-      const kind = String(a.kind ?? "box");
-      const w = typeof a.width === "number" ? a.width : 120;
-      const h = typeof a.height === "number" ? a.height : 60;
-      const x = typeof a.x === "number" ? Math.round(a.x) : 0;
-      const y = typeof a.y === "number" ? Math.round(a.y) : 0;
-      return (
-        <div className="space-y-1">
-          <p className="text-[0.625rem] text-muted-foreground">
-            Add <span className="text-foreground">{kind}</span>
-            <span className="ml-1">at</span>
-            <span className="ml-1 font-mono">
-              ({x}, {y})
-            </span>
-          </p>
-          <svg viewBox={`0 0 200 80`} className="h-16 w-full">
-            {kind === "ellipse" ? (
-              <ellipse
-                cx={100}
-                cy={40}
-                rx={Math.min(80, w / 2)}
-                ry={Math.min(30, h / 2)}
-                className="fill-transparent stroke-foreground/60"
-                strokeWidth={1.5}
-              />
-            ) : kind === "line" || kind === "arrow" ? (
-              <line
-                x1={20}
-                y1={40}
-                x2={180}
-                y2={40}
-                className="stroke-foreground/60"
-                strokeWidth={1.5}
-              />
-            ) : kind === "text" ? (
-              <text x={100} y={45} textAnchor="middle" className="fill-foreground/80 text-[14px]">
-                {String(a.text ?? "Text")}
-              </text>
-            ) : (
-              <rect
-                x={20}
-                y={10}
-                width={160}
-                height={60}
-                rx={6}
-                className="fill-transparent stroke-foreground/60"
-                strokeWidth={1.5}
-              />
-            )}
-          </svg>
-        </div>
-      );
-    }
-    case "canvases.bulkAddShapes":
-    case "canvases_bulkAddShapes": {
-      const shapes = Array.isArray(a.shapes) ? (a.shapes as Array<Record<string, unknown>>) : [];
-      const counts: Record<string, number> = {};
-      for (const s of shapes) {
-        const k = String(s.kind ?? "?");
-        counts[k] = (counts[k] ?? 0) + 1;
-      }
-      return (
-        <div className="space-y-1">
-          <p className="text-[0.625rem] text-muted-foreground">
-            <span className="text-foreground">{shapes.length}</span> shape
-            {shapes.length === 1 ? "" : "s"}
-            {Object.keys(counts).length > 0 && (
-              <span className="ml-1">
-                (
-                {Object.entries(counts)
-                  .map(([k, n]) => `${k}:${n}`)
-                  .join(", ")}
-                )
-              </span>
-            )}
-          </p>
-        </div>
-      );
-    }
-    case "canvases.applyTemplate":
-    case "canvases_applyTemplate": {
-      const template = String(a.templateId ?? "?");
-      return (
-        <p className="text-[0.625rem] text-muted-foreground">
-          Apply template <span className="font-mono text-foreground">{template}</span>
-        </p>
-      );
-    }
-    case "canvases.layout":
-    case "canvases_layout": {
-      const algo = String(a.algorithm ?? "topological");
-      return (
-        <p className="text-[0.625rem] text-muted-foreground">
-          Re-layout using <span className="font-mono text-foreground">{algo}</span>
-        </p>
-      );
-    }
-    default:
-      return null;
-  }
-}
-
-function hasToolArguments(args: unknown): boolean {
-  if (args == null) return false;
-  if (Array.isArray(args)) return args.length > 0;
-  if (typeof args === "object") return Object.keys(args).length > 0;
-  return true;
-}
-
-/**
- * Live tool-call card. Renders started → confirm → executed/error states,
- * surfacing an Approve / Decline pair for write-class tools that need
- * operator sign-off before the loop resumes.
- */
-function ToolCallCard({
-  call,
-  onApprove,
-  onDecline,
-  threadId,
-}: {
-  call: StreamToolCall;
-  onApprove?: (callId: string, alwaysAllow?: boolean) => void;
-  onDecline?: (callId: string) => void;
-  threadId?: string;
-}) {
-  const [open, setOpen] = useState(call.status === "pending" && call.requiresConfirm);
-  const [alwaysAllow, setAlwaysAllow] = useState(false);
-  const json = useMemo(() => {
-    try {
-      return JSON.stringify(call.args, null, 2);
-    } catch {
-      return String(call.args);
-    }
-  }, [call.args]);
-
-  const awaitingConfirm = call.status === "pending" && call.requiresConfirm;
-  const running = call.status === "pending" || call.status === "approved";
-  const canvasPreview = useMemo(() => renderCanvasToolPreview(call), [call]);
-  const hasArgs = useMemo(() => hasToolArguments(call.args), [call.args]);
-
-  let statusLabel: string;
-  switch (call.status) {
-    case "pending":
-      statusLabel = awaitingConfirm ? "awaiting approval" : "running…";
-      break;
-    case "approved":
-      statusLabel = "running…";
-      break;
-    case "declined":
-      statusLabel = "declined";
-      break;
-    case "executed":
-      statusLabel = "done";
-      break;
-    case "error":
-      statusLabel = "error";
-      break;
-  }
-
-  return (
-    <div className="rounded border border-border/60 bg-subtle/30 text-[0.6875rem]">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-1.5 py-1 text-left text-muted-foreground hover:text-foreground"
-      >
-        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <Wrench className="h-3 w-3 text-ember" />
-        <span className="font-mono text-foreground">{call.name}</span>
-        <span
-          className={cn(
-            "ml-auto text-[0.5625rem] uppercase tracking-wider",
-            call.status === "error" || call.status === "declined"
-              ? "text-destructive"
-              : "text-muted-foreground/70",
-          )}
-        >
-          {statusLabel}
-        </span>
-      </button>
-      {open && (
-        <div className="space-y-1.5 border-t border-border/40 px-2 py-1.5">
-          {canvasPreview ??
-            (hasArgs ? (
-              <ChatMarkdown body={"```json\n" + json + "\n```"} />
-            ) : (
-              <p className="text-[0.625rem] text-muted-foreground">No input arguments.</p>
-            ))}
-          {awaitingConfirm && (
-            <div className="space-y-1">
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => onApprove?.(call.id, alwaysAllow)}
-                  className="rounded border border-ember/40 bg-ember/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-ember hover:bg-ember/25"
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onDecline?.(call.id)}
-                  className="rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground"
-                >
-                  Decline
-                </button>
-              </div>
-              {threadId && (
-                <label className="flex cursor-pointer items-center gap-1.5 text-[0.5625rem] text-muted-foreground hover:text-foreground">
-                  <input
-                    type="checkbox"
-                    checked={alwaysAllow}
-                    onChange={(e) => setAlwaysAllow(e.target.checked)}
-                    className="h-3 w-3 rounded border-border bg-card/40 text-ember focus:ring-ember/40"
-                  />
-                  Always allow <span className="font-mono">{call.name}</span> for this thread
-                </label>
-              )}
-            </div>
-          )}
-          {running && !awaitingConfirm && (
-            <p className="text-[0.5625rem] italic text-muted-foreground/60">Running tool…</p>
-          )}
-          {(call.status === "executed" || call.status === "error" || call.status === "declined") &&
-            call.summary && (
-              <p
-                className={cn(
-                  "text-[0.625rem]",
-                  call.status === "executed" ? "text-foreground" : "text-destructive",
-                )}
-              >
-                <span className="mr-1 font-mono">{call.status === "executed" ? "ok" : "fail"}</span>
-                {call.summary}
-              </p>
-            )}
-        </div>
-      )}
     </div>
   );
 }
@@ -896,11 +548,15 @@ function ProviderOverridePopover({
   threadId,
   providerOverride,
   modelOverride,
+  yoloModeOverride,
+  runtimeYoloDefault,
   defaultProvider,
 }: {
   threadId: string;
   providerOverride: AgentProvider | null;
   modelOverride: string | null;
+  yoloModeOverride: boolean | null;
+  runtimeYoloDefault: boolean;
   defaultProvider: AgentProvider;
 }) {
   const utils = trpc.useUtils();
@@ -951,8 +607,15 @@ function ProviderOverridePopover({
     setOverrideM.mutate({ threadId, provider: value });
   };
 
+  const onYoloChange = (next: string) => {
+    const value = next === "inherit" ? null : next === "on";
+    setOverrideM.mutate({ threadId, yoloMode: value });
+  };
+
   const overridesActive =
-    providerOverride !== null || (modelOverride !== null && modelOverride.length > 0);
+    providerOverride !== null ||
+    (modelOverride !== null && modelOverride.length > 0) ||
+    yoloModeOverride !== null;
 
   return (
     <div data-chat-override-popover className="relative">
@@ -1007,9 +670,41 @@ function ProviderOverridePopover({
               Leave blank to use the provider default.
             </p>
           </div>
+          <div className="space-y-1">
+            <label className="block text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+              YOLO mode
+            </label>
+            <select
+              value={
+                yoloModeOverride === null ? "inherit" : yoloModeOverride ? "on" : "off"
+              }
+              onChange={(e) => onYoloChange(e.target.value)}
+              className="w-full rounded border border-border bg-background/60 px-1.5 py-1 text-[0.6875rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ember/40"
+            >
+              <option value="inherit">
+                Inherit runtime default ({runtimeYoloDefault ? "on" : "off"})
+              </option>
+              <option value="on">Force on</option>
+              <option value="off">Force off</option>
+            </select>
+            <p className="text-[0.5625rem] italic text-muted-foreground/60">
+              Codex uses full-access/no-approval turn policy; Hermes approvals are auto-approved.
+            </p>
+          </div>
         </div>
       )}
     </div>
+  );
+}
+
+function runtimeConfigYoloDefault(agent: unknown): boolean {
+  const runtime = (agent as { runtime?: { config?: unknown } | null } | null)?.runtime;
+  const config = runtime?.config;
+  return !!(
+    config &&
+    typeof config === "object" &&
+    !Array.isArray(config) &&
+    (config as Record<string, unknown>).yoloMode === true
   );
 }
 
@@ -1053,6 +748,8 @@ export function ChatThreadView({
     null;
   const modelOverride =
     (data?.thread as { modelOverride?: string | null } | undefined)?.modelOverride ?? null;
+  const yoloModeOverride =
+    (data?.thread as { yoloModeOverride?: boolean | null } | undefined)?.yoloModeOverride ?? null;
   const { data: diagnostics } = trpc.chat.threadDiagnostics.useQuery(
     { threadId: threadId ?? "" },
     { enabled: Boolean(threadId), staleTime: 10_000 },
@@ -1072,6 +769,8 @@ export function ChatThreadView({
   );
   // Use agentFull for rich presence fields, fall back to thread data for basics.
   const agent = agentFull ?? data?.agent;
+  const runtimeYoloDefault = runtimeConfigYoloDefault(agentFull);
+  const effectiveYoloMode = yoloModeOverride ?? runtimeYoloDefault;
   const messages = useMemo(() => data?.messages ?? [], [data?.messages]);
   const latestVisibleMessageAt = messages.at(-1)?.createdAt ?? null;
 
@@ -1541,7 +1240,7 @@ export function ChatThreadView({
           };
           const runExternalId =
             typeof (parsed as { runExternalId?: unknown }).runExternalId === "string"
-              ? ((parsed as { runExternalId: string }).runExternalId)
+              ? (parsed as { runExternalId: string }).runExternalId
               : undefined;
           const dispatchOnly = (parsed as { dispatch?: boolean }).dispatch === true;
           if (messageId) {
@@ -2054,6 +1753,7 @@ export function ChatThreadView({
       provider: agentFull?.provider ?? null,
       transport: readiness ? { mode: readiness.mode, label: readiness.transportLabel } : null,
       appendLocal,
+      notify: (message) => toast.success(message),
       clearLocal,
       clearThread: async () => {
         if (!threadId) return;
@@ -2173,6 +1873,8 @@ export function ChatThreadView({
     () => [...visibleMessageRows, ...localMessages],
     [visibleMessageRows, localMessages],
   );
+  const showSuggestedPrompts =
+    visibleMessageRows.length === 0 && outbox.length === 0 && !streamBubble && !draft;
   const persistedUserMessages = useMemo(
     () =>
       messageRows
@@ -2247,7 +1949,7 @@ export function ChatThreadView({
   const isPersistentOnline = !isEphemeral && !isOnDemand && status === "ONLINE";
   const isPersistentBusy = !isEphemeral && !isOnDemand && status === "BUSY";
   const isPersistentOffline = !isEphemeral && !isOnDemand && status === "OFFLINE";
-  const turnStatus = (diagnostics?.turnStatus ?? null) as TurnStatusView;
+  const rawTurnStatus = (diagnostics?.turnStatus ?? null) as TurnStatusView;
   const chatSupportsTools = Boolean(readiness?.capabilities.tools || readiness?.capabilities.runs);
 
   // Composer placeholder copy
@@ -2283,6 +1985,13 @@ export function ChatThreadView({
   const lastMessage = displayRows[displayRows.length - 1];
   const lastPersistedMessage = messageRows[messageRows.length - 1];
   const lastMessageIsUser = lastPersistedMessage?.role === "USER";
+  const turnStatus =
+    lastPersistedMessage?.role === "AGENT" &&
+    rawTurnStatus &&
+    rawTurnStatus.phase !== "completed" &&
+    rawTurnStatus.phase !== "idle"
+      ? null
+      : rawTurnStatus;
   const lastMessageAge = lastPersistedMessage
     ? Date.now() - new Date(lastPersistedMessage.createdAt).getTime()
     : Infinity;
@@ -2303,7 +2012,11 @@ export function ChatThreadView({
   const canonicalShowsThinking =
     canonicalKnown && (dispatchState === "acknowledged" || dispatchState === "running");
   const fallbackShowsThinking = !canonicalKnown && lastMessageIsUser && lastMessageAge < 300_000;
-  const showThinking = !composerBusy && !draft && (canonicalShowsThinking || fallbackShowsThinking);
+  const showThinking =
+    !composerBusy &&
+    !draft &&
+    lastMessageIsUser &&
+    (canonicalShowsThinking || fallbackShowsThinking);
   const thinkingIsStale = canonicalKnown
     ? dispatchState === "stalled"
     : showThinking && lastMessageAge >= 60_000;
@@ -2334,6 +2047,7 @@ export function ChatThreadView({
     !composerBusy &&
     !draft &&
     !showThinking &&
+    lastMessageIsUser &&
     canonicalKnown &&
     (dispatchState === "queued" || dispatchState === "wake-sent" || dispatchState === "stalled");
 
@@ -2389,6 +2103,26 @@ export function ChatThreadView({
               )}
             </span>
           )}
+          {effectiveYoloMode && (
+            <span
+              className="rounded-full border border-danger/30 bg-danger/10 px-1.5 py-0 text-[0.5625rem] uppercase tracking-wider text-danger"
+              title={
+                yoloModeOverride === null
+                  ? "YOLO inherited from runtime config"
+                  : "YOLO forced on for this conversation"
+              }
+            >
+              YOLO
+            </span>
+          )}
+          {yoloModeOverride === false && runtimeYoloDefault && (
+            <span
+              className="rounded-full border border-border bg-subtle/40 px-1.5 py-0 text-[0.5625rem] uppercase tracking-wider text-muted-foreground"
+              title="Runtime YOLO is disabled for this conversation"
+            >
+              YOLO off
+            </span>
+          )}
 
           {/* Presence indicator */}
           <span className="ml-auto flex items-center gap-1.5">
@@ -2425,6 +2159,8 @@ export function ChatThreadView({
                 threadId={threadId}
                 providerOverride={providerOverride}
                 modelOverride={modelOverride}
+                yoloModeOverride={yoloModeOverride}
+                runtimeYoloDefault={runtimeYoloDefault}
                 defaultProvider={agentFull.provider}
               />
             )}
@@ -2438,7 +2174,7 @@ export function ChatThreadView({
         supportsTools={chatSupportsTools}
       />
       <div ref={scrollerRef} className="flex-1 space-y-2 overflow-y-auto px-2 py-2">
-        {displayRows.length === 0 && (
+        {showSuggestedPrompts && (
           <div className="px-2 py-4 text-[0.6875rem] text-muted-foreground">
             {agent ? (
               <div className="space-y-3">

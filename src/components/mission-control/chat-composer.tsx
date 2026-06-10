@@ -171,15 +171,25 @@ export function ChatComposer({
   // threadId we've already hydrated so React-strict-mode double-mount
   // doesn't clobber a freshly-typed value.
   const hydratedThreadRef = useRef<string | null>(null);
+  const [draftReadyThreadId, setDraftReadyThreadId] = useState<string | null>(null);
   useEffect(() => {
-    if (!threadId) return;
-    if (hydratedThreadRef.current === threadId) return;
+    if (!threadId) {
+      setBody("");
+      setDraftReadyThreadId(null);
+      return;
+    }
+    if (hydratedThreadRef.current === threadId) {
+      setDraftReadyThreadId(threadId);
+      return;
+    }
     hydratedThreadRef.current = threadId;
     try {
       const raw = window.localStorage.getItem(draftStorageKey(threadId));
       setBody(raw ?? "");
     } catch {
       setBody("");
+    } finally {
+      setDraftReadyThreadId(threadId);
     }
   }, [threadId]);
 
@@ -537,7 +547,8 @@ export function ChatComposer({
   // `isPending` (a send in flight) no longer blocks the composer — new
   // messages queue instead. Only a hard `disabled` gates input. `isPending`
   // still drives the send-button spinner + the "sending…" footer hint.
-  const busy = disabled || commandPending;
+  const draftReady = !threadId || draftReadyThreadId === threadId;
+  const busy = disabled || commandPending || !draftReady;
   const hasMentionables = mentionableAgents.length > 0 || mentionablePeople.length > 0;
   const includedAttachments = attachments.filter((a) => a.includeInContext);
   const contextRows =
@@ -551,6 +562,15 @@ export function ChatComposer({
   const approximateContextTokens =
     Math.ceil((body.length + includedContextRows.map((item) => item.label).join(" ").length) / 4) +
     includedAttachments.length * 120;
+  const trimmedBody = body.trim();
+  const submitActionLabel =
+    commandPending
+      ? "Running command"
+      : isPending
+        ? "Sending"
+        : attachments.length === 0 && slashContext && isSlashInput(trimmedBody)
+          ? "Run command"
+          : "Send";
 
   const popoverNode = useMemo(() => {
     if (popoverOpen && popoverMatches.length > 0) {
@@ -886,6 +906,7 @@ export function ChatComposer({
           type="button"
           onClick={() => void submit()}
           disabled={busy || (!body.trim() && attachments.every((a) => !a.includeInContext))}
+          aria-label={submitActionLabel}
           className={cn(
             "mb-0.5 rounded-md p-1.5 transition-colors",
             body.trim() || attachments.some((a) => a.includeInContext)
@@ -893,7 +914,7 @@ export function ChatComposer({
               : "bg-subtle text-muted-foreground",
             "disabled:cursor-not-allowed disabled:opacity-50",
           )}
-          title={commandPending ? "Running command…" : isPending ? "Sending…" : "Send"}
+          title={submitActionLabel}
         >
           {isPending || commandPending ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />

@@ -28,8 +28,14 @@ import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
-import { createIssueWithSideEffects } from "@/server/services/issue-create";
-import { setIssueAgentWakeTarget } from "@/server/services/issue-watchers";
+import {
+  createIssueWithSideEffects,
+  resolveDefaultIssueAssigneeIds,
+} from "@/server/services/issue-create";
+import {
+  autoWatchUser,
+  setIssueAgentWakeTarget,
+} from "@/server/services/issue-watchers";
 import {
   abandonRunsForAgentReassignment,
   openOrTouchRun,
@@ -12011,6 +12017,10 @@ export const mcpTools = {
             select: { number: true },
           });
           const number = (last?.number ?? 0) + 1;
+          const assigneeIds = await resolveDefaultIssueAssigneeIds(tx, {
+            workspaceId: ctx.workspaceId,
+            authorId: userId,
+          });
           const issue = await tx.issue.create({
             data: {
               workspaceId: ctx.workspaceId,
@@ -12022,9 +12032,21 @@ export const mcpTools = {
               priority: Priority.NONE,
               authorId: userId,
               sourceNoteId: note.id,
+              assignees: {
+                create: assigneeIds.map((assigneeUserId) => ({
+                  userId: assigneeUserId,
+                })),
+              },
             },
             include: { status: true },
           });
+          for (const assigneeUserId of assigneeIds) {
+            await autoWatchUser(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: issue.id,
+              userId: assigneeUserId,
+            });
+          }
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: userId,

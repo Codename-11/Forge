@@ -147,11 +147,25 @@ test.describe("Chat conversation settings and read state", () => {
     await expect(page).toHaveURL(new RegExp(`thread=${threadId}`));
 
     const composer = page.getByTestId("chat-composer");
-    await composer.getByRole("textbox").first().fill("activity read marker");
-    await composer.getByRole("textbox").first().press("Enter");
-    await expect(page.getByText(/E2E mock reply: pong/i).first()).toBeVisible({
-      timeout: 25_000,
-    });
+    const composerText = composer.getByRole("textbox").first();
+    await expect(page.getByTestId("chat-suggested-prompts")).toBeVisible();
+    await expect(composerText).toBeEditable();
+    await composerText.fill("activity read marker");
+    await expect(composerText).toHaveValue("activity read marker");
+    const sendButton = composer.getByRole("button", { name: "Send", exact: true });
+    await expect(sendButton).toBeEnabled();
+    const streamResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/chat/stream") && response.request().method() === "POST",
+    );
+    await sendButton.click();
+    expect((await streamResponse).status()).toBe(200);
+    await expect(
+      page.getByTestId("chat-message-user").filter({ hasText: "activity read marker" }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("chat-message-agent").filter({ hasText: /E2E mock reply: pong/i }).first(),
+    ).toBeVisible({ timeout: 25_000 });
 
     await page.evaluate(
       ([key, id]) => {

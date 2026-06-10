@@ -38,6 +38,11 @@ docs/*    ← documentation branches from main
 
 ## Release Process
 
+For the same local gate used before direct releases, run:
+```bash
+pnpm ci:local
+```
+
 ### 1. Land the work
 - Open a PR `feat/* → main`. CI (`.github/workflows/ci.yml`: lint · typecheck · unit ·
   Playwright e2e) must be green. **Squash-merge** with a clean message.

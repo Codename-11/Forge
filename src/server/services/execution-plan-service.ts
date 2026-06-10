@@ -4,6 +4,8 @@ import { EventKind, ExecutionPlanStatus, GoalStatus, Prisma } from "@prisma/clie
 import type { ExecutionStepStatus } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { recordChange } from "@/server/audit";
+import { resolveDefaultIssueAssigneeIds } from "@/server/services/issue-create";
+import { autoWatchUser } from "@/server/services/issue-watchers";
 
 /**
  * Materialize an ExecutionStep into a first-class Issue (AXI-56). Idempotent:
@@ -68,6 +70,10 @@ export async function materializeStepAsIssue(
       select: { number: true },
     });
     const number = (last?.number ?? 0) + 1;
+    const assigneeIds = await resolveDefaultIssueAssigneeIds(tx, {
+      workspaceId: params.workspaceId,
+      authorId,
+    });
 
     const issue = await tx.issue.create({
       data: {
@@ -79,6 +85,9 @@ export async function materializeStepAsIssue(
         authorId,
         projectId: step.plan.projectId ?? null,
         assignedAgentId: step.assignedAgentId ?? null,
+        assignees: {
+          create: assigneeIds.map((userId) => ({ userId })),
+        },
         expectedOutput: step.expectedOutput ?? null,
         verificationChecklist:
           step.verification === null || step.verification === undefined
@@ -87,6 +96,13 @@ export async function materializeStepAsIssue(
       },
       select: { id: true, number: true, title: true },
     });
+    for (const userId of assigneeIds) {
+      await autoWatchUser(tx, {
+        workspaceId: params.workspaceId,
+        issueId: issue.id,
+        userId,
+      });
+    }
 
     await tx.executionStep.update({
       where: { id: step.id },

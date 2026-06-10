@@ -704,7 +704,7 @@ export function ChatWorkspaceSurface() {
                 </select>
               </label>
               <div className="rounded-md border border-border bg-background/50 p-2 text-meta text-muted-foreground">
-                Provider and model overrides stay in the gear menu inside the chat header.
+                Provider, model, and YOLO overrides stay in the gear menu inside the chat header.
               </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">

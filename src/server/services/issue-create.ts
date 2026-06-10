@@ -1,6 +1,7 @@
 import "server-only";
 import { TRPCError } from "@trpc/server";
 import {
+  DefaultIssueAssigneeMode,
   EventKind,
   Priority,
   WorkItemKind,
@@ -90,6 +91,46 @@ async function assertIdsCount(args: {
   }
 }
 
+export async function resolveDefaultIssueAssigneeIds(
+  tx: DbClient,
+  args: {
+    workspaceId: string;
+    authorId: string;
+    requestedAssigneeIds?: string[];
+  },
+): Promise<string[]> {
+  const requested = uniq(args.requestedAssigneeIds);
+  if (requested.length > 0) return requested;
+
+  const workspace = await tx.workspace.findUnique({
+    where: { id: args.workspaceId },
+    select: {
+      defaultIssueAssigneeMode: true,
+      defaultIssueAssigneeUserId: true,
+    },
+  });
+  if (!workspace || workspace.defaultIssueAssigneeMode === DefaultIssueAssigneeMode.NONE) {
+    return [];
+  }
+
+  const candidateUserId =
+    workspace.defaultIssueAssigneeMode === DefaultIssueAssigneeMode.CREATOR
+      ? args.authorId
+      : workspace.defaultIssueAssigneeUserId;
+  if (!candidateUserId) return [];
+
+  const membership = await tx.membership.findUnique({
+    where: {
+      userId_workspaceId: {
+        userId: candidateUserId,
+        workspaceId: args.workspaceId,
+      },
+    },
+    select: { id: true },
+  });
+  return membership ? [candidateUserId] : [];
+}
+
 /**
  * Shared issue creation path for UI/API creates and external ingest/import.
  *
@@ -102,7 +143,7 @@ export async function createIssueWithSideEffects(
 ): Promise<CreatedIssueWithSideEffects> {
   const { db, workspaceId, actorId, actorAgentId = null, ip = null, userAgent = null } = args;
   const input = args.input;
-  const assigneeIds = uniq(input.assigneeIds);
+  const requestedAssigneeIds = uniq(input.assigneeIds);
   const labelIds = uniq(input.labelIds);
 
   return db.$transaction(async (tx) => {
@@ -159,17 +200,6 @@ export async function createIssueWithSideEffects(
       });
     }
 
-    if (assigneeIds.length > 0) {
-      const count = await tx.membership.count({
-        where: { workspaceId, userId: { in: assigneeIds } },
-      });
-      await assertIdsCount({
-        found: count,
-        expected: assigneeIds.length,
-        message: "All assignees must be members of this workspace.",
-      });
-    }
-
     if (input.claimedById) {
       const member = await tx.membership.findFirst({
         where: { workspaceId, userId: input.claimedById },
@@ -203,6 +233,22 @@ export async function createIssueWithSideEffects(
     }
 
     const authorId = await resolveAuthorId(tx, workspaceId, actorId);
+    const assigneeIds = await resolveDefaultIssueAssigneeIds(tx, {
+      workspaceId,
+      authorId,
+      requestedAssigneeIds,
+    });
+    if (assigneeIds.length > 0) {
+      const count = await tx.membership.count({
+        where: { workspaceId, userId: { in: assigneeIds } },
+      });
+      await assertIdsCount({
+        found: count,
+        expected: assigneeIds.length,
+        message: "All assignees must be members of this workspace.",
+      });
+    }
+
     const last = await tx.issue.findFirst({
       where: { workspaceId },
       orderBy: { number: "desc" },

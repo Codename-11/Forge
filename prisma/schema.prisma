@@ -80,6 +80,15 @@ enum WorkItemKind {
   TASK
 }
 
+/// Workspace-level default for new issue human assignees.
+/// NONE leaves issues unassigned, CREATOR assigns the issue author, and
+/// USER assigns the configured workspace member.
+enum DefaultIssueAssigneeMode {
+  NONE
+  CREATOR
+  USER
+}
+
 /// Linear-style state machine with user-extensible statuses per workspace.
 /// The enum is a *category*; the Status row holds the name, color, order.
 enum StatusCategory {
@@ -544,53 +553,54 @@ model User {
   sessions               Session[]
   memberships            Membership[]
   agentProfiles          AgentProfile[]
-  requestedAgentProfiles AgentProfile[] @relation("AgentProfileRequester")
+  requestedAgentProfiles AgentProfile[]         @relation("AgentProfileRequester")
   connections            Connection[]
   externalResourceLinks  ExternalResourceLink[] @relation("ExternalResourceLinkCreator")
 
-  authoredIssues          Issue[]                  @relation("IssueAuthor")
-  assignedIssues          IssueAssignee[]
-  comments                Comment[]
-  auditEntries            AuditLog[]
-  events                  ActivityEvent[]
-  notificationStates      NotificationState[]
-  pushSubscriptions       PushSubscription[]
-  createdProjects         Project[]                @relation("ProjectCreator")
-  apiKeys                 ApiKey[]
-  claimedIssues           Issue[]                  @relation("IssueClaimedBy")
-  recurringCreated        RecurringIssue[]         @relation("RecurringCreator")
-  savedViews              SavedView[]
-  issueSavedViews         IssueSavedView[]
-  timeEntries             TimeEntry[]
-  chatThreads             ChatThread[]
-  chatThreadReads         ChatThreadRead[]
-  runtimes                Runtime[]
-  controlRequestedRuns    AgentRun[]               @relation("AgentRunControlRequester")
-  clearedAgentRuns        AgentRun[]               @relation("AgentRunClearer")
-  pins                    Pin[]
-  recentItems             RecentItem[]
-  notes                   Note[]
-  issueWatches            IssueWatcher[]
-  createdArtifacts        Artifact[]               @relation("ArtifactCreator")
-  artifactVersions        ArtifactVersion[]        @relation("ArtifactVersionCreator")
-  ownedContextSets        ContextSet[]             @relation("ContextSetOwnerUser")
-  createdExecutionPlans   ExecutionPlan[]          @relation("ExecutionPlanCreator")
-  createdGoals            Goal[]                   @relation("GoalCreator")
-  executionSteps          ExecutionStep[]          @relation("ExecutionStepUser")
-  requestedReviewGates    ReviewGate[]             @relation("ReviewGateRequester")
-  resolvedReviewGates     ReviewGate[]             @relation("ReviewGateResolver")
-  requestedActionRequests ActionRequest[]          @relation("ActionRequestRequester")
-  assignedActionRequests  ActionRequest[]          @relation("ActionRequestAssignee")
-  resolvedActionRequests  ActionRequest[]          @relation("ActionRequestResolver")
-  actionRequestVotes      ActionRequestVote[]
-  notificationPreferences NotificationPreference[]
-  createdCanvases         WorkspaceCanvas[]        @relation("WorkspaceCanvasCreator")
-  ownedCanvases           WorkspaceCanvas[]        @relation("WorkspaceCanvasOwner")
-  createdShapes           CanvasShape[]            @relation("CanvasShapeCreator")
-  createdCanvasFrames     CanvasFrame[]            @relation("CanvasFrameCreator")
-  createdCanvasGroups     CanvasGroup[]            @relation("CanvasGroupCreator")
-  createdCanvasComponents CanvasComponent[]        @relation("CanvasComponentCreator")
-  createdCanvasStyles     CanvasStyle[]            @relation("CanvasStyleCreator")
+  authoredIssues                    Issue[]                  @relation("IssueAuthor")
+  assignedIssues                    IssueAssignee[]
+  comments                          Comment[]
+  auditEntries                      AuditLog[]
+  events                            ActivityEvent[]
+  notificationStates                NotificationState[]
+  pushSubscriptions                 PushSubscription[]
+  createdProjects                   Project[]                @relation("ProjectCreator")
+  apiKeys                           ApiKey[]
+  claimedIssues                     Issue[]                  @relation("IssueClaimedBy")
+  defaultIssueAssigneeForWorkspaces Workspace[]              @relation("WorkspaceDefaultIssueAssignee")
+  recurringCreated                  RecurringIssue[]         @relation("RecurringCreator")
+  savedViews                        SavedView[]
+  issueSavedViews                   IssueSavedView[]
+  timeEntries                       TimeEntry[]
+  chatThreads                       ChatThread[]
+  chatThreadReads                   ChatThreadRead[]
+  runtimes                          Runtime[]
+  controlRequestedRuns              AgentRun[]               @relation("AgentRunControlRequester")
+  clearedAgentRuns                  AgentRun[]               @relation("AgentRunClearer")
+  pins                              Pin[]
+  recentItems                       RecentItem[]
+  notes                             Note[]
+  issueWatches                      IssueWatcher[]
+  createdArtifacts                  Artifact[]               @relation("ArtifactCreator")
+  artifactVersions                  ArtifactVersion[]        @relation("ArtifactVersionCreator")
+  ownedContextSets                  ContextSet[]             @relation("ContextSetOwnerUser")
+  createdExecutionPlans             ExecutionPlan[]          @relation("ExecutionPlanCreator")
+  createdGoals                      Goal[]                   @relation("GoalCreator")
+  executionSteps                    ExecutionStep[]          @relation("ExecutionStepUser")
+  requestedReviewGates              ReviewGate[]             @relation("ReviewGateRequester")
+  resolvedReviewGates               ReviewGate[]             @relation("ReviewGateResolver")
+  requestedActionRequests           ActionRequest[]          @relation("ActionRequestRequester")
+  assignedActionRequests            ActionRequest[]          @relation("ActionRequestAssignee")
+  resolvedActionRequests            ActionRequest[]          @relation("ActionRequestResolver")
+  actionRequestVotes                ActionRequestVote[]
+  notificationPreferences           NotificationPreference[]
+  createdCanvases                   WorkspaceCanvas[]        @relation("WorkspaceCanvasCreator")
+  ownedCanvases                     WorkspaceCanvas[]        @relation("WorkspaceCanvasOwner")
+  createdShapes                     CanvasShape[]            @relation("CanvasShapeCreator")
+  createdCanvasFrames               CanvasFrame[]            @relation("CanvasFrameCreator")
+  createdCanvasGroups               CanvasGroup[]            @relation("CanvasGroupCreator")
+  createdCanvasComponents           CanvasComponent[]        @relation("CanvasComponentCreator")
+  createdCanvasStyles               CanvasStyle[]            @relation("CanvasStyleCreator")
 
   @@index([handle])
 }
@@ -669,86 +679,92 @@ model SsoProvider {
 // ----------------------------------------------------------------------------
 
 model Workspace {
-  id                            String                  @id @default(cuid())
-  slug                          String                  @unique
+  id                            String                   @id @default(cuid())
+  slug                          String                   @unique
   name                          String
   /// Short key used for issue identifiers: e.g. `FRG-123`.
-  key                           String                  @unique
+  key                           String                   @unique
   avatarUrl                     String?
   /// Default cycle length (days). Overridable per cycle at create time.
-  cycleLengthDays               Int                     @default(7)
+  cycleLengthDays               Int                      @default(7)
   /// Default rest/cooldown days between cycles (0 = back-to-back).
-  cycleCooldownDays             Int                     @default(0)
+  cycleCooldownDays             Int                      @default(0)
   /// When true, the time-tracking surface is enabled for this workspace.
-  timeTrackingEnabled           Boolean                 @default(false)
+  timeTrackingEnabled           Boolean                  @default(false)
   /// Soft cap on total attachment storage (MB) for this workspace.
-  attachmentQuotaMb             Int                     @default(1024)
+  attachmentQuotaMb             Int                      @default(1024)
+  /// How Forge fills human assignees on issue create when no explicit
+  /// assignees were supplied.
+  defaultIssueAssigneeMode      DefaultIssueAssigneeMode @default(NONE)
+  /// Member used when `defaultIssueAssigneeMode = USER`. Validated by
+  /// settings writes and ignored on create if the membership later goes stale.
+  defaultIssueAssigneeUserId    String?
   /// Master toggle for auto-dispatching queued issues to agents.
-  autoDispatch                  Boolean                 @default(false)
+  autoDispatch                  Boolean                  @default(false)
   /// Strategy used when autoDispatch is on. MANUAL_ONLY disables picking.
-  autoDispatchMode              AutoDispatchMode        @default(MANUAL_ONLY)
+  autoDispatchMode              AutoDispatchMode         @default(MANUAL_ONLY)
   /// Default engagement mode for work dispatched via assignment / queue
   /// (the "you're handing it over" surface). See docs/agents/engagement-modes.md.
-  assignmentEngagementMode      EngagementMode          @default(EXECUTE)
+  assignmentEngagementMode      EngagementMode           @default(EXECUTE)
   /// How an @-mention with no explicit mode marker resolves.
-  mentionEngagementPolicy       MentionEngagementPolicy @default(INFER)
+  mentionEngagementPolicy       MentionEngagementPolicy  @default(INFER)
   /// Fallback mode for @-mentions under FIXED policy (or when INFER yields
   /// nothing actionable). Mentions are conversational by default.
-  mentionDefaultMode            EngagementMode          @default(DISCUSS)
+  mentionDefaultMode            EngagementMode           @default(DISCUSS)
   /// When true, assigning (manually or auto) immediately pushes the agent
   /// webhook to start work; when false, the issue sits in the agent queue.
-  autoStartOnAssign             Boolean                 @default(false)
+  autoStartOnAssign             Boolean                  @default(false)
   /// Heartbeat idle timeout: a heartbeat-tracked agent (Hermes, local daemon,
   /// or a health-probed app server) flips to OFFLINE once its last heartbeat
   /// is older than this window (see `sweepIdleAgents`). 0 = disabled (the
   /// agent never auto-offlines). Default 15 so true presence works out of the
   /// box — well above the 60s heartbeat/probe cadence.
-  agentIdleTimeoutMinutes       Int                     @default(15)
+  agentIdleTimeoutMinutes       Int                      @default(15)
   /// Gated dispatch — assignment lands in queue but agent does not start
   /// work until a human approves.
-  requireApprovalBeforeStart    Boolean                 @default(false)
+  requireApprovalBeforeStart    Boolean                  @default(false)
   /// When > 0, agents must move issues out of BACKLOG/TODO within
   /// this many minutes of assignment. Stale issues emit ISSUE_STALLED
   /// and (depending on `autoRedispatchOnStall`) get their assignedAgentId
   /// cleared so the next auto-dispatch picks them up.
-  assignmentSlaMinutes          Int                     @default(0)
+  assignmentSlaMinutes          Int                      @default(0)
   /// When true, ISSUE_STALLED also clears assignedAgentId so the
   /// auto-dispatcher re-picks. When false, the event fires but the
   /// assignment is preserved (operator-driven workflow).
-  autoRedispatchOnStall         Boolean                 @default(false)
+  autoRedispatchOnStall         Boolean                  @default(false)
   /// When > 0, every successful AGENT_ASSIGNED delivery starts an
   /// "ack window" — the agent must comment on or transition the
   /// issue within this many seconds, otherwise an AGENT_NOACK event
   /// fires (and the issue is re-dispatched if `autoRedispatchOnNoack`
   /// is true). 0 disables the check. 60–180s is reasonable when the
   /// agent's loop is fast.
-  requiredAckSeconds            Int                     @default(0)
+  requiredAckSeconds            Int                      @default(0)
   /// When true, AGENT_NOACK also clears assignedAgentId so the
   /// auto-dispatcher re-picks. Mirrors `autoRedispatchOnStall`.
-  autoRedispatchOnNoack         Boolean                 @default(false)
+  autoRedispatchOnNoack         Boolean                  @default(false)
   /// When true, the maintenance worker scans for SLA breaches every
   /// minute and emits ISSUE_SLA_BREACH events. Off by default —
   /// requires `Issue.slaMinutes` to be set per-issue, otherwise the
   /// sweep is a no-op for the row.
-  slaEnforcementEnabled         Boolean                 @default(false)
+  slaEnforcementEnabled         Boolean                  @default(false)
   /// Master toggle for AI features in this workspace. Off by default.
   /// Gates AI triage on issue create AND Coach agent comments on
   /// stall/noack/breach events. Requires `ANTHROPIC_API_KEY` in env.
-  aiEnabled                     Boolean                 @default(false)
+  aiEnabled                     Boolean                  @default(false)
   /// When true, every newly created issue (by a human author) kicks off
   /// a background AI triage. Null when `aiEnabled` is off.
-  aiTriageOnCreate              Boolean                 @default(true)
+  aiTriageOnCreate              Boolean                  @default(true)
   /// When true, Coach agents post diagnostic comments on
   /// ISSUE_STALLED / AGENT_NOACK / ISSUE_SLA_BREACH events. The
   /// workspace must have an Agent with role=COACH for this to fire.
-  aiCoachEnabled                Boolean                 @default(true)
+  aiCoachEnabled                Boolean                  @default(true)
   /// Which provider Forge talks to for AI features. Default `hermes`
   /// uses Mission-Control's pattern: an OpenAI-compatible Hermes
   /// gateway that itself fans out to Anthropic / OpenAI / etc. via the
   /// model-router plugin. Other values (`openai`, `anthropic`,
   /// `custom`) bypass Hermes and call the named provider directly.
   /// All provider URLs / keys live in env — see ai-providers.ts.
-  aiProvider                    String                  @default("hermes")
+  aiProvider                    String                   @default("hermes")
   /// Optional model override. The provider supplies a sensible default
   /// (Hermes default = workspace's session model; OpenAI default =
   /// gpt-4o-mini; Anthropic default = claude-haiku-4-5-20251001).
@@ -759,7 +775,7 @@ model Workspace {
   /// agent (they emit run events / status comments as they work), short
   /// enough that a finished turn an agent didn't close via `runs.complete`
   /// stops lingering as a live run on the issue page. 0 disables the sweep.
-  agentRunStaleMinutes          Int                     @default(30)
+  agentRunStaleMinutes          Int                      @default(30)
   /// Optional Status row id to auto-transition into on AGENT_ASSIGNED.
   /// When set, the audit/event fan-out promotes assigned issues to this
   /// status (must be in IN_PROGRESS category, validated at write time).
@@ -771,28 +787,30 @@ model Workspace {
   /// considered "stalled" by the dashboard suggestions bucket. Settings-
   /// driven so admins can tune the workspace's idle definition without
   /// editing handler code. 0 disables the bucket.
-  stalledThresholdDays          Int                     @default(7)
+  stalledThresholdDays          Int                      @default(7)
   /// Minutes since `Agent.lastHeartbeatAt` after which a PERSISTENT
   /// agent's presence row surfaces a warning chip on the agents page.
   /// EPHEMERAL agents only heartbeat while running, so the warning is
   /// suppressed for them. 0 disables the warning entirely.
-  agentHeartbeatWarnMinutes     Int                     @default(5)
+  agentHeartbeatWarnMinutes     Int                      @default(5)
   /// Minutes since `Agent.lastHeartbeatAt` after which a PERSISTENT
   /// agent's presence row escalates to the critical (danger) tier.
   /// Should be > `agentHeartbeatWarnMinutes`. 0 disables critical.
-  agentHeartbeatCriticalMinutes Int                     @default(30)
+  agentHeartbeatCriticalMinutes Int                      @default(30)
   /// Master toggle for the `/api/ingest/email` inbound endpoint. When
   /// off, the endpoint returns 403 even if the HMAC signature is valid.
   /// Off by default; admins flip it on in `/settings/integrations`.
-  emailIngestEnabled            Boolean                 @default(false)
+  emailIngestEnabled            Boolean                  @default(false)
   /// HMAC-SHA256 shared secret for the email-ingest endpoint. Caller
   /// signs the JSON body and sends it as `x-forge-email-signature`.
   /// Null until the admin generates one; rotating it invalidates any
   /// outstanding inbound integrations.
   emailIngestSecret             String?
-  createdAt                     DateTime                @default(now())
-  updatedAt                     DateTime                @updatedAt
+  createdAt                     DateTime                 @default(now())
+  updatedAt                     DateTime                 @updatedAt
   deletedAt                     DateTime?
+
+  defaultIssueAssigneeUser User? @relation("WorkspaceDefaultIssueAssignee", fields: [defaultIssueAssigneeUserId], references: [id], onDelete: SetNull)
 
   memberships             Membership[]
   projects                Project[]
@@ -859,6 +877,7 @@ model Workspace {
   startedStatus           Status?                   @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
+  @@index([defaultIssueAssigneeUserId])
 }
 
 model Membership {
@@ -1030,27 +1049,27 @@ model Issue {
   updatedAt             DateTime        @updatedAt
   deletedAt             DateTime?
 
-  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project        Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  parent         Issue?          @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
-  children       Issue[]         @relation("IssueChildren")
-  cycle          Cycle?          @relation(fields: [cycleId], references: [id], onDelete: SetNull)
-  status         Status          @relation(fields: [statusId], references: [id])
-  author         User            @relation("IssueAuthor", fields: [authorId], references: [id])
-  claimedBy      User?           @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
-  assignedAgent  Agent?          @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  workspace      Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project        Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  parent         Issue?                 @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children       Issue[]                @relation("IssueChildren")
+  cycle          Cycle?                 @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  status         Status                 @relation(fields: [statusId], references: [id])
+  author         User                   @relation("IssueAuthor", fields: [authorId], references: [id])
+  claimedBy      User?                  @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  assignedAgent  Agent?                 @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
   assignees      IssueAssignee[]
   labels         IssueLabel[]
   comments       Comment[]
   attachments    Attachment[]
-  relationsFrom  IssueRelation[] @relation("IssueRelationFrom")
-  relationsTo    IssueRelation[] @relation("IssueRelationTo")
+  relationsFrom  IssueRelation[]        @relation("IssueRelationFrom")
+  relationsTo    IssueRelation[]        @relation("IssueRelationTo")
   timeEntries    TimeEntry[]
   agentRuns      AgentRun[]
   watchers       IssueWatcher[]
   artifacts      Artifact[]
   executionPlans ExecutionPlan[]
-  executionSteps ExecutionStep[] @relation("ExecutionStepIssue")
+  executionSteps ExecutionStep[]        @relation("ExecutionStepIssue")
   goals          Goal[]
   actionRequests ActionRequest[]
   externalLinks  ExternalResourceLink[]
@@ -1867,8 +1886,8 @@ model ConnectionMapping {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connection        Connection         @relation(fields: [connectionId], references: [id], onDelete: Cascade)
   externalResources ExternalResource[]
 
   @@index([workspaceId])
@@ -1880,7 +1899,7 @@ model ConnectionMapping {
 /// future integrations can reuse the identity/link/sync layer without
 /// adding a parallel model per vendor.
 model ExternalResource {
-  id                  String   @id @default(cuid())
+  id                  String    @id @default(cuid())
   workspaceId         String
   /// Provider key, e.g. "GITHUB".
   provider            String
@@ -1908,11 +1927,11 @@ model ExternalResource {
   externalCreatedAt   DateTime?
   externalUpdatedAt   DateTime?
   lastSyncedAt        DateTime?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  connectionMapping ConnectionMapping? @relation(fields: [connectionMappingId], references: [id], onDelete: SetNull)
+  workspace         Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connectionMapping ConnectionMapping?     @relation(fields: [connectionMappingId], references: [id], onDelete: SetNull)
   links             ExternalResourceLink[]
 
   @@unique([workspaceId, provider, repoFullName, resourceType, number])
@@ -2223,7 +2242,7 @@ model AgentRun {
   /// Mode-specific structured completion metadata. Examples:
   /// `{ confidence: "HIGH" }` for RESEARCH, `{ verdict: "APPROVE" }`
   /// for REVIEW, plus the Forge run contract version used at completion.
-  completionMeta        Json?
+  completionMeta       Json?
   /// Provider-side run id when this AgentRun is backed by a structured
   /// agent-run connector (e.g. Hermes `/v1/runs`). Lets Forge poll /
   /// approve / stop the live run and correlate streamed `/events`.
@@ -2231,7 +2250,7 @@ model AgentRun {
   externalRunId        String?
   /// Effective runtime/tool policy snapshot captured at dispatch. Stored
   /// on the run so old cards remain truthful after Runtime.config changes.
-  runtimePolicy         Json?
+  runtimePolicy        Json?
   /// Set when a connector-driven run is paused awaiting operator
   /// permission (e.g. Hermes flagged a dangerous command). Drives the
   /// Approve/Reject affordance in the Live tab; cleared when the run
@@ -2379,13 +2398,16 @@ model ChatThread {
   /// Per-thread override of the provider's default model. Null = use
   /// the provider's `defaultModel` from `ai-providers.ts`.
   modelOverride            String?
+  /// Per-thread override of runtime YOLO/approval bypass. Null = inherit the
+  /// runtime config; true/false force the permission mode for this thread.
+  yoloModeOverride         Boolean?
   lastMessageAt            DateTime        @default(now())
   createdAt                DateTime        @default(now())
   archivedAt               DateTime?
 
-  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  agent     Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent     Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
   reads     ChatThreadRead[]
 

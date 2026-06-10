@@ -52,13 +52,25 @@ interface PendingRun {
   buffer: RunEvent[];
   onEvent: ((e: RunEvent) => void) | null;
   terminal: boolean;
+  terminalError?: string;
   usage?: RunStatus["usage"];
   finalText: string;
+  cleanupTimer?: ReturnType<typeof setTimeout>;
 }
+
+const TERMINAL_RUN_RETENTION_MS = 5 * 60_000;
+const runs = new Map<string, PendingRun>();
 
 /** Encode/decode the externalRunId that correlates startRun ↔ subscribe. */
 function encodeRunId(threadId: string, turnId: string): string {
   return `${threadId}#${turnId}`;
+}
+
+function scheduleRunCleanup(externalRunId: string) {
+  const run = runs.get(externalRunId);
+  if (!run || run.cleanupTimer) return;
+  run.cleanupTimer = setTimeout(() => runs.delete(externalRunId), TERMINAL_RUN_RETENTION_MS);
+  run.cleanupTimer.unref?.();
 }
 
 /**
@@ -179,6 +191,8 @@ export const CODEX_APPROVAL_POLICIES: CodexApprovalPolicy[] = [
 export interface CodexRuntimeConfig {
   sandboxMode?: CodexSandboxMode;
   approvalPolicy?: CodexApprovalPolicy;
+  model?: string;
+  yoloMode?: boolean;
   workspaceRoot?: string;
 }
 
@@ -198,6 +212,8 @@ export function parseCodexRuntimeConfig(config: unknown): CodexRuntimeConfig {
     CODEX_APPROVAL_POLICIES.includes(c.approvalPolicy as CodexApprovalPolicy)
   )
     out.approvalPolicy = c.approvalPolicy as CodexApprovalPolicy;
+  if (typeof c.model === "string" && c.model.trim()) out.model = c.model.trim();
+  if (typeof c.yoloMode === "boolean") out.yoloMode = c.yoloMode;
   if (typeof c.workspaceRoot === "string" && c.workspaceRoot.trim())
     out.workspaceRoot = c.workspaceRoot.trim();
   return out;
@@ -242,6 +258,8 @@ export function makeCodexAppServerConnector(opts: {
    */
   sandboxMode?: CodexSandboxMode | null;
   approvalPolicy?: CodexApprovalPolicy | null;
+  model?: string | null;
+  yoloMode?: boolean | null;
   /** Working directory + writable root for the run (e.g. the bridge's /work). */
   workspaceRoot?: string | null;
 }): DispatchConnector | null {
@@ -249,9 +267,10 @@ export function makeCodexAppServerConnector(opts: {
   if (!url) return null;
   const sandboxMode = opts.sandboxMode ?? "danger-full-access";
   const approvalPolicy = opts.approvalPolicy ?? "never";
+  const runtimeModel = opts.model?.trim() || undefined;
+  const runtimeYoloMode = opts.yoloMode === true;
   const workspaceRoot = opts.workspaceRoot?.trim() || undefined;
 
-  const runs = new Map<string, PendingRun>();
   let nextId = 1;
 
   // Outbound request or notification: {id?,method,params?}.
@@ -357,6 +376,11 @@ export function makeCodexAppServerConnector(opts: {
       // Plain notification.
       const evt = mapCodexNotification(method, params);
       if (method === "turn/completed") {
+        const turn = params.turn as { status?: string; error?: unknown } | undefined;
+        const status = typeof turn?.status === "string" ? turn.status : "completed";
+        if (status === "failed") {
+          run.terminalError = codexFailureMessage(turn ?? params);
+        }
         run.usage = mapCodexUsage(params.usage as Record<string, unknown> | undefined);
         run.terminal = true;
       }
@@ -373,12 +397,15 @@ export function makeCodexAppServerConnector(opts: {
     });
 
     run.ws.on("error", (err: Error) => {
+      run.terminalError = err.message;
       if (!run.terminal) emit(run, { type: "error", message: err.message });
       run.terminal = true;
     });
     run.ws.on("close", () => {
       if (!run.terminal) {
-        emit(run, { type: "completed" });
+        const message = "Codex app-server WebSocket closed before turn/completed.";
+        run.terminalError = message;
+        emit(run, { type: "error", message });
         run.terminal = true;
       }
     });
@@ -429,7 +456,11 @@ export function makeCodexAppServerConnector(opts: {
 
       // New thread, then a turn carrying the user message. Codex keeps prior
       // turns in the thread itself; we pass instructions + the latest message.
-      const threadRes = (await request(run, "thread/start", {})) as {
+      const threadParams: Record<string, unknown> = {};
+      if (workspaceRoot) threadParams.cwd = workspaceRoot;
+      const effectiveModel = input.model?.trim() || runtimeModel;
+      if (effectiveModel) threadParams.model = effectiveModel;
+      const threadRes = (await request(run, "thread/start", threadParams)) as {
         thread?: { id?: string };
       };
       const threadId = threadRes.thread?.id;
@@ -456,11 +487,17 @@ export function makeCodexAppServerConnector(opts: {
       // Per-turn policy overrides (codex-cli 0.133 TurnStartParams accepts
       // cwd / approvalPolicy / sandboxPolicy and applies them to this turn and
       // subsequent turns on the thread). Defaults reproduce today's behavior.
-      const effectiveSandboxMode =
-        input.engagementMode && input.engagementMode !== "EXECUTE" ? "read-only" : sandboxMode;
+      const yoloMode = input.yoloMode ?? runtimeYoloMode;
+      const effectiveSandboxMode = yoloMode
+        ? "danger-full-access"
+        : input.engagementMode && input.engagementMode !== "EXECUTE"
+          ? "read-only"
+          : sandboxMode;
+      const effectiveApprovalPolicy = yoloMode ? "never" : approvalPolicy;
       const turnParams: Record<string, unknown> = { threadId, input: turnInput };
       if (workspaceRoot) turnParams.cwd = workspaceRoot;
-      turnParams.approvalPolicy = approvalPolicy;
+      if (effectiveModel) turnParams.model = effectiveModel;
+      turnParams.approvalPolicy = effectiveApprovalPolicy;
       turnParams.sandboxPolicy = toSandboxPolicy(effectiveSandboxMode, workspaceRoot);
       const turnRes = (await request(run, "turn/start", turnParams)) as {
         turn?: { id?: string };
@@ -520,18 +557,27 @@ export function makeCodexAppServerConnector(opts: {
       } catch {
         /* already closed */
       }
-      runs.delete(externalRunId);
+      scheduleRunCleanup(externalRunId);
     },
 
     async getStatus(externalRunId: string): Promise<RunStatus> {
       const run = runs.get(externalRunId);
-      if (!run) return { state: "completed" };
+      if (!run) {
+        return {
+          state: "unknown",
+          output:
+            "Codex app-server run is no longer tracked by this Forge process; the WebSocket session was lost before a terminal status could be read.",
+        };
+      }
+      if (run.terminal) {
+        scheduleRunCleanup(externalRunId);
+        if (run.terminalError) {
+          return { state: "failed", output: run.terminalError, usage: run.usage };
+        }
+        return { state: "completed", output: run.finalText || undefined, usage: run.usage };
+      }
       return {
-        state: run.terminal
-          ? "completed"
-          : run.pendingApprovalId !== null
-            ? "waiting_for_approval"
-            : "running",
+        state: run.pendingApprovalId !== null ? "waiting_for_approval" : "running",
         output: run.finalText || undefined,
         usage: run.usage,
       };
