@@ -9366,3 +9366,30 @@ src/server/routers/__tests__/workspace-members.test.ts` pass (40);
 src/server/services/__tests__/run-dispatcher.test.ts` pass (22);
 `git diff --check` clean. LAN preview restarted at
 `http://<internal-host>:3020/w/axiom-labs/chat`.
+
+
+## 2026-06-11 — AXI-78 Codex RUNS split-worker fix
+
+Follow-up after the AXI-78 verification: Bailey reported a new Codex run
+`cmqa4ogkb0089o606nail0p1s` / external `019eb903…` still stalled. Live run
+state showed the new failure summary was “Codex app-server run is no longer
+tracked by this Forge process,” not the earlier auth-refresh failure.
+
+Root cause: production was running two BullMQ maintenance workers against the
+same queue: the dedicated `forge-worker` container and the Next web container’s
+instrumentation hook importing `@/server/worker` in-process. Codex app-server
+RUNS state is tied to the WebSocket/process that starts the turn, so one
+process could start the Codex turn while the other process polled the AgentRun
+with an empty in-memory run map and incorrectly marked it STALLED.
+
+Fix: extracted `shouldStartInProcessWorker()` and changed instrumentation so
+production web processes do not boot BullMQ workers unless explicitly opted in
+with `FORGE_ENABLE_IN_PROCESS_WORKER=1`. Development/single-process installs
+still get in-process workers by default, and `FORGE_DISABLE_IN_PROCESS_WORKER=1`
+still wins.
+
+Verification: RED/GREEN `pnpm vitest run tests/unit/instrumentation.test.ts`;
+`pnpm vitest run tests/unit/instrumentation.test.ts src/server/services/__tests__/run-dispatcher.test.ts tests/unit/codex-app-server.test.ts`
+pass (27); `pnpm typecheck` pass; `pnpm lint` clean; `env -u OPENAI_API_KEY
+pnpm test` pass (101 files, 850 tests, 1 skipped). Live logs confirmed the
+failed run was split across the web and worker containers before the fix.
