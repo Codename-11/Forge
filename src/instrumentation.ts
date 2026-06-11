@@ -1,19 +1,37 @@
 /**
  * Next.js instrumentation hook — runs once when the server boots.
- * Used to start background tickers that don't warrant a separate worker
- * container (recurring-issue scheduler, BullMQ workers, etc.).
+ * Used to start lightweight web-process tickers and, in development or
+ * explicitly opted-in single-process deployments, BullMQ workers.
  */
+export function shouldStartInProcessWorker(env: {
+  nodeEnv?: string;
+  disableInProcessWorker?: string;
+  enableInProcessWorker?: string;
+}): boolean {
+  if (env.disableInProcessWorker === "1") return false;
+  if (env.enableInProcessWorker === "1") return true;
+  return env.nodeEnv !== "production";
+}
+
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
-  if (process.env.FORGE_DISABLE_IN_PROCESS_WORKER === "1") return;
 
   const { startRecurringTicker } = await import("@/server/services/recurring");
   startRecurringTicker();
 
-  // Boot BullMQ workers in-process. Importing `@/server/worker` triggers
-  // the side-effect Worker(...) constructors and the recurring sweep
-  // registrations. We run the workers inside the Next.js node process to
-  // avoid a separate container — fine at this scale; split into a
-  // dedicated worker service when throughput demands it.
+  if (
+    !shouldStartInProcessWorker({
+      nodeEnv: process.env.NODE_ENV,
+      disableInProcessWorker: process.env.FORGE_DISABLE_IN_PROCESS_WORKER,
+      enableInProcessWorker: process.env.FORGE_ENABLE_IN_PROCESS_WORKER,
+    })
+  ) {
+    return;
+  }
+
+  // Boot BullMQ workers in-process for dev/single-process installs. Production
+  // Docker deployments run the dedicated forge-worker container; starting a
+  // second worker in the web process splits in-memory provider state such as
+  // Codex app-server WebSocket sessions across processes.
   await import("@/server/worker");
 }
