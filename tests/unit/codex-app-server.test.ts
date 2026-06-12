@@ -227,6 +227,71 @@ describe("makeCodexAppServerConnector", () => {
     }
   });
 
+  it("maps a session-scope approval to acceptForSession on the live socket", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const threadId = `thread-appr-${Date.now()}`;
+    const turnId = `turn-appr-${Date.now()}`;
+    const approvalId = 9001;
+    let decision: string | null = null;
+    let sawApprovalRequest = false;
+
+    server.on("connection", (ws) => {
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(raw.toString()) as {
+          id?: number;
+          method?: string;
+          result?: { decision?: string };
+        };
+        // Client → server reply carrying the operator's approval decision.
+        if (msg.method === undefined && msg.id === approvalId && msg.result) {
+          decision = msg.result.decision ?? null;
+          return;
+        }
+        if (msg.id === undefined) return;
+        if (msg.method === "initialize") {
+          ws.send(JSON.stringify({ id: msg.id, result: {} }));
+        } else if (msg.method === "thread/start") {
+          ws.send(JSON.stringify({ id: msg.id, result: { thread: { id: threadId } } }));
+        } else if (msg.method === "turn/start") {
+          ws.send(JSON.stringify({ id: msg.id, result: { turn: { id: turnId } } }));
+          // Server → client approval request mid-turn (e.g. `rg --files`).
+          ws.send(
+            JSON.stringify({
+              id: approvalId,
+              method: "item/commandExecution/requestApproval",
+              params: { command: "rg --files" },
+            }),
+          );
+          sawApprovalRequest = true;
+        }
+      });
+    });
+
+    try {
+      const connector = makeCodexAppServerConnector({
+        baseUrl: `ws://127.0.0.1:${port}`,
+        approvalPolicy: "on-request",
+      });
+      const { externalRunId } = await connector!.startRun({ message: "hi" });
+      // Wait until the connector registers the pending approval.
+      for (let i = 0; i < 50; i++) {
+        const st = await connector!.getStatus!(externalRunId);
+        if (st.state === "waiting_for_approval") break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      await connector!.approve!(externalRunId, "session");
+      for (let i = 0; i < 50 && decision === null; i++) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(sawApprovalRequest).toBe(true);
+      expect(decision).toBe("acceptForSession");
+    } finally {
+      server.close();
+    }
+  });
+
   it("reports unknown runs as unknown instead of completed", async () => {
     const c = makeCodexAppServerConnector({ baseUrl: "ws://127.0.0.1:4500" });
 

@@ -2,6 +2,52 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-11 — Codex dispatch approvals: cross-process relay + surfacing
+
+Diagnosed why `@codex` on an assigned issue (e.g. AXI-45) froze while Codex
+chat worked. Root cause was an architecture split exposed by e2cd9f0
+("disable in-process workers in production"): the Codex app-server connector
+keeps each run's WebSocket + `pendingApprovalId` in a **module-level
+in-memory `runs` Map**. `startRun` + the 5s `getStatus` poll run in the
+`forge-worker` container, but the `respondApproval` tRPC mutation runs in the
+`forge` web container — so `connector.approve()` hit an empty Map and silently
+no-op'd. The web side optimistically cleared `awaitingApprovalAt`; the worker's
+next poll saw Codex still blocked and re-flagged it → Approve flips
+running↔waiting forever (the "approve 10×" symptom). `instrumentation.ts:32`
+literally predicts this. Chat worked because its run lives in one process.
+
+Fixes:
+- **Cross-process approval relay (codex-app-server.ts).** Added a Redis
+  control channel `forge:codex:control`. The socket-owning process subscribes
+  on `startRun`; `approve`/`stop` apply locally when the run is in-process,
+  else publish the decision for the owner to apply. Extracted
+  `applyApproveLocal`/`applyStopLocal`/`rawRespond`/`rawNotify`. Subscriber is
+  inert under VITEST/test and carries an `error` handler so a missing Redis
+  never crashes dispatch. Hermes is unaffected (its approvals POST over HTTP).
+- **Session-scope approvals (agent-run.ts `respondApproval`).** New `scope`
+  input (`once` | `session`, default `session`). Approve now maps to Codex
+  `acceptForSession` / Hermes `session` so a read-only research sweep isn't
+  death-by-approval; a "Just this once" link keeps the per-command path.
+- **Approval surfaced on the issue page (D).** Extracted the Live-tab approval
+  UI into a shared `RunApprovalCard` (`components/agents/run-approval-card.tsx`)
+  used by both `RunRow` and the issue right-rail `IssueAgentPanel`, so an
+  approval is actionable where the operator is looking, not only in the Live
+  overlay.
+- **Settings copy fix + YOLO enabled.** Corrected the Codex YOLO toggle help
+  text (it gates *every* turn, not just chat/discuss). Enabled YOLO on the
+  prod `rt_codex_appserver` runtime (yoloMode + danger-full-access + approval
+  `never`) so our deployment's Codex dispatch runs without approval prompts.
+
+Aside: AXI-45's Victor "RUN STATUS" comments were NOT a mis-dispatch — the
+workspace is `MANUAL_ONLY` with required-ack off, every `AGENT_ASSIGNED` was
+Bailey→Codex, and Victor's three runs had no `assignmentEventId` (self-opened
+EXECUTE runs from a parallel Victor session that actually implemented AXI-45,
+shipping commit fa963e2).
+
+Verification: `pnpm lint`, `pnpm typecheck`, full `pnpm test` (854 passed,
+1 skipped live Codex test). New connector test covers the session→
+`acceptForSession` mapping over the live socket.
+
 ## 2026-06-11 — MCP comment update/delete tools
 
 Exposed `comments.update` and `comments.delete` on the Forge MCP registry so

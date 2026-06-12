@@ -1314,7 +1314,8 @@ function CodexPolicyFields({
         <span className="min-w-0">
           <span className="block font-medium text-foreground">YOLO mode</span>
           <span className="block text-meta text-muted-foreground">
-            Chat and discuss turns keep full access and skip approval prompts.
+            Every turn (chat, dispatch, research) runs with full access and skips
+            approval prompts. Forces danger-full-access + approval “never”.
           </span>
         </span>
       </label>
