@@ -326,6 +326,55 @@ export async function finishRun(
 }
 
 /**
+ * Post an issue comment authored AS the agent, on behalf of a dispatched run.
+ *
+ * The RUNS-engine dispatcher owns the agent loop over the connector socket.
+ * A provider that lacks Forge MCP — or that fails before calling
+ * `comments.create` itself — leaves its output orphaned in `AgentRun.summary`,
+ * visible only in Mission Control's run/recovery overlay. For terminal
+ * *failures* we surface that output as a real issue comment so the timeline +
+ * watcher notifications carry it, exactly like a normal agent reply. Authored
+ * with `authoringAgentId` and a null human author (Comment.authorId is
+ * nullable since migration 0047) so the UI renders it as the agent speaking.
+ */
+export async function postAgentRunComment(
+  tx: Tx,
+  params: {
+    workspaceId: string;
+    issueId: string;
+    agentId: string;
+    body: string;
+  },
+): Promise<void> {
+  const comment = await tx.comment.create({
+    data: {
+      workspaceId: params.workspaceId,
+      issueId: params.issueId,
+      authorId: null,
+      authoringAgentId: params.agentId,
+      body: params.body,
+    },
+  });
+  await recordChange(tx, {
+    workspaceId: params.workspaceId,
+    actorId: null,
+    actorAgentId: params.agentId,
+    entity: "Comment",
+    entityId: comment.id,
+    action: "create",
+    after: comment,
+    eventKind: EventKind.COMMENT_CREATED,
+    subjectType: "issue",
+    subjectId: params.issueId,
+    payload: {
+      commentId: comment.id,
+      issueId: params.issueId,
+      preview: params.body.slice(0, 120),
+    },
+  });
+}
+
+/**
  * Convenience: open-or-touch + append in one call. Used at every place
  * where an agent action lands (webhook delivery, MCP write, status
  * upsert) so the lifecycle is "first action opens the run, every

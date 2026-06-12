@@ -307,6 +307,15 @@ describe("runs dispatcher", () => {
       expect(after.status).toBe("STALLED");
       expect(after.summary).toMatch(/without a valid Forge runs\.complete contract/);
       expect(after.completionMeta).toBeNull();
+
+      // A terminal failure must surface on the issue itself, not only in the
+      // run overlay — posted as an agent-authored comment carrying the output.
+      const comments = await prisma.comment.findMany({ where: { issueId: issue.id } });
+      expect(
+        comments.some(
+          (c) => c.authoringAgentId === agent.id && /run stalled/i.test(c.body),
+        ),
+      ).toBe(true);
     } finally {
       if (previousE2E === undefined) {
         delete process.env.FORGE_E2E;
