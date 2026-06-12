@@ -127,6 +127,8 @@ or `ABANDONED` (so `ACTIVE` and `STALLED` qualify).
 | Tool             | Summary                                                                |
 |------------------|------------------------------------------------------------------------|
 | `create`         | Post a comment on an issue. Optional `confidence: "LOW" \| "MEDIUM" \| "HIGH"` annotates how much to scrutinize the claim (only rendered for agent-authored rows). Optional `actionRequest` bundles a recommendation card in the same call; pass `actionRequest.options[]` to make that card a multi-vote poll. |
+| `update`         | Edit an issue comment body. Input `{ id, body }`; authors can edit their own comments, while workspace OWNER/ADMIN or ADMIN-scoped MCP keys can override. Preserves prior bodies in `revisions`, sets `editedAt`, and emits normal comment audit/activity. |
+| `delete`         | Soft-delete/archive an issue comment. Input `{ id }`; same author/admin authorization as `update`. Sets `deletedAt`, keeps the row for audit/history, and removes it from agent-facing comment lists/context bundles. |
 | `upsertStatus`   | Idempotent rolling STATUS comment for the calling agent's run.         |
 | `list`           | Paginated history. `{ issueId, before?, limit? = 50 (max 200) }` — newest first, hides soft-deleted, includes `author` + `authoringAgent`. Scope: `READ_ISSUES`. |
 

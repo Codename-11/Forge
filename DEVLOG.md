@@ -2,6 +2,26 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-11 — MCP comment update/delete tools
+
+Exposed `comments.update` and `comments.delete` on the Forge MCP registry so
+agents can correct or remove their own erroneous issue comments without direct
+DB access. The new tools enforce author-or-admin authorization (including
+agent-authored comment ownership via `authoringAgentId` and ADMIN-scoped key
+or workspace OWNER/ADMIN overrides), preserve body revision history with
+`editedAt`, and soft-delete comments by setting `deletedAt`.
+
+Both mutations run through audited Forge write paths: `recordChange()` emits
+`COMMENT_UPDATED` activity/audit rows for edit and soft-delete operations, and
+deleted comments remain hidden from `comments.list`, `issues.get` comment
+hydration, and `agent.context.bundle`. Updated the MCP reference docs so the
+new tools are discoverable.
+
+Verification: `pnpm lint`, `pnpm typecheck`, targeted `pnpm test
+src/server/services/__tests__/mcp.test.ts -- --runInBand`, full
+`env -u OPENAI_API_KEY pnpm test` (853 passed, 1 skipped live Codex test), and
+`pnpm test:e2e` (34 passed) all pass.
+
 ## 2026-06-09 — Local release gate and Roadmap e2e stability
 
 Added `pnpm ci:local` as a one-command local release gate matching the practical

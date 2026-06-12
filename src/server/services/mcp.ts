@@ -33,9 +33,11 @@ import {
   resolveDefaultIssueAssigneeIds,
 } from "@/server/services/issue-create";
 import {
+  autoWatchAgent,
   autoWatchUser,
   setIssueAgentWakeTarget,
 } from "@/server/services/issue-watchers";
+import { extractMentions } from "@/server/services/mentions";
 import {
   abandonRunsForAgentReassignment,
   openOrTouchRun,
@@ -143,6 +145,8 @@ export interface McpContext {
 function scopeCtx(ctx: McpContext): { apiKey: ApiKeyContext | null; db: typeof db } {
   return { apiKey: ctx.apiKey, db };
 }
+
+const MCP_BODY_REVISION_CAP = 20;
 
 type McpCommentWithDates = {
   kind: CommentKind;
@@ -293,6 +297,40 @@ async function resolveActorId(ctx: McpContext): Promise<string> {
   });
   return m.userId;
 }
+
+type McpCommentAuthRow = {
+  id: string;
+  authorId: string | null;
+  authoringAgentId: string | null;
+};
+
+async function isMcpWorkspaceAdmin(ctx: McpContext): Promise<boolean> {
+  if (ctx.apiKey?.scopes.includes(PluginScope.ADMIN)) return true;
+  if (!ctx.userId) return false;
+  const membership = await db.membership.findUnique({
+    where: { userId_workspaceId: { userId: ctx.userId, workspaceId: ctx.workspaceId } },
+    select: { role: true },
+  });
+  return membership?.role === "OWNER" || membership?.role === "ADMIN";
+}
+
+async function assertMcpCommentWriteAllowed(
+  ctx: McpContext,
+  comment: McpCommentAuthRow,
+): Promise<void> {
+  const linkedAgentId = ctx.apiKey?.linkedAgentId ?? null;
+  const isAgentAuthor = !!linkedAgentId && comment.authoringAgentId === linkedAgentId;
+  const isHumanAuthor = !linkedAgentId && !!ctx.userId && comment.authorId === ctx.userId;
+  if (isAgentAuthor || isHumanAuthor || (await isMcpWorkspaceAdmin(ctx))) return;
+  throw new Error("Only the comment author or a workspace admin can modify this comment.");
+}
+
+type McpCommentMutationRow = Prisma.CommentGetPayload<{
+  include: {
+    author: { select: { id: true; name: true; image: true } };
+    authoringAgent: { select: { id: true; name: true; profileKey: true; avatar: true } };
+  };
+}>;
 
 type WorkspaceSelectorInput = {
   workspaceId?: string;
@@ -2921,6 +2959,211 @@ export const mcpTools = {
         actionRequestId = created.id;
       }
       return { ...comment, actionRequestId };
+    },
+  },
+
+  /**
+   * Edit a comment body through MCP using the same persisted revision fields
+   * as the app comment editor: push the previous body into `revisions`, set
+   * `editedAt`, and emit a COMMENT_UPDATED audit/activity event. The author
+   * may edit their own comment; workspace OWNER/ADMIN or ADMIN-scoped keys
+   * may override.
+   */
+  "comments.update": {
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({
+      id: z.string().cuid().describe("Comment id (cuid)."),
+      body: z.string().min(1).max(50_000),
+    }),
+    async run(input: { id: string; body: string }, ctx: McpContext) {
+      const existing = await db.comment.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
+        select: {
+          id: true,
+          body: true,
+          issueId: true,
+          kind: true,
+          authorId: true,
+          authoringAgentId: true,
+          updatedAt: true,
+          revisions: true,
+        },
+      });
+      if (!existing) throw new Error("Comment not found in this workspace.");
+      if (!existing.issueId) throw new Error("MCP comment updates currently require an issue comment.");
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: existing.issueId });
+      await assertMcpCommentWriteAllowed(ctx, existing);
+
+      if (existing.body === input.body) {
+        return db.comment.findUniqueOrThrow({
+          where: { id: input.id },
+          include: {
+            author: { select: { id: true, name: true, image: true } },
+            authoringAgent: {
+              select: { id: true, name: true, profileKey: true, avatar: true },
+            },
+          },
+        });
+      }
+
+      const oldTokens = new Set(extractMentions(existing.body));
+      const addedTokens = extractMentions(input.body).filter((token) => !oldTokens.has(token));
+      const priorRevisions = Array.isArray(existing.revisions)
+        ? (existing.revisions as Prisma.JsonArray)
+        : [];
+      const nextRevisions: Prisma.JsonArray = [
+        ...priorRevisions,
+        { body: existing.body, editedAt: existing.updatedAt.toISOString() },
+      ].slice(-MCP_BODY_REVISION_CAP);
+      const actorId = await resolveActorId(ctx);
+      const actorAgentId = ctx.apiKey?.linkedAgentId ?? null;
+      const now = new Date();
+
+      return db.$transaction(async (tx) => {
+        const newlyMentionedAgents: Array<{ agentId: string; profileKey: string }> = [];
+        const newlyMentionedUsers: Array<{ userId: string; handle: string }> = [];
+        if (addedTokens.length) {
+          const [agentMatches, userMatches] = await Promise.all([
+            tx.agent.findMany({
+              where: {
+                workspaceId: ctx.workspaceId,
+                profileKey: { in: addedTokens },
+                archivedAt: null,
+              },
+              select: { id: true, profileKey: true },
+            }),
+            tx.user.findMany({
+              where: {
+                handle: { in: addedTokens },
+                memberships: { some: { workspaceId: ctx.workspaceId } },
+              },
+              select: { id: true, handle: true },
+            }),
+          ]);
+          for (const agent of agentMatches) {
+            newlyMentionedAgents.push({ agentId: agent.id, profileKey: agent.profileKey });
+          }
+          for (const user of userMatches) {
+            if (user.handle) newlyMentionedUsers.push({ userId: user.id, handle: user.handle });
+          }
+          for (const mentioned of newlyMentionedAgents) {
+            await autoWatchAgent(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: existing.issueId!,
+              agentId: mentioned.agentId,
+            });
+          }
+          for (const mentioned of newlyMentionedUsers) {
+            await autoWatchUser(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: existing.issueId!,
+              userId: mentioned.userId,
+            });
+          }
+        }
+
+        const updated = (await tx.comment.update({
+          where: { id: input.id },
+          data: { body: input.body, revisions: nextRevisions, editedAt: now, updatedAt: now },
+          include: {
+            author: { select: { id: true, name: true, image: true } },
+            authoringAgent: {
+              select: { id: true, name: true, profileKey: true, avatar: true },
+            },
+          },
+        })) as McpCommentMutationRow;
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId,
+          actorAgentId,
+          entity: "Comment",
+          entityId: updated.id,
+          action: "update",
+          before: { body: existing.body },
+          after: updated,
+          eventKind: EventKind.COMMENT_UPDATED,
+          subjectType: "issue",
+          subjectId: existing.issueId!,
+          payload: {
+            commentId: updated.id,
+            issueId: existing.issueId,
+            edited: true,
+            preview: input.body.slice(0, 120),
+            mentions: {
+              agentIds: newlyMentionedAgents.map((m) => m.agentId),
+              userIds: newlyMentionedUsers.map((m) => m.userId),
+              agents: newlyMentionedAgents,
+            },
+          },
+        });
+
+        return updated;
+      });
+    },
+  },
+
+  /**
+   * Soft-delete/archive a comment through MCP. The row stays in the database
+   * with `deletedAt` set and is hidden from `comments.list`, `issues.get`
+   * comment hydration, and `agent.context.bundle` because those read paths
+   * already filter deleted comments.
+   */
+  "comments.delete": {
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({ id: z.string().cuid().describe("Comment id (cuid).") }),
+    async run(input: { id: string }, ctx: McpContext) {
+      const existing = await db.comment.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
+        select: {
+          id: true,
+          body: true,
+          issueId: true,
+          authorId: true,
+          authoringAgentId: true,
+          deletedAt: true,
+        },
+      });
+      if (!existing) throw new Error("Comment not found in this workspace.");
+      if (!existing.issueId) throw new Error("MCP comment deletion currently requires an issue comment.");
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: existing.issueId });
+      await assertMcpCommentWriteAllowed(ctx, existing);
+
+      const actorId = await resolveActorId(ctx);
+      const actorAgentId = ctx.apiKey?.linkedAgentId ?? null;
+      return db.$transaction(async (tx) => {
+        const deleted = await tx.comment.update({
+          where: { id: input.id },
+          data: { deletedAt: new Date() },
+          include: {
+            author: { select: { id: true, name: true, image: true } },
+            authoringAgent: {
+              select: { id: true, name: true, profileKey: true, avatar: true },
+            },
+          },
+        });
+
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId,
+          actorAgentId,
+          entity: "Comment",
+          entityId: deleted.id,
+          action: "delete",
+          before: { body: existing.body, deletedAt: existing.deletedAt },
+          after: deleted,
+          eventKind: EventKind.COMMENT_UPDATED,
+          subjectType: "issue",
+          subjectId: existing.issueId!,
+          payload: {
+            commentId: deleted.id,
+            issueId: existing.issueId,
+            deleted: true,
+          },
+        });
+
+        return { ...deleted, deleted: true };
+      });
     },
   },
 
