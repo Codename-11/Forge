@@ -3,7 +3,12 @@ import { AgentRunStatus, EventKind, Prisma } from "@prisma/client";
 import type { AgentProvider } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
-import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/agent-run";
+import {
+  openOrTouchRun,
+  appendRunEvent,
+  finishRun,
+  postAgentRunComment,
+} from "@/server/services/agent-run";
 import { FORGE_RUN_CONTRACT_VERSION, forgeRunInstruction } from "@/server/services/engagement-mode";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from "./registry";
@@ -534,6 +539,24 @@ async function pollActiveRuns(): Promise<number> {
           status: terminal,
           summary,
         });
+        // Surface a terminal *failure* on the issue itself. A clean
+        // COMPLETED run closed through `runs.complete`, so the agent has
+        // already posted its own comments via MCP — re-posting the summary
+        // would duplicate. But a STALLED/ABANDONED run's output otherwise
+        // lives only in `AgentRun.summary` (Mission Control overlay only),
+        // so without this a failed dispatch is invisible on the issue. Post
+        // it as an agent-authored comment so the timeline + watcher
+        // notifications carry it like any other reply.
+        if (terminal !== "COMPLETED" && run.issueId && summary) {
+          await postAgentRunComment(tx, {
+            workspaceId: run.workspaceId,
+            issueId: run.issueId,
+            agentId: run.agentId,
+            body:
+              `[dispatch · run ${terminal.toLowerCase()}]\n\n` +
+              summary,
+          });
+        }
         const usage = status.usage;
         await tx.agentRun.update({
           where: { id: run.id },

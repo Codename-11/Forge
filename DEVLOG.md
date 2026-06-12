@@ -2,6 +2,46 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-12 — Codex dispatch: surface failures + fix the runtime environment
+
+Follow-up after the approval relay shipped: Codex assigned to AXI-45 stopped
+freezing but **stalled** — `run-dispatcher` downgrades any provider-"completed"
+RUNS turn to STALLED unless the agent closed via Forge MCP `runs.complete`
+(`hasForgeCompletionMeta`). The Codex agent couldn't: the `codex-bridge`
+container (`ws://…:4505`) ran `codex app-server` with `cwd=/work` and a
+`/codex-home/config.toml` that declared **zero MCP servers** — no `runs.*`,
+no `comments.*`, no `agent.inbox.*`. It was also sitting in `/work/agent-forge`
+(an unrelated repo; `Runtime.config.workspaceRoot` was `/work/agent-forge`),
+so it reported "wrong checkout." The output never reached the issue: the RUNS
+dispatch path posts no comment of its own (it relies on the agent's MCP
+`comments.create`), and `finishRun` records the summary only as an
+`agent-run`-subject activity event → visible solely in Mission Control's
+recovery overlay.
+
+Two-part fix.
+
+**Forge code (this repo):** new `postAgentRunComment()` in agent-run.ts; the
+`pollActiveRuns` terminal block now posts the provider output as an
+agent-authored issue comment when a run ends non-COMPLETED (STALLED/ABANDONED)
+— so failures land in the timeline + notify watchers instead of hiding in the
+overlay. Clean COMPLETED runs already commented via MCP, so they're skipped
+(no double-post). Poll selects only ACTIVE runs, so it fires once. Test +
+CHANGELOG updated.
+
+**Runtime (`~/docker/codex-bridge/`, not this repo):** entrypoint now writes
+`config.toml` deterministically every boot with `[mcp_servers.forge]`
+(bearer `FORGE_API_KEY`, only when the key is present); compose gains an
+`env_file` (`./forge.env`) carrying the **codex-linked** key. The host
+`forge.env` key was Victor's (confirmed via `agents.me`) — using it would
+misattribute `runs.complete` — so minted a dedicated `codex-bridge:mcp` AGENT
+key (linkedAgent=codex, same 8 scopes as `codex-cli:mcp`). Cloned forge into
+`workspace/forge` (isolated from the live prod tree) and set
+`Runtime.config.workspaceRoot=/work/forge`. No sandbox: runtime stays
+`yoloMode + danger-full-access + approval never` (full access like
+Hermes/Claude); the sandbox tiers remain a supported per-turn feature.
+Verified: `agents.me` now returns `codex/CODEX`, MCP block present, clone at
+HEAD.
+
 ## 2026-06-11 — Codex dispatch approvals: cross-process relay + surfacing
 
 Diagnosed why `@codex` on an assigned issue (e.g. AXI-45) froze while Codex

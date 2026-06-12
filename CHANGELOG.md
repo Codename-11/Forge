@@ -14,6 +14,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 ### Fixed
 
 - **Codex approvals on assigned issues no longer freeze.** Approving (or rejecting) a Codex command request now reaches the agent even when dispatch runs in a separate worker process — previously the button flipped the run between "running" and "waiting" without ever resuming.
+- **Failed agent dispatches now show on the issue.** When a dispatched run ends without completing (stalled/abandoned), the agent's output is posted as a comment on the issue instead of being buried in the Mission Control run overlay — so a failed run is visible in the timeline and notifies watchers.
 
 ### Changed
 
