@@ -131,6 +131,8 @@ describe("mcp tool registry", () => {
       "issues.assign",
       "comments.list",
       "comments.create",
+      "comments.update",
+      "comments.delete",
       "workspaces.list",
       "access.createSession",
       "access.createAgentKey",
@@ -1480,6 +1482,141 @@ describe("mcp — awareness tools (Stream BA)", () => {
     // Workspace filter on the where clause means we get an empty list rather
     // than a leak, even with broad scopes. Caller's workspaceId is the gate.
     expect(rows).toEqual([]);
+  });
+
+  it("comments.update edits an owned body comment, preserves revisions, and emits audit/activity", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BCU" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const issue = await createIssue(f, { title: "editable" });
+    const { ctx } = buildMcpCtx(f, { scopes: ["READ_ISSUES", "WRITE_COMMENTS"] });
+    const created = await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.user.id,
+        body: "first draft",
+      },
+    });
+
+    const updated = (await call(
+      "comments.update",
+      { id: created.id, body: "second draft" },
+      ctx,
+    )) as { id: string; body: string; editedAt: Date | null; revisions: Array<{ body: string }> };
+
+    expect(updated.id).toBe(created.id);
+    expect(updated.body).toBe("second draft");
+    expect(updated.editedAt).toBeInstanceOf(Date);
+    expect(updated.revisions.map((r) => r.body)).toEqual(["first draft"]);
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: { workspaceId: f.workspace.id, kind: "COMMENT_UPDATED", subjectId: issue.id },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(event.payload).toMatchObject({ commentId: created.id, issueId: issue.id, edited: true });
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { workspaceId: f.workspace.id, entity: "Comment", entityId: created.id },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(audit.action).toBe("update");
+  });
+
+  it("comments.delete soft-deletes an owned body comment, audits it, and hides it from MCP context", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BCD" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const issue = await createIssue(f, { title: "delete-me" });
+    const { ctx } = buildMcpCtx(f, { scopes: ["READ_ISSUES", "WRITE_COMMENTS"] });
+    const keep = await prisma.comment.create({
+      data: { workspaceId: f.workspace.id, issueId: issue.id, authorId: f.user.id, body: "keep" },
+    });
+    const remove = await prisma.comment.create({
+      data: { workspaceId: f.workspace.id, issueId: issue.id, authorId: f.user.id, body: "remove" },
+    });
+
+    const result = (await call("comments.delete", { id: remove.id }, ctx)) as {
+      id: string;
+      deleted: boolean;
+      deletedAt: Date | null;
+    };
+
+    expect(result).toMatchObject({ id: remove.id, deleted: true });
+    expect(result.deletedAt).toBeInstanceOf(Date);
+    const row = await prisma.comment.findUniqueOrThrow({ where: { id: remove.id } });
+    expect(row.deletedAt).not.toBeNull();
+
+    const listed = dataOf<{ id: string }>(await call("comments.list", { issueId: issue.id }, ctx));
+    expect(listed.map((c) => c.id)).toContain(keep.id);
+    expect(listed.map((c) => c.id)).not.toContain(remove.id);
+
+    const hydrated = (await call(
+      "issues.get",
+      { id: issue.id, include: { comments: true } },
+      ctx,
+    )) as { comments: Array<{ id: string }> };
+    expect(hydrated.comments.map((c) => c.id)).toEqual([keep.id]);
+
+    const bundle = (await call("agent.context.bundle", { issueId: issue.id }, ctx)) as {
+      comments: Array<{ id: string }>;
+    };
+    expect(bundle.comments.map((c) => c.id)).toEqual([keep.id]);
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: { workspaceId: f.workspace.id, kind: "COMMENT_UPDATED", subjectId: issue.id },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(event.payload).toMatchObject({ commentId: remove.id, issueId: issue.id, deleted: true });
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { workspaceId: f.workspace.id, entity: "Comment", entityId: remove.id },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(audit.action).toBe("delete");
+  });
+
+  it("comments.update/delete deny non-author members but allow admin override", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BCA" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const issue = await createIssue(f, { title: "authz" });
+    const ownedByOwner = await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.user.id,
+        body: "owner comment",
+      },
+    });
+    const ownedByMember = await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.secondUser.id,
+        body: "member comment",
+      },
+    });
+    const { ctx: memberCtx } = buildMcpCtx(f, {
+      userId: f.secondUser.id,
+      scopes: ["READ_ISSUES", "WRITE_COMMENTS"],
+    });
+    await expect(
+      call("comments.update", { id: ownedByOwner.id, body: "bad edit" }, memberCtx),
+    ).rejects.toThrow(/author|admin/i);
+    await expect(call("comments.delete", { id: ownedByOwner.id }, memberCtx)).rejects.toThrow(
+      /author|admin/i,
+    );
+
+    const { ctx: adminCtx } = buildMcpCtx(f, { scopes: ["READ_ISSUES", "WRITE_COMMENTS", "ADMIN"] });
+    const updatedByAdmin = (await call(
+      "comments.update",
+      { id: ownedByMember.id, body: "admin edit" },
+      adminCtx,
+    )) as { body: string };
+    expect(updatedByAdmin.body).toBe("admin edit");
+    const deletedByAdmin = (await call("comments.delete", { id: ownedByMember.id }, adminCtx)) as {
+      deleted: boolean;
+    };
+    expect(deletedByAdmin.deleted).toBe(true);
   });
 
   it("issues.get with include hydrates description/comments/attachments/relations/currentRun/labels", async () => {
