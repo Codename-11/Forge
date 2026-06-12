@@ -12,6 +12,7 @@ import { STALE_RUN_MS } from "@/lib/agent-stale";
 import { presenceAvailability } from "@/lib/transport-display";
 import { relativeTime, cn } from "@/lib/utils";
 import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
+import { RunApprovalCard } from "@/components/agents/run-approval-card";
 import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 
 /**
@@ -228,6 +229,16 @@ export function IssueAgentPanel({
           "Assigned · no active run"
         )}
       </div>
+      {run?.awaitingApprovalAt && (
+        <div className="mt-2">
+          <RunApprovalCard
+            runId={run.id}
+            agentName={agent.name}
+            pendingApproval={run.pendingApproval}
+            onResolved={() => void utils.issue.byId.invalidate({ id: issueId })}
+          />
+        </div>
+      )}
     </div>
   );
 }

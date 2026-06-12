@@ -1,6 +1,7 @@
 import "server-only";
 import WebSocket from "ws";
 import { logger } from "@/server/logger";
+import { redisPub, redisSub } from "@/server/redis";
 import type {
   DispatchConnector,
   RunEvent,
@@ -71,6 +72,102 @@ function scheduleRunCleanup(externalRunId: string) {
   if (!run || run.cleanupTimer) return;
   run.cleanupTimer = setTimeout(() => runs.delete(externalRunId), TERMINAL_RUN_RETENTION_MS);
   run.cleanupTimer.unref?.();
+}
+
+/**
+ * Cross-process control channel. A Codex run's WebSocket + `pendingApprovalId`
+ * live only in the process that called `startRun` — for dispatched work that's
+ * the **forge-worker** container (where the runs-dispatch poll runs). But the
+ * operator's Approve/Reject button hits the `respondApproval` tRPC mutation in
+ * the **web** container, which has an empty `runs` map. Resolving the approval
+ * directly there is a silent no-op, so the run flips running↔waiting forever
+ * (see instrumentation.ts on split in-process worker state).
+ *
+ * Fix: the owning process subscribes here on `startRun`; the other process
+ * publishes the decision and the owner applies it to the live socket.
+ */
+const CODEX_CONTROL_CHANNEL = "forge:codex:control";
+
+interface CodexControlMsg {
+  externalRunId: string;
+  action: "approve" | "stop";
+  choice?: string;
+}
+
+let controlSub: ReturnType<typeof redisSub.duplicate> | null = null;
+
+function ensureControlSubscriber() {
+  if (controlSub) return;
+  // Unit tests exercise startRun against a local ws server with no Redis;
+  // the cross-process relay isn't under test there, so stay inert.
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return;
+  const sub = redisSub.duplicate();
+  controlSub = sub;
+  // A missing/blipping Redis must never crash the dispatch process — log and
+  // let ioredis reconnect on its own schedule.
+  sub.on("error", (err: Error) =>
+    logger.warn({ err }, "codex-app-server: control channel error"),
+  );
+  void sub.subscribe(CODEX_CONTROL_CHANNEL).catch((err) => {
+    logger.warn({ err }, "codex-app-server: control subscribe failed");
+  });
+  sub.on("message", (_channel: string, raw: string) => {
+    let msg: CodexControlMsg;
+    try {
+      msg = JSON.parse(raw) as CodexControlMsg;
+    } catch {
+      return;
+    }
+    const run = runs.get(msg.externalRunId);
+    if (!run) return; // socket not owned by this process — another owner will apply
+    if (msg.action === "approve") applyApproveLocal(run, msg.choice ?? "once");
+    else if (msg.action === "stop") applyStopLocal(run);
+  });
+}
+
+/** Reply to a server→client request: {id,result}. */
+function rawRespond(ws: WebSocket, id: JsonRpcId, result: unknown) {
+  ws.send(JSON.stringify({ id, result }));
+}
+
+/** Outbound notification: {method,params?}. */
+function rawNotify(ws: WebSocket, method: string, params?: unknown) {
+  const msg: Record<string, unknown> = { method };
+  if (params !== undefined) msg.params = params;
+  ws.send(JSON.stringify(msg));
+}
+
+/**
+ * Resolve a pending approval on a locally-owned run. Maps Forge's choice
+ * vocabulary (once|session|always|deny) onto Codex's decision enum. Returns
+ * false when there's nothing to resolve.
+ */
+function applyApproveLocal(run: PendingRun, choice: string): boolean {
+  if (run.pendingApprovalId === null) return false;
+  const decision =
+    choice === "session" || choice === "always"
+      ? "acceptForSession"
+      : choice === "deny" || choice === "decline"
+        ? "decline"
+        : "accept";
+  rawRespond(run.ws, run.pendingApprovalId, { decision });
+  run.pendingApprovalId = null;
+  return true;
+}
+
+/** Cancel any pending approval and interrupt the turn on a locally-owned run. */
+function applyStopLocal(run: PendingRun) {
+  try {
+    if (run.pendingApprovalId !== null) {
+      rawRespond(run.ws, run.pendingApprovalId, { decision: "cancel" });
+      run.pendingApprovalId = null;
+    }
+    if (run.turnId) {
+      rawNotify(run.ws, "turn/interrupt", { threadId: run.threadId, turnId: run.turnId });
+    }
+  } catch (err) {
+    logger.warn({ err }, "codex-app-server: stop failed");
+  }
 }
 
 /**
@@ -432,6 +529,9 @@ export function makeCodexAppServerConnector(opts: {
     kind: "codex-app-server",
 
     async startRun(input: RunInput): Promise<StartedRun> {
+      // This process now owns a Codex socket — subscribe so cross-process
+      // approve/stop relays (from the web container) reach it.
+      ensureControlSubscriber();
       const ws = await openSocket();
       const run: PendingRun = {
         ws,
@@ -585,30 +685,35 @@ export function makeCodexAppServerConnector(opts: {
 
     async approve(externalRunId: string, choice: string): Promise<void> {
       const run = runs.get(externalRunId);
-      if (!run || run.pendingApprovalId === null) return;
-      const decision =
-        choice === "session" || choice === "always"
-          ? "acceptForSession"
-          : choice === "deny" || choice === "decline"
-            ? "decline"
-            : "accept";
-      respond(run.ws, run.pendingApprovalId, { decision });
-      run.pendingApprovalId = null;
+      if (run) {
+        applyApproveLocal(run, choice);
+        return;
+      }
+      // Socket lives in another process (worker owns dispatched runs). Relay
+      // the decision over Redis so the owner applies it to the live socket.
+      try {
+        await redisPub.publish(
+          CODEX_CONTROL_CHANNEL,
+          JSON.stringify({ externalRunId, action: "approve", choice } satisfies CodexControlMsg),
+        );
+      } catch (err) {
+        logger.warn({ err, externalRunId }, "codex-app-server: approve relay failed");
+      }
     },
 
     async stop(externalRunId: string): Promise<void> {
       const run = runs.get(externalRunId);
-      if (!run) return;
+      if (run) {
+        applyStopLocal(run);
+        return;
+      }
       try {
-        if (run.pendingApprovalId !== null) {
-          respond(run.ws, run.pendingApprovalId, { decision: "cancel" });
-          run.pendingApprovalId = null;
-        }
-        if (run.turnId) {
-          send(run.ws, "turn/interrupt", { threadId: run.threadId, turnId: run.turnId });
-        }
+        await redisPub.publish(
+          CODEX_CONTROL_CHANNEL,
+          JSON.stringify({ externalRunId, action: "stop" } satisfies CodexControlMsg),
+        );
       } catch (err) {
-        logger.warn({ err, externalRunId }, "codex-app-server: stop failed");
+        logger.warn({ err, externalRunId }, "codex-app-server: stop relay failed");
       }
     },
   };

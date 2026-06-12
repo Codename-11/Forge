@@ -11,6 +11,15 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Codex approvals on assigned issues no longer freeze.** Approving (or rejecting) a Codex command request now reaches the agent even when dispatch runs in a separate worker process — previously the button flipped the run between "running" and "waiting" without ever resuming.
+
+### Changed
+
+- **Approve grants session scope by default.** Approving a command request stops the agent re-prompting for similar commands for the rest of the run; a "Just this once" link keeps the single-command option.
+- **Command approvals now appear on the issue page.** The Approve/Reject card shows in the issue's agent panel, not only in the Mission Control Live tab.
+
 ## [2026-06-09] — v0.7.0 · Chat runtime controls
 
 ### Added

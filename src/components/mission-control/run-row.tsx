@@ -8,15 +8,13 @@ import {
   ChevronRight,
   Bot,
   ExternalLink,
-  ShieldAlert,
-  Check,
-  X,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { ModeChip } from "@/components/ui/engagement-mode-glyph";
 import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
 import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
+import { RunApprovalCard } from "@/components/agents/run-approval-card";
 import { RunTimeline } from "./run-timeline";
 import { RunActions } from "./run-actions";
 
@@ -65,16 +63,6 @@ export type RunRowData = {
     description: string;
   }>;
 };
-
-/** Narrow the JSON `pendingApproval` blob to its displayable fields. */
-function readPendingApproval(v: unknown): { command: string | null; description: string | null } {
-  if (!v || typeof v !== "object") return { command: null, description: null };
-  const o = v as Record<string, unknown>;
-  return {
-    command: typeof o.command === "string" ? o.command : null,
-    description: typeof o.description === "string" ? o.description : null,
-  };
-}
 
 /** Format a token count compactly: <1k as raw, ≥1k rounded to k. */
 function formatTokens(n: number): string {
@@ -126,19 +114,11 @@ export function RunRow({
   onActivate?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const utils = trpc.useUtils();
   const { data: events } = trpc.agentRun.events.useQuery(
     { runId: run.id, limit: 40 },
     { enabled: expanded, staleTime: 5_000 },
   );
   const awaitingApproval = Boolean(run.awaitingApprovalAt);
-  const pendingApproval = readPendingApproval(run.pendingApproval);
-  const respondApproval = trpc.agentRun.respondApproval.useMutation({
-    onSettled: () => {
-      void utils.agentRun.activeAll.invalidate();
-      void utils.agentRun.activeForIssue.invalidate();
-    },
-  });
 
   const issueKey = run.issue ? `${run.issue.workspace.key}-${run.issue.number}` : "—";
   const issueHref = run.issue ? `/w/${run.issue.workspace.slug}/issues/${run.issue.id}` : null;
@@ -302,49 +282,12 @@ export function RunRow({
         </div>
       )}
       {awaitingApproval && (
-        <div
-          className="text-meta mt-1.5 flex flex-wrap items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-2 py-1.5"
-          data-no-drag
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-          <span className="min-w-0 flex-1 text-foreground/80">
-            {run.agent.name} needs permission
-            {pendingApproval.command ? (
-              <>
-                {" "}
-                to run{" "}
-                <code className="rounded bg-background/60 px-1 font-mono text-[0.625rem] text-foreground">
-                  {pendingApproval.command.length > 80
-                    ? `${pendingApproval.command.slice(0, 77)}…`
-                    : pendingApproval.command}
-                </code>
-              </>
-            ) : (
-              " to run a command"
-            )}
-            {pendingApproval.description ? (
-              <span className="mt-0.5 block text-[0.625rem] text-muted-foreground">
-                {pendingApproval.description}
-              </span>
-            ) : null}
-          </span>
-          <button
-            type="button"
-            disabled={respondApproval.isPending}
-            onClick={() => respondApproval.mutate({ runId: run.id, decision: "approve" })}
-            className="inline-flex min-h-8 items-center gap-1 rounded border border-ember/40 bg-ember/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-ember hover:bg-ember/25 disabled:opacity-50 sm:min-h-0"
-          >
-            <Check className="h-3 w-3" /> Approve
-          </button>
-          <button
-            type="button"
-            disabled={respondApproval.isPending}
-            onClick={() => respondApproval.mutate({ runId: run.id, decision: "reject" })}
-            className="inline-flex min-h-8 items-center gap-1 rounded border border-border bg-card/40 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground disabled:opacity-50 sm:min-h-0"
-          >
-            <X className="h-3 w-3" /> Reject
-          </button>
+        <div className="mt-1.5">
+          <RunApprovalCard
+            runId={run.id}
+            agentName={run.agent.name}
+            pendingApproval={run.pendingApproval}
+          />
         </div>
       )}
       {isStalled && !awaitingApproval && (

@@ -1195,7 +1195,17 @@ export const agentRunRouter = router({
    * leaves the agent blocked, so we interrupt it) and mark it ABANDONED.
    */
   respondApproval: workspaceProcedure
-    .input(z.object({ runId: idString, decision: z.enum(["approve", "reject"]) }))
+    .input(
+      z.object({
+        runId: idString,
+        decision: z.enum(["approve", "reject"]),
+        // Approve scope: "session" tells the runtime to stop re-prompting for
+        // similar commands for the rest of the run (Codex `acceptForSession`,
+        // Hermes `session`); "once" approves only this command. Defaults to
+        // "session" so a research sweep isn't death-by-approval.
+        scope: z.enum(["once", "session"]).default("session"),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const run = await ctx.db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
@@ -1233,7 +1243,7 @@ export const agentRunRouter = router({
       }
 
       if (input.decision === "approve") {
-        await connector.approve?.(run.externalRunId, "once");
+        await connector.approve?.(run.externalRunId, input.scope);
         await ctx.db.$transaction(async (tx) => {
           await tx.agentRun.update({
             where: { id: run.id },
@@ -1249,8 +1259,9 @@ export const agentRunRouter = router({
             issueId: run.issueId,
             agentId: run.agentId,
             kind: "STEP",
-            currentStep: "approved · resuming",
-            payload: { approval: "once" },
+            currentStep:
+              input.scope === "session" ? "approved (session) · resuming" : "approved · resuming",
+            payload: { approval: input.scope },
           });
         });
         return { ok: true as const, decision: "approve" as const };
