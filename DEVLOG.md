@@ -29,18 +29,30 @@ overlay. Clean COMPLETED runs already commented via MCP, so they're skipped
 CHANGELOG updated.
 
 **Runtime (`~/docker/codex-bridge/`, not this repo):** entrypoint now writes
-`config.toml` deterministically every boot with `[mcp_servers.forge]`
-(bearer `FORGE_API_KEY`, only when the key is present); compose gains an
-`env_file` (`./forge.env`) carrying the **codex-linked** key. The host
-`forge.env` key was Victor's (confirmed via `agents.me`) — using it would
-misattribute `runs.complete` — so minted a dedicated `codex-bridge:mcp` AGENT
-key (linkedAgent=codex, same 8 scopes as `codex-cli:mcp`). Cloned forge into
-`workspace/forge` (isolated from the live prod tree) and set
-`Runtime.config.workspaceRoot=/work/forge`. No sandbox: runtime stays
-`yoloMode + danger-full-access + approval never` (full access like
-Hermes/Claude); the sandbox tiers remain a supported per-turn feature.
-Verified: `agents.me` now returns `codex/CODEX`, MCP block present, clone at
-HEAD.
+`config.toml` deterministically every boot with `[mcp_servers.forge]` (only
+when the key is present); compose gains an `env_file` (`./forge.env`) carrying
+the **codex-linked** key. The host `forge.env` key was Victor's (confirmed via
+`agents.me`) — using it would misattribute `runs.complete` — so minted a
+dedicated `codex-bridge:mcp` AGENT key (linkedAgent=codex, same 8 scopes as
+`codex-cli:mcp`). Cloned forge into `workspace/forge` (isolated from the live
+prod tree) and set `Runtime.config.workspaceRoot=/work/forge`. No sandbox:
+runtime stays `yoloMode + danger-full-access + approval never` (full access
+like Hermes/Claude); the sandbox tiers remain a supported per-turn feature.
+
+The MCP must be the **stdio** bridge (`command = node /app/forge-bridge/server.mjs`,
+a copy of `~/.hermes/mcp-servers/forge-bridge/server.mjs` baked into the image),
+NOT a `url`/streamable-HTTP server — codex 0.133's url MCP client hangs the
+app-server's thread/start. One self-inflicted trap cost an hour: the
+entrypoint's success `echo` sat inside the `{ … } > config.toml` redirect
+(missing `>&2`), so its log line landed in config.toml → invalid TOML → codex
+rejected the whole config and thread/start errored → startRun retried every
+sweep → 100+ codex processes spawned. Fixed the redirect.
+
+End-to-end verified live: Bailey assigned `@codex` (RESEARCH) on AXI-45 → run
+started, Codex worked in `/work/forge` with `mcpServer forge: ready`, streamed
+`currentStep` progress, posted comments as `codex` via MCP, and closed through
+`runs.complete` → **COMPLETED** with a valid Forge contract (`completionMeta`
+set). No churn, correct identity (Bailey assigned, Codex acted).
 
 ## 2026-06-11 — Codex dispatch approvals: cross-process relay + surfacing
 
