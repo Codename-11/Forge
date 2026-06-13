@@ -11,6 +11,10 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+### Added
+
+- **Runtime credentials + repo provisioning.** Runtimes (Settings → Runtimes → a runtime) now have an encrypted **Secrets** store (e.g. `GH_TOKEN`) and **Repository** bindings. A runtime auto-provisions on startup — fetches its secrets, sets up git/`gh` auth, and clones-or-pulls its bound repos into the workspace — so a dispatched agent lands in a ready checkout with push/PR access instead of an operator hand-placing files and keys. Secret values are write-only (never shown again after saving).
+
 ### Fixed
 
 - **Codex approvals on assigned issues no longer freeze.** Approving (or rejecting) a Codex command request now reaches the agent even when dispatch runs in a separate worker process — previously the button flipped the run between "running" and "waiting" without ever resuming.

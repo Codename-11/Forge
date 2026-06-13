@@ -24,6 +24,7 @@ import {
 } from "@prisma/client";
 import { nanoid } from "nanoid";
 import { db } from "@/server/db";
+import { decryptSecret } from "@/server/crypto";
 import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
@@ -5829,6 +5830,73 @@ export const mcpTools = {
           updatedAt: true,
         },
       });
+    },
+  },
+
+  // --------------------------------------------------------------------- Runtime self-provisioning
+  // The runtime (authenticating with an agent-linked API key) fetches the
+  // DECRYPTED secrets + repo bindings for ITS OWN runtime so it can export
+  // env, set up gh/git auth, and clone-or-pull repos before the agent's turn.
+  // Linked-agent-required (mcp-policy) and strictly scoped to the agent's
+  // runtime — a key for agent A can never read agent B's runtime secrets.
+  // No PluginScope ceiling (the linked-agent gate is the real control), so a
+  // narrowly-scoped runtime key can still self-provision.
+  "runtimes.provisioning": {
+    scopes: [] as const,
+    input: z
+      .object({})
+      .describe("Returns decrypted secrets + repo bindings for the calling agent's runtime."),
+    async run(_input: Record<string, never>, ctx: McpContext) {
+      const agentId = ctx.apiKey?.linkedAgentId;
+      if (!agentId) {
+        throw new Error("runtimes.provisioning requires an agent-linked API key.");
+      }
+      const agent = await db.agent.findFirst({
+        where: { id: agentId, workspaceId: ctx.workspaceId },
+        select: { id: true, runtimeId: true },
+      });
+      if (!agent?.runtimeId) {
+        throw new Error(
+          "The calling agent has no runtime attached; attach one before provisioning.",
+        );
+      }
+      const runtime = await db.runtime.findFirst({
+        where: { id: agent.runtimeId, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          name: true,
+          config: true,
+          secrets: { select: { key: true, valueEnc: true }, orderBy: { key: "asc" } },
+          repos: {
+            select: { url: true, branch: true, path: true },
+            orderBy: { path: "asc" },
+          },
+        },
+      });
+      if (!runtime) throw new Error("Runtime not found.");
+
+      const cfg =
+        runtime.config && typeof runtime.config === "object" && !Array.isArray(runtime.config)
+          ? (runtime.config as Record<string, unknown>)
+          : {};
+
+      const secrets: Array<{ key: string; value: string }> = [];
+      for (const s of runtime.secrets) {
+        try {
+          secrets.push({ key: s.key, value: decryptSecret(s.valueEnc) });
+        } catch {
+          // A value that can't be decrypted (e.g. AUTH_SECRET was rotated) is
+          // skipped rather than failing the whole provision; re-enter it.
+        }
+      }
+
+      return {
+        runtimeId: runtime.id,
+        runtimeName: runtime.name,
+        workspaceRoot: typeof cfg.workspaceRoot === "string" ? cfg.workspaceRoot : null,
+        secrets,
+        repos: runtime.repos,
+      };
     },
   },
 

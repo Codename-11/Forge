@@ -177,6 +177,15 @@ export const EXPLICIT_MCP_TOOL_POLICIES = {
     allowedModes: "ANY",
     actor: "linked-agent-required",
   },
+  // The runtime fetches its OWN secrets + repo bindings to provision itself.
+  // Linked-agent-required: only an agent's key can call, and it resolves to
+  // that agent's runtime — never another's. Read-only, any engagement mode.
+  "runtimes.provisioning": {
+    access: "read",
+    targetType: "runtime",
+    allowedModes: "ANY",
+    actor: "linked-agent-required",
+  },
   "runs.setWaiting": {
     access: "write",
     targetType: "agent-run",

@@ -21,6 +21,7 @@ import { Card } from "@/components/settings/card";
 import { Section, SkeletonList } from "@/components/ui";
 import { CodeBlock } from "@/components/mcp-integration-blocks";
 import { RuntimeToolSurfacePanel } from "@/components/runtime-tool-surface";
+import { RuntimeCredentials } from "@/components/settings/runtime-credentials";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
@@ -404,6 +405,8 @@ export default function RuntimeDetailPage() {
                   </Card>
                 )}
               </Section>
+
+              <RuntimeCredentials runtimeId={id} />
 
               {showConnectPane && (
                 <Section
