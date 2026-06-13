@@ -343,6 +343,66 @@ describe("runs dispatcher", () => {
     }
   });
 
+  it("does not dispatch an ACTIVE unbacked run that has no external trigger", async () => {
+    // Guard against a self-perpetuating loop: a RUNS agent that completes a run
+    // and then posts a comment makes openOrTouchRun create a fresh ACTIVE,
+    // unbacked, trigger-less run. Dispatching it re-summons the agent forever.
+    const previousE2E = process.env.FORGE_E2E;
+    process.env.FORGE_E2E = "1";
+
+    try {
+      const fixture = await createWorkspaceFixture({ keyPrefix: "RDL" });
+      fixtures.push(fixture);
+      const prisma = getPrisma();
+      const runtime = await prisma.runtime.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          ownerId: fixture.user.id,
+          name: "mock runs",
+          kind: RuntimeKind.LOCAL_DAEMON,
+          adapterKey: "mock-runs",
+          providersAvailable: [AgentProvider.HERMES],
+        },
+        select: { id: true },
+      });
+      const agent = await prisma.agent.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          name: "self opener",
+          profileKey: "self-opener",
+          provider: AgentProvider.HERMES,
+          runEngine: RunEngine.RUNS,
+          runtimeId: runtime.id,
+          status: "ONLINE",
+        },
+        select: { id: true },
+      });
+      const issue = await createIssue(fixture, { title: "no trigger" });
+      // An ACTIVE, unbacked run with NO triggerKind — as openOrTouchRun creates
+      // when an agent posts a comment with no live run.
+      const run = await prisma.agentRun.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: agent.id,
+          status: "ACTIVE",
+          lastEventAt: new Date(),
+        },
+      });
+
+      await ingestRunsDispatch();
+
+      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+      expect(after.externalRunId).toBeNull(); // never dispatched
+    } finally {
+      if (previousE2E === undefined) {
+        delete process.env.FORGE_E2E;
+      } else {
+        process.env.FORGE_E2E = previousE2E;
+      }
+    }
+  });
+
   it("does not mark provider-terminal runs completed without runs.complete metadata", async () => {
     const previousE2E = process.env.FORGE_E2E;
     process.env.FORGE_E2E = "1";

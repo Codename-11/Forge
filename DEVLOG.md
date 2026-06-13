@@ -28,6 +28,17 @@ three-valued-logic bug: `NOT: { authoringAgentId }` drops human comments
 Fix (#3): issue agent panel shows the block reason (`currentStep`) inline when
 a run is waiting, instead of only "Waiting on your reply".
 
+Loop guard (exposed by the above): once Codex actually *completed* assigned
+work (instead of always stalling), a self-perpetuating dispatch loop surfaced
+— `runs.complete` → agent posts a comment → `comments.create` calls
+`openOrTouchRun`, finds no live run, opens a fresh ACTIVE/unbacked/trigger-less
+row → `startUnbackedAgentRuns` dispatches it → agent re-runs, completes,
+comments → repeat (observed ~4 short COMPLETED runs/min on AXI-45). Not caused
+by the resume work (`resumed` stayed 0). Fix: `startUnbackedAgentRuns` now only
+dispatches runs with a real external trigger (`triggerKind != null`) — comment
+mentions / watcher wakes set one; an agent's own incidental comment-touch
+doesn't. Test added.
+
 Fix (#2, runtime / not this repo): the AXI-45 block was Codex calling
 `runs.setWaiting` because it couldn't run DB-backed tests (no DATABASE_URL/
 docker in the bridge container). The codex-bridge entrypoint now idempotently
