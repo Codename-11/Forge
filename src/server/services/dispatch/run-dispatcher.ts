@@ -402,6 +402,193 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
   return started;
 }
 
+/**
+ * Re-dispatch WAITING RUNS-engine runs that have a fresh operator reply.
+ *
+ * When an agent calls `runs.setWaiting({ blocking: true })` its provider turn
+ * ends and the AgentRun goes WAITING with a stashed `externalRunId`. Nothing
+ * else re-invokes it: `startUnbackedAgentRuns` only catches ACTIVE/unbacked
+ * runs and `pollActiveRuns` only polls ACTIVE — so an operator reply (the
+ * Nudge button or an `@agent` comment) had no effect for RUNS agents, even
+ * though the issue panel invited one. Here we pick up a WAITING run once a
+ * comment lands *after* it paused, fold the waiting reason + the reply(s) into
+ * a fresh turn, and flip it back to ACTIVE (the provider connector opens a new
+ * thread, so context travels in the message, same as initial dispatch).
+ *
+ * Dedup is the `lastEventAt` watermark: we only consider comments newer than
+ * the moment the run paused, and flip `lastEventAt` on resume — so the same
+ * reply can't re-trigger, and if the agent pauses again only newer replies
+ * wake it.
+ */
+async function resumeWaitingRuns(limit: number): Promise<number> {
+  if (limit <= 0) return 0;
+  const waiting = await db.agentRun.findMany({
+    where: {
+      status: AgentRunStatus.WAITING,
+      externalRunId: { not: null },
+      lastEventAt: { gte: new Date(Date.now() - UNBACKED_RUN_RECOVERY_LOOKBACK_MS) },
+    },
+    orderBy: { lastEventAt: "desc" },
+    take: limit * 3,
+    select: {
+      id: true,
+      workspaceId: true,
+      issueId: true,
+      agentId: true,
+      engagementMode: true,
+      currentStep: true,
+      summary: true,
+      lastEventAt: true,
+      issue: {
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          description: true,
+          workspace: { select: { key: true } },
+        },
+      },
+      agent: {
+        select: {
+          id: true,
+          provider: true,
+          runEngine: true,
+          runtime: {
+            select: {
+              adapterKey: true,
+              endpoint: true,
+              secret: true,
+              config: true,
+              disabledAt: true,
+              name: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  let resumed = 0;
+  for (const run of waiting) {
+    if (resumed >= limit) break;
+    if (run.agent.runtime?.disabledAt) continue;
+    if (!shouldUseRunsEngine(run.agent)) continue;
+    const connector = getRunsConnectorForAgent({
+      provider: run.agent.provider,
+      runtime: run.agent.runtime,
+    });
+    if (!connector?.startRun) continue;
+
+    // A reply that landed after the run paused wakes it. Any comment the agent
+    // didn't author itself counts — the Nudge button and a plain `@agent`
+    // comment both produce one. Skip the agent's own posts so its closing
+    // status note doesn't self-resume.
+    const replies = await db.comment.findMany({
+      where: {
+        issueId: run.issueId,
+        createdAt: { gt: run.lastEventAt },
+        deletedAt: null,
+        // Anything the waiting agent didn't author itself. Must include human
+        // comments (authoringAgentId IS NULL) — a bare `NOT: { authoringAgentId }`
+        // drops NULLs under SQL three-valued logic, so spell out the OR.
+        OR: [{ authoringAgentId: null }, { authoringAgentId: { not: run.agentId } }],
+      },
+      orderBy: { createdAt: "asc" },
+      take: 10,
+      select: {
+        body: true,
+        author: { select: { name: true } },
+        authoringAgent: { select: { name: true } },
+      },
+    });
+    if (replies.length === 0) continue;
+
+    const engagementMode = run.engagementMode;
+    const instruction = forgeRunInstruction({
+      mode: engagementMode,
+      source: "surface-default",
+      inferable: false,
+    });
+    const runtimePolicy = buildRuntimePolicySnapshot({
+      contractVersion: FORGE_RUN_CONTRACT_VERSION,
+      engagementMode,
+      adapterKey:
+        run.agent.runtime?.adapterKey ?? (run.agent.provider === "HERMES" ? "hermes" : null),
+      runtimeName: run.agent.runtime?.name ?? null,
+      config: run.agent.runtime?.config,
+    });
+
+    const waitingReason = (run.currentStep || run.summary || "").trim();
+    const replyBlock = replies
+      .map(
+        (r) =>
+          `${r.authoringAgent?.name ?? r.author?.name ?? "Operator"}: ${r.body}`,
+      )
+      .join("\n\n");
+    const message =
+      issueMessage(
+        {
+          id: run.issue.id,
+          key: issueKey(run.issue.workspace.key, run.issue.number),
+          title: run.issue.title,
+          description: run.issue.description,
+        },
+        instruction,
+        run.id,
+      ) +
+      `\n\nYou paused this run earlier` +
+      (waitingReason ? ` because: ${waitingReason}` : "") +
+      `.\nThe operator has replied:\n\n${replyBlock}\n\n` +
+      `Resume with this new context. Close the run via runs.complete when done, ` +
+      `or pause again with runs.setWaiting if you're still blocked.`;
+
+    try {
+      const { externalRunId } = await connector.startRun({
+        message,
+        instructions: instruction,
+        engagementMode,
+        contractVersion: FORGE_RUN_CONTRACT_VERSION,
+        toolPolicy: runtimePolicy,
+      });
+      await db.$transaction(async (tx) => {
+        await tx.agentRun.update({
+          where: { id: run.id },
+          data: {
+            status: AgentRunStatus.ACTIVE,
+            externalRunId,
+            currentStep: "resuming after reply",
+            lastEventAt: new Date(),
+            awaitingApprovalAt: null,
+            runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
+          },
+        });
+        await appendRunEvent(tx, {
+          runId: run.id,
+          workspaceId: run.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          kind: "DISPATCH_STARTED",
+          currentStep: "resuming after reply",
+          payload: {
+            externalRunId,
+            engine: "RUNS",
+            resumedFromWaiting: true,
+            replyCount: replies.length,
+            contractVersion: FORGE_RUN_CONTRACT_VERSION,
+          },
+        });
+      });
+      resumed++;
+    } catch (err) {
+      logger.warn(
+        { err, runId: run.id, issueId: run.issueId },
+        "runs-dispatch: resume waiting run failed",
+      );
+    }
+  }
+  return resumed;
+}
+
 /** Poll live provider runs and mirror status onto the AgentRun. */
 async function pollActiveRuns(): Promise<number> {
   const runs = await db.agentRun.findMany({
@@ -753,14 +940,16 @@ async function ensureSubscriptions(): Promise<number> {
 /** One worker tick: start fresh runs, poll lifecycle, ensure live subs. */
 export async function ingestRunsDispatch(): Promise<{
   started: number;
+  resumed: number;
   polled: number;
   subscribed: number;
 }> {
   const started = await startNewRuns();
+  const resumed = await resumeWaitingRuns(START_BATCH);
   const subscribed = await ensureSubscriptions();
   const polled = await pollActiveRuns();
-  if (started > 0 || polled > 0 || subscribed > 0) {
-    logger.info({ started, polled, subscribed }, "runs-dispatch: tick");
+  if (started > 0 || resumed > 0 || polled > 0 || subscribed > 0) {
+    logger.info({ started, resumed, polled, subscribed }, "runs-dispatch: tick");
   }
-  return { started, polled, subscribed };
+  return { started, resumed, polled, subscribed };
 }

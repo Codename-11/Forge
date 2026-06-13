@@ -224,6 +224,13 @@ export function IssueAgentPanel({
             <span className="text-muted-foreground/60">
               {" · "}updated {relativeTime(run.lastEventAt)}
             </span>
+            {/* When paused, show *why* (the agent's last step / block reason)
+                so the operator can respond without opening the run overlay. */}
+            {waiting && run.currentStep && (
+              <div className="mt-1 line-clamp-3 text-muted-foreground/80">
+                {run.currentStep}
+              </div>
+            )}
           </>
         ) : (
           "Assigned · no active run"

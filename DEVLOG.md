@@ -2,6 +2,40 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-13 — Resume WAITING RUNS runs from a reply + surface the block reason
+
+Closing the loop on "Codex shows blocked — how do I respond from the issue
+view?" The issue agent panel already showed a "waiting" badge + Nudge button,
+but for RUNS-engine agents (Codex) the reply went nowhere: `nudge` posts an
+`@agent` COMMENT_CREATED, but `startNewRuns` only opens runs on AGENT_ASSIGNED,
+`startUnbackedAgentRuns` only catches ACTIVE/unbacked rows, and `pollActiveRuns`
+only polls ACTIVE — a WAITING run (has externalRunId, status WAITING) fell
+through everything. So a paused Codex could only be restarted by re-assigning
+(fresh run, lost context).
+
+Fix (#1): new `resumeWaitingRuns()` in run-dispatcher — finds WAITING
+RUNS-engine runs with a comment newer than `lastEventAt` (the pause watermark),
+folds the waiting reason + the operator reply(ies) into a fresh turn, flips the
+run ACTIVE with a new externalRunId, and tags a `resumedFromWaiting`
+DISPATCH_STARTED event. Watermark = dedup: only replies after the pause count,
+and resuming bumps `lastEventAt`, so a reply can't re-trigger and a re-pause
+only wakes on newer replies. Wired into `ingestRunsDispatch` (returns `resumed`).
+The Nudge button now actually works for Codex. Test added — it caught a
+three-valued-logic bug: `NOT: { authoringAgentId }` drops human comments
+(NULL author-agent) under SQL, so the reply filter spells out
+`OR [{ authoringAgentId: null }, { not: agentId }]`.
+
+Fix (#3): issue agent panel shows the block reason (`currentStep`) inline when
+a run is waiting, instead of only "Waiting on your reply".
+
+Fix (#2, runtime / not this repo): the AXI-45 block was Codex calling
+`runs.setWaiting` because it couldn't run DB-backed tests (no DATABASE_URL/
+docker in the bridge container). The codex-bridge entrypoint now idempotently
+appends a "sandbox note" to the checkout's AGENTS.md (codex loads it on every
+thread/start): full access + Forge MCP, but no DB/Redis/MinIO/docker — run
+lint + typecheck, and don't hard-block on DB-backed tests; reserve
+`runs.setWaiting` for genuine operator decisions.
+
 ## 2026-06-12 — Codex dispatch: surface failures + fix the runtime environment
 
 Follow-up after the approval relay shipped: Codex assigned to AXI-45 stopped
