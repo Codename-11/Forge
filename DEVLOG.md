@@ -2,6 +2,40 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-13 — Runtime credentials + repo provisioning (agents do real work)
+
+Foundational feature so agents can do real work without manual setup (clone
+private repos, push, open PRs) — answering "does the app support config for
+keys / gh auth, or do we hand-place files into the workspace?" (it didn't).
+
+Two new models (migration 0081): **RuntimeSecret** (named, AES-256-GCM via
+`crypto.ts`, `@@unique([runtimeId, key])`) and **RuntimeRepo**
+(`{ url, branch?, path }`, `@@unique([runtimeId, path])`), both
+runtime-scoped, cascade via the runtime.
+
+- **tRPC** (`runtime.ts`): `listSecrets` (workspace read — values NEVER
+  selected/returned, only key + metadata), `setSecret`/`deleteSecret`
+  (admin, encrypt via `crypto.ts`), `listRepos`/`setRepo`/`deleteRepo`. Env-var
+  key + safe-relative-path validation.
+- **MCP** `runtimes.provisioning` (`scopes: []`, **linked-agent-required** via
+  `mcp-policy`): returns the *decrypted* secrets + repos for the calling
+  agent's runtime — strictly scoped (agent A's key never reads B's secrets).
+- **Bridge provisioning** (`~/docker/codex-bridge/provision.cjs`, run by the
+  entrypoint before the bridge starts): fetches `runtimes.provisioning`, writes
+  secrets to an env file the entrypoint sources, configures a git credential
+  helper + author + `gh` from `GH_TOKEN`, and clone-or-pulls each bound repo.
+  Dockerfile now installs `gh`. Bootstrap stays one secret (`FORGE_API_KEY`);
+  everything else is managed in-app.
+- **UI**: `RuntimeCredentials` (Settings → Runtimes → a runtime) — Secrets +
+  Repositories cards with inline add-forms and write-only values.
+- **Tests**: router CRUD (value never returned, upsert, delete, path-traversal
+  reject, cross-workspace isolation) + MCP provisioning (decrypt round-trip,
+  linked-agent gate, runtime scoping). All green.
+- Docs: `docs/agents/runtime-credentials.md`.
+
+Follow-ons (noted): per-project repo selection at dispatch (one runtime →
+many codebases) and SSH-key git auth.
+
 ## 2026-06-13 — Resume WAITING RUNS runs from a reply + surface the block reason
 
 Closing the loop on "Codex shows blocked — how do I respond from the issue

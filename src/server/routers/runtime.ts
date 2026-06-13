@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { AgentProvider, RuntimeKind, type Runtime } from "@prisma/client";
-import { router, workspaceProcedure } from "@/server/trpc";
+import { AgentProvider, RuntimeKind, type Runtime, type PrismaClient } from "@prisma/client";
+import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
+import { encryptSecret } from "@/server/crypto";
 import {
   getRuntimeAdapter,
   managedAdapters,
@@ -120,6 +121,41 @@ function shouldProbeHeartbeatCountAsRuntimeHeartbeat(rt: RuntimeForHealth): bool
  */
 
 const runtimeId = z.string().min(1).max(40);
+
+/** Confirm a runtime belongs to the caller's workspace, or 404. */
+async function assertRuntimeInWorkspace(
+  db: PrismaClient,
+  workspaceId: string,
+  id: string,
+): Promise<{ id: string }> {
+  const rt = await db.runtime.findFirst({
+    where: { id, workspaceId },
+    select: { id: true },
+  });
+  if (!rt) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Runtime not found in this workspace." });
+  }
+  return rt;
+}
+
+/** Env var name shape (also the per-runtime secret key). */
+const envVarKey = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Must be a valid environment variable name.");
+
+/** A safe relative clone path (no leading slash, no `..`). */
+const repoPath = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9._\-/]+$/, "Relative path: letters, numbers, . _ - / only.")
+  .refine((p) => !p.startsWith("/") && !p.split("/").includes(".."), {
+    message: "Must be a relative path without '..'.",
+  });
 
 const baseFields = {
   name: z.string().min(1).max(120),
@@ -449,4 +485,107 @@ export const runtimeRouter = router({
       note: a.note,
     })),
   ),
+
+  // ── Runtime secrets ──────────────────────────────────────────────────
+  // Encrypted env injected into the runtime at provision time (gh/git tokens,
+  // deploy creds, …). Values are WRITE-ONLY — never returned to any client.
+  // The runtime fetches its own decrypted values via `runtimes.provisioning`.
+
+  listSecrets: workspaceProcedure
+    .input(z.object({ runtimeId }))
+    .query(async ({ ctx, input }) => {
+      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
+      // valueEnc is intentionally never selected — only key + metadata leave.
+      return ctx.db.runtimeSecret.findMany({
+        where: { runtimeId: input.runtimeId },
+        orderBy: { key: "asc" },
+        select: { id: true, key: true, description: true, createdAt: true, updatedAt: true },
+      });
+    }),
+
+  setSecret: adminProcedure
+    .input(
+      z.object({
+        runtimeId,
+        key: envVarKey,
+        value: z.string().min(1).max(20_000),
+        description: z.string().trim().max(300).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const rt = await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
+      const valueEnc = encryptSecret(input.value);
+      return ctx.db.runtimeSecret.upsert({
+        where: { runtimeId_key: { runtimeId: rt.id, key: input.key } },
+        create: {
+          runtimeId: rt.id,
+          workspaceId: ctx.workspaceId,
+          key: input.key,
+          valueEnc,
+          description: input.description ?? null,
+        },
+        update: { valueEnc, description: input.description ?? null },
+        select: { id: true, key: true, description: true, createdAt: true, updatedAt: true },
+      });
+    }),
+
+  deleteSecret: adminProcedure
+    .input(z.object({ runtimeId, key: envVarKey }))
+    .mutation(async ({ ctx, input }) => {
+      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
+      await ctx.db.runtimeSecret.deleteMany({
+        where: { runtimeId: input.runtimeId, key: input.key },
+      });
+      return { ok: true };
+    }),
+
+  // ── Runtime repos ────────────────────────────────────────────────────
+  // Repositories the runtime materializes (clone-or-pull) into its workspace
+  // so a dispatched agent lands in a ready checkout. Auth comes from secrets.
+
+  listRepos: workspaceProcedure
+    .input(z.object({ runtimeId }))
+    .query(async ({ ctx, input }) => {
+      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
+      return ctx.db.runtimeRepo.findMany({
+        where: { runtimeId: input.runtimeId },
+        orderBy: { path: "asc" },
+        select: { id: true, url: true, branch: true, path: true, createdAt: true, updatedAt: true },
+      });
+    }),
+
+  setRepo: adminProcedure
+    .input(
+      z.object({
+        runtimeId,
+        url: z.string().trim().min(1).max(500),
+        branch: z.string().trim().max(200).optional(),
+        path: repoPath,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const rt = await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
+      return ctx.db.runtimeRepo.upsert({
+        where: { runtimeId_path: { runtimeId: rt.id, path: input.path } },
+        create: {
+          runtimeId: rt.id,
+          workspaceId: ctx.workspaceId,
+          url: input.url,
+          branch: input.branch || null,
+          path: input.path,
+        },
+        update: { url: input.url, branch: input.branch || null },
+        select: { id: true, url: true, branch: true, path: true, createdAt: true, updatedAt: true },
+      });
+    }),
+
+  deleteRepo: adminProcedure
+    .input(z.object({ runtimeId, id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
+      await ctx.db.runtimeRepo.deleteMany({
+        where: { id: input.id, runtimeId: input.runtimeId },
+      });
+      return { ok: true };
+    }),
 });

@@ -1785,9 +1785,62 @@ model Runtime {
   owner         User?          @relation(fields: [ownerId], references: [id], onDelete: SetNull)
   agents        Agent[]        @relation("AgentRuntime")
   agentProfiles AgentProfile[] @relation("AgentProfileRuntime")
+  secrets       RuntimeSecret[]
+  repos         RuntimeRepo[]
 
   @@index([workspaceId, archivedAt])
   @@index([ownerId])
+}
+
+/// A named secret injected into a runtime's environment at provision time
+/// (e.g. GH_TOKEN, GIT_SSH_KEY, a deploy credential). The value is encrypted
+/// at rest with AES-256-GCM (see `src/server/crypto.ts`) and is NEVER returned
+/// to clients — management surfaces show only `key` + metadata. The runtime
+/// fetches+decrypts its own secrets via `runtimes.provisioning` (the agent's
+/// API key resolves to its runtime), exports them for the agent process, and
+/// uses them to set up gh/git auth before the agent's turn.
+model RuntimeSecret {
+  id          String   @id @default(cuid())
+  runtimeId   String
+  /// Denormalized for scoping/queries; cascade is via the runtime relation.
+  workspaceId String
+  /// Environment variable name (e.g. `GH_TOKEN`). Unique per runtime.
+  key         String
+  /// AES-256-GCM ciphertext of the value. Write-only from the client's POV.
+  valueEnc    String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  runtime Runtime @relation(fields: [runtimeId], references: [id], onDelete: Cascade)
+
+  @@unique([runtimeId, key])
+  @@index([runtimeId])
+  @@index([workspaceId])
+}
+
+/// A repository the runtime should materialize (clone-or-pull) into its
+/// workspace so a dispatched agent lands in a ready, up-to-date checkout
+/// instead of an operator hand-placing files. Auth comes from the runtime's
+/// secrets (e.g. GH_TOKEN drives a git credential helper + `gh`).
+model RuntimeRepo {
+  id          String   @id @default(cuid())
+  runtimeId   String
+  workspaceId String
+  /// Git remote URL (https — credential-helper supplies the token — or ssh).
+  url         String
+  /// Branch to track; null = the remote's default branch.
+  branch      String?
+  /// Clone path relative to the runtime's workspace root (e.g. `forge`).
+  path        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  runtime Runtime @relation(fields: [runtimeId], references: [id], onDelete: Cascade)
+
+  @@unique([runtimeId, path])
+  @@index([runtimeId])
+  @@index([workspaceId])
 }
 
 /// A per-workspace chat-model credential — lets the Streaming (Completions)

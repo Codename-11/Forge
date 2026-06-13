@@ -199,6 +199,7 @@ async function resolveExplicitPolicyTarget(
     case "runs.resumeWork":
     case "agent.inbox.ack":
     case "agent.inbox.outputStarted":
+    case "runtimes.provisioning":
       return { kind: "none" };
   }
 }
