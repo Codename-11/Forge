@@ -272,6 +272,13 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
     where: {
       status: AgentRunStatus.ACTIVE,
       externalRunId: null,
+      // Only dispatch runs opened by a genuine external wake (a comment
+      // mention, a watcher event — these carry a triggerKind). A run with no
+      // trigger was opened incidentally by the agent's OWN activity, e.g.
+      // `openOrTouchRun` creating a fresh row when a RUNS agent posts a comment
+      // right after its prior run completed. Dispatching those re-summons the
+      // agent, which completes + comments again → a self-perpetuating loop.
+      triggerKind: { not: null },
       OR: [
         { startedAt: { gte: new Date(Date.now() - RUN_START_LOOKBACK_MS) } },
         { lastEventAt: { gte: new Date(Date.now() - UNBACKED_RUN_RECOVERY_LOOKBACK_MS) } },
