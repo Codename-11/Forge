@@ -37,6 +37,12 @@ import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from
 
 const RUN_START_LOOKBACK_MS = 15 * 60_000;
 const UNBACKED_RUN_RECOVERY_LOOKBACK_MS = 60 * 60_000;
+// A paused run can sit WAITING for days before the operator replies, so the
+// resume scan reaches back much further than the unbacked-recovery window —
+// correctness is gated on the reply being newer than the pause, not on pause
+// age. Bounded only so we don't scan runs the stale-run watchdog has long
+// since flagged for abandonment.
+const RESUME_WAITING_LOOKBACK_MS = 14 * 24 * 60 * 60_000;
 const START_BATCH = 10;
 const POLL_BATCH = 25;
 const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
@@ -426,7 +432,7 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
     where: {
       status: AgentRunStatus.WAITING,
       externalRunId: { not: null },
-      lastEventAt: { gte: new Date(Date.now() - UNBACKED_RUN_RECOVERY_LOOKBACK_MS) },
+      lastEventAt: { gte: new Date(Date.now() - RESUME_WAITING_LOOKBACK_MS) },
     },
     orderBy: { lastEventAt: "desc" },
     take: limit * 3,
