@@ -195,6 +195,91 @@ describe("runs dispatcher", () => {
     }
   });
 
+  it("resumes a WAITING run when an operator reply lands after it paused", async () => {
+    const previousE2E = process.env.FORGE_E2E;
+    process.env.FORGE_E2E = "1";
+
+    try {
+      const fixture = await createWorkspaceFixture({ keyPrefix: "RDW" });
+      fixtures.push(fixture);
+      const prisma = getPrisma();
+      const runtime = await prisma.runtime.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          ownerId: fixture.user.id,
+          name: "mock runs",
+          kind: RuntimeKind.LOCAL_DAEMON,
+          adapterKey: "mock-runs",
+          providersAvailable: [AgentProvider.HERMES],
+        },
+        select: { id: true },
+      });
+      const agent = await prisma.agent.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          name: "waiter",
+          profileKey: "waiting-runner",
+          provider: AgentProvider.HERMES,
+          runEngine: RunEngine.RUNS,
+          runtimeId: runtime.id,
+          status: "ONLINE",
+        },
+        select: { id: true },
+      });
+      const issue = await createIssue(fixture, { title: "blocked then replied" });
+      // A run that paused 5 minutes ago via runs.setWaiting: WAITING, has an
+      // externalRunId from the prior turn, nobody re-invoking it.
+      const pausedAt = new Date(Date.now() - 5 * 60_000);
+      const run = await prisma.agentRun.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: agent.id,
+          status: "WAITING",
+          externalRunId: "mock-waiting-1",
+          currentStep: "blocked on a question",
+          lastEventAt: pausedAt,
+        },
+      });
+      // Operator reply that lands AFTER the run paused.
+      await prisma.comment.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          authorId: fixture.user.id,
+          body: "go ahead, skip the DB-backed tests",
+        },
+      });
+
+      const tick = await ingestRunsDispatch();
+      expect(tick.resumed).toBeGreaterThanOrEqual(1);
+
+      // The WAITING run was re-dispatched: a fresh provider run id (not the
+      // paused one) and a DISPATCH_STARTED event tagged resumedFromWaiting.
+      // (Final status is left to the poll — the mock connector completes
+      // instantly without a runs.complete contract, so it's not asserted.)
+      const after = await prisma.agentRun.findUniqueOrThrow({
+        where: { id: run.id },
+        include: { events: { orderBy: { createdAt: "asc" } } },
+      });
+      expect(after.externalRunId).toMatch(/^mock-/);
+      expect(after.externalRunId).not.toBe("mock-waiting-1");
+      expect(
+        after.events.some(
+          (e) =>
+            e.kind === "DISPATCH_STARTED" &&
+            (e.payload as { resumedFromWaiting?: boolean } | null)?.resumedFromWaiting === true,
+        ),
+      ).toBe(true);
+    } finally {
+      if (previousE2E === undefined) {
+        delete process.env.FORGE_E2E;
+      } else {
+        process.env.FORGE_E2E = previousE2E;
+      }
+    }
+  });
+
   it("starts an old unbacked RUNS row after a recent touch", async () => {
     const previousE2E = process.env.FORGE_E2E;
     process.env.FORGE_E2E = "1";

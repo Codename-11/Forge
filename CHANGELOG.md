@@ -15,11 +15,13 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 - **Codex approvals on assigned issues no longer freeze.** Approving (or rejecting) a Codex command request now reaches the agent even when dispatch runs in a separate worker process — previously the button flipped the run between "running" and "waiting" without ever resuming.
 - **Failed agent dispatches now show on the issue.** When a dispatched run ends without completing (stalled/abandoned), the agent's output is posted as a comment on the issue instead of being buried in the Mission Control run overlay — so a failed run is visible in the timeline and notifies watchers.
+- **Replying to a blocked agent now resumes it.** When an agent pauses a run waiting on you, nudging it (or commenting on the issue) re-dispatches it with your reply — previously a paused run could only be restarted by re-assigning, which lost its context.
 
 ### Changed
 
 - **Approve grants session scope by default.** Approving a command request stops the agent re-prompting for similar commands for the rest of the run; a "Just this once" link keeps the single-command option.
 - **Command approvals now appear on the issue page.** The Approve/Reject card shows in the issue's agent panel, not only in the Mission Control Live tab.
+- **The issue's agent panel shows why a run is paused.** A waiting run now displays the agent's last step / block reason inline, so you can respond without opening the Mission Control overlay.
 
 ## [2026-06-09] — v0.7.0 · Chat runtime controls
 
