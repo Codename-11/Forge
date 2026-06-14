@@ -132,11 +132,11 @@ function parseChangelog(raw: string): ChangelogEntry[] {
   }
 
   flush();
-  // Drop the synthetic "Unreleased" placeholder if it has no items —
-  // it's not user-relevant.
-  return entries.filter(
-    (e) => !(e.version.toLowerCase() === "unreleased" && e.items.length === 0),
-  );
+  // Drop the "Unreleased" section from the structured entries: it's not a
+  // shipped release, so it shouldn't head the What's New rail or be counted
+  // as the latest version (buildInfo.release already filters by date). Its
+  // content still appears in the full raw body on the /whats-new page.
+  return entries.filter((e) => e.version.toLowerCase() !== "unreleased");
 }
 
 export const systemRouter = router({
