@@ -56,9 +56,9 @@ function parse(raw: string): Array<{
       });
     }
   }
-  return entries.filter(
-    (e) => !(e.version.toLowerCase() === "unreleased" && e.items.length === 0),
-  );
+  // Mirror system.ts: the "Unreleased" section is not a shipped release, so it
+  // never heads the structured entries (its body still shows in the raw page).
+  return entries.filter((e) => e.version.toLowerCase() !== "unreleased");
 }
 
 describe("CHANGELOG.md", () => {
