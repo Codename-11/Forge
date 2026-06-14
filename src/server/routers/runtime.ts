@@ -2,11 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { AgentProvider, RuntimeKind, type Runtime, type PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
-import { encryptSecret, decryptSecret } from "@/server/crypto";
-import {
-  verifyGithubApp,
-  invalidateInstallationToken,
-} from "@/server/services/github-app";
+import { encryptSecret } from "@/server/crypto";
 import {
   getRuntimeAdapter,
   managedAdapters,
@@ -160,33 +156,6 @@ const repoPath = z
   .refine((p) => !p.startsWith("/") && !p.split("/").includes(".."), {
     message: "Must be a relative path without '..'.",
   });
-
-/** Numeric GitHub identifier (App ID, installation ID). */
-const githubNumericId = z
-  .string()
-  .trim()
-  .min(1)
-  .max(20)
-  .regex(/^\d+$/, "Must be a numeric GitHub ID (digits only).");
-
-/** A GitHub App's PEM private key (must look like a PEM, not a token). */
-const githubPrivateKey = z
-  .string()
-  .trim()
-  .min(1)
-  .max(20_000)
-  .refine((p) => p.includes("PRIVATE KEY"), {
-    message: "Paste the full PEM private key, including the BEGIN/END lines.",
-  });
-
-/** GitHub App slug (from the app's URL, e.g. `forge-bot`). */
-const githubAppSlug = z
-  .string()
-  .trim()
-  .max(60)
-  .regex(/^[a-z0-9-]*$/, "Lowercase letters, numbers, and hyphens only.")
-  .optional()
-  .or(z.literal(""));
 
 const baseFields = {
   name: z.string().min(1).max(120),
@@ -626,135 +595,54 @@ export const runtimeRouter = router({
   // installation token into GH_TOKEN at provision time. The PEM private key
   // is write-only (encrypted at rest, never returned).
 
+  // Which workspace GitHub App (if any) this runtime uses for git auth. Apps
+  // are managed workspace-wide (see the `githubApp` router); a runtime just
+  // links to one. Returns the linked app's metadata (never the PEM).
   getGithubApp: workspaceProcedure
     .input(z.object({ runtimeId }))
     .query(async ({ ctx, input }) => {
-      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      const app = await ctx.db.runtimeGithubApp.findUnique({
-        where: { runtimeId: input.runtimeId },
-        // privateKeyEnc is intentionally never selected.
+      const rt = await ctx.db.runtime.findFirst({
+        where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
         select: {
-          appId: true,
-          installationId: true,
-          slug: true,
-          lastMintedAt: true,
-          lastError: true,
-          updatedAt: true,
+          githubAppId: true,
+          githubApp: {
+            select: {
+              id: true,
+              name: true,
+              appId: true,
+              installationId: true,
+              slug: true,
+              lastMintedAt: true,
+              lastError: true,
+            },
+          },
         },
       });
-      return app; // null = not configured
+      if (!rt) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Runtime not found in this workspace." });
+      }
+      return rt.githubApp; // null = no app linked
     }),
 
-  setGithubApp: adminProcedure
-    .input(
-      z.object({
-        runtimeId,
-        appId: githubNumericId,
-        installationId: githubNumericId,
-        // Optional on update — omit to keep the stored key. Required on create.
-        privateKey: githubPrivateKey.optional(),
-        slug: githubAppSlug,
-      }),
-    )
+  // Link this runtime to a workspace GitHub App (or pass null to unlink).
+  linkGithubApp: adminProcedure
+    .input(z.object({ runtimeId, githubAppId: z.string().min(1).max(40).nullable() }))
     .mutation(async ({ ctx, input }) => {
       const rt = await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      const existing = await ctx.db.runtimeGithubApp.findUnique({
-        where: { runtimeId: rt.id },
-        select: { id: true },
-      });
-      if (!existing && !input.privateKey) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "A private key is required when first configuring a GitHub App.",
+      if (input.githubAppId) {
+        // Must be an app in the same workspace.
+        const app = await ctx.db.githubApp.findFirst({
+          where: { id: input.githubAppId, workspaceId: ctx.workspaceId },
+          select: { id: true },
         });
+        if (!app) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "GitHub App not found in this workspace." });
+        }
       }
-      // Credentials changed — drop any cached installation token.
-      invalidateInstallationToken(rt.id);
-      const privateKeyEnc = input.privateKey ? encryptSecret(input.privateKey) : undefined;
-      const select = {
-        appId: true,
-        installationId: true,
-        slug: true,
-        lastMintedAt: true,
-        lastError: true,
-        updatedAt: true,
-      } as const;
-      // Explicit create/update rather than upsert: on update the private key
-      // is optional (keep the stored one), and Prisma's upsert validates the
-      // create branch's required `privateKeyEnc` even when only update runs.
-      if (existing) {
-        return ctx.db.runtimeGithubApp.update({
-          where: { runtimeId: rt.id },
-          data: {
-            appId: input.appId,
-            installationId: input.installationId,
-            slug: input.slug || null,
-            ...(privateKeyEnc ? { privateKeyEnc } : {}),
-            // Re-arm health state; the next provision / test re-stamps it.
-            lastError: null,
-          },
-          select,
-        });
-      }
-      return ctx.db.runtimeGithubApp.create({
-        data: {
-          runtimeId: rt.id,
-          workspaceId: ctx.workspaceId,
-          appId: input.appId,
-          installationId: input.installationId,
-          privateKeyEnc: privateKeyEnc!,
-          slug: input.slug || null,
-        },
-        select,
+      await ctx.db.runtime.update({
+        where: { id: rt.id },
+        data: { githubAppId: input.githubAppId },
       });
-    }),
-
-  deleteGithubApp: adminProcedure
-    .input(z.object({ runtimeId }))
-    .mutation(async ({ ctx, input }) => {
-      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      invalidateInstallationToken(input.runtimeId);
-      await ctx.db.runtimeGithubApp.deleteMany({ where: { runtimeId: input.runtimeId } });
       return { ok: true };
-    }),
-
-  // Live credential check for the "Test connection" button: sign as the app,
-  // mint a token, and report what it can reach. Persists discovered slug +
-  // health so the UI shows an at-a-glance status afterwards.
-  testGithubApp: adminProcedure
-    .input(z.object({ runtimeId }))
-    .mutation(async ({ ctx, input }) => {
-      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      const app = await ctx.db.runtimeGithubApp.findUnique({
-        where: { runtimeId: input.runtimeId },
-        select: { appId: true, installationId: true, privateKeyEnc: true, slug: true },
-      });
-      if (!app) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "No GitHub App configured." });
-      }
-      try {
-        const result = await verifyGithubApp({
-          appId: app.appId,
-          installationId: app.installationId,
-          privateKeyPem: decryptSecret(app.privateKeyEnc),
-        });
-        await ctx.db.runtimeGithubApp.update({
-          where: { runtimeId: input.runtimeId },
-          data: {
-            lastMintedAt: new Date(),
-            lastError: null,
-            // Backfill the slug if GitHub reported one and we didn't have it.
-            ...(result.slug && !app.slug ? { slug: result.slug } : {}),
-          },
-        });
-        return result;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : "GitHub App check failed.";
-        await ctx.db.runtimeGithubApp.update({
-          where: { runtimeId: input.runtimeId },
-          data: { lastError: message },
-        });
-        throw new TRPCError({ code: "BAD_REQUEST", message });
-      }
     }),
 });

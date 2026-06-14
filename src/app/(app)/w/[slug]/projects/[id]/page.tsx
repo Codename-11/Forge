@@ -1030,6 +1030,8 @@ function EditProjectDialog({
     description: string | null;
     color: string | null;
     icon: string | null;
+    repoUrl?: string | null;
+    repoBranch?: string | null;
   };
   onSaved: () => void;
 }) {
@@ -1037,6 +1039,8 @@ function EditProjectDialog({
   const [description, setDescription] = useState(project.description ?? "");
   const [color, setColor] = useState(project.color ?? "#78716c");
   const [icon, setIcon] = useState(project.icon ?? "");
+  const [repoUrl, setRepoUrl] = useState(project.repoUrl ?? "");
+  const [repoBranch, setRepoBranch] = useState(project.repoBranch ?? "");
 
   const update = trpc.project.update.useMutation({
     onSuccess: () => {
@@ -1062,6 +1066,8 @@ function EditProjectDialog({
             description: description.trim() || null,
             color,
             icon: icon.trim() || undefined,
+            repoUrl: repoUrl.trim() || null,
+            repoBranch: repoBranch.trim() || null,
           });
         } catch (e) {
           return { error: e instanceof Error ? e.message : "Failed to save." };
@@ -1105,6 +1111,24 @@ function EditProjectDialog({
           />
         </QuickForm.Field>
       </div>
+      <QuickForm.Field label="Repository">
+        <Input
+          name="repoUrl"
+          value={repoUrl}
+          onChange={(e) => setRepoUrl(e.target.value)}
+          placeholder="https://github.com/org/repo.git"
+          className="font-mono"
+        />
+      </QuickForm.Field>
+      <QuickForm.Field label="Default branch (optional)">
+        <Input
+          name="repoBranch"
+          value={repoBranch}
+          onChange={(e) => setRepoBranch(e.target.value)}
+          placeholder="main"
+          className="font-mono"
+        />
+      </QuickForm.Field>
     </QuickForm>
   );
 }

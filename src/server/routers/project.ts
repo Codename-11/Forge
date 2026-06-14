@@ -11,6 +11,20 @@ const projectKey = z
   .max(8)
   .regex(/^[A-Z0-9]+$/);
 
+/**
+ * A git remote for the project's repo — https (token/app-auth) or scp-style
+ * ssh (`git@host:org/repo.git`). Loosely validated: must look like one of
+ * those, capped at 500 chars. Auth is handled at provision time.
+ */
+const projectRepoUrl = z
+  .string()
+  .trim()
+  .max(500)
+  .refine(
+    (v) => v === "" || /^https?:\/\//.test(v) || /^[A-Za-z0-9._-]+@[^:]+:.+/.test(v) || /^ssh:\/\//.test(v),
+    { message: "Enter an https:// or git@host:org/repo.git URL." },
+  );
+
 export const projectRouter = router({
   list: workspaceProcedure
     .input(
@@ -410,6 +424,8 @@ export const projectRouter = router({
           startDate: project.startDate,
           targetDate: project.targetDate,
           initiativeId: project.initiativeId,
+          repoUrl: project.repoUrl,
+          repoBranch: project.repoBranch,
           createdAt: project.createdAt,
           updatedAt: project.updatedAt,
         },
@@ -434,6 +450,8 @@ export const projectRouter = router({
         icon: z.string().max(8).optional(),
         startDate: z.date().optional(),
         targetDate: z.date().optional(),
+        repoUrl: projectRepoUrl.optional(),
+        repoBranch: z.string().trim().max(200).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -484,6 +502,8 @@ export const projectRouter = router({
         archived: z.boolean().optional(),
         startDate: z.date().nullable().optional(),
         targetDate: z.date().nullable().optional(),
+        repoUrl: projectRepoUrl.nullable().optional(),
+        repoBranch: z.string().trim().max(200).nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

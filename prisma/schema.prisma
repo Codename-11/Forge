@@ -844,6 +844,7 @@ model Workspace {
   chatThreadReads         ChatThreadRead[]
   chatMessages            ChatMessage[]
   runtimes                Runtime[]
+  githubApps              GithubApp[]
   providerCredentials     ProviderCredential[]
   connectionMappings      ConnectionMapping[]
   externalResources       ExternalResource[]
@@ -920,6 +921,15 @@ model Project {
   /// Backlink for a project created via `notes.promote`. Mirrors
   /// `Issue.sourceNoteId`.
   sourceNoteId String?
+  /// Git repository this project's work lives in. When set, a runtime
+  /// provisions (clone-or-pulls) it so an agent dispatched to one of this
+  /// project's issues lands in the right checkout — letting one runtime serve
+  /// many codebases. `repoUrl` is an https (token/app-auth) or ssh remote;
+  /// `repoBranch` null = the remote's default branch. The clone path is
+  /// derived from the repo name. Auth comes from the runtime's GitHub App or
+  /// secrets (see `docs/agents/runtime-credentials.md`).
+  repoUrl      String?
+  repoBranch   String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
@@ -1778,6 +1788,11 @@ model Runtime {
   /// operator can flip a Codex runtime between full-access (today's default)
   /// and a sandboxed, approval-gated mode without restarting the bridge.
   config             Json?
+  /// Optional link to a workspace-scoped {@link GithubApp} used for git auth.
+  /// When set, provisioning mints a short-lived installation token from that
+  /// app into `GH_TOKEN` (superseding a static GH_TOKEN secret). One app can
+  /// be shared across many runtimes. SetNull so deleting the app just unlinks.
+  githubAppId        String?
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
 
@@ -1787,10 +1802,11 @@ model Runtime {
   agentProfiles AgentProfile[] @relation("AgentProfileRuntime")
   secrets       RuntimeSecret[]
   repos         RuntimeRepo[]
-  githubApp     RuntimeGithubApp?
+  githubApp     GithubApp?     @relation(fields: [githubAppId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, archivedAt])
   @@index([ownerId])
+  @@index([githubAppId])
 }
 
 /// A named secret injected into a runtime's environment at provision time
@@ -1844,41 +1860,53 @@ model RuntimeRepo {
   @@index([workspaceId])
 }
 
-/// GitHub App credentials bound to a runtime — the recommended alternative to
-/// a static `GH_TOKEN` PAT. Instead of scoping a personal token per repo, you
-/// install ONE GitHub App on your org/account and manage which repos it can
-/// touch from GitHub's install UI. At provision time Forge mints a short-lived
-/// (≈1h) installation access token from these credentials and injects it as
-/// `GH_TOKEN`, so the runtime + agent get clone/push/PR access with no
-/// long-lived token and no per-repo key. Adding a repo later is a checkbox on
-/// GitHub — Forge needs no change. One app per runtime (1:1 with Runtime).
+/// A **workspace-scoped GitHub App** for runtime git auth — the recommended
+/// alternative to a static `GH_TOKEN` PAT. Install ONE app on your org/account,
+/// manage which repos it can touch from GitHub's install UI, and **share it
+/// across many runtimes** (each `Runtime.githubAppId` points here). At provision
+/// time Forge mints a short-lived (≈1h) installation access token and injects it
+/// as `GH_TOKEN`, so agents get clone/push/PR access with no long-lived token
+/// and no per-repo key. Adding a repo later is a checkbox on GitHub.
+///
+/// Created two ways: **manifest flow** (GitHub generates the app + returns the
+/// private key to our callback — no manual paste) or **manual paste** (App ID +
+/// installation ID + PEM). `appId`/`privateKeyEnc` are set at creation;
+/// `installationId` is filled after the app is installed (null = "created, not
+/// yet installed" — provisioning skips it until installed).
 ///
 /// The private key (PEM) is AES-256-GCM-encrypted at rest (`src/server/crypto.ts`)
 /// and NEVER returned to clients; the minted token never touches the DB. App ID,
 /// installation ID and slug are non-secret and shown in the management UI.
-model RuntimeGithubApp {
-  id             String    @id @default(cuid())
-  runtimeId      String    @unique
-  /// Denormalized for scoping/queries; cascade is via the runtime relation.
-  workspaceId    String
+/// Distinct from the **instance** GitHub App (env-var creds) used for issue
+/// sync — see `src/server/services/github/app-auth.ts`.
+model GithubApp {
+  id               String    @id @default(cuid())
+  workspaceId      String
+  /// Operator-facing label (e.g. "Axiom Bot").
+  name             String
   /// Numeric GitHub App ID — the JWT issuer used to mint installation tokens.
-  appId          String
-  /// Installation ID (the app installed on an org/account). Tokens are scoped
-  /// to whatever repos this installation grants.
-  installationId String
+  appId            String
+  /// Installation ID (the app installed on an org/account). Null until the app
+  /// is installed; tokens are scoped to whatever repos the installation grants.
+  installationId   String?
   /// AES-256-GCM ciphertext of the app's PEM private key. Write-only.
-  privateKeyEnc  String
+  privateKeyEnc    String
   /// App slug (e.g. `forge-bot`) for deep-linking to GitHub's install/settings
-  /// pages. Auto-discovered on the first successful "Test connection".
-  slug           String?
+  /// pages. From the manifest conversion, or the first successful test.
+  slug             String?
+  /// OAuth client id from the manifest conversion (informational; nullable).
+  clientId         String?
+  /// Created via the manifest flow (vs. manual paste). UI hint only.
+  createdViaManifest Boolean @default(false)
   /// Last successful token mint, for at-a-glance health in the UI.
-  lastMintedAt   DateTime?
+  lastMintedAt     DateTime?
   /// Last mint/verify error message (cleared on success). UI surfaces it.
-  lastError      String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  lastError        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  runtime Runtime @relation(fields: [runtimeId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runtimes  Runtime[]
 
   @@index([workspaceId])
 }

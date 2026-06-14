@@ -10,6 +10,7 @@ import {
   postAgentRunComment,
 } from "@/server/services/agent-run";
 import { FORGE_RUN_CONTRACT_VERSION, forgeRunInstruction } from "@/server/services/engagement-mode";
+import { deriveRepoPath } from "@/server/services/repo-path";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from "./registry";
 
@@ -66,15 +67,23 @@ function issueMessage(
     key: string;
     title: string;
     description: string | null;
+    repo?: { url: string; branch: string | null } | null;
   },
   engagementInstruction?: string | null,
   runId?: string | null,
 ): string {
   const body = issue.description?.trim();
+  // Per-project repo hint: the runtime materializes each project's repo into
+  // <workspaceRoot>/<repo-name>, so tell the agent which checkout to work in.
+  const repoLine = issue.repo?.url
+    ? `Repository: ${issue.repo.url}${issue.repo.branch ? ` (branch ${issue.repo.branch})` : ""} ` +
+      `— work in the checkout at ./${deriveRepoPath(issue.repo.url)}.\n`
+    : "";
   return (
     (engagementInstruction ? `${engagementInstruction}\n\n` : "") +
     `You are dispatched for Forge issue ${issue.key}: ${issue.title}.\n` +
     `Issue id: ${issue.id}.\n` +
+    repoLine +
     (runId ? `Current AgentRun id: ${runId}.\n` : "") +
     "\n" +
     (body ? `${body}\n\n` : "") +
@@ -140,6 +149,7 @@ async function startNewRuns(): Promise<number> {
         description: true,
         assignedAgentId: true,
         workspace: { select: { key: true } },
+        project: { select: { repoUrl: true, repoBranch: true } },
         assignedAgent: {
           select: {
             id: true,
@@ -205,6 +215,9 @@ async function startNewRuns(): Promise<number> {
             key: issueKey(issue.workspace.key, issue.number),
             title: issue.title,
             description: issue.description,
+            repo: issue.project?.repoUrl
+              ? { url: issue.project.repoUrl, branch: issue.project.repoBranch }
+              : null,
           },
           instruction,
           already?.id ?? null,

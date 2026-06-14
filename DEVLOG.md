@@ -2,6 +2,53 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-14 (pt 2) — GitHub App sharing, manifest flow, per-project repos, SSH
+
+Four follow-ons to the morning's runtime GitHub App work, in one pass.
+
+**1. Workspace-level app sharing.** Promoted the per-runtime `RuntimeGithubApp`
+(1:1) to a workspace-scoped, shareable **`GithubApp`** model; runtimes link via
+`Runtime.githubAppId` (FK SetNull). Migration **0083** drops RuntimeGithubApp
+(zero data) + creates GithubApp + adds the link + Project repo cols. New
+`githubApp` tRPC router (list/get/createManual/update/delete/test — PEM
+write-only, workspace-isolated, admin-gated). Runtime router slimmed to
+`getGithubApp` (returns the linked app) + `linkGithubApp`. New workspace page
+**Settings → GitHub Apps** (`/w/[slug]/settings/github-apps`, nav item under
+Connections); the runtime detail card became a **selector**. Token cache rekeyed
+runtime→app (`getInstallationTokenForApp`) so a shared app mints once.
+
+**2. Manifest flow (no PEM paste).** `convertManifestCode()` exchanges a GitHub
+manifest `code` for {appId, slug, pem, clientId}. Routes under
+`/api/integrations/github-app/{manifest,callback,installed}`: manifest renders an
+auto-submit form to GitHub → callback converts + creates the `GithubApp` row →
+redirects to install → installed callback stamps `installationId`. CSRF via a
+tamper-proof, self-expiring AES-GCM state token (`github-app-manifest.ts`,
+mirrors the existing `connections/github` HMAC pattern but stateless). "Create
+with GitHub" button in the UI.
+
+**3. Per-project repos.** `Project.repoUrl` / `repoBranch` (+ project router
+create/update inputs + detail output + Edit dialog field). `runtimes.provisioning`
+now merges runtime repos with all of the workspace's project repos (path derived
+via new `repo-path.ts`, runtime wins on collision). The dispatch message
+(`run-dispatcher.ts` `issueMessage`) names the issue's project repo + checkout
+path so the agent works in the right tree. One runtime → many codebases.
+
+**4. SSH-key auth.** `provision.cjs` now also handles a `GIT_SSH_KEY` secret
+(writes `~/.ssh` key + `core.sshCommand`; optional `GIT_SSH_KNOWN_HOSTS` pins
+hosts, else accept-new). Token + SSH coexist per-remote.
+
+Provisioning skips an app with no `installationId` (created-but-not-installed).
+Mint failures stay non-fatal. Tests: rewrote `runtime-github-app.test.ts`
+(githubApp router CRUD/no-leak/isolation/test-mint + runtime link), extended
+`runtimes-provisioning.test.ts` (app via link, supersede, **project-repo
+materialization**, uninstalled-skip), new `repo-path.test.ts` +
+`github-app-manifest.test.ts`. Full suite green (890), lint + typecheck clean.
+Decision: kept this separate from the v0.6.0 instance issue-sync GitHub App
+(env-var creds) — different scope (workspace vs instance), storage (DB vs env),
+and direction (outbound git vs inbound webhooks).
+
+Migration 0083 applied to local dev DB. **Prod deploy pending this session.**
+
 ## 2026-06-14 — GitHub App auth for runtimes (link once, no per-repo keys)
 
 Follow-on to the 2026-06-13 runtime-credentials feature, answering Bailey's
