@@ -2,6 +2,64 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-14 — GitHub App auth for runtimes (link once, no per-repo keys)
+
+Follow-on to the 2026-06-13 runtime-credentials feature, answering Bailey's
+"is there a way to link GitHub as an app login so we don't scope keys per
+project?" — yes: a **GitHub App**. Install one app, manage repo access in
+GitHub's UI, and Forge mints a short-lived installation token into `GH_TOKEN`
+automatically. No per-repo PAT, no long-lived key.
+
+**Architecture decision:** mint the installation token **server-side in Forge**,
+inject it as `GH_TOKEN` in the `runtimes.provisioning` response. The PEM never
+leaves the server; the bridge's `provision.cjs` needs ~zero functional change
+(it already consumes `GH_TOKEN`). Ephemeral dispatches always get a fresh token;
+persistent sessions re-mint on re-provision. Chose this over minting in the
+bridge (which would have to hold the PEM) for blast-radius + simplicity.
+
+New model (migration **0082**): **RuntimeGithubApp** — 1:1 with Runtime,
+`{ appId, installationId, privateKeyEnc (AES-256-GCM), slug?, lastMintedAt?,
+lastError? }`. App ID / installation ID / slug are non-secret (shown in UI);
+the PEM is write-only, never returned.
+
+- **Service** `src/server/services/github-app.ts` — RS256 app-JWT (node
+  `crypto`, 9-min expiry, 60s skew backdate) → `POST /app/installations/{id}/
+  access_tokens`. `mintInstallationToken` (+ per-runtime 50-min token cache,
+  `getInstallationTokenForRuntime`), `verifyGithubApp` (signs, mints, reads
+  `/app` slug + `/installation/repositories` count for the Test button).
+- **tRPC** `runtime.{get,set,delete,test}GithubApp` — admin-gated (get is
+  workspace-read); PEM never selected; explicit create/update (not upsert — the
+  key is optional on update and Prisma validates upsert's create branch);
+  `setGithubApp` invalidates the token cache; `testGithubApp` persists
+  `lastMintedAt`/`lastError` + backfills the discovered slug.
+- **MCP** `runtimes.provisioning` — if a GitHub App is bound, mints (cached) and
+  injects `GH_TOKEN`, **superseding** any static `GH_TOKEN` secret; returns
+  `githubAppTokenExpiresAt`. Mint failure is recorded but non-fatal (other
+  secrets/repos still flow).
+- **UI** `runtime-credentials.tsx` — new **GitHub App** card (placed first):
+  guided one-time-setup steps + deep links, App ID / Installation ID / slug /
+  PEM-textarea form, **Test connection** with an inline health line
+  (account · repo count · ~1h), Edit/Remove, "linked" badge. Secrets card shows
+  a banner when an app is active (GH_TOKEN auto-supplied, static one ignored).
+- **Bridge** `~/docker/codex-bridge/provision.cjs` — no functional change; logs
+  the minted-token expiry and documents the App path in the header.
+- **Tests** (+8): `github-app.test.ts` (JWT verify against pubkey, mint mapping,
+  404/401 errors, verify flow), `runtime-github-app.test.ts` (CRUD no-PEM-leak,
+  required-key-on-create, keep-key-on-update, non-PEM/non-numeric reject,
+  cross-workspace isolation, test mints+stamps, test records error),
+  `runtimes-provisioning.test.ts` (App mints GH_TOKEN; supersedes static).
+- **Docs** `docs/agents/runtime-credentials.md` — GitHub App section (why,
+  one-time setup, security, expiry note); CHANGELOG entry.
+
+Migration 0082 applied to the local dev DB. **Prod not yet migrated/deployed.**
+The one operator step to actually use it: Settings → Runtimes → Codex app
+server → GitHub App → create+install an app on GitHub, paste App ID /
+Installation ID / private key, Test connection.
+
+Follow-ons deferred (in docs): workspace-level app (share across runtimes),
+manifest-flow app creation (no manual PEM paste), per-project repo selection at
+dispatch, SSH-key auth.
+
 ## 2026-06-13 — Runtime credentials + repo provisioning (agents do real work)
 
 Foundational feature so agents can do real work without manual setup (clone

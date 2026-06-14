@@ -1787,6 +1787,7 @@ model Runtime {
   agentProfiles AgentProfile[] @relation("AgentProfileRuntime")
   secrets       RuntimeSecret[]
   repos         RuntimeRepo[]
+  githubApp     RuntimeGithubApp?
 
   @@index([workspaceId, archivedAt])
   @@index([ownerId])
@@ -1840,6 +1841,45 @@ model RuntimeRepo {
 
   @@unique([runtimeId, path])
   @@index([runtimeId])
+  @@index([workspaceId])
+}
+
+/// GitHub App credentials bound to a runtime — the recommended alternative to
+/// a static `GH_TOKEN` PAT. Instead of scoping a personal token per repo, you
+/// install ONE GitHub App on your org/account and manage which repos it can
+/// touch from GitHub's install UI. At provision time Forge mints a short-lived
+/// (≈1h) installation access token from these credentials and injects it as
+/// `GH_TOKEN`, so the runtime + agent get clone/push/PR access with no
+/// long-lived token and no per-repo key. Adding a repo later is a checkbox on
+/// GitHub — Forge needs no change. One app per runtime (1:1 with Runtime).
+///
+/// The private key (PEM) is AES-256-GCM-encrypted at rest (`src/server/crypto.ts`)
+/// and NEVER returned to clients; the minted token never touches the DB. App ID,
+/// installation ID and slug are non-secret and shown in the management UI.
+model RuntimeGithubApp {
+  id             String    @id @default(cuid())
+  runtimeId      String    @unique
+  /// Denormalized for scoping/queries; cascade is via the runtime relation.
+  workspaceId    String
+  /// Numeric GitHub App ID — the JWT issuer used to mint installation tokens.
+  appId          String
+  /// Installation ID (the app installed on an org/account). Tokens are scoped
+  /// to whatever repos this installation grants.
+  installationId String
+  /// AES-256-GCM ciphertext of the app's PEM private key. Write-only.
+  privateKeyEnc  String
+  /// App slug (e.g. `forge-bot`) for deep-linking to GitHub's install/settings
+  /// pages. Auto-discovered on the first successful "Test connection".
+  slug           String?
+  /// Last successful token mint, for at-a-glance health in the UI.
+  lastMintedAt   DateTime?
+  /// Last mint/verify error message (cleared on success). UI surfaces it.
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  runtime Runtime @relation(fields: [runtimeId], references: [id], onDelete: Cascade)
+
   @@index([workspaceId])
 }
 

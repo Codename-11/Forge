@@ -13,6 +13,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Link a GitHub App to a runtime (recommended for git auth).** Instead of minting a `GH_TOKEN` and re-scoping it per repo, link one GitHub App at Settings → Runtimes → a runtime → **GitHub App**. Forge mints a short-lived installation token into `GH_TOKEN` automatically at provision time, and you manage which repos it can touch from GitHub — no per-repo tokens, no long-lived key to rotate. A guided one-time setup and a **Test connection** button (reports the account + repo count) make it a two-minute task. The private key is encrypted at rest and never leaves the server.
 - **Runtime credentials + repo provisioning.** Runtimes (Settings → Runtimes → a runtime) now have an encrypted **Secrets** store (e.g. `GH_TOKEN`) and **Repository** bindings. A runtime auto-provisions on startup — fetches its secrets, sets up git/`gh` auth, and clones-or-pulls its bound repos into the workspace — so a dispatched agent lands in a ready checkout with push/PR access instead of an operator hand-placing files and keys. Secret values are write-only (never shown again after saving).
 
 ### Fixed

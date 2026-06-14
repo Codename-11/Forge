@@ -25,6 +25,7 @@ import {
 import { nanoid } from "nanoid";
 import { db } from "@/server/db";
 import { decryptSecret } from "@/server/crypto";
+import { getInstallationTokenForRuntime } from "@/server/services/github-app";
 import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
@@ -5871,6 +5872,9 @@ export const mcpTools = {
             select: { url: true, branch: true, path: true },
             orderBy: { path: "asc" },
           },
+          githubApp: {
+            select: { appId: true, installationId: true, privateKeyEnc: true },
+          },
         },
       });
       if (!runtime) throw new Error("Runtime not found.");
@@ -5890,12 +5894,44 @@ export const mcpTools = {
         }
       }
 
+      // If a GitHub App is bound, mint a short-lived installation token and
+      // inject it as GH_TOKEN — superseding any static GH_TOKEN secret so the
+      // managed path wins. The minted token never persists; mint failures are
+      // recorded for the UI but don't break the rest of provisioning.
+      let githubAppTokenExpiresAt: string | null = null;
+      if (runtime.githubApp) {
+        try {
+          const token = await getInstallationTokenForRuntime(runtime.id, {
+            appId: runtime.githubApp.appId,
+            installationId: runtime.githubApp.installationId,
+            privateKeyPem: decryptSecret(runtime.githubApp.privateKeyEnc),
+          });
+          const withoutStatic = secrets.filter((s) => s.key !== "GH_TOKEN");
+          withoutStatic.push({ key: "GH_TOKEN", value: token.token });
+          secrets.length = 0;
+          secrets.push(...withoutStatic);
+          githubAppTokenExpiresAt = token.expiresAt;
+          db.runtimeGithubApp
+            .update({
+              where: { runtimeId: runtime.id },
+              data: { lastMintedAt: new Date(), lastError: null },
+            })
+            .catch(() => {});
+        } catch (e) {
+          const message = e instanceof Error ? e.message : "GitHub App token mint failed.";
+          db.runtimeGithubApp
+            .update({ where: { runtimeId: runtime.id }, data: { lastError: message } })
+            .catch(() => {});
+        }
+      }
+
       return {
         runtimeId: runtime.id,
         runtimeName: runtime.name,
         workspaceRoot: typeof cfg.workspaceRoot === "string" ? cfg.workspaceRoot : null,
         secrets,
         repos: runtime.repos,
+        githubAppTokenExpiresAt,
       };
     },
   },
