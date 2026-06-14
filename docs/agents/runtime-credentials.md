@@ -1,69 +1,79 @@
 # Runtime credentials & repo provisioning
 
 A runtime (the compute environment that hosts agents — the Codex bridge, a
-Hermes host, a `forge daemon`) can now carry **encrypted secrets** and **repo
-bindings**, and **self-provision** from them on startup. The point: a dispatched
-agent should land in a ready, up-to-date checkout with the credentials it needs
-to do real work — clone private repos, push branches, open PRs — without an
-operator hand-placing files or keys into the runtime.
+Hermes host, a `forge daemon`) can carry **git auth** (a GitHub App or static
+secrets), **secrets**, and **repo bindings**, and **self-provision** from them
+on startup. The point: a dispatched agent should land in a ready, up-to-date
+checkout with the credentials it needs to do real work — clone private repos,
+push branches, open PRs — without an operator hand-placing files or keys.
 
-Manage all of it at **Settings → Runtimes → (a runtime)**.
+Manage GitHub Apps at **Settings → GitHub Apps** (workspace-wide). Manage a
+runtime's app link, secrets, and repos at **Settings → Runtimes → (a runtime)**.
 
 ## GitHub App (recommended for git)
 
-Instead of minting a `GH_TOKEN` PAT and re-scoping it every time the agent needs
-a new repo, **link one GitHub App** to the runtime. You install the app once on
-your account/org and choose which repos it can touch in GitHub's own UI; Forge
-mints a short-lived (~1h) **installation access token** from the app at provision
-time and injects it as `GH_TOKEN`. Adding a repo later is a checkbox on GitHub —
-Forge needs no change, and there's no long-lived token to rotate.
+Instead of minting a `GH_TOKEN` PAT and re-scoping it per repo, **install one
+GitHub App** and share it across runtimes. You manage which repos it can touch
+in GitHub's own UI; Forge mints a short-lived (~1h) **installation access token**
+at provision time and injects it as `GH_TOKEN`. Adding a repo later is a checkbox
+on GitHub — Forge needs no change, and there's no long-lived token to rotate.
 
-Why it's better than a PAT:
+Apps are **workspace-scoped** and shared: create one at **Settings → GitHub
+Apps**, then point any number of runtimes at it (Settings → Runtimes → a runtime
+→ GitHub App). Two ways to create one:
 
-- **No per-repo key.** GitHub's install settings are the scoping surface.
-- **Short-lived tokens.** Forge re-mints on each provision; nothing long-lived
-  is stored or shipped.
-- **Bot identity + higher rate limits.** Commits/PRs are attributed to the app,
-  not a person's account.
+### Create with GitHub (manifest flow — no key to paste)
 
-One-time setup (the UI walks you through it):
+Click **Create with GitHub**. Forge sends an app *manifest* to GitHub; you
+confirm, and GitHub creates the app and hands the credentials (App ID, slug, and
+a freshly-generated private key) straight back to Forge — **you never copy-paste
+a PEM**. Forge then walks you to the install page to pick repos; on completion
+the installation ID is captured automatically. Implemented by the routes under
+`src/app/api/integrations/github-app/*` with a tamper-proof, self-expiring state
+token (`src/server/integrations/github-app-manifest.ts`).
 
-1. **Create a GitHub App** (`https://github.com/settings/apps/new`) with repo
-   permissions **Contents: Read & write**, **Pull requests: Read & write**,
-   **Metadata: Read**. Generate and download a private key (PEM).
-2. **Install** it on your account/org and pick the repos. The install URL ends
-   in `/installations/<id>` — that number is the **Installation ID**.
-3. In Forge, paste the **App ID**, **Installation ID**, and **private key**,
-   then hit **Test connection** — it signs as the app, mints a token, and reports
-   the account + repo count so you know it works.
+### Add manually
 
-The private key (PEM) is AES-256-GCM-encrypted at rest and **never returned** to
-any client; the minted token never touches the DB. App ID / Installation ID /
-slug are non-secret and shown in the UI. When an app is configured, the minted
-`GH_TOKEN` **supersedes** any static `GH_TOKEN` secret — so you don't need both.
+If you already have an app, click **Add manually** and paste its App ID,
+installation ID, and a generated private key (PEM).
 
-> The minted token lasts ~1h. Ephemeral dispatches always start with a fresh
-> one; a long-running session re-mints when it re-provisions. Token expiry is
-> reported to the runtime (`githubAppTokenExpiresAt`) and logged by the bridge.
+Either way, hit **Test connection** — Forge signs as the app, mints a token, and
+reports the account + repo count so you know it works.
+
+The private key is AES-256-GCM-encrypted at rest (`src/server/crypto.ts`,
+keyed off `AUTH_SECRET`) and **never returned** to a client or shipped to the
+runtime — only Forge holds it, minting tokens server-side. App ID / installation
+ID / slug are non-secret and shown in the UI. When an app is linked, the minted
+`GH_TOKEN` **supersedes** any static `GH_TOKEN` secret on that runtime.
+
+> This is distinct from the **instance** GitHub App (env-var creds) used for
+> inbound *issue sync* — see `src/server/services/github/app-auth.ts`. The
+> runtime-auth app is per-workspace, DB-backed, and only mints git tokens.
 
 ## Secrets
 
 Named, AES-256-GCM-encrypted values injected into the runtime's environment when
-it provisions (`src/server/crypto.ts`, keyed off `AUTH_SECRET`). Typical use:
+it provisions. Typical use:
 
-- `GH_TOKEN` — a GitHub token (fine-grained PAT). The provisioner wires it into
-  a git credential helper **and** `gh` (which reads `GH_TOKEN` from the env), so
-  the agent can clone private repos, `git push`, and `gh pr create`. **Prefer
-  the GitHub App above** — it supplies `GH_TOKEN` automatically with no per-repo
-  scoping; a static `GH_TOKEN` here is the manual fallback.
+- `GH_TOKEN` — a GitHub token (fine-grained PAT). Wired into a git credential
+  helper **and** `gh`. **Prefer the GitHub App above** — it supplies `GH_TOKEN`
+  automatically with no per-repo scoping; a static `GH_TOKEN` here is the manual
+  fallback.
+- `GIT_SSH_KEY` — an SSH private key for git over SSH (see below).
 - Any other env the agent needs (deploy creds, registry tokens, …).
 
-Values are **write-only**: the API and UI never return them after saving — the
-list shows only the key + description. The runtime reads its own decrypted
-values through the `runtimes.provisioning` MCP tool.
+Values are **write-only**: the API and UI never return them after saving. The
+runtime reads its own decrypted values through the `runtimes.provisioning` MCP
+tool. Secrets are **per-runtime** and admin-gated.
 
-Secrets are **per-runtime** and admin-gated. A key for agent A resolves only to
-A's runtime — it can never read another runtime's secrets.
+## SSH-key git auth
+
+For deploy keys or non-GitHub hosts, add a `GIT_SSH_KEY` secret (an OpenSSH/PEM
+private key). On provision the runtime writes it to `~/.ssh` (mode 600) and wires
+it into git via `core.sshCommand`, so `git@github.com:org/repo.git`-style remotes
+work. An optional `GIT_SSH_KNOWN_HOSTS` secret pins host keys (otherwise the
+runtime accepts-new on first use). Token (`GH_TOKEN`/App) and SSH can coexist —
+each repo uses whichever its remote URL implies.
 
 ## Repositories
 
@@ -74,53 +84,54 @@ clone-or-pulls each into `<workspaceRoot>/<path>`:
 - **present →** `git remote set-url origin <url>` + `fetch` + (optional)
   `checkout <branch>` + `pull --ff-only` (a dirty/diverged tree is left as-is)
 
-Auth comes from the secrets above (the `GH_TOKEN` credential helper). `path` is
-a validated relative path (no leading `/`, no `..`).
+Two sources, materialized together (runtime bindings win on a path collision):
+
+- **Runtime-wide repos** — bound at Settings → Runtimes → a runtime. For repos
+  every dispatch on that runtime needs.
+- **Per-project repos** — bound on a Project (Project → Edit → Repository). One
+  runtime can serve **many codebases**: each project's repo is cloned at a path
+  derived from its name, and a dispatched agent is told which checkout to work in
+  (the dispatch message names the project's repo + path). See
+  `src/server/services/repo-path.ts` for the path derivation.
+
+`path` is a validated relative path (no leading `/`, no `..`). Auth comes from
+the GitHub App / secrets above.
 
 ## How provisioning works
 
 1. The runtime authenticates to Forge with its **agent-linked** API key (a
    bootstrap credential) and calls the MCP tool **`runtimes.provisioning`**,
-   which returns the decrypted secrets + repo bindings for *that agent's
-   runtime* (linked-agent-required; strictly scoped). If a GitHub App is bound,
-   Forge mints a fresh installation token server-side and includes it as
-   `GH_TOKEN` (with `githubAppTokenExpiresAt`) — the PEM never leaves Forge.
+   which returns the decrypted secrets + repo bindings (runtime + project) for
+   *that agent's runtime* (linked-agent-required; strictly scoped). If a GitHub
+   App is linked **and installed**, Forge mints a fresh installation token
+   server-side and includes it as `GH_TOKEN` (with `githubAppTokenExpiresAt`) —
+   the PEM never leaves Forge.
 2. It writes the secrets to an env file, exports them, configures git/gh auth
-   from `GH_TOKEN`, and clone-or-pulls the bound repos.
+   (token credential helper and/or `GIT_SSH_KEY`), and clone-or-pulls the bound
+   repos.
 3. It hands control to the agent — which now starts in a ready checkout with
    working credentials.
 
-For the containerised Codex bridge this is `provision.cjs`, run by the
-entrypoint before the bridge starts (`~/docker/codex-bridge/`). The single
-bootstrap secret (`FORGE_API_KEY`, the runtime's agent key) stays in the
-container env; everything else (gh token, repos, deploy creds) is managed
-in-app and fetched at startup.
+For the containerised Codex bridge this is `provision.cjs`, run by the entrypoint
+before the bridge starts (`~/docker/codex-bridge/`). The single bootstrap secret
+(`FORGE_API_KEY`, the runtime's agent key) stays in the container env; everything
+else is managed in-app and fetched at startup.
 
 ## Security notes
 
-- Secret values are encrypted at rest and never leave the server except to the
-  owning runtime via `runtimes.provisioning`.
-- Rotating `AUTH_SECRET` invalidates stored secrets — re-enter them.
-- The agent already operates with these credentials, so it can read its own
-  secrets by design; the guarantee is that *other* runtimes/keys cannot.
-
-## Security notes (GitHub App)
-
-- The PEM private key is encrypted at rest and **never** returned to a client or
-  shipped to the runtime — only Forge holds it, and it mints tokens server-side.
+- Secret values + the GitHub App private key are encrypted at rest and never
+  leave the server except (for non-App secrets) to the owning runtime via
+  `runtimes.provisioning`. The App PEM never leaves Forge at all.
 - The minted installation token is short-lived (~1h) and never persisted.
 - A mint failure is recorded (`lastError`, shown in the UI) and does **not**
   break the rest of provisioning — other secrets and repos still flow.
+- Rotating `AUTH_SECRET` invalidates stored secrets/keys — re-enter them.
+- An agent already operates with these credentials, so it can read its own
+  runtime's secrets by design; the guarantee is that *other* runtimes/keys
+  cannot, and that workspace GitHub Apps are isolated per workspace.
 
 ## Not yet (follow-ons)
 
-- **Per-project repo selection at dispatch.** Today repos are bound to the
-  runtime; a future step is selecting the repo from the dispatched issue's
-  project so one runtime can serve many codebases. (A GitHub App already grants
-  access to *all* its installed repos, so this is mostly a UI/wiring step.)
-- **Workspace-level GitHub App.** Today an app is per-runtime; sharing one app
-  across runtimes would remove even that repetition.
-- **Manifest-flow app creation.** A guided "Create app" callback (GitHub
-  generates and returns the private key) would remove the manual PEM paste.
-- **SSH-key git auth** beyond token-based `GH_TOKEN` (the secret store already
-  holds arbitrary values; the credential-helper wiring is token-first).
+- **App-level webhooks** for the runtime-auth app (today inactive; the instance
+  issue-sync app handles inbound events).
+- **Multiple installations per app** (one app installed on several orgs).

@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
 import { RuntimeKind } from "@prisma/client";
 import { generateKeyPairSync } from "node:crypto";
 import { runtimeRouter } from "@/server/routers/runtime";
+import { githubAppRouter } from "@/server/routers/github-app";
 import { decryptSecret } from "@/server/crypto";
 import {
   buildContext,
@@ -13,7 +14,7 @@ import {
 
 const fixtures: TestFixture[] = [];
 
-// A real signable key — needed for the testGithubApp path (which signs a JWT).
+// A real signable key — needed for the test (verify) path which signs a JWT.
 const { privateKey: PEM } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
   publicKeyEncoding: { type: "spki", format: "pem" },
@@ -46,195 +47,167 @@ async function setup(keyPrefix: string) {
     },
     select: { id: true },
   });
-  return { fixture, runtime, caller: runtimeRouter.createCaller(ctx) };
+  return {
+    fixture,
+    runtime,
+    apps: githubAppRouter.createCaller(ctx),
+    runtimes: runtimeRouter.createCaller(ctx),
+  };
 }
 
-describe("runtime GitHub App", () => {
-  it("stores app creds with a write-only private key and never returns the PEM", async () => {
-    const { runtime, caller } = await setup("RGHA");
+describe("workspace GitHub App router", () => {
+  it("creates an app with a write-only key and never returns the PEM", async () => {
+    const { apps } = await setup("GHA");
     const prisma = getPrisma();
 
-    const saved = await caller.setGithubApp({
-      runtimeId: runtime.id,
+    const created = await apps.createManual({
+      name: "Axiom Bot",
       appId: "123456",
       installationId: "42",
-      slug: "forge-bot",
+      slug: "axiom-bot",
       privateKey: PEM,
     });
-    expect(saved.appId).toBe("123456");
-    expect(saved.installationId).toBe("42");
-    expect(saved.slug).toBe("forge-bot");
-    expect(saved).not.toHaveProperty("privateKey");
-    expect(saved).not.toHaveProperty("privateKeyEnc");
+    expect(created.name).toBe("Axiom Bot");
+    expect(created).not.toHaveProperty("privateKey");
+    expect(created).not.toHaveProperty("privateKeyEnc");
 
-    const got = await caller.getGithubApp({ runtimeId: runtime.id });
-    expect(got?.appId).toBe("123456");
-    expect(got).not.toHaveProperty("privateKey");
-    expect(got).not.toHaveProperty("privateKeyEnc");
+    const listed = await apps.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].installed).toBe(true);
+    expect(listed[0].runtimeCount).toBe(0);
+    expect(listed[0]).not.toHaveProperty("privateKeyEnc");
 
-    // Ciphertext round-trips back to the PEM, and the PEM isn't stored raw.
-    const row = await prisma.runtimeGithubApp.findUniqueOrThrow({
-      where: { runtimeId: runtime.id },
+    const row = await prisma.githubApp.findFirstOrThrow({
+      where: { appId: "123456" },
       select: { privateKeyEnc: true },
     });
     expect(row.privateKeyEnc).not.toContain("PRIVATE KEY");
-    // Input is trimmed (harmless — still signs); compare against the trimmed PEM.
     expect(decryptSecret(row.privateKeyEnc)).toBe(PEM.trim());
   });
 
-  it("requires a private key on first set, then lets you keep it on update", async () => {
-    const { runtime, caller } = await setup("RGHB");
+  it("update keeps the stored key when privateKey is omitted", async () => {
+    const { apps } = await setup("GHB");
     const prisma = getPrisma();
-
-    await expect(
-      caller.setGithubApp({ runtimeId: runtime.id, appId: "1", installationId: "2" }),
-    ).rejects.toThrow(/private key is required/i);
-
-    await caller.setGithubApp({
-      runtimeId: runtime.id,
+    const created = await apps.createManual({
+      name: "A",
       appId: "1",
       installationId: "2",
       privateKey: PEM,
     });
-    const before = await prisma.runtimeGithubApp.findUniqueOrThrow({
-      where: { runtimeId: runtime.id },
+    const before = await prisma.githubApp.findFirstOrThrow({
+      where: { id: created.id },
       select: { privateKeyEnc: true },
     });
-
-    // Update without a key keeps the stored ciphertext, changes other fields.
-    const updated = await caller.setGithubApp({
-      runtimeId: runtime.id,
-      appId: "1",
-      installationId: "99",
-    });
+    const updated = await apps.update({ id: created.id, installationId: "99" });
     expect(updated.installationId).toBe("99");
-    const after = await prisma.runtimeGithubApp.findUniqueOrThrow({
-      where: { runtimeId: runtime.id },
+    const after = await prisma.githubApp.findFirstOrThrow({
+      where: { appId: "1" },
       select: { privateKeyEnc: true },
     });
     expect(after.privateKeyEnc).toBe(before.privateKeyEnc);
   });
 
-  it("rejects a non-PEM private key and a non-numeric app id", async () => {
-    const { runtime, caller } = await setup("RGHC");
+  it("rejects a non-PEM key and a non-numeric app id", async () => {
+    const { apps } = await setup("GHC");
     await expect(
-      caller.setGithubApp({
-        runtimeId: runtime.id,
-        appId: "123",
-        installationId: "1",
-        privateKey: "ghp_thats_a_token_not_a_key",
-      }),
+      apps.createManual({ name: "x", appId: "1", installationId: "2", privateKey: "ghp_token" }),
     ).rejects.toThrow(/PEM/i);
     await expect(
-      caller.setGithubApp({
-        runtimeId: runtime.id,
-        appId: "not-numeric",
-        installationId: "1",
-        privateKey: PEM,
-      }),
+      apps.createManual({ name: "x", appId: "nope", installationId: "2", privateKey: PEM }),
     ).rejects.toThrow();
   });
 
-  it("deletes the app binding", async () => {
-    const { runtime, caller } = await setup("RGHD");
-    await caller.setGithubApp({
-      runtimeId: runtime.id,
+  it("isolates apps across workspaces", async () => {
+    const a = await setup("GHD");
+    const b = await setup("GHE");
+    const created = await a.apps.createManual({
+      name: "A app",
       appId: "1",
       installationId: "2",
       privateKey: PEM,
     });
-    await caller.deleteGithubApp({ runtimeId: runtime.id });
-    expect(await caller.getGithubApp({ runtimeId: runtime.id })).toBeNull();
+    const id = (await a.apps.list())[0].id;
+    expect(await b.apps.get({ id })).toBeNull();
+    await expect(b.apps.update({ id, name: "hijack" })).rejects.toThrow(/not found/i);
+    await expect(b.apps.delete({ id })).rejects.toThrow(/not found/i);
+    expect(created.name).toBe("A app");
   });
 
-  it("does not let one workspace touch another's GitHub App", async () => {
-    const a = await setup("RGHE");
-    const b = await setup("RGHF");
-    await a.caller.setGithubApp({
-      runtimeId: a.runtime.id,
-      appId: "1",
-      installationId: "2",
-      privateKey: PEM,
-    });
-    // B cannot read or mutate A's runtime app.
-    await expect(b.caller.getGithubApp({ runtimeId: a.runtime.id })).rejects.toThrow(/not found/i);
-    await expect(
-      b.caller.setGithubApp({
-        runtimeId: a.runtime.id,
-        appId: "9",
-        installationId: "9",
-        privateKey: PEM,
-      }),
-    ).rejects.toThrow(/not found/i);
-  });
-
-  it("testGithubApp mints a token and stamps health (discovers slug)", async () => {
-    const { runtime, caller } = await setup("RGHG");
+  it("test mints a token, stamps health, and backfills the slug", async () => {
+    const { apps } = await setup("GHF");
     const prisma = getPrisma();
-    await caller.setGithubApp({
-      runtimeId: runtime.id,
-      appId: "123456",
-      installationId: "42",
-      privateKey: PEM,
-    });
+    await apps.createManual({ name: "x", appId: "123456", installationId: "42", privateKey: PEM });
+    const id = (await apps.list())[0].id;
 
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         if (url.endsWith("/app"))
-          return new Response(JSON.stringify({ slug: "forge-bot", name: "Forge Bot" }), {
-            status: 200,
-          });
+          return new Response(JSON.stringify({ slug: "discovered-slug" }), { status: 200 });
         if (url.endsWith("/access_tokens"))
           return new Response(
-            JSON.stringify({
-              token: "ghs_x",
-              expires_at: "2026-06-14T18:00:00Z",
-              repository_selection: "all",
-            }),
+            JSON.stringify({ token: "ghs_x", expires_at: "2026-06-14T18:00:00Z", repository_selection: "all" }),
             { status: 201 },
           );
         if (url.includes("/installation/repositories"))
           return new Response(
-            JSON.stringify({ total_count: 2, repositories: [{ owner: { login: "acme" } }] }),
+            JSON.stringify({ total_count: 4, repositories: [{ owner: { login: "acme" } }] }),
             { status: 200 },
           );
         throw new Error(`unexpected url ${url}`);
       }),
     );
-
-    const res = await caller.testGithubApp({ runtimeId: runtime.id });
+    const res = await apps.test({ id });
     expect(res.account).toBe("acme");
-    expect(res.repoCount).toBe(2);
+    expect(res.repoCount).toBe(4);
 
-    // Health stamped + slug backfilled.
-    const row = await prisma.runtimeGithubApp.findUniqueOrThrow({
-      where: { runtimeId: runtime.id },
+    const row = await prisma.githubApp.findFirstOrThrow({
+      where: { id },
       select: { lastMintedAt: true, lastError: true, slug: true },
     });
     expect(row.lastMintedAt).not.toBeNull();
     expect(row.lastError).toBeNull();
-    expect(row.slug).toBe("forge-bot");
+    expect(row.slug).toBe("discovered-slug");
   });
 
-  it("testGithubApp records the error on a bad credential", async () => {
-    const { runtime, caller } = await setup("RGHH");
-    const prisma = getPrisma();
-    await caller.setGithubApp({
-      runtimeId: runtime.id,
-      appId: "1",
-      installationId: "2",
-      privateKey: PEM,
+  it("test refuses an app that isn't installed yet", async () => {
+    const { apps, fixture } = await setup("GHG");
+    const created = await getPrisma().githubApp.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "uninstalled",
+        appId: "1",
+        privateKeyEnc: "x", // never decrypted — install check fails first
+      },
+      select: { id: true },
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("bad", { status: 401 })),
-    );
-    await expect(caller.testGithubApp({ runtimeId: runtime.id })).rejects.toThrow();
-    const row = await prisma.runtimeGithubApp.findUniqueOrThrow({
-      where: { runtimeId: runtime.id },
-      select: { lastError: true },
-    });
-    expect(row.lastError).toMatch(/401|credentials/i);
+    await expect(apps.test({ id: created.id })).rejects.toThrow(/install/i);
+  });
+});
+
+describe("runtime ↔ GitHub App link", () => {
+  it("links a runtime to a workspace app and reads it back; unlink with null", async () => {
+    const { apps, runtimes, runtime } = await setup("GHL");
+    await apps.createManual({ name: "x", appId: "55", installationId: "66", privateKey: PEM });
+    const appId = (await apps.list())[0].id;
+
+    await runtimes.linkGithubApp({ runtimeId: runtime.id, githubAppId: appId });
+    const linked = await runtimes.getGithubApp({ runtimeId: runtime.id });
+    expect(linked?.appId).toBe("55");
+    expect(linked?.installationId).toBe("66");
+    expect(linked).not.toHaveProperty("privateKeyEnc");
+
+    await runtimes.linkGithubApp({ runtimeId: runtime.id, githubAppId: null });
+    expect(await runtimes.getGithubApp({ runtimeId: runtime.id })).toBeNull();
+  });
+
+  it("refuses to link an app from another workspace", async () => {
+    const a = await setup("GHM");
+    const b = await setup("GHN");
+    await b.apps.createManual({ name: "b", appId: "1", installationId: "2", privateKey: PEM });
+    const bAppId = (await b.apps.list())[0].id;
+    await expect(
+      a.runtimes.linkGithubApp({ runtimeId: a.runtime.id, githubAppId: bAppId }),
+    ).rejects.toThrow(/not found/i);
   });
 });

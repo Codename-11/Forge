@@ -192,15 +192,17 @@ describe("runtimes.provisioning", () => {
       },
       select: { id: true },
     });
-    await prisma.runtimeGithubApp.create({
+    const app = await prisma.githubApp.create({
       data: {
-        runtimeId: runtime.id,
         workspaceId: f.workspace.id,
+        name: "app",
         appId: "123456",
         installationId: "42",
         privateKeyEnc: encryptSecret(PEM),
       },
+      select: { id: true },
     });
+    await prisma.runtime.update({ where: { id: runtime.id }, data: { githubAppId: app.id } });
     stubGithubMint("ghs_minted_token");
 
     const res = await provision(ctxFor(f, agent.id));
@@ -243,15 +245,17 @@ describe("runtimes.provisioning", () => {
         valueEnc: encryptSecret("keep-me"),
       },
     });
-    await prisma.runtimeGithubApp.create({
+    const app = await prisma.githubApp.create({
       data: {
-        runtimeId: runtime.id,
         workspaceId: f.workspace.id,
+        name: "app",
         appId: "1",
         installationId: "2",
         privateKeyEnc: encryptSecret(PEM),
       },
+      select: { id: true },
     });
+    await prisma.runtime.update({ where: { id: runtime.id }, data: { githubAppId: app.id } });
     stubGithubMint("ghs_fresh");
 
     const res = await provision(ctxFor(f, agent.id));
@@ -259,5 +263,103 @@ describe("runtimes.provisioning", () => {
     expect(gh).toEqual([{ key: "GH_TOKEN", value: "ghs_fresh" }]); // exactly one, the minted one
     // Unrelated secrets are preserved.
     expect(res.secrets.find((s) => s.key === "DEPLOY_KEY")?.value).toBe("keep-me");
+  });
+
+  it("materializes per-project repos (one runtime serves many codebases)", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "PROVP" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const runtime = await prisma.runtime.create({
+      data: { workspaceId: f.workspace.id, name: "p", kind: RuntimeKind.REMOTE_HTTP },
+      select: { id: true },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        name: "p",
+        profileKey: "prov-proj",
+        provider: AgentProvider.CODEX,
+        runtimeId: runtime.id,
+      },
+      select: { id: true },
+    });
+    // A runtime-wide repo + two project repos (one with a branch).
+    await prisma.runtimeRepo.create({
+      data: {
+        runtimeId: runtime.id,
+        workspaceId: f.workspace.id,
+        url: "https://github.com/acme/infra.git",
+        path: "infra",
+      },
+    });
+    await prisma.project.create({
+      data: {
+        workspaceId: f.workspace.id,
+        key: "WEB",
+        name: "Web",
+        createdById: f.user.id,
+        repoUrl: "https://github.com/acme/web.git",
+        repoBranch: "develop",
+      },
+    });
+    await prisma.project.create({
+      data: {
+        workspaceId: f.workspace.id,
+        key: "API",
+        name: "Api",
+        createdById: f.user.id,
+        repoUrl: "git@github.com:acme/api.git",
+      },
+    });
+
+    const res = await provision(ctxFor(f, agent.id));
+    const byPath = Object.fromEntries(res.repos.map((r) => [r.path, r]));
+    expect(byPath.infra.url).toBe("https://github.com/acme/infra.git");
+    expect(byPath.web).toEqual({
+      url: "https://github.com/acme/web.git",
+      branch: "develop",
+      path: "web",
+    });
+    expect(byPath.api).toEqual({
+      url: "git@github.com:acme/api.git",
+      branch: null,
+      path: "api",
+    });
+  });
+
+  it("skips a GitHub App that isn't installed yet (no installation id)", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "PROVU" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const runtime = await prisma.runtime.create({
+      data: { workspaceId: f.workspace.id, name: "u", kind: RuntimeKind.REMOTE_HTTP },
+      select: { id: true },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        name: "u",
+        profileKey: "prov-uninst",
+        provider: AgentProvider.CODEX,
+        runtimeId: runtime.id,
+      },
+      select: { id: true },
+    });
+    const app = await prisma.githubApp.create({
+      data: {
+        workspaceId: f.workspace.id,
+        name: "uninstalled",
+        appId: "1",
+        installationId: null,
+        privateKeyEnc: encryptSecret(PEM),
+      },
+      select: { id: true },
+    });
+    await prisma.runtime.update({ where: { id: runtime.id }, data: { githubAppId: app.id } });
+    // No fetch stub — if it tried to mint, the test would throw on real network.
+
+    const res = await provision(ctxFor(f, agent.id));
+    expect(res.githubAppTokenExpiresAt).toBeNull();
+    expect(res.secrets.find((s) => s.key === "GH_TOKEN")).toBeUndefined();
   });
 });

@@ -53,6 +53,7 @@ import { commandCenterRouter } from "./command-center";
 import { commandPaletteRouter } from "./command-palette";
 import { relationRouter } from "./relation";
 import { runtimeRouter } from "./runtime";
+import { githubAppRouter } from "./github-app";
 import { timeEntryRouter } from "./timeEntry";
 import { userRouter } from "./user";
 
@@ -105,6 +106,7 @@ export const appRouter = router({
   recurring: recurringRouter,
   relation: relationRouter,
   runtime: runtimeRouter,
+  githubApp: githubAppRouter,
   savedView: savedViewRouter,
   standup: standupRouter,
   status: statusRouter,

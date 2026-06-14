@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   KeyRound,
@@ -11,125 +12,55 @@ import {
   CheckCircle2,
   AlertCircle,
   ShieldCheck,
-  Loader2,
 } from "lucide-react";
 import { Section } from "@/components/ui";
 import { Card } from "@/components/settings/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Confirm } from "@/components/ui/modal";
+import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
-import { cn, relativeTime } from "@/lib/utils";
+import { relativeTime } from "@/lib/utils";
 
 /**
- * Runtime credentials: a GitHub App (the recommended git auth — install once,
- * manage repos in GitHub), encrypted secrets injected into the runtime at
- * provision time, and the repos it clone-or-pulls into its workspace. Secret
- * and key values are write-only — the API never returns them. The runtime
- * reads its own decrypted values via the `runtimes.provisioning` MCP tool.
+ * Runtime credentials: which workspace GitHub App this runtime uses for git
+ * auth (managed at Settings → GitHub Apps), encrypted secrets injected at
+ * provision time, and the repos it clone-or-pulls. Secret values are
+ * write-only — the API never returns them. The runtime reads its own decrypted
+ * values via the `runtimes.provisioning` MCP tool.
  */
 export function RuntimeCredentials({ runtimeId }: { runtimeId: string }) {
-  const { data: githubApp } = trpc.runtime.getGithubApp.useQuery({ runtimeId });
+  const { data: linkedApp } = trpc.runtime.getGithubApp.useQuery({ runtimeId });
+  const appActive = !!linkedApp?.installationId;
   return (
     <>
       <GithubAppSection runtimeId={runtimeId} />
-      <SecretsSection runtimeId={runtimeId} githubAppActive={!!githubApp} />
+      <SecretsSection runtimeId={runtimeId} githubAppActive={appActive} />
       <ReposSection runtimeId={runtimeId} />
     </>
   );
 }
 
-type VerifyResult = {
-  slug: string | null;
-  appName: string | null;
-  account: string | null;
-  expiresAt: string;
-  repositorySelection: string | null;
-  repoCount: number | null;
-};
-
+/**
+ * Selector: pick which workspace GitHub App (if any) this runtime uses. Apps
+ * are created/installed/tested on the workspace GitHub Apps page; here you just
+ * point a runtime at one (or none → fall back to a static GH_TOKEN secret).
+ */
 function GithubAppSection({ runtimeId }: { runtimeId: string }) {
+  const ws = useWorkspace();
   const utils = trpc.useUtils();
-  const { data: app, isLoading } = trpc.runtime.getGithubApp.useQuery({ runtimeId });
+  const { data: linked } = trpc.runtime.getGithubApp.useQuery({ runtimeId });
+  const { data: apps, isLoading } = trpc.githubApp.list.useQuery();
 
-  const [editing, setEditing] = useState(false);
-  const [appId, setAppId] = useState("");
-  const [installationId, setInstallationId] = useState("");
-  const [slug, setSlug] = useState("");
-  const [privateKey, setPrivateKey] = useState("");
-  const [confirmRemove, setConfirmRemove] = useState(false);
-  const [testResult, setTestResult] = useState<VerifyResult | null>(null);
-
-  const configured = !!app;
-  const showForm = !configured || editing;
-
-  const invalidate = () => void utils.runtime.getGithubApp.invalidate({ runtimeId });
-
-  const resetForm = () => {
-    setAppId("");
-    setInstallationId("");
-    setSlug("");
-    setPrivateKey("");
-  };
-
-  const save = trpc.runtime.setGithubApp.useMutation({
+  const link = trpc.runtime.linkGithubApp.useMutation({
     onSuccess: () => {
-      invalidate();
-      setEditing(false);
-      resetForm();
-      setTestResult(null);
-      toast.success("GitHub App saved");
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const remove = trpc.runtime.deleteGithubApp.useMutation({
-    onSuccess: () => {
-      invalidate();
-      setConfirmRemove(false);
-      setTestResult(null);
-      toast.success("GitHub App removed");
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const test = trpc.runtime.testGithubApp.useMutation({
-    onSuccess: (r) => {
-      setTestResult(r);
-      invalidate();
-      const where = r.account ? ` for ${r.account}` : "";
-      const repos =
-        r.repoCount != null
-          ? `${r.repoCount} repo${r.repoCount === 1 ? "" : "s"}`
-          : r.repositorySelection === "all"
-            ? "all repos"
-            : "selected repos";
-      toast.success(`Connected${where} — ${repos}`);
+      void utils.runtime.getGithubApp.invalidate({ runtimeId });
+      toast.success("GitHub App updated");
     },
     onError: (e) => toast.error(e.message),
   });
 
-  const startEdit = () => {
-    setAppId(app?.appId ?? "");
-    setInstallationId(app?.installationId ?? "");
-    setSlug(app?.slug ?? "");
-    setPrivateKey("");
-    setEditing(true);
-  };
-
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!appId.trim() || !installationId.trim()) return;
-    if (!configured && !privateKey.trim()) {
-      toast.error("A private key is required to set up the app.");
-      return;
-    }
-    save.mutate({
-      runtimeId,
-      appId: appId.trim(),
-      installationId: installationId.trim(),
-      slug: slug.trim() || undefined,
-      privateKey: privateKey.trim() || undefined,
-    });
-  };
+  const manageHref = `/w/${ws.slug}/settings/github-apps`;
 
   return (
     <Section
@@ -137,217 +68,75 @@ function GithubAppSection({ runtimeId }: { runtimeId: string }) {
         <span className="flex items-center gap-2">
           <Github className="h-3.5 w-3.5 text-muted-foreground" />
           GitHub App
-          {configured && (
+          {linked && (
             <span className="rounded-md border border-emerald-600/30 bg-emerald-600/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-emerald-700 dark:text-emerald-400">
-              linked
+              {linked.installationId ? "linked" : "not installed"}
             </span>
           )}
         </span>
       }
-      hint="Install one GitHub App and let Forge mint a short-lived token into GH_TOKEN at provision time. Manage which repos it can touch from GitHub — no per-repo tokens, no key to rotate."
+      hint="Use a shared GitHub App for git auth — Forge mints a short-lived token into GH_TOKEN at provision time, no per-repo key. Manage apps on the GitHub Apps page."
     >
-      <Card as="div" className="space-y-0 p-0">
+      <Card as="div" className="space-y-3 p-4">
         {isLoading ? (
-          <div className="px-4 py-6 text-meta text-muted-foreground">Loading…</div>
-        ) : (
+          <div className="text-meta text-muted-foreground">Loading…</div>
+        ) : apps && apps.length > 0 ? (
           <>
-            {configured && (
-              <div className="space-y-2 px-4 py-3">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                  <Field label="App ID" value={app!.appId} />
-                  <Field label="Installation" value={app!.installationId} />
-                  {app!.slug && <Field label="App" value={app!.slug} />}
-                  <span className="inline-flex items-center gap-1 text-meta text-muted-foreground">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                    private key set
-                  </span>
-                </div>
-                <HealthLine
-                  lastMintedAt={app!.lastMintedAt}
-                  lastError={app!.lastError}
-                  testResult={testResult}
-                />
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => test.mutate({ runtimeId })}
-                    disabled={test.isPending}
-                  >
-                    {test.isPending ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <ShieldCheck className="h-3.5 w-3.5" />
-                    )}
-                    Test connection
-                  </Button>
-                  {!editing && (
-                    <Button type="button" size="sm" variant="ghost" onClick={startEdit}>
-                      Edit
-                    </Button>
-                  )}
-                  {app!.slug && (
-                    <a
-                      href={`https://github.com/apps/${app!.slug}/installations/new`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-meta text-muted-foreground hover:text-foreground"
-                    >
-                      Add repositories on GitHub
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setConfirmRemove(true)}
-                    className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-meta text-muted-foreground hover:bg-subtle hover:text-destructive"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Remove
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {!configured && <SetupGuide />}
-
-            {showForm && (
-              <form
-                onSubmit={submit}
-                className={cn(
-                  "space-y-3 px-4 py-3",
-                  configured && "border-t border-border bg-subtle/20",
-                )}
+            <label className="block space-y-1">
+              <span className="text-meta text-muted-foreground">App used by this runtime</span>
+              <select
+                value={linked ? (apps.find((a) => a.appId === linked.appId)?.id ?? "") : ""}
+                onChange={(e) => link.mutate({ runtimeId, githubAppId: e.target.value || null })}
+                disabled={link.isPending}
+                className="focus-ring h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                aria-label="GitHub App"
               >
-                {configured && (
-                  <p className="text-meta text-muted-foreground">
-                    Editing — leave the private key blank to keep the stored one.
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <label className="flex-1 space-y-1">
-                    <span className="text-meta text-muted-foreground">App ID</span>
-                    <Input
-                      value={appId}
-                      onChange={(e) => setAppId(e.target.value)}
-                      placeholder="123456"
-                      inputMode="numeric"
-                      className="font-mono"
-                      aria-label="GitHub App ID"
-                    />
-                  </label>
-                  <label className="flex-1 space-y-1">
-                    <span className="text-meta text-muted-foreground">Installation ID</span>
-                    <Input
-                      value={installationId}
-                      onChange={(e) => setInstallationId(e.target.value)}
-                      placeholder="87654321"
-                      inputMode="numeric"
-                      className="font-mono"
-                      aria-label="GitHub App installation ID"
-                    />
-                  </label>
-                  <label className="flex-1 space-y-1">
-                    <span className="text-meta text-muted-foreground">App slug (optional)</span>
-                    <Input
-                      value={slug}
-                      onChange={(e) => setSlug(e.target.value.toLowerCase())}
-                      placeholder="forge-bot"
-                      className="font-mono"
-                      aria-label="GitHub App slug"
-                    />
-                  </label>
-                </div>
-                <label className="block space-y-1">
-                  <span className="text-meta text-muted-foreground">
-                    Private key (PEM){configured && " — leave blank to keep current"}
-                  </span>
-                  <textarea
-                    value={privateKey}
-                    onChange={(e) => setPrivateKey(e.target.value)}
-                    placeholder={"-----BEGIN RSA PRIVATE KEY-----\n…\n-----END RSA PRIVATE KEY-----"}
-                    rows={4}
-                    spellCheck={false}
-                    className="focus-ring w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-[0.75rem] leading-snug text-foreground placeholder:text-muted-foreground"
-                    aria-label="GitHub App private key (PEM)"
-                  />
-                </label>
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="submit"
-                    size="sm"
-                    disabled={save.isPending || !appId.trim() || !installationId.trim()}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    {configured ? "Save changes" : "Link GitHub App"}
-                  </Button>
-                  {configured && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setEditing(false);
-                        resetForm();
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  )}
-                </div>
-              </form>
+                <option value="">None — use a static GH_TOKEN secret</option>
+                {apps.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                    {a.installed ? "" : " (not installed)"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {linked && (
+              <HealthLine lastMintedAt={linked.lastMintedAt} lastError={linked.lastError} />
             )}
+            <Link
+              href={manageHref}
+              className="inline-flex items-center gap-1 text-meta text-muted-foreground hover:text-foreground"
+            >
+              Manage GitHub Apps
+              <ExternalLink className="h-3 w-3" />
+            </Link>
           </>
+        ) : (
+          <div className="space-y-2 text-meta text-muted-foreground">
+            <p>
+              No GitHub App in this workspace yet. Create one to give runtimes push/PR access
+              without per-repo tokens.
+            </p>
+            <Link href={manageHref}>
+              <Button type="button" size="sm" variant="outline">
+                <Plus className="h-3.5 w-3.5" />
+                Set up a GitHub App
+              </Button>
+            </Link>
+          </div>
         )}
       </Card>
-
-      <Confirm
-        open={confirmRemove}
-        onOpenChange={setConfirmRemove}
-        title="Remove GitHub App?"
-        description="The runtime stops minting GH_TOKEN from this app on its next provision. Add a GH_TOKEN secret or another app to restore git access."
-        primaryLabel="Remove"
-        loading={remove.isPending}
-        onConfirm={() => remove.mutate({ runtimeId })}
-      />
     </Section>
-  );
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="inline-flex items-baseline gap-1.5">
-      <span className="text-meta text-muted-foreground/70">{label}</span>
-      <span className="font-mono text-id text-foreground">{value}</span>
-    </span>
   );
 }
 
 function HealthLine({
   lastMintedAt,
   lastError,
-  testResult,
 }: {
   lastMintedAt: Date | string | null;
   lastError: string | null;
-  testResult: VerifyResult | null;
 }) {
-  if (testResult) {
-    const repos =
-      testResult.repoCount != null
-        ? `${testResult.repoCount} repo${testResult.repoCount === 1 ? "" : "s"}`
-        : testResult.repositorySelection === "all"
-          ? "all repos"
-          : "selected repos";
-    return (
-      <p className="inline-flex items-center gap-1.5 text-meta text-emerald-700 dark:text-emerald-400">
-        <CheckCircle2 className="h-3.5 w-3.5" />
-        Connected{testResult.account ? ` for ${testResult.account}` : ""} — {repos}, token valid
-        ~1h.
-      </p>
-    );
-  }
   if (lastError) {
     return (
       <p className="inline-flex items-start gap-1.5 text-meta text-destructive">
@@ -358,45 +147,16 @@ function HealthLine({
   }
   if (lastMintedAt) {
     return (
-      <p className="text-meta text-muted-foreground/80">
+      <p className="inline-flex items-center gap-1.5 text-meta text-emerald-700 dark:text-emerald-400">
+        <CheckCircle2 className="h-3.5 w-3.5" />
         Last token minted {relativeTime(lastMintedAt)}.
       </p>
     );
   }
   return (
     <p className="text-meta text-muted-foreground/80">
-      Not yet used — run “Test connection” to verify.
+      Linked — a token mints on this runtime&apos;s next provision.
     </p>
-  );
-}
-
-function SetupGuide() {
-  return (
-    <div className="space-y-2 border-b border-border bg-subtle/20 px-4 py-3 text-meta text-muted-foreground">
-      <p className="text-foreground">One-time setup:</p>
-      <ol className="ml-4 list-decimal space-y-1.5">
-        <li>
-          <a
-            href="https://github.com/settings/apps/new"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
-          >
-            Create a GitHub App
-            <ExternalLink className="h-3 w-3" />
-          </a>{" "}
-          with repository permissions <span className="font-mono">Contents: Read &amp; write</span>
-          , <span className="font-mono">Pull requests: Read &amp; write</span>,{" "}
-          <span className="font-mono">Metadata: Read</span>. Generate &amp; download a private key.
-        </li>
-        <li>
-          Install the app on your account/org and choose which repos it can access. The install
-          URL ends in <span className="font-mono">/installations/&lt;id&gt;</span> — that number is
-          the Installation ID.
-        </li>
-        <li>Paste the App ID, Installation ID, and private key below, then “Test connection”.</li>
-      </ol>
-    </div>
   );
 }
 
@@ -445,7 +205,7 @@ function SecretsSection({
           </span>
         </span>
       }
-      hint="Encrypted env injected into this runtime when it provisions (e.g. GH_TOKEN). Values are write-only — never shown again after saving."
+      hint="Encrypted env injected into this runtime when it provisions (e.g. GH_TOKEN, GIT_SSH_KEY). Values are write-only — never shown again after saving."
     >
       <Card as="div" className="divide-y-0 p-0">
         {githubAppActive && (
@@ -490,12 +250,14 @@ function SecretsSection({
               <>
                 No secrets yet — and you don&apos;t need a{" "}
                 <span className="font-mono">GH_TOKEN</span> here: the GitHub App above mints one
-                automatically. Add secrets only for other env (deploy creds, registry tokens, …).
+                automatically. Add secrets only for other env (deploy creds, registry tokens,
+                a <span className="font-mono">GIT_SSH_KEY</span>, …).
               </>
             ) : (
               <>
-                No secrets yet. Add a <span className="font-mono">GH_TOKEN</span> to give this
-                runtime git/gh access — or link a GitHub App above to skip per-repo tokens.
+                No secrets yet. Add a <span className="font-mono">GH_TOKEN</span> (or a{" "}
+                <span className="font-mono">GIT_SSH_KEY</span>) to give this runtime git access —
+                or link a GitHub App above to skip per-repo tokens.
               </>
             )}
           </div>
@@ -594,7 +356,7 @@ function ReposSection({ runtimeId }: { runtimeId: string }) {
           <span className="font-mono text-meta text-muted-foreground">{repos?.length ?? 0}</span>
         </span>
       }
-      hint="Repos this runtime clone-or-pulls into its workspace before an agent's turn (auth from the secrets above). The agent lands in a ready checkout."
+      hint="Repos this runtime always clone-or-pulls (auth from the GitHub App / secrets above). Project-bound repos are materialized automatically — add one here only for runtime-wide repos."
     >
       <Card as="div" className="divide-y-0 p-0">
         {isLoading ? (
@@ -625,7 +387,8 @@ function ReposSection({ runtimeId }: { runtimeId: string }) {
           </ul>
         ) : (
           <div className="px-4 py-6 text-meta text-muted-foreground">
-            No repos bound yet. Add one so the runtime materializes it automatically.
+            No runtime-wide repos. Bind repos to projects instead (Project → Settings) so the
+            right one is cloned per dispatch.
           </div>
         )}
         <form

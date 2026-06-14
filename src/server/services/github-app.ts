@@ -107,29 +107,79 @@ export async function mintInstallationToken(creds: GithubAppCreds): Promise<Inst
   };
 }
 
-// ── Per-runtime token cache ────────────────────────────────────────────────
+// ── Per-app token cache ────────────────────────────────────────────────────
 // Provisioning can be called repeatedly (every bridge start / dispatch). A
 // freshly-minted token is good for ~1h, so we reuse it across calls until it's
-// within 10 min of expiry rather than hammering GitHub's token endpoint.
+// within 10 min of expiry rather than hammering GitHub's token endpoint. Keyed
+// by the GithubApp id so a workspace app shared across runtimes mints once.
 const tokenCache = new Map<string, InstallationToken>();
 const REFRESH_MARGIN_MS = 10 * 60 * 1000;
 
-export async function getInstallationTokenForRuntime(
-  runtimeId: string,
+export async function getInstallationTokenForApp(
+  appKey: string,
   creds: GithubAppCreds,
 ): Promise<InstallationToken> {
-  const cached = tokenCache.get(runtimeId);
+  const cached = tokenCache.get(appKey);
   if (cached && Date.parse(cached.expiresAt) - Date.now() > REFRESH_MARGIN_MS) {
     return cached;
   }
   const fresh = await mintInstallationToken(creds);
-  tokenCache.set(runtimeId, fresh);
+  tokenCache.set(appKey, fresh);
   return fresh;
 }
 
 /** Drop a cached token (e.g. after the app credentials change). */
-export function invalidateInstallationToken(runtimeId: string): void {
-  tokenCache.delete(runtimeId);
+export function invalidateInstallationToken(appKey: string): void {
+  tokenCache.delete(appKey);
+}
+
+export type ManifestConversion = {
+  appId: string;
+  slug: string;
+  name: string;
+  privateKeyPem: string;
+  clientId: string | null;
+  webhookSecret: string | null;
+};
+
+/**
+ * Exchange a GitHub App Manifest `code` for the created app's credentials.
+ * GitHub returns the App ID, slug, and a freshly-generated PEM private key —
+ * so the operator never copy-pastes a key. One-shot: the code is single-use
+ * and expires in ~1h. See:
+ * https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest
+ */
+export async function convertManifestCode(code: string): Promise<ManifestConversion> {
+  const res = await fetch(`${GH_API}/app-manifests/${encodeURIComponent(code)}/conversions`, {
+    method: "POST",
+    headers: {
+      accept: "application/vnd.github+json",
+      "x-github-api-version": "2022-11-28",
+      "user-agent": UA,
+    },
+  });
+  if (!res.ok) {
+    throw new Error(humanizeGithubError(res.status, await res.text().catch(() => "")));
+  }
+  const json = (await res.json()) as {
+    id: number;
+    slug: string;
+    name: string;
+    pem: string;
+    client_id?: string;
+    webhook_secret?: string;
+  };
+  if (!json.id || !json.pem) {
+    throw new Error("GitHub manifest conversion returned no app id / private key.");
+  }
+  return {
+    appId: String(json.id),
+    slug: json.slug,
+    name: json.name,
+    privateKeyPem: json.pem,
+    clientId: json.client_id ?? null,
+    webhookSecret: json.webhook_secret ?? null,
+  };
 }
 
 export type VerifyResult = {

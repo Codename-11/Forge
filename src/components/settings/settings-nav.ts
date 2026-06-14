@@ -2,6 +2,7 @@ import {
   Bot,
   ClipboardList,
   DatabaseBackup,
+  Github,
   Key,
   KeyRound,
   Layers,
@@ -144,6 +145,13 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
         icon: PlugZap,
         description:
           "Inbound and outbound I/O — GitHub, Slack, email-to-issue, custom webhooks. For agents, see Automation.",
+      },
+      {
+        path: "/github-apps",
+        label: "GitHub Apps",
+        icon: Github,
+        description:
+          "Shared GitHub Apps for runtime git auth. Install one app, manage repos on GitHub, point runtimes at it — Forge mints a short-lived GH_TOKEN. No per-repo keys.",
       },
       {
         path: "/plugins",
