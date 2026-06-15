@@ -22,6 +22,7 @@ import { Section, SkeletonList } from "@/components/ui";
 import { CodeBlock } from "@/components/mcp-integration-blocks";
 import { RuntimeToolSurfacePanel } from "@/components/runtime-tool-surface";
 import { RuntimeCredentials } from "@/components/settings/runtime-credentials";
+import { RuntimeProvisioning } from "@/components/settings/runtime-provisioning";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
@@ -407,6 +408,8 @@ export default function RuntimeDetailPage() {
               </Section>
 
               <RuntimeCredentials runtimeId={id} />
+
+              <RuntimeProvisioning />
 
               {showConnectPane && (
                 <Section
