@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
-import { Priority } from "@prisma/client";
+import { Priority, StatusCategory } from "@prisma/client";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import {
@@ -13,10 +13,11 @@ import {
 } from "@/lib/saved-view-filters";
 
 /**
- * Multi-select facet chips for the issue list — Status, Priority, Project,
- * Assignee, Label. Each is a chip + popover of checkable options operating
- * on the array fields of `SavedViewFilters` (`statusIds`, `priorities`,
- * `projectIds`, `assigneeIds`, `labelIds`). Unlike the single-pick Sprint /
+ * Multi-select facet chips for the issue list — Status, Priority,
+ * Assignee, Label. Project is a first-class chip next to Sprint/Initiative
+ * because operators filter by project constantly. Each facet is a chip +
+ * popover of checkable options operating on the array fields of
+ * `SavedViewFilters` (`statusIds`, `priorities`, `assigneeIds`, `labelIds`). Unlike the single-pick Sprint /
  * Initiative chips, picking an option toggles it and KEEPS the popover open
  * so the operator can stack several without re-opening.
  *
@@ -57,10 +58,6 @@ export function IssueFacetChips({
   onChange: (next: SavedViewFilters) => void;
 }) {
   const { data: statuses } = trpc.status.list.useQuery();
-  const { data: projects } = trpc.project.list.useQuery({
-    archived: false,
-    limit: 100,
-  });
   const { data: labels } = trpc.label.list.useQuery();
   const { data: members } = trpc.workspace.members.useQuery();
 
@@ -72,6 +69,23 @@ export function IssueFacetChips({
     onChange({ ...filters, priorities: next.length ? next : undefined });
   };
 
+  const toggleStatus = (id: string) => {
+    const nextStatusIds = toggleId(filters.statusIds, id);
+    const selectedTerminalStatus = (statuses ?? []).some(
+      (s) =>
+        nextStatusIds?.includes(s.id) &&
+        (s.category === StatusCategory.DONE || s.category === StatusCategory.CANCELED),
+    );
+    const selectedTerminalCategory = filters.statusCategories?.some(
+      (category) => category === StatusCategory.DONE || category === StatusCategory.CANCELED,
+    );
+    onChange({
+      ...filters,
+      statusIds: nextStatusIds,
+      includeDone: selectedTerminalStatus || selectedTerminalCategory ? true : undefined,
+    });
+  };
+
   return (
     <>
       <FacetChip label="Status" count={filters.statusIds?.length ?? 0}>
@@ -81,9 +95,7 @@ export function IssueFacetChips({
             label={s.name}
             color={s.color}
             checked={filters.statusIds?.includes(s.id) ?? false}
-            onToggle={() =>
-              onChange({ ...filters, statusIds: toggleId(filters.statusIds, s.id) })
-            }
+            onToggle={() => toggleStatus(s.id)}
           />
         ))}
       </FacetChip>
@@ -95,23 +107,6 @@ export function IssueFacetChips({
             label={priorityLabel(p)}
             checked={filters.priorities?.includes(p) ?? false}
             onToggle={() => togglePriority(p)}
-          />
-        ))}
-      </FacetChip>
-
-      <FacetChip label="Project" count={filters.projectIds?.length ?? 0}>
-        {(projects?.items ?? []).map((p) => (
-          <CheckOption
-            key={p.id}
-            label={p.name}
-            color={p.color}
-            checked={filters.projectIds?.includes(p.id) ?? false}
-            onToggle={() =>
-              onChange({
-                ...filters,
-                projectIds: toggleId(filters.projectIds, p.id),
-              })
-            }
           />
         ))}
       </FacetChip>

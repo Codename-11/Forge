@@ -858,19 +858,36 @@ export function QuickCreate() {
       // Wrap the floating bar so it anchors to the top of the viewport
       // without capturing clicks on the surrounding page (the bar itself
       // handles outside-click close via the mousedown listener above).
-      className="pointer-events-none fixed inset-x-0 top-[18vh] z-40 flex justify-center px-4"
+      className="pointer-events-none fixed inset-x-0 top-3 z-40 flex justify-center px-3 sm:top-[18vh] sm:px-4"
     >
       <div
         ref={containerRef}
         role="dialog"
         aria-label={`Quick-create ${modeLabel}`}
         className={cn(
-          "pointer-events-auto w-full max-w-4xl overflow-hidden rounded-xl border border-border bg-card/95 shadow-xl backdrop-blur",
+          "pointer-events-auto flex max-h-[calc(100vh-1.5rem)] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-card/95 shadow-xl backdrop-blur",
           MOTION.slideInTop,
         )}
       >
+        <div className="flex items-start justify-between gap-3 border-b border-border/60 bg-card/60 px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-foreground">Create {modeLabel.toLowerCase()}</div>
+            <p className="text-meta mt-0.5 text-muted-foreground">
+              Pick the target, add context, then press Enter to create.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => close(true)}
+            aria-label="Close quick create"
+            className="focus-ring -mr-1 rounded-md p-1 text-muted-foreground hover:bg-subtle hover:text-foreground"
+          >
+            <X className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+
         {/* Top row: mode chip + input + hint */}
-        <div className="flex items-center gap-2.5 px-4 py-3.5">
+        <div className="flex flex-col gap-2.5 px-4 py-3.5 sm:flex-row sm:items-center">
           <ModeChip
             mode={mode}
             onToggleIntent={() => {
@@ -937,7 +954,7 @@ export function QuickCreate() {
             onClick={() => submit(false)}
             disabled={!text.trim() || busy}
             className={cn(
-              "focus-ring inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-ember px-2.5 py-1 text-xs font-medium text-ember-foreground hover:bg-ember/90 disabled:pointer-events-none disabled:opacity-40",
+              "focus-ring inline-flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-ember px-2.5 py-1.5 text-xs font-medium text-ember-foreground hover:bg-ember/90 disabled:pointer-events-none disabled:opacity-40 sm:w-auto sm:py-1",
               MOTION.fast,
             )}
           >
@@ -1119,6 +1136,19 @@ export function QuickCreate() {
                     />
                   </>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setShowDescription((v) => !v)}
+                  aria-pressed={showDescription}
+                  className={cn(
+                    "focus-ring rounded px-1.5 py-0.5 text-[0.6875rem] transition-colors",
+                    showDescription
+                      ? "bg-ember/15 text-ember"
+                      : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+                  )}
+                >
+                  Description
+                </button>
                 <CommittedChips committed={committed} onRemove={removeCommitted} />
               </>
             )}

@@ -2811,7 +2811,7 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
 
     const notDone = dataOf<{ id: string }>(await call("issues.list", { includeDone: false }, ctx));
     expect(notDone.map((row) => row.id)).not.toContain(done.id);
-    expect(notDone.map((row) => row.id)).toContain(canceled.id);
+    expect(notDone.map((row) => row.id)).not.toContain(canceled.id);
 
     const onlyCanceled = dataOf<{ id: string }>(
       await call("issues.list", { statusCategories: ["CANCELED"], includeDone: false }, ctx),
@@ -2821,7 +2821,7 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     const onlyDoneWithDoneExcluded = dataOf<{ id: string }>(
       await call("issues.list", { statusCategories: ["DONE"], includeDone: false }, ctx),
     );
-    expect(onlyDoneWithDoneExcluded).toEqual([]);
+    expect(onlyDoneWithDoneExcluded.map((row) => row.id)).toEqual([done.id]);
   });
 
   it("issues.update writes audit + ISSUE_UPDATED and emits ISSUE_PRIORITY_CHANGED on priority bump", async () => {

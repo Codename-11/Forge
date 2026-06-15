@@ -1,5 +1,5 @@
 "use client";
-import { CircleSlash, Inbox, Layers, ShieldAlert, Sparkles } from "lucide-react";
+import { CheckCircle2, CircleSlash, Inbox, Layers, ShieldAlert, Sparkles } from "lucide-react";
 import { StatusCategory } from "@prisma/client";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -111,6 +111,20 @@ export function QuickFilterChips({
     });
   };
 
+  // Done / completed work. Use category instead of ids so custom terminal
+  // statuses stay covered and the server/client both infer includeDone.
+  const doneActive = filters.statusCategories?.includes(StatusCategory.DONE) ?? false;
+  const toggleDone = () => {
+    const nextCategories = doneActive
+      ? (filters.statusCategories ?? []).filter((c) => c !== StatusCategory.DONE)
+      : Array.from(new Set([...(filters.statusCategories ?? []), StatusCategory.DONE]));
+    onChange({
+      ...filters,
+      statusCategories: nextCategories.length ? nextCategories : undefined,
+      includeDone: doneActive ? undefined : true,
+    });
+  };
+
   // Epics — pin kinds to [EPIC] to see just the top-level parents.
   const epicsActive = filters.kinds?.includes("EPIC") ?? false;
   const toggleEpics = () => {
@@ -157,6 +171,14 @@ export function QuickFilterChips({
           onClick={toggleUpdated}
           icon={<Sparkles className="h-3 w-3" aria-hidden />}
           label="Recently updated"
+        />
+      </li>
+      <li>
+        <Chip
+          active={doneActive}
+          onClick={toggleDone}
+          icon={<CheckCircle2 className="h-3 w-3" aria-hidden />}
+          label="Done"
         />
       </li>
       <li>

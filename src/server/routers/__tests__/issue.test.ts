@@ -37,6 +37,60 @@ async function setup() {
   return { fixture, ctx, caller };
 }
 
+describe("issueRouter — list filtering", () => {
+  it("keeps terminal statuses reachable when explicitly filtered", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const open = await createIssue(fixture, { title: "open", statusCategory: "TODO" });
+    const done = await createIssue(fixture, { title: "done", statusCategory: "DONE" });
+    const canceled = await createIssue(fixture, { title: "canceled", statusCategory: "CANCELED" });
+    const doneStatus = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "DONE" },
+    });
+
+    const activeOnly = await caller.list({ includeDone: false, limit: 50 });
+    expect(activeOnly.items.map((row) => row.id)).toContain(open.id);
+    expect(activeOnly.items.map((row) => row.id)).not.toContain(done.id);
+    expect(activeOnly.items.map((row) => row.id)).not.toContain(canceled.id);
+
+    const byCategory = await caller.list({
+      statusCategories: ["DONE"],
+      includeDone: false,
+      limit: 50,
+    });
+    expect(byCategory.items.map((row) => row.id)).toEqual([done.id]);
+
+    const byStatusId = await caller.list({
+      statusId: doneStatus.id,
+      includeDone: false,
+      limit: 50,
+    });
+    expect(byStatusId.items.map((row) => row.id)).toEqual([done.id]);
+  });
+
+  it("supports first-class project and no-project filters", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "OPS",
+        name: "Operations",
+        createdById: fixture.user.id,
+      },
+    });
+    const projectIssue = await createIssue(fixture, { title: "project issue", projectId: project.id });
+    const unfiledIssue = await createIssue(fixture, { title: "unfiled issue" });
+
+    const projectRows = await caller.list({ projectIds: [project.id], includeDone: false, limit: 50 });
+    expect(projectRows.items.map((row) => row.id)).toEqual([projectIssue.id]);
+
+    const noProjectRows = await caller.list({ withoutProject: true, includeDone: false, limit: 50 });
+    expect(noProjectRows.items.map((row) => row.id)).toContain(unfiledIssue.id);
+    expect(noProjectRows.items.map((row) => row.id)).not.toContain(projectIssue.id);
+  });
+});
+
 describe("issueRouter — blocker-aware claim + narrowing + unblocked flag", () => {
   it("byId returns only the latest agent run for the issue-detail failure banner", async () => {
     const { caller, fixture } = await setup();

@@ -14,8 +14,10 @@ import { ViewToggle, useViewPref } from "@/components/view-toggle";
 import {
   CycleFilterChip,
   InitiativeFilterChip,
+  ProjectFilterChip,
   type CycleFilter,
   type InitiativeFilter,
+  type ProjectFilter,
 } from "@/components/saved-views/filter-chips";
 import { GroupChip, IssueFacetChips, SortChip } from "@/components/saved-views/facet-chips";
 import { QuickFilterChips } from "@/components/saved-views/quick-filter-chips";
@@ -216,11 +218,20 @@ export default function IssuesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fParam, viewIdFromUrl, views?.length]);
 
-  // Cycle / initiative chip state derives from `filters`.
+  // Project / Cycle / initiative chip state derives from `filters`.
+  const projectId: ProjectFilter = filters.withoutProject ? null : (filters.projectIds?.[0] ?? undefined);
   const cycleId: CycleFilter = filters.withoutCycle ? null : (filters.cycleIds?.[0] ?? undefined);
   const initiativeId: InitiativeFilter = filters.withoutInitiative
     ? null
     : (filters.initiativeIds?.[0] ?? undefined);
+
+  function setProjectId(v: ProjectFilter) {
+    onChangeFilters({
+      ...filters,
+      projectIds: typeof v === "string" ? [v] : undefined,
+      withoutProject: v === null ? true : undefined,
+    });
+  }
 
   function setCycleId(v: CycleFilter) {
     onChangeFilters({
@@ -361,6 +372,7 @@ export default function IssuesPage() {
               list view only — are pinned right. */}
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <IssueFacetChips filters={filters} onChange={onChangeFilters} />
+            <ProjectFilterChip value={projectId} onChange={setProjectId} />
             <CycleFilterChip value={cycleId} onChange={setCycleId} />
             <InitiativeFilterChip value={initiativeId} onChange={setInitiativeId} />
             {dueOn && <DueOnChip dueOn={dueOn} onClear={clearDueOn} />}

@@ -61,6 +61,10 @@ import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { buildChatContextBundle } from "@/server/services/chat-context";
 import { agentIdSchema } from "@/server/validators";
 import {
+  TERMINAL_STATUS_CATEGORIES,
+  hasTerminalStatusCategory,
+} from "@/lib/saved-view-filters";
+import {
   assertKeyScope,
   buildKeyScopeWhere,
   type ApiKeyContext,
@@ -1164,6 +1168,7 @@ export const mcpTools = {
         .describe("Agent CUID to pin, null for issues with no agent assigned"),
       // Array filters (any-of). AND'd with singleton equivalents above.
       projectIds: z.array(z.string().cuid()).max(100).optional(),
+      withoutProject: z.boolean().optional(),
       labelIds: z.array(z.string().cuid()).max(100).optional(),
       statusCategories: z.array(z.nativeEnum(StatusCategory)).max(8).optional(),
       priorities: z
@@ -1199,6 +1204,7 @@ export const mcpTools = {
         assigneeId?: string;
         assignedAgentId?: string | null;
         projectIds?: string[];
+        withoutProject?: boolean;
         labelIds?: string[];
         statusCategories?: StatusCategory[];
         priorities?: ("NONE" | "LOW" | "MEDIUM" | "HIGH" | "URGENT")[];
@@ -1244,6 +1250,12 @@ export const mcpTools = {
           AND: [{ assignees: { none: {} } }, { assignedAgentId: null }],
         });
       }
+      if (input.projectIds?.length || input.withoutProject === true) {
+        const ors: Array<Record<string, unknown>> = [];
+        if (input.projectIds?.length) ors.push({ projectId: { in: input.projectIds } });
+        if (input.withoutProject === true) ors.push({ projectId: null });
+        andClauses.push({ OR: ors });
+      }
       if (input.statusCategories?.length) {
         andClauses.push({
           status: { category: { in: input.statusCategories } },
@@ -1261,13 +1273,25 @@ export const mcpTools = {
         });
       }
 
+      const explicitTerminalStatusFilter =
+        hasTerminalStatusCategory(input.statusCategories) ||
+        (input.statusId
+          ? (await db.status.count({
+              where: {
+                workspaceId: ctx.workspaceId,
+                id: input.statusId,
+                category: { in: [...TERMINAL_STATUS_CATEGORIES] },
+              },
+            })) > 0
+          : false);
+      const includeTerminalStatuses = input.includeDone || explicitTerminalStatusFilter;
+
       const rows = await db.issue.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           deletedAt: null,
           ...keyWhere,
           ...(input.projectId ? { projectId: input.projectId } : {}),
-          ...(input.projectIds?.length ? { projectId: { in: input.projectIds } } : {}),
           ...(input.statusId ? { statusId: input.statusId } : {}),
           ...(input.assigneeId ? { assignees: { some: { userId: input.assigneeId } } } : {}),
           ...(input.labelIds?.length
@@ -1289,7 +1313,9 @@ export const mcpTools = {
             : input.assignedAgentId
               ? { assignedAgentId: input.assignedAgentId }
               : {}),
-          ...(input.includeDone ? {} : { status: { category: { not: "DONE" } } }),
+          ...(includeTerminalStatuses
+            ? {}
+            : { status: { category: { notIn: [...TERMINAL_STATUS_CATEGORIES] } } }),
           ...(andClauses.length ? { AND: andClauses } : {}),
         },
         take: input.limit + 1,

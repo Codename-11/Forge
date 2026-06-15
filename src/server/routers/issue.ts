@@ -27,7 +27,9 @@ import {
 import { agentId as agentIdSchema } from "./agent";
 import {
   ISSUE_SORT_VALUES,
+  TERMINAL_STATUS_CATEGORIES,
   UPDATED_SINCE_VALUES,
+  hasTerminalStatusCategory,
   updatedSinceToDate,
 } from "@/lib/saved-view-filters";
 import type { SlashCommand } from "@/lib/slash-commands";
@@ -289,6 +291,7 @@ const filterSchema = z.object({
   // -- Array / projection filters (Phase 1D saved-views). --------------------
   // Any-of semantics. AND'd with singleton equivalents above when both pass.
   projectIds: z.array(z.string().cuid()).max(100).optional(),
+  withoutProject: z.boolean().optional(),
   statusIds: z.array(z.string().cuid()).max(100).optional(),
   statusCategories: z.array(z.nativeEnum(StatusCategory)).max(8).optional(),
   assigneeIds: z.array(z.string().cuid()).max(100).optional(),
@@ -393,6 +396,16 @@ async function buildIssueListWhere(
     });
   }
 
+  // Project: combine `projectIds[]` and `withoutProject` under OR so global
+  // operational views can pin one or more projects while also surfacing
+  // unfiled issues. (The singular `projectId` field still applies directly.)
+  if (input.projectIds?.length || input.withoutProject === true) {
+    const ors: Array<Record<string, unknown>> = [];
+    if (input.projectIds?.length) ors.push({ projectId: { in: input.projectIds } });
+    if (input.withoutProject === true) ors.push({ projectId: null });
+    andClauses.push({ OR: ors });
+  }
+
   // Status: combine `statusIds[]` and `statusCategories[]` under OR when
   // both are present so saved views can pin "any of {Backlog} OR exact id
   // Foo" without needing two views. When only one is set we emit the
@@ -443,12 +456,32 @@ async function buildIssueListWhere(
     blockedConstraint = { id: { in: [...blocked] } };
   }
 
+  // Terminal-status awareness: explicitly filtering by a DONE/CANCELED
+  // category — or by a status id that resolves to a terminal category —
+  // means the caller wants terminal issues, so don't also exclude them
+  // (which would produce an impossible query). Otherwise hide terminal
+  // issues unless `includeDone` is set.
+  const statusIdsToCheck = [
+    ...(input.statusId ? [input.statusId] : []),
+    ...(input.statusIds ?? []),
+  ];
+  const explicitTerminalStatusFilter =
+    hasTerminalStatusCategory(input.statusCategories) ||
+    (statusIdsToCheck.length > 0 &&
+      (await ctx.db.status.count({
+        where: {
+          workspaceId: ctx.workspaceId,
+          id: { in: statusIdsToCheck },
+          category: { in: [...TERMINAL_STATUS_CATEGORIES] },
+        },
+      })) > 0);
+  const includeTerminalStatuses = input.includeDone || explicitTerminalStatusFilter;
+
   return {
     workspaceId: ctx.workspaceId,
     deletedAt: null,
     ...keyWhere,
     ...(input.projectId ? { projectId: input.projectId } : {}),
-    ...(input.projectIds?.length ? { projectId: { in: input.projectIds } } : {}),
     ...(input.statusId ? { statusId: input.statusId } : {}),
     ...(input.assigneeId ? { assignees: { some: { userId: input.assigneeId } } } : {}),
     ...(input.assigneeIds?.length
@@ -488,7 +521,9 @@ async function buildIssueListWhere(
           return { dueDate: { gte: start, lt: end } };
         })()
       : {}),
-    ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
+    ...(includeTerminalStatuses
+      ? {}
+      : { status: { category: { notIn: [...TERMINAL_STATUS_CATEGORIES] } } }),
     ...(blockedConstraint ?? {}),
     ...(andClauses.length ? { AND: andClauses } : {}),
   } as Prisma.IssueWhereInput;

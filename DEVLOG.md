@@ -775,6 +775,16 @@ Verification: `pnpm typecheck`; `pnpm test src/server/services/__tests__/orchest
 `pnpm lint`; `env -u OPENAI_API_KEY pnpm test` (109 files passed, 898 tests
 passed, 1 skipped). Full test run still logs pre-existing async notification
 fan-out/storage CORS warnings, but exits green.
+## 2026-06-15 — AXI-79 global issue filters + Quick Create cleanup
+
+Improved the global `/issues` operations surface:
+- Added a first-class Project chip beside Sprint/Initiative, including a `No project` branch backed by a new `withoutProject` filter.
+- Added a Done quick filter and made status filtering terminal-aware: explicit DONE/CANCELED status ids/categories now bypass the default terminal-status exclusion instead of producing impossible queries.
+- Mirrored the terminal/no-project behavior in the MCP `issues.list` path so agents and UI see the same semantics.
+- Cleaned up Quick Create into a clearer responsive card with a title/close affordance, mobile-friendly stacked controls, and an explicit Description toggle for issue creation.
+
+Tests: targeted Vitest for saved-view filters, Quick Create modes, issue router, and MCP issues; `pnpm typecheck`; `pnpm lint`; full `pnpm test`; `pnpm test:e2e` (first attempted with an invalid extra `-- --workers=1` arg which Playwright treated as a test pattern; reran plain and passed 34/34).
+
 
 ## 2026-06-15 — Provisioning distribution (one script, any runtime)
 

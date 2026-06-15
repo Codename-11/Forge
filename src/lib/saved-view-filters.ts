@@ -63,6 +63,27 @@ export type IssueGroupBy = (typeof ISSUE_GROUP_VALUES)[number];
 
 const cuidArray = z.array(z.string().cuid()).max(100);
 
+export const TERMINAL_STATUS_CATEGORIES = [
+  StatusCategory.DONE,
+  StatusCategory.CANCELED,
+] as const;
+
+const TERMINAL_STATUS_CATEGORY_SET = new Set<string>(TERMINAL_STATUS_CATEGORIES);
+
+export function hasTerminalStatusCategory(
+  categories: readonly StatusCategory[] | undefined,
+): boolean {
+  return (categories ?? []).some((category) => TERMINAL_STATUS_CATEGORY_SET.has(category));
+}
+
+export function withIncludeDoneForTerminalFilters(
+  filters: SavedViewFilters,
+): SavedViewFilters {
+  return hasTerminalStatusCategory(filters.statusCategories)
+    ? { ...filters, includeDone: true }
+    : filters;
+}
+
 export const SavedViewFiltersSchema = z
   .object({
     /** Exact status ids (workspace-scoped). */
@@ -77,6 +98,8 @@ export const SavedViewFiltersSchema = z
     labelIds: cuidArray.optional(),
     /** Project ids (any-of). */
     projectIds: cuidArray.optional(),
+    /** Match issues with no project. */
+    withoutProject: z.boolean().optional(),
     /** Initiative ids (any-of). */
     initiativeIds: cuidArray.optional(),
     /** Match issues whose project has no initiative (or no project). */

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   filtersEqual,
+  hasTerminalStatusCategory,
   isEmptyFilters,
   safeParseFilters,
+  withIncludeDoneForTerminalFilters,
   type SavedViewFilters,
 } from "@/lib/saved-view-filters";
+import { StatusCategory } from "@prisma/client";
 
 describe("isEmptyFilters", () => {
   it("treats null/undefined/empty object as empty", () => {
@@ -64,5 +67,20 @@ describe("safeParseFilters", () => {
   it("preserves a valid filter blob", () => {
     const b: SavedViewFilters = { statusIds: [], unassigned: true };
     expect(safeParseFilters(b)).toEqual(b);
+  });
+});
+
+describe("terminal status filter helpers", () => {
+  it("detects done/canceled categories", () => {
+    expect(hasTerminalStatusCategory([StatusCategory.DONE])).toBe(true);
+    expect(hasTerminalStatusCategory([StatusCategory.CANCELED])).toBe(true);
+    expect(hasTerminalStatusCategory([StatusCategory.TODO])).toBe(false);
+  });
+
+  it("marks terminal category filters as includeDone so list calls remain reachable", () => {
+    const filters = withIncludeDoneForTerminalFilters({
+      statusCategories: [StatusCategory.DONE],
+    });
+    expect(filters.includeDone).toBe(true);
   });
 });

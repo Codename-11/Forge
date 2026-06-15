@@ -13,6 +13,62 @@ import { cn } from "@/lib/utils";
 
 export type CycleFilter = string | null | undefined;
 export type InitiativeFilter = string | null | undefined;
+export type ProjectFilter = string | null | undefined;
+
+export function ProjectFilterChip({
+  value,
+  onChange,
+}: {
+  value: ProjectFilter;
+  onChange: (v: ProjectFilter) => void;
+}) {
+  const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
+
+  const label = (() => {
+    if (value === undefined) return "Any project";
+    if (value === null) return "No project";
+    const match = projects?.items.find((p) => p.id === value);
+    return match ? `${match.key} · ${match.name}` : "Project";
+  })();
+
+  return (
+    <Chip label={label} active={value !== undefined}>
+      {(close) => (
+        <ul className="min-w-[260px] py-1">
+          <Option
+            label="Any project"
+            selected={value === undefined}
+            onClick={() => {
+              onChange(undefined);
+              close();
+            }}
+          />
+          <Option
+            label="No project"
+            selected={value === null}
+            onClick={() => {
+              onChange(null);
+              close();
+            }}
+          />
+          <li className="my-1 border-t border-border" />
+          {(projects?.items ?? []).map((p) => (
+            <Option
+              key={p.id}
+              label={`${p.key} · ${p.name}`}
+              selected={value === p.id}
+              color={p.color}
+              onClick={() => {
+                onChange(p.id);
+                close();
+              }}
+            />
+          ))}
+        </ul>
+      )}
+    </Chip>
+  );
+}
 
 export function CycleFilterChip({
   value,
