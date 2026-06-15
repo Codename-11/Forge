@@ -86,6 +86,12 @@ type MutationHook<TInput, TOutput> = {
   }) => { mutate: (input: TInput) => void; isPending: boolean };
 };
 
+type GoalDecomposeResult = {
+  planId: string;
+  status: "PLANNING";
+  plannerAgentId: string | null;
+};
+
 interface GoalRouter {
   list?: QueryHook<{ status?: string } | undefined, { items: GoalRow[] } | GoalRow[]>;
   get?: QueryHook<{ id: string }, GoalRow>;
@@ -99,6 +105,10 @@ interface GoalRouter {
       maxWallTimeMinutes?: number;
     },
     { id: string }
+  >;
+  decompose?: MutationHook<
+    { goalId: string; plannerAgentId?: string | null; contextSetId?: string | null },
+    GoalDecomposeResult
   >;
   abandon?: MutationHook<{ id: string }, { ok: boolean }>;
 }

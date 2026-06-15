@@ -45,8 +45,9 @@ export type SlashTemplateSideEffect =
   /**
    * `goal`: spin up an orchestration Goal off the current issue. The
    * composer fires `goal.create({ title, issueId })` after the comment
-   * lands, then navigates the operator to the new goal page where they
-   * trigger plan decomposition. `title` is the operator's objective.
+   * lands and, when available, immediately starts `goal.decompose` so
+   * the operator lands on a live PLANNING goal instead of a silent OPEN
+   * placeholder. `title` is the operator's objective.
    */
   | { kind: "goal"; title: string };
 

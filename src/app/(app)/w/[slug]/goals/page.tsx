@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus, Target, UsersRound } from "lucide-react";
@@ -10,6 +10,7 @@ import { EmptyState, SkeletonList } from "@/components/ui";
 import { CrewSelector } from "@/components/crews/crew-selector";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRealtime } from "@/hooks/use-realtime";
 import {
   GOAL_STATUS_TONE,
   GOAL_STATUSES,
@@ -53,6 +54,15 @@ export default function GoalsPage() {
   const data = listQuery?.data;
   const isLoading = available ? (listQuery?.isLoading ?? true) : false;
 
+  const invalidateGoalList = () => {
+    const goalUtils = (utils as unknown as { goal?: { list?: { invalidate?: () => void } } }).goal;
+    goalUtils?.list?.invalidate?.();
+  };
+
+  useRealtime(invalidateGoalList, {
+    subjectType: ["goal", "execution-plan", "execution-step", "agent-run"],
+  });
+
   const items = useMemo<GoalRow[]>(() => {
     if (!data) return [];
     return Array.isArray(data) ? data : (data.items ?? []);
@@ -79,20 +89,51 @@ export default function GoalsPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [crewId, setCrewId] = useState<string | null>(null);
+  const pendingCreatedGoalId = useRef<string | null>(null);
+  const decomposeGoal = goalRouter?.decompose?.useMutation({
+    onSuccess: (result) => {
+      const goalId = pendingCreatedGoalId.current;
+      pendingCreatedGoalId.current = null;
+      invalidateGoalList();
+      toast.success(
+        result.plannerAgentId
+          ? "Goal created — planner is drafting the plan."
+          : "Goal created — plan draft is live; assign a planner to continue.",
+      );
+      if (goalId) router.push(`/w/${ws.slug}/goals/${goalId}`);
+    },
+    onError: (e) => {
+      const goalId = pendingCreatedGoalId.current;
+      pendingCreatedGoalId.current = null;
+      toast.warning(`Goal created, but planning did not start: ${e.message}`);
+      if (goalId) router.push(`/w/${ws.slug}/goals/${goalId}`);
+    },
+  });
   const createGoal = goalRouter?.create?.useMutation({
     onSuccess: (result) => {
-      toast.success("Goal created");
       setCreating(false);
       setTitle("");
       setDescription("");
       setCrewId(null);
-      const goalUtils = (utils as unknown as { goal?: { list?: { invalidate?: () => void } } }).goal;
-      goalUtils?.list?.invalidate?.();
-      if (result?.id) router.push(`/w/${ws.slug}/goals/${result.id}`);
+      invalidateGoalList();
+      const goalId = result?.id;
+      if (!goalId) {
+        toast.success("Goal created.");
+        return;
+      }
+      if (decomposeGoal) {
+        pendingCreatedGoalId.current = goalId;
+        toast.success("Goal created — starting planner…");
+        decomposeGoal.mutate({ goalId });
+        return;
+      }
+      toast.success("Goal created.");
+      router.push(`/w/${ws.slug}/goals/${goalId}`);
     },
     onError: (e) => toast.error(e.message),
   });
   const canCreate = Boolean(goalRouter?.create);
+  const isStartingGoal = Boolean(createGoal?.isPending || decomposeGoal?.isPending);
 
   return (
     <>
@@ -240,7 +281,7 @@ export default function GoalsPage() {
               <Button
                 variant="ember"
                 size="sm"
-                disabled={createGoal.isPending || !title.trim()}
+                disabled={isStartingGoal || !title.trim()}
                 onClick={() =>
                   createGoal.mutate({
                     title: title.trim(),
@@ -249,7 +290,11 @@ export default function GoalsPage() {
                   })
                 }
               >
-                {createGoal.isPending ? "Creating…" : "Create goal"}
+                {createGoal.isPending
+                  ? "Creating…"
+                  : decomposeGoal?.isPending
+                    ? "Starting planner…"
+                    : "Create goal"}
               </Button>
             </div>
           </div>
