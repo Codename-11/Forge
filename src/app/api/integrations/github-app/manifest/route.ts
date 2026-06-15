@@ -8,6 +8,7 @@ import {
   safeReturnTo,
   signManifestState,
 } from "@/server/integrations/github-app-manifest";
+import { publicOrigin as origin } from "@/server/integrations/public-origin";
 
 /**
  * Begin the GitHub App manifest flow. Renders a tiny auto-submitting form that
@@ -15,17 +16,6 @@ import {
  * app and redirects to our callback with a one-time `code`. No PEM is ever
  * pasted — GitHub generates the key and hands it back at conversion.
  */
-
-function origin(req: NextRequest): string {
-  try {
-    return new URL(req.url).origin;
-  } catch {
-    return (process.env.AUTH_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(
-      /\/+$/,
-      "",
-    );
-  }
-}
 
 function errorRedirect(req: NextRequest, returnTo: string, error: string): NextResponse {
   const url = new URL(returnTo, origin(req));

@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { auth } from "@/server/auth";
 import { db } from "@/server/db";
 import { isWorkspaceAdmin, verifyManifestState } from "@/server/integrations/github-app-manifest";
+import { publicOrigin as origin } from "@/server/integrations/public-origin";
 
 /**
  * Post-install callback (the app's `setup_url`). GitHub redirects here after the
@@ -10,17 +11,6 @@ import { isWorkspaceAdmin, verifyManifestState } from "@/server/integrations/git
  * it onto the `GithubApp` row — now provisioning can mint tokens. State carries
  * which app row + workspace this install belongs to.
  */
-
-function origin(req: NextRequest): string {
-  try {
-    return new URL(req.url).origin;
-  } catch {
-    return (process.env.AUTH_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(
-      /\/+$/,
-      "",
-    );
-  }
-}
 
 function redirectBack(req: NextRequest, returnTo: string, key: string, value: string): NextResponse {
   const url = new URL(returnTo, origin(req));

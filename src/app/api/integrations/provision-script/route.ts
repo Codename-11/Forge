@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { buildProvisionScript } from "@/server/integrations/provision-script";
+import { publicOrigin } from "@/server/integrations/public-origin";
 
 /**
  * Serves the canonical runtime provisioning script (see
@@ -16,13 +17,7 @@ import { buildProvisionScript } from "@/server/integrations/provision-script";
  */
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const origin =
-    url.origin ||
-    (process.env.AUTH_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(
-      /\/+$/,
-      "",
-    );
-  const script = buildProvisionScript(origin);
+  const script = buildProvisionScript(publicOrigin(req));
   const download = url.searchParams.get("download") === "1";
   return new Response(script, {
     headers: {

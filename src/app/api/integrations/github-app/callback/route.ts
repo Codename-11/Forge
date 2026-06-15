@@ -9,6 +9,7 @@ import {
   signManifestState,
   verifyManifestState,
 } from "@/server/integrations/github-app-manifest";
+import { publicOrigin as origin } from "@/server/integrations/public-origin";
 
 /**
  * Manifest conversion callback. GitHub redirects here with a one-time `code`
@@ -16,17 +17,6 @@ import {
  * slug, freshly-generated PEM), persist a `GithubApp` row, then send the
  * operator on to install it (which yields the installation id).
  */
-
-function origin(req: NextRequest): string {
-  try {
-    return new URL(req.url).origin;
-  } catch {
-    return (process.env.AUTH_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(
-      /\/+$/,
-      "",
-    );
-  }
-}
 
 function errorRedirect(req: NextRequest, returnTo: string, error: string): NextResponse {
   const url = new URL(returnTo, origin(req));
