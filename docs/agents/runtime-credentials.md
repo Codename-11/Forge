@@ -117,6 +117,41 @@ before the bridge starts (`~/docker/codex-bridge/`). The single bootstrap secret
 (`FORGE_API_KEY`, the runtime's agent key) stays in the container env; everything
 else is managed in-app and fetched at startup.
 
+## Running it on any runtime (Hermes, ephemeral agents)
+
+The provisioning logic is **provider-agnostic** — `runtimes.provisioning` gates
+on an agent-linked key, not the agent's provider, so the same flow works for
+Hermes, Claude, Codex, or any custom runtime. Forge serves one **canonical
+script** so each host runs identical logic (single source of truth):
+
+```
+GET /api/integrations/provision-script    # instance origin baked in as the default base
+```
+
+It's plain Node (≥18), dependency-free, and idempotent. Run it with the host's
+agent-linked `FORGE_API_KEY`:
+
+```sh
+curl -fsSL https://<forge>/api/integrations/provision-script -o forge-provision.cjs
+FORGE_API_KEY=forge_sk_… node forge-provision.cjs
+```
+
+It clones into the current directory (override with `FORGE_WORKSPACE_ROOT`) and
+writes secrets to `<root>/.forge-runtime.env`. Re-run any time to refresh the
+~1h GitHub App token and pull latest. Source `src/server/integrations/provision-script.ts`.
+
+Where to run it:
+
+- **Ephemeral agents (Claude Code, Codex CLI):** copy the one-liner from
+  **Settings → Runtimes → (a runtime) → Provisioning** (download button + ready
+  bootstrap), or wire it as a session-start step.
+- **Persistent Hermes host:** install the `forge-provision` Hermes skill
+  (`~/.hermes/skills/forge-provision/`) — `bin/setup.sh <profile>` installs an
+  hourly cron that fetches + runs the script, keeping the token + checkouts
+  fresh. Companion to the `forge-presence` heartbeat skill; shares the same
+  `forge.env` (`FORGE_URL` + `FORGE_API_KEY`).
+- **Codex bridge:** already runs `provision.cjs` (the same logic) at startup.
+
 ## Security notes
 
 - Secret values + the GitHub App private key are encrypted at rest and never

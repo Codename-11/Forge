@@ -2,6 +2,40 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-15 — Provisioning distribution (one script, any runtime)
+
+Made runtime provisioning **provider-agnostic in practice**, not just on the
+platform. Confirmed first: `runtimes.provisioning` gates on `linked-agent`, not
+provider — so Hermes/Claude/Codex/custom all qualify. The gap was the
+*runtime-side consumer* (only the Codex bridge's `provision.cjs` existed).
+
+Shipped a single **canonical provisioning script** as the source of truth:
+- `src/server/integrations/provision-script.ts` — the portable Node (≥18,
+  dep-free, idempotent) script as a string, authored with concatenation-only
+  (no internal backticks/`${}`) + a `__FORGE_BASE_DEFAULT__` placeholder so it
+  embeds cleanly; `buildProvisionScript(origin)` bakes the instance origin as
+  the default `FORGE_BASE_URL`. Generalizes `provision.cjs` (cwd-relative root,
+  `FORGE_WORKSPACE_ROOT`/`FORGE_ENV_FILE` env, GH_TOKEN + GIT_SSH_KEY + clone).
+- `GET /api/integrations/provision-script` — serves it (`text/javascript`,
+  `?download=1` for attachment). **Unauthenticated by design** — no secrets in
+  the script; the agent key is supplied by the operator at run time.
+- UI: `RuntimeProvisioning` card on the runtime detail page — copyable bootstrap
+  one-liner (`curl … | node`) + download + agent-key pointer + Hermes note.
+  Reuses `CodeBlock` from mcp-integration-blocks.
+- Hermes skill `~/.hermes/skills/forge-provision/` (host, mirrors forge-presence):
+  SKILL.md + `bin/provision.sh` (resolves forge.env → curls the served script →
+  runs it per-profile) + `bin/setup.sh` (hourly cron; `--now` to run once) +
+  forge.env.example. Shares forge.env with forge-presence.
+
+Codex bridge's `provision.cjs` left as-is (works; same logic) — could switch to
+fetching the served script later to fully dedupe. Tests: `provision-script.test.ts`
+(base baked, markers present, **syntactically valid via `new Function`**, the
+tricky POSIX single-quote escape verified). Full suite green, lint + typecheck
+clean. Docs/CHANGELOG updated.
+
+Deployed: new route → needs the deploy to go live; verify by fetching the served
+script and `node --check`-ing it.
+
 ## 2026-06-14 (pt 2) — GitHub App sharing, manifest flow, per-project repos, SSH
 
 Four follow-ons to the morning's runtime GitHub App work, in one pass.
