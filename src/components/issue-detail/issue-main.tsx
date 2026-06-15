@@ -647,13 +647,10 @@ function Comments({
     onError: (e) => toast.error(`Unblock request: ${e.message}`),
   });
 
-  // `/goal` template side-effect → `goal.create({ title, issueId })`.
-  // The `goal` router is shipped by the orchestration backend agent in
-  // parallel; until its types are regenerated it isn't on the typed
-  // tRPC proxy, so we reach it through a guarded `any` cast (same
-  // degrade-gracefully pattern the plan page uses for `canvas.*`). If
-  // the procedure isn't present at runtime we toast a hint instead of
-  // crashing the comment flow.
+  // `/goal` template side-effect → `goal.create({ title, issueId })`,
+  // then `goal.decompose({ goalId })` when the orchestration backend is
+  // available so the new goal immediately has live PLANNING status and
+  // planner feedback instead of landing as a silent OPEN record.
   const router = useRouter();
   const ws = useMaybeWorkspace();
   const goalRouterAny = (trpc as unknown as Record<string, unknown>).goal as
@@ -667,11 +664,46 @@ function Comments({
         };
       }
     | undefined;
+  const goalDecomposeAny = goalRouterAny?.decompose as
+    | {
+        useMutation: (opts?: unknown) => {
+          mutate: (input: { goalId: string }) => void;
+          isPending: boolean;
+        };
+      }
+    | undefined;
+  const pendingGoalNavRef = useRef<string | null>(null);
+  const decomposeGoalMut = goalDecomposeAny?.useMutation({
+    onSuccess: (result: { plannerAgentId?: string | null } | undefined) => {
+      const goalId = pendingGoalNavRef.current;
+      pendingGoalNavRef.current = null;
+      toast.success(
+        result?.plannerAgentId
+          ? "Goal created — planner is drafting the plan."
+          : "Goal created — plan draft is live; assign a planner to continue.",
+      );
+      if (goalId && ws) router.push(`/w/${ws.slug}/goals/${goalId}`);
+    },
+    onError: (e: { message: string }) => {
+      const goalId = pendingGoalNavRef.current;
+      pendingGoalNavRef.current = null;
+      toast.warning(`Goal created, but planning did not start: ${e.message}`);
+      if (goalId && ws) router.push(`/w/${ws.slug}/goals/${goalId}`);
+    },
+  }) as
+    | { mutate: (input: { goalId: string }) => void; isPending: boolean }
+    | undefined;
   const createGoalMut = goalCreateAny?.useMutation({
     onSuccess: (result: { id?: string } | undefined) => {
       const goalId = result?.id;
       if (goalId && ws) {
-        toast.success("Goal created — decompose it into a plan.");
+        if (decomposeGoalMut) {
+          pendingGoalNavRef.current = goalId;
+          toast.success("Goal created — starting planner…");
+          decomposeGoalMut.mutate({ goalId });
+          return;
+        }
+        toast.success("Goal created.");
         router.push(`/w/${ws.slug}/goals/${goalId}`);
       } else {
         toast.success("Goal created.");

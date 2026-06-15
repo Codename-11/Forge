@@ -80,6 +80,21 @@ export default function GoalDetailPage() {
     onError: (e: { message: string }) => toast.error(e.message),
   });
 
+  const decomposeM = goalRouter?.decompose?.useMutation({
+    onSuccess: (result) => {
+      toast.success(
+        result.plannerAgentId
+          ? "Planner started — drafting the execution plan."
+          : "Plan draft is live; assign a planner to continue.",
+      );
+      const u = utils as unknown as {
+        goal?: { get?: { invalidate?: (i: { id: string }) => void } };
+      };
+      u.goal?.get?.invalidate?.({ id: params.goalId });
+    },
+    onError: (e: { message: string }) => toast.error(`Planning: ${e.message}`),
+  });
+
   const [confirmAbandon, setConfirmAbandon] = useState(false);
 
   if (!available) {
@@ -135,6 +150,7 @@ export default function GoalDetailPage() {
   const priorAttempts = plans.filter((p) => p.id !== activePlan?.id);
 
   const canAbandon = goal.status !== "ACHIEVED" && goal.status !== "ABANDONED";
+  const canStartPlanning = goal.status === "OPEN" && Boolean(decomposeM);
   const elapsedMinutes = goal.startedAt
     ? (Date.now() - new Date(goal.startedAt).getTime()) / 60_000
     : null;
@@ -204,8 +220,23 @@ export default function GoalDetailPage() {
             />
           ) : (
             <div className="rounded-lg border border-dashed border-border bg-card/20 p-4 text-meta text-muted-foreground">
-              No plan yet. A planner agent will decompose this goal into an
-              execution plan.
+              <div>
+                {goal.status === "OPEN"
+                  ? "No plan is running yet. Start the planner to create a live draft and dispatch feedback."
+                  : "No plan yet. A planner agent will decompose this goal into an execution plan."}
+              </div>
+              {canStartPlanning ? (
+                <Button
+                  className="mt-3"
+                  size="sm"
+                  variant="ember"
+                  disabled={decomposeM?.isPending}
+                  onClick={() => decomposeM?.mutate({ goalId: goal.id })}
+                >
+                  <ListChecks className="h-3.5 w-3.5" />
+                  {decomposeM?.isPending ? "Starting planner…" : "Start planner"}
+                </Button>
+              ) : null}
             </div>
           )}
 

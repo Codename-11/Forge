@@ -2,6 +2,27 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-15 — Goal creation starts live planning
+
+Closed AXI-80's silent-goal gap. Goal creation from the Goals page now chains
+`goal.create` into `goal.decompose` when the orchestration router is available,
+showing explicit "starting planner" / "planner drafting" feedback and routing
+the operator to the live goal detail once the draft plan exists. The `/goal`
+issue-comment side effect follows the same create → decompose path, so goals
+spawned from issue context no longer land as inert OPEN placeholders.
+
+Added a recovery affordance on OPEN goal detail pages: the empty plan card now
+explains that no plan is running yet and exposes **Start planner**, which calls
+`goal.decompose` and refreshes the detail view. The goals index also subscribes
+to goal / execution-plan / execution-step / agent-run realtime events and
+invalidates its list so status/progress changes stay live while operators watch
+the grid.
+
+Verification: `pnpm typecheck`; `pnpm test src/server/services/__tests__/orchestration.test.ts`;
+`pnpm lint`; `env -u OPENAI_API_KEY pnpm test` (109 files passed, 898 tests
+passed, 1 skipped). Full test run still logs pre-existing async notification
+fan-out/storage CORS warnings, but exits green.
+
 ## 2026-06-15 — Provisioning distribution (one script, any runtime)
 
 Made runtime provisioning **provider-agnostic in practice**, not just on the
