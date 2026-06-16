@@ -3,6 +3,7 @@
   "version": "0.7.0",
   "private": true,
   "description": "Forge — a fast, minimalist, keyboard-driven project management platform with pluggable agents.",
+  "license": "MIT",
   "scripts": {
     "dev": "./scripts/dev-live.sh",
     "dev:live": "./scripts/dev-live.sh",
