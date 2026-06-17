@@ -9823,3 +9823,98 @@ Verification: RED/GREEN `pnpm vitest run tests/unit/instrumentation.test.ts`;
 pass (27); `pnpm typecheck` pass; `pnpm lint` clean; `env -u OPENAI_API_KEY
 pnpm test` pass (101 files, 850 tests, 1 skipped). Live logs confirmed the
 failed run was split across the web and worker containers before the fix.
+
+## 2026-06-17 — Fix: /issues list filter by Done/Cancelled returned nothing
+
+Report: on the global Issues page (list view), selecting a "Done" status from
+the Status facet showed zero issues. Board view was fine.
+
+Root cause: `issue.list` AND's two status predicates. Selecting a status writes
+`statusIds` → `AND: [{ statusId: { in: [...] } }]`. Separately, the list defaults
+`includeDone:false`, which adds a top-level `status: { category: { notIn:
+["DONE","CANCELED"] } }` (issue.ts:470). The two clauses contradict: a Done
+statusId AND "category not DONE" → empty set. `IssueList` defaults
+`includeDone=false` (issue-list.tsx) and the /issues page never raises it, so any
+explicit Done/Cancelled filter was silently emptied. The board sets
+`includeDone:true` (issue-board.tsx:40), which is why only list view broke.
+
+Fix (UI-only; server + MCP contract untouched): derive an effective
+`includeDone` in `IssueList`. It already loads `status.list`; build the set of
+DONE/CANCELED status ids and set `effectiveIncludeDone = (extraFilters.includeDone
+?? includeDone) || filtersTargetDone`, where `filtersTargetDone` is true when
+`extraFilters.statusCategories` includes DONE/CANCELED or any selected `statusIds`
+maps to a completed status. `includeDone` moved after the `...extraFilters` spread
+so the derived value wins. A saved view that pins `includeDone` stays
+authoritative unless the active filter explicitly targets a completed status.
+
+Deliberately did NOT touch the server: mcp.test.ts:2774 asserts
+`{ statusCategories:["DONE"], includeDone:false }` → `[]` for the agent-facing
+`issues.list`, i.e. explicit `includeDone:false` is authoritative there. The bug
+was the UI never raising the flag, not the server honoring it.
+
+Verification: `pnpm typecheck` pass; `pnpm lint` clean. Traced both directions:
+pre-fix select-Done → empty; post-fix → `includeDone:true` + `statusId in [...]`
+→ done rows. Unfiltered list still hides done (effective stays false).
+
+## 2026-06-17 — Issues view audit: pagination, board parity, keyboard nav, URL state
+
+Broad UX/flow audit of the global Issues view (5 parallel review passes) after
+the Done-filter bug, then fixed four batches. All server changes share one
+where-builder so list/count/board can't drift.
+
+**Server (issue.ts).**
+- `orderBy` now ends every branch in a unique `id` tiebreaker (asc/desc to
+  match the primary key) — cursor pagination was lossy on ties (same title /
+  same-second createdAt/updatedAt / priority+createdAt).
+- `dueOn` schema gained a `.refine()` round-trip check; calendar-invalid dates
+  that passed the shape regex (e.g. 2026-13-45) used to roll over silently.
+  Mirrored client-side in page.tsx (`isRealDateString`).
+- Extracted `buildIssueListWhere(ctx, input)` (returns `where | null`; null =
+  matches-nothing short-circuit, e.g. blocked-with-none) from `list`. Added
+  `issue.count` reusing it — the header count can't drift from the list.
+
+**Pagination.**
+- issue-list.tsx: `useQuery` → `useInfiniteQuery` (`getNextPageParam:
+  last.nextCursor`), pages flat-mapped; IntersectionObserver sentinel
+  (rootMargin 400px) + "Load more" fallback. Was silently capped at 50.
+- issue-board.tsx: rewrote from one global `limit:100` bucketed client-side
+  (which starved low-priority columns) to per-column `BoardColumn` components,
+  each its own `useInfiniteQuery` scoped to `statusIds:[s.id]` (strips
+  statusIds/statusCategories from the spread to avoid OR-broadening),
+  `includeDone:true`. Column visibility honours an explicit status/category
+  filter. Empty state driven by `issue.count`.
+- Board now takes `sort`, `dueOn`, `emptyOverride` props (all previously
+  dropped); page passes them. Search box no longer hidden in board view (the
+  query already applied there invisibly).
+- Honest header count: page calls `issue.count` with the same effective
+  includeDone as the list (board → true). Subtitle "N matching" / "N issues".
+
+**includeDone derivation** extracted to saved-view-filters.ts
+(`doneStatusIds`, `filtersTargetDone`, `resolveIncludeDone`) and shared by
+IssueList + the page count (de-dups the inline logic from the Done-filter fix).
+
+**Keyboard nav (issue-list.tsx).** Roving `activeIndex` cursor: j/k +
+Arrow Up/Down (clamped, follows filtered length), Enter opens active row
+(`router.push`), `x` toggles active row then falls back to hovered. Active row
+gets a ring + scrollIntoView. Esc clears selection then the cursor. Hint text
+updated. facet-chips.tsx: `usePopoverKeys` hook adds Esc-to-close (refocus
+trigger), Arrow option roving, focus-into-panel on open; popovers gained
+`max-w-[calc(100vw-1.5rem)]`.
+
+**URL state (page.tsx).** Filters/search/sort/group now encode in the URL
+(`?f=<json>`, `?q=`, `?sort=`, `?group=`, alongside `?view=` / `?dueOn=`).
+Single `buildSearch`/`commit` writer (push on facet edits → Back/Forward works,
+replace for transient). Lazy `useState` hydration + a guarded
+URL→state effect for Back/Forward. **Fixes the clear-filters race**: the old
+two-`router.replace` clear read a stale snapshot and could re-introduce
+`?view=`; now one `commit({filters:{},query:"",view:null,dueOn:null})`. Quirk:
+the recently-updated quick filter now lights for any window
+(quick-filter-chips.tsx). Quirk accepted: the search box doesn't restore on
+Back/Forward (filters/sort/group do) so live typing isn't clobbered.
+
+Verification: `pnpm typecheck` clean; `pnpm lint` clean; `env -u
+OPENAI_API_KEY pnpm test` → 901 passed / 1 skipped (incl. mcp.test.ts's
+`statusCategories:["DONE"], includeDone:false → []` contract, untouched — the
+MCP handler was deliberately not changed). Client behaviour (infinite scroll,
+keyboard, URL hydration, board columns) not covered by node tests — browser
+smoke-test recommended before deploy.

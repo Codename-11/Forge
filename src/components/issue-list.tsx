@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -33,6 +34,7 @@ import { trpc } from "@/lib/trpc";
 import { useHotkey } from "@/lib/keyboard";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { doneStatusIds, resolveIncludeDone } from "@/lib/saved-view-filters";
 import type { IssueGroupBy, IssueSort, SavedViewFilters } from "@/lib/saved-view-filters";
 
 export function IssueList({
@@ -88,19 +90,35 @@ export function IssueList({
   emptyOverride?: React.ReactNode;
   enableBulk?: boolean;
 }) {
-  const { data, isLoading } = trpc.issue.list.useQuery({
-    includeDone,
-    limit: 50,
-    projectId,
-    assigneeId,
-    query,
-    cycleId,
-    initiativeId,
-    dueOn,
-    ...(extraFilters ?? {}),
-    sort,
-  });
   const { data: statuses } = trpc.status.list.useQuery();
+  // The global /issues list hides DONE/CANCELED rows by default
+  // (`includeDone` defaults false). But when the caller's filters
+  // explicitly target a completed status — a DONE/CANCELED status id from
+  // the Status facet, or the DONE/CANCELED category — hiding them would AND
+  // against that selection and return nothing (the bug: "filter by Done
+  // shows nothing"). Derive an effective flag so an explicit "Done" filter
+  // surfaces done issues while the unfiltered list still hides them. A
+  // saved view that pins `includeDone` stays authoritative unless the
+  // active filter explicitly asks for a completed status.
+  const doneIds = useMemo(() => doneStatusIds(statuses ?? []), [statuses]);
+  const effectiveIncludeDone = resolveIncludeDone(extraFilters, includeDone, doneIds);
+
+  const { data, isLoading, hasNextPage, isFetchingNextPage, fetchNextPage } =
+    trpc.issue.list.useInfiniteQuery(
+      {
+        limit: 50,
+        projectId,
+        assigneeId,
+        query,
+        cycleId,
+        initiativeId,
+        dueOn,
+        ...(extraFilters ?? {}),
+        includeDone: effectiveIncludeDone,
+        sort,
+      },
+      { getNextPageParam: (last) => last.nextCursor },
+    );
   // Unread set: issues the user is watching that have had activity
   // since their last view. Cached for 30s — we don't need real-time
   // accuracy; the dot is a quiet hint and a stale clear-after-view
@@ -112,8 +130,9 @@ export function IssueList({
   const utils = trpc.useUtils();
   const ws = useMaybeWorkspace();
   const base = ws ? `/w/${ws.slug}` : "";
+  const router = useRouter();
 
-  const items = useMemo(() => data?.items ?? [], [data]);
+  const items = useMemo(() => data?.pages.flatMap((p) => p.items) ?? [], [data]);
   const filtered = authorId ? items.filter((i) => i.authorId === authorId) : items;
   const density = useDensity();
   const compact = density === "compact";
@@ -274,6 +293,26 @@ export function IssueList({
     if (filtered.length > 0) staggeredOnceRef.current = true;
   }, [filtered.length]);
 
+  // Infinite scroll. A sentinel at the end of the list auto-fetches the
+  // next cursor page when it scrolls into view (400px early so the seam is
+  // invisible). The "Load more" button below is the keyboard/explicit
+  // fallback. Without this the list silently capped at the first 50 rows.
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el || !hasNextPage) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasNextPage && !isFetchingNextPage) {
+          void fetchNextPage();
+        }
+      },
+      { rootMargin: "400px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
   // ---- Selection state --------------------------------------------------
   // Mirrors the inbox's pattern: a single Set<string> with a sister
   // ordered-id ref so Shift+Click ranges are stable, plus a hover/focus
@@ -312,35 +351,82 @@ export function IssueList({
     else setSelected(new Set(filtered.map((i) => i.id)));
   }
 
-  // Hotkeys — `x` toggles the hovered row; `Esc` clears (only fires
-  // when bulk-select is enabled and a selection exists). Mirror the
-  // inbox's editable-target guard so we don't fire from inputs.
+  // ---- Keyboard navigation (Linear-style) -------------------------------
+  // A roving "active row" cursor driven by j/k + arrows; Enter opens it,
+  // `x` selects it. Previously the list shipped no row navigation at all
+  // and `x` only toggled the *mouse-hovered* row — useless without a
+  // pointer on a product that bills itself as keyboard-driven.
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const moveActive = useCallback(
+    (delta: number) => {
+      setActiveIndex((i) => {
+        if (filtered.length === 0) return -1;
+        if (i < 0) return delta > 0 ? 0 : filtered.length - 1;
+        return Math.max(0, Math.min(filtered.length - 1, i + delta));
+      });
+    },
+    [filtered.length],
+  );
+  // Keep the cursor in range as the list grows/shrinks (filter, load-more).
+  useEffect(() => {
+    setActiveIndex((i) => (i >= filtered.length ? filtered.length - 1 : i));
+  }, [filtered.length]);
+  // Scroll the active row into view as the cursor moves.
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    const id = filtered[activeIndex]?.id;
+    if (!id) return;
+    document
+      .querySelector(`[data-row-id="${id}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, filtered]);
+
+  useHotkey("j", () => moveActive(1), [moveActive]);
+  useHotkey("k", () => moveActive(-1), [moveActive]);
+  useHotkey("arrowdown", () => moveActive(1), [moveActive]);
+  useHotkey("arrowup", () => moveActive(-1), [moveActive]);
+  useHotkey(
+    "enter",
+    () => {
+      if (activeIndex < 0) return;
+      const issue = filtered[activeIndex];
+      if (issue) router.push(`${base}/issues/${issue.id}`);
+    },
+    [activeIndex, filtered, router, base],
+  );
+
+  // `x` toggles the active row, falling back to the mouse-hovered row.
+  // `Esc` clears the selection, then the active cursor. The manual Esc
+  // listener mirrors the inbox's editable-target guard.
   useHotkey(
     "x",
     () => {
       if (!enableBulk) return;
-      const id = hoveredRowRef.current;
+      const id = (activeIndex >= 0 ? filtered[activeIndex]?.id : null) ?? hoveredRowRef.current;
       if (id) toggleSelected(id);
     },
-    [toggleSelected, enableBulk],
+    [toggleSelected, enableBulk, activeIndex, filtered],
   );
   useEffect(() => {
-    if (!enableBulk) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && selected.size > 0) {
-        const target = e.target as HTMLElement | null;
-        const isEditable =
-          target?.tagName === "INPUT" ||
-          target?.tagName === "TEXTAREA" ||
-          target?.isContentEditable;
-        if (isEditable) return;
+      if (e.key !== "Escape") return;
+      const target = e.target as HTMLElement | null;
+      const isEditable =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable;
+      if (isEditable) return;
+      if (enableBulk && selected.size > 0) {
         e.preventDefault();
         clearSelection();
+      } else if (activeIndex >= 0) {
+        e.preventDefault();
+        setActiveIndex(-1);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [enableBulk, selected.size, clearSelection]);
+  }, [enableBulk, selected.size, clearSelection, activeIndex]);
 
   const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false);
   const [labelPickerOpen, setLabelPickerOpen] = useState(false);
@@ -581,7 +667,8 @@ export function IssueList({
             <span className="text-muted-foreground">Select all</span>
           </label>
           <span className="text-meta hidden text-muted-foreground/70 sm:inline">
-            <Kbd>x</Kbd> select hovered · Shift+Click for range
+            <Kbd>j</Kbd>/<Kbd>k</Kbd> move · <Kbd>↵</Kbd> open · <Kbd>x</Kbd> select ·
+            Shift+Click for range
           </span>
         </div>
       )}
@@ -629,6 +716,7 @@ export function IssueList({
             {group.issues.map((issue) => {
               const i = orderedIdsRef.current.indexOf(issue.id);
               const on = selected.has(issue.id);
+              const isActive = i === activeIndex;
               const isUnread = unreadSet.has(issue.id);
               const isSnoozed =
                 !!issue.snoozedUntil && new Date(issue.snoozedUntil).getTime() > Date.now();
@@ -649,7 +737,13 @@ export function IssueList({
               return (
                 <div
                   key={issue.id}
-                  className={cn(rowCls, on && "bg-ember/5", staggerRows && "forge-row-rise")}
+                  data-row-id={issue.id}
+                  className={cn(
+                    rowCls,
+                    on && "bg-ember/5",
+                    isActive && "bg-ember/5 ring-1 ring-inset ring-ember/50",
+                    staggerRows && "forge-row-rise",
+                  )}
                   style={
                     staggerRows ? ({ "--row-i": Math.min(i, 8) } as React.CSSProperties) : undefined
                   }
@@ -879,6 +973,19 @@ export function IssueList({
           </div>
         </div>
       ))}
+
+      {hasNextPage && (
+        <div ref={loadMoreRef} className="flex justify-center px-5 py-4">
+          <button
+            type="button"
+            onClick={() => void fetchNextPage()}
+            disabled={isFetchingNextPage}
+            className="focus-ring text-meta rounded-md border border-border bg-background/40 px-3 py-1.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+          >
+            {isFetchingNextPage ? "Loading…" : "Load more"}
+          </button>
+        </div>
+      )}
 
       <Confirm
         open={bulkArchiveOpen}

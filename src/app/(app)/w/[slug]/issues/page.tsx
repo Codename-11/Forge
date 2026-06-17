@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Sparkles, Folder } from "lucide-react";
 import Link from "next/link";
@@ -24,9 +24,12 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 import {
+  doneStatusIds,
+  filtersEqual,
   isEmptyFilters,
   ISSUE_GROUP_VALUES,
   ISSUE_SORT_VALUES,
+  resolveIncludeDone,
   safeParseFilters,
   type IssueGroupBy,
   type IssueSort,
@@ -57,30 +60,51 @@ export default function IssuesPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [view, setView] = useViewPref("issues");
-  // Sort + group-by are per-user *view* preferences (not saved-view
-  // filters): persisted in localStorage, threaded into the query (sort)
-  // and the list grouping (groupBy).
-  const [sort, setSort] = useStoredPref<IssueSort>(
+
+  // -- URL state --------------------------------------------------------
+  // The issues view encodes its full state in the URL, so a filtered list
+  // is shareable, bookmarkable, refresh-safe, and Back/Forward works:
+  //   ?view=<id>          saved view (its filters are authoritative)
+  //   ?f=<json>           ad-hoc SavedViewFilters blob (when no view pinned)
+  //   ?q=<text>           search query
+  //   ?sort= / ?group=    per-user view prefs (localStorage seeds default)
+  //   ?dueOn=YYYY-MM-DD    transient Today-widget deep link
+  const viewIdFromUrl = searchParams?.get("view") ?? null;
+  const fParam = searchParams?.get("f") ?? null;
+  const dueOnFromUrl = searchParams?.get("dueOn") ?? null;
+  // Reject a malformed or calendar-invalid ?dueOn (e.g. 2026-13-45, which
+  // passes the shape regex but rolls over) before it reaches the chip/query.
+  const dueOn = dueOnFromUrl && isRealDateString(dueOnFromUrl) ? dueOnFromUrl : null;
+
+  // Sort + group: localStorage seeds the per-user default; a URL param (a
+  // shared link, or Back/Forward) overrides it.
+  const [sortPref, setSortPref] = useStoredPref<IssueSort>(
     "forge:issues:sort",
     "priority",
     ISSUE_SORT_VALUES,
   );
-  const [groupBy, setGroupBy] = useStoredPref<IssueGroupBy>(
+  const [groupPref, setGroupPref] = useStoredPref<IssueGroupBy>(
     "forge:issues:group",
     "status",
     ISSUE_GROUP_VALUES,
   );
-  const [query, setQuery] = useState("");
-  // Debounced mirror of `query` — only this value reaches the list
-  // query, so typing doesn't fire a request per keystroke. `query`
-  // itself drives the input + the `hasFilters` chip immediately.
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedQuery(query), 300);
-    return () => clearTimeout(t);
-  }, [query]);
-  const searchPending = query.trim() !== debouncedQuery.trim();
-  const [filters, setFilters] = useState<SavedViewFilters>({});
+  const sortParam = searchParams?.get("sort");
+  const groupParam = searchParams?.get("group");
+  const sort: IssueSort = (ISSUE_SORT_VALUES as readonly string[]).includes(sortParam ?? "")
+    ? (sortParam as IssueSort)
+    : sortPref;
+  const groupBy: IssueGroupBy = (ISSUE_GROUP_VALUES as readonly string[]).includes(groupParam ?? "")
+    ? (groupParam as IssueGroupBy)
+    : groupPref;
+
+  // Filters + query hydrate from the URL on first render; the effect below
+  // re-syncs them on Back/Forward. (Query isn't pulled back from the URL
+  // post-mount so live typing isn't clobbered by our own ?q= write.)
+  const [filters, setFilters] = useState<SavedViewFilters>(() =>
+    fParam ? safeParseFilters(safeJsonParse(fParam)) : {},
+  );
+  const [query, setQuery] = useState(() => searchParams?.get("q") ?? "");
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [saveOpen, setSaveOpen] = useState(false);
 
@@ -89,37 +113,108 @@ export default function IssuesPage() {
   const { data: views } = trpc.savedView.list.useQuery();
   const key = wsCount?.key ?? ws.key;
 
-  // -- URL sync ---------------------------------------------------------
-  // `?view=<id>` deep links land here, then resolve to filters when the
-  // saved-view list arrives. Mismatches (deleted view, wrong workspace)
-  // silently fall back to a clean state.
-  // `?dueOn=YYYY-MM-DD` is a transient filter (Today widget week-peek
-  // deep-link); not part of saved views, lives only in the URL + chip.
-  const viewIdFromUrl = searchParams?.get("view") ?? null;
-  const dueOnFromUrl = searchParams?.get("dueOn") ?? null;
-  // Validate the URL value before threading it into the query. A
-  // malformed `?dueOn=foo` shouldn't hit the server.
-  const dueOn = dueOnFromUrl && /^\d{4}-\d{2}-\d{2}$/.test(dueOnFromUrl) ? dueOnFromUrl : null;
+  // Canonical URL writer. Every mutation routes through here, building the
+  // full search string from explicit values — so two writers can't race on
+  // a stale `searchParams` snapshot (the old double-replace "Clear filters"
+  // bug that re-introduced ?view= and snapped filters back).
+  const buildSearch = useCallback(
+    (s: {
+      filters: SavedViewFilters;
+      query: string;
+      sort: IssueSort;
+      group: IssueGroupBy;
+      view: string | null;
+      dueOn: string | null;
+    }) => {
+      const p = new URLSearchParams();
+      if (s.view) p.set("view", s.view);
+      else if (!isEmptyFilters(s.filters)) p.set("f", JSON.stringify(s.filters));
+      if (s.query.trim()) p.set("q", s.query.trim());
+      if (s.sort !== "priority") p.set("sort", s.sort);
+      if (s.group !== "status") p.set("group", s.group);
+      if (s.dueOn) p.set("dueOn", s.dueOn);
+      return p.toString();
+    },
+    [],
+  );
+  const commit = useCallback(
+    (
+      next: Partial<{
+        filters: SavedViewFilters;
+        query: string;
+        sort: IssueSort;
+        group: IssueGroupBy;
+        view: string | null;
+        dueOn: string | null;
+      }>,
+      opts?: { push?: boolean },
+    ) => {
+      const qs = buildSearch({
+        filters: next.filters ?? filters,
+        query: next.query ?? query,
+        sort: next.sort ?? sort,
+        group: next.group ?? groupBy,
+        view: next.view !== undefined ? next.view : (activeViewId ?? viewIdFromUrl),
+        dueOn: next.dueOn !== undefined ? next.dueOn : dueOn,
+      });
+      const url = qs ? `${pathname}?${qs}` : pathname;
+      if (opts?.push) router.push(url);
+      else router.replace(url);
+    },
+    [
+      buildSearch,
+      filters,
+      query,
+      sort,
+      groupBy,
+      activeViewId,
+      viewIdFromUrl,
+      dueOn,
+      pathname,
+      router,
+    ],
+  );
+
+  // Debounce the search box; only the debounced value reaches the query.
   useEffect(() => {
-    if (!viewIdFromUrl) {
-      setActiveViewId(null);
+    const t = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(t);
+  }, [query]);
+  const searchPending = query.trim() !== debouncedQuery.trim();
+  // Reflect the debounced search into ?q=, skipping the mount value so the
+  // URL isn't rewritten before a ?view= has resolved.
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
       return;
     }
-    if (!views) return;
-    const match = views.find((v) => v.id === viewIdFromUrl);
-    if (match) {
-      setActiveViewId(match.id);
-      setFilters(safeParseFilters(match.filters));
-    } else {
-      // Unknown view id — strip from URL.
-      setActiveViewId(null);
-      const params = new URLSearchParams(searchParams?.toString() ?? "");
-      params.delete("view");
-      const q = params.toString();
-      router.replace(q ? `${pathname}?${q}` : pathname);
-    }
+    commit({ query: debouncedQuery });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewIdFromUrl, views?.length]);
+  }, [debouncedQuery]);
+
+  // Hydrate filters/view FROM the URL on mount and Back/Forward. Equality
+  // guards keep this from looping against the writers above.
+  useEffect(() => {
+    if (viewIdFromUrl) {
+      if (!views) return; // resolve once the saved-view list arrives
+      const match = views.find((v) => v.id === viewIdFromUrl);
+      if (match) {
+        setActiveViewId(match.id);
+        const vf = safeParseFilters(match.filters);
+        setFilters((prev) => (filtersEqual(prev, vf) ? prev : vf));
+      } else {
+        // Unknown / foreign view id — strip it with a single replace.
+        setActiveViewId(null);
+        commit({ view: null });
+      }
+      return;
+    }
+    setActiveViewId(null);
+    const urlFilters = fParam ? safeParseFilters(safeJsonParse(fParam)) : {};
+    setFilters((prev) => (filtersEqual(prev, urlFilters) ? prev : urlFilters));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fParam, viewIdFromUrl, views?.length]);
 
   // Cycle / initiative chip state derives from `filters`.
   const cycleId: CycleFilter = filters.withoutCycle ? null : (filters.cycleIds?.[0] ?? undefined);
@@ -142,50 +237,44 @@ export default function IssuesPage() {
     });
   }
 
+  const setSort = (v: IssueSort) => {
+    setSortPref(v);
+    commit({ sort: v });
+  };
+  const setGroupBy = (v: IssueGroupBy) => {
+    setGroupPref(v);
+    commit({ group: v });
+  };
+
   /**
-   * Any direct user-edit of the filters drops the active-view selection
-   * (we no longer represent the saved view exactly). Re-clicking the
-   * view chip restores it.
+   * A direct user-edit of the filters drops the active saved view (we no
+   * longer represent it exactly) and pushes a history entry so Back undoes
+   * the change. Re-clicking the view chip restores it.
    */
   function onChangeFilters(next: SavedViewFilters) {
     setFilters(next);
-    if (activeViewId) {
-      setActiveViewId(null);
-      const params = new URLSearchParams(searchParams?.toString() ?? "");
-      params.delete("view");
-      const q = params.toString();
-      router.replace(q ? `${pathname}?${q}` : pathname);
-    }
+    setActiveViewId(null);
+    commit({ filters: next, view: null }, { push: true });
   }
 
   function applyView(id: string | null, applied: SavedViewFilters) {
     setFilters(applied);
     setActiveViewId(id);
-    const params = new URLSearchParams(searchParams?.toString() ?? "");
-    if (id) params.set("view", id);
-    else params.delete("view");
-    const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
+    commit({ filters: applied, view: id }, { push: true });
   }
 
   function clearAllFilters() {
     setFilters({});
     setQuery("");
     setDebouncedQuery("");
-    if (activeViewId) {
-      setActiveViewId(null);
-      const params = new URLSearchParams(searchParams?.toString() ?? "");
-      params.delete("view");
-      const q = params.toString();
-      router.replace(q ? `${pathname}?${q}` : pathname);
-    }
+    setActiveViewId(null);
+    // One URL write that drops filters, query, view AND dueOn together —
+    // the old two-call clear read a stale snapshot and could re-add ?view=.
+    commit({ filters: {}, query: "", view: null, dueOn: null }, { push: true });
   }
 
   function clearDueOn() {
-    const params = new URLSearchParams(searchParams?.toString() ?? "");
-    params.delete("dueOn");
-    const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
+    commit({ dueOn: null });
   }
 
   const hasFilters = !isEmptyFilters(filters) || !!query || !!dueOn;
@@ -199,33 +288,56 @@ export default function IssuesPage() {
     [filters, debouncedQuery],
   );
 
+  // Honest header count. Tracks what the current view actually shows
+  // instead of a raw workspace total (which over-counts soft-deleted +
+  // done + snoozed). The board includes done; the list applies the same
+  // effective includeDone as IssueList. Shares `issue.count`, so it can't
+  // drift from the list's own where-clause.
+  const { data: statuses } = trpc.status.list.useQuery();
+  const doneIds = useMemo(() => doneStatusIds(statuses ?? []), [statuses]);
+  const countIncludeDone =
+    view === "board" ? true : resolveIncludeDone(issueQueryFilters, false, doneIds);
+  const { data: countData } = trpc.issue.count.useQuery({
+    ...issueQueryFilters,
+    includeDone: countIncludeDone,
+    dueOn: dueOn ?? undefined,
+  });
+
   const activeView = activeViewId && views ? views.find((v) => v.id === activeViewId) : null;
 
   return (
     <DensityProvider>
       <Topbar
         title="All issues"
-        subtitle={wsCount ? `${wsCount._count.issues} total` : undefined}
+        subtitle={
+          countData
+            ? `${countData.count} ${hasFilters ? "matching" : "issues"}`
+            : wsCount
+              ? `${wsCount._count.issues} issues`
+              : undefined
+        }
         actions={
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
-            {view === "list" && !isWorkspaceEmpty && (
-              <>
-                <div className="relative">
-                  <Input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search…"
-                    className="h-8 w-[min(44vw,12rem)] pr-7 text-xs sm:h-7 sm:w-48"
-                  />
-                  {searchPending && (
-                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
-                      <Spinner size="sm" />
-                    </span>
-                  )}
-                </div>
-                <DensityToggle />
-              </>
+            {/* Search applies to both list and board (the query is folded
+                into the shared filter blob). Density only affects list rows,
+                so it stays list-only — otherwise a board could be silently
+                filtered by a search term with no visible input to clear. */}
+            {!isWorkspaceEmpty && (
+              <div className="relative">
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search…"
+                  className="h-8 w-[min(44vw,12rem)] pr-7 text-xs sm:h-7 sm:w-48"
+                />
+                {searchPending && (
+                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
+                    <Spinner size="sm" />
+                  </span>
+                )}
+              </div>
             )}
+            {view === "list" && !isWorkspaceEmpty && <DensityToggle />}
             {!isWorkspaceEmpty && <ViewToggle value={view} onChange={setView} />}
           </div>
         }
@@ -255,10 +367,7 @@ export default function IssuesPage() {
             {hasFilters && (
               <button
                 type="button"
-                onClick={() => {
-                  clearAllFilters();
-                  if (dueOn) clearDueOn();
-                }}
+                onClick={clearAllFilters}
                 className="text-meta text-muted-foreground hover:text-foreground"
               >
                 Clear filters
@@ -311,17 +420,27 @@ export default function IssuesPage() {
                 hasFilters ? (
                   <FilteredEmptyState
                     activeViewName={activeView?.name ?? null}
-                    onClear={() => {
-                      clearAllFilters();
-                      if (dueOn) clearDueOn();
-                    }}
+                    onClear={clearAllFilters}
                   />
                 ) : undefined
               }
             />
           </div>
         ) : (
-          <IssueBoard workspaceKey={key} extraFilters={issueQueryFilters} />
+          <IssueBoard
+            workspaceKey={key}
+            extraFilters={issueQueryFilters}
+            sort={sort}
+            dueOn={dueOn ?? undefined}
+            emptyOverride={
+              hasFilters ? (
+                <FilteredEmptyState
+                  activeViewName={activeView?.name ?? null}
+                  onClear={clearAllFilters}
+                />
+              ) : undefined
+            }
+          />
         )}
       </div>
 
@@ -329,12 +448,7 @@ export default function IssuesPage() {
         open={saveOpen}
         onClose={() => setSaveOpen(false)}
         filters={filters}
-        onCreated={(id) => {
-          setActiveViewId(id);
-          const params = new URLSearchParams(searchParams?.toString() ?? "");
-          params.set("view", id);
-          router.replace(`${pathname}?${params.toString()}`);
-        }}
+        onCreated={(id) => applyView(id, filters)}
       />
     </DensityProvider>
   );
@@ -411,6 +525,27 @@ function DueOnChip({ dueOn, onClear }: { dueOn: string; onClear: () => void }) {
       </button>
     </span>
   );
+}
+
+/**
+ * True when `s` is a real `YYYY-MM-DD` calendar date. Mirrors the server's
+ * `dueOn` refine — shape regex plus a round-trip check so `2026-13-45`
+ * (which `Date.UTC` would silently roll to 2027-02-14) is rejected.
+ */
+/** Parse a JSON string, falling back to `{}` so a hand-edited `?f=` never throws. */
+function safeJsonParse(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return {};
+  }
+}
+
+function isRealDateString(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
 /**

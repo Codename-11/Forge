@@ -98,8 +98,12 @@ export function QuickFilterChips({
     onChange({ ...filters, blocked: blockedActive ? undefined : true });
   };
 
-  // Recently updated (3d window)
-  const updatedActive = filters.updatedSince === "3d";
+  // Recently updated. Lit for ANY updatedSince window (1d/3d/7d/30d), not
+  // just 3d — otherwise a saved view pinning 7d/30d would leave the chip
+  // dark and a click (meant to enable it) would silently clobber the
+  // window down to 3d. Click toggles the window off if set, else applies
+  // the 3d default.
+  const updatedActive = !!filters.updatedSince;
   const toggleUpdated = () => {
     onChange({
       ...filters,

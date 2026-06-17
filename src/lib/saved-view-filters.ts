@@ -169,6 +169,48 @@ export function filtersEqual(
   return true;
 }
 
+/**
+ * Status ids whose category is DONE or CANCELED. Cheap to recompute from
+ * the workspace's `status.list`.
+ */
+export function doneStatusIds(
+  statuses: ReadonlyArray<{ id: string; category: StatusCategory }>,
+): Set<string> {
+  return new Set(
+    statuses
+      .filter((s) => s.category === StatusCategory.DONE || s.category === StatusCategory.CANCELED)
+      .map((s) => s.id),
+  );
+}
+
+/**
+ * Whether a filter explicitly targets a completed status — a DONE/CANCELED
+ * status id, or the DONE/CANCELED category.
+ */
+export function filtersTargetDone(
+  filters: SavedViewFilters | null | undefined,
+  done: Set<string>,
+): boolean {
+  const cats = filters?.statusCategories ?? [];
+  if (cats.includes(StatusCategory.DONE) || cats.includes(StatusCategory.CANCELED)) return true;
+  return (filters?.statusIds ?? []).some((id) => done.has(id));
+}
+
+/**
+ * Effective `includeDone` for a list/count query. An explicit
+ * `filters.includeDone` (or the surface's `base` default) normally wins —
+ * but a filter that explicitly targets a completed status forces done rows
+ * in, otherwise selecting "Done" would return nothing. Shared by the list,
+ * the board, and the header count so all three agree.
+ */
+export function resolveIncludeDone(
+  filters: SavedViewFilters | null | undefined,
+  base: boolean,
+  done: Set<string>,
+): boolean {
+  return (filters?.includeDone ?? base) || filtersTargetDone(filters, done);
+}
+
 /** Lookup table for `updatedSince`. Returns the threshold as a Date. */
 export function updatedSinceToDate(window: UpdatedSinceWindow): Date {
   const days = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 }[window];

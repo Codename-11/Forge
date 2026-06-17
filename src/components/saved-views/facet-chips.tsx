@@ -208,6 +208,47 @@ export function GroupChip({
 // Internals
 // ---------------------------------------------------------------------------
 
+/**
+ * Shared keyboard behaviour for the chip popovers. Returns an `onKeyDown`
+ * for the popover container (events bubble up from the trigger + options):
+ *   - Escape closes and returns focus to the trigger
+ *   - Arrow Up/Down rove between the option buttons
+ * Plus a focus-on-open effect so opening a chip with the keyboard lands
+ * focus inside the panel. Previously these popovers were mouse-only — no
+ * Esc, no arrow nav, focus stranded on the trigger.
+ */
+function usePopoverKeys(
+  open: boolean,
+  setOpen: (v: boolean) => void,
+  triggerRef: React.RefObject<HTMLButtonElement | null>,
+  panelRef: React.RefObject<HTMLDivElement | null>,
+) {
+  useEffect(() => {
+    if (!open) return;
+    panelRef.current?.querySelector<HTMLElement>("button")?.focus();
+  }, [open, panelRef]);
+
+  return (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const items = Array.from(panelRef.current?.querySelectorAll<HTMLElement>("button") ?? []);
+      if (items.length === 0) return;
+      e.preventDefault();
+      const idx = items.indexOf(document.activeElement as HTMLElement);
+      const next =
+        e.key === "ArrowDown"
+          ? (idx + 1) % items.length
+          : (idx - 1 + items.length) % items.length;
+      items[next]?.focus();
+    }
+  };
+}
+
 /** A facet chip whose popover stays open across multiple toggles. */
 function FacetChip({
   label,
@@ -220,6 +261,8 @@ function FacetChip({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
@@ -228,11 +271,13 @@ function FacetChip({
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
+  const onKeyDown = usePopoverKeys(open, setOpen, triggerRef, panelRef);
 
   const active = count > 0;
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative" onKeyDown={onKeyDown}>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -252,7 +297,10 @@ function FacetChip({
         <ChevronDown className="h-2.5 w-2.5 opacity-60" aria-hidden />
       </button>
       {open && (
-        <div className="absolute left-0 top-[calc(100%+4px)] z-20 max-h-72 min-w-[220px] overflow-y-auto rounded-md border border-border bg-card shadow-lg">
+        <div
+          ref={panelRef}
+          className="absolute left-0 top-[calc(100%+4px)] z-20 max-h-72 min-w-[220px] max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-md border border-border bg-card shadow-lg"
+        >
           <ul className="py-1">{children}</ul>
         </div>
       )}
@@ -315,6 +363,8 @@ function SelectChip<T extends string>({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
@@ -323,10 +373,12 @@ function SelectChip<T extends string>({
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
+  const onKeyDown = usePopoverKeys(open, setOpen, triggerRef, panelRef);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative" onKeyDown={onKeyDown}>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -341,7 +393,10 @@ function SelectChip<T extends string>({
         <ChevronDown className="h-2.5 w-2.5 opacity-60" aria-hidden />
       </button>
       {open && (
-        <div className="absolute right-0 top-[calc(100%+4px)] z-20 min-w-[180px] overflow-hidden rounded-md border border-border bg-card shadow-lg">
+        <div
+          ref={panelRef}
+          className="absolute right-0 top-[calc(100%+4px)] z-20 min-w-[180px] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-md border border-border bg-card shadow-lg"
+        >
           <ul className="py-1">
             {options.map((o) => (
               <li key={o.value}>

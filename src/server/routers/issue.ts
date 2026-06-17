@@ -303,6 +303,17 @@ const filterSchema = z.object({
   dueOn: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "dueOn must be YYYY-MM-DD")
+    // The regex only checks shape — `2026-13-45` passes it and then
+    // `Date.UTC` silently rolls it over to a different day. Reject dates
+    // that don't round-trip so a hand-edited/shared link can't query a
+    // surprise day.
+    .refine((s) => {
+      const [y, m, d] = s.split("-").map(Number);
+      const dt = new Date(Date.UTC(y, m - 1, d));
+      return (
+        dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+      );
+    }, "dueOn must be a real calendar date")
     .optional(),
 
   /**
@@ -317,160 +328,179 @@ const filterSchema = z.object({
   cursor: cursorSchema,
 });
 
+type IssueListFilter = z.infer<typeof filterSchema>;
+
+/**
+ * Build the Prisma `where` for `issue.list` / `issue.count` from the shared
+ * filter input. Returns `null` when the filter provably matches nothing
+ * (e.g. `blocked: true` with no blocked issues) so callers can
+ * short-circuit. Kept in one place so the list and its count never drift —
+ * a count computed from a different where-clause than the list would be the
+ * worst kind of "honest" number.
+ */
+async function buildIssueListWhere(
+  ctx: Parameters<typeof buildKeyScopeWhere>[0] & {
+    db: PrismaClient;
+    workspaceId: string;
+  },
+  input: IssueListFilter,
+): Promise<Prisma.IssueWhereInput | null> {
+  const keyWhere = buildKeyScopeWhere(ctx, "issue");
+  // Compose optional OR clauses under AND so multiple predicates that each
+  // need OR (query, initiativeId=null) don't clobber each other.
+  const andClauses: Array<Record<string, unknown>> = [];
+  if (input.initiativeId === null || input.withoutInitiative === true) {
+    andClauses.push({
+      OR: [{ projectId: null }, { project: { initiativeId: null } }],
+    });
+  }
+  if (input.query) {
+    andClauses.push({
+      OR: [
+        { title: { contains: input.query, mode: "insensitive" } },
+        { description: { contains: input.query, mode: "insensitive" } },
+      ],
+    });
+  }
+
+  // `unassigned` = no human assignees AND no agent. Implemented as a
+  // single AND so it composes with explicit assigneeIds / assignedAgentId.
+  if (input.unassigned === true) {
+    andClauses.push({
+      AND: [{ assignees: { none: {} } }, { assignedAgentId: null }],
+    });
+  }
+
+  // Status: combine `statusIds[]` and `statusCategories[]` under OR when
+  // both are present so saved views can pin "any of {Backlog} OR exact id
+  // Foo" without needing two views. When only one is set we emit the
+  // simpler clause.
+  let statusClause: Record<string, unknown> | null = null;
+  if (input.statusIds?.length && input.statusCategories?.length) {
+    statusClause = {
+      OR: [
+        { statusId: { in: input.statusIds } },
+        { status: { category: { in: input.statusCategories } } },
+      ],
+    };
+  } else if (input.statusIds?.length) {
+    statusClause = { statusId: { in: input.statusIds } };
+  } else if (input.statusCategories?.length) {
+    statusClause = { status: { category: { in: input.statusCategories } } };
+  }
+  if (statusClause) andClauses.push(statusClause);
+
+  // Cycle: array form. The `withoutCycle` boolean appends a `cycleId IS
+  // NULL` branch under OR so a saved view can express "in sprint X OR
+  // uncycled" if it ever wants to. The single `cycleId` field keeps prior
+  // behavior.
+  if (input.cycleIds?.length || input.withoutCycle === true) {
+    const ors: Array<Record<string, unknown>> = [];
+    if (input.cycleIds?.length) ors.push({ cycleId: { in: input.cycleIds } });
+    if (input.withoutCycle === true) ors.push({ cycleId: null });
+    andClauses.push({ OR: ors });
+  }
+
+  // Initiative array: joins through project.initiativeId. The
+  // `withoutInitiative` toggle is already handled above; this branch adds
+  // the explicit-id case.
+  if (input.initiativeIds?.length) {
+    andClauses.push({
+      project: { initiativeId: { in: input.initiativeIds } },
+    });
+  }
+
+  // `blocked: true` resolves the blocked-set up front and constrains the
+  // row id. Skipped when false/undefined to keep the unblocked path on a
+  // single query.
+  let blockedConstraint: Record<string, unknown> | null = null;
+  if (input.blocked === true) {
+    const blocked = await findBlockedIssueIds(ctx);
+    // Nothing blocked → the filter matches nothing.
+    if (blocked.size === 0) return null;
+    blockedConstraint = { id: { in: [...blocked] } };
+  }
+
+  return {
+    workspaceId: ctx.workspaceId,
+    deletedAt: null,
+    ...keyWhere,
+    ...(input.projectId ? { projectId: input.projectId } : {}),
+    ...(input.projectIds?.length ? { projectId: { in: input.projectIds } } : {}),
+    ...(input.statusId ? { statusId: input.statusId } : {}),
+    ...(input.assigneeId ? { assignees: { some: { userId: input.assigneeId } } } : {}),
+    ...(input.assigneeIds?.length
+      ? { assignees: { some: { userId: { in: input.assigneeIds } } } }
+      : {}),
+    ...(input.labelIds?.length
+      ? { labels: { some: { labelId: { in: input.labelIds } } } }
+      : {}),
+    ...(input.priority ? { priority: input.priority } : {}),
+    ...(input.priorities?.length ? { priority: { in: input.priorities } } : {}),
+    ...(input.kinds?.length ? { kind: { in: input.kinds } } : {}),
+    ...(input.cycleId === null
+      ? { cycleId: null }
+      : input.cycleId
+        ? { cycleId: input.cycleId }
+        : {}),
+    ...(typeof input.initiativeId === "string"
+      ? { project: { initiativeId: input.initiativeId } }
+      : {}),
+    ...(input.assignedAgentId === null
+      ? { assignedAgentId: null }
+      : input.assignedAgentId
+        ? { assignedAgentId: input.assignedAgentId }
+        : {}),
+    ...(input.updatedSince
+      ? { updatedAt: { gte: updatedSinceToDate(input.updatedSince) } }
+      : {}),
+    ...(input.excludeSnoozed
+      ? { OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: new Date() } }] }
+      : {}),
+    ...(input.dueOn
+      ? (() => {
+          // Parse YYYY-MM-DD as UTC midnight, then bracket the day.
+          const [y, m, d] = input.dueOn.split("-").map(Number);
+          const start = new Date(Date.UTC(y, m - 1, d));
+          const end = new Date(Date.UTC(y, m - 1, d + 1));
+          return { dueDate: { gte: start, lt: end } };
+        })()
+      : {}),
+    ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
+    ...(blockedConstraint ?? {}),
+    ...(andClauses.length ? { AND: andClauses } : {}),
+  } as Prisma.IssueWhereInput;
+}
+
 export const issueRouter = router({
   list: workspaceProcedure
     .input(filterSchema.default({ includeDone: true, limit: 50 }))
     .query(async ({ ctx, input }) => {
-      const keyWhere = buildKeyScopeWhere(ctx, "issue");
-      // Compose optional OR clauses under AND so multiple predicates that
-      // each need OR (query, initiativeId=null) don't clobber each other.
-      const andClauses: Array<Record<string, unknown>> = [];
-      if (input.initiativeId === null || input.withoutInitiative === true) {
-        andClauses.push({
-          OR: [{ projectId: null }, { project: { initiativeId: null } }],
-        });
-      }
-      if (input.query) {
-        andClauses.push({
-          OR: [
-            { title: { contains: input.query, mode: "insensitive" } },
-            { description: { contains: input.query, mode: "insensitive" } },
-          ],
-        });
-      }
-
-      // `unassigned` = no human assignees AND no agent. Implemented as a
-      // single AND so it composes with explicit assigneeIds / assignedAgentId.
-      if (input.unassigned === true) {
-        andClauses.push({
-          AND: [{ assignees: { none: {} } }, { assignedAgentId: null }],
-        });
-      }
-
-      // Status: combine `statusIds[]` and `statusCategories[]` under OR
-      // when both are present so saved views can pin "any of {Backlog} OR
-      // exact id Foo" without needing two views. When only one is set we
-      // emit the simpler clause.
-      let statusClause: Record<string, unknown> | null = null;
-      if (input.statusIds?.length && input.statusCategories?.length) {
-        statusClause = {
-          OR: [
-            { statusId: { in: input.statusIds } },
-            { status: { category: { in: input.statusCategories } } },
-          ],
-        };
-      } else if (input.statusIds?.length) {
-        statusClause = { statusId: { in: input.statusIds } };
-      } else if (input.statusCategories?.length) {
-        statusClause = { status: { category: { in: input.statusCategories } } };
-      }
-      if (statusClause) andClauses.push(statusClause);
-
-      // Cycle: array form. The `withoutCycle` boolean appends a `cycleId
-      // IS NULL` branch under OR so a saved view can express "in sprint
-      // X OR uncycled" if it ever wants to. The single `cycleId` field
-      // (above) keeps prior behavior.
-      if (input.cycleIds?.length || input.withoutCycle === true) {
-        const ors: Array<Record<string, unknown>> = [];
-        if (input.cycleIds?.length) ors.push({ cycleId: { in: input.cycleIds } });
-        if (input.withoutCycle === true) ors.push({ cycleId: null });
-        andClauses.push({ OR: ors });
-      }
-
-      // Initiative array: joins through project.initiativeId. The
-      // `withoutInitiative` toggle is already handled above; this branch
-      // adds the explicit-id case.
-      if (input.initiativeIds?.length) {
-        andClauses.push({
-          project: { initiativeId: { in: input.initiativeIds } },
-        });
-      }
-
-      // `blocked: true` resolves the blocked-set up front and constrains
-      // the row id. Skipped when false/undefined to keep the unblocked
-      // path on a single query.
-      let blockedConstraint: Record<string, unknown> | null = null;
-      if (input.blocked === true) {
-        const blocked = await findBlockedIssueIds(ctx);
-        if (blocked.size === 0) {
-          // Nothing blocked → return early with an empty page.
-          return { items: [], nextCursor: undefined };
-        }
-        blockedConstraint = { id: { in: [...blocked] } };
-      }
+      const where = await buildIssueListWhere(ctx, input);
+      // `null` means the filter provably matches nothing (e.g. `blocked:
+      // true` with no blocked issues) — short-circuit with an empty page.
+      if (where === null) return { items: [], nextCursor: undefined };
 
       // Result ordering. Default keeps priority-desc then newest-first;
       // the Sort control offers single-key alternatives.
+      // Every branch ends in a unique `id` tiebreaker matching the `id`
+      // cursor below. Without it, ties on a non-unique sort key (same
+      // title, same-second createdAt/updatedAt, same priority+createdAt)
+      // make cursor pagination skip or duplicate rows across page
+      // boundaries. Id direction follows the primary key's direction.
       const orderBy: Prisma.IssueOrderByWithRelationInput[] =
         input.sort === "newest"
-          ? [{ createdAt: "desc" }]
+          ? [{ createdAt: "desc" }, { id: "desc" }]
           : input.sort === "oldest"
-            ? [{ createdAt: "asc" }]
+            ? [{ createdAt: "asc" }, { id: "asc" }]
             : input.sort === "updated"
-              ? [{ updatedAt: "desc" }]
+              ? [{ updatedAt: "desc" }, { id: "desc" }]
               : input.sort === "title"
-                ? [{ title: "asc" }]
-                : [{ priority: "desc" }, { createdAt: "desc" }];
+                ? [{ title: "asc" }, { id: "asc" }]
+                : [{ priority: "desc" }, { createdAt: "desc" }, { id: "desc" }];
 
       const rows = await ctx.db.issue.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          deletedAt: null,
-          ...keyWhere,
-          ...(input.projectId ? { projectId: input.projectId } : {}),
-          ...(input.projectIds?.length
-            ? { projectId: { in: input.projectIds } }
-            : {}),
-          ...(input.statusId ? { statusId: input.statusId } : {}),
-          ...(input.assigneeId ? { assignees: { some: { userId: input.assigneeId } } } : {}),
-          ...(input.assigneeIds?.length
-            ? { assignees: { some: { userId: { in: input.assigneeIds } } } }
-            : {}),
-          ...(input.labelIds?.length
-            ? { labels: { some: { labelId: { in: input.labelIds } } } }
-            : {}),
-          ...(input.priority ? { priority: input.priority } : {}),
-          ...(input.priorities?.length
-            ? { priority: { in: input.priorities } }
-            : {}),
-          ...(input.kinds?.length ? { kind: { in: input.kinds } } : {}),
-          ...(input.cycleId === null
-            ? { cycleId: null }
-            : input.cycleId
-              ? { cycleId: input.cycleId }
-              : {}),
-          ...(typeof input.initiativeId === "string"
-            ? { project: { initiativeId: input.initiativeId } }
-            : {}),
-          ...(input.assignedAgentId === null
-            ? { assignedAgentId: null }
-            : input.assignedAgentId
-              ? { assignedAgentId: input.assignedAgentId }
-              : {}),
-          ...(input.updatedSince
-            ? { updatedAt: { gte: updatedSinceToDate(input.updatedSince) } }
-            : {}),
-          ...(input.excludeSnoozed
-            ? {
-                OR: [
-                  { snoozedUntil: null },
-                  { snoozedUntil: { lte: new Date() } },
-                ],
-              }
-            : {}),
-          ...(input.dueOn
-            ? (() => {
-                // Parse YYYY-MM-DD as UTC midnight, then bracket the day.
-                const [y, m, d] = input.dueOn.split("-").map(Number);
-                const start = new Date(Date.UTC(y, m - 1, d));
-                const end = new Date(Date.UTC(y, m - 1, d + 1));
-                return { dueDate: { gte: start, lt: end } };
-              })()
-            : {}),
-          ...(input.includeDone ? {} : { status: { category: { notIn: ["DONE", "CANCELED"] } } }),
-          ...(blockedConstraint ?? {}),
-          ...(andClauses.length ? { AND: andClauses } : {}),
-        },
+        where,
         take: input.limit + 1,
         cursor: input.cursor ? { id: input.cursor } : undefined,
         orderBy,
@@ -503,6 +533,21 @@ export const issueRouter = router({
       if (rows.length > input.limit) nextCursor = rows.pop()!.id;
       const withFlags = await annotateUnblocked(ctx, rows);
       return { items: withFlags, nextCursor };
+    }),
+
+  /**
+   * Count issues matching the same filter as `list`. Powers the issues
+   * header's honest "N matching" subtitle so the count tracks the active
+   * filters (and the list's own exclusions — soft-deleted, snoozed, and
+   * the default DONE/CANCELED hide) instead of a raw workspace total.
+   * Shares `buildIssueListWhere`, so it can never drift from the list.
+   */
+  count: workspaceProcedure
+    .input(filterSchema.default({ includeDone: true, limit: 50 }))
+    .query(async ({ ctx, input }) => {
+      const where = await buildIssueListWhere(ctx, input);
+      if (where === null) return { count: 0 };
+      return { count: await ctx.db.issue.count({ where }) };
     }),
 
   byId: workspaceProcedure
