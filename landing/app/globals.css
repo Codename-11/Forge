@@ -1,0 +1,421 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ */
+/* Forge design tokens — mirrored from
+ *   src/app/globals.css @ Codename-11/Forge@master
+ * (the prototype shipped these as forge-tokens.css). Keep in lockstep.
+ * The two --font-* vars below are bound to the self-hosted next/font
+ * families (Inter + JetBrains Mono) instead of the named webfonts.
+ * ------------------------------------------------------------------ */
+
+:root {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
+  --radius: 0.5rem;
+
+  /* Warm paper neutrals (HSL components) */
+  --background: 38 20% 97%;
+  --foreground: 30 10% 12%;
+  --card: 36 24% 98%;
+  --card-foreground: 30 10% 12%;
+  --popover: 36 24% 98%;
+  --popover-foreground: 30 10% 12%;
+  --muted: 34 16% 92%;
+  --muted-foreground: 30 8% 36%;
+  --subtle: 34 20% 90%;
+  --border: 30 10% 86%;
+  --input: 30 10% 86%;
+  --ring: 25 70% 48%;
+
+  /* Ember — single accent, warm amber */
+  --ember: 25 80% 50%;
+  --ember-foreground: 40 40% 98%;
+
+  --success: 120 45% 34%;
+  --warning: 38 90% 45%;
+  --danger: 0 60% 44%;
+
+  --sticky-sand: 38 35% 78%;
+  --sticky-blush: 10 45% 80%;
+  --sticky-sage: 95 22% 72%;
+  --sticky-sky: 205 35% 78%;
+  --sticky-lavender: 265 28% 80%;
+  --sticky-peach: 25 55% 78%;
+}
+
+.dark {
+  --background: 30 6% 8%;
+  --foreground: 36 16% 92%;
+  --card: 30 6% 10%;
+  --card-foreground: 36 16% 92%;
+  --popover: 30 6% 10%;
+  --popover-foreground: 36 16% 92%;
+  --muted: 30 6% 14%;
+  --muted-foreground: 30 10% 62%;
+  --subtle: 30 6% 16%;
+  --border: 30 6% 18%;
+  --input: 30 6% 18%;
+  --ring: 25 80% 58%;
+
+  --ember: 25 90% 58%;
+  --ember-foreground: 30 6% 8%;
+
+  --success: 120 45% 48%;
+  --warning: 38 90% 56%;
+  --danger: 0 60% 60%;
+
+  --sticky-sand: 38 30% 64%;
+  --sticky-blush: 10 40% 66%;
+  --sticky-sage: 95 18% 58%;
+  --sticky-sky: 205 30% 64%;
+  --sticky-lavender: 265 23% 66%;
+  --sticky-peach: 25 50% 64%;
+}
+
+/* Density / textsize cascade — same logic as globals.css */
+html { font-size: 16px; }
+html[data-density="comfortable"] { font-size: 17px; }
+html[data-textsize="larger"] { font-size: 18px; }
+html[data-density="comfortable"][data-textsize="larger"] { font-size: 19px; }
+
+html, body { margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  min-height: 100vh;
+  font-family: var(--font-sans);
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+code, kbd, pre, samp { font-family: var(--font-mono); }
+::selection { background: hsl(var(--ember) / 0.25); }
+
+/* Smooth in-page anchor jumps for the nav links. */
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+
+/* ============================================================ */
+/* Existing UI patterns (mirrored from globals.css)              */
+/* ============================================================ */
+
+.ui-shimmer {
+  position: relative;
+  overflow: hidden;
+  background-color: hsl(var(--subtle));
+}
+.ui-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(var(--muted) / 0.6) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  background-position: -200% 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ui-shimmer::after { animation: forge-shimmer 1.8s linear infinite; }
+}
+[data-motion="off"] .ui-shimmer::after { animation: none !important; }
+
+@keyframes forge-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+/* ============================================================ */
+/* Motion additions — gated on no-preference AND on a doc-level  */
+/* data-motion="on" so motion can be paused.                     */
+/* ============================================================ */
+
+/* M1: Animated grid background ------------------------------- */
+.forge-grid-bg {
+  --grid-line: hsl(var(--border) / 0.6);
+  --grid-size: 40px;
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: var(--grid-size) var(--grid-size);
+  background-position: 0 0, 0 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-grid-bg {
+    animation: forge-grid-drift 48s linear infinite;
+  }
+}
+@keyframes forge-grid-drift {
+  to { background-position: var(--grid-size) var(--grid-size), var(--grid-size) var(--grid-size); }
+}
+
+/* M2: Ember aurora glow -------------------------------------- */
+.forge-aurora {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.forge-aurora::before {
+  content: "";
+  position: absolute;
+  inset: -25%;
+  z-index: -1;
+  background:
+    radial-gradient(40% 50% at 30% 40%, hsl(var(--ember) / 0.18), transparent 70%),
+    radial-gradient(35% 45% at 70% 60%, hsl(var(--ember) / 0.10), transparent 75%);
+  filter: blur(20px);
+  opacity: 0.9;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-aurora::before {
+    animation: forge-aurora-drift 28s ease-in-out infinite alternate;
+  }
+}
+@keyframes forge-aurora-drift {
+  0%   { transform: translate3d(-2%, -1%, 0) scale(1);     opacity: 0.85; }
+  50%  { transform: translate3d( 2%,  1%, 0) scale(1.05);  opacity: 1; }
+  100% { transform: translate3d( 1%, -2%, 0) scale(1.02);  opacity: 0.9; }
+}
+
+/* M7: Active-path glow on running node ----------------------- */
+.forge-active-node {
+  box-shadow:
+    0 0 0 1px hsl(var(--ember) / 0.55) inset,
+    0 0 0 0 hsl(var(--ember) / 0);
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-active-node {
+    animation: forge-pulse 2.4s ease-in-out infinite;
+  }
+}
+@keyframes forge-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px hsl(var(--ember) / 0.55) inset,
+      0 0 0 0   hsl(var(--ember) / 0.0);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px hsl(var(--ember) / 0.8) inset,
+      0 0 0 6px hsl(var(--ember) / 0.10);
+  }
+}
+
+/* M10: Idle status-dot breath ------------------------------- */
+.forge-breath {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 9999px;
+  background: hsl(var(--success));
+  box-shadow: 0 0 0 0 hsl(var(--success) / 0.5);
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-breath {
+    animation: forge-breath 3.2s ease-in-out infinite;
+  }
+}
+@keyframes forge-breath {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--success) / 0.40); }
+  50%      { box-shadow: 0 0 0 5px hsl(var(--success) / 0); }
+}
+
+/* Activity halo pulse (lived in the prototype's <head>) ------ */
+@keyframes forge-act-pulse {
+  0%, 100% { transform: scale(1);    opacity: 0.55; }
+  50%      { transform: scale(1.55); opacity: 0;    }
+}
+[data-motion="off"] .forge-act-pulse,
+[data-motion="off"] [style*="forge-act-pulse"] { animation: none !important; }
+
+/* ============================================================ */
+/* Drifting glow grid (hero background)                          */
+/* ============================================================ */
+
+.forge-glow-grid {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  mask-image: radial-gradient(
+    ellipse at center,
+    rgb(0 0 0 / 1) 30%,
+    rgb(0 0 0 / 0.6) 60%,
+    transparent 95%
+  );
+  -webkit-mask-image: radial-gradient(
+    ellipse at center,
+    rgb(0 0 0 / 1) 30%,
+    rgb(0 0 0 / 0.6) 60%,
+    transparent 95%
+  );
+}
+
+.forge-glow-grid-dots {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle, hsl(var(--foreground) / 0.07) 1px, transparent 1.5px),
+    radial-gradient(circle, hsl(var(--foreground) / 0.03) 1.5px, transparent 2px);
+  background-size: 24px 24px, 24px 24px;
+}
+
+.forge-glow-grid-blob {
+  position: absolute;
+  inset: -50%;
+  mix-blend-mode: plus-lighter;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.forge-glow-grid-blob-a {
+  background: radial-gradient(
+    circle at 50% 50%,
+    hsl(var(--foreground) / 0.07) 0%,
+    hsl(var(--foreground) / 0.03) 18%,
+    transparent 38%
+  );
+}
+
+.forge-glow-grid-blob-b {
+  background: radial-gradient(
+    circle at 50% 50%,
+    hsl(var(--ember) / 0.12) 0%,
+    hsl(var(--ember) / 0.05) 20%,
+    transparent 40%
+  );
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="on"] .forge-glow-grid-blob-a {
+    animation: forge-glow-drift-a 28s linear infinite;
+  }
+  [data-motion="on"] .forge-glow-grid-blob-b {
+    animation: forge-glow-drift-b 36s linear infinite;
+  }
+}
+
+@keyframes forge-glow-drift-a {
+  0%   { transform: translate3d(-15%, -10%, 0); }
+  25%  { transform: translate3d( 10%, -18%, 0); }
+  50%  { transform: translate3d( 18%,  12%, 0); }
+  75%  { transform: translate3d(-12%,  16%, 0); }
+  100% { transform: translate3d(-15%, -10%, 0); }
+}
+
+@keyframes forge-glow-drift-b {
+  0%   { transform: translate3d( 20%,  15%, 0); }
+  33%  { transform: translate3d(-18%,  10%, 0); }
+  66%  { transform: translate3d(-10%, -20%, 0); }
+  100% { transform: translate3d( 20%,  15%, 0); }
+}
+
+/* ============================================================ */
+/* Landing-site responsive layer.                                */
+/* The ported components keep their (desktop-1440) inline styles  */
+/* verbatim; these classes layer responsive behaviour on top.    */
+/* Longhand !important beats the shorthand inline `padding` /     */
+/* explicit inline `grid-template-columns` below the breakpoint.  */
+/* ============================================================ */
+
+/* Multi-column grids collapse to a single column on narrow screens. */
+@media (max-width: 980px) {
+  .lnd-cols-2,
+  .lnd-cols-3,
+  .lnd-cols-4 { grid-template-columns: minmax(0, 1fr) !important; }
+  .lnd-hero-grid { grid-template-columns: minmax(0, 1fr) !important; gap: 40px !important; }
+}
+@media (min-width: 981px) and (max-width: 1180px) {
+  .lnd-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+
+/* Section horizontal padding shrinks on tablet / phone. */
+@media (max-width: 860px) {
+  .lnd-pad {
+    padding-left: clamp(20px, 6vw, 96px) !important;
+    padding-right: clamp(20px, 6vw, 96px) !important;
+    padding-top: clamp(56px, 12vw, 120px) !important;
+    padding-bottom: clamp(56px, 12vw, 120px) !important;
+  }
+  /* Product strip: left/top/bottom only — right stays 0 so the horizontal
+     scroll strip can bleed to the screen edge. */
+  .lnd-pad-left {
+    padding-left: clamp(20px, 6vw, 96px) !important;
+    padding-top: clamp(56px, 12vw, 120px) !important;
+    padding-bottom: clamp(56px, 12vw, 120px) !important;
+  }
+  .lnd-nav { padding-left: 18px !important; padding-right: 18px !important; }
+  .lnd-footer { padding-left: 22px !important; padding-right: 22px !important; }
+}
+
+/* Narrow-screen nav: drop the desktop link row and the wide GitHub pill so
+   the essential controls (logo, theme toggle, Get-started CTA) fit ~360px. */
+@media (max-width: 860px) {
+  .lnd-nav-links { display: none !important; }
+  .lnd-nav-gh { display: none !important; }
+}
+/* On the smallest phones, also drop the version badge. */
+@media (max-width: 520px) {
+  .lnd-nav-badge { display: none !important; }
+}
+
+/* The hero's product mock is intricate (absolute-positioned, fixed height);
+   below ~760px it can't reflow legibly, so we drop it on phones — matching
+   the prototype's mobile artboard, which omits it. */
+@media (max-width: 760px) {
+  .lnd-hero-visual { display: none !important; }
+}
+
+/* Footer column grid stacks. */
+@media (max-width: 860px) {
+  .lnd-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 32px !important; }
+}
+@media (max-width: 520px) {
+  .lnd-footer-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .lnd-footer-bottom { flex-wrap: wrap; }
+}
+
+/* Release rows: the date rail folds above the body on phones. */
+@media (max-width: 640px) {
+  .lnd-release-row { grid-template-columns: minmax(0, 1fr) !important; gap: 12px !important; }
+}
+
+/* Nav hover (was an inline onMouseEnter handler in the prototype). */
+.lnd-navlink { color: hsl(var(--muted-foreground)); transition: color 120ms ease-out; }
+.lnd-navlink:hover { color: hsl(var(--foreground)); }
+
+/* Docs index rows hover (was an inline handler in the prototype). */
+.lnd-doclink { transition: background-color 120ms ease-out; }
+.lnd-doclink:hover { background: hsl(var(--muted) / 0.5); }
+
+/* GhostButton lift on hover. */
+.lnd-btn { transition: transform 100ms ease-out, background-color 120ms ease-out, box-shadow 120ms ease-out; }
+.lnd-btn:hover { transform: translateY(-1px); }
+
+/* Forge primitive shims (kbd / focus / density text utilities). */
+.kbd {
+  display: inline-flex;
+  height: 1.25rem;
+  min-width: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.25rem;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--muted));
+  padding: 0 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+}
+
+:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
