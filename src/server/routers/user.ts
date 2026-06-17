@@ -50,6 +50,10 @@ const DASHBOARD_PREFS = z.object({
   order: z.array(z.string()).max(64).default([]),
   collapsed: z.array(z.string()).max(64).default([]),
   hidden: z.array(z.string()).max(64).default([]),
+  // Per-widget column width on the 2-col customize grid. Absent ids fall
+  // back to the widget's registry default. Tolerant of unknown ids like
+  // the order/hidden sets.
+  widths: z.record(z.string(), z.enum(["half", "full"])).optional(),
 });
 
 // Today only "member" is opt-out-able. Keep the enum tight so we don't
