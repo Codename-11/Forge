@@ -2,6 +2,35 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-16 — Agent request run-mode chips and durable issue links
+
+Implemented AXI-81's first-class issue-comment Agent Request flow. Comments now
+persist structured `agentRequests` JSON (migration 0084) with target agent,
+mode (`DISCUSS`, `RESEARCH`, `REVIEW`, `EXECUTE`), source comment context, and
+optional Execute assignment intent. The server resolves explicit composer chip
+payloads or keyboard sugar (`@victor /review`, `@victor:execute`) into the same
+canonical payload, opens/touches AgentRuns in the requested engagement mode, and
+only assigns ownership when Execute + "Assign issue" is explicitly set.
+
+The issue composer now auto-detects agent mentions, renders compact agent chips
+(default Discuss), exposes a mode picker with mode descriptions, and shows an
+Execute-only assign checkbox. Timeline comment cards and the issue/global
+activity feeds render requested agent + mode rather than relying on raw prose.
+Action-request activity and run lifecycle events are now tied back to issue
+context through shared audit payload enrichment (`issueId`, human identifier,
+and canonical workspace issue URL), so toasts/activity rows can deep-link to the
+issue even when the event subject is a run or action-request row.
+
+Also cleaned up issue-create and agent-request realtime toasts to prefer human
+issue identifiers and explicit Open issue actions. Added integration coverage
+for structured agent requests, parser fallback syntax, Discuss-by-default
+semantics, and Execute assignment behavior.
+
+Verification: `pnpm prisma:generate && pnpm typecheck`; `pnpm lint && pnpm
+typecheck`; `env -u OPENAI_API_KEY pnpm test` (109 files passed, 901 tests
+passed, 1 skipped). Full test run still logs pre-existing async notification
+fan-out races/storage CORS warnings, but exits green.
+
 ## 2026-06-16 — Public landing site (`landing/`, standalone Next app)
 
 Built the marketing site from the Claude Design handoff bundle (`Forge

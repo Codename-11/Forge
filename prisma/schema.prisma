@@ -1298,6 +1298,11 @@ model Comment {
   /// change, including suggestedReplies / confidence). Null = body
   /// has never been edited.
   editedAt         DateTime?
+  /// Structured agent requests attached to this comment (added 2026-06-16,
+  /// migration 0084). Each entry carries targetAgentId, mode, and optional
+  /// assignIssue flag so the composer and timeline can render first-class
+  /// run-mode chips without parsing raw markdown.
+  agentRequests    Json             @default("[]")
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
   deletedAt        DateTime?

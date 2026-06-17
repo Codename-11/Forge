@@ -723,6 +723,11 @@ export const issueRouter = router({
         select: { id: true },
       });
       const runIds = runs.map((run) => run.id);
+      const actionRequests = await ctx.db.actionRequest.findMany({
+        where: { issueId: input.issueId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      const actionRequestIds = actionRequests.map((request) => request.id);
       const rows = await ctx.db.activityEvent.findMany({
         where: {
           workspaceId: ctx.workspaceId,
@@ -730,6 +735,9 @@ export const issueRouter = router({
             { subjectType: "issue", subjectId: input.issueId },
             ...(runIds.length
               ? [{ subjectType: "agent-run", subjectId: { in: runIds } }]
+              : []),
+            ...(actionRequestIds.length
+              ? [{ subjectType: "action-request", subjectId: { in: actionRequestIds } }]
               : []),
           ],
         },

@@ -46,6 +46,7 @@ export function agentDispatchUrlFor(agentId: string): string {
 function mentionedAgentIdsFromPayload(payloadIn: unknown): string[] {
   const payload = payloadIn as
     | {
+        agentRequests?: Array<{ agentId?: unknown }>;
         mentions?:
           | {
               agentIds?: unknown[];
@@ -54,25 +55,38 @@ function mentionedAgentIdsFromPayload(payloadIn: unknown): string[] {
           | Array<{ agentId?: unknown }>;
       }
     | undefined;
+  const out = new Set<string>();
+  if (Array.isArray(payload?.agentRequests)) {
+    for (const request of payload.agentRequests) {
+      if (typeof request.agentId === "string" && request.agentId.length > 0) {
+        out.add(request.agentId);
+      }
+    }
+  }
   const mentionsRaw = payload?.mentions;
   if (Array.isArray(mentionsRaw)) {
-    return mentionsRaw
-      .map((m) => m.agentId)
-      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    for (const mention of mentionsRaw) {
+      if (typeof mention.agentId === "string" && mention.agentId.length > 0) {
+        out.add(mention.agentId);
+      }
+    }
+    return [...out];
   }
   if (mentionsRaw && typeof mentionsRaw === "object") {
     if (Array.isArray(mentionsRaw.agentIds)) {
-      return mentionsRaw.agentIds.filter(
-        (id): id is string => typeof id === "string" && id.length > 0,
-      );
+      for (const id of mentionsRaw.agentIds) {
+        if (typeof id === "string" && id.length > 0) out.add(id);
+      }
     }
     if (Array.isArray(mentionsRaw.agents)) {
-      return mentionsRaw.agents
-        .map((m) => m.agentId)
-        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      for (const mention of mentionsRaw.agents) {
+        if (typeof mention.agentId === "string" && mention.agentId.length > 0) {
+          out.add(mention.agentId);
+        }
+      }
     }
   }
-  return [];
+  return [...out];
 }
 
 const AGENT_WATCHER_FANOUT_EVENT_KINDS = new Set<EventKind>([
@@ -258,6 +272,38 @@ async function loadIssueSnapshot(
     projectId: row.projectId,
     labelNames: row.labels.map((l) => l.label.name),
   };
+}
+
+async function enrichPayloadWithIssueReference(
+  tx: PrismaClient | Prisma.TransactionClient,
+  params: {
+    workspaceId: string;
+    subjectType: string;
+    subjectId: string;
+    payload: Prisma.InputJsonValue;
+  },
+): Promise<Prisma.InputJsonValue> {
+  const base = payloadRecord(params.payload);
+  const payloadIssueId = payloadString(base, "issueId");
+  const issueId = params.subjectType === "issue" ? params.subjectId : payloadIssueId;
+  if (!issueId) return params.payload;
+
+  const issue = await tx.issue.findFirst({
+    where: { id: issueId, workspaceId: params.workspaceId },
+    select: {
+      id: true,
+      number: true,
+      workspace: { select: { key: true, slug: true } },
+    },
+  });
+  if (!issue) return params.payload;
+
+  return {
+    ...base,
+    issueId: issue.id,
+    issuePrefix: `${issue.workspace.key}-${issue.number}`,
+    issueUrl: `/w/${issue.workspace.slug}/issues/${issue.id}`,
+  } as unknown as Prisma.InputJsonValue;
 }
 
 /**
@@ -515,6 +561,12 @@ export async function recordChange(
   // gains an `autoTransitionedTo` field so receivers can tell apart a
   // pre-existing started status from a server-driven transition.
   let payloadOut: Prisma.InputJsonValue = (params.payload ?? {}) as Prisma.InputJsonValue;
+  payloadOut = await enrichPayloadWithIssueReference(tx, {
+    workspaceId: params.workspaceId,
+    subjectType: params.subjectType,
+    subjectId: params.subjectId,
+    payload: payloadOut,
+  });
   if (params.eventKind === EventKind.AGENT_ASSIGNED && params.subjectType === "issue") {
     const assignMode =
       params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)

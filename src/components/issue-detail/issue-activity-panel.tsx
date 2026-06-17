@@ -70,6 +70,20 @@ function readPayloadRecord(payload: unknown, key: string): Record<string, unknow
     : null;
 }
 
+function readAgentRequests(payload: unknown): Array<{ profileKey: string; mode: string }> {
+  if (!payload || typeof payload !== "object") return [];
+  const raw = (payload as Record<string, unknown>).agentRequests;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const rec = item as Record<string, unknown>;
+    const profileKey = rec.profileKey;
+    const mode = rec.mode;
+    if (typeof profileKey !== "string" || typeof mode !== "string") return [];
+    return [{ profileKey, mode }];
+  });
+}
+
 function readNestedString(payload: unknown, objectKey: string, valueKey: string): string | null {
   const obj = readPayloadRecord(payload, objectKey);
   const value = obj?.[valueKey];
@@ -187,6 +201,19 @@ function activityCopy(
       detail: payloadDetail(payload),
       phase: "output",
     };
+  }
+  if (kind === "COMMENT_CREATED") {
+    const requests = readAgentRequests(payload);
+    if (requests.length > 0) {
+      const first = requests[0];
+      const suffix = requests.length > 1 ? ` +${requests.length - 1}` : "";
+      const mode = `${first.mode.charAt(0)}${first.mode.slice(1).toLowerCase()}`;
+      return {
+        label: `Requested @${first.profileKey}${suffix}`,
+        detail: `${mode} agent request${payloadDetail(payload) ? ` · ${payloadDetail(payload)}` : ""}`,
+        phase: "request",
+      };
+    }
   }
   if (kind === "COMMENT_CREATED" && actorAgentProfileKey) {
     return {

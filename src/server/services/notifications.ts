@@ -422,8 +422,10 @@ async function hydrateNotificationEvents(
     if (event.subjectType === "issue") issueIds.add(event.subjectId);
     if (event.subjectType === "agent") agentIds.add(event.subjectId);
     const payload = asPayload(event.payload);
+    const issueId = readPayloadString(payload, "issueId");
     const agentId = readPayloadString(payload, "agentId");
     const assignedAgentId = readPayloadString(payload, "assignedAgentId");
+    if (issueId) issueIds.add(issueId);
     if (agentId) agentIds.add(agentId);
     if (assignedAgentId) agentIds.add(assignedAgentId);
   }
@@ -477,7 +479,10 @@ async function hydrateNotificationEvents(
     const issue =
       event.subjectType === "issue"
         ? ((issueById.get(event.subjectId) as HydratedIssue | undefined) ?? null)
-        : null;
+        : readPayloadString(payload, "issueId")
+          ? ((issueById.get(readPayloadString(payload, "issueId")!) as HydratedIssue | undefined) ??
+            null)
+          : null;
     const subjectAgent =
       event.subjectType === "agent"
         ? ((agentById.get(event.subjectId) as HydratedAgent | undefined) ?? null)

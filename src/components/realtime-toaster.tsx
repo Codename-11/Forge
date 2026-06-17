@@ -34,6 +34,9 @@ type EventPayload = {
   actorName?: string;
   issuePrefix?: string;
   agentProfileKey?: string;
+  engagementMode?: string;
+  via?: string;
+  agentRequests?: Array<{ profileKey?: string; mode?: string }>;
   slaMinutes?: number;
   requiredAckSeconds?: number;
   breachedByMinutes?: number;
@@ -47,9 +50,7 @@ function asPayload(p: unknown): EventPayload {
 const RECENT_LIMIT = 100;
 
 function toastDurationFor(notification: EventNotificationMetadata): number {
-  return notification.severity === "ERROR" || notification.severity === "CRITICAL"
-    ? 12_000
-    : 8_000;
+  return notification.severity === "ERROR" || notification.severity === "CRITICAL" ? 12_000 : 8_000;
 }
 
 function iconForNotification(notification: EventNotificationMetadata) {
@@ -112,10 +113,7 @@ export default function RealtimeToaster() {
             onClick: () => router.push(notification.primaryHref),
           },
         };
-        if (
-          notification.severity === "ERROR" ||
-          notification.severity === "CRITICAL"
-        ) {
+        if (notification.severity === "ERROR" || notification.severity === "CRITICAL") {
           toast.error(notification.toast.title, options);
         } else if (notification.severity === "SUCCESS") {
           toast.success(notification.toast.title, options);
@@ -130,16 +128,28 @@ export default function RealtimeToaster() {
       switch (evt.kind) {
         case "AGENT_ASSIGNED": {
           const dispatch = payload.dispatch ?? undefined;
-          const who = dispatch?.chosen?.name ?? "agent";
-          const subject = evt.subjectId ?? "an issue";
-          toast(`Dispatch: ${who} took ${subject}`, {
+          const who =
+            dispatch?.chosen?.name ??
+            dispatch?.chosen?.profileKey ??
+            payload.agentProfileKey ??
+            "agent";
+          const issueLabel = payload.issuePrefix ?? "issue";
+          const requestMode = payload.engagementMode
+            ? `${payload.engagementMode.charAt(0)}${payload.engagementMode.slice(1).toLowerCase()}`
+            : null;
+          const title =
+            payload.via === "agent-request"
+              ? `${who} requested · ${requestMode ?? "Execute"} on ${issueLabel}`
+              : `${who} requested on ${issueLabel}`;
+          toast(title, {
             description:
-              dispatch?.reason ?? `mode: ${dispatch?.mode ?? "manual"}`,
+              dispatch?.reason ??
+              (requestMode ? `mode: ${requestMode}` : `mode: ${dispatch?.mode ?? "manual"}`),
             icon: <UserCheck className="h-4 w-4" />,
             ...(evt.subjectType === "issue" && evt.subjectId
               ? {
                   action: {
-                    label: "View issue",
+                    label: `Open ${issueLabel}`,
                     onClick: () => router.push(`/w/${ws.slug}/issues/${evt.subjectId}`),
                   },
                 }
@@ -178,16 +188,37 @@ export default function RealtimeToaster() {
           return;
         }
         case "COMMENT_CREATED": {
+          const firstRequest = payload.agentRequests?.find((r) => r.profileKey && r.mode);
+          if (firstRequest) {
+            const issueLabel = payload.issuePrefix ?? "issue";
+            const mode = `${firstRequest.mode!.charAt(0)}${firstRequest.mode!.slice(1).toLowerCase()}`;
+            toast(`@${firstRequest.profileKey} requested · ${mode} on ${issueLabel}`, {
+              description:
+                (payload.agentRequests?.length ?? 0) > 1
+                  ? `${payload.agentRequests!.length} agent requests`
+                  : "Agent request created",
+              icon: <MessageCircle className="h-4 w-4" />,
+              ...(evt.subjectType === "issue" && evt.subjectId
+                ? {
+                    action: {
+                      label: `Open ${issueLabel}`,
+                      onClick: () => router.push(`/w/${ws.slug}/issues/${evt.subjectId}`),
+                    },
+                  }
+                : {}),
+            });
+            return;
+          }
           if (!payload.mentionsCount || payload.mentionsCount <= 0) return;
           const actor = payload.actorName ?? "Someone";
           const where = payload.issuePrefix ?? "an issue";
           toast(`New mention`, {
-            description: `@${actor} commented on ${where}`,
+            description: `${actor} commented on ${where}`,
             icon: <MessageCircle className="h-4 w-4" />,
             ...(evt.subjectType === "issue" && evt.subjectId
               ? {
                   action: {
-                    label: "View issue",
+                    label: `Open ${where}`,
                     onClick: () => router.push(`/w/${ws.slug}/issues/${evt.subjectId}`),
                   },
                 }

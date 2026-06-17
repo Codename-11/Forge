@@ -6,18 +6,12 @@ import { toast } from "sonner";
 import { MessageCircleReply, Target, Workflow } from "lucide-react";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { Avatar } from "@/components/ui/avatar";
-import {
-  AgentAvatar,
-  type AgentAvatarIdentity,
-} from "@/components/agents/agent-avatar";
+import { AgentAvatar, type AgentAvatarIdentity } from "@/components/agents/agent-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
-import {
-  SubIssuesPanel,
-  ParentIssueBacklink,
-} from "@/components/issue-detail/sub-issues-panel";
+import { SubIssuesPanel, ParentIssueBacklink } from "@/components/issue-detail/sub-issues-panel";
 import { ActionRequestCard } from "@/components/action-requests/action-request-card";
 import {
   CommentToolCallCard,
@@ -27,32 +21,98 @@ import {
   CommentHistoryPopover,
   EditedFallbackLink,
 } from "@/components/issue-detail/comment-history-popover";
-import {
-  ConfidenceChip,
-  type ConfidenceLevel,
-} from "@/components/issue-detail/confidence-chip";
+import { ConfidenceChip, type ConfidenceLevel } from "@/components/issue-detail/confidence-chip";
 import { usePasteUpload } from "@/components/attachments/use-paste-upload";
 import { useDropUpload } from "@/components/attachments/use-drop-upload";
 import { DropOverlay } from "@/components/attachments/drop-overlay";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
-import {
-  parseSlashCommands,
-  SLASH_COMMAND_HINT,
-  type SlashCommand,
-} from "@/lib/slash-commands";
-import {
-  expandTemplatesInBody,
-  type SlashTemplateSideEffect,
-} from "@/lib/slash-templates";
-import {
-  SlashAutocomplete,
-  useSlashAutocomplete,
-} from "@/components/slash-autocomplete";
+import { parseAgentRequestsFromBody, type ParsedAgentRequest } from "@/lib/agent-request-parser";
+import { parseSlashCommands, SLASH_COMMAND_HINT, type SlashCommand } from "@/lib/slash-commands";
+import { expandTemplatesInBody, type SlashTemplateSideEffect } from "@/lib/slash-templates";
+import { SlashAutocomplete, useSlashAutocomplete } from "@/components/slash-autocomplete";
 import { MentionInput } from "@/components/inputs/mention-input";
 import { Kbd } from "@/components/ui/kbd";
 import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+
+type AgentRequestMode = "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS";
+
+type ComposerAgent = {
+  id: string;
+  name: string;
+  profileKey: string;
+  avatar: string | null;
+};
+
+type AgentRequestDraft = ParsedAgentRequest & {
+  agentId: string;
+  agentName: string;
+};
+
+const AGENT_REQUEST_MODES: Array<{
+  value: AgentRequestMode;
+  label: string;
+  hint: string;
+}> = [
+  { value: "DISCUSS", label: "Discuss", hint: "converse/clarify/advise" },
+  { value: "RESEARCH", label: "Research", hint: "gather facts/options" },
+  { value: "REVIEW", label: "Review", hint: "evaluate + verdict" },
+  { value: "EXECUTE", label: "Execute", hint: "deliver the change/result" },
+];
+
+const MODE_LABEL: Record<AgentRequestMode, string> = {
+  EXECUTE: "Execute",
+  RESEARCH: "Research",
+  REVIEW: "Review",
+  DISCUSS: "Discuss",
+};
+
+function isAgentRequestMode(value: unknown): value is AgentRequestMode {
+  return value === "EXECUTE" || value === "RESEARCH" || value === "REVIEW" || value === "DISCUSS";
+}
+
+function detectAgentRequests(
+  body: string,
+  agents: ComposerAgent[],
+  overrides: Record<string, { mode: AgentRequestMode; assignIssue?: boolean }>,
+): AgentRequestDraft[] {
+  const parsed = parseAgentRequestsFromBody(body);
+  const byKey = new Map(agents.map((agent) => [agent.profileKey.toLowerCase(), agent]));
+  const out: AgentRequestDraft[] = [];
+  const seen = new Set<string>();
+  for (const req of parsed) {
+    const agent = byKey.get(req.profileKey.toLowerCase());
+    if (!agent || seen.has(agent.profileKey.toLowerCase())) continue;
+    seen.add(agent.profileKey.toLowerCase());
+    const override = overrides[agent.profileKey.toLowerCase()];
+    const parsedMode = isAgentRequestMode(req.mode) ? req.mode : "DISCUSS";
+    out.push({
+      profileKey: agent.profileKey,
+      mode: override?.mode ?? parsedMode,
+      assignIssue: override?.assignIssue ?? req.assignIssue,
+      agentId: agent.id,
+      agentName: agent.name,
+    });
+  }
+  return out;
+}
+
+function normalizeAgentRequestRows(value: unknown): Array<{
+  profileKey: string;
+  mode: AgentRequestMode;
+  assignIssue?: boolean;
+}> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const rec = item as Record<string, unknown>;
+    const profileKey = rec.profileKey;
+    const mode = rec.mode;
+    if (typeof profileKey !== "string" || !isAgentRequestMode(mode)) return [];
+    return [{ profileKey, mode, assignIssue: rec.assignIssue === true }];
+  });
+}
 
 /**
  * Main column of the issue detail page — description (inline-editable)
@@ -95,6 +155,12 @@ type Comment = {
     status: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED" | "WAITING";
     finishedAt: Date | string | null;
   } | null;
+  /**
+   * Structured Agent Requests created from @agent composer chips or typed
+   * @agent /mode sugar. Rendering these keeps the timeline from relying on
+   * raw prose for requested agent + mode intent.
+   */
+  agentRequests?: unknown;
   /**
    * Optional short reply suggestions an agent attached when posting.
    * Rendered as click-to-insert chips beneath the LATEST agent body
@@ -139,11 +205,7 @@ interface QuickReplyEventDetail {
   text: string;
   agentProfileKey?: string | null;
 }
-function dispatchQuickReply(
-  issueId: string,
-  text: string,
-  agentProfileKey?: string | null,
-) {
+function dispatchQuickReply(issueId: string, text: string, agentProfileKey?: string | null) {
   if (typeof window === "undefined") return;
   window.dispatchEvent(
     new CustomEvent<QuickReplyEventDetail>(QUICK_REPLY_EVENT, {
@@ -250,21 +312,9 @@ export function IssueMain({
       <AgentRunStrip issueId={issueId} />
       <IssueGoalsStrip issueId={issueId} />
       <IssuePlansStrip issueId={issueId} />
-      <DescriptionBlock
-        issueId={issueId}
-        description={description}
-        onSave={onDescriptionSave}
-      />
-      <SubIssuesPanel
-        parentId={issueId}
-        parentProjectId={projectId}
-        parentKind={kind}
-      />
-      <Comments
-        issueId={issueId}
-        comments={comments}
-        canResolveActions={canResolveActions}
-      />
+      <DescriptionBlock issueId={issueId} description={description} onSave={onDescriptionSave} />
+      <SubIssuesPanel parentId={issueId} parentProjectId={projectId} parentKind={kind} />
+      <Comments issueId={issueId} comments={comments} canResolveActions={canResolveActions} />
     </div>
   );
 }
@@ -285,7 +335,7 @@ function IssueGoalsStrip({ issueId }: { issueId: string }) {
   if (goals.length === 0) return null;
   return (
     <section className="flex flex-wrap items-center gap-1.5">
-      <span className="flex items-center gap-1 text-meta uppercase tracking-wide text-muted-foreground">
+      <span className="text-meta flex items-center gap-1 uppercase tracking-wide text-muted-foreground">
         <Target className="h-3 w-3" />
         {goals.length === 1 ? "Goal" : "Goals"}
       </span>
@@ -293,7 +343,7 @@ function IssueGoalsStrip({ issueId }: { issueId: string }) {
         <Link
           key={g.id}
           href={`/w/${ws.slug}/goals/${g.id}`}
-          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card/40 px-2 py-1 text-meta transition hover:border-ember/40 hover:text-ember"
+          className="text-meta inline-flex items-center gap-1.5 rounded-md border border-border bg-card/40 px-2 py-1 transition hover:border-ember/40 hover:text-ember"
           title={g.title}
         >
           <span className="max-w-[18rem] truncate">{g.title}</span>
@@ -314,15 +364,12 @@ function IssueGoalsStrip({ issueId }: { issueId: string }) {
  */
 function IssuePlansStrip({ issueId }: { issueId: string }) {
   const ws = useWorkspace();
-  const { data } = trpc.executionPlan.list.useQuery(
-    { issueId, limit: 10 },
-    { staleTime: 30_000 },
-  );
+  const { data } = trpc.executionPlan.list.useQuery({ issueId, limit: 10 }, { staleTime: 30_000 });
   const plans = data?.items ?? [];
   if (plans.length === 0) return null;
   return (
     <section className="flex flex-wrap items-center gap-1.5">
-      <span className="flex items-center gap-1 text-meta uppercase tracking-wide text-muted-foreground">
+      <span className="text-meta flex items-center gap-1 uppercase tracking-wide text-muted-foreground">
         <Workflow className="h-3 w-3" />
         {plans.length === 1 ? "Plan" : "Plans"}
       </span>
@@ -333,7 +380,7 @@ function IssuePlansStrip({ issueId }: { issueId: string }) {
           <Link
             key={p.id}
             href={`/w/${ws.slug}/plans/${p.id}`}
-            className="inline-flex items-center gap-2 rounded-md border border-border bg-card/40 px-2 py-1 text-meta transition hover:border-ember/40 hover:text-ember"
+            className="text-meta inline-flex items-center gap-2 rounded-md border border-border bg-card/40 px-2 py-1 transition hover:border-ember/40 hover:text-ember"
             title={`${p.title} · ${p.doneSteps}/${total} steps · ${p.status.toLowerCase()}`}
           >
             <span className="max-w-[16rem] truncate">{p.title}</span>
@@ -450,8 +497,7 @@ function DescriptionBlock({
           <div className="relative">
             <MentionInput
               ref={(handle) => {
-                editorRef.current =
-                  (handle?.textarea as HTMLTextAreaElement | null) ?? null;
+                editorRef.current = (handle?.textarea as HTMLTextAreaElement | null) ?? null;
               }}
               autoFocus
               multiline
@@ -492,11 +538,7 @@ function DescriptionBlock({
             {slash.visible && <SlashAutocomplete {...slash.dropdownProps} />}
           </div>
           <div className="flex gap-2">
-            <Button
-              variant="ember"
-              size="sm"
-              onClick={commitDescription}
-            >
+            <Button variant="ember" size="sm" onClick={commitDescription}>
               Save
             </Button>
             <Button
@@ -520,9 +562,7 @@ function DescriptionBlock({
           {description ? (
             <MarkdownWithAttachments body={description} />
           ) : (
-            <span className="text-muted-foreground">
-              No description. Click to add.
-            </span>
+            <span className="text-muted-foreground">No description. Click to add.</span>
           )}
         </article>
       )}
@@ -561,14 +601,18 @@ function Comments({
   // action-request). Mirrors `pendingCommands` — fired in the
   // `createComment.onSuccess` callback so we don't open an unblock
   // request for a comment that never landed.
-  const [pendingSideEffects, setPendingSideEffects] = useState<
-    SlashTemplateSideEffect[]
-  >([]);
+  const [pendingSideEffects, setPendingSideEffects] = useState<SlashTemplateSideEffect[]>([]);
   // True while MentionInput's @-dropdown is open. Used to suppress the
   // slash picker so the two autocompletes never coexist at the caret —
   // whichever is open owns Arrow/Enter/Tab/Esc.
   const [mentionOpen, setMentionOpen] = useState(false);
-
+  const [agentRequestOverrides, setAgentRequestOverrides] = useState<
+    Record<string, { mode: AgentRequestMode; assignIssue?: boolean }>
+  >({});
+  const { data: agentRoster = [] } = trpc.agent.list.useQuery(
+    { includeArchived: false },
+    { staleTime: 60_000 },
+  );
   // Hydrate the draft from localStorage on mount (and when the issue
   // changes — guards against the page re-keying without remounting).
   useEffect(() => {
@@ -600,10 +644,7 @@ function Comments({
     function onInsert(event: Event) {
       const detail = (event as CustomEvent<QuickReplyEventDetail>).detail;
       if (!detail || detail.issueId !== issueId) return;
-      const text = quickReplyTextForComposer(
-        detail.text,
-        detail.agentProfileKey,
-      );
+      const text = quickReplyTextForComposer(detail.text, detail.agentProfileKey);
       setDraft((prev) => {
         // If the composer already has text, separate with a blank
         // line so the chip doesn't trample mid-sentence. Otherwise
@@ -620,8 +661,7 @@ function Comments({
       });
     }
     window.addEventListener(QUICK_REPLY_EVENT, onInsert as EventListener);
-    return () =>
-      window.removeEventListener(QUICK_REPLY_EVENT, onInsert as EventListener);
+    return () => window.removeEventListener(QUICK_REPLY_EVENT, onInsert as EventListener);
   }, [issueId]);
 
   // Autocomplete: fires on top-of-body slash lines, inserts stubs on
@@ -690,9 +730,7 @@ function Comments({
       toast.warning(`Goal created, but planning did not start: ${e.message}`);
       if (goalId && ws) router.push(`/w/${ws.slug}/goals/${goalId}`);
     },
-  }) as
-    | { mutate: (input: { goalId: string }) => void; isPending: boolean }
-    | undefined;
+  }) as { mutate: (input: { goalId: string }) => void; isPending: boolean } | undefined;
   const createGoalMut = goalCreateAny?.useMutation({
     onSuccess: (result: { id?: string } | undefined) => {
       const goalId = result?.id;
@@ -724,9 +762,7 @@ function Comments({
             .join(", ")}`,
         );
       } else if (results.length > 0) {
-        toast.success(
-          `Applied ${results.length} command${results.length === 1 ? "" : "s"}.`,
-        );
+        toast.success(`Applied ${results.length} command${results.length === 1 ? "" : "s"}.`);
       }
       utils.issue.byId.invalidate({ id: issueId });
       utils.issue.activity.invalidate({ issueId });
@@ -770,15 +806,14 @@ function Comments({
             if (createGoalMut) {
               createGoalMut.mutate({ title: eff.title, issueId });
             } else {
-              toast.error(
-                "Goal orchestration isn't available yet in this workspace.",
-              );
+              toast.error("Goal orchestration isn't available yet in this workspace.");
             }
           }
         }
         setPendingSideEffects([]);
       }
       setDraft("");
+      setAgentRequestOverrides({});
       clearDraft(draftKey);
     },
     onError: (e) => toast.error(e.message),
@@ -809,16 +844,42 @@ function Comments({
     if (sideEffects.length > 0) {
       setPendingSideEffects((prev) => [...prev, ...sideEffects]);
     }
-    createComment.mutate({ issueId, body });
-  }, [draft, createComment, applyCommandsM, issueId, draftKey]);
+    const finalAgentRequests = detectAgentRequests(
+      body,
+      agentRoster.map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        profileKey: agent.profileKey,
+        avatar: agent.avatar ?? null,
+      })),
+      agentRequestOverrides,
+    ).map((request) => ({
+      profileKey: request.profileKey,
+      mode: request.mode,
+      assignIssue: request.assignIssue === true,
+    }));
+    createComment.mutate({ issueId, body, agentRequests: finalAgentRequests });
+  }, [draft, createComment, applyCommandsM, issueId, draftKey, agentRoster, agentRequestOverrides]);
 
   // Live preview: do we have any slash commands (on any line)? Drives
   // the hint chip below the textarea. We reuse the real parser so the
   // hint only shows for RECOGNISED commands — prose with a stray `/`
   // (URLs, "and/or") doesn't trip it.
-  const hasCommands = useMemo(
-    () => parseSlashCommands(draft).commands.length > 0,
-    [draft],
+  const hasCommands = useMemo(() => parseSlashCommands(draft).commands.length > 0, [draft]);
+
+  const agentRequests = useMemo(
+    () =>
+      detectAgentRequests(
+        draft,
+        agentRoster.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          profileKey: agent.profileKey,
+          avatar: agent.avatar ?? null,
+        })),
+        agentRequestOverrides,
+      ),
+    [draft, agentRoster, agentRequestOverrides],
   );
 
   const paste = usePasteUpload({
@@ -854,7 +915,9 @@ function Comments({
   }, [timelineComments]);
   return (
     <section>
-      <SectionLabel>Comments {timelineComments.length > 0 && <Count>{timelineComments.length}</Count>}</SectionLabel>
+      <SectionLabel>
+        Comments {timelineComments.length > 0 && <Count>{timelineComments.length}</Count>}
+      </SectionLabel>
       <div className="space-y-3">
         {timelineComments.length === 0 && (
           <p className="text-xs text-muted-foreground">No comments yet.</p>
@@ -896,8 +959,7 @@ function Comments({
               // so the slash autocomplete hook can read it on every
               // tick. Cast: when multiline=true the imperative handle
               // exposes the textarea element.
-              composerRef.current =
-                (handle?.textarea as HTMLTextAreaElement | null) ?? null;
+              composerRef.current = (handle?.textarea as HTMLTextAreaElement | null) ?? null;
             }}
             multiline
             rows={2}
@@ -932,12 +994,69 @@ function Comments({
           />
           {slash.visible && <SlashAutocomplete {...slash.dropdownProps} />}
         </div>
-        {hasCommands ? (
-          <div className="text-meta text-muted-foreground">
-            {SLASH_COMMAND_HINT}
+        {agentRequests.length > 0 && (
+          <div className="text-meta flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-card/30 px-2 py-1.5">
+            <span className="text-muted-foreground">Agent request</span>
+            {agentRequests.map((request) => {
+              const key = request.profileKey.toLowerCase();
+              return (
+                <span
+                  key={key}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-background/70 px-1.5 py-0.5"
+                >
+                  <span className="font-medium text-foreground">{request.agentName}</span>
+                  <span className="font-mono text-[0.625rem] text-muted-foreground">
+                    @{request.profileKey}
+                  </span>
+                  <select
+                    aria-label={`Mode for ${request.agentName}`}
+                    value={request.mode}
+                    onChange={(e) => {
+                      const mode = e.target.value as AgentRequestMode;
+                      setAgentRequestOverrides((prev) => ({
+                        ...prev,
+                        [key]: {
+                          mode,
+                          assignIssue:
+                            mode === "EXECUTE"
+                              ? (prev[key]?.assignIssue ?? request.assignIssue ?? false)
+                              : false,
+                        },
+                      }));
+                    }}
+                    className="rounded border border-border bg-card/60 px-1 py-0.5 text-[0.6875rem] text-foreground"
+                  >
+                    {AGENT_REQUEST_MODES.map((mode) => (
+                      <option key={mode.value} value={mode.value}>
+                        {mode.label} — {mode.hint}
+                      </option>
+                    ))}
+                  </select>
+                  {request.mode === "EXECUTE" && (
+                    <label className="inline-flex items-center gap-1 text-[0.6875rem] text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={request.assignIssue === true}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setAgentRequestOverrides((prev) => ({
+                            ...prev,
+                            [key]: { mode: "EXECUTE", assignIssue: checked },
+                          }));
+                        }}
+                      />
+                      Assign issue
+                    </label>
+                  )}
+                </span>
+              );
+            })}
           </div>
+        )}
+        {hasCommands ? (
+          <div className="text-meta text-muted-foreground">{SLASH_COMMAND_HINT}</div>
         ) : (
-          <div className="flex flex-wrap items-center gap-1.5 text-meta text-muted-foreground">
+          <div className="text-meta flex flex-wrap items-center gap-1.5 text-muted-foreground">
             <Kbd>@</Kbd>
             <span>mention</span>
             <span className="text-muted-foreground/40">·</span>
@@ -953,11 +1072,7 @@ function Comments({
           <Button
             type="submit"
             size="sm"
-            disabled={
-              (!draft.trim()) ||
-              createComment.isPending ||
-              applyCommandsM.isPending
-            }
+            disabled={!draft.trim() || createComment.isPending || applyCommandsM.isPending}
           >
             Comment
             <Kbd className="ml-1.5">⌘⏎</Kbd>
@@ -1013,7 +1128,11 @@ function TimelineCommentCard({
   // Mission Control chat surface) instead of an opaque code fence.
   // Plain markdown bodies fall through with a single `md` segment.
   const bodySegments = useMemo(() => splitToolDirectives(rest), [rest]);
-  const quickReplies = isAgent && showQuickReplies ? comment.suggestedReplies ?? [] : [];
+  const quickReplies = isAgent && showQuickReplies ? (comment.suggestedReplies ?? []) : [];
+  const structuredAgentRequests = useMemo(
+    () => normalizeAgentRequestRows(comment.agentRequests),
+    [comment.agentRequests],
+  );
   // Confidence chip: AGENT-authored only, even if a stray human row
   // ever carries the field. Falsy levels short-circuit the render.
   const confidenceLevel: ConfidenceLevel | null =
@@ -1026,7 +1145,7 @@ function TimelineCommentCard({
   // useMemo above so hook order stays stable across render paths.
   if (comment.kind === "SYSTEM") {
     return (
-      <div className="flex items-center gap-2 px-1 py-1.5 text-meta italic text-muted-foreground">
+      <div className="text-meta flex items-center gap-2 px-1 py-1.5 italic text-muted-foreground">
         <span className="h-px flex-1 bg-border/60" />
         <MarkdownWithAttachments
           body={comment.body}
@@ -1044,7 +1163,7 @@ function TimelineCommentCard({
       <CommentAvatar
         name={displayName}
         image={isAgent ? null : (comment.author?.image ?? null)}
-        agent={isAgent ? comment.authoringAgent ?? null : null}
+        agent={isAgent ? (comment.authoringAgent ?? null) : null}
       />
       <div className="min-w-0 flex-1 space-y-2">
         {/*
@@ -1070,7 +1189,7 @@ function TimelineCommentCard({
                 : "border-border bg-card/40"
           }`}
         >
-          <div className="flex flex-wrap items-center gap-1.5 text-meta">
+          <div className="text-meta flex flex-wrap items-center gap-1.5">
             <span className="font-medium text-foreground">{displayName}</span>
             {isAgent && comment.authoringAgent && (
               <span className="font-mono text-[0.6875rem] text-muted-foreground">
@@ -1106,22 +1225,16 @@ function TimelineCommentCard({
               {isStatus ? `updated ${relativeTime(statusTime)}` : relativeTime(comment.createdAt)}
             </span>
             {!isStatus && comment.editedAt && (
-              <CommentEditedMarker
-                commentId={comment.id}
-                editedAt={comment.editedAt}
-              />
+              <CommentEditedMarker commentId={comment.id} editedAt={comment.editedAt} />
             )}
             {confidenceLevel && (
-              <ConfidenceChip
-                level={confidenceLevel}
-                reason={comment.confidenceReason ?? null}
-              />
+              <ConfidenceChip level={confidenceLevel} reason={comment.confidenceReason ?? null} />
             )}
             {isEditable && !editing && (
               <button
                 type="button"
                 onClick={() => setEditing(true)}
-                className="focus-ring ml-auto rounded px-1 text-meta text-muted-foreground/70 transition-colors hover:text-foreground"
+                className="focus-ring text-meta ml-auto rounded px-1 text-muted-foreground/70 transition-colors hover:text-foreground"
               >
                 Edit
               </button>
@@ -1130,6 +1243,27 @@ function TimelineCommentCard({
           {provenance && (
             <div className="mt-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
               {provenance}
+            </div>
+          )}
+          {structuredAgentRequests.length > 0 && (
+            <div className="text-meta mt-1 flex flex-wrap items-center gap-1.5">
+              {structuredAgentRequests.map((request) => {
+                const mode = isAgentRequestMode(request.mode) ? request.mode : "DISCUSS";
+                return (
+                  <span
+                    key={`${request.profileKey}:${mode}`}
+                    className="inline-flex items-center gap-1 rounded-full border border-ember/25 bg-ember/[0.06] px-1.5 py-0.5 text-muted-foreground"
+                  >
+                    <span>requested</span>
+                    <span className="font-medium text-foreground">@{request.profileKey}</span>
+                    <span className="text-muted-foreground/50">·</span>
+                    <span className="font-medium text-foreground">{MODE_LABEL[mode]}</span>
+                    {request.assignIssue && mode === "EXECUTE" && (
+                      <span className="text-muted-foreground/70">+ assign</span>
+                    )}
+                  </span>
+                );
+              })}
             </div>
           )}
           {editing ? (
@@ -1149,11 +1283,7 @@ function TimelineCommentCard({
             <QuickReplyChips
               replies={quickReplies}
               onPick={(text) =>
-                dispatchQuickReply(
-                  issueId,
-                  text,
-                  comment.authoringAgent?.profileKey,
-                )
+                dispatchQuickReply(issueId, text, comment.authoringAgent?.profileKey)
               }
             />
           )}
@@ -1257,8 +1387,7 @@ function CommentEditor({
       <div className="relative">
         <MentionInput
           ref={(handle) => {
-            editorRef.current =
-              (handle?.textarea as HTMLTextAreaElement | null) ?? null;
+            editorRef.current = (handle?.textarea as HTMLTextAreaElement | null) ?? null;
           }}
           autoFocus
           multiline
@@ -1318,12 +1447,7 @@ function CommentBodyWithTools({
   // Fast path for the common case — a body with no tool directives —
   // avoids wrapping a single MarkdownWithAttachments in an extra div.
   if (segments.length === 1 && segments[0].kind === "md") {
-    return (
-      <MarkdownWithAttachments
-        body={segments[0].text}
-        className={className}
-      />
-    );
+    return <MarkdownWithAttachments body={segments[0].text} className={className} />;
   }
   return (
     <div className={className}>
@@ -1381,17 +1505,13 @@ function QuickReplyChips({
   onPick: (text: string) => void;
 }) {
   return (
-    <div
-      role="group"
-      aria-label="Quick reply suggestions"
-      className="mt-2 flex flex-wrap gap-1.5"
-    >
+    <div role="group" aria-label="Quick reply suggestions" className="mt-2 flex flex-wrap gap-1.5">
       {replies.map((text, i) => (
         <button
           key={`${i}-${text}`}
           type="button"
           onClick={() => onPick(text)}
-          className="focus-ring inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-left text-meta text-muted-foreground transition-colors hover:border-ember/40 hover:text-foreground"
+          className="focus-ring text-meta inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-left text-muted-foreground transition-colors hover:border-ember/40 hover:text-foreground"
         >
           <MessageCircleReply className="h-3 w-3" />
           <span className="min-w-0 break-words">{text}</span>
@@ -1420,13 +1540,7 @@ function CommentAvatar({
 }) {
   if (agent) {
     return (
-      <AgentAvatar
-        agent={agent}
-        size="xs"
-        shape="circle"
-        active
-        className="h-[22px] w-[22px]"
-      />
+      <AgentAvatar agent={agent} size="xs" shape="circle" active className="h-[22px] w-[22px]" />
     );
   }
   return <Avatar name={name} image={image} size={22} />;
@@ -1441,9 +1555,5 @@ function SectionLabel({ children }: { children: ReactNode }) {
 }
 
 function Count({ children }: { children: ReactNode }) {
-  return (
-    <span className="font-mono text-[0.6875rem] text-muted-foreground">
-      {children}
-    </span>
-  );
+  return <span className="font-mono text-[0.6875rem] text-muted-foreground">{children}</span>;
 }

@@ -44,6 +44,7 @@ import { EmptyState, MOTION, SkeletonList } from "@/components/ui";
 
 type Kind =
   | "ISSUE_CREATED"
+  | "ISSUE_UPDATED"
   | "ISSUE_STATUS_CHANGED"
   | "ISSUE_ASSIGNED"
   | "ISSUE_PRIORITY_CHANGED"
@@ -108,6 +109,7 @@ type PersistedNotificationRow =
 
 const KINDS: Kind[] = [
   "ISSUE_CREATED",
+  "ISSUE_UPDATED",
   "ISSUE_STATUS_CHANGED",
   "ISSUE_ASSIGNED",
   "ISSUE_PRIORITY_CHANGED",
@@ -375,6 +377,24 @@ function readPayloadBoolean(payload: unknown, key: string): boolean | null {
   return typeof v === "boolean" ? v : null;
 }
 
+function readAgentRequests(payload: unknown): Array<{ profileKey: string; mode: string }> {
+  if (!payload || typeof payload !== "object") return [];
+  const raw = (payload as Record<string, unknown>).agentRequests;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const rec = item as Record<string, unknown>;
+    const profileKey = rec.profileKey;
+    const mode = rec.mode;
+    if (typeof profileKey !== "string" || typeof mode !== "string") return [];
+    return [{ profileKey, mode }];
+  });
+}
+
+function formatModeLabel(mode: string): string {
+  return `${mode.charAt(0)}${mode.slice(1).toLowerCase()}`;
+}
+
 function chatThreadIdForEvent(evt: TimelineEvent): string | null {
   if (evt.subjectType === "chat-thread") return evt.subjectId;
   const direct = readPayloadString(evt.payload, "threadId");
@@ -625,6 +645,34 @@ function summarizeEvent(
         ),
         meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
       };
+    case "ISSUE_UPDATED":
+      if (evt.subjectType === "action-request") {
+        const title = readPayloadString(evt.payload, "title");
+        const kind = readPayloadString(evt.payload, "kind");
+        return {
+          headline: (
+            <>
+              {actorName} opened an action request on {issueLink}
+            </>
+          ),
+          meta: title ? (
+            <span className="truncate">
+              {title}
+              {kind ? ` · ${kind}` : ""}
+            </span>
+          ) : issue ? (
+            <span className="truncate">{issue.title}</span>
+          ) : undefined,
+        };
+      }
+      return {
+        headline: (
+          <>
+            {actorName} updated {issueLink}
+          </>
+        ),
+        meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
+      };
     case "ISSUE_ASSIGNED": {
       const agentHandle = evt.agent?.profileKey ?? evt.issue?.assignedAgent?.profileKey;
       return {
@@ -645,8 +693,15 @@ function summarizeEvent(
       const agentHandle = activityAgentHandle(evt);
       const redirectedFromRunId = readPayloadString(evt.payload, "redirectedFromRunId");
       const auto = readPayloadBoolean(evt.payload, "auto") === true;
+      const viaAgentRequest = readPayloadString(evt.payload, "via") === "agent-request";
+      const engagementMode = readPayloadString(evt.payload, "engagementMode");
       return {
-        headline: (
+        headline: viaAgentRequest ? (
+          <>
+            {actorName} requested {agentHandleNode(agentHandle)} ·{" "}
+            {engagementMode ? formatModeLabel(engagementMode) : "Execute"} on {issueLink}
+          </>
+        ) : (
           <>
             {auto ? "Auto-dispatch" : actorName} requested wake for {agentHandleNode(agentHandle)}{" "}
             on {issueLink}
@@ -771,7 +826,23 @@ function summarizeEvent(
         meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
       };
     }
-    case "COMMENT_CREATED":
+    case "COMMENT_CREATED": {
+      const requests = readAgentRequests(evt.payload);
+      if (requests.length > 0) {
+        const first = requests[0];
+        const suffix = requests.length > 1 ? ` +${requests.length - 1}` : "";
+        return {
+          headline: (
+            <>
+              {actorName} requested <span className="font-mono">@{first.profileKey}</span>
+              {suffix} · {formatModeLabel(first.mode)} on {issueLink}
+            </>
+          ),
+          meta:
+            runSummaryMeta(evt.payload) ??
+            (issue ? <span className="truncate">{issue.title}</span> : undefined),
+        };
+      }
       if (readPayloadString(evt.payload, "kind") === "STATUS") {
         return {
           headline: (
@@ -799,6 +870,7 @@ function summarizeEvent(
         ),
         meta: issue ? <span className="truncate">{issue.title}</span> : undefined,
       };
+    }
     case "AGENT_RUN_STARTED": {
       const handle = activityAgentHandle(evt);
       return {
