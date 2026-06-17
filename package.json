@@ -60,6 +60,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "framer-motion": "^12.40.0",
     "ioredis": "^5.4.2",
     "jose": "^5.9.6",
     "katex": "^0.16.47",

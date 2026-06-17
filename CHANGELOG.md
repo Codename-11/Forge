@@ -13,6 +13,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **The dashboard Customize mode is now a fluid grid.** Tiles live on a 2-column grid you can drag to reorder — the board reflows with smooth motion as you drag instead of snapping. Drag a tile's right edge (or hit the size button) to snap it between half and full width, and the layout animates into place. Your order, widths, and hidden tiles save automatically. Respects reduced-motion.
 - **The issues list loads every issue, not just the first 50.** The list now pages in more as you scroll (with a "Load more" fallback); the board pages each column independently, so low-traffic columns like Backlog and Done are no longer starved by a shared cap.
 - **Keyboard navigation on the issues list.** Move the row cursor with `j`/`k` or the arrow keys, open the focused issue with `↵`, and select it with `x` — no mouse required. Filter pop-overs also close with `Esc` and move with the arrow keys.
 - **Filtered issue views are now shareable.** Your active filters, search, sort, and grouping live in the URL, so a filtered list can be bookmarked, shared, and survives a refresh — and the browser Back/Forward buttons undo and redo filter changes.

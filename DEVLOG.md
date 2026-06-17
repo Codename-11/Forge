@@ -9918,3 +9918,38 @@ OPENAI_API_KEY pnpm test` → 901 passed / 1 skipped (incl. mcp.test.ts's
 MCP handler was deliberately not changed). Client behaviour (infinite scroll,
 keyboard, URL hydration, board columns) not covered by node tests — browser
 smoke-test recommended before deploy.
+
+## 2026-06-17 — Dashboard customize: animated 2-col grid (framer-motion)
+
+Reference mock (`.orca/drops/01 _ Dashboard.png`) showed a tiled 2-column
+dashboard; the ask was a smoother customize with animated reshape/resize on
+drag. Current customize was a full-width vertical `space-y-6` stack with native
+HTML5 drag (abrupt), no resize, no animation.
+
+Chose **framer-motion** (user-selected over hand-rolled FLIP / react-grid-layout)
+— added `framer-motion@^12.40` (+3 packages, route-scoped: dashboard route
+first-load 25kB → 66kB, shared chunk unchanged).
+
+- **dashboard-stack.tsx** rewritten: responsive `grid-cols-1 lg:grid-cols-2`,
+  each tile a `<motion.div layout>` so every order/width change is a layout
+  animation (the "reshape" smoothness). `half` = 1 col, `full` = `lg:col-span-2`.
+  - Drag-to-reorder from the grip (`useDragControls` + `dragListener={false}`,
+    `dragSnapToOrigin`); `onDrag` hit-tests `[data-widget-id]` rects in reading
+    order and live-reorders, so neighbours flow out of the way via `layout` and
+    the tile springs to its committed slot on release.
+  - Edge resize handle (pointer-capture) snaps half↔full past a 64px threshold;
+    also a maximize/minimize button + up/down buttons for keyboard/a11y.
+  - `useReducedMotion()` → instant transitions, no whileDrag scale.
+- **Layout model**: `DashboardLayout` gained `widths?: Record<id, 'half'|'full'>`;
+  `DASHBOARD_PREFS` zod schema (user.ts) gained `widths` (tolerant of unknown
+  ids like order/hidden). page.tsx seeds + persists widths; registry widgets got
+  `defaultWidth` (most `half`, notes `full`) for the tiled reference look.
+  No prisma change (dashboardPrefs is already Json).
+
+Scope: upgraded the existing customizable stack only; fixed top (greeting/
+needs-you/onboarding/focus) + bottom 3-col stats left as-is. Fully unifying all
+tiles into one grid is a possible follow-up.
+
+Verification: `pnpm typecheck` clean; `pnpm lint` clean; `pnpm build` OK
+(framer-motion bundles under Next 15 / React 19, route-scoped). Drag/resize
+interaction is not covered by tests — browser smoke-test recommended.

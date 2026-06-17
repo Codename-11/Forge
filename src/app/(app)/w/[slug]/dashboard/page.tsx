@@ -162,15 +162,20 @@ export default function DashboardPage() {
     if (layoutSeeded.current || !account) return;
     layoutSeeded.current = true;
     const p = account.dashboardPrefs as
-      | { order?: string[]; hidden?: string[] }
+      | { order?: string[]; hidden?: string[]; widths?: Record<string, "half" | "full"> }
       | null;
-    setLayout({ order: p?.order ?? [], hidden: p?.hidden ?? [] });
+    setLayout({ order: p?.order ?? [], hidden: p?.hidden ?? [], widths: p?.widths ?? {} });
   }, [account]);
-  const effLayout: DashboardLayout = layout ?? { order: [], hidden: [] };
+  const effLayout: DashboardLayout = layout ?? { order: [], hidden: [], widths: {} };
   const persistLayout = useCallback(
     (next: DashboardLayout) => {
       setLayout(next);
-      setPrefsMut.mutate({ order: next.order, hidden: next.hidden, collapsed: [] });
+      setPrefsMut.mutate({
+        order: next.order,
+        hidden: next.hidden,
+        collapsed: [],
+        widths: next.widths ?? {},
+      });
     },
     [setPrefsMut],
   );
@@ -180,17 +185,34 @@ export default function DashboardPage() {
       {
         id: "today",
         title: "Today",
+        defaultWidth: "half",
         node: <TodayWidget slug={slug} workspaceKey={workspaceKey} />,
       },
-      { id: "pulse", title: "Pulse", node: <PulseTile slug={slug} /> },
-      { id: "resume", title: "Pick up where you left off", node: <ResumeTile slug={slug} /> },
-      { id: "agent-activity", title: "Agent activity", node: <AgentActivityTile slug={slug} /> },
-      { id: "ideas", title: "Ideas", node: <IdeasTile slug={slug} /> },
-      { id: "quick-notes", title: "Notes & journal", node: <QuickNotesWidget /> },
-      { id: "standup", title: "Standup", node: <StandupTile slug={slug} /> },
+      { id: "pulse", title: "Pulse", defaultWidth: "half", node: <PulseTile slug={slug} /> },
+      {
+        id: "resume",
+        title: "Pick up where you left off",
+        defaultWidth: "half",
+        node: <ResumeTile slug={slug} />,
+      },
+      {
+        id: "agent-activity",
+        title: "Agent activity",
+        defaultWidth: "half",
+        node: <AgentActivityTile slug={slug} />,
+      },
+      { id: "ideas", title: "Ideas", defaultWidth: "half", node: <IdeasTile slug={slug} /> },
+      {
+        id: "quick-notes",
+        title: "Notes & journal",
+        defaultWidth: "full",
+        node: <QuickNotesWidget />,
+      },
+      { id: "standup", title: "Standup", defaultWidth: "half", node: <StandupTile slug={slug} /> },
       {
         id: "whats-new",
         title: "What's new",
+        defaultWidth: "half",
         node: (
           <WhatsNewTile slug={slug} seenAt={account?.changelogSeenAt ?? null} />
         ),
@@ -210,7 +232,7 @@ export default function DashboardPage() {
             {editing && (
               <button
                 type="button"
-                onClick={() => persistLayout({ order: [], hidden: [] })}
+                onClick={() => persistLayout({ order: [], hidden: [], widths: {} })}
                 className="focus-ring inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
                 title="Reset to the default layout"
               >
