@@ -26,6 +26,8 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Fixed
 
+- **Unused dashboard widgets no longer show as blank tiles.** Widgets with nothing to show (no agents, no recent items, etc.) collapse and take no space; in Customize mode they stay visible, flagged "not in use," so you can hide them.
+- **Dashboard customize drag feels smoother.** You can now grab a tile anywhere (not just the small grip), reordering no longer jitters while tiles animate, and the resize edge is a larger, easier target.
 - **Filtering the issues list by a "Done" (or "Cancelled") status now shows those issues.** Previously the list hid completed work by default, so explicitly selecting a Done status from the Status filter returned nothing. The list now includes done issues whenever your filter explicitly asks for a completed status.
 - **The issues header count is now honest.** The subtitle reflects what you're actually looking at ("N matching" when filters are active) instead of a raw total that counted archived, done, and snoozed issues.
 - **"Clear filters" no longer snaps back.** Clearing with both a saved view and a due-date deep link active could silently re-apply the view; it now clears everything in one step. The board also shows a "no matches" state with a Clear shortcut, like the list.

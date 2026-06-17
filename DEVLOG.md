@@ -10007,3 +10007,20 @@ tiles into one grid is a possible follow-up.
 Verification: `pnpm typecheck` clean; `pnpm lint` clean; `pnpm build` OK
 (framer-motion bundles under Next 15 / React 19, route-scoped). Drag/resize
 interaction is not covered by tests — browser smoke-test recommended.
+
+## 2026-06-17 — Dashboard customize polish (empty collapse + smoother drag)
+
+Follow-up to the framer-motion grid: it "felt finnicky" and unused widgets
+showed as blank tiles. dashboard-stack.tsx:
+- Restored `:empty` collapse (lost in the grid rewrite) — `!editing &&
+  "empty:hidden"` on the tile, so a widget that renders null takes no space.
+  In edit mode tiles stay visible with a `peer-empty:block` "Not in use"
+  placeholder so users know to hide them.
+- Drag target is now the full tile body (an absolute overlay below the
+  control strip starts the drag via `useDragControls`), not the 14px grip.
+- Reorder cool-down (90ms) + final snap on release stops the mid-drag
+  thrash (hit-testing tiles while they were still layout-animating caused
+  oscillation). Crisper spring (520/40/0.8), `dragElastic: 0`.
+- Resize handle widened 8px→16px; size button stays the reliable toggle.
+
+typecheck + lint clean. Not browser-tested (headless box).
