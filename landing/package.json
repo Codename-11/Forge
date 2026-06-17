@@ -1,0 +1,32 @@
+{
+  "name": "forge-landing",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Forge — public landing site. Standalone Next.js app (static export), decoupled from the main Forge application.",
+  "scripts": {
+    "dev": "next dev --turbo --hostname 0.0.0.0 --port 3200",
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0 --port 3200",
+    "serve": "npx serve out -l tcp://0.0.0.0:3200",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "^15.5.15",
+    "next-themes": "^0.4.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.5",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9",
+    "eslint-config-next": "^15.5.15",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2"
+  }
+}

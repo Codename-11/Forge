@@ -2,6 +2,50 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-16 — Public landing site (`landing/`, standalone Next app)
+
+Built the marketing site from the Claude Design handoff bundle (`Forge
+Landing Site` project). Implemented as a **standalone** Next 15 app in
+`landing/` — its own `package.json`/lockfile, decoupled from the main app,
+`output: "export"` → static `out/` deployable to any host. Stack: React 19,
+Tailwind 3 wired to the Forge token vars, `next/font` (Inter + JetBrains
+Mono), `next-themes` (light/dark). `landing/README.md` documents it.
+
+`app/globals.css` mirrors the Forge token system from `src/app/globals.css`
+(tokens + the motion/glow-grid keyframes) plus a thin **responsive layer**:
+the section components are inline-styled verbatim from the prototype, and
+responsiveness is layered via marker classes (`.lnd-cols-2/3/4`, `.lnd-pad`,
+`.lnd-pad-left`, `.lnd-hero-grid`, `.lnd-hero-visual`, `.lnd-nav*`,
+`.lnd-footer*`, `.lnd-release-row`, `.lnd-navlink`, `.lnd-doclink`) with
+`!important` media-query overrides. The prototype's canvas/tweaks shell is
+dropped; one responsive page replaces the separate desktop/mobile artboards.
+
+Routes: `/` (hero → 4 pillars → 3-tier runtimes → product strip → planning →
+self-host → changelog preview → footer), `/releases` (full changelog from
+`lib/releases.ts`), `/docs` (docs index), branded `not-found`, plus
+`robots.ts` + `sitemap.ts` + per-page OG/canonical for SEO.
+
+Process: ported the ~10 section components by fanning out parallel subagents
+(verbatim port + per-file responsive markers), each adversarially
+fidelity-reviewed against the prototype; then a 3-dimension review
+(responsive / a11y / correctness) caught real bugs I fixed: phone nav
+overflow (hide GitHub pill + version badge < 860/520px), the self-host
+install `<pre>` inverting onto `--foreground` and going invisible in dark
+mode (pinned to a fixed dark terminal surface), the hero product-mock
+cramping on phones (hidden < 760px, matching the mobile artboard), missing
+`<h1>` + heading-level skips on sub-pages, dead in-page anchors rewired to
+real routes, and trailing-slash consistency.
+
+Intentional non-fix: the primary ember CTA is ~3.06:1 in light mode (WCAG AA
+miss for 13px bold) — it's the brand `--ember` token mirrored verbatim from
+the app's design system (lockstep per CLAUDE.md) and the exact button shipped
+in-product, so the contrast fix belongs in the design system, not a
+landing-site fork.
+
+Verification: `pnpm typecheck`, `pnpm lint`, `pnpm build` (static export, all
+routes) all green; exported HTML spot-checked (one h1/page, per-page og:url +
+canonical, trailing-slash links, fixed terminal colors, sitemap).
+
 ## 2026-06-15 — Goal creation starts live planning
 
 Closed AXI-80's silent-goal gap. Goal creation from the Goals page now chains
