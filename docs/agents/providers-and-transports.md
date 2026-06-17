@@ -146,4 +146,5 @@ configured but won't dial: dispatch skips it and chat reports
   `PLANNED_ADAPTERS`).
 - Engine resolution + connectors: `src/server/services/dispatch/`.
 - Design history + remaining work:
-  [runtime-adapter ADR](../plans/runtime-adapter-refactor.md).
+  [runtime-adapter ADR](https://github.com/Codename-11/forge/blob/main/docs/plans/runtime-adapter-refactor.md)
+  (in the repo).

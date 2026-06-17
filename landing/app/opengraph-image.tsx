@@ -81,7 +81,7 @@ export default async function OgImage() {
             fontFamily: "ui-monospace, Menlo, monospace",
           }}
         >
-          <span>forge.axiom-labs.dev</span>
+          <span>forge-pm.dev</span>
           <span style={{ color: "#d97706" }}>github.com/Codename-11/forge</span>
         </div>
       </div>

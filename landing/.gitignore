@@ -6,6 +6,9 @@
 /out/
 next-env.d.ts
 
+# VitePress docs staged in by scripts/build-docs.sh (built artifact)
+/public/docs/
+
 # misc
 .DS_Store
 *.tsbuildinfo

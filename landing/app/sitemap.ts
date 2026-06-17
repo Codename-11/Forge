@@ -2,7 +2,7 @@ import type { MetadataRoute } from "next";
 
 export const dynamic = "force-static";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://forge.axiom-labs.dev";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://forge-pm.dev";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   // Trailing slashes match the exported canonical routes (trailingSlash: true).

@@ -2,6 +2,60 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-17 — Public landing domain (forge-pm.dev) + docs wired into /docs; public-readiness audit
+
+Picked `forge-pm.dev` as the public landing/marketing domain; the app stays on
+the personal `forge.axiom-labs.dev` (env-driven, untouched). Swapped the
+landing canonical everywhere it defaulted to `forge.axiom-labs.dev`:
+`landing/app/layout.tsx` (metadataBase + OG), `sitemap.ts`, `robots.ts`, the
+OG-card domain text in `opengraph-image.tsx`, and the README default. The
+placeholder docs grid had advertised `docs.forge.dev` — a domain we don't own
+— now removed (see below).
+
+### Docs at forge-pm.dev/docs
+Docs are already a full VitePress site (`docs/`, base `/docs/`) that the app
+builds via `scripts/build-docs.sh` → `public/docs/`. Rather than build a second
+renderer in the landing site, mirrored that into the landing static export:
+- New `landing/scripts/build-docs.sh` — builds the SAME `../docs` site and
+  stages dist → `landing/public/docs/`. POSIX sh; `SKIP_DOCS`/`STAGE_ONLY`
+  knobs; skips gracefully if `docs/` absent.
+- `landing/package.json`: `build` = `./scripts/build-docs.sh && next build`;
+  added `build:app` (docs-less) + `build:docs`.
+- Deleted the placeholder `app/docs/page.tsx` + `components/docs-content.tsx`
+  (VitePress owns the whole `/docs/` subtree incl. its home page; they'd
+  collide on `out/docs/index.html`). Nav `Docs → /docs/` was already correct.
+- Gitignored `landing/public/docs/` (build artifact).
+- No Next rewrite needed (unlike the app server): static hosts auto-serve
+  `index.html` for `/docs/`, and base `/docs/` makes assets resolve.
+Verified `pnpm build` → `out/docs/` carries all 60 pages + assets + sitemap
+alongside the landing pages; lint + typecheck green.
+
+### VitePress config (shared by app + landing builds)
+- `srcExclude: ["audits/**","plans/**"]` — keep internal execution plans /
+  audit notes out of the published site (they were unlinked but reachable).
+  Fixed the one inbound link (`agents/providers-and-transports.md` → the
+  runtime-adapter ADR) to a GitHub blob URL.
+- `sitemap.hostname = forge-pm.dev` + a `transformItems` that injects the
+  `/docs/` base (VitePress emits page paths without the site base, so raw
+  output dropped `/docs/`). Emits `/docs/sitemap.xml` with 60 canonical URLs;
+  landing `robots.ts` now lists both sitemaps.
+- `editLink` branch `master → main` (default branch is main; links 404'd).
+- Genericized a sample plugin manifest author email (`ops@axiom-labs.dev` →
+  `you@example.com`).
+
+### Public-readiness audit (repo is already PUBLIC)
+Swept tracked files for secrets / internal data:
+- CRITICAL: an earlier DEVLOG entry (~L8265, 2026-04-19 section) carried a
+  plaintext owner-login credential (the `ADMIN_PASSWORD` from
+  `~/docker/forge/.env`). Redacted at HEAD. Because it sits in already-pushed
+  PUBLIC history, the credential MUST be rotated; an optional history rewrite
+  (filter-repo + force-push) to purge it is pending decision.
+- Redacted the internal LAN IP (`172.16.24.250`) across DEVLOG →
+  `<internal-host>`.
+- Otherwise clean: no tracked `.env`/key files; remaining password-like hits
+  are CI/dev defaults (`forge-dev`, `forgeminio-dev-password`); the built
+  public docs contain zero leaks; README + MIT LICENSE present.
+
 ## 2026-06-16 — Agent request run-mode chips and durable issue links
 
 Implemented AXI-81's first-class issue-comment Agent Request flow. Comments now
@@ -6639,7 +6693,7 @@ real dispatch event doubles as a heartbeat.
   respond to each `kind` (AGENT_ASSIGNED → claim/start, COMMENT_CREATED
   → read, etc.).
 - `Agent.webhookUrl` set to
-  `http://172.16.24.250:8644/webhooks/forge-dispatch` (Victor) and
+  `http://&lt;internal-host&gt;:8644/webhooks/forge-dispatch` (Victor) and
   `:8645/...` (Mizu). `Agent.webhookSecret` set to the per-route HMAC
   secret returned by the subscribe call. Secrets generated with
   `openssl rand -hex 32`; intermediate file shredded after the DB
@@ -6678,7 +6732,7 @@ real dispatch event doubles as a heartbeat.
     with a stable jobId for dedupe.
   - Live verification: assigned AXI-32 to Victor → `AGENT_ASSIGNED`
     event row written → drain enqueued the delivery → worker POSTed to
-    `http://172.16.24.250:8644/webhooks/forge-dispatch` → HTTP 202 →
+    `http://&lt;internal-host&gt;:8644/webhooks/forge-dispatch` → HTTP 202 →
     `recordAgentReachable` bumped `Agent.lastHeartbeatAt` within 14ms
     of `deliveredAt`.
 - **Bonus fix during E2E:** existing agent ids in this DB are not
@@ -6708,7 +6762,7 @@ presence fresh.
 - **Mizu cron** also removed; her webhook adapter is live but she had
   no `lastHeartbeatAt` to begin with — first real dispatch event
   intended for her will set both URL trust and presence.
-- The webhook URL is currently the LAN IP `172.16.24.250` because
+- The webhook URL is currently the LAN IP `&lt;internal-host&gt;` because
   Forge runs in a Docker container on the same host as Hermes (which
   runs on the host filesystem). For the cross-host case, swap to a
   reachable hostname.
@@ -6798,7 +6852,7 @@ Currently NOT enabled (no listener on 8644). To switch from the
 poll-style heartbeat / queue-pull pattern to push-style dispatch:
 flip `platforms.webhook` on in each profile config, subscribe one
 route per profile, set the corresponding `Agent.webhookUrl` (e.g.
-`http://172.16.24.250:8644/webhooks/forge-dispatch`), and let the
+`http://&lt;internal-host&gt;:8644/webhooks/forge-dispatch`), and let the
 existing Forge `WebhookDelivery` worker POST `AGENT_ASSIGNED`
 straight to Hermes — the route prompt would render "you have a new
 assignment: AXI-42" and wake Victor's session. MCP polling for
@@ -8262,7 +8316,7 @@ Authelia header-bridge didn't land cleanly (edge middleware was setting response
 
 - `POST /api/auth/callback/credentials` with valid creds → `302 /inbox`, `__Secure-authjs.session-token` set.
 - `GET /inbox` with that cookie → `200`.
-- Login: `timothy.b.dixon@gmail.com` / `@Tqbfj0tld!` (from `~/docker/forge/.env`).
+- Login verified with the seeded admin credentials from `~/docker/forge/.env` (redacted).
 
 ### Ran into
 
@@ -9069,10 +9123,10 @@ Findings + fixes:
 - **Validation:** (1) gated live vitest `codex-app-server-live.test.ts`
   (CODEX_LIVE=1) bridges stdio→ws and runs the *shipped* connector through real
   codex — streams `FORGE_CODEX_OK`. (2) The **deployed Forge container** drove
-  the bridge→codex round-trip over the network (172.16.24.250:4505) and got
+  the bridge→codex round-trip over the network (&lt;internal-host&gt;:4505) and got
   `FORGE_PROD_OK` via both streamed deltas and the fallback.
 - **Prod wiring:** created Runtime `rt_codex_appserver` (adapterKey
-  codex-app-server, endpoint `ws://172.16.24.250:4505`) in workspace
+  codex-app-server, endpoint `ws://&lt;internal-host&gt;:4505`) in workspace
   cmo6cui6q…, attached the `@codex` agent. resolveRunEngine→RUNS via the
   attached adapter; getRunsConnectorForAgent→codex-app-server connector.
 
@@ -9183,7 +9237,7 @@ override is authoritative.
 3. In Forge → Settings → Runtimes, edit `rt_codex_appserver`: set
    `workspaceRoot=/work` and pick a sandbox/approval tier (leave
    full-access/never for parity with today). Endpoint stays
-   `ws://172.16.24.250:4505`.
+   `ws://&lt;internal-host&gt;:4505`.
 Live end-to-end of a sandboxed Codex *turn* still needs the operator to send a
 chat (auth-walled) — every layer beneath that is proven.
 
@@ -9795,7 +9849,7 @@ src/server/routers/__tests__/workspace-members.test.ts` pass (40);
 `pnpm vitest run tests/unit/codex-app-server.test.ts
 src/server/services/__tests__/run-dispatcher.test.ts` pass (22);
 `git diff --check` clean. LAN preview restarted at
-`http://172.16.24.250:3020/w/axiom-labs/chat`.
+`http://&lt;internal-host&gt;:3020/w/axiom-labs/chat`.
 
 
 ## 2026-06-11 — AXI-78 Codex RUNS split-worker fix
