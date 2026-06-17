@@ -5,6 +5,7 @@ import {
   ActionRequestKind,
   CommentKind,
   ConfidenceLevel,
+  EngagementMode,
   EventKind,
   NotificationSeverity,
 } from "@prisma/client";
@@ -13,12 +14,16 @@ import { recordChange } from "@/server/audit";
 import { agentIdSchema } from "@/server/validators";
 import { extractMentions } from "@/server/services/mentions";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
+import { recordManualDispatchReason } from "@/server/services/dispatcher";
+import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import {
   autoWatchActor,
   autoWatchAgent,
   autoWatchUser,
+  setIssueAgentWakeTarget,
 } from "@/server/services/issue-watchers";
 import { createActionRequest } from "@/server/services/action-request-service";
+import { resolveAgentRequests, type ParsedAgentRequest } from "@/lib/agent-request-parser";
 
 const STATUS_REVISION_CAP = 50;
 /**
@@ -106,15 +111,77 @@ export const commentRouter = router({
          * component picks it up.
          */
         actionRequest: inlineActionRequestSchema.optional(),
+        /**
+         * Explicit structured agent requests. Supplied by the composer
+         * chips; when empty the server falls back to parsing `@agent /mode`
+         * tokens from the body text.
+         */
+        agentRequests: z
+          .array(
+            z.object({
+              profileKey: z.string().min(1).max(40),
+              mode: z.nativeEnum(EngagementMode).default(EngagementMode.DISCUSS),
+              assignIssue: z.boolean().optional(),
+            }),
+          )
+          .max(20)
+          .optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const result = await ctx.db.$transaction(async (tx) => {
-        // If the caller authenticated via an API key that is linked to an
-        // Agent (the common case for Victor/Mizu automations), stamp the
-        // comment with that agent so the UI can render "<Agent> (agent)"
-        // instead of the human key owner. Human sessions leave it null.
         const authoringAgentId = ctx.apiKey?.linkedAgentId ?? null;
+
+        const explicitAgentRequests: ParsedAgentRequest[] =
+          input.agentRequests?.map((r) => ({
+            profileKey: r.profileKey.trim().replace(/^@+/, "").toLowerCase(),
+            mode: r.mode,
+            assignIssue: r.assignIssue === true,
+          })) ?? [];
+
+        // Resolve explicit agent requests (from composer chips) or parse
+        // from body text. Cross-reference profileKey to actual agent ids.
+        // Bare @agent becomes a DISCUSS request; typed @agent /review and
+        // @agent:execute are parser sugar over the same structured payload.
+        const agentRequests: Array<{
+          agentId: string;
+          profileKey: string;
+          mode: EngagementMode;
+          assignIssue?: boolean;
+        }> = [];
+        const requestedAgentRequests = resolveAgentRequests(explicitAgentRequests, input.body);
+        if (requestedAgentRequests.length > 0) {
+          const keys = requestedAgentRequests.map((r) => r.profileKey);
+          const agents = await tx.agent.findMany({
+            where: {
+              workspaceId: ctx.workspaceId,
+              profileKey: { in: keys },
+              archivedAt: null,
+            },
+            select: { id: true, profileKey: true },
+          });
+          const byKey = new Map(agents.map((a) => [a.profileKey.toLowerCase(), a]));
+          const seen = new Set<string>();
+          for (const req of requestedAgentRequests) {
+            const found = byKey.get(req.profileKey.toLowerCase());
+            if (found && !seen.has(found.id)) {
+              seen.add(found.id);
+              agentRequests.push({
+                agentId: found.id,
+                profileKey: found.profileKey,
+                mode: req.mode,
+                assignIssue: req.assignIssue,
+              });
+            }
+          }
+        }
+
+        const agentRequestsJson = agentRequests.map((r) => ({
+          agentId: r.agentId,
+          profileKey: r.profileKey,
+          mode: r.mode,
+          assignIssue: r.assignIssue === true,
+        }));
 
         const comment = await tx.comment.create({
           data: {
@@ -125,6 +192,7 @@ export const commentRouter = router({
             authoringAgentId,
             suggestedReplies: input.suggestedReplies ?? [],
             confidence: input.confidence ?? null,
+            agentRequests: agentRequestsJson as Prisma.InputJsonValue,
           },
           include: {
             author: { select: { id: true, name: true, image: true } },
@@ -182,6 +250,31 @@ export const commentRouter = router({
           }
         }
 
+        const issue = await tx.issue.findFirstOrThrow({
+          where: { id: input.issueId, workspaceId: ctx.workspaceId },
+          select: {
+            id: true,
+            number: true,
+            title: true,
+            assignedAgentId: true,
+            workspace: { select: { key: true } },
+          },
+        });
+        const issuePrefix = `${issue.workspace.key}-${issue.number}`;
+
+        // Treat structured Agent Requests as explicit mentions too. This
+        // keeps watcher rows, COMMENT_CREATED fan-out, and opened AgentRuns
+        // tied to one canonical event even if a client submitted only the
+        // structured request payload.
+        const mentionedAgentById = new Map(mentionedAgents.map((m) => [m.agentId, m]));
+        for (const r of agentRequests) {
+          if (!mentionedAgentById.has(r.agentId)) {
+            const mention = { agentId: r.agentId, profileKey: r.profileKey };
+            mentionedAgentById.set(r.agentId, mention);
+            mentionedAgents.push(mention);
+          }
+        }
+
         // Subscribe mentioned agents + users to the issue so subsequent
         // events route to them via the watcher fan-out (humans) or the
         // per-agent shim (agents). Branch (c) in audit.ts already
@@ -202,6 +295,51 @@ export const commentRouter = router({
           });
         }
 
+        const executeAssignment = agentRequests.find(
+          (r) => r.mode === EngagementMode.EXECUTE && r.assignIssue === true,
+        );
+        if (executeAssignment && issue.assignedAgentId !== executeAssignment.agentId) {
+          await tx.issue.update({
+            where: { id: input.issueId },
+            data: { assignedAgentId: executeAssignment.agentId },
+          });
+          const reasonBlob = await recordManualDispatchReason(tx, {
+            issueId: input.issueId,
+            agentProfileKey: executeAssignment.profileKey,
+            actorId: ctx.session.user.id,
+          });
+          await setIssueAgentWakeTarget(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: input.issueId,
+            agentId: executeAssignment.agentId,
+          });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            actorAgentId: authoringAgentId,
+            entity: "Issue",
+            entityId: input.issueId,
+            action: "assign-agent-request",
+            after: { assignedAgentId: executeAssignment.agentId },
+            eventKind: EventKind.AGENT_ASSIGNED,
+            subjectType: "issue",
+            subjectId: input.issueId,
+            payload: {
+              agentId: executeAssignment.agentId,
+              previousAgentId: issue.assignedAgentId,
+              dispatchReason: reasonBlob,
+              engagementMode: EngagementMode.EXECUTE,
+              via: "agent-request",
+              sourceCommentId: comment.id,
+              issueId: input.issueId,
+              issuePrefix,
+            },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+          await maybeApplyAgentTemplate(tx, input.issueId, executeAssignment.agentId);
+        }
+
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
@@ -215,21 +353,20 @@ export const commentRouter = router({
           subjectId: input.issueId,
           payload: {
             commentId: comment.id,
+            ...(agentRequestsJson.length > 0 ? { sourceCommentId: comment.id } : {}),
             issueId: input.issueId,
+            issuePrefix,
+            number: issue.number,
+            title: issue.title,
+            actorName: ctx.session.user.name ?? ctx.session.user.email ?? "Someone",
             preview: input.body.slice(0, 120),
-            // Structured mentions payload. `agentIds[]` powers branch (c)
-            // in audit.ts's per-agent webhook dispatch; `userIds[]` is
-            // read by the notification materializer so human mentions
-            // count toward "involved" for notification gating.
             mentions: {
               agentIds: mentionedAgents.map((m) => m.agentId),
               userIds: mentionedUsers.map((m) => m.userId),
-              // Legacy array shape preserved for any consumer that
-              // hasn't migrated yet (the audit branch reads `agents` /
-              // falls back). Slated for removal once all readers move
-              // to the structured fields.
               agents: mentionedAgents,
             },
+            mentionsCount: mentionedAgents.length + mentionedUsers.length,
+            agentRequests: agentRequestsJson,
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
@@ -470,9 +607,7 @@ export const commentRouter = router({
           message: "Comment not found in this workspace.",
         });
       }
-      const revisions = Array.isArray(row.revisions)
-        ? (row.revisions as Prisma.JsonArray)
-        : [];
+      const revisions = Array.isArray(row.revisions) ? (row.revisions as Prisma.JsonArray) : [];
       return {
         id: row.id,
         currentBody: row.body,
@@ -512,8 +647,7 @@ export const commentRouter = router({
       if (!agentId) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message:
-            "comment.upsertStatus is restricted to agent-linked API keys.",
+          message: "comment.upsertStatus is restricted to agent-linked API keys.",
         });
       }
       return ctx.db.$transaction(async (tx) => {

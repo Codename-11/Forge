@@ -17,6 +17,7 @@ import { router, workspaceProcedure } from "@/server/trpc";
 
 const RELEVANT_KINDS: EventKind[] = [
   EventKind.ISSUE_CREATED,
+  EventKind.ISSUE_UPDATED,
   EventKind.ISSUE_STATUS_CHANGED,
   EventKind.ISSUE_ASSIGNED,
   EventKind.ISSUE_PRIORITY_CHANGED,

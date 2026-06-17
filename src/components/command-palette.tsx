@@ -25,7 +25,7 @@ import {
 import { RecentItemsRail } from "@/components/palette/recent-items-rail";
 import { useHotkey } from "@/lib/keyboard";
 import { trpc } from "@/lib/trpc";
-import { cn } from "@/lib/utils";
+import { cn, formatIssueId } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
 /**
@@ -240,7 +240,15 @@ export function CommandPalette() {
   // ---------------------------------------------------- "Create issue" mut
   const createIssueM = trpc.issue.create.useMutation({
     onSuccess: (issue) => {
-      toast.success(`Created ${issue.id.slice(0, 8)}.`);
+      const issueKey = ws ? formatIssueId(ws.key, issue.number) : `#${issue.number}`;
+      toast.success(`Created ${issueKey}.`, {
+        action: ws
+          ? {
+              label: "Open issue",
+              onClick: () => router.push(`/w/${ws.slug}/issues/${issue.id}`),
+            }
+          : undefined,
+      });
       utils.issue.list.invalidate();
       setOpen(false);
       if (ws) router.push(`/w/${ws.slug}/issues/${issue.id}`);

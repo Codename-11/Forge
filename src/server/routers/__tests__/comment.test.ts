@@ -91,8 +91,7 @@ describe("commentRouter.create — agent authorship", () => {
     // The returned comment includes the joined agent relation so the UI can
     // render the byline without a second roundtrip.
     expect(
-      (created as unknown as { authoringAgent: { id: string } | null })
-        .authoringAgent?.id,
+      (created as unknown as { authoringAgent: { id: string } | null }).authoringAgent?.id,
     ).toBe(agent.id);
 
     const row = await prisma.comment.findUniqueOrThrow({
@@ -355,6 +354,140 @@ describe("commentRouter.create — auto-watch + mention resolution", () => {
     expect(payload.mentions?.agentIds ?? []).toEqual([]);
     // Suppress lint warning for unused fixture binding.
     expect(fixture.user.id).toBeTruthy();
+  });
+});
+
+describe("commentRouter.create — structured agent requests", () => {
+  it("persists composer chip mode metadata and opens a non-owning Review run", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: "victor-request",
+      },
+    });
+
+    const caller = commentRouter.createCaller(ctx);
+    const created = await caller.create({
+      issueId: issue.id,
+      body: "@victor-request please check this implementation.",
+      agentRequests: [{ profileKey: "victor-request", mode: "REVIEW" }],
+    });
+
+    const row = await prisma.comment.findUniqueOrThrow({ where: { id: created.id } });
+    expect(row.agentRequests).toEqual([
+      {
+        agentId: agent.id,
+        profileKey: "victor-request",
+        mode: "REVIEW",
+        assignIssue: false,
+      },
+    ]);
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: { kind: "COMMENT_CREATED", subjectId: issue.id },
+      orderBy: { createdAt: "desc" },
+    });
+    const payload = event.payload as {
+      agentRequests?: Array<{ agentId: string; mode: string }>;
+      issuePrefix?: string;
+    };
+    expect(payload.agentRequests?.[0]).toMatchObject({
+      agentId: agent.id,
+      mode: "REVIEW",
+    });
+    expect(payload.issuePrefix).toBe(`${fixture.workspace.key}-${issue.number}`);
+
+    const run = await prisma.agentRun.findFirstOrThrow({
+      where: { issueId: issue.id, agentId: agent.id },
+    });
+    expect(run.engagementMode).toBe("REVIEW");
+
+    const freshIssue = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(freshIssue.assignedAgentId).toBeNull();
+  });
+
+  it("parses keyboard syntax when no structured chip payload is sent", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Mizu",
+        profileKey: "mizu-research",
+      },
+    });
+
+    const caller = commentRouter.createCaller(ctx);
+    await caller.create({
+      issueId: issue.id,
+      body: "@mizu-research /research what are our options?",
+    });
+
+    const row = await prisma.comment.findFirstOrThrow({
+      where: { issueId: issue.id },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(row.agentRequests).toEqual([
+      {
+        agentId: agent.id,
+        profileKey: "mizu-research",
+        mode: "RESEARCH",
+        assignIssue: false,
+      },
+    ]);
+    const run = await prisma.agentRun.findFirstOrThrow({
+      where: { issueId: issue.id, agentId: agent.id },
+    });
+    expect(run.engagementMode).toBe("RESEARCH");
+  });
+
+  it("defaults a bare @agent request to Discuss and only assigns on explicit Execute+assign", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const discussAgent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Discuss Bot",
+        profileKey: "discuss-bot",
+      },
+    });
+    const executeAgent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Exec Bot",
+        profileKey: "exec-bot",
+      },
+    });
+
+    const caller = commentRouter.createCaller(ctx);
+    await caller.create({ issueId: issue.id, body: "@discuss-bot thoughts?" });
+    const discussRun = await prisma.agentRun.findFirstOrThrow({
+      where: { issueId: issue.id, agentId: discussAgent.id },
+    });
+    expect(discussRun.engagementMode).toBe("DISCUSS");
+    expect(
+      (await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } })).assignedAgentId,
+    ).toBeNull();
+
+    await caller.create({
+      issueId: issue.id,
+      body: "@exec-bot please do it.",
+      agentRequests: [{ profileKey: "exec-bot", mode: "EXECUTE", assignIssue: true }],
+    });
+    expect(
+      (await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } })).assignedAgentId,
+    ).toBe(executeAgent.id);
+    const executeRun = await prisma.agentRun.findFirstOrThrow({
+      where: { issueId: issue.id, agentId: executeAgent.id },
+      orderBy: { startedAt: "desc" },
+    });
+    expect(executeRun.engagementMode).toBe("EXECUTE");
   });
 });
 

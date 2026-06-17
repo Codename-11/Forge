@@ -41,6 +41,7 @@
   "exclude": [
     "node_modules",
     "tools",
-    "docs"
+    "docs",
+    "landing"
   ]
 }

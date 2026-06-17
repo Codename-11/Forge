@@ -66,7 +66,15 @@ function engagementModeFromPayload(payload: unknown): EngagementMode | null {
 
 function mentionedAgentIdsFromPayload(payload: unknown): Set<string> {
   const out = new Set<string>();
-  const mentions = asRecord(payload)?.mentions;
+  const record = asRecord(payload);
+  const requests = record?.agentRequests;
+  if (Array.isArray(requests)) {
+    for (const item of requests) {
+      const agentId = asRecord(item)?.agentId;
+      if (typeof agentId === "string") out.add(agentId);
+    }
+  }
+  const mentions = record?.mentions;
   if (Array.isArray(mentions)) {
     for (const item of mentions) {
       const agentId = asRecord(item)?.agentId;
@@ -86,6 +94,21 @@ function mentionedAgentIdsFromPayload(payload: unknown): Set<string> {
     for (const item of legacyAgents) {
       const agentId = asRecord(item)?.agentId;
       if (typeof agentId === "string") out.add(agentId);
+    }
+  }
+  return out;
+}
+
+function agentRequestModeByAgentId(payload: unknown): Map<string, EngagementMode> {
+  const out = new Map<string, EngagementMode>();
+  const requests = asRecord(payload)?.agentRequests;
+  if (!Array.isArray(requests)) return out;
+  for (const item of requests) {
+    const rec = asRecord(item);
+    const agentId = rec?.agentId;
+    const mode = readEngagementMode(rec?.mode);
+    if (typeof agentId === "string" && mode && !out.has(agentId)) {
+      out.set(agentId, mode);
     }
   }
   return out;
@@ -192,6 +215,7 @@ async function ensureIssueRuns(
   // wakes without an explicit mode inherit the issue's current assignment
   // mode for the assigned agent; non-assigned @mentions use mention policy.
   const payloadMode = engagementModeFromPayload(params.payload);
+  const agentRequestModes = agentRequestModeByAgentId(params.payload);
   const mentionedAgentIds = mentionedAgentIdsFromPayload(params.payload);
   const activeRuns = await tx.agentRun.findMany({
     where: {
@@ -240,6 +264,7 @@ async function ensureIssueRuns(
   for (const agentId of agentIds) {
     const agent = agentById.get(agentId);
     const engagementMode =
+      agentRequestModes.get(agentId) ??
       payloadMode ??
       activeRunModeByAgentId.get(agentId) ??
       resolveIssueRunEngagementMode({
