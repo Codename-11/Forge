@@ -13,6 +13,10 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **The issues list loads every issue, not just the first 50.** The list now pages in more as you scroll (with a "Load more" fallback); the board pages each column independently, so low-traffic columns like Backlog and Done are no longer starved by a shared cap.
+- **Keyboard navigation on the issues list.** Move the row cursor with `j`/`k` or the arrow keys, open the focused issue with `↵`, and select it with `x` — no mouse required. Filter pop-overs also close with `Esc` and move with the arrow keys.
+- **Filtered issue views are now shareable.** Your active filters, search, sort, and grouping live in the URL, so a filtered list can be bookmarked, shared, and survives a refresh — and the browser Back/Forward buttons undo and redo filter changes.
+- **The issues board honours Sort and the due-date filter.** Changing Sort now reorders board cards, and a `?dueOn=` deep link (from the Today widget) scopes the board too — previously both were silently ignored on the board.
 - **Shared GitHub Apps for runtime git auth (no per-repo keys).** A new **Settings → GitHub Apps** page lets you set up one GitHub App and share it across runtimes. Forge mints a short-lived installation token into `GH_TOKEN` at provision time, and you manage which repos it can touch from GitHub — no per-repo tokens, no long-lived key to rotate. **Create with GitHub** runs a manifest flow where GitHub generates the app and key for you (no PEM to paste) and walks you through install; or add an existing app manually. A **Test connection** button reports the account + repo count. Point a runtime at an app from its settings. The private key is encrypted at rest and never leaves the server.
 - **Per-project repositories.** Bind a git repo to a project (Project → Edit → Repository). Runtimes clone-or-pull every project's repo, so one runtime can serve many codebases — an agent dispatched to a project's issue is told which checkout to work in.
 - **SSH-key git auth.** Add a `GIT_SSH_KEY` runtime secret (with optional `GIT_SSH_KNOWN_HOSTS`) to clone/push over SSH — deploy keys and non-GitHub hosts, alongside or instead of a token.
@@ -21,6 +25,11 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Fixed
 
+- **Filtering the issues list by a "Done" (or "Cancelled") status now shows those issues.** Previously the list hid completed work by default, so explicitly selecting a Done status from the Status filter returned nothing. The list now includes done issues whenever your filter explicitly asks for a completed status.
+- **The issues header count is now honest.** The subtitle reflects what you're actually looking at ("N matching" when filters are active) instead of a raw total that counted archived, done, and snoozed issues.
+- **"Clear filters" no longer snaps back.** Clearing with both a saved view and a due-date deep link active could silently re-apply the view; it now clears everything in one step. The board also shows a "no matches" state with a Clear shortcut, like the list.
+- **The "Recently updated" quick filter no longer resets your window.** A saved view pinned to 7/30 days now lights the chip correctly instead of appearing off and being clobbered back to 3 days on the next click.
+- **Invalid due-date links are rejected.** A shared `?dueOn=` with an impossible date (e.g. `2026-13-45`) no longer silently rolls over to a different day.
 - **Codex approvals on assigned issues no longer freeze.** Approving (or rejecting) a Codex command request now reaches the agent even when dispatch runs in a separate worker process — previously the button flipped the run between "running" and "waiting" without ever resuming.
 - **Failed agent dispatches now show on the issue.** When a dispatched run ends without completing (stalled/abandoned), the agent's output is posted as a comment on the issue instead of being buried in the Mission Control run overlay — so a failed run is visible in the timeline and notifies watchers.
 - **Replying to a blocked agent now resumes it.** When an agent pauses a run waiting on you, nudging it (or commenting on the issue) re-dispatches it with your reply — previously a paused run could only be restarted by re-assigning, which lost its context.
