@@ -15,7 +15,7 @@ the scopes line up.
   "name": "My Plugin",
   "version": "0.1.0",
   "description": "Reacts to issues and suggests labels.",
-  "author": { "name": "Axiom Labs", "email": "ops@axiom-labs.dev" },
+  "author": { "name": "Your Name", "email": "you@example.com" },
   "scopes": ["READ_ISSUES", "WRITE_ISSUES"],
   "events": ["ISSUE_CREATED"],
   "skills": [

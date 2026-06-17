@@ -5,7 +5,9 @@
   "description": "Forge — public landing site. Standalone Next.js app (static export), decoupled from the main Forge application.",
   "scripts": {
     "dev": "next dev --turbo --hostname 0.0.0.0 --port 3200",
-    "build": "next build",
+    "build": "./scripts/build-docs.sh && next build",
+    "build:app": "next build",
+    "build:docs": "./scripts/build-docs.sh",
     "start": "next start --hostname 0.0.0.0 --port 3200",
     "serve": "npx serve out -l tcp://0.0.0.0:3200",
     "lint": "next lint",

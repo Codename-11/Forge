@@ -30,17 +30,27 @@ pnpm dev              # binds 0.0.0.0:3200 — http://localhost:3200 (and over t
 ## Build & deploy
 
 ```bash
-pnpm build            # static export → ./out
+pnpm build            # build the VitePress docs + static export → ./out
+pnpm build:app        # landing pages only (skip the docs build)
 pnpm serve            # preview the exported site locally (npx serve)
 ```
 
-`out/` is a plain static bundle. Drop it on GitHub Pages, S3/CloudFront,
-Netlify, Vercel, or behind the same reverse proxy as the app. No Node server
-is required. (If you later need server features, remove `output: "export"`
-in `next.config.ts` and run `pnpm start`.)
+`pnpm build` runs `scripts/build-docs.sh` first: it builds the shared
+VitePress docs (`../docs` — the same site the app serves) into
+`public/docs/`, then `next build` exports everything to `out/`, so the full
+documentation ships at `/docs/`. For a fast landing-only loop use
+`pnpm build:app` (or `SKIP_DOCS=1 pnpm build`).
+
+`out/` is a plain static bundle. Drop it on any static host — GitHub Pages,
+S3/CloudFront, Netlify, Vercel, or behind the same reverse proxy as the app.
+No Node server is required to *serve* it; the *build* needs Node + pnpm (the
+docs step does a one-time `pnpm --dir ../docs install`). On a host's static
+buildpack, set the **build command** to `pnpm build` and the **publish
+directory** to `out`. (If you later need server features, remove
+`output: "export"` in `next.config.ts` and run `pnpm start`.)
 
 Set the canonical URL via `NEXT_PUBLIC_SITE_URL` at build time (used for
-metadata / Open Graph). Defaults to `https://forge.axiom-labs.dev`.
+metadata / Open Graph). Defaults to `https://forge-pm.dev`.
 
 ## Live data
 

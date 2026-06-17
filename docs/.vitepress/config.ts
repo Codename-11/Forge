@@ -18,6 +18,19 @@ export default defineConfig({
   // the last-updated stamp anyway.
   lastUpdated: false,
   appearance: true, // light is default; users can flip to dark
+  // Exclude internal working docs (execution plans + audit notes) from the
+  // published site. They're in no sidebar and reference internal infra —
+  // not user documentation. Applies to both the app and public docs builds.
+  srcExclude: ["audits/**", "plans/**"],
+  // Emit /docs/sitemap.xml with canonical public URLs (the public docs home,
+  // not the personal app instance) so every doc page is individually indexable.
+  // VitePress emits page paths without the site `base`, so inject /docs/ to
+  // match where the docs are actually served (forge-pm.dev/docs/...).
+  sitemap: {
+    hostname: "https://forge-pm.dev",
+    transformItems: (items) =>
+      items.map((item) => ({ ...item, url: `docs/${item.url.replace(/^\/+/, "")}` })),
+  },
   ignoreDeadLinks: [
     /^https?:\/\/localhost/,
     /^\/api\//,
@@ -199,10 +212,9 @@ export default defineConfig({
       },
     },
 
-    // Edit-link is wired but the repo isn't public yet. Flip the URL
-    // when the repo flips public.
+    // Repo is public; "Edit this page" targets the default branch (main).
     editLink: {
-      pattern: "https://github.com/Codename-11/forge/edit/master/docs/:path",
+      pattern: "https://github.com/Codename-11/forge/edit/main/docs/:path",
       text: "Edit this page on GitHub",
     },
 

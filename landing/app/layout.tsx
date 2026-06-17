@@ -17,7 +17,7 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://forge.axiom-labs.dev";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://forge-pm.dev";
 const TITLE = "Forge — issue tracking for humans & agents";
 const DESCRIPTION =
   "An open-source work tracker built for the handoff between humans and agents. Humans file, agents pick up, humans review — same issues, same plans, same keyboard. Self-host in 60 seconds.";
