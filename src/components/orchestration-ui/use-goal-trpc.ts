@@ -75,6 +75,16 @@ type GoalPlanRow = {
     status: string;
     assignedAgentId?: string | null;
     updatedAt?: string | Date | null;
+    runs?: {
+      id: string;
+      status: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED" | "WAITING" | string;
+      summary?: string | null;
+      currentStep?: string | null;
+      triggerKind?: string | null;
+      externalRunId?: string | null;
+      lastEventAt?: string | Date | null;
+      lastWakeAt?: string | Date | null;
+    }[];
   }[];
   _count?: { steps?: number } | null;
 };

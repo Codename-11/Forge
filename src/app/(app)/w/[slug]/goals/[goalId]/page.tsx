@@ -640,6 +640,23 @@ function GoalLiveStatus({
   const review = counts.REVIEW ?? 0;
   const blocked = counts.BLOCKED ?? 0;
   const done = counts.DONE ?? 0;
+  const latestRuns = steps.flatMap((step) => step.runs?.slice(0, 1) ?? []);
+  const runCounts = latestRuns.reduce<Record<string, number>>((acc, run) => {
+    acc[run.status] = (acc[run.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const attentionRun =
+    latestRuns.find((run) => run.status === "STALLED") ??
+    latestRuns.find((run) => run.status === "WAITING") ??
+    null;
+  const activeRunCount = runCounts.ACTIVE ?? 0;
+  const runMetric = (() => {
+    if ((runCounts.STALLED ?? 0) > 0) return `${runCounts.STALLED} stalled`;
+    if ((runCounts.WAITING ?? 0) > 0) return `${runCounts.WAITING} waiting`;
+    if (activeRunCount > 0) return `${activeRunCount} active`;
+    if ((runCounts.COMPLETED ?? 0) > 0) return `${runCounts.COMPLETED} done`;
+    return null;
+  })();
 
   const phase = (() => {
     if (!plan) return { title: "No plan yet", body: "Generate a plan or dispatch the crew planner." };
@@ -653,7 +670,20 @@ function GoalLiveStatus({
       return { title: "Approved, not running", body: "Start the crew to dispatch ready root steps." };
     }
     if (plan.status === "RUNNING") {
+      if (attentionRun?.status === "STALLED") {
+        return {
+          title: "Run stalled",
+          body: attentionRun.summary ?? "The latest worker run stopped and needs attention.",
+        };
+      }
+      if (attentionRun?.status === "WAITING") {
+        return {
+          title: "Waiting on operator",
+          body: attentionRun.summary ?? "The latest worker run is waiting before continuing.",
+        };
+      }
       if (blocked > 0) return { title: "Blocked", body: `${blocked} step${blocked === 1 ? "" : "s"} need attention.` };
+      if (activeRunCount > 0) return { title: "Crew working", body: `${activeRunCount} run${activeRunCount === 1 ? "" : "s"} active now.` };
       if (running > 0) return { title: "Crew working", body: `${running} step${running === 1 ? "" : "s"} running now.` };
       if (review > 0) return { title: "In review", body: `${review} step${review === 1 ? "" : "s"} waiting on judging.` };
       if (queued > 0) return { title: "Queued for pickup", body: `${queued} step${queued === 1 ? "" : "s"} dispatched and waiting for acknowledgement.` };
@@ -690,6 +720,7 @@ function GoalLiveStatus({
           <Metric label="Done" value={`${done}/${total}`} />
           <Metric label="Queued" value={String(queued)} />
           <Metric label="Running" value={String(running + review)} />
+          {runMetric ? <Metric label="Runs" value={runMetric} /> : null}
           {elapsedMinutes != null ? (
             <Metric label="Elapsed" value={`${Math.max(0, Math.round(elapsedMinutes))}m`} />
           ) : null}
@@ -703,6 +734,31 @@ function GoalLiveStatus({
             />
           ) : null}
         </dl>
+      ) : null}
+      {attentionRun ? (
+        <div className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-2">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            <div className="min-w-0">
+              <div className="text-meta font-medium uppercase tracking-wide text-warning">
+                Run {attentionRun.status.toLowerCase()}
+              </div>
+              {attentionRun.summary ? (
+                <p className="mt-1 line-clamp-3 text-meta text-muted-foreground">
+                  {attentionRun.summary}
+                </p>
+              ) : null}
+              {attentionRun.lastEventAt ? (
+                <div className="mt-1 text-[10px] font-mono text-muted-foreground">
+                  {new Date(attentionRun.lastEventAt).toLocaleTimeString([], {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
       ) : null}
       {onStart ? (
         <Button

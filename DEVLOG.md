@@ -35,6 +35,10 @@ Fixes:
   with no issue anchor, and the opened AgentRun is stamped with
   `triggerKind=EXECUTION_STEP_READY` so the runs dispatcher starts it instead
   of creating a dead-letter webhook delivery.
+- Goal detail now carries the latest AgentRun snapshot per plan step and the
+  live-status card surfaces stalled/waiting run summaries inline, so runtime
+  credential failures and operator waits are visible from the goal page instead
+  of only from Mission Control.
 
 Verify:
 `pnpm typecheck`, `pnpm lint`,

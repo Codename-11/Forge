@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   ActionRequestStatus,
+  AgentRunStatus,
   AgentProvider,
   ExecutionPlanStatus,
   ExecutionStepStatus,
@@ -725,6 +726,23 @@ describe("orchestration: Goal loop opens observable runs (AXI-57)", () => {
     expect(run.agentId).toBe(worker.id);
     expect(run.triggerKind).toBe("EXECUTION_STEP_READY");
     expect(run.triggerEventId).toBeTruthy();
+
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: {
+        status: AgentRunStatus.STALLED,
+        summary: "Runtime credentials need attention.",
+      },
+    });
+    const hydratedGoal = await getGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      id: goal.id,
+    });
+    const hydratedStep = hydratedGoal.plans
+      .flatMap((plan) => plan.steps)
+      .find((candidate) => candidate.id === step.id);
+    expect(hydratedStep?.runs[0]?.status).toBe(AgentRunStatus.STALLED);
+    expect(hydratedStep?.runs[0]?.summary).toBe("Runtime credentials need attention.");
 
     const deadWebhook = await prisma.webhookDelivery.findFirst({
       where: { webhook: { url: `agent:dispatch:${worker.id}` } },
