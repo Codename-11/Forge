@@ -2,6 +2,23 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-18 — Landing Docker healthcheck
+
+Added a Dockerfile-level `HEALTHCHECK` to `landing/Dockerfile` so the
+Coolify-managed `Prod-Forge-PM-Landing` container can report healthy instead of
+`running:unknown` when Docker health state is used. The check probes nginx at
+`http://127.0.0.1/` with BusyBox `wget` from the `nginx:alpine` runtime image.
+
+Verify:
+
+```bash
+docker build -f landing/Dockerfile -t forge-landing:healthcheck-test .
+docker run -d --name forge-landing-healthcheck-test -p 127.0.0.1:18080:80 forge-landing:healthcheck-test
+```
+
+Docker health reached `healthy`, and local smokes for `/` and `/docs/` both
+returned 200.
+
 ## 2026-06-17 — Mobile/PWA fixes from the Orca-driven audit
 
 Implemented the mobile/PWA audit findings (audit ran read-only in an
