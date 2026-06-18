@@ -13,6 +13,22 @@ highlighting matches exactly what submit persists.
 
 Verify: `pnpm exec vitest run tests/unit/agent-request-parser.test.ts src/server/routers/__tests__/comment.test.ts`, `pnpm typecheck`, `pnpm lint`, `env -u OPENAI_API_KEY pnpm test`.
 
+## 2026-06-18 — Docker build cache + worker image speedup
+
+Improved the production Docker build path after deploys exposed repeated
+multi-minute rebuilds and a large worker image. The Dockerfile now builds
+VitePress docs in a separate cacheable `docs-build` stage and stages the
+prebuilt output during the Next build via `STAGE_ONLY=1`, so app-only changes
+do not reinstall/rebuild docs. Added a shared `prisma-client` stage so the
+worker target depends on install + Prisma generation, not the full Next build.
+The worker image copies only runtime source/config/deps instead of the whole
+app build tree, dropping the local worker image from roughly 2.7 GB to about
+1.1 GB. `.dockerignore` now excludes generated docs output from the build
+context.
+
+Verify:
+`docker compose build forge-worker`, `docker image ls forge-worker:local`.
+
 ## 2026-06-18 — Goal/Crew activation and live controls
 
 Closed the gap where a goal plan could look approved but not actually start:

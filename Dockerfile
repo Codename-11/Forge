@@ -16,19 +16,44 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; \
     else pnpm install --no-frozen-lockfile; fi
 
+# ---- docs -----------------------------------------------------------------
+# VitePress docs are staged into public/docs for the Next app. Keep their
+# dependency/build cache isolated from app source changes so a normal app-only
+# deploy does not rebuild docs.
+FROM base AS docs-deps
+COPY package.json pnpm-lock.yaml* ./
+COPY docs/package.json docs/pnpm-lock.yaml* ./docs/
+RUN --mount=type=cache,id=pnpm-docs,target=/root/.local/share/pnpm/store \
+    if [ -f docs/pnpm-lock.yaml ]; then pnpm --dir docs --ignore-workspace install --frozen-lockfile; \
+    else pnpm --dir docs --ignore-workspace install --no-frozen-lockfile; fi
+
+FROM docs-deps AS docs-build
+WORKDIR /app
+COPY docs ./docs
+RUN pnpm --dir docs --ignore-workspace build
+
+# ---- prisma client --------------------------------------------------------
+# Shared generated Prisma client for both app build and worker runtime. Keeping
+# this before the Next build lets the worker image build without compiling the
+# web app.
+FROM base AS prisma-client
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json pnpm-lock.yaml* ./
+COPY prisma ./prisma
+RUN pnpm prisma generate
+
 # ---- build ----------------------------------------------------------------
 FROM base AS build
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=prisma-client /app/node_modules ./node_modules
 COPY . .
+COPY --from=docs-build /app/docs/.vitepress/dist ./docs/.vitepress/dist
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm prisma generate
-RUN pnpm build
+RUN STAGE_ONLY=1 pnpm build
 
 # ---- worker ---------------------------------------------------------------
 # BullMQ maintenance/webhook workers are a separate process from the Next.js
-# server. Keep a dedicated target with the built source tree + generated Prisma
-# client so production Compose can run `pnpm worker` without baking worker logic
-# into the web container entrypoint.
+# server. Keep a dedicated target with source + generated Prisma client, but
+# do not copy the full Next build output into the worker image.
 FROM base AS worker
 WORKDIR /app
 ENV NODE_ENV=production
@@ -40,7 +65,12 @@ ARG GIT_SHA=""
 ARG BUILD_TIME=""
 ENV FORGE_GIT_SHA=$GIT_SHA
 ENV FORGE_BUILD_TIME=$BUILD_TIME
-COPY --from=build /app ./
+COPY --from=prisma-client /app/node_modules ./node_modules
+COPY package.json pnpm-lock.yaml* tsconfig.json next-env.d.ts next.config.ts ./
+COPY prisma ./prisma
+COPY scripts ./scripts
+COPY plugins ./plugins
+COPY src ./src
 CMD ["pnpm", "worker"]
 
 # ---- runner ---------------------------------------------------------------
