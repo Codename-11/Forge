@@ -11,7 +11,10 @@ import {
 } from "@/server/services/agent-run";
 import { FORGE_RUN_CONTRACT_VERSION, forgeRunInstruction } from "@/server/services/engagement-mode";
 import { deriveRepoPath } from "@/server/services/repo-path";
-import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
+import {
+  buildRuntimePolicySnapshot,
+  type RuntimePolicySnapshot,
+} from "@/lib/runtime-enforcement";
 import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from "./registry";
 
 /**
@@ -96,6 +99,34 @@ function issueKey(workspaceKey: string, number: number): string {
   return `${workspaceKey}-${number}`;
 }
 
+function storedRuntimePolicy(
+  raw: Prisma.JsonValue | null | undefined,
+  engagementMode: RuntimePolicySnapshot["engagementMode"],
+): RuntimePolicySnapshot | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const policy = raw as Record<string, unknown>;
+  if (policy.engagementMode !== engagementMode) return null;
+  if (typeof policy.contractVersion !== "string") return null;
+  if (!Array.isArray(policy.allowedHostTools)) return null;
+  if (!Array.isArray(policy.layers)) return null;
+  return policy as unknown as RuntimePolicySnapshot;
+}
+
+function runtimePolicyGrantContext(policy: RuntimePolicySnapshot): string {
+  const grant = policy.toolGrant;
+  if (!grant) return "";
+  const tools = policy.allowedHostTools.length
+    ? policy.allowedHostTools.join(", ")
+    : "no host tools";
+  const access =
+    grant.accessLevel === "READ_ONLY" ? "read-only" : "full";
+  const scope = grant.scopePath ? ` within ${grant.scopePath}` : "";
+  return (
+    `\n\nOne-time runtime tool grant approved for this run: ` +
+    `${access} ${tools}${scope}. Stay within the ${policy.engagementMode} contract.`
+  );
+}
+
 function shouldUseRunsEngine(agent: {
   runEngine: "COMPLETIONS" | "RUNS" | null;
   provider: AgentProvider;
@@ -134,7 +165,7 @@ async function startNewRuns(): Promise<number> {
     // treated as already-dispatched.
     const already = await db.agentRun.findFirst({
       where: { assignmentEventId: evt.id },
-      select: { id: true, status: true, externalRunId: true },
+      select: { id: true, status: true, externalRunId: true, runtimePolicy: true },
     });
     if (already?.externalRunId || (already && TERMINAL_RUN_STATUSES.has(already.status))) {
       continue;
@@ -199,13 +230,15 @@ async function startNewRuns(): Promise<number> {
       source: "surface-default",
       inferable: false,
     });
-    const runtimePolicy = buildRuntimePolicySnapshot({
-      contractVersion: FORGE_RUN_CONTRACT_VERSION,
-      engagementMode,
-      adapterKey: agent.runtime?.adapterKey ?? (agent.provider === "HERMES" ? "hermes" : null),
-      runtimeName: agent.runtime?.name ?? null,
-      config: agent.runtime?.config,
-    });
+    const runtimePolicy =
+      storedRuntimePolicy(already?.runtimePolicy, engagementMode) ??
+      buildRuntimePolicySnapshot({
+        contractVersion: FORGE_RUN_CONTRACT_VERSION,
+        engagementMode,
+        adapterKey: agent.runtime?.adapterKey ?? (agent.provider === "HERMES" ? "hermes" : null),
+        runtimeName: agent.runtime?.name ?? null,
+        config: agent.runtime?.config,
+      });
 
     try {
       const { externalRunId } = await connector.startRun({
@@ -221,7 +254,7 @@ async function startNewRuns(): Promise<number> {
           },
           instruction,
           already?.id ?? null,
-        ),
+        ) + runtimePolicyGrantContext(runtimePolicy),
         instructions: instruction,
         engagementMode,
         contractVersion: FORGE_RUN_CONTRACT_VERSION,
@@ -308,7 +341,16 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
       engagementMode: true,
       triggerKind: true,
       triggerEventId: true,
-      issue: {
+      runtimePolicy: true,
+    },
+  });
+
+  let started = 0;
+  for (const run of runs) {
+    if (started >= limit) break;
+    const [issue, agent] = await Promise.all([
+      db.issue.findUnique({
+        where: { id: run.issueId },
         select: {
           id: true,
           number: true,
@@ -316,8 +358,9 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
           description: true,
           workspace: { select: { key: true } },
         },
-      },
-      agent: {
+      }),
+      db.agent.findUnique({
+        where: { id: run.agentId },
         select: {
           id: true,
           provider: true,
@@ -333,20 +376,16 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
             },
           },
         },
-      },
-    },
-  });
-
-  let started = 0;
-  for (const run of runs) {
-    if (started >= limit) break;
-    if (run.agent.runtime?.disabledAt) continue;
-    if (!shouldUseRunsEngine(run.agent)) {
+      }),
+    ]);
+    if (!issue || !agent) continue;
+    if (agent.runtime?.disabledAt) continue;
+    if (!shouldUseRunsEngine(agent)) {
       continue;
     }
     const connector = getRunsConnectorForAgent({
-      provider: run.agent.provider,
-      runtime: run.agent.runtime,
+      provider: agent.provider,
+      runtime: agent.runtime,
     });
     if (!connector) continue;
 
@@ -356,27 +395,29 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
       source: "surface-default",
       inferable: false,
     });
-    const runtimePolicy = buildRuntimePolicySnapshot({
-      contractVersion: FORGE_RUN_CONTRACT_VERSION,
-      engagementMode,
-      adapterKey:
-        run.agent.runtime?.adapterKey ?? (run.agent.provider === "HERMES" ? "hermes" : null),
-      runtimeName: run.agent.runtime?.name ?? null,
-      config: run.agent.runtime?.config,
-    });
+    const runtimePolicy =
+      storedRuntimePolicy(run.runtimePolicy, engagementMode) ??
+      buildRuntimePolicySnapshot({
+        contractVersion: FORGE_RUN_CONTRACT_VERSION,
+        engagementMode,
+        adapterKey:
+          agent.runtime?.adapterKey ?? (agent.provider === "HERMES" ? "hermes" : null),
+        runtimeName: agent.runtime?.name ?? null,
+        config: agent.runtime?.config,
+      });
 
     try {
       const { externalRunId } = await connector.startRun({
         message: issueMessage(
           {
-            id: run.issue.id,
-            key: issueKey(run.issue.workspace.key, run.issue.number),
-            title: run.issue.title,
-            description: run.issue.description,
+            id: issue.id,
+            key: issueKey(issue.workspace.key, issue.number),
+            title: issue.title,
+            description: issue.description,
           },
           instruction,
           run.id,
-        ),
+        ) + runtimePolicyGrantContext(runtimePolicy),
         instructions: instruction,
         engagementMode,
         contractVersion: FORGE_RUN_CONTRACT_VERSION,
@@ -419,9 +460,9 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
       });
       started++;
     } catch (err) {
-      logger.warn(
-        { err, runId: run.id, issueId: run.issueId },
-        "runs-dispatch: start unbacked run failed",
+        logger.warn(
+          { err, runId: run.id, issueId: run.issueId },
+          "runs-dispatch: start unbacked run failed",
       );
     }
   }
@@ -465,6 +506,7 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
       currentStep: true,
       summary: true,
       lastEventAt: true,
+      runtimePolicy: true,
       issue: {
         select: {
           id: true,
@@ -535,14 +577,16 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
       source: "surface-default",
       inferable: false,
     });
-    const runtimePolicy = buildRuntimePolicySnapshot({
-      contractVersion: FORGE_RUN_CONTRACT_VERSION,
-      engagementMode,
-      adapterKey:
-        run.agent.runtime?.adapterKey ?? (run.agent.provider === "HERMES" ? "hermes" : null),
-      runtimeName: run.agent.runtime?.name ?? null,
-      config: run.agent.runtime?.config,
-    });
+    const runtimePolicy =
+      storedRuntimePolicy(run.runtimePolicy, engagementMode) ??
+      buildRuntimePolicySnapshot({
+        contractVersion: FORGE_RUN_CONTRACT_VERSION,
+        engagementMode,
+        adapterKey:
+          run.agent.runtime?.adapterKey ?? (run.agent.provider === "HERMES" ? "hermes" : null),
+        runtimeName: run.agent.runtime?.name ?? null,
+        config: run.agent.runtime?.config,
+      });
 
     const waitingReason = (run.currentStep || run.summary || "").trim();
     const replyBlock = replies
@@ -567,10 +611,11 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
       `.\nThe operator has replied:\n\n${replyBlock}\n\n` +
       `Resume with this new context. Close the run via runs.complete when done, ` +
       `or pause again with runs.setWaiting if you're still blocked.`;
+    const messageWithGrant = message + runtimePolicyGrantContext(runtimePolicy);
 
     try {
       const { externalRunId } = await connector.startRun({
-        message,
+        message: messageWithGrant,
         instructions: instruction,
         engagementMode,
         contractVersion: FORGE_RUN_CONTRACT_VERSION,

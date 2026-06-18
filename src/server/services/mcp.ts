@@ -2837,6 +2837,7 @@ export const mcpTools = {
               "ASSIGN_AGENT",
               "ARCHIVE",
               "CLOSE_AS_DUPLICATE",
+              "RUNTIME_TOOL_GRANT",
             ])
             .default("FREE_FORM"),
           payload: z.unknown().optional(),
@@ -2880,7 +2881,8 @@ export const mcpTools = {
             | "ASSIGN"
             | "ASSIGN_AGENT"
             | "ARCHIVE"
-            | "CLOSE_AS_DUPLICATE";
+            | "CLOSE_AS_DUPLICATE"
+            | "RUNTIME_TOOL_GRANT";
           payload?: unknown;
           options?: Array<{ key: string; label: string; description?: string }>;
           assignedUserId?: string | null;
@@ -11789,6 +11791,7 @@ export const mcpTools = {
           "ASSIGN_AGENT",
           "ARCHIVE",
           "CLOSE_AS_DUPLICATE",
+          "RUNTIME_TOOL_GRANT",
         ])
         .default("FREE_FORM"),
       /**
@@ -11799,6 +11802,7 @@ export const mcpTools = {
        *   ASSIGN_AGENT       → { agentId }
        *   ARCHIVE            → {} (targets `issueId`)
        *   CLOSE_AS_DUPLICATE → { duplicateOfIssueId; statusId? }
+       *   RUNTIME_TOOL_GRANT → { agentId; mode; tools; accessLevel; scopePath; reason? }
        */
       payload: z.unknown().optional(),
       /**
@@ -11838,7 +11842,8 @@ export const mcpTools = {
           | "ASSIGN"
           | "ASSIGN_AGENT"
           | "ARCHIVE"
-          | "CLOSE_AS_DUPLICATE";
+          | "CLOSE_AS_DUPLICATE"
+          | "RUNTIME_TOOL_GRANT";
         payload?: unknown;
         options?: Array<{ key: string; label: string; description?: string }>;
         assignedUserId?: string | null;

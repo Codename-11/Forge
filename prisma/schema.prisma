@@ -3221,6 +3221,7 @@ enum ActionRequestKind {
   ASSIGN_AGENT
   ARCHIVE
   CLOSE_AS_DUPLICATE
+  RUNTIME_TOOL_GRANT
 }
 
 /// Agent-set confidence flag on a Comment (added 2026-05-20,
@@ -3267,6 +3268,7 @@ model ActionRequest {
   ///   ASSIGN_AGENT       → { agentId: string }
   ///   ARCHIVE            → {} (no args needed; targets `issueId`)
   ///   CLOSE_AS_DUPLICATE → { duplicateOfIssueId: string; statusId?: string }
+  ///   RUNTIME_TOOL_GRANT → { agentId, mode, tools, accessLevel, scopePath, reason? }
   /// Validated at create time by the action-request service; rejected
   /// if any referenced id lives outside the workspace.
   payload            Json?

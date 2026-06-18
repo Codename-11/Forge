@@ -10181,3 +10181,57 @@ showed as blank tiles. dashboard-stack.tsx:
 - Resize handle widened 8px→16px; size button stays the reliable toggle.
 
 typecheck + lint clean. Not browser-tested (headless box).
+
+## 2026-06-18 — One-time Hermes repo-tool grants for Review runs
+
+AXI-81 review exposed a policy/UX gap: Hermes could declare repo tools globally
+while `modeToolProfiles.REVIEW` stayed empty, and accepting Victor's
+FREE_FORM "read-only repo access" request only recorded approval without
+changing dispatch policy.
+
+- Added `ActionRequestKind.RUNTIME_TOOL_GRANT` plus migration
+  `0085_runtime_tool_grants`. Payload carries `{ agentId, mode, tools,
+  accessLevel, scopePath, reason? }`.
+- Accepting the typed request now validates the target Hermes runtime,
+  supersedes any active/waiting run for that issue+agent, opens a fresh run in
+  the requested mode, stores a one-time runtime policy snapshot with the grant,
+  and lets the worker dispatch it via the normal unbacked-run path.
+- Dispatcher now preserves stored runtime policy snapshots instead of
+  recomputing them away, and includes grant context in the provider message.
+  Hermes receives the grant in `runtime_policy.tool_grant` plus the existing
+  `tool_allowlist`.
+- Hardened the unbacked-run scanner to resolve agent/issue rows after the
+  scalar run scan and skip orphans, avoiding full-suite worker failures when
+  parallel cleanup removes an agent between scans.
+- Runtime settings now expose Hermes per-mode tool allowlists (Execute, Review,
+  Research, Discuss) instead of hiding `modeToolProfiles` in raw config. Newly
+  declared tools default into Execute; non-Execute modes remain explicit.
+- Action request cards render a compact grant summary and change the primary
+  action to "Grant and rerun" for runtime tool grants.
+- MCP action-request schemas now advertise `RUNTIME_TOOL_GRANT` so agents can
+  request this flow directly instead of falling back to prose.
+
+Verification: `pnpm exec prisma generate`; `pnpm exec prisma migrate deploy`
+against local dev DB; `pnpm test
+src/server/routers/__tests__/action-request-accept.test.ts
+src/server/routers/__tests__/runtime-dispatch-contract.test.ts` clean;
+`pnpm typecheck` clean; `pnpm lint` clean; full `pnpm test` clean (909
+passed / 1 skipped). Not browser-tested.
+
+## 2026-06-18 — Forge goal-plan generation parser hardening
+
+Goal "Generate with Forge" could fail with "The model did not return any plan
+steps" when an OpenAI-compatible provider returned useful plan text outside the
+modern `tool_calls[].function.arguments` field.
+
+- Refactored `runPlanGeneration` to parse the standard tool-call shape, legacy
+  `function_call`, JSON/fenced-JSON message content, and markdown numbered or
+  top-level bullet plans.
+- Normalized common camelCase/snake_case aliases for plan step fields and
+  role casing while keeping empty-title steps unusable.
+- Added focused unit coverage for tool calls, legacy function calls, content
+  JSON, numbered markdown, and bullet markdown fallback.
+
+Verification: `pnpm test tests/unit/plan-generation-parser.test.ts` clean;
+`pnpm typecheck` clean; `pnpm lint` clean; full `pnpm test` clean (914
+passed / 1 skipped).

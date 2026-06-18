@@ -26,6 +26,13 @@ export interface RunToolPolicy {
   contractVersion: string;
   engagementMode: RunEngagementMode;
   allowedHostTools: string[];
+  toolGrant?: {
+    accessLevel: "READ_ONLY" | "FULL";
+    scopePath?: string | null;
+    approvedByUserId?: string | null;
+    actionRequestId?: string | null;
+    reason?: string | null;
+  } | null;
   layers: Array<{
     kind: string;
     label: string;

@@ -3,6 +3,8 @@ import type { PrismaClient } from "@prisma/client";
 import {
   ActionRequestKind,
   ActionRequestStatus,
+  AgentRunStatus,
+  EngagementMode,
   EventKind,
   NotificationSeverity,
   Prisma,
@@ -11,7 +13,14 @@ import {
 } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import {
+  RUNTIME_TOOL_CAPABILITIES,
+  type RuntimeToolCapability,
+} from "@/lib/runtime-tools";
+import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { recordChange } from "@/server/audit";
+import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
+import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
 import { agentIdSchema } from "@/server/validators";
 
 /**
@@ -39,6 +48,17 @@ const closeAsDuplicatePayload = z.object({
   /** Optional: status to flip the source issue to (typically CANCELED). */
   statusId: z.string().cuid().optional(),
 });
+const runtimeToolGrantPayload = z.object({
+  agentId: agentIdSchema,
+  mode: z.nativeEnum(EngagementMode).default(EngagementMode.REVIEW),
+  tools: z
+    .array(z.enum(RUNTIME_TOOL_CAPABILITIES))
+    .min(1)
+    .max(RUNTIME_TOOL_CAPABILITIES.length),
+  accessLevel: z.enum(["READ_ONLY", "FULL"]).default("READ_ONLY"),
+  scopePath: z.string().trim().min(1).max(500),
+  reason: z.string().trim().max(2_000).optional(),
+});
 
 export const actionRequestPayloadSchemas = {
   TRANSITION: transitionPayload,
@@ -47,6 +67,7 @@ export const actionRequestPayloadSchemas = {
   ASSIGN_AGENT: assignAgentPayload,
   ARCHIVE: archivePayload,
   CLOSE_AS_DUPLICATE: closeAsDuplicatePayload,
+  RUNTIME_TOOL_GRANT: runtimeToolGrantPayload,
 } as const;
 
 export type ActionRequestPayloadMap = {
@@ -56,6 +77,7 @@ export type ActionRequestPayloadMap = {
   ASSIGN_AGENT: z.infer<typeof assignAgentPayload>;
   ARCHIVE: z.infer<typeof archivePayload>;
   CLOSE_AS_DUPLICATE: z.infer<typeof closeAsDuplicatePayload>;
+  RUNTIME_TOOL_GRANT: z.infer<typeof runtimeToolGrantPayload>;
 };
 
 /**
@@ -149,6 +171,34 @@ export function readPollOptions(
   return parsed.success ? parsed.data : null;
 }
 
+function configRecord(config: unknown): Record<string, unknown> {
+  return config && typeof config === "object" && !Array.isArray(config)
+    ? { ...(config as Record<string, unknown>) }
+    : {};
+}
+
+function modeToolProfilesRecord(config: Record<string, unknown>): Record<string, unknown> {
+  return config.modeToolProfiles &&
+    typeof config.modeToolProfiles === "object" &&
+    !Array.isArray(config.modeToolProfiles)
+    ? { ...(config.modeToolProfiles as Record<string, unknown>) }
+    : {};
+}
+
+function configWithModeToolGrant(
+  config: unknown,
+  mode: EngagementMode,
+  tools: RuntimeToolCapability[],
+): Record<string, unknown> {
+  const next = configRecord(config);
+  next.modeToolProfiles = {
+    ...modeToolProfilesRecord(next),
+    [mode]: tools,
+  };
+  next.modeToolPolicyEnforced = true;
+  return next;
+}
+
 /**
  * Validate that every entity referenced by a kind-specific payload
  * lives in the calling workspace. Runs *before* the create transaction
@@ -232,6 +282,42 @@ async function validatePayloadWorkspaceScope(
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: "ASSIGN_AGENT.agentId does not belong to this workspace.",
+      });
+    }
+    return;
+  }
+
+  if (kind === ActionRequestKind.RUNTIME_TOOL_GRANT) {
+    const p = payload as ActionRequestPayloadMap["RUNTIME_TOOL_GRANT"];
+    const agent = await db.agent.findFirst({
+      where: { id: p.agentId, workspaceId, archivedAt: null },
+      select: {
+        id: true,
+        runtime: { select: { id: true, adapterKey: true, disabledAt: true } },
+      },
+    });
+    if (!agent) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "RUNTIME_TOOL_GRANT.agentId does not belong to this workspace.",
+      });
+    }
+    if (!agent.runtime) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "RUNTIME_TOOL_GRANT requires an agent attached to a managed runtime.",
+      });
+    }
+    if (agent.runtime.adapterKey !== "hermes") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Runtime tool grants are currently supported for Hermes runtimes.",
+      });
+    }
+    if (agent.runtime.disabledAt) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Target runtime is disabled.",
       });
     }
     return;
@@ -639,6 +725,136 @@ async function dispatchActionRequestKind(
         assignedAgentId: p.agentId,
         via: "action-request",
         actionRequestId: request.id,
+      },
+    });
+    return;
+  }
+
+  if (kind === ActionRequestKind.RUNTIME_TOOL_GRANT) {
+    const p = parseActionRequestPayload(ActionRequestKind.RUNTIME_TOOL_GRANT, payload);
+    const agent = await tx.agent.findFirst({
+      where: { id: p.agentId, workspaceId, archivedAt: null },
+      select: {
+        id: true,
+        name: true,
+        provider: true,
+        runtime: {
+          select: {
+            name: true,
+            adapterKey: true,
+            config: true,
+            disabledAt: true,
+          },
+        },
+      },
+    });
+    if (!agent?.runtime) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Target agent no longer has an attached runtime.",
+      });
+    }
+    if (agent.runtime.disabledAt) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Target runtime is disabled.",
+      });
+    }
+    if (agent.runtime.adapterKey !== "hermes") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Runtime tool grants are currently supported for Hermes runtimes.",
+      });
+    }
+
+    const runtimePolicy = buildRuntimePolicySnapshot({
+      contractVersion: FORGE_RUN_CONTRACT_VERSION,
+      engagementMode: p.mode,
+      adapterKey: agent.runtime.adapterKey ?? (agent.provider === "HERMES" ? "hermes" : null),
+      runtimeName: agent.runtime.name,
+      config: configWithModeToolGrant(
+        agent.runtime.config,
+        p.mode,
+        p.tools as RuntimeToolCapability[],
+      ),
+    });
+    runtimePolicy.toolGrant = {
+      accessLevel: p.accessLevel,
+      scopePath: p.scopePath,
+      approvedByUserId: actorId,
+      actionRequestId: request.id,
+      reason: p.reason ?? null,
+    };
+
+    const now = new Date();
+    const superseded = await tx.agentRun.findMany({
+      where: {
+        workspaceId,
+        issueId,
+        agentId: p.agentId,
+        status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+      },
+      select: { id: true },
+    });
+    if (superseded.length > 0) {
+      await tx.agentRun.updateMany({
+        where: { id: { in: superseded.map((run) => run.id) } },
+        data: {
+          status: AgentRunStatus.ABANDONED,
+          finishedAt: now,
+          currentStep: "superseded by one-time runtime tool grant",
+          awaitingApprovalAt: null,
+          pendingApproval: Prisma.DbNull,
+        },
+      });
+      await Promise.all(
+        superseded.map((run) =>
+          appendRunEvent(tx, {
+            runId: run.id,
+            workspaceId,
+            issueId,
+            agentId: p.agentId,
+            kind: "SUPERSEDED",
+            currentStep: "superseded by one-time runtime tool grant",
+            payload: {
+              actionRequestId: request.id,
+              mode: p.mode,
+              tools: p.tools,
+            },
+          }),
+        ),
+      );
+    }
+
+    const { run } = await openOrTouchRun(tx, {
+      workspaceId,
+      issueId,
+      agentId: p.agentId,
+      actorId,
+      currentStep: "queued with one-time runtime tool grant",
+      engagementMode: p.mode,
+      runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
+    });
+    await tx.agentRun.update({
+      where: { id: run.id },
+      data: {
+        triggerEventId: request.id,
+        triggerKind: "ACTION_REQUEST_ACCEPTED",
+      },
+    });
+    await appendRunEvent(tx, {
+      runId: run.id,
+      workspaceId,
+      issueId,
+      agentId: p.agentId,
+      kind: "TOOL_GRANT_APPROVED",
+      currentStep: "queued with one-time runtime tool grant",
+      payload: {
+        actionRequestId: request.id,
+        mode: p.mode,
+        tools: p.tools,
+        accessLevel: p.accessLevel,
+        scopePath: p.scopePath,
       },
     });
     return;

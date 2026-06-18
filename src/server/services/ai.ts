@@ -405,61 +405,351 @@ Decompose this goal into a short, ordered list of concrete execution steps (typi
     return null;
   }
 
-  const call = completion.choices?.[0]?.message?.tool_calls?.[0] as
-    | { type: string; function?: { name?: string; arguments?: string } }
-    | undefined;
-  if (!call?.function?.arguments) {
-    logger.warn({ completion }, "ai.plan: tool call missing");
+  const parsed = parseGeneratedPlanMessage(completion.choices?.[0]?.message);
+  if (!parsed) {
+    logger.warn(
+      {
+        provider: client.providerId,
+        finishReason: completion.choices?.[0]?.finish_reason,
+        completion,
+      },
+      "ai.plan: no usable steps",
+    );
     return null;
   }
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(call.function.arguments);
-  } catch (err) {
-    logger.warn({ err, args: call.function.arguments }, "ai.plan: bad JSON");
-    return null;
+  logger.info(
+    { provider: client.providerId, source: parsed.source, stepCount: parsed.steps.length },
+    "ai.plan: parsed plan",
+  );
+  return parsed.steps;
+}
+
+export function parseGeneratedPlanMessage(
+  message: unknown,
+): { steps: GeneratedStep[]; source: string } | null {
+  const candidates = extractPlanPayloadCandidates(message);
+  for (const candidate of candidates) {
+    const steps = generatedStepsFromPayload(candidate.payload);
+    if (steps.length > 0) {
+      return { steps, source: candidate.source };
+    }
   }
 
-  const rawSteps = Array.isArray(parsed.steps) ? parsed.steps : [];
+  const text = messageTextContent(message);
+  if (text) {
+    const steps = generatedStepsFromMarkdown(text);
+    if (steps.length > 0) {
+      return { steps, source: "content_markdown" };
+    }
+  }
+
+  return null;
+}
+
+function extractPlanPayloadCandidates(
+  message: unknown,
+): Array<{ payload: unknown; source: string }> {
+  const candidates: Array<{ payload: unknown; source: string }> = [];
+  const msg = asRecord(message);
+  if (!msg) return candidates;
+
+  const toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+  for (const toolCall of toolCalls) {
+    const call = asRecord(toolCall);
+    const fn = asRecord(call?.function);
+    const name = typeof fn?.name === "string" ? fn.name : null;
+    if (name && name !== "submit_plan") continue;
+    const payload = parsePlanArguments(fn?.arguments);
+    if (payload !== null) {
+      candidates.push({ payload, source: "tool_calls" });
+    }
+  }
+
+  const legacyFn = asRecord(msg.function_call);
+  if (legacyFn) {
+    const name = typeof legacyFn.name === "string" ? legacyFn.name : null;
+    if (!name || name === "submit_plan") {
+      const payload = parsePlanArguments(legacyFn.arguments);
+      if (payload !== null) {
+        candidates.push({ payload, source: "function_call" });
+      }
+    }
+  }
+
+  const text = messageTextContent(message);
+  if (text) {
+    const payload = parseJsonishPlanPayload(text);
+    if (payload !== null) {
+      candidates.push({ payload, source: "content_json" });
+    }
+  }
+
+  return candidates;
+}
+
+function parsePlanArguments(value: unknown): unknown | null {
+  if (typeof value === "string") {
+    return parseJsonishPlanPayload(value);
+  }
+  if (value && typeof value === "object") {
+    return value;
+  }
+  return null;
+}
+
+function parseJsonishPlanPayload(text: string): unknown | null {
+  const candidates = jsonCandidates(text);
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next likely JSON span.
+    }
+  }
+  return null;
+}
+
+function jsonCandidates(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  const candidates = [trimmed];
+  const fencePattern = /```(?:json|jsonc)?\s*([\s\S]*?)```/gi;
+  for (const match of trimmed.matchAll(fencePattern)) {
+    if (match[1]?.trim()) candidates.push(match[1].trim());
+  }
+
+  const objectStart = trimmed.indexOf("{");
+  const objectEnd = trimmed.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    candidates.push(trimmed.slice(objectStart, objectEnd + 1).trim());
+  }
+
+  const arrayStart = trimmed.indexOf("[");
+  const arrayEnd = trimmed.lastIndexOf("]");
+  if (arrayStart >= 0 && arrayEnd > arrayStart) {
+    candidates.push(trimmed.slice(arrayStart, arrayEnd + 1).trim());
+  }
+
+  return Array.from(new Set(candidates));
+}
+
+function generatedStepsFromPayload(payload: unknown): GeneratedStep[] {
+  const rawSteps = rawStepsFromPayload(payload);
   const steps: GeneratedStep[] = [];
-  for (const raw of rawSteps) {
+  for (let index = 0; index < rawSteps.length; index++) {
+    const raw = rawSteps[index];
     if (!raw || typeof raw !== "object") continue;
     const r = raw as Record<string, unknown>;
-    const title = typeof r.title === "string" ? r.title.trim() : "";
-    if (!title) continue; // a step with no title is unusable
-    const verification = Array.isArray(r.verification)
-      ? r.verification
-          .filter((v): v is string => typeof v === "string")
-          .map((v) => v.trim())
-          .filter(Boolean)
-      : [];
-    const dependsOnStepIndexes = Array.isArray(r.depends_on_step_indexes)
-      ? r.depends_on_step_indexes.filter(
-          (n): n is number => typeof n === "number" && Number.isInteger(n),
-        )
-      : [];
-    const role =
-      r.assigned_role === "WORKER" || r.assigned_role === "REVIEWER"
-        ? r.assigned_role
-        : null;
+    const title = firstString(r.title, r.name, r.step_title)?.trim() ?? "";
+    if (!title) continue;
+
+    const verification = coerceStringArray(
+      r.verification ?? r.verification_checklist ?? r.checklist,
+    );
+    const dependsOnStepIndexes = coerceIntegerArray(
+      r.depends_on_step_indexes ?? r.dependsOnStepIndexes ?? r.depends_on ?? r.dependencies,
+    ).filter((n) => n >= 0 && n < index);
+    const role = coerceRole(r.assigned_role ?? r.assignedRole);
+    const body = firstString(r.body, r.description, r.details);
+    const expectedOutput = firstString(
+      r.expected_output,
+      r.expectedOutput,
+      r.output,
+      r.deliverable,
+    );
+
     steps.push({
       title: title.slice(0, 300),
-      body: typeof r.body === "string" && r.body.trim() ? r.body : null,
-      expectedOutput:
-        typeof r.expected_output === "string" && r.expected_output.trim()
-          ? r.expected_output
-          : null,
+      body: body?.trim() ? body.trim() : null,
+      expectedOutput: expectedOutput?.trim() ? expectedOutput.trim() : null,
       verification,
       dependsOnStepIndexes,
       assignedRole: role,
     });
   }
+  return steps;
+}
 
-  if (steps.length === 0) {
-    logger.warn({ completion }, "ai.plan: no usable steps");
-    return null;
+function rawStepsFromPayload(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  const record = asRecord(payload);
+  if (!record) return [];
+  const steps = record.steps ?? record.plan ?? record.execution_steps;
+  return Array.isArray(steps) ? steps : [];
+}
+
+function generatedStepsFromMarkdown(text: string): GeneratedStep[] {
+  const items = collectMarkdownStepItems(text, false);
+  const fallbackItems = items.length > 0 ? items : collectMarkdownStepItems(text, true);
+  const steps: GeneratedStep[] = [];
+  for (const item of fallbackItems) {
+    const title = cleanMarkdownInline(item.title);
+    if (!title) continue;
+    const details = markdownDetails(item.bodyLines);
+    steps.push({
+      title: title.slice(0, 300),
+      body: details.body,
+      expectedOutput: details.expectedOutput,
+      verification: details.verification,
+      dependsOnStepIndexes: [],
+      assignedRole: null,
+    });
   }
   return steps;
+}
+
+function collectMarkdownStepItems(
+  text: string,
+  allowPlainBullets: boolean,
+): Array<{ title: string; bodyLines: string[] }> {
+  const items: Array<{ title: string; bodyLines: string[] }> = [];
+  let current: { title: string; bodyLines: string[] } | null = null;
+
+  for (const line of text.split(/\r?\n/)) {
+    const item = markdownStepTitle(line, allowPlainBullets);
+    if (item) {
+      current = { title: item, bodyLines: [] };
+      items.push(current);
+      continue;
+    }
+    if (current && line.trim()) {
+      current.bodyLines.push(line);
+    }
+  }
+
+  return items;
+}
+
+function markdownStepTitle(line: string, allowPlainBullets: boolean): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  const heading = trimmed.match(/^#{1,6}\s+(?:step\s*)?\d{1,2}[.)\s:-]+(.+)$/i);
+  if (heading?.[1]) return heading[1].trim();
+
+  const listed = trimmed.match(/^(?:step\s*)?\d{1,2}[.)]\s+(.+)$/i);
+  if (listed?.[1]) return listed[1].trim();
+
+  const bullet = trimmed.match(/^[-*+]\s+(?:step\s*)?\d{1,2}[.)\s:-]+(.+)$/i);
+  if (bullet?.[1]) return bullet[1].trim();
+
+  if (allowPlainBullets && line === trimmed) {
+    const plainBullet = trimmed.match(/^[-*+]\s+(.+)$/);
+    if (plainBullet?.[1]) return plainBullet[1].trim();
+  }
+
+  return null;
+}
+
+function markdownDetails(lines: string[]): {
+  body: string | null;
+  expectedOutput: string | null;
+  verification: string[];
+} {
+  const bodyLines: string[] = [];
+  const verification: string[] = [];
+  let expectedOutput: string | null = null;
+
+  for (const line of lines) {
+    const clean = cleanMarkdownInline(line.replace(/^\s*[-*+]\s+/, ""));
+    if (!clean) continue;
+
+    const expected = clean.match(/^(?:expected output|expected_output|deliverable|output):\s*(.+)$/i);
+    if (expected?.[1]) {
+      expectedOutput = expected[1].trim();
+      continue;
+    }
+
+    const verify = clean.match(/^(?:verification|verify|done when|acceptance):\s*(.+)$/i);
+    if (verify?.[1]) {
+      verification.push(verify[1].trim());
+      continue;
+    }
+
+    bodyLines.push(clean);
+  }
+
+  return {
+    body: bodyLines.length ? bodyLines.join("\n") : null,
+    expectedOutput,
+    verification,
+  };
+}
+
+function cleanMarkdownInline(value: string): string {
+  return value
+    .replace(/^\s*(?:step\s*)?\d{1,2}[.)\s:-]+/i, "")
+    .replace(/\*\*/g, "")
+    .replace(/__/g, "")
+    .replace(/`/g, "")
+    .trim();
+}
+
+function messageTextContent(message: unknown): string | null {
+  if (typeof message === "string") return message.trim() || null;
+  const msg = asRecord(message);
+  if (!msg) return null;
+  return contentToText(msg.content);
+}
+
+function contentToText(content: unknown): string | null {
+  if (typeof content === "string") return content.trim() || null;
+  if (!Array.isArray(content)) return null;
+
+  const text = content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      const record = asRecord(part);
+      if (!record) return "";
+      if (typeof record.text === "string") return record.text;
+      if (typeof record.content === "string") return record.content;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return text || null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string") return value;
+  }
+  return null;
+}
+
+function coerceStringArray(value: unknown): string[] {
+  if (typeof value === "string") {
+    return value
+      .split(/\r?\n|;/)
+      .map((v) => cleanMarkdownInline(v.replace(/^\s*[-*+]\s+/, "")))
+      .filter(Boolean);
+  }
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((v): v is string => typeof v === "string")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+function coerceIntegerArray(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (n): n is number => typeof n === "number" && Number.isInteger(n),
+  );
+}
+
+function coerceRole(value: unknown): "WORKER" | "REVIEWER" | null {
+  if (typeof value !== "string") return null;
+  const upper = value.toUpperCase();
+  return upper === "WORKER" || upper === "REVIEWER" ? upper : null;
 }
 
 function isPriority(value: unknown): value is Priority {

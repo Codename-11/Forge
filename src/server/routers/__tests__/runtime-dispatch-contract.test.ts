@@ -56,6 +56,13 @@ describe("runtime dispatch contract", () => {
         localWorkspaceTools: true,
         toolCapabilities: ["terminal", "filesystem", "git"],
         workspaceRoot: "  /home/bailey/forge  ",
+        modeToolPolicyEnforced: true,
+        modeToolProfiles: {
+          EXECUTE: ["terminal", "filesystem", "git"],
+          REVIEW: ["filesystem", "git"],
+          RESEARCH: [],
+          DISCUSS: [],
+        },
       },
     });
 
@@ -63,6 +70,13 @@ describe("runtime dispatch contract", () => {
       localWorkspaceTools: true,
       toolCapabilities: ["terminal", "filesystem", "git"],
       workspaceRoot: "/home/bailey/forge",
+      modeToolPolicyEnforced: true,
+      modeToolProfiles: {
+        EXECUTE: ["terminal", "filesystem", "git"],
+        REVIEW: ["filesystem", "git"],
+        RESEARCH: [],
+        DISCUSS: [],
+      },
     });
 
     await expect(

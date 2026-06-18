@@ -26,6 +26,13 @@ export type RuntimePolicySnapshot = {
   runtimeName?: string | null;
   capabilities: RuntimeToolCapability[];
   allowedHostTools: RuntimeToolCapability[];
+  toolGrant?: {
+    accessLevel: "READ_ONLY" | "FULL";
+    scopePath?: string | null;
+    approvedByUserId?: string | null;
+    actionRequestId?: string | null;
+    reason?: string | null;
+  } | null;
   layers: RuntimeEnforcementLayer[];
   generatedAt: string;
 };

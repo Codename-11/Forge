@@ -16,7 +16,9 @@ import {
   RUNTIME_TOOL_CAPABILITIES,
   declaredRuntimeToolCapabilities,
   runtimeDeclaresLocalWorkspaceTools,
+  runtimeModeToolCapabilities,
   runtimeWorkspaceRoot,
+  type RuntimeEngagementMode,
   type RuntimeToolCapability,
 } from "@/lib/runtime-tools";
 import { Topbar } from "@/components/topbar";
@@ -678,11 +680,44 @@ type AdapterOption = {
 
 const fieldLabel = "mb-1 block font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-muted-foreground";
 
+const RUNTIME_ENGAGEMENT_MODES = ["EXECUTE", "REVIEW", "RESEARCH", "DISCUSS"] as const;
+
+const MODE_COPY: Record<RuntimeEngagementMode, { label: string; hint: string }> = {
+  EXECUTE: {
+    label: "Execute",
+    hint: "Implementation work. Usually full repo tools.",
+  },
+  REVIEW: {
+    label: "Review",
+    hint: "Inspection without issue mutation.",
+  },
+  RESEARCH: {
+    label: "Research",
+    hint: "Read and investigate.",
+  },
+  DISCUSS: {
+    label: "Discuss",
+    hint: "Conversation only by default.",
+  },
+};
+
+type ModeToolProfiles = Record<RuntimeEngagementMode, RuntimeToolCapability[]>;
+
+function emptyModeToolProfiles(): ModeToolProfiles {
+  return {
+    EXECUTE: [],
+    REVIEW: [],
+    RESEARCH: [],
+    DISCUSS: [],
+  };
+}
+
 type RuntimeToolPolicy = {
   localWorkspaceTools: boolean;
   toolCapabilities: RuntimeToolCapability[];
   workspaceRoot: string;
   modeToolPolicyEnforced: boolean;
+  modeToolProfiles: ModeToolProfiles;
 };
 
 const DEFAULT_RUNTIME_TOOL_POLICY: RuntimeToolPolicy = {
@@ -690,6 +725,7 @@ const DEFAULT_RUNTIME_TOOL_POLICY: RuntimeToolPolicy = {
   toolCapabilities: [],
   workspaceRoot: "",
   modeToolPolicyEnforced: false,
+  modeToolProfiles: emptyModeToolProfiles(),
 };
 
 type HermesRuntimePolicy = RuntimeToolPolicy & {
@@ -708,6 +744,10 @@ const DEFAULT_HERMES_RUNTIME_POLICY: HermesRuntimePolicy = {
 };
 
 function runtimeToolPolicyFromConfig(config: unknown): RuntimeToolPolicy {
+  const modeToolProfiles = emptyModeToolProfiles();
+  for (const mode of RUNTIME_ENGAGEMENT_MODES) {
+    modeToolProfiles[mode] = runtimeModeToolCapabilities(config, mode);
+  }
   return {
     localWorkspaceTools: runtimeDeclaresLocalWorkspaceTools(config),
     toolCapabilities: declaredRuntimeToolCapabilities(config),
@@ -719,6 +759,7 @@ function runtimeToolPolicyFromConfig(config: unknown): RuntimeToolPolicy {
         !Array.isArray(config) &&
         (config as Record<string, unknown>).modeToolPolicyEnforced === true
       ),
+    modeToolProfiles,
   };
 }
 
@@ -731,6 +772,14 @@ function runtimeToolPolicyToConfig(p: RuntimeToolPolicy): Record<string, unknown
     p.toolCapabilities.includes(tool),
   );
   out.toolCapabilities = tools;
+  out.modeToolProfiles = Object.fromEntries(
+    RUNTIME_ENGAGEMENT_MODES.map((mode) => [
+      mode,
+      RUNTIME_TOOL_CAPABILITIES.filter((tool) =>
+        p.modeToolProfiles[mode]?.includes(tool),
+      ),
+    ]),
+  );
   if (p.workspaceRoot.trim()) out.workspaceRoot = p.workspaceRoot.trim();
   return out;
 }
@@ -830,14 +879,44 @@ function RuntimeToolPolicyFields({
   value: RuntimeToolPolicy;
   onChange: (v: RuntimeToolPolicy) => void;
 }) {
+  const declaredTools = new Set(value.toolCapabilities);
+
   function toggleTool(tool: RuntimeToolCapability, checked: boolean) {
     const next = new Set(value.toolCapabilities);
     if (checked) next.add(tool);
     else next.delete(tool);
+    const nextCapabilities = RUNTIME_TOOL_CAPABILITIES.filter((key) => next.has(key));
+    const nextProfiles = emptyModeToolProfiles();
+    for (const mode of RUNTIME_ENGAGEMENT_MODES) {
+      const currentModeTools = new Set(value.modeToolProfiles[mode] ?? []);
+      if (checked && mode === "EXECUTE") currentModeTools.add(tool);
+      nextProfiles[mode] = RUNTIME_TOOL_CAPABILITIES.filter(
+        (key) => next.has(key) && currentModeTools.has(key),
+      );
+    }
     onChange({
       ...value,
       localWorkspaceTools: checked ? value.localWorkspaceTools : false,
-      toolCapabilities: RUNTIME_TOOL_CAPABILITIES.filter((key) => next.has(key)),
+      toolCapabilities: nextCapabilities,
+      modeToolProfiles: nextProfiles,
+    });
+  }
+
+  function toggleModeTool(
+    mode: RuntimeEngagementMode,
+    tool: RuntimeToolCapability,
+    checked: boolean,
+  ) {
+    if (!declaredTools.has(tool)) return;
+    const next = new Set(value.modeToolProfiles[mode] ?? []);
+    if (checked) next.add(tool);
+    else next.delete(tool);
+    onChange({
+      ...value,
+      modeToolProfiles: {
+        ...value.modeToolProfiles,
+        [mode]: RUNTIME_TOOL_CAPABILITIES.filter((key) => next.has(key)),
+      },
     });
   }
 
@@ -864,6 +943,12 @@ function RuntimeToolPolicyFields({
                 toolCapabilities: e.target.checked
                   ? [...RUNTIME_TOOL_CAPABILITIES]
                   : [],
+                modeToolProfiles: e.target.checked
+                  ? {
+                      ...value.modeToolProfiles,
+                      EXECUTE: [...RUNTIME_TOOL_CAPABILITIES],
+                    }
+                  : emptyModeToolProfiles(),
               })
             }
           />
@@ -912,6 +997,58 @@ function RuntimeToolPolicyFields({
             </label>
           ))}
         </div>
+      </div>
+      <div>
+        <span className={fieldLabel}>Allowed by mode</span>
+        <div className="space-y-2">
+          {RUNTIME_ENGAGEMENT_MODES.map((mode) => {
+            const copy = MODE_COPY[mode];
+            return (
+              <div
+                key={mode}
+                className="grid gap-2 rounded-md border border-border bg-background/30 px-2.5 py-2 sm:grid-cols-[minmax(0,1fr)_auto]"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-foreground">{copy.label}</div>
+                  <div className="text-meta text-muted-foreground">{copy.hint}</div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {RUNTIME_TOOL_CAPABILITIES.map((tool) => {
+                    const disabled = !declaredTools.has(tool);
+                    return (
+                      <label
+                        key={tool}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[0.6875rem]",
+                          disabled
+                            ? "border-border bg-subtle/20 text-muted-foreground/50"
+                            : "border-border bg-card/40 text-foreground/80",
+                        )}
+                        title={
+                          disabled
+                            ? `Declare ${tool} before allowing it in ${copy.label}`
+                            : `${copy.label} may use ${tool}`
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          disabled={disabled}
+                          checked={value.modeToolProfiles[mode]?.includes(tool) ?? false}
+                          onChange={(e) => toggleModeTool(mode, tool, e.target.checked)}
+                        />
+                        <span className="font-mono uppercase tracking-wider">{tool}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <span className="mt-1.5 block text-[0.625rem] text-muted-foreground/70">
+          Hermes receives this per-run allowlist. Non-Execute modes keep Forge issue
+          mutations blocked; this only changes host tools.
+        </span>
       </div>
       <label className="block">
         <span className={fieldLabel}>

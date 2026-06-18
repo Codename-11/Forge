@@ -136,6 +136,7 @@ export function makeHermesRunsConnector(opts?: {
           contract_version: input.toolPolicy.contractVersion,
           engagement_mode: input.toolPolicy.engagementMode,
           allowed_host_tools: input.toolPolicy.allowedHostTools,
+          tool_grant: input.toolPolicy.toolGrant ?? null,
           enforcement_layers: input.toolPolicy.layers,
         };
       }

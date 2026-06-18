@@ -8,6 +8,7 @@ import {
   AlertOctagon,
   XCircle,
   Loader2,
+  ShieldCheck,
 } from "lucide-react";
 import type {
   ActionRequestKind,
@@ -124,9 +125,10 @@ function ActionRequestCardForComment({
     },
     onSuccess: () => {
       // Refresh the issue payload so the dispatched action (status flip,
-      // labels, assignment) materializes everywhere.
+      // labels, assignment, runtime grant) materializes everywhere.
       utils.issue.byId.invalidate({ id: issueId });
       utils.issue.activity.invalidate({ issueId });
+      utils.agentRun.activeForIssue.invalidate({ issueId });
       utils.actionRequest.forComment.invalidate({ commentId });
     },
   });
@@ -336,6 +338,13 @@ function ActionRequestCardView({
     request.kind,
     request.payload,
   ]);
+  const runtimeGrant = useMemo(
+    () =>
+      request.kind === "RUNTIME_TOOL_GRANT"
+        ? readRuntimeToolGrantPayload(request.payload)
+        : null,
+    [request.kind, request.payload],
+  );
   const requesterName = request.requestedByAgent
     ? `@${request.requestedByAgent.profileKey}`
     : request.requestedByUser?.handle
@@ -396,6 +405,7 @@ function ActionRequestCardView({
               className="text-[0.8125rem] text-foreground/90"
             />
           )}
+          {runtimeGrant && <RuntimeToolGrantSummary grant={runtimeGrant} />}
 
           {isOpen && visibleCanResolve && !showDeclineReason && (
             <div className="flex gap-2 pt-1">
@@ -404,14 +414,20 @@ function ActionRequestCardView({
                 size="sm"
                 onClick={onAccept}
                 disabled={pending}
-                aria-label="Accept this action request"
+                aria-label={
+                  request.kind === "RUNTIME_TOOL_GRANT"
+                    ? "Grant runtime tool access and rerun"
+                    : "Accept this action request"
+                }
               >
                 {pending ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
+                ) : request.kind === "RUNTIME_TOOL_GRANT" ? (
+                  <ShieldCheck className="h-3 w-3" />
                 ) : (
                   <Sparkles className="h-3 w-3" />
                 )}
-                Accept
+                {request.kind === "RUNTIME_TOOL_GRANT" ? "Grant and rerun" : "Accept"}
               </Button>
               <Button
                 variant="outline"
@@ -479,6 +495,81 @@ function ActionRequestCardView({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+type RuntimeToolGrantPayload = {
+  mode: string;
+  tools: string[];
+  accessLevel: string;
+  scopePath: string;
+  reason: string | null;
+};
+
+function readRuntimeToolGrantPayload(payload: unknown): RuntimeToolGrantPayload | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const p = payload as Record<string, unknown>;
+  const tools = Array.isArray(p.tools)
+    ? p.tools.filter((tool): tool is string => typeof tool === "string")
+    : [];
+  const scopePath = typeof p.scopePath === "string" ? p.scopePath : "";
+  return {
+    mode: typeof p.mode === "string" ? p.mode : "REVIEW",
+    tools,
+    accessLevel: typeof p.accessLevel === "string" ? p.accessLevel : "READ_ONLY",
+    scopePath,
+    reason: typeof p.reason === "string" && p.reason.trim() ? p.reason : null,
+  };
+}
+
+function RuntimeToolGrantSummary({ grant }: { grant: RuntimeToolGrantPayload }) {
+  const access = grant.accessLevel === "READ_ONLY" ? "read-only" : "full";
+  return (
+    <div className="grid gap-2 rounded-md border border-border bg-background/40 p-2 text-meta sm:grid-cols-2">
+      <div className="min-w-0">
+        <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
+          Run
+        </div>
+        <div className="mt-0.5 text-foreground">
+          {grant.mode.toLowerCase()} with {access} host tools
+        </div>
+      </div>
+      <div className="min-w-0">
+        <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
+          Scope
+        </div>
+        <div className="mt-0.5 truncate font-mono text-foreground" title={grant.scopePath}>
+          {grant.scopePath || "runtime default"}
+        </div>
+      </div>
+      <div className="min-w-0 sm:col-span-2">
+        <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
+          Tools
+        </div>
+        <div className="mt-1 flex flex-wrap gap-1">
+          {grant.tools.length > 0 ? (
+            grant.tools.map((tool) => (
+              <span
+                key={tool}
+                className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-foreground/80"
+              >
+                {tool}
+              </span>
+            ))
+          ) : (
+            <span className="text-muted-foreground">No tools requested</span>
+          )}
+        </div>
+      </div>
+      {grant.reason && (
+        <div className="min-w-0 sm:col-span-2">
+          <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
+            Reason
+          </div>
+          <div className="mt-0.5 text-foreground/90">{grant.reason}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -582,6 +673,14 @@ function kindChipLabel(
       return {
         label: `dup of · ${id.slice(0, 6)}…`,
         title: `Will mark issue as duplicate of ${id}`,
+      };
+    }
+    case "RUNTIME_TOOL_GRANT": {
+      const mode = typeof p.mode === "string" ? p.mode.toLowerCase() : "review";
+      const tools = Array.isArray(p.tools) ? p.tools.length : 0;
+      return {
+        label: `${mode} tools · ${tools}`,
+        title: "Will grant a one-time runtime tool allowlist and rerun the agent",
       };
     }
     default:

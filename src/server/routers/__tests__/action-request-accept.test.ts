@@ -2,8 +2,13 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   ActionRequestKind,
   ActionRequestStatus,
+  AgentProvider,
+  AgentRunStatus,
+  EngagementMode,
   RelationKind,
   Role,
+  RunEngine,
+  RuntimeKind,
 } from "@prisma/client";
 import { actionRequestRouter } from "@/server/routers/action-request";
 import {
@@ -24,7 +29,7 @@ import {
  *     TRANSITION flips statusId, SET_LABELS adds/removes IssueLabel
  *     rows, ASSIGN replaces assignees, ASSIGN_AGENT sets the agent,
  *     ARCHIVE soft-deletes, CLOSE_AS_DUPLICATE writes a DUPLICATES
- *     IssueRelation row.
+ *     IssueRelation row, RUNTIME_TOOL_GRANT queues a permissioned run.
  *   - Decline never dispatches.
  */
 
@@ -285,6 +290,94 @@ describe("actionRequestRouter — kind dispatchers", () => {
     const after = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
     expect(after.statusId).toBe(done.id);
     expect(after.completedAt).not.toBeNull();
+  });
+
+  it("RUNTIME_TOOL_GRANT queues a one-time permissioned review run", async () => {
+    const { fixture, prisma, caller } = await setup();
+    const issue = await createIssue(fixture);
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Hermes gateway",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "hermes",
+        endpoint: "http://127.0.0.1:8642/v1",
+        providersAvailable: [AgentProvider.HERMES],
+        config: {
+          workspaceRoot: "/home/bailey/forge",
+          localWorkspaceTools: true,
+          toolCapabilities: ["terminal", "filesystem", "git"],
+          modeToolPolicyEnforced: true,
+          modeToolProfiles: {
+            EXECUTE: ["terminal", "filesystem", "git"],
+            REVIEW: [],
+            RESEARCH: [],
+            DISCUSS: [],
+          },
+        },
+      },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: `victor-${Date.now()}`,
+        provider: AgentProvider.HERMES,
+        runEngine: RunEngine.RUNS,
+        runtimeId: runtime.id,
+      },
+    });
+    const staleRun = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        engagementMode: EngagementMode.REVIEW,
+        currentStep: "blocked on missing repo tools",
+      },
+    });
+
+    const { id } = await caller.create({
+      title: "Enable read-only repo access",
+      kind: ActionRequestKind.RUNTIME_TOOL_GRANT,
+      issueId: issue.id,
+      payload: {
+        agentId: agent.id,
+        mode: "REVIEW",
+        tools: ["filesystem", "git", "terminal"],
+        accessLevel: "READ_ONLY",
+        scopePath: "/home/bailey/forge",
+        reason: "Need file:line review findings.",
+      },
+    });
+    const accepted = await caller.accept({ id });
+    expect(accepted.dispatched).toBe(true);
+
+    const oldRun = await prisma.agentRun.findUniqueOrThrow({ where: { id: staleRun.id } });
+    expect(oldRun.status).toBe(AgentRunStatus.ABANDONED);
+    expect(oldRun.finishedAt).not.toBeNull();
+
+    const nextRun = await prisma.agentRun.findFirstOrThrow({
+      where: {
+        issueId: issue.id,
+        agentId: agent.id,
+        id: { not: staleRun.id },
+      },
+      orderBy: { startedAt: "desc" },
+    });
+    expect(nextRun.status).toBe(AgentRunStatus.ACTIVE);
+    expect(nextRun.engagementMode).toBe(EngagementMode.REVIEW);
+    expect(nextRun.triggerKind).toBe("ACTION_REQUEST_ACCEPTED");
+    expect(nextRun.runtimePolicy).toMatchObject({
+      engagementMode: "REVIEW",
+      allowedHostTools: ["terminal", "filesystem", "git"],
+      toolGrant: {
+        accessLevel: "READ_ONLY",
+        scopePath: "/home/bailey/forge",
+        actionRequestId: id,
+      },
+    });
   });
 });
 
