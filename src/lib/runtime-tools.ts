@@ -2,6 +2,7 @@ export const RUNTIME_TOOL_CAPABILITIES = ["terminal", "filesystem", "git"] as co
 
 export type RuntimeToolCapability = (typeof RUNTIME_TOOL_CAPABILITIES)[number];
 export type RuntimeEngagementMode = "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS";
+export type RuntimeToolGrantStrategy = "mode-profile" | "sandbox" | "none";
 
 const RUNTIME_TOOL_SET = new Set<string>(RUNTIME_TOOL_CAPABILITIES);
 
@@ -104,6 +105,47 @@ export function runtimeModeToolCapabilities(
 
   if (mode !== "EXECUTE") return [];
   return declaredRuntimeToolCapabilities(config);
+}
+
+export function runtimeToolGrantStrategy(
+  adapterKey: string | null | undefined,
+): RuntimeToolGrantStrategy {
+  if (adapterKey === "hermes") return "mode-profile";
+  if (adapterKey === "codex-app-server") return "sandbox";
+  return "none";
+}
+
+export function runtimeSupportsRuntimeToolGrants(
+  adapterKey: string | null | undefined,
+): boolean {
+  return runtimeToolGrantStrategy(adapterKey) !== "none";
+}
+
+export function runtimeHostToolPolicyEnforced(
+  adapterKey: string | null | undefined,
+  config: unknown,
+): boolean {
+  if (adapterKey === "codex-app-server") return true;
+  if (adapterKey === "local-daemon") return true;
+  if (adapterKey === "hermes") return runtimeHostEnforcesModeToolPolicy(config);
+  return false;
+}
+
+export function runtimeAllowedHostTools(
+  adapterKey: string | null | undefined,
+  config: unknown,
+  mode: RuntimeEngagementMode,
+): RuntimeToolCapability[] {
+  if (adapterKey === "hermes") {
+    return runtimeModeToolCapabilities(config, mode);
+  }
+
+  const surface = runtimeToolSurface(adapterKey, config);
+  if (mode === "EXECUTE") return surface.capabilities;
+  if (adapterKey === "codex-app-server" || adapterKey === "local-daemon") {
+    return surface.capabilities;
+  }
+  return [];
 }
 
 export function runtimeToolSurface(

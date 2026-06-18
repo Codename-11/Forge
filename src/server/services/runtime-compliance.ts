@@ -2,7 +2,7 @@ import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { AgentRunStatus } from "@prisma/client";
 import {
-  runtimeHostEnforcesModeToolPolicy,
+  runtimeHostToolPolicyEnforced,
   runtimeToolSurface,
   type RuntimeToolCapability,
 } from "@/lib/runtime-tools";
@@ -89,10 +89,7 @@ function worstTone(signals: RuntimeComplianceSignal[]): RuntimeComplianceTone {
 }
 
 function runtimeHostEnforced(adapterKey: string | null, config: unknown): boolean {
-  if (adapterKey === "codex-app-server") return true;
-  if (adapterKey === "local-daemon") return true;
-  if (adapterKey === "hermes") return runtimeHostEnforcesModeToolPolicy(config);
-  return false;
+  return runtimeHostToolPolicyEnforced(adapterKey, config);
 }
 
 function runtimeSignals(runtime: RuntimeRow | null): RuntimeComplianceSignal[] {
@@ -142,7 +139,7 @@ function runtimeSignals(runtime: RuntimeRow | null): RuntimeComplianceSignal[] {
       detail: "Runtime does not declare terminal, filesystem, or git access.",
     });
   }
-  if (runtime.adapterKey === "hermes" && !runtimeHostEnforcesModeToolPolicy(runtime.config)) {
+  if (runtime.adapterKey === "hermes" && !runtimeHostToolPolicyEnforced(runtime.adapterKey, runtime.config)) {
     signals.push({
       code: "prompt-only-tools",
       tone: "warning",

@@ -94,6 +94,7 @@ const CHATMODE_LABEL: Record<string, string> = {
 type AdapterCapabilities = {
   streaming: boolean;
   approvals: boolean;
+  toolGrants?: boolean;
   presence: string;
 };
 
@@ -126,6 +127,17 @@ function AdapterCapabilityBadges({
         title="Whether this adapter can surface runtime approvals"
       >
         {capabilities.approvals ? "approvals" : "no approvals"}
+      </span>
+      <span
+        className={cn(
+          "rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+          capabilities.toolGrants
+            ? "border-success/30 bg-success/10 text-success"
+            : "border-border bg-subtle/40 text-muted-foreground",
+        )}
+        title="Whether this adapter can enforce one-time runtime tool grants"
+      >
+        {capabilities.toolGrants ? "tool grants" : "no grants"}
       </span>
       <span
         className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"

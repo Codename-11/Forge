@@ -379,6 +379,72 @@ describe("actionRequestRouter — kind dispatchers", () => {
       },
     });
   });
+
+  it("RUNTIME_TOOL_GRANT supports Codex app-server sandbox-backed runtimes", async () => {
+    const { fixture, prisma, caller } = await setup();
+    const issue = await createIssue(fixture);
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Codex app server",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "codex-app-server",
+        endpoint: "ws://127.0.0.1:4505",
+        providersAvailable: [AgentProvider.CODEX],
+        config: {
+          workspaceRoot: "/work",
+          sandboxMode: "read-only",
+          approvalPolicy: "on-request",
+        },
+      },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Codex reviewer",
+        profileKey: `codex-${Date.now()}`,
+        provider: AgentProvider.CODEX,
+        runEngine: RunEngine.RUNS,
+        runtimeId: runtime.id,
+      },
+    });
+
+    const { id } = await caller.create({
+      title: "Grant scoped Codex repo review",
+      kind: ActionRequestKind.RUNTIME_TOOL_GRANT,
+      issueId: issue.id,
+      payload: {
+        agentId: agent.id,
+        mode: "REVIEW",
+        tools: ["filesystem", "git"],
+        accessLevel: "READ_ONLY",
+        scopePath: "/work",
+        reason: "Need file:line review findings.",
+      },
+    });
+    const accepted = await caller.accept({ id });
+    expect(accepted.dispatched).toBe(true);
+
+    const run = await prisma.agentRun.findFirstOrThrow({
+      where: { issueId: issue.id, agentId: agent.id },
+      orderBy: { startedAt: "desc" },
+    });
+    expect(run.engagementMode).toBe(EngagementMode.REVIEW);
+    expect(run.runtimePolicy).toMatchObject({
+      engagementMode: "REVIEW",
+      adapterKey: "codex-app-server",
+      allowedHostTools: ["filesystem", "git"],
+      toolGrant: {
+        accessLevel: "READ_ONLY",
+        scopePath: "/work",
+        actionRequestId: id,
+      },
+      layers: [
+        { kind: "forge-mcp", enforced: true },
+        { kind: "codex-sandbox", enforced: true },
+      ],
+    });
+  });
 });
 
 describe("actionRequestRouter — decline never dispatches", () => {

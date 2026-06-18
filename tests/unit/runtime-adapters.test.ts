@@ -15,6 +15,7 @@ describe("runtime adapter registry", () => {
     expect(new Set(keys).size).toBe(keys.length);
     for (const a of RUNTIME_ADAPTERS) {
       expect(a.providers.length).toBeGreaterThan(0);
+      expect(typeof a.capabilities.toolGrants).toBe("boolean");
       // runs-api adapters are the managed loop-owners
       if (a.transport === "runs-api") expect(a.managed).toBe(true);
     }
@@ -28,6 +29,7 @@ describe("runtime adapter registry", () => {
     expect(h!.transport).toBe("runs-api");
     expect(h!.defaultRunEngine).toBe("RUNS");
     expect(h!.capabilities.streaming).toBe(true);
+    expect(h!.capabilities.toolGrants).toBe(true);
   });
 
   it("CLI connections are thin (managed=false, mcp transport)", () => {
@@ -78,6 +80,7 @@ describe("runtime adapter registry", () => {
     expect(c.defaultRunEngine).toBe("RUNS");
     expect(c.providers).toContain("CODEX");
     expect(adapterServesChat(c)).toBe(true);
+    expect(c.capabilities.toolGrants).toBe(true);
   });
 
   it("legacy backfill matches the SQL in migration 0059", () => {

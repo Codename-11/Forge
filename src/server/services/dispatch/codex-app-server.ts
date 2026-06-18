@@ -557,7 +557,9 @@ export function makeCodexAppServerConnector(opts: {
       // New thread, then a turn carrying the user message. Codex keeps prior
       // turns in the thread itself; we pass instructions + the latest message.
       const threadParams: Record<string, unknown> = {};
-      if (workspaceRoot) threadParams.cwd = workspaceRoot;
+      const grantScope = input.toolPolicy?.toolGrant?.scopePath?.trim() || undefined;
+      const runWorkspaceRoot = grantScope ?? workspaceRoot;
+      if (runWorkspaceRoot) threadParams.cwd = runWorkspaceRoot;
       const effectiveModel = input.model?.trim() || runtimeModel;
       if (effectiveModel) threadParams.model = effectiveModel;
       const threadRes = (await request(run, "thread/start", threadParams)) as {
@@ -588,17 +590,24 @@ export function makeCodexAppServerConnector(opts: {
       // cwd / approvalPolicy / sandboxPolicy and applies them to this turn and
       // subsequent turns on the thread). Defaults reproduce today's behavior.
       const yoloMode = input.yoloMode ?? runtimeYoloMode;
-      const effectiveSandboxMode = yoloMode
-        ? "danger-full-access"
-        : input.engagementMode && input.engagementMode !== "EXECUTE"
-          ? "read-only"
-          : sandboxMode;
+      const grantSandboxMode: CodexSandboxMode | null = input.toolPolicy?.toolGrant
+        ? input.toolPolicy.toolGrant.accessLevel === "FULL"
+          ? "workspace-write"
+          : "read-only"
+        : null;
+      const effectiveSandboxMode =
+        grantSandboxMode ??
+        (yoloMode
+          ? "danger-full-access"
+          : input.engagementMode && input.engagementMode !== "EXECUTE"
+            ? "read-only"
+            : sandboxMode);
       const effectiveApprovalPolicy = yoloMode ? "never" : approvalPolicy;
       const turnParams: Record<string, unknown> = { threadId, input: turnInput };
-      if (workspaceRoot) turnParams.cwd = workspaceRoot;
+      if (runWorkspaceRoot) turnParams.cwd = runWorkspaceRoot;
       if (effectiveModel) turnParams.model = effectiveModel;
       turnParams.approvalPolicy = effectiveApprovalPolicy;
-      turnParams.sandboxPolicy = toSandboxPolicy(effectiveSandboxMode, workspaceRoot);
+      turnParams.sandboxPolicy = toSandboxPolicy(effectiveSandboxMode, runWorkspaceRoot);
       const turnRes = (await request(run, "turn/start", turnParams)) as {
         turn?: { id?: string };
       };

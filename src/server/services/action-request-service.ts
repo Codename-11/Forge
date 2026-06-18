@@ -15,6 +15,8 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   RUNTIME_TOOL_CAPABILITIES,
+  runtimeSupportsRuntimeToolGrants,
+  runtimeToolSurface,
   type RuntimeToolCapability,
 } from "@/lib/runtime-tools";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
@@ -171,34 +173,6 @@ export function readPollOptions(
   return parsed.success ? parsed.data : null;
 }
 
-function configRecord(config: unknown): Record<string, unknown> {
-  return config && typeof config === "object" && !Array.isArray(config)
-    ? { ...(config as Record<string, unknown>) }
-    : {};
-}
-
-function modeToolProfilesRecord(config: Record<string, unknown>): Record<string, unknown> {
-  return config.modeToolProfiles &&
-    typeof config.modeToolProfiles === "object" &&
-    !Array.isArray(config.modeToolProfiles)
-    ? { ...(config.modeToolProfiles as Record<string, unknown>) }
-    : {};
-}
-
-function configWithModeToolGrant(
-  config: unknown,
-  mode: EngagementMode,
-  tools: RuntimeToolCapability[],
-): Record<string, unknown> {
-  const next = configRecord(config);
-  next.modeToolProfiles = {
-    ...modeToolProfilesRecord(next),
-    [mode]: tools,
-  };
-  next.modeToolPolicyEnforced = true;
-  return next;
-}
-
 /**
  * Validate that every entity referenced by a kind-specific payload
  * lives in the calling workspace. Runs *before* the create transaction
@@ -293,7 +267,9 @@ async function validatePayloadWorkspaceScope(
       where: { id: p.agentId, workspaceId, archivedAt: null },
       select: {
         id: true,
-        runtime: { select: { id: true, adapterKey: true, disabledAt: true } },
+        runtime: {
+          select: { id: true, adapterKey: true, config: true, disabledAt: true },
+        },
       },
     });
     if (!agent) {
@@ -308,16 +284,26 @@ async function validatePayloadWorkspaceScope(
         message: "RUNTIME_TOOL_GRANT requires an agent attached to a managed runtime.",
       });
     }
-    if (agent.runtime.adapterKey !== "hermes") {
+    if (!runtimeSupportsRuntimeToolGrants(agent.runtime.adapterKey)) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: "Runtime tool grants are currently supported for Hermes runtimes.",
+        message:
+          "Runtime tool grants are not supported for this runtime adapter.",
       });
     }
     if (agent.runtime.disabledAt) {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: "Target runtime is disabled.",
+      });
+    }
+    const surface = runtimeToolSurface(agent.runtime.adapterKey, agent.runtime.config);
+    const declared = new Set(surface.capabilities);
+    const missing = p.tools.filter((tool) => !declared.has(tool));
+    if (missing.length > 0) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Runtime does not declare requested tool access: ${missing.join(", ")}.`,
       });
     }
     return;
@@ -760,10 +746,20 @@ async function dispatchActionRequestKind(
         message: "Target runtime is disabled.",
       });
     }
-    if (agent.runtime.adapterKey !== "hermes") {
+    if (!runtimeSupportsRuntimeToolGrants(agent.runtime.adapterKey)) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: "Runtime tool grants are currently supported for Hermes runtimes.",
+        message:
+          "Runtime tool grants are not supported for this runtime adapter.",
+      });
+    }
+    const surface = runtimeToolSurface(agent.runtime.adapterKey, agent.runtime.config);
+    const declared = new Set(surface.capabilities);
+    const missing = p.tools.filter((tool) => !declared.has(tool));
+    if (missing.length > 0) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Runtime does not declare requested tool access: ${missing.join(", ")}.`,
       });
     }
 
@@ -772,19 +768,16 @@ async function dispatchActionRequestKind(
       engagementMode: p.mode,
       adapterKey: agent.runtime.adapterKey ?? (agent.provider === "HERMES" ? "hermes" : null),
       runtimeName: agent.runtime.name,
-      config: configWithModeToolGrant(
-        agent.runtime.config,
-        p.mode,
-        p.tools as RuntimeToolCapability[],
-      ),
+      config: agent.runtime.config,
+      toolGrant: {
+        tools: p.tools as RuntimeToolCapability[],
+        accessLevel: p.accessLevel,
+        scopePath: p.scopePath,
+        approvedByUserId: actorId,
+        actionRequestId: request.id,
+        reason: p.reason ?? null,
+      },
     });
-    runtimePolicy.toolGrant = {
-      accessLevel: p.accessLevel,
-      scopePath: p.scopePath,
-      approvedByUserId: actorId,
-      actionRequestId: request.id,
-      reason: p.reason ?? null,
-    };
 
     const now = new Date();
     const superseded = await tx.agentRun.findMany({

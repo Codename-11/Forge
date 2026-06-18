@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import {
   RUNTIME_TOOL_CAPABILITIES,
-  runtimeHostEnforcesModeToolPolicy,
+  runtimeHostToolPolicyEnforced,
   runtimeToolSurface,
   type RuntimeToolCapability,
 } from "@/lib/runtime-tools";
@@ -141,7 +141,7 @@ function RuntimeConfigEnforcementBadge({
   config: unknown;
 }) {
   if (adapterKey === "hermes") {
-    const enforced = runtimeHostEnforcesModeToolPolicy(config);
+    const enforced = runtimeHostToolPolicyEnforced(adapterKey, config);
     const Icon = enforced ? ShieldCheck : ShieldAlert;
     return (
       <span
@@ -162,14 +162,18 @@ function RuntimeConfigEnforcementBadge({
       </span>
     );
   }
-  if (adapterKey === "codex-app-server") {
+  if (runtimeHostToolPolicyEnforced(adapterKey, config)) {
     return (
       <span
         className="inline-flex items-center gap-1 rounded-md border border-success/30 bg-success/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-success"
-        title="Codex app server receives Forge's per-turn sandbox policy; non-Execute runs are forced read-only."
+        title={
+          adapterKey === "codex-app-server"
+            ? "Codex app server receives Forge's per-turn sandbox policy; non-Execute runs are forced read-only."
+            : "This runtime adapter is marked as host-enforcing Forge's runtime tool policy."
+        }
       >
         <ShieldCheck className="h-3 w-3" />
-        sandbox enforced
+        {adapterKey === "codex-app-server" ? "sandbox enforced" : "host enforced"}
       </span>
     );
   }
@@ -202,16 +206,27 @@ export function RuntimePolicyBadges({
             title={layer.detail}
           >
             <Icon className="h-3 w-3" />
-            {layer.kind === "forge-mcp"
-              ? "Forge MCP"
-              : layer.kind === "codex-sandbox"
-                ? "Codex sandbox"
-                : layer.kind === "hermes-host"
-                  ? "Hermes host"
-                  : "prompt only"}
+              {layer.kind === "forge-mcp"
+                ? "Forge MCP"
+                : layer.kind === "codex-sandbox"
+                  ? "Codex sandbox"
+                  : layer.kind === "hermes-host"
+                    ? "Hermes host"
+                    : layer.kind === "host-tool-policy"
+                      ? "Runtime host"
+                      : "prompt only"}
           </span>
         );
       })}
+      {policy.toolGrant && (
+        <span
+          className="inline-flex items-center gap-1 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-ember"
+          title={`One-time ${policy.toolGrant.accessLevel === "READ_ONLY" ? "read-only" : "full"} runtime tool grant${policy.toolGrant.scopePath ? ` for ${policy.toolGrant.scopePath}` : ""}`}
+        >
+          <ShieldCheck className="h-3 w-3" />
+          one-time grant
+        </span>
+      )}
       {!compact && (
         <span
           className="truncate rounded-md border border-border bg-background/40 px-1.5 py-0.5 font-mono text-[0.625rem] text-muted-foreground"

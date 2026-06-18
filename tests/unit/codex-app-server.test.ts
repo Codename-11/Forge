@@ -227,6 +227,76 @@ describe("makeCodexAppServerConnector", () => {
     }
   });
 
+  it("maps a one-time read-only tool grant to scoped cwd + read-only sandbox", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const threadId = `thread-grant-${Date.now()}`;
+    const turnId = `turn-grant-${Date.now()}`;
+    let threadStartParams: Record<string, unknown> | null = null;
+    let turnStartParams: Record<string, unknown> | null = null;
+
+    server.on("connection", (ws) => {
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(raw.toString()) as {
+          id?: number;
+          method?: string;
+          params?: Record<string, unknown>;
+        };
+        if (msg.id === undefined) return;
+        if (msg.method === "initialize") {
+          ws.send(JSON.stringify({ id: msg.id, result: {} }));
+        } else if (msg.method === "thread/start") {
+          threadStartParams = msg.params ?? {};
+          ws.send(JSON.stringify({ id: msg.id, result: { thread: { id: threadId } } }));
+        } else if (msg.method === "turn/start") {
+          turnStartParams = msg.params ?? {};
+          ws.send(JSON.stringify({ id: msg.id, result: { turn: { id: turnId } } }));
+          ws.send(
+            JSON.stringify({
+              method: "turn/completed",
+              params: { turn: { status: "completed" } },
+            }),
+          );
+        }
+      });
+    });
+
+    try {
+      const connector = makeCodexAppServerConnector({
+        baseUrl: `ws://127.0.0.1:${port}`,
+        yoloMode: true,
+        workspaceRoot: "/work",
+      });
+      const { externalRunId } = await connector!.startRun({
+        message: "review this",
+        engagementMode: "REVIEW",
+        toolPolicy: {
+          contractVersion: "test",
+          engagementMode: "REVIEW",
+          allowedHostTools: ["filesystem", "git"],
+          toolGrant: {
+            accessLevel: "READ_ONLY",
+            scopePath: "/work/repo",
+            approvedByUserId: "user_1",
+            actionRequestId: "ar_1",
+            reason: "Review needs file access.",
+          },
+          layers: [],
+        },
+      });
+      await connector!.subscribe(externalRunId, () => undefined);
+
+      expect(threadStartParams).toMatchObject({ cwd: "/work/repo" });
+      expect(turnStartParams).toMatchObject({
+        cwd: "/work/repo",
+        sandboxPolicy: { type: "readOnly", networkAccess: false },
+      });
+    } finally {
+      server.close();
+    }
+  });
+
   it("maps a session-scope approval to acceptForSession on the live socket", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await new Promise<void>((resolve) => server.once("listening", resolve));

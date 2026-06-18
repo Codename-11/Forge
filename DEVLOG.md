@@ -10235,3 +10235,26 @@ modern `tool_calls[].function.arguments` field.
 Verification: `pnpm test tests/unit/plan-generation-parser.test.ts` clean;
 `pnpm typecheck` clean; `pnpm lint` clean; full `pnpm test` clean (914
 passed / 1 skipped).
+
+## 2026-06-18 — Generalized runtime tool grants beyond Hermes
+
+Follow-up to the AXI-81 grant flow: the approval mechanism is now keyed to
+runtime adapter capability instead of `adapterKey === "hermes"`.
+
+- Added shared runtime-tool helpers for grant support, host-policy
+  enforcement, and mode-aware allowed host tools.
+- Adapter registry now declares `capabilities.toolGrants`; Hermes and Codex
+  app server opt in, while MCP/webhook/pull-act adapters stay out.
+- `RUNTIME_TOOL_GRANT` validation accepts any opt-in adapter and rejects
+  requested tools the runtime has not declared.
+- Runtime policy snapshots accept a first-class `toolGrant` input. Hermes
+  still receives a per-run allowlist; Codex app server now maps grants to
+  scoped `cwd` plus read-only or workspace-write sandbox policy.
+- Runtime settings and run policy badges display the generalized grant /
+  host-enforcement state.
+
+Verification: `pnpm test tests/unit/codex-app-server.test.ts
+tests/unit/runtime-adapters.test.ts
+src/server/routers/__tests__/action-request-accept.test.ts` clean;
+`pnpm typecheck` clean; `pnpm lint` clean; full `pnpm test` clean (916
+passed / 1 skipped).

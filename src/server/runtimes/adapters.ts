@@ -110,6 +110,8 @@ export interface RuntimeAdapter {
     streaming: boolean;
     /** Supports interactive approvals mid-run. */
     approvals: boolean;
+    /** Accepts Forge runtime tool grants as host-enforced per-run policy. */
+    toolGrants: boolean;
     presence: PresenceModel;
   };
   /**
@@ -138,7 +140,12 @@ export const RUNTIME_ADAPTERS: RuntimeAdapter[] = [
     defaultRunEngine: "RUNS",
     defaultRuntimeMode: "PERSISTENT",
     defaultKeyKind: "AGENT",
-    capabilities: { streaming: true, approvals: true, presence: "runtime-heartbeat" },
+    capabilities: {
+      streaming: true,
+      approvals: true,
+      toolGrants: true,
+      presence: "runtime-heartbeat",
+    },
     autoProvisionable: false,
     setupMarkdown: `# Hermes (managed runtime)
 
@@ -173,7 +180,12 @@ token-by-token, handles approvals, and reports presence.
     defaultRunEngine: "COMPLETIONS",
     defaultRuntimeMode: "PERSISTENT",
     defaultKeyKind: "AGENT",
-    capabilities: { streaming: true, approvals: false, presence: "runtime-heartbeat" },
+    capabilities: {
+      streaming: true,
+      approvals: false,
+      toolGrants: false,
+      presence: "runtime-heartbeat",
+    },
     autoProvisionable: false,
     setupMarkdown: `# Forge local daemon (managed runtime)
 
@@ -195,7 +207,12 @@ subscription to Forge, and dispatches \`CHAT_MESSAGE_POSTED\` to a local CLI
     defaultRunEngine: "RUNS",
     defaultRuntimeMode: "PERSISTENT",
     defaultKeyKind: "AGENT",
-    capabilities: { streaming: true, approvals: true, presence: "runtime-heartbeat" },
+    capabilities: {
+      streaming: true,
+      approvals: true,
+      toolGrants: true,
+      presence: "runtime-heartbeat",
+    },
     autoProvisionable: false,
     setupMarkdown: `# Codex app server (managed runtime)
 
@@ -234,7 +251,7 @@ Pin exact method shapes with \`codex app-server generate-ts --out <dir>\`.`,
     defaultRunEngine: "COMPLETIONS",
     defaultRuntimeMode: "EPHEMERAL",
     defaultKeyKind: "SESSION",
-    capabilities: { streaming: false, approvals: false, presence: "session" },
+    capabilities: { streaming: false, approvals: false, toolGrants: false, presence: "session" },
     autoProvisionable: true,
     setupMarkdown: `# Claude Code
 
@@ -259,7 +276,7 @@ SESSION key — it auto-expires.`,
     // resolve to heartbeat presence and read as a permanent "offline").
     defaultRuntimeMode: "EPHEMERAL",
     defaultKeyKind: "PERSONAL",
-    capabilities: { streaming: false, approvals: false, presence: "session" },
+    capabilities: { streaming: false, approvals: false, toolGrants: false, presence: "session" },
     autoProvisionable: true,
     setupMarkdown: `# Claude Desktop
 
@@ -278,7 +295,7 @@ Add Forge as an MCP server in \`claude_desktop_config.json\`. Use a PERSONAL key
     defaultRunEngine: "COMPLETIONS",
     defaultRuntimeMode: "EPHEMERAL",
     defaultKeyKind: "SESSION",
-    capabilities: { streaming: false, approvals: false, presence: "session" },
+    capabilities: { streaming: false, approvals: false, toolGrants: false, presence: "session" },
     autoProvisionable: true,
     setupMarkdown: `# Codex CLI (pull/act connection)
 
@@ -303,7 +320,7 @@ Hermes agents chat via \`/v1/runs\`.`,
     defaultRunEngine: "COMPLETIONS",
     defaultRuntimeMode: "EPHEMERAL",
     defaultKeyKind: "AGENT",
-    capabilities: { streaming: true, approvals: true, presence: "session" },
+    capabilities: { streaming: true, approvals: true, toolGrants: false, presence: "session" },
     autoProvisionable: false,
     setupMarkdown: `# ACP session (Agent Client Protocol)
 
@@ -338,7 +355,12 @@ agent a *first-class* always-on member instead, back it with a managed runtime
     defaultRunEngine: "COMPLETIONS",
     defaultRuntimeMode: "PERSISTENT",
     defaultKeyKind: "AGENT",
-    capabilities: { streaming: false, approvals: false, presence: "delivery-derived" },
+    capabilities: {
+      streaming: false,
+      approvals: false,
+      toolGrants: false,
+      presence: "delivery-derived",
+    },
     autoProvisionable: false,
     setupMarkdown: `# Custom integration
 
