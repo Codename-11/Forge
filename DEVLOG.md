@@ -2,6 +2,18 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-18 — Coolify deploy for forge-pm.dev
+
+Deployed the public Forge landing/docs site to Coolify on `https://forge-pm.dev`.
+
+- Created Coolify project `Forge PM` (`ebaz0m70idd26sg9fcjqjozq`) and app `Prod-Forge-PM-Landing` (`o9paiq2ij5mdlpwyysjmsoml`) on the localhost Coolify server.
+- Initial `static` build-pack attempt deployed successfully but served the nginx welcome page: Coolify's static pack only copies source; it does **not** run the landing `pnpm build` / docs staging commands.
+- Added `landing/Dockerfile` + `landing/nginx.conf`, committed as `20ed9a8 deploy: add Forge landing Docker image`, and switched Coolify to `build_pack=dockerfile`, `base_directory=/`, `dockerfile_location=/landing/Dockerfile`, `is_static=false`, port `80`.
+- Verified Docker image locally (`docker build -f landing/Dockerfile -t forge-landing:local .`) and smoke-tested `/`, `/docs/`, `/releases/`.
+- Live deploy `m13eg5q2hby3re42k65dsi1p` finished on commit `20ed9a8bcd2ea575bce8084ecb71ba60c7d73090`; public smoke passed: `/`, `/docs/`, `/releases/` all 200, title `Forge — issue tracking for humans & agents`, canonical `og:url=https://forge-pm.dev/`.
+
+Note: repository still had unrelated dirty WIP in app/orchestration files; deploy commit only touched `landing/Dockerfile` and `landing/nginx.conf`.
+
 ## 2026-06-17 — Public landing domain (forge-pm.dev) + docs wired into /docs; public-readiness audit
 
 Picked `forge-pm.dev` as the public landing/marketing domain; the app stays on
