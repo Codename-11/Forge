@@ -10455,6 +10455,9 @@ the removed compact search UI.
   and made Mission Control chat previews link directly to the exact thread.
 - Updated stale Mission Control/chat read-state e2e coverage for the preview
   model and suppressed the offline-pages prompt during those specs.
+- Hardened `chat.kickThread` against same-timestamp user/agent messages by
+  using the message id as a deterministic tie-breaker; this fixed the CI unit
+  failure in `mcp.test.ts`.
 
 Verification: `pnpm exec tsc --noEmit --pretty false` clean; `pnpm lint`
 clean; full `pnpm test` clean (930 passed / 1 skipped); full `pnpm test:e2e`

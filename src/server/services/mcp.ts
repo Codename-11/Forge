@@ -6618,7 +6618,7 @@ export const mcpTools = {
           dispatchedAt: { not: null },
           acknowledgedAt: null,
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: { id: true, body: true, contextSnapshot: true, createdAt: true },
       });
       if (!latest) {
@@ -6633,7 +6633,10 @@ export const mcpTools = {
           workspaceId: ctx.workspaceId,
           threadId: thread.id,
           role: "AGENT",
-          createdAt: { gt: latest.createdAt },
+          OR: [
+            { createdAt: { gt: latest.createdAt } },
+            { createdAt: latest.createdAt, id: { gt: latest.id } },
+          ],
         },
         select: { id: true },
       });

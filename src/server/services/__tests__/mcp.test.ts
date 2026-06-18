@@ -4277,21 +4277,26 @@ describe("mcp — agent.inbox.list / agent.inbox.ack / agent.inbox.outputStarted
         title: "answered",
       },
     });
+    const sameTimestamp = new Date("2026-06-18T12:00:00.000Z");
     await prisma.chatMessage.create({
       data: {
+        id: "mcp-kick-same-ts-user",
         workspaceId: f.workspace.id,
         threadId: thread.id,
         role: "USER",
         body: "ping",
         dispatchedAt: new Date(),
+        createdAt: sameTimestamp,
       },
     });
     await prisma.chatMessage.create({
       data: {
+        id: "mcp-kick-same-ts-z-agent",
         workspaceId: f.workspace.id,
         threadId: thread.id,
         role: "AGENT",
         body: "pong",
+        createdAt: sameTimestamp,
       },
     });
 
