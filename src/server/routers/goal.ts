@@ -7,6 +7,7 @@ import {
   attachPlanToGoal,
   createGoal,
   decomposeGoal,
+  generatePlanForGoal,
   getGoal,
   listGoals,
   requestPlanApproval,
@@ -105,6 +106,23 @@ export const goalRouter = router({
         actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         goalId: input.goalId,
         plannerAgentId: input.plannerAgentId ?? null,
+        contextSetId: input.contextSetId ?? null,
+      });
+    }),
+
+  generatePlan: workspaceProcedure
+    .input(
+      z.object({
+        goalId: z.string().cuid(),
+        contextSetId: z.string().cuid().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return generatePlanForGoal(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session?.user?.id ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        goalId: input.goalId,
         contextSetId: input.contextSetId ?? null,
       });
     }),

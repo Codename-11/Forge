@@ -2,7 +2,16 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Ban, ChevronLeft, ExternalLink, ListChecks, Target } from "lucide-react";
+import {
+  AlertTriangle,
+  Ban,
+  ChevronLeft,
+  ExternalLink,
+  ListChecks,
+  Send,
+  Sparkles,
+  Target,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -26,6 +35,7 @@ import {
 import {
   useGoalRouter,
   type GoalPlanRow,
+  type GoalPlannerInfo,
 } from "@/components/orchestration-ui/use-goal-trpc";
 
 const STEP_DONE = "DONE";
@@ -80,19 +90,45 @@ export default function GoalDetailPage() {
     onError: (e: { message: string }) => toast.error(e.message),
   });
 
+  const invalidateGoal = () => {
+    const u = utils as unknown as {
+      goal?: { get?: { invalidate?: (i: { id: string }) => void } };
+    };
+    u.goal?.get?.invalidate?.({ id: params.goalId });
+  };
+
+  // Result of the most recent "Dispatch to crew planner" — drives the
+  // reachability banner so the operator isn't left staring at an empty plan.
+  const [dispatchResult, setDispatchResult] = useState<{
+    planner: GoalPlannerInfo | null;
+    dispatchable: boolean;
+  } | null>(null);
+
   const decomposeM = goalRouter?.decompose?.useMutation({
     onSuccess: (result) => {
-      toast.success(
-        result.plannerAgentId
-          ? "Planner started — drafting the execution plan."
-          : "Plan draft is live; assign a planner to continue.",
-      );
-      const u = utils as unknown as {
-        goal?: { get?: { invalidate?: (i: { id: string }) => void } };
-      };
-      u.goal?.get?.invalidate?.({ id: params.goalId });
+      setDispatchResult({
+        planner: result.planner,
+        dispatchable: result.dispatchable,
+      });
+      if (result.dispatchable && result.planner) {
+        toast.success(`Dispatched to ${result.planner.name} — awaiting steps.`);
+      } else {
+        toast.warning("Plan draft created, but no planner could be reached.");
+      }
+      invalidateGoal();
     },
-    onError: (e: { message: string }) => toast.error(`Planning: ${e.message}`),
+    onError: (e: { message: string }) => toast.error(`Dispatch: ${e.message}`),
+  });
+
+  const generatePlanM = goalRouter?.generatePlan?.useMutation({
+    onSuccess: (result) => {
+      setDispatchResult(null);
+      toast.success(
+        `Plan generated · ${result.stepCount} step${result.stepCount === 1 ? "" : "s"}.`,
+      );
+      invalidateGoal();
+    },
+    onError: (e: { message: string }) => toast.error(`Generate: ${e.message}`),
   });
 
   const [confirmAbandon, setConfirmAbandon] = useState(false);
@@ -150,7 +186,15 @@ export default function GoalDetailPage() {
   const priorAttempts = plans.filter((p) => p.id !== activePlan?.id);
 
   const canAbandon = goal.status !== "ACHIEVED" && goal.status !== "ABANDONED";
-  const canStartPlanning = goal.status === "OPEN" && Boolean(decomposeM);
+  const canPlan = goal.status !== "ACHIEVED" && goal.status !== "ABANDONED";
+  const activeStepCount =
+    activePlan?.steps?.length ?? activePlan?._count?.steps ?? 0;
+  const activePlanEmpty =
+    !!activePlan && activePlan.status === "DRAFT" && activeStepCount === 0;
+  // Offer the planner actions whenever there's nothing to run yet: no active
+  // plan, or an active plan still sitting as an empty DRAFT (the bug the user
+  // hit). A plan with steps hides the panel.
+  const needsPlanner = canPlan && (!activePlan || activePlanEmpty);
   const elapsedMinutes = goal.startedAt
     ? (Date.now() - new Date(goal.startedAt).getTime()) / 60_000
     : null;
@@ -182,7 +226,7 @@ export default function GoalDetailPage() {
                     <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-ember motion-safe:animate-pulse" />
                   ) : null}
                 </span>
-                <h1 className="text-lg font-medium leading-snug">{goal.title}</h1>
+                <h1 className="text-base font-semibold leading-snug">{goal.title}</h1>
               </div>
               <span
                 className={cn(
@@ -213,32 +257,27 @@ export default function GoalDetailPage() {
 
           {/* Active attempt */}
           {activePlan ? (
-            <PlanAttemptCard
-              plan={activePlan}
+            <PlanAttemptCard plan={activePlan} slug={ws.slug} isActive />
+          ) : null}
+
+          {/* Planner actions — shown when there's nothing to run yet (no plan,
+              or an empty DRAFT no one filled). Offers Forge's built-in
+              generator and a dispatch to the crew's planner, and surfaces the
+              dispatch outcome so an unreachable planner isn't a silent dead end. */}
+          {needsPlanner ? (
+            <PlannerPanel
+              hasEmptyDraft={activePlanEmpty}
+              activePlanId={activePlan?.id ?? null}
               slug={ws.slug}
-              isActive
+              dispatchResult={dispatchResult}
+              canGenerate={Boolean(generatePlanM)}
+              canDispatch={Boolean(decomposeM)}
+              generating={Boolean(generatePlanM?.isPending)}
+              dispatching={Boolean(decomposeM?.isPending)}
+              onGenerate={() => generatePlanM?.mutate({ goalId: goal.id })}
+              onDispatch={() => decomposeM?.mutate({ goalId: goal.id })}
             />
-          ) : (
-            <div className="rounded-lg border border-dashed border-border bg-card/20 p-4 text-meta text-muted-foreground">
-              <div>
-                {goal.status === "OPEN"
-                  ? "No plan is running yet. Start the planner to create a live draft and dispatch feedback."
-                  : "No plan yet. A planner agent will decompose this goal into an execution plan."}
-              </div>
-              {canStartPlanning ? (
-                <Button
-                  className="mt-3"
-                  size="sm"
-                  variant="ember"
-                  disabled={decomposeM?.isPending}
-                  onClick={() => decomposeM?.mutate({ goalId: goal.id })}
-                >
-                  <ListChecks className="h-3.5 w-3.5" />
-                  {decomposeM?.isPending ? "Starting planner…" : "Start planner"}
-                </Button>
-              ) : null}
-            </div>
-          )}
+          ) : null}
 
           {/* Attempt history */}
           {priorAttempts.length > 0 ? (
@@ -330,12 +369,146 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+function PlannerPanel({
+  hasEmptyDraft,
+  activePlanId,
+  slug,
+  dispatchResult,
+  canGenerate,
+  canDispatch,
+  generating,
+  dispatching,
+  onGenerate,
+  onDispatch,
+}: {
+  hasEmptyDraft: boolean;
+  activePlanId: string | null;
+  slug: string;
+  dispatchResult: { planner: GoalPlannerInfo | null; dispatchable: boolean } | null;
+  canGenerate: boolean;
+  canDispatch: boolean;
+  generating: boolean;
+  dispatching: boolean;
+  onGenerate: () => void;
+  onDispatch: () => void;
+}) {
+  const busy = generating || dispatching;
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-card/20 p-4">
+      <div className="flex items-center gap-2">
+        <Target className="h-3.5 w-3.5 text-ember" />
+        <span className="text-sm font-medium">
+          {hasEmptyDraft ? "This plan has no steps yet" : "No plan yet"}
+        </span>
+      </div>
+      <p className="mt-1 text-meta text-muted-foreground">
+        Generate the steps with Forge, or dispatch the crew&apos;s planner agent
+        to draft them.
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="ember"
+          disabled={!canGenerate || busy}
+          onClick={onGenerate}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          {generating ? "Generating…" : "Generate with Forge"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!canDispatch || busy}
+          onClick={onDispatch}
+        >
+          <Send className="h-3.5 w-3.5" />
+          {dispatching ? "Dispatching…" : "Dispatch to crew planner"}
+        </Button>
+      </div>
+
+      {dispatchResult ? (
+        <DispatchFeedback
+          result={dispatchResult}
+          activePlanId={activePlanId}
+          slug={slug}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function DispatchFeedback({
+  result,
+  activePlanId,
+  slug,
+}: {
+  result: { planner: GoalPlannerInfo | null; dispatchable: boolean };
+  activePlanId: string | null;
+  slug: string;
+}) {
+  const { planner, dispatchable } = result;
+
+  if (dispatchable && planner) {
+    const offline = planner.status === "OFFLINE";
+    return (
+      <div className="mt-3 rounded-md border border-border bg-card/40 p-2.5 text-meta">
+        <div className="flex flex-wrap items-center gap-1.5 text-foreground">
+          <span className="forge-breath" aria-hidden />
+          Dispatched to <span className="font-medium">{planner.name}</span>
+          <span className="text-id text-muted-foreground">{planner.profileKey}</span>
+          · waiting for steps.
+        </div>
+        {offline ? (
+          <div className="mt-1 text-warning">
+            Agent is currently offline — it&apos;ll pick this up when it
+            reconnects.
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  // Not dispatchable — say exactly why, and what to do instead.
+  const reason = !planner
+    ? "No planner agent is assigned to this goal's crew."
+    : `${planner.name} can't be reached — it ${
+        planner.runEngine === "RUNS"
+          ? "has no runtime attached"
+          : "has no webhook configured"
+      }.`;
+  return (
+    <div className="mt-3 rounded-md border border-warning/30 bg-warning/10 p-2.5 text-meta text-foreground">
+      <div className="flex items-start gap-1.5">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+        <div>
+          <div>{reason}</div>
+          <div className="mt-1 text-muted-foreground">
+            Generate with Forge instead, or assign a reachable planner to the
+            crew.
+            {activePlanId ? (
+              <>
+                {" "}
+                <Link
+                  href={`/w/${slug}/plans/${activePlanId}`}
+                  className="text-ember hover:underline"
+                >
+                  Open the draft to add steps manually →
+                </Link>
+              </>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const PLAN_STATUS_TONE: Record<string, string> = {
   DRAFT: "bg-subtle text-muted-foreground",
-  APPROVED: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  APPROVED: "bg-success/15 text-success",
   RUNNING: "bg-ember/15 text-ember",
   BLOCKED: "bg-warning/15 text-warning",
-  COMPLETED: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  COMPLETED: "bg-success/15 text-success",
   CANCELED: "bg-muted/40 text-muted-foreground line-through",
 };
 

@@ -12,13 +12,18 @@ import { Confirm } from "@/components/ui/modal";
 import { cn, relativeTime } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
+import {
+  DagStepStrip,
+  countBasedTones,
+  toneForStepStatus,
+} from "@/components/orchestration/dag-step-strip";
 
 const STATUS_TONE: Record<ExecutionPlanStatus, string> = {
   DRAFT: "bg-subtle text-muted-foreground",
-  APPROVED: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  APPROVED: "bg-success/15 text-success",
   RUNNING: "bg-ember/15 text-ember",
   BLOCKED: "bg-warning/15 text-warning",
-  COMPLETED: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  COMPLETED: "bg-success/15 text-success",
   CANCELED: "bg-muted/40 text-muted-foreground line-through",
 };
 
@@ -178,53 +183,6 @@ type PlanRow = {
 };
 
 type Tab = "active" | "archived";
-
-const STRIP_MAX_PIPS = 12;
-
-// Collapsed-row pip color by step status. Tokens only — DONE success,
-// RUNNING ember (pulses), BLOCKED danger, REVIEW warning, the rest fade
-// to subtle so the strip reads as a progress glance. Mirrors the
-// Mission Control plans-tab strip.
-function pipClass(status: ExecutionStepStatus): string {
-  switch (status) {
-    case "DONE":
-      return "bg-success";
-    case "RUNNING":
-      return "bg-ember forge-active-node";
-    case "BLOCKED":
-      return "bg-danger";
-    case "REVIEW":
-      return "bg-warning";
-    case "READY":
-      return "bg-ember/50";
-    default:
-      return "bg-muted-foreground/30";
-  }
-}
-
-function StepStrip({ steps }: { steps: PlanStripStep[] }) {
-  if (steps.length === 0) return null;
-  const shown = steps.slice(0, STRIP_MAX_PIPS);
-  const overflow = steps.length - shown.length;
-  return (
-    <div className="flex min-w-0 items-center gap-0.5">
-      {shown.map((s, i) => (
-        <span key={s.id} className="flex items-center gap-0.5">
-          {i > 0 && <span className="h-px w-1 bg-border" aria-hidden />}
-          <span
-            className={cn("h-1.5 w-1.5 rounded-full", pipClass(s.status))}
-            title={`Step ${s.position + 1}: ${s.status.toLowerCase()}`}
-          />
-        </span>
-      ))}
-      {overflow > 0 && (
-        <span className="ml-1 font-mono text-[0.625rem] text-muted-foreground">
-          +{overflow}
-        </span>
-      )}
-    </div>
-  );
-}
 
 function PlanOwner({
   createdBy,
@@ -467,12 +425,17 @@ export default function PlansPage() {
           )
         ) : (
           <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
-            {items.map((row) => (
-              <li key={row.id} className="relative">
+            {items.map((row, idx) => (
+              <li
+                key={row.id}
+                className="relative forge-row-rise"
+                style={{ "--row-i": idx } as React.CSSProperties}
+              >
                 <Link
                   href={`/w/${ws.slug}/plans/${row.id}`}
                   className={cn(
                     "group flex h-full flex-col gap-2 rounded-lg border border-border bg-card/40 p-3 transition hover:border-ember/40 hover:bg-subtle",
+                    row.status === "RUNNING" && "forge-active-node border-ember/40",
                     tab === "archived" && "opacity-70",
                   )}
                 >
@@ -493,24 +456,30 @@ export default function PlansPage() {
                     </p>
                   ) : null}
                   <div className="mt-auto flex flex-col gap-2">
-                    {/* DAG step strip — one pip per step in position
-                        order, colored by status (capped, with +N). */}
-                    {row.steps && row.steps.length > 0 ? (
-                      <StepStrip steps={row.steps} />
-                    ) : null}
-                    <div className="flex items-center gap-2 text-meta text-muted-foreground">
-                      <span>
-                        {row._count.steps > 0
-                          ? `${row.doneSteps ?? 0}/${row._count.steps} steps`
-                          : "0 steps"}
-                      </span>
-                      {row.updatedAt ? (
+                    {/* DAG step strip — numbered chips in position order,
+                        tinted by status with the running node glowing. */}
+                    <DagStepStrip
+                      tones={
+                        row.steps && row.steps.length > 0
+                          ? row.steps.map((s) => toneForStepStatus(s.status))
+                          : countBasedTones(
+                              row._count.steps,
+                              row.doneSteps ?? 0,
+                              row.status,
+                            )
+                      }
+                      done={row.doneSteps ?? 0}
+                      total={row._count.steps}
+                      max={10}
+                    />
+                    {row.updatedAt ? (
+                      <div className="flex items-center text-meta text-muted-foreground">
                         <span className="ml-auto inline-flex items-center gap-1">
                           <Clock className="h-3 w-3" />
                           Updated {relativeTime(row.updatedAt)}
                         </span>
-                      ) : null}
-                    </div>
+                      </div>
+                    ) : null}
                     {/* Owner footer — authoring agent preferred over user. */}
                     {row.createdByAgent || row.createdBy ? (
                       <div className="flex items-center border-t border-border/60 pt-2">

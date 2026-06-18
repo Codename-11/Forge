@@ -2,6 +2,71 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-17 — Built-in plan generation + planning UI refresh
+
+Fixed the "empty plan" dead end and modernized the planning surfaces against
+the `Forge Screens Board` design bundle (claude.ai/design export).
+
+### Root cause
+`decomposeGoal` (`orchestration-service.ts`) only ever created an empty DRAFT
+plan and fired a fire-and-forget webhook at the resolved planner. With no
+reachable planner (crew has no PLANNER, agent OFFLINE / no `webhookUrl` /
+RUNS-engine whose dispatch webhook is suppressed, or delivery fails) the plan
+stayed empty forever with **zero UI feedback**. Goal *creation* also
+auto-dispatched decompose, reproducing the dead end at create time. Forge had
+no built-in/synchronous decomposition.
+
+### Backend ("pick at click time")
+- **`runPlanGeneration(client, input)`** in `ai.ts` — single-shot forced
+  `submit_plan` tool-call mirroring `runTriage`; returns `GeneratedStep[]` or
+  null. Caller passes a client from **`resolveWorkspaceProviderClient`**
+  (credential-first, so a DB-`ProviderCredential`-only workspace works).
+- **`generatePlanForGoal(db, params)`** in `orchestration-service.ts` — Forge
+  IS the planner. Validates goal + `Workspace.aiEnabled`/provider + a 60s
+  in-flight guard **before any write** (no dead empty plan on failure); calls
+  the model **outside** any tx; writes plan + goal→PLANNING flip + steps in one
+  atomic tx. Extracted `addStepsToPlan`'s inner tx body into a shared
+  `insertStepsTx(tx, …)` so generate is one rollback-safe unit (no nested tx).
+  Emits a plan-created `ActivityEvent` with `action:"generate"`. No
+  `queueAgentDispatch`. tRPC `goal.generatePlan`.
+- **Dispatch legibility:** `decomposeGoal` now also returns
+  `planner {id,name,profileKey,status,runEngine,hasWebhook}` + derived
+  `dispatchable` (RUNS → needs `runtimeId`; else needs `webhookUrl`; OFFLINE is
+  a soft warning). All derived from existing columns — **no new Prisma
+  columns, no migration.**
+
+### UI
+- **Goal detail:** single "Start planner" → two actions (**Generate with
+  Forge** / **Dispatch to crew planner**) via a new `PlannerPanel`; a
+  `DispatchFeedback` block surfaces "dispatched to X · waiting" vs. an
+  actionable "can't be reached — generate / assign / open draft to add steps
+  manually" warning. Title `text-lg`→`text-base`. Panel shows whenever there's
+  no active plan **or an empty DRAFT** (the bug state).
+- **Goal create:** no longer auto-dispatches; lands on the goal so the operator
+  picks. Removed the auto-decompose machinery.
+- **Shared `DagStepStrip`** (`components/orchestration/dag-step-strip.tsx`):
+  numbered chips + hairline connectors + `{done}/{total}` / "no steps yet";
+  `toneForStepStatus` / `countBasedTones` helpers; running chip carries
+  `.forge-active-node`.
+- **Plan detail:** title `text-lg`→`text-base`; DAG ribbon in the header;
+  `.forge-active-node` on the RUNNING step card; `.forge-row-rise` on the step
+  list; all status tones moved off raw `emerald/amber` onto `success/warning`
+  tokens.
+- **Lists:** plans-list pip strip → `DagStepStrip`; `forge-active-node` on
+  RUNNING cards + `forge-row-rise` on the grid; goals-list `forge-active-node`
+  on live cards + `forge-row-rise`; artifacts-list `forge-row-rise` + token
+  tones. (Goals/plans lists already shipped most of the design's structure.)
+- `use-goal-trpc.ts`: `GoalDecomposeResult` gains `planner`/`dispatchable`;
+  added `generatePlan` + `GoalGenerateResult`/`GoalPlannerInfo`.
+
+### Verify
+`pnpm lint` + `pnpm typecheck` clean; `pnpm test` 901 passed / 1 skipped
+(orchestration integration incl. addSteps/decompose green — refactor is
+backward-compatible). Manual end-to-end of generate/dispatch + the
+no-provider/no-planner/offline paths to run in the real app (local dev has no
+model provider, so "Generate with Forge" hits the PRECONDITION_FAILED path —
+which is the intended clean error, no dead plan).
+
 ## 2026-06-18 — Coolify deploy for forge-pm.dev
 
 Deployed the public Forge landing/docs site to Coolify on `https://forge-pm.dev`.

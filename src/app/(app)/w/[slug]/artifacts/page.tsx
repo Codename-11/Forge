@@ -36,8 +36,8 @@ const TYPE_LABEL: Record<ArtifactType, string> = {
 
 const STATUS_TONE: Record<ArtifactStatus, string> = {
   DRAFT: "bg-subtle text-muted-foreground",
-  IN_REVIEW: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  ACCEPTED: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  IN_REVIEW: "bg-warning/15 text-warning",
+  ACCEPTED: "bg-success/15 text-success",
   ARCHIVED: "bg-muted/40 text-muted-foreground line-through",
 };
 
@@ -267,8 +267,12 @@ export default function ArtifactsPage() {
           </div>
         ) : (
           <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
-            {visibleItems.map((row) => (
-              <li key={row.id} className="relative">
+            {visibleItems.map((row, idx) => (
+              <li
+                key={row.id}
+                className="relative forge-row-rise"
+                style={{ "--row-i": idx } as React.CSSProperties}
+              >
                 <Link
                   href={`/w/${ws.slug}/artifacts/${row.slug}`}
                   className={cn(

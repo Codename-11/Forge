@@ -36,6 +36,10 @@ import { StepComments } from "@/components/plans/step-comments";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { Avatar } from "@/components/ui/avatar";
 import { BudgetMeter } from "@/components/orchestration/budget-meter";
+import {
+  DagStepStrip,
+  toneForStepStatus,
+} from "@/components/orchestration/dag-step-strip";
 import { DagView } from "@/components/orchestration/dag-view";
 import type { DagAgent, DagStep } from "@/components/orchestration/types";
 import {
@@ -70,31 +74,31 @@ const STEP_STATUSES: ExecutionStepStatus[] = [
 
 const PLAN_STATUS_TONE: Record<ExecutionPlanStatus, string> = {
   DRAFT: "bg-subtle text-muted-foreground",
-  APPROVED: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  APPROVED: "bg-success/15 text-success",
   RUNNING: "bg-ember/15 text-ember",
   BLOCKED: "bg-warning/15 text-warning",
-  COMPLETED: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  COMPLETED: "bg-success/15 text-success",
   CANCELED: "bg-muted/40 text-muted-foreground line-through",
 };
 
 const STEP_STATUS_TONE: Record<ExecutionStepStatus, string> = {
   TODO: "bg-subtle text-muted-foreground",
-  READY: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  READY: "bg-success/10 text-success",
   RUNNING: "bg-ember/15 text-ember",
   BLOCKED: "bg-warning/15 text-warning",
-  REVIEW: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  DONE: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  REVIEW: "bg-warning/15 text-warning",
+  DONE: "bg-success/15 text-success",
   CANCELED: "bg-muted/40 text-muted-foreground line-through",
 };
 
 // Used for the timeline connector and the stacked progress bar.
 const STEP_STATUS_BAR: Record<ExecutionStepStatus, string> = {
   TODO: "bg-muted/50",
-  READY: "bg-emerald-500/50",
+  READY: "bg-success/50",
   RUNNING: "bg-ember",
   BLOCKED: "bg-warning",
-  REVIEW: "bg-amber-500",
-  DONE: "bg-emerald-700",
+  REVIEW: "bg-warning",
+  DONE: "bg-success",
   CANCELED: "bg-muted/40",
 };
 
@@ -388,6 +392,10 @@ export default function PlanDetailPage() {
     return c;
   }, [orderedSteps]);
   const total = orderedSteps.length;
+  const stepTones = useMemo(
+    () => orderedSteps.map((s) => toneForStepStatus(s.status)),
+    [orderedSteps],
+  );
 
   // Orchestration contract reads (loose — these land on the schema via
   // the backend agent; optional-chained until types regenerate).
@@ -598,7 +606,7 @@ export default function PlanDetailPage() {
               }}
               onFocus={() => setHeadEditing("title")}
               onBlur={() => setHeadEditing(null)}
-              className="w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-lg font-medium leading-snug outline-none transition-colors hover:border-border focus:border-border focus:bg-card/40"
+              className="w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-base font-semibold leading-snug outline-none transition-colors hover:border-border focus:border-border focus:bg-card/40"
               aria-label="Plan title"
             />
             <div className="mt-2">
@@ -651,6 +659,15 @@ export default function PlanDetailPage() {
             </div>
 
             <ProgressBar counts={counts} total={total} />
+            {total > 0 ? (
+              <DagStepStrip
+                tones={stepTones}
+                done={counts.DONE}
+                total={total}
+                showLabel={false}
+                className="mt-3 overflow-x-auto"
+              />
+            ) : null}
           </header>
 
           <div className="flex items-center justify-between">
@@ -1047,7 +1064,7 @@ function SaveIndicator({ pending }: { pending: boolean }) {
       <span
         className={cn(
           "inline-block h-1.5 w-1.5 rounded-full transition-colors",
-          pending ? "bg-ember animate-pulse" : "bg-emerald-600",
+          pending ? "bg-ember animate-pulse" : "bg-success",
         )}
         aria-hidden
       />
@@ -1137,7 +1154,11 @@ function StepsList({
   return (
     <ol className="flex flex-col gap-2">
       {steps.map((step, idx) => (
-        <li key={step.id}>
+        <li
+          key={step.id}
+          className="forge-row-rise"
+          style={{ "--row-i": idx } as React.CSSProperties}
+        >
           <StepCard
             step={step}
             index={idx}
@@ -1253,7 +1274,7 @@ function StepCard({
       className={cn(
         "flex flex-col gap-2 rounded-lg border bg-card/40 p-3 transition-all duration-300 motion-safe:animate-in motion-safe:fade-in",
         running
-          ? "border-ember/40 ring-1 ring-ember/30 shadow-sm"
+          ? "forge-active-node border-ember/40"
           : step.status === ExecutionStepStatus.BLOCKED
             ? "border-warning/40"
             : step.judgeVerdict?.verdict === "FAIL"
@@ -1421,7 +1442,7 @@ function FieldSaveTick({ pending }: { pending: boolean }) {
       <span
         className={cn(
           "inline-block h-1.5 w-1.5 rounded-full transition-colors",
-          pending ? "bg-ember animate-pulse" : "bg-emerald-600/70",
+          pending ? "bg-ember animate-pulse" : "bg-success/70",
         )}
         aria-hidden
       />

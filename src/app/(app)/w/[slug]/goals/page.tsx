@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus, Target, UsersRound } from "lucide-react";
@@ -89,26 +89,6 @@ export default function GoalsPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [crewId, setCrewId] = useState<string | null>(null);
-  const pendingCreatedGoalId = useRef<string | null>(null);
-  const decomposeGoal = goalRouter?.decompose?.useMutation({
-    onSuccess: (result) => {
-      const goalId = pendingCreatedGoalId.current;
-      pendingCreatedGoalId.current = null;
-      invalidateGoalList();
-      toast.success(
-        result.plannerAgentId
-          ? "Goal created — planner is drafting the plan."
-          : "Goal created — plan draft is live; assign a planner to continue.",
-      );
-      if (goalId) router.push(`/w/${ws.slug}/goals/${goalId}`);
-    },
-    onError: (e) => {
-      const goalId = pendingCreatedGoalId.current;
-      pendingCreatedGoalId.current = null;
-      toast.warning(`Goal created, but planning did not start: ${e.message}`);
-      if (goalId) router.push(`/w/${ws.slug}/goals/${goalId}`);
-    },
-  });
   const createGoal = goalRouter?.create?.useMutation({
     onSuccess: (result) => {
       setCreating(false);
@@ -116,24 +96,17 @@ export default function GoalsPage() {
       setDescription("");
       setCrewId(null);
       invalidateGoalList();
-      const goalId = result?.id;
-      if (!goalId) {
-        toast.success("Goal created.");
-        return;
-      }
-      if (decomposeGoal) {
-        pendingCreatedGoalId.current = goalId;
-        toast.success("Goal created — starting planner…");
-        decomposeGoal.mutate({ goalId });
-        return;
-      }
       toast.success("Goal created.");
-      router.push(`/w/${ws.slug}/goals/${goalId}`);
+      // Land on the goal so the operator chooses how to draft the plan —
+      // Generate with Forge or Dispatch to crew planner. We no longer
+      // auto-dispatch on create: that silent dispatch is what produced the
+      // empty plan when the crew's planner couldn't be reached.
+      if (result?.id) router.push(`/w/${ws.slug}/goals/${result.id}`);
     },
     onError: (e) => toast.error(e.message),
   });
   const canCreate = Boolean(goalRouter?.create);
-  const isStartingGoal = Boolean(createGoal?.isPending || decomposeGoal?.isPending);
+  const isStartingGoal = Boolean(createGoal?.isPending);
 
   return (
     <>
@@ -220,8 +193,12 @@ export default function GoalsPage() {
               slug
             />
             <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
-              {items.map((goal) => (
-                <li key={goal.id}>
+              {items.map((goal, idx) => (
+                <li
+                  key={goal.id}
+                  className="forge-row-rise"
+                  style={{ "--row-i": idx } as React.CSSProperties}
+                >
                   <GoalCard goal={goal} slug={ws.slug} />
                 </li>
               ))}
@@ -241,8 +218,9 @@ export default function GoalsPage() {
           >
             <h2 className="text-sm font-medium">New goal</h2>
             <p className="mb-3 mt-1 text-meta text-muted-foreground">
-              The crew&apos;s planner will decompose this into a plan you
-              approve, then run and review it to completion on its own.
+              After creating, choose how to draft the plan: generate it with
+              Forge, or dispatch the crew&apos;s planner. Then approve, run, and
+              review it to completion.
             </p>
             <label className="block text-meta text-muted-foreground">
               Objective
@@ -290,11 +268,7 @@ export default function GoalsPage() {
                   })
                 }
               >
-                {createGoal.isPending
-                  ? "Creating…"
-                  : decomposeGoal?.isPending
-                    ? "Starting planner…"
-                    : "Create goal"}
+                {createGoal.isPending ? "Creating…" : "Create goal"}
               </Button>
             </div>
           </div>
@@ -361,7 +335,7 @@ function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
       href={`/w/${slug}/goals/${goal.id}`}
       className={cn(
         "group flex h-full flex-col gap-2 rounded-lg border bg-card/40 p-3 transition hover:border-ember/40 hover:bg-subtle",
-        live ? "border-ember/30" : "border-border",
+        live ? "forge-active-node border-ember/30" : "border-border",
       )}
     >
       <div className="flex items-start justify-between gap-2">

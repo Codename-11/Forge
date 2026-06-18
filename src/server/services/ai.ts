@@ -6,6 +6,7 @@ import {
   getClient,
   isProviderAvailable,
   listProviders,
+  type ResolvedProviderClient,
 } from "@/server/services/ai-providers";
 
 /**
@@ -274,6 +275,191 @@ Use plain prose, no bullets, no headers. Do not address the agent directly.`;
     return null;
   }
   return text.trim();
+}
+
+// ---------------------------------------------------------------------------
+// Plan generation — Forge's built-in PLANNER. Single-shot, forced tool-call
+// that decomposes a goal into ordered ExecutionSteps so "Generate with Forge"
+// works without dispatching to an external agent runtime. The output is mapped
+// to `AddStepInput[]` by the caller (orchestration-service.generatePlanForGoal).
+//
+// Unlike runTriage/runCoachComment (env-only via getClient), the caller passes
+// an already-resolved client from `resolveWorkspaceProviderClient` so a
+// DB-credential-only workspace works too. Returns null on any failure — the
+// caller surfaces a typed error and never persists a dead empty plan.
+// ---------------------------------------------------------------------------
+
+export interface PlanGenInput {
+  goalTitle: string;
+  goalDescription: string | null;
+  /** Crew roles present (e.g. ["WORKER","REVIEWER"]) — hints assigned_role. */
+  crewRoles?: string[];
+  model?: string | null;
+}
+
+export interface GeneratedStep {
+  title: string;
+  body: string | null;
+  expectedOutput: string | null;
+  verification: string[];
+  dependsOnStepIndexes: number[];
+  assignedRole: "WORKER" | "REVIEWER" | null;
+}
+
+export async function runPlanGeneration(
+  client: ResolvedProviderClient,
+  input: PlanGenInput,
+): Promise<GeneratedStep[] | null> {
+  const rolesBlock = input.crewRoles?.length
+    ? `\n\nThe assigned crew has these roles available: ${input.crewRoles.join(
+        ", ",
+      )}. Suggest assigned_role from {WORKER, REVIEWER} per step, or null.`
+    : "";
+
+  const userMessage = `Goal: ${input.goalTitle}
+
+Description:
+${input.goalDescription?.trim() || "(none)"}${rolesBlock}
+
+Decompose this goal into a short, ordered list of concrete execution steps (typically 3-7). Each step needs a clear title, a body describing the work, an expected_output (the completion contract), a verification checklist (how we know it's done), and depends_on_step_indexes referencing earlier steps by their 0-based position in your list. Keep steps independent where possible; only add a dependency when one step genuinely requires another's output first.`;
+
+  const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+    {
+      type: "function",
+      function: {
+        name: "submit_plan",
+        description:
+          "Submit the decomposed execution plan as an ordered list of steps.",
+        parameters: {
+          type: "object",
+          properties: {
+            steps: {
+              type: "array",
+              description: "Ordered execution steps. At least one.",
+              items: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  body: {
+                    type: ["string", "null"],
+                    description: "What the step entails. Markdown allowed.",
+                  },
+                  expected_output: {
+                    type: ["string", "null"],
+                    description: "The concrete deliverable that marks completion.",
+                  },
+                  verification: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Checklist items proving the step is done.",
+                  },
+                  depends_on_step_indexes: {
+                    type: "array",
+                    items: { type: "integer" },
+                    description:
+                      "0-based indexes of prerequisite steps in this same list.",
+                  },
+                  assigned_role: {
+                    type: ["string", "null"],
+                    enum: ["WORKER", "REVIEWER", null],
+                  },
+                },
+                required: [
+                  "title",
+                  "body",
+                  "expected_output",
+                  "verification",
+                  "depends_on_step_indexes",
+                  "assigned_role",
+                ],
+              },
+            },
+          },
+          required: ["steps"],
+        },
+      },
+    },
+  ];
+
+  let completion: OpenAI.Chat.Completions.ChatCompletion;
+  try {
+    completion = await client.client.chat.completions.create({
+      model: input.model || client.defaultModel,
+      max_tokens: 2048,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are the PLANNER for a project management tool. Decompose a goal into ordered, verifiable execution steps and make a single tool call to submit_plan. Be concrete and conservative: prefer fewer, well-scoped steps over many vague ones. Do not invent dependencies. Every step must have a non-empty title.",
+        },
+        { role: "user", content: userMessage },
+      ],
+      tools,
+      tool_choice: { type: "function", function: { name: "submit_plan" } },
+    });
+  } catch (err) {
+    logger.warn(
+      { err, provider: client.providerId },
+      "ai.plan: chat call failed",
+    );
+    return null;
+  }
+
+  const call = completion.choices?.[0]?.message?.tool_calls?.[0] as
+    | { type: string; function?: { name?: string; arguments?: string } }
+    | undefined;
+  if (!call?.function?.arguments) {
+    logger.warn({ completion }, "ai.plan: tool call missing");
+    return null;
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(call.function.arguments);
+  } catch (err) {
+    logger.warn({ err, args: call.function.arguments }, "ai.plan: bad JSON");
+    return null;
+  }
+
+  const rawSteps = Array.isArray(parsed.steps) ? parsed.steps : [];
+  const steps: GeneratedStep[] = [];
+  for (const raw of rawSteps) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const title = typeof r.title === "string" ? r.title.trim() : "";
+    if (!title) continue; // a step with no title is unusable
+    const verification = Array.isArray(r.verification)
+      ? r.verification
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter(Boolean)
+      : [];
+    const dependsOnStepIndexes = Array.isArray(r.depends_on_step_indexes)
+      ? r.depends_on_step_indexes.filter(
+          (n): n is number => typeof n === "number" && Number.isInteger(n),
+        )
+      : [];
+    const role =
+      r.assigned_role === "WORKER" || r.assigned_role === "REVIEWER"
+        ? r.assigned_role
+        : null;
+    steps.push({
+      title: title.slice(0, 300),
+      body: typeof r.body === "string" && r.body.trim() ? r.body : null,
+      expectedOutput:
+        typeof r.expected_output === "string" && r.expected_output.trim()
+          ? r.expected_output
+          : null,
+      verification,
+      dependsOnStepIndexes,
+      assignedRole: role,
+    });
+  }
+
+  if (steps.length === 0) {
+    logger.warn({ completion }, "ai.plan: no usable steps");
+    return null;
+  }
+  return steps;
 }
 
 function isPriority(value: unknown): value is Priority {

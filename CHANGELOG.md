@@ -13,6 +13,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Generate a plan with Forge — no agent required.** A goal now offers two ways to draft its plan: **Generate with Forge** builds the steps directly using your workspace's AI model, and **Dispatch to crew planner** hands it to an agent as before. Pick whichever fits; Generate works even with no agents online.
 - **The dashboard Customize mode is now a fluid grid.** Tiles live on a 2-column grid you can drag to reorder — the board reflows with smooth motion as you drag instead of snapping. Drag a tile's right edge (or hit the size button) to snap it between half and full width, and the layout animates into place. Your order, widths, and hidden tiles save automatically. Respects reduced-motion.
 - **The issues list loads every issue, not just the first 50.** The list now pages in more as you scroll (with a "Load more" fallback); the board pages each column independently, so low-traffic columns like Backlog and Done are no longer starved by a shared cap.
 - **Keyboard navigation on the issues list.** Move the row cursor with `j`/`k` or the arrow keys, open the focused issue with `↵`, and select it with `x` — no mouse required. Filter pop-overs also close with `Esc` and move with the arrow keys.
@@ -26,6 +27,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Fixed
 
+- **Clicking "Plan" no longer leaves you with a silent empty plan.** If the crew's planner can't be reached (no planner assigned, offline, or not wired up), the goal now says so clearly and points you to generate the plan with Forge or add steps yourself — instead of a blank plan with no explanation. When a planner *is* reachable, you see it was dispatched and that steps are on the way.
 - **Unused dashboard widgets no longer show as blank tiles.** Widgets with nothing to show (no agents, no recent items, etc.) collapse and take no space; in Customize mode they stay visible, flagged "not in use," so you can hide them.
 - **Dashboard customize drag feels smoother.** You can now grab a tile anywhere (not just the small grip), reordering no longer jitters while tiles animate, and the resize edge is a larger, easier target.
 - **Filtering the issues list by a "Done" (or "Cancelled") status now shows those issues.** Previously the list hid completed work by default, so explicitly selecting a Done status from the Status filter returned nothing. The list now includes done issues whenever your filter explicitly asks for a completed status.
@@ -39,6 +41,8 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Changed
 
+- **The planning views got a visual refresh.** Plans and goals show a numbered DAG step strip with the running step glowing, status colors now use the warm palette, lists fade in as they load, and detail-view titles are sized to match the rest of the app (no more oversized headers).
+- **Creating a goal no longer auto-starts the planner.** You land on the goal and choose how to draft the plan, instead of a planner being dispatched silently in the background.
 - **Approve grants session scope by default.** Approving a command request stops the agent re-prompting for similar commands for the rest of the run; a "Just this once" link keeps the single-command option.
 - **Command approvals now appear on the issue page.** The Approve/Reject card shows in the issue's agent panel, not only in the Mission Control Live tab.
 - **The issue's agent panel shows why a run is paused.** A waiting run now displays the agent's last step / block reason inline, so you can respond without opening the Mission Control overlay.

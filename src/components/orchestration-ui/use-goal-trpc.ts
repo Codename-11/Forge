@@ -86,10 +86,27 @@ type MutationHook<TInput, TOutput> = {
   }) => { mutate: (input: TInput) => void; isPending: boolean };
 };
 
+type GoalPlannerInfo = {
+  id: string;
+  name: string;
+  profileKey: string;
+  status: string;
+  runEngine: string | null;
+  hasWebhook: boolean;
+};
+
 type GoalDecomposeResult = {
   planId: string;
   status: "PLANNING";
   plannerAgentId: string | null;
+  planner: GoalPlannerInfo | null;
+  dispatchable: boolean;
+};
+
+type GoalGenerateResult = {
+  planId: string;
+  status: "PLANNING";
+  stepCount: number;
 };
 
 interface GoalRouter {
@@ -110,6 +127,10 @@ interface GoalRouter {
     { goalId: string; plannerAgentId?: string | null; contextSetId?: string | null },
     GoalDecomposeResult
   >;
+  generatePlan?: MutationHook<
+    { goalId: string; contextSetId?: string | null },
+    GoalGenerateResult
+  >;
   abandon?: MutationHook<{ id: string }, { ok: boolean }>;
 }
 
@@ -119,4 +140,11 @@ export function useGoalRouter(): GoalRouter | undefined {
     | undefined;
 }
 
-export type { GoalRow, GoalPlanRow, GoalCrewRow };
+export type {
+  GoalRow,
+  GoalPlanRow,
+  GoalCrewRow,
+  GoalPlannerInfo,
+  GoalDecomposeResult,
+  GoalGenerateResult,
+};

@@ -2,11 +2,13 @@ import "server-only";
 import type { PrismaClient } from "@prisma/client";
 import {
   ActionRequestKind,
+  type AgentStatus,
   EventKind,
   ExecutionPlanStatus,
   ExecutionStepStatus,
   GoalStatus,
   Prisma,
+  RunEngine,
 } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
@@ -14,6 +16,8 @@ import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import { openReviewGateTx } from "@/server/services/agent-crew-service";
 import { createActionRequest } from "@/server/services/action-request-service";
 import { openOrTouchRun } from "@/server/services/agent-run";
+import { runPlanGeneration } from "@/server/services/ai";
+import { resolveWorkspaceProviderClient } from "@/server/services/ai-providers";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
@@ -343,7 +347,25 @@ export async function decomposeGoal(
     plannerAgentId?: string | null;
     contextSetId?: string | null;
   },
-): Promise<{ planId: string; status: "PLANNING"; plannerAgentId: string | null }> {
+): Promise<{
+  planId: string;
+  status: "PLANNING";
+  plannerAgentId: string | null;
+  /** Resolved planner + reachability so the UI can warn instead of silently
+   *  producing a plan no one will ever fill. Null when no planner resolved. */
+  planner: {
+    id: string;
+    name: string;
+    profileKey: string;
+    status: AgentStatus;
+    runEngine: RunEngine | null;
+    hasWebhook: boolean;
+  } | null;
+  /** True when the dispatch can actually reach the planner: RUNS-engine needs
+   *  a runtime; others need a webhook. OFFLINE is a soft warning (see
+   *  `planner.status`), not a hard blocker, so it doesn't flip this false. */
+  dispatchable: boolean;
+}> {
   const goal = await db.goal.findFirst({
     where: { id: params.goalId, workspaceId: params.workspaceId },
     select: {
@@ -392,6 +414,46 @@ export async function decomposeGoal(
   }
   if (!plannerAgentId && params.actorAgentId) {
     plannerAgentId = params.actorAgentId;
+  }
+
+  // Resolve planner reachability so the caller/UI can warn up-front.
+  let planner: {
+    id: string;
+    name: string;
+    profileKey: string;
+    status: AgentStatus;
+    runEngine: RunEngine | null;
+    hasWebhook: boolean;
+  } | null = null;
+  let dispatchable = false;
+  if (plannerAgentId) {
+    const agent = await db.agent.findFirst({
+      where: { id: plannerAgentId, workspaceId: params.workspaceId },
+      select: {
+        id: true,
+        name: true,
+        profileKey: true,
+        status: true,
+        runEngine: true,
+        webhookUrl: true,
+        runtimeId: true,
+      },
+    });
+    if (agent) {
+      const hasWebhook = !!agent.webhookUrl;
+      planner = {
+        id: agent.id,
+        name: agent.name,
+        profileKey: agent.profileKey,
+        status: agent.status,
+        runEngine: agent.runEngine,
+        hasWebhook,
+      };
+      // RUNS agents are reached via a Runtime (their dispatch webhook is
+      // suppressed); everyone else needs a webhookUrl.
+      dispatchable =
+        agent.runEngine === RunEngine.RUNS ? !!agent.runtimeId : hasWebhook;
+    }
   }
 
   const result = await db.$transaction(async (tx) => {
@@ -481,7 +543,219 @@ export async function decomposeGoal(
     return { planId: plan.id };
   });
 
-  return { planId: result.planId, status: "PLANNING", plannerAgentId };
+  return { planId: result.planId, status: "PLANNING", plannerAgentId, planner, dispatchable };
+}
+
+// ---------------------------------------------------------------------------
+// Generate — Forge IS the planner. Calls the workspace's configured model to
+// decompose the goal synchronously, then writes the steps. The counterpart to
+// `decompose` (which dispatches an external planner agent): "Generate with
+// Forge" works with zero external agents. The slow model call happens OUTSIDE
+// any transaction; the plan + goal flip + steps are written in one atomic tx
+// so a failure never leaves a dead empty plan.
+// ---------------------------------------------------------------------------
+
+export async function generatePlanForGoal(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    actorAgentId?: string | null;
+    goalId: string;
+    contextSetId?: string | null;
+  },
+): Promise<{ planId: string; status: "PLANNING"; stepCount: number }> {
+  const goal = await db.goal.findFirst({
+    where: { id: params.goalId, workspaceId: params.workspaceId },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      status: true,
+      crewId: true,
+      issueId: true,
+      maxTotalCostUsd: true,
+      maxWallTimeMinutes: true,
+    },
+  });
+  if (!goal) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found." });
+  }
+  if (goal.status === GoalStatus.ACHIEVED || goal.status === GoalStatus.ABANDONED) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Cannot plan a ${goal.status.toLowerCase()} goal.`,
+    });
+  }
+  if (params.contextSetId) {
+    const cs = await db.contextSet.findFirst({
+      where: { id: params.contextSetId, workspaceId: params.workspaceId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!cs) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Context set not found in this workspace." });
+    }
+  }
+
+  // AI must be enabled + a provider resolvable BEFORE any DB write, so a
+  // misconfigured workspace gets a clear error and never a dead empty plan.
+  const ws = await db.workspace.findUnique({
+    where: { id: params.workspaceId },
+    select: { aiEnabled: true, aiProvider: true, aiModel: true },
+  });
+  if (!ws) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found." });
+  }
+  if (!ws.aiEnabled) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "AI is disabled for this workspace. Enable it in Settings → Workspace → AI, or use Dispatch to crew planner instead.",
+    });
+  }
+
+  // Best-effort double-click guard (no schema change): reject a second
+  // generate while a fresh active DRAFT attempt already exists.
+  const inFlight = await db.executionPlan.findFirst({
+    where: {
+      goalId: goal.id,
+      isActiveAttempt: true,
+      status: ExecutionPlanStatus.DRAFT,
+      createdAt: { gte: new Date(Date.now() - 60_000) },
+    },
+    select: { id: true },
+  });
+  if (inFlight) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "A plan is already being generated for this goal.",
+    });
+  }
+
+  const client = await resolveWorkspaceProviderClient(db, params.workspaceId, ws.aiProvider);
+  if (!client) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `No AI provider is configured (${ws.aiProvider}). Add a key in Settings → Workspace → AI, or use Dispatch to crew planner.`,
+    });
+  }
+
+  // Role hints for assigned_role (purely advisory; workers are resolved from
+  // the crew when steps go READY).
+  let crewRoles: string[] = [];
+  if (goal.crewId) {
+    const members = await db.agentCrewMember.findMany({
+      where: { crewId: goal.crewId },
+      select: { role: true },
+    });
+    crewRoles = Array.from(new Set(members.map((m) => m.role)));
+  }
+
+  // The slow/external call — OUTSIDE any transaction.
+  const generated = await runPlanGeneration(client, {
+    goalTitle: goal.title,
+    goalDescription: goal.description,
+    crewRoles,
+    model: ws.aiModel,
+  });
+  if (!generated || generated.length === 0) {
+    throw new TRPCError({
+      code: "BAD_GATEWAY",
+      message:
+        "The model did not return any plan steps. Try again, or dispatch to a crew planner.",
+    });
+  }
+
+  const result = await db.$transaction(async (tx) => {
+    // Mark prior attempts inactive.
+    await tx.executionPlan.updateMany({
+      where: { goalId: goal.id, isActiveAttempt: true },
+      data: { isActiveAttempt: false },
+    });
+    const plan = await tx.executionPlan.create({
+      data: {
+        workspaceId: params.workspaceId,
+        title: `Plan for: ${goal.title}`.slice(0, 300),
+        description: goal.description,
+        issueId: goal.issueId,
+        status: ExecutionPlanStatus.DRAFT,
+        createdById: params.actorAgentId ? null : params.actorId,
+        createdByAgentId: params.actorAgentId ?? null,
+        contextSetId: params.contextSetId ?? null,
+        crewId: goal.crewId,
+        goalId: goal.id,
+        isActiveAttempt: true,
+        maxTotalCostUsd: goal.maxTotalCostUsd,
+        maxWallTimeMinutes: goal.maxWallTimeMinutes,
+      },
+    });
+    // Flip goal → PLANNING.
+    if (goal.status !== GoalStatus.PLANNING) {
+      await tx.goal.update({
+        where: { id: goal.id },
+        data: { status: GoalStatus.PLANNING },
+      });
+      await recordChange(tx, {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        entity: "goal",
+        entityId: goal.id,
+        action: "status",
+        before: { status: goal.status },
+        after: { status: GoalStatus.PLANNING },
+        eventKind: EventKind.GOAL_STATUS_CHANGED,
+        subjectType: "goal",
+        subjectId: goal.id,
+        payload: { from: goal.status, to: GoalStatus.PLANNING },
+      });
+    }
+    // Plan-created event — action "generate" distinguishes Forge-built plans
+    // from dispatched-planner ("decompose") plans for the UI / analytics.
+    await tx.activityEvent.create({
+      data: {
+        workspaceId: params.workspaceId,
+        kind: EventKind.ISSUE_UPDATED,
+        actorId: params.actorId,
+        subjectType: "execution-plan",
+        subjectId: plan.id,
+        payload: {
+          action: "generate",
+          goalId: goal.id,
+          goalTitle: goal.title,
+          provider: client.providerId,
+          stepCount: generated.length,
+        } as Prisma.InputJsonValue,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        entity: "execution-plan",
+        entityId: plan.id,
+        action: "generate",
+        after: { goalId: goal.id, stepCount: generated.length },
+      },
+    });
+    // Steps in the SAME tx — whole generate rolls back atomically on failure.
+    const stepIds = await insertStepsTx(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      planId: plan.id,
+      steps: generated.map((s) => ({
+        title: s.title,
+        body: s.body,
+        expectedOutput: s.expectedOutput,
+        verification: s.verification.length
+          ? (s.verification as Prisma.InputJsonValue)
+          : null,
+        dependsOnStepIndexes: s.dependsOnStepIndexes,
+      })),
+    });
+    return { planId: plan.id, stepCount: stepIds.length };
+  });
+
+  return { planId: result.planId, status: "PLANNING", stepCount: result.stepCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -578,6 +852,90 @@ export interface AddStepInput {
   assignedRole?: string | null;
 }
 
+/**
+ * The transactional core of bulk step insertion: two-pass create (so
+ * index-based deps resolve to real ids) + plan touch + addSteps audit/event.
+ * Shared by `addStepsToPlan` (validates first, then opens its own tx) and
+ * `generatePlanForGoal` (calls this inside the plan-create tx so the whole
+ * generate is one rollback-safe unit). Assumes the plan exists, is DRAFT, and
+ * any explicit assignees were already validated by the caller.
+ */
+async function insertStepsTx(
+  tx: Prisma.TransactionClient,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    planId: string;
+    steps: AddStepInput[];
+  },
+): Promise<string[]> {
+  const last = await tx.executionStep.findFirst({
+    where: { planId: params.planId },
+    orderBy: { position: "desc" },
+    select: { position: true },
+  });
+  const basePosition = (last?.position ?? -1) + 1;
+
+  // First pass: create steps without deps so we get real ids by index.
+  const createdIds: string[] = [];
+  for (let i = 0; i < params.steps.length; i++) {
+    const s = params.steps[i];
+    const created = await tx.executionStep.create({
+      data: {
+        workspaceId: params.workspaceId,
+        planId: params.planId,
+        title: s.title.trim(),
+        body: s.body ?? null,
+        position: basePosition + i,
+        assignedAgentId: s.assignedAgentId ?? null,
+        expectedOutput: s.expectedOutput ?? null,
+        verification:
+          s.verification === undefined || s.verification === null
+            ? Prisma.JsonNull
+            : s.verification,
+        dependsOnStepIds: [],
+      },
+      select: { id: true },
+    });
+    createdIds.push(created.id);
+  }
+
+  // Second pass: resolve index-based deps to real ids. Indexes refer to
+  // the position WITHIN this batch (0-based). Out-of-range or
+  // self-referential indexes are dropped defensively.
+  for (let i = 0; i < params.steps.length; i++) {
+    const s = params.steps[i];
+    const idxs = s.dependsOnStepIndexes ?? [];
+    if (!idxs.length) continue;
+    const dependsOnStepIds = idxs
+      .filter((idx) => idx >= 0 && idx < createdIds.length && idx !== i)
+      .map((idx) => createdIds[idx]);
+    if (dependsOnStepIds.length === 0) continue;
+    await tx.executionStep.update({
+      where: { id: createdIds[i] },
+      data: { dependsOnStepIds },
+    });
+  }
+
+  await tx.executionPlan.update({
+    where: { id: params.planId },
+    data: { updatedAt: new Date() },
+  });
+  await recordChange(tx, {
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    entity: "execution-plan",
+    entityId: params.planId,
+    action: "addSteps",
+    after: { stepCount: createdIds.length },
+    eventKind: EventKind.ISSUE_UPDATED,
+    subjectType: "execution-plan",
+    subjectId: params.planId,
+    payload: { stepCount: createdIds.length },
+  });
+  return createdIds;
+}
+
 export async function addStepsToPlan(
   db: PrismaClient,
   params: {
@@ -617,73 +975,7 @@ export async function addStepsToPlan(
     }
   }
 
-  const stepIds = await db.$transaction(async (tx) => {
-    const last = await tx.executionStep.findFirst({
-      where: { planId: params.planId },
-      orderBy: { position: "desc" },
-      select: { position: true },
-    });
-    const basePosition = (last?.position ?? -1) + 1;
-
-    // First pass: create steps without deps so we get real ids by index.
-    const createdIds: string[] = [];
-    for (let i = 0; i < params.steps.length; i++) {
-      const s = params.steps[i];
-      const created = await tx.executionStep.create({
-        data: {
-          workspaceId: params.workspaceId,
-          planId: params.planId,
-          title: s.title.trim(),
-          body: s.body ?? null,
-          position: basePosition + i,
-          assignedAgentId: s.assignedAgentId ?? null,
-          expectedOutput: s.expectedOutput ?? null,
-          verification:
-            s.verification === undefined || s.verification === null
-              ? Prisma.JsonNull
-              : s.verification,
-          dependsOnStepIds: [],
-        },
-        select: { id: true },
-      });
-      createdIds.push(created.id);
-    }
-
-    // Second pass: resolve index-based deps to real ids. Indexes refer to
-    // the position WITHIN this addSteps batch (0-based). Out-of-range or
-    // self-referential indexes are dropped defensively.
-    for (let i = 0; i < params.steps.length; i++) {
-      const s = params.steps[i];
-      const idxs = s.dependsOnStepIndexes ?? [];
-      if (!idxs.length) continue;
-      const dependsOnStepIds = idxs
-        .filter((idx) => idx >= 0 && idx < createdIds.length && idx !== i)
-        .map((idx) => createdIds[idx]);
-      if (dependsOnStepIds.length === 0) continue;
-      await tx.executionStep.update({
-        where: { id: createdIds[i] },
-        data: { dependsOnStepIds },
-      });
-    }
-
-    await tx.executionPlan.update({
-      where: { id: params.planId },
-      data: { updatedAt: new Date() },
-    });
-    await recordChange(tx, {
-      workspaceId: params.workspaceId,
-      actorId: params.actorId,
-      entity: "execution-plan",
-      entityId: params.planId,
-      action: "addSteps",
-      after: { stepCount: createdIds.length },
-      eventKind: EventKind.ISSUE_UPDATED,
-      subjectType: "execution-plan",
-      subjectId: params.planId,
-      payload: { stepCount: createdIds.length },
-    });
-    return createdIds;
-  });
+  const stepIds = await db.$transaction((tx) => insertStepsTx(tx, params));
 
   return { stepIds };
 }
