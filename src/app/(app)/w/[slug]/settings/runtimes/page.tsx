@@ -9,6 +9,7 @@ import {
   Layers,
   Server,
   Sparkles,
+  Terminal,
   Users as UsersIcon,
 } from "lucide-react";
 import type { RuntimeKind } from "@prisma/client";
@@ -268,7 +269,7 @@ export default function RuntimesPage() {
     <>
       <Topbar
         title="Runtimes"
-        subtitle="Compute environments that host agents."
+        subtitle="Managed compute environments that host agents."
         actions={
           <>
             <Button
@@ -284,7 +285,7 @@ export default function RuntimesPage() {
               {includeArchived ? "Hide archived" : "Show archived"}
             </Button>
             <Button size="sm" variant="ember" onClick={() => setCreateOpen(true)}>
-              Add runtime
+              Add runtime host
             </Button>
           </>
         }
@@ -292,6 +293,7 @@ export default function RuntimesPage() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-6 p-6">
           <TierExplainer />
+          <AgentClientsCallout />
           <Card as="div" className="divide-y-0 p-0">
             <ul className="divide-y divide-border">
               {rows.map((rt) => {
@@ -613,6 +615,36 @@ function TierExplainer() {
         ))}
       </div>
     </Card>
+  );
+}
+
+function AgentClientsCallout() {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-ember/30 bg-ember/5 px-3 py-2 text-meta">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-ember/30 bg-background/50 text-ember">
+        <Terminal className="h-3.5 w-3.5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <span className="font-medium text-foreground">Looking for Claude Code, Codex CLI, or a one-time MCP session?</span>
+        <span className="ml-1 text-muted-foreground">
+          Those are agent clients, not managed runtime hosts.
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Link
+          href="/settings/clients"
+          className="focus-ring inline-flex h-7 items-center justify-center rounded-md border border-border bg-card/60 px-2 text-xs font-medium text-foreground hover:bg-subtle"
+        >
+          Agent Clients
+        </Link>
+        <Link
+          href="/settings/access?create=session"
+          className="focus-ring inline-flex h-7 items-center justify-center rounded-md bg-ember px-2 text-xs font-medium text-ember-foreground hover:bg-ember/90"
+        >
+          Generate session key
+        </Link>
+      </div>
+    </div>
   );
 }
 
@@ -1186,8 +1218,8 @@ function CreateRuntimeModal({
     <QuickForm
       open={open}
       onOpenChange={(v) => !v && onCancel()}
-      title="Add managed runtime"
-      description="A managed runtime owns its endpoint + secret and can host agents (e.g. a Hermes gateway). Attach agents to it from the Agents page."
+      title="Add runtime host"
+      description="A runtime host owns its endpoint and secret and can host persistent agents, such as Hermes or the Codex app server."
       primaryLabel="Create"
       loading={pending}
       onSubmit={async (e) => {
@@ -1212,6 +1244,13 @@ function CreateRuntimeModal({
       }}
     >
       <div className="space-y-3">
+        <div className="rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-meta text-muted-foreground">
+          Claude Code, Codex CLI, and one-off local sessions do not need a host row. Use{" "}
+          <Link href="/settings/clients" className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground">
+            Agent Clients
+          </Link>{" "}
+          or generate a session key instead.
+        </div>
         <label className="block">
           <span className={fieldLabel}>Adapter</span>
           <select

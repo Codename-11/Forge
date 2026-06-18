@@ -1,5 +1,7 @@
 "use client";
-import { useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
   Bot,
@@ -104,6 +106,10 @@ const PROVIDERS: Array<{
 
 const PROVIDER_LABEL = new Map(PROVIDERS.map((p) => [p.id, p.label]));
 
+function isMcpProvider(value: string | null): value is McpOnboardingProvider {
+  return PROVIDERS.some((p) => p.id === value);
+}
+
 function setEq<T>(a: T[], b: T[]) {
   if (a.length !== b.length) return false;
   const s = new Set(a);
@@ -135,6 +141,8 @@ type RevealKeyState = {
 };
 
 export default function AccessPage() {
+  const searchParams = useSearchParams();
+  const handledDeepLinkRef = useRef<string | null>(null);
   const { data: keys, refetch } = trpc.access.list.useQuery();
   const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false });
 
@@ -324,6 +332,44 @@ export default function AccessPage() {
     setSessionTtlHours("24");
     setSessionOpen(true);
   }
+
+  useEffect(() => {
+    const target = searchParams.get("create");
+    const providerParam = searchParams.get("provider");
+    const signature = `${target ?? ""}:${providerParam ?? ""}`;
+    if (!target || handledDeepLinkRef.current === signature) return;
+    handledDeepLinkRef.current = signature;
+
+    if (target === "session") {
+      setSessionName("");
+      setSessionScopes(DEFAULT_SCOPES);
+      setSessionPreset("default");
+      setSessionTtlHours("24");
+      setSessionOpen(true);
+      return;
+    }
+
+    if (target === "personal") {
+      setPersonalName("");
+      setPersonalScopes(DEFAULT_SCOPES);
+      setPersonalPreset("default");
+      setPersonalExpiresInDays("");
+      setPersonalOpen(true);
+      return;
+    }
+
+    if (target === "agent") {
+      const nextProvider = isMcpProvider(providerParam) ? providerParam : "hermes";
+      setProvider(nextProvider);
+      setName(`${PROVIDER_LABEL.get(nextProvider) ?? "Agent"} Forge MCP`);
+      setScopes(FULL_ACCESS);
+      setPreset("full");
+      setExpiresInDays("");
+      setLinkedAgentId("");
+      setStep(0);
+      setCreateOpen(true);
+    }
+  }, [searchParams]);
 
   const createSession = trpc.access.createSession.useMutation({
     onSuccess: (k) => {
@@ -1258,7 +1304,7 @@ function Intro({ baseUrl }: { baseUrl: string }) {
   return (
     <Section
       title="Connect an external agent"
-      hint="Forge exposes a Model Context Protocol surface and scoped REST aliases. Issue a key below, then paste the provider-specific config into the runtime."
+      hint="Forge exposes a Model Context Protocol surface and scoped REST aliases. Issue a key below, then paste the provider-specific config into the client."
     >
       <div className="grid grid-cols-1 gap-2 rounded-lg border border-border bg-card/40 p-3 text-[0.6875rem] text-muted-foreground sm:grid-cols-3">
         <div className="rounded-md border border-border p-2">
@@ -1273,6 +1319,16 @@ function Intro({ baseUrl }: { baseUrl: string }) {
           <div className="mb-1 font-semibold text-foreground">Auth</div>
           Bearer token, <span className="font-mono">forge_sk_...</span>
         </div>
+      </div>
+      <div className="mt-2 rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-meta text-muted-foreground">
+        Use this page to issue or rotate secrets. Use{" "}
+        <Link
+          href="/settings/clients"
+          className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+        >
+          Agent Clients
+        </Link>{" "}
+        to see active client rows, status, and revocation actions.
       </div>
     </Section>
   );

@@ -2,6 +2,42 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-18 — App-flow agent client and runtime host cleanup
+
+Implemented the APP-FLOW-ENHANCEMENT-AUDIT follow-up in an Orca-managed
+worktree. The first orchestration dispatch created the isolated worktree and
+task, but the injected Codex TUI prompt did not begin executing; the coordinator
+marked that task failed and completed the implementation directly in the same
+worktree.
+
+Fixes:
+- Added account Settings -> Agent Clients as a first-class MCP/session client
+  surface backed by existing access key rows, with create shortcuts, status,
+  scope/narrowing context, revoke/delete actions, and a clear raw-secret
+  rotation note.
+- Added Agent Clients to the account settings rail and linked workspace Agents,
+  global Runtimes, workspace Runtimes, and Developer Access into the new
+  surface.
+- Added Developer Access deep links (`?create=session|personal|agent`) so the
+  new client cards open the correct creation flow directly.
+- Made global Settings -> Agents "New profile" functional for instance admins
+  with a compact profile creation modal using `agents.profiles.create`.
+- Reframed workspace runtime copy as managed runtime hosts without removing the
+  stable "Runtimes" route/header labels, and added callouts for Claude Code,
+  Codex CLI, and one-off MCP sessions.
+- Added a Codex app-server self-test note that distinguishes Forge runtime
+  secret/workspace auth from Codex host/container auth and points operators at
+  the mounted `~/.codex/auth.json` recovery path.
+
+Verify:
+`pnpm exec prisma generate`, `pnpm typecheck`, `pnpm lint`,
+`AUTH_SECRET=test-auth-secret-for-vitest DATABASE_URL=postgresql://forge:forge@localhost:55432/forge?schema=public REDIS_URL=redis://localhost:56379 pnpm test`
+(946 passed / 1 skipped), initial full `E2E_FORCE_BUILD=1 E2E_PORT=3217
+PLAYWRIGHT_BASE_URL=http://localhost:3217 pnpm test:e2e` reached 30/34 before
+stable-copy assertions failed on the renamed Runtimes header/action, then
+focused `E2E_FORCE_BUILD=1 E2E_PORT=3218 PLAYWRIGHT_BASE_URL=http://localhost:3218 pnpm exec playwright test tests/e2e/mobile-smoke.spec.ts tests/e2e/runtime-management.spec.ts`
+passed 10/10 after restoring stable labels.
+
 ## 2026-06-18 — Safe URL scheme handling for rich content links
 
 Fixed AXI-85 by centralizing renderable/external URL validation and applying it to rich markdown links, link attachments, and existing link-attachment open/preview surfaces.

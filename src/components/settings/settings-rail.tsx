@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowLeft, Bot, PlugZap, Search, Server } from "lucide-react";
+import { ArrowLeft, Bot, PlugZap, Search, Server, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   ACCOUNT_SETTINGS_GROUP,
@@ -203,6 +203,13 @@ const GLOBAL_RAIL_ITEMS: RailItem[] = [
     label: "Agents",
     icon: Bot,
     hint: "Profiles (definitions)",
+    adminOnly: false,
+  },
+  {
+    href: "/settings/clients",
+    label: "Agent Clients",
+    icon: Terminal,
+    hint: "MCP sessions + keys",
     adminOnly: false,
   },
   {

@@ -188,6 +188,7 @@ export function RuntimeSelfTestNotice({
 }) {
   const issue = issueForSelfTest({ selfTest, adapterKey });
   if (!issue) return null;
+  const isCodex = adapterKey === "codex-app-server";
 
   return (
     <div className="rounded-lg border border-danger/30 bg-danger/5 p-3 text-sm">
@@ -201,6 +202,18 @@ export function RuntimeSelfTestNotice({
           <p className="mt-1 text-meta leading-relaxed text-muted-foreground">
             {issue.summary}
           </p>
+          {isCodex && (
+            <div className="mt-2 rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-meta text-muted-foreground">
+              <div className="font-medium text-foreground">Codex app-server auth boundary</div>
+              <div className="mt-0.5">
+                Forge workspace auth and the runtime secret only get Forge to the bridge.
+                The test turn then uses Codex auth inside the app-server host or Docker
+                container, typically the mounted <span className="font-mono">~/.codex/auth.json</span>.
+                Re-authenticate Codex on that host, restart the bridge/container, then run
+                self-test again.
+              </div>
+            </div>
+          )}
           <div className="mt-3 grid gap-2 rounded-md border border-border/60 bg-background/45 p-2 text-meta sm:grid-cols-[0.8fr_1.2fr]">
             <div>
               <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">

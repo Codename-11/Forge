@@ -1,8 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useState, type ReactNode } from "react";
 import { Bot, ChevronRight, Plus, Shield } from "lucide-react";
+import { AgentProvider, RunEngine } from "@prisma/client";
+import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { CenterModal } from "@/components/ui/modal";
 import { Spinner, EmptyState } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
@@ -47,6 +53,58 @@ function WsChipDense({ ws }: { ws: Workspace }) {
 
 export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean }) {
   const { data: profiles, isLoading } = trpc.agents.profiles.list.useQuery();
+  const utils = trpc.useUtils();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [profileKey, setProfileKey] = useState("");
+  const [provider, setProvider] = useState<AgentProvider>(AgentProvider.HERMES);
+  const [runEngine, setRunEngine] = useState<"DEFAULT" | RunEngine>("DEFAULT");
+  const [description, setDescription] = useState("");
+  const [avatar, setAvatar] = useState("");
+  const [capsText, setCapsText] = useState("");
+  const [instanceShared, setInstanceShared] = useState(true);
+
+  function resetCreate() {
+    setName("");
+    setProfileKey("");
+    setProvider(AgentProvider.HERMES);
+    setRunEngine("DEFAULT");
+    setDescription("");
+    setAvatar("");
+    setCapsText("");
+    setInstanceShared(true);
+  }
+
+  const createProfile = trpc.agents.profiles.create.useMutation({
+    onSuccess: () => {
+      toast.success("Agent profile created.");
+      void utils.agents.profiles.list.invalidate();
+      resetCreate();
+      setCreateOpen(false);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  function submitCreate() {
+    if (!name.trim() || !profileKey.trim()) {
+      toast.error("Name and profile key are required.");
+      return;
+    }
+    const baseCapabilities = capsText
+      .split(",")
+      .map((c) => c.trim().toLowerCase())
+      .filter(Boolean);
+    createProfile.mutate({
+      name: name.trim(),
+      profileKey: profileKey.trim(),
+      provider,
+      runEngine: runEngine === "DEFAULT" ? null : runEngine,
+      description: description.trim() || undefined,
+      avatar: avatar.trim() || undefined,
+      baseCapabilities,
+      instanceShared,
+    });
+  }
 
   return (
     <>
@@ -68,9 +126,15 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
               </span>
             </div>
             {isInstanceAdmin ? (
-              <span className="inline-flex items-center gap-1 rounded border border-ember/30 bg-ember/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ember">
-                <Plus size={11} /> New profile
-              </span>
+              <Button
+                type="button"
+                variant="ember"
+                size="sm"
+                onClick={() => setCreateOpen(true)}
+              >
+                <Plus size={12} />
+                New profile
+              </Button>
             ) : (
               <span className="rounded border border-border/70 bg-card/60 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 requires instance admin
@@ -163,6 +227,129 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
           )}
         </div>
       </div>
+      <CenterModal
+        open={createOpen}
+        onOpenChange={(open) => {
+          if (!open) resetCreate();
+          setCreateOpen(open);
+        }}
+        size="md"
+        title="Create agent profile"
+        description="Define the global profile first. Bind it to workspaces and provision keys or runtime hosts after creation."
+        primaryLabel="Create profile"
+        onPrimary={submitCreate}
+        loading={createProfile.isPending}
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <ProfileField label="Name" hint="Display name">
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Review Bot"
+                autoFocus
+              />
+            </ProfileField>
+            <ProfileField label="Profile key" hint="Lowercase, digits, - or _">
+              <Input
+                value={profileKey}
+                onChange={(e) =>
+                  setProfileKey(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, ""))
+                }
+                placeholder="review-bot"
+                className="font-mono"
+              />
+            </ProfileField>
+            <ProfileField label="Provider">
+              <select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value as AgentProvider)}
+                className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                {Object.values(AgentProvider).map((p) => (
+                  <option key={p} value={p}>
+                    {p.toLowerCase()}
+                  </option>
+                ))}
+              </select>
+            </ProfileField>
+            <ProfileField label="Run engine" hint="Default = provider choice">
+              <select
+                value={runEngine}
+                onChange={(e) => setRunEngine(e.target.value as "DEFAULT" | RunEngine)}
+                className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="DEFAULT">Default</option>
+                {Object.values(RunEngine).map((r) => (
+                  <option key={r} value={r}>
+                    {r.toLowerCase()}
+                  </option>
+                ))}
+              </select>
+            </ProfileField>
+            <ProfileField label="Avatar" hint="Optional">
+              <Input
+                value={avatar}
+                onChange={(e) => setAvatar(e.target.value)}
+                placeholder="VI"
+              />
+            </ProfileField>
+            <ProfileField label="Capabilities" hint="Comma-separated tags">
+              <Input
+                value={capsText}
+                onChange={(e) => setCapsText(e.target.value)}
+                placeholder="review, terminal, code"
+                className="font-mono"
+              />
+            </ProfileField>
+          </div>
+          <ProfileField label="Description" hint="Optional">
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              placeholder="What this profile is for..."
+              className="focus-ring w-full resize-none rounded-md border border-input bg-background px-2.5 py-2 text-sm"
+            />
+          </ProfileField>
+          <label className="flex items-start gap-2 rounded-md border border-border bg-background/40 px-2.5 py-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={instanceShared}
+              onChange={(e) => setInstanceShared(e.target.checked)}
+            />
+            <span className="min-w-0">
+              <span className="block font-medium text-foreground">
+                Share in every workspace catalog
+              </span>
+              <span className="block text-meta text-muted-foreground">
+                Turn this off for a private profile that only the owner can bind.
+              </span>
+            </span>
+          </label>
+        </div>
+      </CenterModal>
     </>
+  );
+}
+
+function ProfileField({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-[0.6875rem] font-medium text-foreground">{label}</span>
+        {hint && <span className="text-[0.625rem] text-muted-foreground">{hint}</span>}
+      </div>
+      {children}
+    </div>
   );
 }

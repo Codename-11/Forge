@@ -10,6 +10,7 @@ import {
   Clock,
   MessageSquare,
   Plus,
+  Terminal,
   X,
 } from "lucide-react";
 import type { EngagementMode } from "@prisma/client";
@@ -255,6 +256,13 @@ export default function AgentsBindingPage() {
                   >
                     your agent definitions
                   </Link>
+                  , or connect an ephemeral CLI from{" "}
+                  <Link
+                    href="/settings/clients"
+                    className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                  >
+                    Agent Clients
+                  </Link>
                   .
                 </div>
               )}
@@ -282,6 +290,16 @@ export default function AgentsBindingPage() {
                   </span>
                 </button>
               )}
+              <Link
+                href="/settings/clients"
+                className="flex items-center gap-2 border-t border-border/60 p-3 text-[0.8125rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
+              >
+                <Terminal className="h-3 w-3" />
+                Connect Claude Code, Codex CLI, or a session client
+                <span className="ml-auto rounded border border-border/70 bg-card/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
+                  MCP
+                </span>
+              </Link>
             </Card>
           </Section>
         </div>

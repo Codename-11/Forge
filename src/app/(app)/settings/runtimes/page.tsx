@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Bot, Server, Settings, Sparkles } from "lucide-react";
+import { Bot, Server, Settings, Sparkles, Terminal } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Spinner, EmptyState } from "@/components/ui";
 import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
@@ -68,7 +68,7 @@ export default function RuntimesPage() {
     <>
       <Topbar
         title="Runtimes"
-        subtitle="Hosts you've registered — local daemons, remote HTTP boxes, cloud runners. Each can serve any workspace it's bound to via an agent profile."
+        subtitle="Managed compute hosts you've registered — local daemons, remote HTTP boxes, cloud runners."
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-4 p-6">
@@ -83,6 +83,21 @@ export default function RuntimesPage() {
                 then heartbeats every 60s.
               </span>
             </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 rounded-md border border-ember/30 bg-ember/5 p-3 text-meta">
+            <Terminal size={14} className="shrink-0 text-ember" />
+            <div className="min-w-0 flex-1">
+              <span className="font-medium text-foreground">Claude Code, Codex CLI, and one-off MCP sessions live under Agent Clients.</span>
+              <span className="ml-1 text-muted-foreground">
+                Runtime hosts are for managed compute that Forge dials or monitors.
+              </span>
+            </div>
+            <Link
+              href="/settings/clients"
+              className="focus-ring inline-flex h-7 items-center justify-center rounded-md border border-border bg-card/60 px-2 text-xs font-medium text-foreground hover:bg-subtle"
+            >
+              Open Agent Clients
+            </Link>
           </div>
 
           {isLoading ? (
