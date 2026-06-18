@@ -20,6 +20,7 @@ import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { parseAgentRequestTokensFromBody } from "@/lib/agent-request-parser";
 import { parseLine } from "@/lib/slash-commands";
 import type { AgentStatus } from "@prisma/client";
 
@@ -498,7 +499,9 @@ export const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
                     "rounded-[3px]",
                     s.type === "mention"
                       ? "bg-indigo-500/15"
-                      : "bg-ember/15",
+                      : s.type === "agent-mode"
+                        ? "bg-success/15"
+                        : "bg-ember/15",
                   )}
                 >
                   {s.text}
@@ -609,17 +612,17 @@ export function detectMention(value: string, caret: number): MentionTrigger | nu
 // Inline highlight tokenizer
 // ---------------------------------------------------------------------------
 
-type HighlightSegment = { text: string; type: "text" | "mention" | "command" };
-
-// `@handle` with a leading boundary, mirroring detectMention / the
-// renderer's REF_RE so "email@host" never lights up. The capture group 1
-// is the boundary char (kept as plain text), group 2 is the token.
-const HL_MENTION_RE = /(^|[\s(,.;:!?])(@[a-z0-9][a-z0-9_-]*)/gi;
+type HighlightSegment = {
+  text: string;
+  type: "text" | "mention" | "command" | "agent-mode";
+};
 
 /**
  * Split a composer body into highlight segments for the backdrop layer.
  * A whole line that parses as a recognised slash command becomes one
- * `command` segment; otherwise the line is scanned for `@mentions`.
+ * `command` segment; otherwise we reuse the agent-request tokenizer so
+ * @mentions and their optional mode marker (`/review`, `execute`, …)
+ * light up with the same dynamic boundaries the submit path persists.
  * Newlines are preserved as their own text segments so the backdrop wraps
  * identically to the textarea.
  */
@@ -635,22 +638,40 @@ function buildHighlightSegments(
     if (opts.commands && trimmed.startsWith("/") && parseLine(trimmed, now)) {
       out.push({ text: line, type: "command" });
     } else if (opts.mentions && line.includes("@")) {
-      const re = new RegExp(HL_MENTION_RE);
-      let last = 0;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(line))) {
-        const at = m.index + m[1].length; // index of the '@'
-        if (at > last) out.push({ text: line.slice(last, at), type: "text" });
-        out.push({ text: m[2], type: "mention" });
-        last = at + m[2].length;
-      }
-      if (last < line.length) out.push({ text: line.slice(last), type: "text" });
+      appendMentionHighlightSegments(out, line);
     } else {
       out.push({ text: line, type: "text" });
     }
     if (li < lines.length - 1) out.push({ text: "\n", type: "text" });
   });
   return out;
+}
+
+function appendMentionHighlightSegments(out: HighlightSegment[], line: string) {
+  const tokens = parseAgentRequestTokensFromBody(line);
+  if (tokens.length === 0) {
+    out.push({ text: line, type: "text" });
+    return;
+  }
+
+  let last = 0;
+  for (const token of tokens) {
+    if (token.mentionStart < last) continue;
+    if (token.mentionStart > last) {
+      out.push({ text: line.slice(last, token.mentionStart), type: "text" });
+    }
+    out.push({ text: line.slice(token.mentionStart, token.mentionEnd), type: "mention" });
+    last = token.mentionEnd;
+
+    if (token.modeStart != null && token.modeEnd != null && token.modeStart >= last) {
+      if (token.modeStart > last) {
+        out.push({ text: line.slice(last, token.modeStart), type: "text" });
+      }
+      out.push({ text: line.slice(token.modeStart, token.modeEnd), type: "agent-mode" });
+      last = token.modeEnd;
+    }
+  }
+  if (last < line.length) out.push({ text: line.slice(last), type: "text" });
 }
 
 // ---------------------------------------------------------------------------

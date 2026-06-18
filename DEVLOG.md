@@ -2,6 +2,17 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-18 — AXI-81 agent-request highlighting
+
+Followed up AXI-81’s first-class agent request composer with richer live token
+handling. The shared agent-request parser now emits mention/mode spans, supports
+slash, colon, and bare mode-word sugar (`@victor /review`, `@victor:execute`,
+`@victor research`), and rejects partial words like `reviewing`. The issue
+comment composer highlight layer now reuses that parser so the visible inline
+highlighting matches exactly what submit persists.
+
+Verify: `pnpm exec vitest run tests/unit/agent-request-parser.test.ts src/server/routers/__tests__/comment.test.ts`, `pnpm typecheck`, `pnpm lint`, `env -u OPENAI_API_KEY pnpm test`.
+
 ## 2026-06-18 — Goal/Crew activation and live controls
 
 Closed the gap where a goal plan could look approved but not actually start:
