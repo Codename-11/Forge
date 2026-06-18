@@ -19,15 +19,13 @@ export type MissionControlTab =
   | "live"
   | "queue"
   | "agents"
-  | "history"
-  | "chat"
-  | "control"
-  | "plans";
+  | "chat";
 /**
  * Three visual modes:
  *   - pill: ambient indicator only (active count + presence dots).
  *   - glance: small agent-focused popover with heartbeats + load.
- *   - panel: full tabbed UI (Live / Queue / Agents / History).
+ *   - panel: quick-access tabs (Live / Queue / Agents / Chat). Durable
+ *     operations live on Command Center, Activity, and Settings pages.
  *
  * Default cycle on `mod+'` and click: pill → glance → panel → pill.
  */
@@ -64,6 +62,7 @@ const DEFAULT_STATE: MissionControlState = {
 };
 
 const STORAGE_PREFIX = "forge.mission-control";
+const VALID_TABS = new Set<MissionControlTab>(["live", "queue", "agents", "chat"]);
 
 function storageKey(slug: string): string {
   return `${STORAGE_PREFIX}.${slug}`;
@@ -75,7 +74,13 @@ function loadState(slug: string): MissionControlState {
     const raw = window.localStorage.getItem(storageKey(slug));
     if (!raw) return DEFAULT_STATE;
     const parsed = JSON.parse(raw) as Partial<MissionControlState>;
-    return { ...DEFAULT_STATE, ...parsed };
+    return {
+      ...DEFAULT_STATE,
+      ...parsed,
+      tab: VALID_TABS.has(parsed.tab as MissionControlTab)
+        ? (parsed.tab as MissionControlTab)
+        : DEFAULT_STATE.tab,
+    };
   } catch {
     return DEFAULT_STATE;
   }

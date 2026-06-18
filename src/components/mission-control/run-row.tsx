@@ -14,9 +14,7 @@ import { cn } from "@/lib/utils";
 import { ModeChip } from "@/components/ui/engagement-mode-glyph";
 import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
 import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
-import { RunApprovalCard } from "@/components/agents/run-approval-card";
 import { RunTimeline } from "./run-timeline";
-import { RunActions } from "./run-actions";
 
 /**
  * Single row inside the Live tab. One ACTIVE AgentRun.
@@ -194,7 +192,6 @@ export function RunRow({
           policy={run.runtimePolicy as RuntimePolicySnapshot | null | undefined}
         />
         <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-          <RunActions runId={run.id} agentName={run.agent.name} />
           {(() => {
             const tokens = (run.tokensIn ?? 0) + (run.tokensOut ?? 0);
             if (tokens === 0) return null;
@@ -282,12 +279,8 @@ export function RunRow({
         </div>
       )}
       {awaitingApproval && (
-        <div className="mt-1.5">
-          <RunApprovalCard
-            runId={run.id}
-            agentName={run.agent.name}
-            pendingApproval={run.pendingApproval}
-          />
+        <div className="text-meta mt-1.5 rounded-md border border-warning/30 bg-background/50 px-2 py-1.5 text-warning">
+          Awaiting operator approval. Open Command Center to approve or reject the request.
         </div>
       )}
       {isStalled && !awaitingApproval && (

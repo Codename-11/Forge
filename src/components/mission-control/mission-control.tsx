@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
@@ -11,6 +12,7 @@ import {
   PinOff,
   X as XIcon,
   AlertTriangle,
+  ExternalLink,
   Hourglass,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -36,13 +38,10 @@ import { playRunCompletedSound, playRunStalledSound } from "@/lib/mission-contro
 import { LiveTab } from "./live-tab";
 import { QueueTab } from "./queue-tab";
 import { AgentsTab } from "./agents-tab";
-import { HistoryTab } from "./history-tab";
 import { GlanceView } from "./glance-view";
 import { SettingsPopover } from "./settings-popover";
 import { PillSparkline } from "./pill-sparkline";
-import { ChatTab } from "./chat-tab";
-import { ControlTab } from "./control-tab";
-import { PlansTab } from "./plans-tab";
+import { ChatPreviewTab } from "./chat-preview-tab";
 import { Kbd } from "@/components/ui/kbd";
 
 /**
@@ -56,9 +55,9 @@ import { Kbd } from "@/components/ui/kbd";
  *   - pill: a small ambient indicator with active count + first
  *     active run's current step. Stalled runs swap the dot for an
  *     amber glyph so you can spot trouble at a glance.
- *   - panel: full tabbed UI (Live / Queue / Agents / History). All
- *     four tabs hydrate independently so flipping tabs is instant
- *     after the first visit.
+ *   - panel: quick-access UI (Live / Queue / Agents / Chat). Durable
+ *     run control, activity history, planning, and admin configuration
+ *     live on their canonical pages and are deep-linked from here.
  *
  * SSE wiring: subscribes to the workspace channel and invalidates the
  * relevant tRPC queries on AGENT_RUN_*, AGENT_ASSIGNED, ISSUE_QUEUED,
@@ -73,23 +72,18 @@ import { Kbd } from "@/components/ui/kbd";
  *   - Esc    → collapse to pill (when expanded and not text-focused)
  */
 
-const BASE_TABS: { id: MissionControlTab; label: string; chord: string; adminOnly?: boolean }[] = [
+const BASE_TABS: { id: MissionControlTab; label: string; chord: string }[] = [
   { id: "live", label: "Live", chord: "1" },
   { id: "queue", label: "Queue", chord: "2" },
   { id: "agents", label: "Agents", chord: "3" },
-  { id: "history", label: "History", chord: "4" },
-  { id: "chat", label: "Chat", chord: "5" },
-  { id: "control", label: "Admin", chord: "6", adminOnly: true },
-  { id: "plans", label: "Plans", chord: "7" },
+  { id: "chat", label: "Chat", chord: "4" },
 ];
 
 export function MissionControl() {
   const workspace = useMaybeWorkspace();
   const slug = workspace?.slug ?? "";
   const pathname = usePathname();
-  const isAdmin = workspace?.role === "OWNER" || workspace?.role === "ADMIN";
-  // Filter tabs: adminOnly tabs only visible to OWNER/ADMIN.
-  const TABS = BASE_TABS.filter((t) => !t.adminOnly || isAdmin);
+  const TABS = BASE_TABS;
   const {
     state,
     setSize,
@@ -219,9 +213,9 @@ export function MissionControl() {
       return;
     }
     appliedDefaultRef.current = key;
-    if (resolvedDefaultTab === "control" && !isAdmin) return;
+    if (!TABS.some((t) => t.id === resolvedDefaultTab)) return;
     setTab(resolvedDefaultTab as MissionControlTab);
-  }, [slug, resolvedDefaultTab, state.tab, setTab, isAdmin]);
+  }, [slug, resolvedDefaultTab, state.tab, setTab, TABS]);
 
   // ---------- Unread chat tracking ----------
   // Per-thread "last seen" timestamp. Bumped whenever the user has the
@@ -366,41 +360,7 @@ export function MissionControl() {
       const target = e.target as HTMLElement | null;
       if (target?.matches("input, textarea, [contenteditable=true]")) return;
       e.preventDefault();
-      setTab("history");
-    },
-    [expanded, setTab],
-  );
-  useHotkey(
-    "5",
-    (e) => {
-      if (!expanded) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.matches("input, textarea, [contenteditable=true]")) return;
-      e.preventDefault();
       setTab("chat");
-    },
-    [expanded, setTab],
-  );
-  useHotkey(
-    "6",
-    (e) => {
-      if (!expanded) return;
-      if (!isAdmin) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.matches("input, textarea, [contenteditable=true]")) return;
-      e.preventDefault();
-      setTab("control");
-    },
-    [expanded, isAdmin, setTab],
-  );
-  useHotkey(
-    "7",
-    (e) => {
-      if (!expanded) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.matches("input, textarea, [contenteditable=true]")) return;
-      e.preventDefault();
-      setTab("plans");
     },
     [expanded, setTab],
   );
@@ -481,8 +441,8 @@ export function MissionControl() {
   // `g m` is kept as a back-compat alias for existing muscle memory.
   useChord("g", { "5": () => setSize("panel"), m: () => setSize("panel") });
 
-  // Global `/` shortcut: open Mission Control directly to the Chat tab
-  // with the composer focused. Same vibe as Slack / Linear.
+  // Global `/` shortcut: open Mission Control directly to the chat preview.
+  // Full compose/control lives on the workspace Chat page.
   useHotkey(
     "/",
     (e) => {
@@ -721,7 +681,7 @@ export function MissionControl() {
       >
         <GripHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
-          Activity
+          Quick Access
         </span>
         {hasStalled && (
           <span className="flex items-center gap-1 rounded-md border border-warning/30 bg-warning/10 px-1.5 py-0 text-[0.625rem] text-warning">
@@ -729,6 +689,14 @@ export function MissionControl() {
           </span>
         )}
         <span className="ml-auto flex items-center gap-1" data-no-drag>
+          <Link
+            href={`/w/${slug}/command-center`}
+            title="Open Command Center"
+            className="hidden h-6 items-center gap-1 rounded border border-border px-2 text-[0.625rem] uppercase tracking-wider text-muted-foreground hover:border-ember/40 hover:text-foreground sm:inline-flex"
+          >
+            Command
+            <ExternalLink className="h-2.5 w-2.5" />
+          </Link>
           <SettingsPopover soundEnabled={state.soundEnabled} onToggleSound={toggleSound} />
           <button
             type="button"
@@ -766,7 +734,8 @@ export function MissionControl() {
       >
         {TABS.map((t) => {
           const isActive = state.tab === t.id;
-          const count = t.id === "live" ? activeCount : t.id === "queue" ? queueCount : null;
+          const count =
+            t.id === "live" ? activeCount : t.id === "queue" ? queueCount : t.id === "chat" ? unreadCount : null;
           return (
             <button
               key={t.id}
@@ -811,14 +780,12 @@ export function MissionControl() {
             onTogglePin={(id) => (isPinned(id) ? unpinRun(id) : pinRun(id))}
             activeRunId={activeRunId}
             setActiveRunId={setActiveRunId}
+            commandCenterHref={`/w/${slug}/command-center`}
           />
         )}
         {state.tab === "queue" && <QueueTab slug={slug} />}
         {state.tab === "agents" && <AgentsTab slug={slug} />}
-        {state.tab === "history" && <HistoryTab slug={slug} />}
-        {state.tab === "chat" && <ChatTab slug={slug} autoFocus />}
-        {state.tab === "control" && isAdmin && <ControlTab slug={slug} />}
-        {state.tab === "plans" && <PlansTab slug={slug} />}
+        {state.tab === "chat" && <ChatPreviewTab slug={slug} />}
       </div>
     </div>
   );

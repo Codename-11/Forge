@@ -130,7 +130,7 @@ export const userRouter = router({
     .input(
       z.object({
         missionControlDefaultTab: z
-          .enum(["live", "queue", "agents", "history", "chat"])
+          .enum(["live", "queue", "agents", "chat"])
           .nullable()
           .optional(),
         /**

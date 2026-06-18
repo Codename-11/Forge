@@ -10,15 +10,14 @@ interface SettingsPopoverProps {
   onToggleSound: () => void;
 }
 
-// Only user-selectable defaults; Control is admin-only and never a sensible
-// landing tab so it's excluded here.
-type DefaultTabPref = "live" | "queue" | "agents" | "history" | "chat";
+// Only lightweight quick-access tabs belong in the floating dock. History,
+// plans, and admin/run-control work have durable homes elsewhere.
+type DefaultTabPref = "live" | "queue" | "agents" | "chat";
 
 const TAB_OPTIONS: Array<{ id: DefaultTabPref; label: string }> = [
   { id: "live", label: "Live" },
   { id: "queue", label: "Queue" },
   { id: "agents", label: "Agents" },
-  { id: "history", label: "History" },
   { id: "chat", label: "Chat" },
 ];
 
@@ -26,7 +25,6 @@ const DEFAULT_TAB_VALUES = new Set<DefaultTabPref>([
   "live",
   "queue",
   "agents",
-  "history",
   "chat",
 ]);
 

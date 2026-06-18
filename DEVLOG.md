@@ -2,6 +2,35 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-18 — Quick-access Mission Control and bounded Command Center
+
+Refined the floating activity dock after the live Command Center screenshots
+showed the dock acting like a source of truth and the page layout stretching
+awkwardly when activity/attention lists got long.
+
+Fixes:
+- Reframed Mission Control as a quick-access dock: removed the floating
+  History/Admin/Plans tabs, sanitized legacy saved tab state back to Live, and
+  limited default-tab preferences to Live/Queue/Agents/Chat.
+- Converted the floating Live, Queue, and Chat tabs into previews. Run control,
+  approvals, dispatch, full chat compose/provider controls, activity history,
+  and admin/runtime configuration now deep-link to Command Center, Issues,
+  Chat, or Settings instead of being duplicated in the overlay.
+- Split Command Center's attention queue into bounded Asks, Stalled Runs, and
+  Review Gates groups with independent scrolling and preserved inline actions
+  where Command Center is the canonical decision surface.
+- Reworked Command Center into a left operations column plus a sticky, bounded
+  workspace activity rail so long activity lists cannot push lower sections down
+  or visually overlap the page.
+- Added optional bounded body regions to `WorkspaceActivityTimeline` and
+  `AgentAttentionPanel` so Dashboard can remain roomy while Command Center
+  constrains heavy lists.
+
+Verify:
+`pnpm exec tsc --noEmit --pretty false`, `pnpm lint`, `pnpm typecheck`,
+`pnpm test`, `pnpm build:app`, plus Playwright screenshots for
+`/w/axiom-labs/command-center` and Mission Control quick-access tabs.
+
 ## 2026-06-18 — Workspace activity, agent attention, runtime self-tests
 
 Expanded the daily-driving operator surfaces after Dashboard and Command Center

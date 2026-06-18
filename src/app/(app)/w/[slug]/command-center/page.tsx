@@ -30,6 +30,7 @@ import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timel
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
+import { cn } from "@/lib/utils";
 
 /**
  * Command Center — the operator's **decisions + live agent operations**
@@ -164,66 +165,82 @@ export default function CommandCenterPage() {
             description="The command center couldn't fetch its summary."
           />
         ) : (
-          <div className="mx-auto max-w-7xl space-y-4">
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <div className="mx-auto grid max-w-7xl grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
+            <div className="min-w-0 space-y-4">
               <Section
                 icon={<Inbox className="h-3.5 w-3.5" />}
                 title="Attention queue"
                 empty="Nothing waiting on you."
                 count={attentionCount}
                 className="min-w-0"
-                action={
-                  data.stalledRuns.length > 0 && canRecoverRuns ? (
-                    <RunRecoveryBulkActions
-                      runs={data.stalledRuns}
-                      pending={recoverRuns.isPending}
-                      onRecover={(action, runIds) => recoverRuns.mutate({ action, runIds })}
-                    />
-                  ) : null
-                }
+                bodyClassName="p-0"
               >
-                <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
-                  {data.actionRequests.map((row) => (
-                    <ActionRequestDecisionCard
-                      key={row.id}
-                      request={row}
-                      slug={ws.slug}
-                      onResolved={() => dropActionRequest(row.id)}
-                    />
-                  ))}
-                  {data.stalledRuns.map((row) => (
-                    <RunFailureCard
-                      key={row.id}
-                      run={row}
-                      slug={ws.slug}
-                      canRecover={canRecoverRuns}
-                      pending={recoverRuns.isPending}
-                      onRecover={(action) => recoverRuns.mutate({ action, runIds: [row.id] })}
-                    />
-                  ))}
-                  {data.reviewGates.map((row) => (
-                    <ReviewGateDecisionCard
-                      key={row.id}
-                      gate={row}
-                      slug={ws.slug}
-                      onResolved={() => dropReviewGate(row.id)}
-                    />
-                  ))}
+                <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-3">
+                  <AttentionGroup
+                    title="Asks"
+                    count={data.actionRequests.length}
+                    empty="No agent asks."
+                  >
+                    {data.actionRequests.map((row) => (
+                      <ActionRequestDecisionCard
+                        key={row.id}
+                        request={row}
+                        slug={ws.slug}
+                        onResolved={() => dropActionRequest(row.id)}
+                      />
+                    ))}
+                  </AttentionGroup>
+                  <AttentionGroup
+                    title="Stalled runs"
+                    count={data.stalledRuns.length}
+                    empty="No recoverable runs."
+                    action={
+                      data.stalledRuns.length > 0 && canRecoverRuns ? (
+                        <RunRecoveryBulkActions
+                          runs={data.stalledRuns}
+                          pending={recoverRuns.isPending}
+                          onRecover={(action, runIds) => recoverRuns.mutate({ action, runIds })}
+                        />
+                      ) : null
+                    }
+                  >
+                    {data.stalledRuns.map((row) => (
+                      <RunFailureCard
+                        key={row.id}
+                        run={row}
+                        slug={ws.slug}
+                        canRecover={canRecoverRuns}
+                        pending={recoverRuns.isPending}
+                        onRecover={(action) => recoverRuns.mutate({ action, runIds: [row.id] })}
+                      />
+                    ))}
+                  </AttentionGroup>
+                  <AttentionGroup
+                    title="Review gates"
+                    count={data.reviewGates.length}
+                    empty="No review gates."
+                  >
+                    {data.reviewGates.map((row) => (
+                      <ReviewGateDecisionCard
+                        key={row.id}
+                        gate={row}
+                        slug={ws.slug}
+                        onResolved={() => dropReviewGate(row.id)}
+                      />
+                    ))}
+                  </AttentionGroup>
                 </div>
               </Section>
 
-            <WorkspaceActivityTimeline
-              limit={8}
-              defaultFilter="decisions"
-              className="min-w-0"
-            />
-            </div>
+              <AgentAttentionPanel
+                slug={ws.slug}
+                showEmpty
+                limit={6}
+                itemLimit={2}
+                bodyClassName="max-h-[24rem] overflow-y-auto"
+              />
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <div className="lg:col-span-3">
-                <AgentAttentionPanel slug={ws.slug} showEmpty limit={6} itemLimit={2} />
-              </div>
-
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <Section
               icon={<Target className="h-3.5 w-3.5" />}
               title="Live goals"
@@ -380,6 +397,15 @@ export default function CommandCenterPage() {
               </Section>
             ) : null}
             </div>
+          </div>
+          <aside className="min-w-0 xl:sticky xl:top-4 xl:self-start">
+            <WorkspaceActivityTimeline
+              limit={20}
+              defaultFilter="decisions"
+              className="min-w-0"
+              bodyClassName="max-h-[42rem] overflow-y-auto xl:max-h-[calc(100svh-14rem)]"
+            />
+          </aside>
           </div>
         )}
       </div>
@@ -854,6 +880,7 @@ function Section({
   tone,
   action,
   className,
+  bodyClassName,
   children,
 }: {
   icon: React.ReactNode;
@@ -863,11 +890,17 @@ function Section({
   tone?: "warning";
   action?: React.ReactNode;
   className?: string;
+  bodyClassName?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className={`flex flex-col gap-2 ${className ?? ""}`}>
-      <header className="flex min-w-0 items-center justify-between gap-2 text-meta uppercase tracking-wide text-muted-foreground">
+    <section
+      className={cn(
+        "flex min-h-0 min-w-0 flex-col rounded-lg border border-border bg-card/40",
+        className,
+      )}
+    >
+      <header className="flex min-w-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5 text-meta uppercase tracking-wide text-muted-foreground">
         <div className="flex min-w-0 items-center gap-1.5">
           {icon}
           <span className="truncate">{title}</span>
@@ -887,7 +920,44 @@ function Section({
           ) : null}
         </div>
       </header>
-      <div className="flex flex-col gap-2">
+      <div className={cn("flex min-h-0 flex-col gap-2 p-3", bodyClassName)}>
+        {count === 0 ? (
+          <div className="rounded-md border border-dashed border-border bg-card/20 p-3 text-meta text-muted-foreground">
+            {empty}
+          </div>
+        ) : (
+          children
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AttentionGroup({
+  title,
+  count,
+  empty,
+  action,
+  children,
+}: {
+  title: string;
+  count: number;
+  empty: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="min-h-0 rounded-md border border-border bg-background/35">
+      <header className="flex min-w-0 items-center gap-2 border-b border-border/70 px-3 py-2">
+        <span className="truncate text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">
+          {title}
+        </span>
+        <span className="rounded bg-subtle px-1.5 py-0.5 font-mono text-[0.625rem] text-muted-foreground">
+          {count}
+        </span>
+        {action ? <span className="ml-auto flex shrink-0 items-center gap-1">{action}</span> : null}
+      </header>
+      <div className="max-h-[22rem] min-h-0 space-y-2 overflow-y-auto p-2">
         {count === 0 ? (
           <div className="rounded-md border border-dashed border-border bg-card/20 p-3 text-meta text-muted-foreground">
             {empty}

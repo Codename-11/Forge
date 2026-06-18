@@ -45,12 +45,14 @@ export function AgentAttentionPanel({
   itemLimit = 3,
   showEmpty = false,
   className,
+  bodyClassName,
 }: {
   slug: string;
   limit?: number;
   itemLimit?: number;
   showEmpty?: boolean;
   className?: string;
+  bodyClassName?: string;
 }) {
   const utils = trpc.useUtils();
   const query = trpc.event.agentAttention.useQuery(
@@ -85,24 +87,26 @@ export function AgentAttentionPanel({
           <ChevronRight className="h-3 w-3" />
         </Link>
       </header>
-      {query.isLoading ? (
-        <div className="p-4">
-          <SkeletonList rows={4} />
-        </div>
-      ) : rows.length === 0 ? (
-        <EmptyState
-          variant="card"
-          icon={<CheckCircle2 />}
-          title="No agent attention needed"
-          description="Questions, approvals, blocked runs, and active turns appear here."
-        />
-      ) : (
-        <div className="divide-y divide-border">
-          {rows.map((row) => (
-            <AgentAttentionCard key={row.agent.id} row={row} slug={slug} />
-          ))}
-        </div>
-      )}
+      <div className={cn("min-h-0", bodyClassName)}>
+        {query.isLoading ? (
+          <div className="p-4">
+            <SkeletonList rows={4} />
+          </div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            variant="card"
+            icon={<CheckCircle2 />}
+            title="No agent attention needed"
+            description="Questions, approvals, blocked runs, and active turns appear here."
+          />
+        ) : (
+          <div className="divide-y divide-border">
+            {rows.map((row) => (
+              <AgentAttentionCard key={row.agent.id} row={row} slug={slug} />
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

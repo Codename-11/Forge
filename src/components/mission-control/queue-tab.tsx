@@ -1,102 +1,20 @@
 "use client";
-import { useMemo, useState } from "react";
 import Link from "next/link";
-import { toast } from "sonner";
-import { Bot, ChevronDown, Send, ExternalLink, Shield, Inbox, Workflow } from "lucide-react";
+import { Bot, ExternalLink, Shield, Inbox, Workflow } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
 /**
- * Queue tab. Renders queued + unassigned issues with an inline agent
- * picker per row + a single "Dispatch all unblocked" footer button.
- *
- * Inline assignment uses `issue.update({ assignedAgentId })` — the
- * existing event hook in `recordChange()` fires AGENT_ASSIGNED, the
- * worker pushes the webhook, and AgentRun lifecycle takes over the
- * moment the agent acks. No separate dispatch mutation needed.
+ * Queue tab. Quick-access preview of queued/unassigned issues.
+ * Dispatching and queue management belong on the durable issue/ops
+ * surfaces; this dock tab stays read-only and deep-links out.
  */
 
-type AgentLite = {
-  id: string;
-  name: string;
-  profileKey: string;
-  status: string;
-  /** Avg cost per run over the last 30d — helps right-size a dispatch. */
-  avgCostUsd?: number;
-};
-
-function fmtCost(n: number): string {
-  if (n <= 0) return "$0";
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  if (n < 100) return `$${n.toFixed(2)}`;
-  return `$${Math.round(n)}`;
-}
-
 export function QueueTab({ slug }: { slug: string }) {
-  const utils = trpc.useUtils();
   const { data: queue, isLoading } = trpc.issue.queue.useQuery({
     includeClaimed: false,
     limit: 30,
   });
-  const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false });
-  const { data: costStats } = trpc.agentRun.costByAgent.useQuery(
-    { sinceDays: 30 },
-    { staleTime: 60_000 },
-  );
-
-  const eligibleAgents: AgentLite[] = useMemo(() => {
-    const costById = new Map((costStats?.byAgent ?? []).map((c) => [c.agentId, c]));
-    return (agents ?? [])
-      .filter((a) => a.role === "WORKER" && !a.archivedAt)
-      .map((a) => {
-        const c = costById.get(a.id);
-        return {
-          id: a.id,
-          name: a.name,
-          profileKey: a.profileKey,
-          status: a.status,
-          avgCostUsd: c && c.runs > 0 ? c.costUsd / c.runs : undefined,
-        };
-      });
-  }, [agents, costStats]);
-
-  const update = trpc.issue.update.useMutation({
-    onSuccess: () => {
-      void utils.issue.queue.invalidate();
-      void utils.issue.list.invalidate();
-      void utils.agentRun.activeAll.invalidate();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const dispatchOne = (issueId: string, agentId: string, label: string) => {
-    update.mutate(
-      { id: issueId, assignedAgentId: agentId },
-      {
-        onSuccess: () => toast.success(`Dispatched to ${label}`),
-      },
-    );
-  };
-
-  const dispatchAllUnblocked = () => {
-    const unassigned = queue?.filter((q) => !q.assignedAgent && q.unblocked !== false) ?? [];
-    if (unassigned.length === 0) {
-      toast.info("Nothing to dispatch.");
-      return;
-    }
-    if (eligibleAgents.length === 0) {
-      toast.error("No eligible WORKER agents available.");
-      return;
-    }
-    // Round-robin across eligible agents.
-    let cursor = 0;
-    for (const issue of unassigned) {
-      const agent = eligibleAgents[cursor % eligibleAgents.length];
-      cursor++;
-      update.mutate({ id: issue.id, assignedAgentId: agent.id });
-    }
-    toast.success(`Dispatched ${unassigned.length} to ${eligibleAgents.length} agent(s).`);
-  };
 
   if (isLoading) {
     return <div className="text-meta px-3 py-4 text-muted-foreground">Loading queue…</div>;
@@ -105,9 +23,6 @@ export function QueueTab({ slug }: { slug: string }) {
   const items = queue ?? [];
   const unassignedCount = items.filter((q) => !q.assignedAgent).length;
   const blockedCount = items.filter((q) => q.unblocked === false).length;
-  // "Needs human" — unassigned with no eligible WORKER to take it. Mirrors
-  // the design's "dispatch failures" card without inventing a metric.
-  const noEligible = eligibleAgents.length === 0 ? unassignedCount : 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -133,7 +48,6 @@ export function QueueTab({ slug }: { slug: string }) {
               <StatCard
                 label="Blocked"
                 value={`${blockedCount}`}
-                sub={noEligible > 0 ? "no eligible target" : undefined}
                 accent={blockedCount > 0 ? "danger" : undefined}
               />
             </div>
@@ -160,8 +74,6 @@ export function QueueTab({ slug }: { slug: string }) {
                     }
                   : null,
               }}
-              agents={eligibleAgents}
-              onDispatch={(agentId, label) => dispatchOne(issue.id, agentId, label)}
             />
           );
         })}
@@ -176,16 +88,13 @@ export function QueueTab({ slug }: { slug: string }) {
             </>
           )}
         </span>
-        <button
-          type="button"
-          onClick={dispatchAllUnblocked}
-          disabled={unassignedCount === 0 || eligibleAgents.length === 0}
-          className={cn(
-            "flex min-h-9 items-center gap-1 rounded-md bg-ember px-2 py-1 text-[0.6875rem] font-medium text-ember-foreground hover:bg-ember/90 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
-          )}
+        <Link
+          href={`/w/${slug}/issues`}
+          className="focus-ring inline-flex min-h-9 items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] font-medium text-foreground/80 hover:border-ember/40 hover:text-foreground sm:min-h-0"
         >
-          <Send className="h-3 w-3" /> Dispatch all
-        </button>
+          Open issues
+          <ExternalLink className="h-3 w-3" />
+        </Link>
       </div>
     </div>
   );
@@ -230,8 +139,6 @@ function StatCard({
 function QueueRow({
   slug,
   issue,
-  agents,
-  onDispatch,
 }: {
   slug: string;
   issue: {
@@ -242,11 +149,7 @@ function QueueRow({
     blocked: boolean;
     assignedAgent: { id: string; name: string; profileKey: string } | null;
   };
-  agents: AgentLite[];
-  onDispatch: (agentId: string, agentLabel: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-
   return (
     <div className="rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-[0.75rem]">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -269,18 +172,7 @@ function QueueRow({
               <Bot className="h-3 w-3" />
               {issue.assignedAgent.profileKey}
             </span>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setOpen((o) => !o)}
-              className={cn(
-                "flex min-h-8 items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[0.65625rem] text-muted-foreground hover:border-ember/40 hover:text-foreground sm:min-h-0",
-                open && "border-ember/40 text-foreground",
-              )}
-            >
-              Dispatch <ChevronDown className="h-2.5 w-2.5" />
-            </button>
-          )}
+          ) : null}
           <Link
             href={`/w/${slug}/issues/${issue.id}`}
             className="flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-5 sm:w-5"
@@ -299,48 +191,10 @@ function QueueRow({
           <span className="font-mono text-ember">→ @{issue.assignedAgent.profileKey}</span>
         ) : issue.blocked ? (
           <span className="text-warning">blocked · waiting on dependencies</span>
-        ) : agents.length === 0 ? (
-          <span className="font-mono text-danger">no eligible · needs human</span>
         ) : (
           <span className="text-muted-foreground">waiting for an agent</span>
         )}
       </div>
-      {open && !issue.assignedAgent && (
-        <div className="mt-1.5 flex flex-wrap gap-1 border-t border-border/60 pt-1.5">
-          {agents.length === 0 ? (
-            <span className="text-meta text-muted-foreground">No eligible WORKER agents.</span>
-          ) : (
-            agents.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                onClick={() => {
-                  onDispatch(a.id, a.name);
-                  setOpen(false);
-                }}
-                className={cn(
-                  "flex min-h-8 items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 font-mono text-[0.65625rem] hover:border-ember/40 sm:min-h-0",
-                  a.status === "OFFLINE" && "opacity-60",
-                )}
-                title={`Status: ${a.status}`}
-              >
-                <Bot className="h-3 w-3 text-ember" /> @{a.profileKey}
-                {a.avgCostUsd != null && (
-                  <span
-                    className="text-meta ml-1 text-muted-foreground"
-                    title="Avg cost per run, last 30d"
-                  >
-                    ~{fmtCost(a.avgCostUsd)}
-                  </span>
-                )}
-                {a.status === "OFFLINE" && (
-                  <span className="text-meta ml-1 text-muted-foreground">(offline)</span>
-                )}
-              </button>
-            ))
-          )}
-        </div>
-      )}
     </div>
   );
 }

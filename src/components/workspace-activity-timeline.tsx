@@ -63,11 +63,13 @@ export function WorkspaceActivityTimeline({
   defaultFilter = "all",
   showFilters = true,
   className,
+  bodyClassName,
 }: {
   limit?: number;
   defaultFilter?: TimelineFilter;
   showFilters?: boolean;
   className?: string;
+  bodyClassName?: string;
 }) {
   const utils = trpc.useUtils();
   const [filter, setFilter] = useState<TimelineFilter>(defaultFilter);
@@ -120,24 +122,26 @@ export function WorkspaceActivityTimeline({
           </div>
         ) : null}
       </header>
-      {query.isLoading ? (
-        <div className="p-4">
-          <SkeletonList rows={4} />
-        </div>
-      ) : items.length === 0 ? (
-        <EmptyState
-          variant="card"
-          icon={<Activity />}
-          title="No recent activity"
-          description="Workspace changes will appear here."
-        />
-      ) : (
-        <ol className="divide-y divide-border">
-          {items.map((item) => (
-            <ActivityRow key={item.id} item={item} />
-          ))}
-        </ol>
-      )}
+      <div className={cn("min-h-0", bodyClassName)}>
+        {query.isLoading ? (
+          <div className="p-4">
+            <SkeletonList rows={4} />
+          </div>
+        ) : items.length === 0 ? (
+          <EmptyState
+            variant="card"
+            icon={<Activity />}
+            title="No recent activity"
+            description="Workspace changes will appear here."
+          />
+        ) : (
+          <ol className="divide-y divide-border">
+            {items.map((item) => (
+              <ActivityRow key={item.id} item={item} />
+            ))}
+          </ol>
+        )}
+      </div>
     </section>
   );
 }
