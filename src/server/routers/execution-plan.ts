@@ -10,6 +10,7 @@ import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { agentIdSchema } from "@/server/validators";
 import { extractMentions } from "@/server/services/mentions";
+import { activatePlan } from "@/server/services/orchestration-service";
 import {
   addExecutionStep,
   createExecutionPlan,
@@ -214,6 +215,19 @@ export const executionPlanRouter = router({
         status: input.status,
         contextSetId: input.contextSetId === undefined ? undefined : input.contextSetId,
       });
+      return { ok: true };
+    }),
+
+  activate: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.$transaction((tx) =>
+        activatePlan(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          planId: input.id,
+        }),
+      );
       return { ok: true };
     }),
 

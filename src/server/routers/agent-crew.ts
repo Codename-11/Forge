@@ -20,8 +20,9 @@ import {
   type AgentCrewRole,
 } from "@/server/services/agent-crew-service";
 
-/** Step statuses that mean a crew member is actively working right now. */
+/** Step statuses that mean a crew member has queued or active work. */
 const ACTIVE_STEP_STATUSES: ExecutionStepStatus[] = [
+  ExecutionStepStatus.READY,
   ExecutionStepStatus.RUNNING,
   ExecutionStepStatus.REVIEW,
 ];

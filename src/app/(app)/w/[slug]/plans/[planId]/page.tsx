@@ -102,6 +102,12 @@ const STEP_STATUS_BAR: Record<ExecutionStepStatus, string> = {
   CANCELED: "bg-muted/40",
 };
 
+const ROSTER_ACTIVE_STEP_STATUSES = new Set<ExecutionStepStatus>([
+  ExecutionStepStatus.READY,
+  ExecutionStepStatus.RUNNING,
+  ExecutionStepStatus.REVIEW,
+]);
+
 type JudgeVerdict = {
   verdict: "PASS" | "FAIL";
   feedback?: string | null;
@@ -200,6 +206,15 @@ export default function PlanDetailPage() {
 
   const update = trpc.executionPlan.update.useMutation({
     onSuccess: () => {
+      utils.executionPlan.get.invalidate({ id: params.planId });
+      utils.executionPlan.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const activate = trpc.executionPlan.activate.useMutation({
+    onSuccess: () => {
+      toast.success("Crew started");
       utils.executionPlan.get.invalidate({ id: params.planId });
       utils.executionPlan.list.invalidate();
     },
@@ -418,13 +433,14 @@ export default function PlanDetailPage() {
   const crew =
     (plan as unknown as { crew?: CrewRosterData | null } | undefined)?.crew ?? null;
 
-  // Which crew member is live on which step — drives the roster
-  // highlight. Built from RUNNING steps' `assignedAgentId`.
+  // Which crew member has active or queued work — drives the roster
+  // highlight. READY means the worker dispatch was queued and is waiting
+  // for pickup/ack, so it should not read as idle.
   const activeByAgent = useMemo<ActiveStepByAgent>(() => {
     const m: ActiveStepByAgent = new Map();
     for (const s of orderedSteps) {
-      if (s.status === ExecutionStepStatus.RUNNING && s.assignedAgentId) {
-        m.set(s.assignedAgentId, { id: s.id, title: s.title });
+      if (ROSTER_ACTIVE_STEP_STATUSES.has(s.status) && s.assignedAgentId) {
+        m.set(s.assignedAgentId, { id: s.id, title: s.title, status: s.status });
       }
     }
     return m;
@@ -581,6 +597,13 @@ export default function PlanDetailPage() {
                 utils.executionPlan.get.invalidate({ id: plan.id });
                 utils.executionPlan.list.invalidate();
               }}
+            />
+          ) : null}
+
+          {plan.status === ExecutionPlanStatus.APPROVED ? (
+            <PlanStartBanner
+              busy={activate.isPending}
+              onStart={() => activate.mutate({ id: plan.id })}
             />
           ) : null}
 
@@ -769,12 +792,15 @@ export default function PlanDetailPage() {
             </div>
             <select
               value={plan.status}
-              onChange={(e) =>
-                update.mutate({
-                  id: plan.id,
-                  status: e.target.value as ExecutionPlanStatus,
-                })
-              }
+              onChange={(e) => {
+                const next = e.target.value as ExecutionPlanStatus;
+                if (next === ExecutionPlanStatus.RUNNING) {
+                  activate.mutate({ id: plan.id });
+                  return;
+                }
+                update.mutate({ id: plan.id, status: next });
+              }}
+              disabled={activate.isPending || update.isPending}
               className={cn(
                 "w-full rounded-md border border-border bg-card/40 px-2 py-1 text-xs",
                 PLAN_STATUS_TONE[plan.status],
@@ -986,10 +1012,9 @@ function PlanApproval({
 
 /**
  * Fallback "Pending your approval" banner for DRAFT plans with NO bound
- * ActionRequest. Offers a direct "Approve" that flips the plan to
- * APPROVED via `executionPlan.update` — a manual fast-path that skips
- * the crew-kickoff dispatch the ActionRequest accept path performs.
- * Only rendered by `<PlanApproval>` when no ActionRequest exists.
+ * ActionRequest. Uses the same activation path as accepting the
+ * ActionRequest: DRAFT/APPROVED → RUNNING, goal → ACTIVE, root steps
+ * dispatched. Only rendered by `<PlanApproval>` when no ActionRequest exists.
  */
 function PlanApprovalBanner({
   planId,
@@ -1004,9 +1029,9 @@ function PlanApprovalBanner({
   workspaceKey: string;
   onApproved: () => void;
 }) {
-  const approve = trpc.executionPlan.update.useMutation({
+  const approve = trpc.executionPlan.activate.useMutation({
     onSuccess: () => {
-      toast.success("Plan approved");
+      toast.success("Plan approved · crew started");
       onApproved();
     },
     onError: (e) => toast.error(e.message),
@@ -1033,11 +1058,9 @@ function PlanApprovalBanner({
           size="sm"
           variant="ember"
           disabled={approve.isPending}
-          onClick={() =>
-            approve.mutate({ id: planId, status: ExecutionPlanStatus.APPROVED })
-          }
+          onClick={() => approve.mutate({ id: planId })}
         >
-          <CheckCircle2 className="h-3.5 w-3.5" /> Approve plan
+          <CheckCircle2 className="h-3.5 w-3.5" /> Approve and start
         </Button>
         {issueNumber != null ? (
           <a
@@ -1047,6 +1070,33 @@ function PlanApprovalBanner({
             Review on issue
           </a>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+function PlanStartBanner({
+  busy,
+  onStart,
+}: {
+  busy: boolean;
+  onStart: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border-l-2 border-y border-r border-l-ember border-y-border border-r-border bg-ember/[0.05] p-3">
+      <div className="flex items-center gap-2">
+        <CheckCircle2 className="h-4 w-4 shrink-0 text-ember" />
+        <span className="text-sm font-medium">Approved, not running</span>
+      </div>
+      <p className="text-meta text-muted-foreground">
+        This plan was approved before the crew kickoff ran. Start it to flip
+        the goal active and dispatch the ready root steps.
+      </p>
+      <div>
+        <Button size="sm" variant="ember" disabled={busy} onClick={onStart}>
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          {busy ? "Starting…" : "Start crew"}
+        </Button>
       </div>
     </div>
   );

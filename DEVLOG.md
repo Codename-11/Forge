@@ -2,6 +2,40 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-18 — Goal/Crew activation and live controls
+
+Closed the gap where a goal plan could look approved but not actually start:
+the legacy plan approval fallback in the plan cockpit called
+`executionPlan.update({ status: APPROVED })`, which left the goal in
+`PLANNING`, left steps as `TODO`, and never ran the crew kickoff. Live prod
+inspection confirmed this exact state for the Dev-Team goal "Enhance Issues to
+support Rich Rendering": active plan `cmqjkctwa0003mo07aonmhg1j` was
+`APPROVED`, all 6 steps were `TODO`, and no bound `ActionRequest` existed.
+
+Fixes:
+- Added `executionPlan.activate` tRPC mutation, backed by the existing
+  `activatePlan()` service path, so UI start/approval actions run the canonical
+  transition: plan → `RUNNING`, goal → `ACTIVE`, root steps → `READY` and
+  worker dispatch queued.
+- Rewired the no-ActionRequest plan approval fallback to "Approve and start"
+  through `executionPlan.activate`, and added an "Approved, not running" banner
+  plus "Start crew" action for already-stuck plans.
+- Added `goal.update` service/router mutation for title, description, crew,
+  initiative, cost cap, and wall-time cap. Budget edits mirror onto the active
+  plan attempt so caps changed after planning still gate live execution.
+- Added goal detail edit UI and a live-status card showing current phase,
+  step totals, queued/working counts, elapsed time, and a start action for
+  approved-but-idle active plans.
+- Goal detail now embeds active plan step status/assignee rows, and goal/plan
+  crew roster highlights include `READY` queued work, not just `RUNNING`.
+  Crew detail also treats `READY` as queued active work so assigned crew members
+  no longer appear idle immediately after dispatch.
+
+Verify:
+`pnpm typecheck`, `pnpm lint`,
+`pnpm test src/server/services/__tests__/orchestration.test.ts src/server/routers/__tests__/execution-plan.test.ts`,
+`pnpm test`.
+
 ## 2026-06-18 — Landing Docker healthcheck
 
 Added a Dockerfile-level `HEALTHCHECK` to `landing/Dockerfile` so the

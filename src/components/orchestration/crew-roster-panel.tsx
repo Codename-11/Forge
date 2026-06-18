@@ -45,8 +45,11 @@ export type CrewRosterData = {
   members: CrewMemberRow[];
 };
 
-/** Map of agentId → the step that agent is currently RUNNING. */
-export type ActiveStepByAgent = Map<string, { id: string; title: string }>;
+/** Map of agentId → the step that agent is currently queued or working. */
+export type ActiveStepByAgent = Map<
+  string,
+  { id: string; title: string; status?: string }
+>;
 
 const ROLE_TONE: Record<string, string> = {
   PLANNER: "bg-ember/10 text-ember",
@@ -129,7 +132,7 @@ export function CrewRosterPanel({
                 )}
                 title={
                   active
-                    ? `@${m.agent.profileKey} · on "${active.title}"`
+                    ? `@${m.agent.profileKey} · ${(active.status ?? "active").toLowerCase()} "${active.title}"`
                     : `@${m.agent.profileKey}`
                 }
               >
@@ -149,7 +152,10 @@ export function CrewRosterPanel({
                   {active ? (
                     <span className="flex items-center gap-1 truncate text-meta text-ember">
                       <span className="inline-block h-1 w-1 shrink-0 rounded-full bg-ember motion-safe:animate-pulse" />
-                      <span className="truncate">{active.title}</span>
+                      <span className="truncate">
+                        {active.status ? `${active.status.toLowerCase()}: ` : ""}
+                        {active.title}
+                      </span>
                     </span>
                   ) : null}
                 </div>

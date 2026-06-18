@@ -199,6 +199,160 @@ export async function createGoal(
   return { id };
 }
 
+export interface UpdateGoalInput {
+  workspaceId: string;
+  actorId: string | null;
+  actorAgentId?: string | null;
+  id: string;
+  title?: string;
+  description?: string | null;
+  initiativeId?: string | null;
+  crewId?: string | null;
+  maxTotalCostUsd?: number | null;
+  maxWallTimeMinutes?: number | null;
+}
+
+export async function updateGoal(
+  db: PrismaClient,
+  input: UpdateGoalInput,
+): Promise<{ id: string }> {
+  const goal = await db.goal.findFirst({
+    where: { id: input.id, workspaceId: input.workspaceId },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      status: true,
+      initiativeId: true,
+      crewId: true,
+      maxTotalCostUsd: true,
+      maxWallTimeMinutes: true,
+    },
+  });
+  if (!goal) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found." });
+  }
+  if (goal.status === GoalStatus.ACHIEVED || goal.status === GoalStatus.ABANDONED) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Cannot edit a ${goal.status.toLowerCase()} goal.`,
+    });
+  }
+
+  if (input.crewId) {
+    const found = await db.agentCrew.findFirst({
+      where: { id: input.crewId, workspaceId: input.workspaceId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!found) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Agent crew not found in this workspace." });
+    }
+  }
+  if (input.initiativeId) {
+    const found = await db.initiative.findFirst({
+      where: { id: input.initiativeId, workspaceId: input.workspaceId },
+      select: { id: true },
+    });
+    if (!found) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Initiative not found in this workspace." });
+    }
+  }
+
+  const goalData: Prisma.GoalUpdateInput = {
+    title: input.title?.trim() ?? undefined,
+    description: input.description === undefined ? undefined : input.description,
+    initiative:
+      input.initiativeId === undefined
+        ? undefined
+        : input.initiativeId
+          ? { connect: { id: input.initiativeId } }
+          : { disconnect: true },
+    crew:
+      input.crewId === undefined
+        ? undefined
+        : input.crewId
+          ? { connect: { id: input.crewId } }
+          : { disconnect: true },
+    maxTotalCostUsd:
+      input.maxTotalCostUsd === undefined ? undefined : input.maxTotalCostUsd,
+    maxWallTimeMinutes:
+      input.maxWallTimeMinutes === undefined ? undefined : input.maxWallTimeMinutes,
+  };
+  const planBudgetData: Prisma.ExecutionPlanUpdateManyMutationInput = {
+    ...(input.maxTotalCostUsd === undefined
+      ? {}
+      : { maxTotalCostUsd: input.maxTotalCostUsd }),
+    ...(input.maxWallTimeMinutes === undefined
+      ? {}
+      : { maxWallTimeMinutes: input.maxWallTimeMinutes }),
+  };
+
+  await db.$transaction(async (tx) => {
+    await tx.goal.update({
+      where: { id: goal.id },
+      data: goalData,
+    });
+    if (Object.keys(planBudgetData).length > 0) {
+      await tx.executionPlan.updateMany({
+        where: {
+          goalId: goal.id,
+          isActiveAttempt: true,
+          status: {
+            in: [
+              ExecutionPlanStatus.DRAFT,
+              ExecutionPlanStatus.APPROVED,
+              ExecutionPlanStatus.RUNNING,
+              ExecutionPlanStatus.BLOCKED,
+            ],
+          },
+        },
+        data: planBudgetData,
+      });
+    }
+    await recordChange(tx, {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      actorAgentId: input.actorAgentId ?? null,
+      entity: "goal",
+      entityId: goal.id,
+      action: "updated",
+      before: {
+        title: goal.title,
+        description: goal.description,
+        initiativeId: goal.initiativeId,
+        crewId: goal.crewId,
+        maxTotalCostUsd: goal.maxTotalCostUsd,
+        maxWallTimeMinutes: goal.maxWallTimeMinutes,
+      },
+      after: {
+        title: input.title?.trim() ?? goal.title,
+        description:
+          input.description === undefined ? goal.description : input.description,
+        initiativeId:
+          input.initiativeId === undefined ? goal.initiativeId : input.initiativeId,
+        crewId: input.crewId === undefined ? goal.crewId : input.crewId,
+        maxTotalCostUsd:
+          input.maxTotalCostUsd === undefined
+            ? goal.maxTotalCostUsd
+            : input.maxTotalCostUsd,
+        maxWallTimeMinutes:
+          input.maxWallTimeMinutes === undefined
+            ? goal.maxWallTimeMinutes
+            : input.maxWallTimeMinutes,
+      },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "goal",
+      subjectId: goal.id,
+      payload: {
+        action: "updated",
+        budgetMirroredToActivePlan: Object.keys(planBudgetData).length > 0,
+      } as Prisma.InputJsonValue,
+    });
+  });
+
+  return { id: goal.id };
+}
+
 export async function getGoal(
   db: PrismaClient,
   params: { workspaceId: string; id: string },
@@ -208,7 +362,19 @@ export async function getGoal(
     include: {
       plans: {
         orderBy: { createdAt: "desc" },
-        include: { _count: { select: { steps: true } } },
+        include: {
+          _count: { select: { steps: true } },
+          steps: {
+            orderBy: { position: "asc" },
+            select: {
+              id: true,
+              title: true,
+              status: true,
+              assignedAgentId: true,
+              updatedAt: true,
+            },
+          },
+        },
       },
       crew: {
         select: {

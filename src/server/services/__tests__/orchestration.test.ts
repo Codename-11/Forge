@@ -17,6 +17,7 @@ import {
   getGoal,
   recordVerdict,
   requestPlanApproval,
+  updateGoal,
 } from "@/server/services/orchestration-service";
 import { createExecutionPlan, materializeStepAsIssue } from "@/server/services/execution-plan-service";
 import {
@@ -95,6 +96,41 @@ describe("orchestration: goals", () => {
     });
     const after = await getGoal(prisma, { workspaceId: fixture.workspace.id, id });
     expect(after.status).toBe(GoalStatus.ABANDONED);
+  });
+
+  it("updates goal metadata and mirrors budget caps to the active plan", async () => {
+    const { fixture, prisma } = await setup();
+    const { id } = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Original goal",
+      maxTotalCostUsd: 3,
+    });
+    const { planId } = await decomposeGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: id,
+    });
+
+    await updateGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      id,
+      title: "Updated goal",
+      description: "new detail",
+      maxTotalCostUsd: 12,
+      maxWallTimeMinutes: 45,
+    });
+
+    const goal = await getGoal(prisma, { workspaceId: fixture.workspace.id, id });
+    expect(goal.title).toBe("Updated goal");
+    expect(goal.description).toBe("new detail");
+    expect(goal.maxTotalCostUsd).toBe(12);
+    expect(goal.maxWallTimeMinutes).toBe(45);
+
+    const plan = await prisma.executionPlan.findUniqueOrThrow({ where: { id: planId } });
+    expect(plan.maxTotalCostUsd).toBe(12);
+    expect(plan.maxWallTimeMinutes).toBe(45);
   });
 });
 

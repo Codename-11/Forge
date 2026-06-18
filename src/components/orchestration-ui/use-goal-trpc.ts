@@ -68,7 +68,14 @@ type GoalPlanRow = {
   totalCostUsd?: number | null;
   maxTotalCostUsd?: number | null;
   createdAt?: string | Date | null;
-  steps?: { id: string; status: string }[];
+  updatedAt?: string | Date | null;
+  steps?: {
+    id: string;
+    title?: string;
+    status: string;
+    assignedAgentId?: string | null;
+    updatedAt?: string | Date | null;
+  }[];
   _count?: { steps?: number } | null;
 };
 
@@ -120,6 +127,18 @@ interface GoalRouter {
       crewId?: string;
       maxTotalCostUsd?: number;
       maxWallTimeMinutes?: number;
+    },
+    { id: string }
+  >;
+  update?: MutationHook<
+    {
+      id: string;
+      title?: string;
+      description?: string | null;
+      initiativeId?: string | null;
+      crewId?: string | null;
+      maxTotalCostUsd?: number | null;
+      maxWallTimeMinutes?: number | null;
     },
     { id: string }
   >;

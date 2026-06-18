@@ -74,6 +74,21 @@ describe("executionPlanRouter", () => {
     expect(got.status).toBe(ExecutionPlanStatus.RUNNING);
   });
 
+  it("activates a draft plan and readies root steps", async () => {
+    const { caller } = await setup();
+    const plan = await caller.create({
+      title: "Plan",
+      steps: [{ title: "Root" }, { title: "Child", dependsOnStepIndexes: [0] }],
+    });
+
+    await caller.activate({ id: plan.id });
+
+    const got = await caller.get({ id: plan.id });
+    expect(got.status).toBe(ExecutionPlanStatus.RUNNING);
+    expect(got.steps[0].status).toBe(ExecutionStepStatus.READY);
+    expect(got.steps[1].status).toBe(ExecutionStepStatus.TODO);
+  });
+
   it("transitions a step to DONE and records audit", async () => {
     const { fixture, caller } = await setup();
     const created = await caller.create({

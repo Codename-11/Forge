@@ -5,9 +5,13 @@ import { useParams, useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Ban,
+  Check,
   ChevronLeft,
+  Clock3,
   ExternalLink,
   ListChecks,
+  Pencil,
+  Play,
   Send,
   Sparkles,
   Target,
@@ -30,6 +34,7 @@ import { BudgetMeter } from "@/components/orchestration/budget-meter";
 import { GoalLoopExplainerCollapsible } from "@/components/orchestration/goal-loop-explainer";
 import {
   CrewRosterPanel,
+  type ActiveStepByAgent,
   type CrewRosterData,
 } from "@/components/orchestration/crew-roster-panel";
 import {
@@ -60,6 +65,7 @@ export default function GoalDetailPage() {
     { id: params.goalId },
     { staleTime: 10_000 },
   );
+  const { data: crewList } = trpc.agentCrew.list.useQuery({});
   const goal = query?.data;
   const isLoading = available ? (query?.isLoading ?? true) : false;
 
@@ -88,6 +94,28 @@ export default function GoalDetailPage() {
       u.goal?.get?.invalidate?.({ id: params.goalId });
     },
     onError: (e: { message: string }) => toast.error(e.message),
+  });
+
+  const updateM = goalRouter?.update?.useMutation({
+    onSuccess: () => {
+      toast.success("Goal updated");
+      invalidateGoal();
+      const u = utils as unknown as {
+        goal?: { list?: { invalidate?: () => void } };
+      };
+      u.goal?.list?.invalidate?.();
+      setEditingGoal(false);
+    },
+    onError: (e: { message: string }) => toast.error(e.message),
+  });
+
+  const activatePlanM = trpc.executionPlan.activate.useMutation({
+    onSuccess: () => {
+      toast.success("Crew started");
+      invalidateGoal();
+      utils.executionPlan.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
   });
 
   const invalidateGoal = () => {
@@ -132,6 +160,7 @@ export default function GoalDetailPage() {
   });
 
   const [confirmAbandon, setConfirmAbandon] = useState(false);
+  const [editingGoal, setEditingGoal] = useState(false);
 
   if (!available) {
     return (
@@ -198,6 +227,19 @@ export default function GoalDetailPage() {
   const elapsedMinutes = goal.startedAt
     ? (Date.now() - new Date(goal.startedAt).getTime()) / 60_000
     : null;
+  const activeByAgent: ActiveStepByAgent = new Map();
+  for (const step of activePlan?.steps ?? []) {
+    if (
+      step.assignedAgentId &&
+      ["READY", "RUNNING", "REVIEW"].includes(step.status)
+    ) {
+      activeByAgent.set(step.assignedAgentId, {
+        id: step.id,
+        title: step.title ?? "Step",
+        status: step.status,
+      });
+    }
+  }
 
   return (
     <>
@@ -205,13 +247,25 @@ export default function GoalDetailPage() {
         title={goal.title}
         subtitle={`Goal · ${goal.status.toLowerCase()}`}
         actions={
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => router.push(`/w/${ws.slug}/goals`)}
-          >
-            <ChevronLeft className="h-3.5 w-3.5" /> Back
-          </Button>
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => router.push(`/w/${ws.slug}/goals`)}
+            >
+              <ChevronLeft className="h-3.5 w-3.5" /> Back
+            </Button>
+            {canPlan ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setEditingGoal(true)}
+                disabled={!updateM}
+              >
+                <Pencil className="h-3.5 w-3.5" /> Edit
+              </Button>
+            ) : null}
+          </>
         }
       />
 
@@ -257,7 +311,17 @@ export default function GoalDetailPage() {
 
           {/* Active attempt */}
           {activePlan ? (
-            <PlanAttemptCard plan={activePlan} slug={ws.slug} isActive />
+            <PlanAttemptCard
+              plan={activePlan}
+              slug={ws.slug}
+              isActive
+              onStart={
+                activePlan.status === "APPROVED"
+                  ? () => activatePlanM.mutate({ id: activePlan.id })
+                  : undefined
+              }
+              starting={activatePlanM.isPending}
+            />
           ) : null}
 
           {/* Planner actions — shown when there's nothing to run yet (no plan,
@@ -293,6 +357,18 @@ export default function GoalDetailPage() {
         </section>
 
         <aside className="flex flex-col gap-3">
+          <GoalLiveStatus
+            goalStatus={goal.status}
+            plan={activePlan}
+            elapsedMinutes={elapsedMinutes}
+            onStart={
+              activePlan?.status === "APPROVED"
+                ? () => activatePlanM.mutate({ id: activePlan.id })
+                : undefined
+            }
+            starting={activatePlanM.isPending}
+          />
+
           <div className="rounded-lg border border-border bg-card/40 p-3">
             <BudgetMeter
               spent={goal.totalCostUsd ?? 0}
@@ -304,6 +380,7 @@ export default function GoalDetailPage() {
 
           <CrewRosterPanel
             crew={(goal.crew ?? null) as CrewRosterData | null}
+            activeByAgent={activeByAgent}
           />
 
           <div className="rounded-lg border border-border bg-card/40 p-3 text-meta">
@@ -356,6 +433,21 @@ export default function GoalDetailPage() {
           setConfirmAbandon(false);
         }}
       />
+
+      {editingGoal ? (
+        <GoalEditModal
+          goal={goal}
+          crews={crewList?.items ?? []}
+          busy={Boolean(updateM?.isPending)}
+          onClose={() => setEditingGoal(false)}
+          onSave={(payload) =>
+            updateM?.mutate({
+              id: goal.id,
+              ...payload,
+            })
+          }
+        />
+      ) : null}
     </>
   );
 }
@@ -365,6 +457,274 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between gap-2">
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="font-mono tabular-nums">{value}</dd>
+    </div>
+  );
+}
+
+type GoalCrewOption = {
+  id: string;
+  name: string;
+  maxParallel?: number | null;
+  members?: unknown[];
+};
+
+function GoalEditModal({
+  goal,
+  crews,
+  busy,
+  onClose,
+  onSave,
+}: {
+  goal: {
+    title: string;
+    description?: string | null;
+    crewId?: string | null;
+    maxTotalCostUsd?: number | null;
+    maxWallTimeMinutes?: number | null;
+  };
+  crews: GoalCrewOption[];
+  busy: boolean;
+  onClose: () => void;
+  onSave: (payload: {
+    title: string;
+    description: string | null;
+    crewId: string | null;
+    maxTotalCostUsd: number | null;
+    maxWallTimeMinutes: number | null;
+  }) => void;
+}) {
+  const [title, setTitle] = useState(goal.title);
+  const [description, setDescription] = useState(goal.description ?? "");
+  const [crewId, setCrewId] = useState(goal.crewId ?? "");
+  const [costCap, setCostCap] = useState(
+    goal.maxTotalCostUsd == null ? "" : String(goal.maxTotalCostUsd),
+  );
+  const [timeCap, setTimeCap] = useState(
+    goal.maxWallTimeMinutes == null ? "" : String(goal.maxWallTimeMinutes),
+  );
+
+  const parsedCost = costCap.trim() ? Number(costCap) : null;
+  const parsedTime = timeCap.trim() ? Number(timeCap) : null;
+  const invalidCost = parsedCost != null && (!Number.isFinite(parsedCost) || parsedCost < 0);
+  const invalidTime =
+    parsedTime != null && (!Number.isInteger(parsedTime) || parsedTime <= 0);
+  const canSave = title.trim().length > 0 && !invalidCost && !invalidTime;
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-foreground/20 px-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg rounded-lg border border-border bg-card p-4 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium">Edit goal</h2>
+          <span className="text-meta text-muted-foreground">Budgets apply to the active plan</span>
+        </div>
+
+        <label className="mt-3 block text-meta text-muted-foreground">Title</label>
+        <input
+          autoFocus
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="mt-1 w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+        />
+
+        <label className="mt-3 block text-meta text-muted-foreground">
+          Description
+        </label>
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={4}
+          className="mt-1 w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+        />
+
+        <label className="mt-3 block text-meta text-muted-foreground">Crew</label>
+        <select
+          value={crewId}
+          onChange={(e) => setCrewId(e.target.value)}
+          className="mt-1 w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+        >
+          <option value="">No crew</option>
+          {crews.map((crew) => (
+            <option key={crew.id} value={crew.id}>
+              {crew.name}
+            </option>
+          ))}
+        </select>
+
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="text-meta text-muted-foreground">Cost cap (USD)</span>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={costCap}
+              onChange={(e) => setCostCap(e.target.value)}
+              placeholder="No cap"
+              className="mt-1 w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm tabular-nums"
+            />
+          </label>
+          <label className="block">
+            <span className="text-meta text-muted-foreground">Wall-time cap (minutes)</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={timeCap}
+              onChange={(e) => setTimeCap(e.target.value)}
+              placeholder="No cap"
+              className="mt-1 w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm tabular-nums"
+            />
+          </label>
+        </div>
+
+        {(invalidCost || invalidTime) ? (
+          <p className="mt-2 text-meta text-warning">
+            Cost must be zero or higher. Wall time must be a whole positive minute.
+          </p>
+        ) : null}
+
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="ember"
+            size="sm"
+            disabled={busy || !canSave}
+            onClick={() =>
+              onSave({
+                title: title.trim(),
+                description: description.trim() || null,
+                crewId: crewId || null,
+                maxTotalCostUsd: parsedCost,
+                maxWallTimeMinutes: parsedTime,
+              })
+            }
+          >
+            <Check className="h-3.5 w-3.5" />
+            {busy ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GoalLiveStatus({
+  goalStatus,
+  plan,
+  elapsedMinutes,
+  onStart,
+  starting,
+}: {
+  goalStatus: string;
+  plan: GoalPlanRow | null;
+  elapsedMinutes: number | null;
+  onStart?: () => void;
+  starting?: boolean;
+}) {
+  const steps = plan?.steps ?? [];
+  const total = steps.length || plan?._count?.steps || 0;
+  const counts = steps.reduce<Record<string, number>>((acc, step) => {
+    acc[step.status] = (acc[step.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const queued = counts.READY ?? 0;
+  const running = counts.RUNNING ?? 0;
+  const review = counts.REVIEW ?? 0;
+  const blocked = counts.BLOCKED ?? 0;
+  const done = counts.DONE ?? 0;
+
+  const phase = (() => {
+    if (!plan) return { title: "No plan yet", body: "Generate a plan or dispatch the crew planner." };
+    if (plan.status === "DRAFT" && total === 0) {
+      return { title: "Draft is empty", body: "The planner has not added steps yet." };
+    }
+    if (plan.status === "DRAFT") {
+      return { title: "Waiting for approval", body: "Approve the draft plan to start the crew." };
+    }
+    if (plan.status === "APPROVED") {
+      return { title: "Approved, not running", body: "Start the crew to dispatch ready root steps." };
+    }
+    if (plan.status === "RUNNING") {
+      if (blocked > 0) return { title: "Blocked", body: `${blocked} step${blocked === 1 ? "" : "s"} need attention.` };
+      if (running > 0) return { title: "Crew working", body: `${running} step${running === 1 ? "" : "s"} running now.` };
+      if (review > 0) return { title: "In review", body: `${review} step${review === 1 ? "" : "s"} waiting on judging.` };
+      if (queued > 0) return { title: "Queued for pickup", body: `${queued} step${queued === 1 ? "" : "s"} dispatched and waiting for acknowledgement.` };
+      if (done === total && total > 0) return { title: "Wrapping up", body: "Every step is done; completion should land shortly." };
+      return { title: "Waiting on dependencies", body: "No root step is ready yet." };
+    }
+    if (plan.status === "BLOCKED") {
+      return { title: "Plan blocked", body: "Open the plan cockpit to resolve the blocker." };
+    }
+    if (plan.status === "COMPLETED") {
+      return { title: "Completed", body: "The active plan has completed." };
+    }
+    return { title: goalStatus.toLowerCase(), body: "No active crew work is currently visible." };
+  })();
+
+  return (
+    <div className="rounded-lg border border-border bg-card/40 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-meta uppercase tracking-wide text-muted-foreground">
+          <Clock3 className="h-3 w-3" />
+          <span>Live status</span>
+        </div>
+        {plan ? (
+          <span className="font-mono text-[10px] uppercase text-muted-foreground">
+            {plan.status.toLowerCase()}
+          </span>
+        ) : null}
+      </div>
+      <div className="text-sm font-medium">{phase.title}</div>
+      <p className="mt-1 text-meta text-muted-foreground">{phase.body}</p>
+      {plan ? (
+        <dl className="mt-3 grid grid-cols-2 gap-2 text-meta">
+          <Metric label="Steps" value={String(total)} />
+          <Metric label="Done" value={`${done}/${total}`} />
+          <Metric label="Queued" value={String(queued)} />
+          <Metric label="Running" value={String(running + review)} />
+          {elapsedMinutes != null ? (
+            <Metric label="Elapsed" value={`${Math.max(0, Math.round(elapsedMinutes))}m`} />
+          ) : null}
+          {plan.updatedAt ? (
+            <Metric
+              label="Updated"
+              value={new Date(plan.updatedAt).toLocaleTimeString([], {
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            />
+          ) : null}
+        </dl>
+      ) : null}
+      {onStart ? (
+        <Button
+          size="sm"
+          variant="ember"
+          className="mt-3 w-full"
+          disabled={starting}
+          onClick={onStart}
+        >
+          <Play className="h-3.5 w-3.5" />
+          {starting ? "Starting…" : "Start crew"}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-card/30 px-2 py-1.5">
+      <dt className="uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 font-mono tabular-nums text-foreground">{value}</dd>
     </div>
   );
 }
@@ -516,10 +876,14 @@ function PlanAttemptCard({
   plan,
   slug,
   isActive,
+  onStart,
+  starting,
 }: {
   plan: GoalPlanRow;
   slug: string;
   isActive?: boolean;
+  onStart?: () => void;
+  starting?: boolean;
 }) {
   const steps = plan.steps ?? [];
   const total = steps.length || plan._count?.steps || 0;
@@ -568,12 +932,20 @@ function PlanAttemptCard({
         </div>
       ) : null}
 
-      <a
-        href={`/w/${slug}/plans/${plan.id}`}
-        className="mt-2 inline-flex items-center gap-1 text-meta text-ember hover:underline"
-      >
-        Open plan cockpit <ExternalLink className="h-3 w-3" />
-      </a>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <a
+          href={`/w/${slug}/plans/${plan.id}`}
+          className="inline-flex items-center gap-1 text-meta text-ember hover:underline"
+        >
+          Open plan cockpit <ExternalLink className="h-3 w-3" />
+        </a>
+        {onStart ? (
+          <Button size="sm" variant="ember" disabled={starting} onClick={onStart}>
+            <Play className="h-3.5 w-3.5" />
+            {starting ? "Starting…" : "Start crew"}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }

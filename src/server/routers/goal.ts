@@ -11,6 +11,7 @@ import {
   getGoal,
   listGoals,
   requestPlanApproval,
+  updateGoal,
 } from "@/server/services/orchestration-service";
 
 /**
@@ -71,6 +72,41 @@ export const goalRouter = router({
         crewId: input.crewId ?? null,
         maxTotalCostUsd: input.maxTotalCostUsd ?? null,
         maxWallTimeMinutes: input.maxWallTimeMinutes ?? null,
+      });
+    }),
+
+  update: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        title: z.string().min(1).max(300).optional(),
+        description: z.string().max(50_000).nullable().optional(),
+        initiativeId: z.string().cuid().nullable().optional(),
+        crewId: z.string().cuid().nullable().optional(),
+        maxTotalCostUsd: z.number().nonnegative().nullable().optional(),
+        maxWallTimeMinutes: z.number().int().positive().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return updateGoal(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session?.user?.id ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        id: input.id,
+        title: input.title,
+        description:
+          input.description === undefined ? undefined : input.description,
+        initiativeId:
+          input.initiativeId === undefined ? undefined : input.initiativeId,
+        crewId: input.crewId === undefined ? undefined : input.crewId,
+        maxTotalCostUsd:
+          input.maxTotalCostUsd === undefined
+            ? undefined
+            : input.maxTotalCostUsd,
+        maxWallTimeMinutes:
+          input.maxWallTimeMinutes === undefined
+            ? undefined
+            : input.maxWallTimeMinutes,
       });
     }),
 
