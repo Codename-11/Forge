@@ -2,6 +2,7 @@ import "server-only";
 import type { PrismaClient } from "@prisma/client";
 import {
   ActionRequestKind,
+  AgentRunStatus,
   type AgentStatus,
   EventKind,
   ExecutionPlanStatus,
@@ -373,8 +374,57 @@ export async function getGoal(
               status: true,
               assignedAgentId: true,
               updatedAt: true,
+              issue: {
+                select: {
+                  id: true,
+                  number: true,
+                  title: true,
+                  assignedAgentId: true,
+                  workspace: { select: { key: true, slug: true } },
+                  agentRuns: {
+                    orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
+                    take: 1,
+                    select: {
+                      id: true,
+                      status: true,
+                      summary: true,
+                      currentStep: true,
+                      startedAt: true,
+                      lastEventAt: true,
+                      finishedAt: true,
+                      awaitingApprovalAt: true,
+                      pendingApproval: true,
+                      externalRunId: true,
+                      controlState: true,
+                      engagementMode: true,
+                      clearedAt: true,
+                      agentId: true,
+                      issueId: true,
+                      agent: {
+                        select: {
+                          id: true,
+                          name: true,
+                          profileKey: true,
+                          avatar: true,
+                          status: true,
+                          runtimeId: true,
+                        },
+                      },
+                      issue: {
+                        select: {
+                          id: true,
+                          number: true,
+                          title: true,
+                          assignedAgentId: true,
+                          workspace: { select: { key: true, slug: true } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
               runs: {
-                orderBy: { lastEventAt: "desc" },
+                orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
                 take: 1,
                 select: {
                   id: true,
@@ -383,8 +433,36 @@ export async function getGoal(
                   currentStep: true,
                   triggerKind: true,
                   externalRunId: true,
+                  startedAt: true,
                   lastEventAt: true,
+                  finishedAt: true,
                   lastWakeAt: true,
+                  awaitingApprovalAt: true,
+                  pendingApproval: true,
+                  controlState: true,
+                  engagementMode: true,
+                  clearedAt: true,
+                  agentId: true,
+                  issueId: true,
+                  agent: {
+                    select: {
+                      id: true,
+                      name: true,
+                      profileKey: true,
+                      avatar: true,
+                      status: true,
+                      runtimeId: true,
+                    },
+                  },
+                  issue: {
+                    select: {
+                      id: true,
+                      number: true,
+                      title: true,
+                      assignedAgentId: true,
+                      workspace: { select: { key: true, slug: true } },
+                    },
+                  },
                 },
               },
             },
@@ -1318,6 +1396,213 @@ async function transitionStepToReady(
       });
     }
   }
+}
+
+/**
+ * Operator retry for a plan step whose prior AgentRun failed/stalled. This is
+ * intentionally step-aware: it opens the replacement AgentRun with
+ * `executionStepId`, so Goals/Plans continue to observe the retry instead of
+ * waking only the materialized issue.
+ */
+export async function retryExecutionStep(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    actorAgentId?: string | null;
+    stepId: string;
+  },
+): Promise<{ stepId: string; planId: string; issueId: string; runId: string; agentId: string }> {
+  return db.$transaction(async (tx) => {
+    const step = await tx.executionStep.findFirst({
+      where: { id: params.stepId, workspaceId: params.workspaceId },
+      select: {
+        id: true,
+        planId: true,
+        title: true,
+        body: true,
+        expectedOutput: true,
+        verification: true,
+        assignedAgentId: true,
+        lastFeedback: true,
+        retryCount: true,
+        status: true,
+        issueId: true,
+        plan: {
+          select: {
+            id: true,
+            status: true,
+            crewId: true,
+            contextSetId: true,
+            issueId: true,
+          },
+        },
+      },
+    });
+    if (!step) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
+    }
+    if (
+      step.status === ExecutionStepStatus.DONE ||
+      step.status === ExecutionStepStatus.CANCELED
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Cannot retry a ${step.status.toLowerCase()} step.`,
+      });
+    }
+    if (
+      step.plan.status !== ExecutionPlanStatus.RUNNING &&
+      step.plan.status !== ExecutionPlanStatus.BLOCKED
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Plan must be running or blocked to retry a step (is ${step.plan.status}).`,
+      });
+    }
+
+    const activeRun = await tx.agentRun.findFirst({
+      where: {
+        workspaceId: params.workspaceId,
+        executionStepId: step.id,
+        status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+      },
+      select: { id: true },
+    });
+    if (activeRun) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "This step already has an active run.",
+      });
+    }
+
+    let workerAgentId = step.assignedAgentId;
+    if (!workerAgentId && step.plan.crewId) {
+      workerAgentId = await pickCrewMember(tx, step.plan.crewId, "WORKER");
+    }
+    if (!workerAgentId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "No worker is assigned to this step or its crew.",
+      });
+    }
+    const worker = await tx.agent.findFirst({
+      where: { id: workerAgentId, workspaceId: params.workspaceId, archivedAt: null },
+      select: { webhookUrl: true, runtimeId: true },
+    });
+    if (!worker) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Assigned worker not found." });
+    }
+
+    let runIssueId = step.issueId ?? step.plan.issueId ?? null;
+    if (!runIssueId) {
+      const materialized = await materializeStepAsIssueTx(tx, {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        stepId: step.id,
+      });
+      runIssueId = materialized.issueId;
+    }
+
+    await tx.executionStep.update({
+      where: { id: step.id },
+      data: {
+        status: ExecutionStepStatus.READY,
+        assignedAgentId: workerAgentId,
+        issueId: runIssueId,
+      },
+    });
+    if (step.plan.status === ExecutionPlanStatus.BLOCKED) {
+      await tx.executionPlan.update({
+        where: { id: step.planId },
+        data: { status: ExecutionPlanStatus.RUNNING, updatedAt: new Date() },
+      });
+      await recordChange(tx, {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        actorAgentId: params.actorAgentId ?? null,
+        entity: "execution-plan",
+        entityId: step.planId,
+        action: "resume",
+        before: { status: ExecutionPlanStatus.BLOCKED },
+        after: { status: ExecutionPlanStatus.RUNNING },
+        eventKind: EventKind.ISSUE_UPDATED,
+        subjectType: "execution-plan",
+        subjectId: step.planId,
+        payload: { from: ExecutionPlanStatus.BLOCKED, to: ExecutionPlanStatus.RUNNING },
+      });
+    } else {
+      await tx.executionPlan.update({
+        where: { id: step.planId },
+        data: { updatedAt: new Date() },
+      });
+    }
+
+    const event = await tx.activityEvent.create({
+      data: {
+        workspaceId: params.workspaceId,
+        kind: EventKind.EXECUTION_STEP_READY,
+        actorId: params.actorId,
+        subjectType: "execution-step",
+        subjectId: step.id,
+        payload: {
+          planId: step.planId,
+          stepId: step.id,
+          title: step.title,
+          body: step.body,
+          expectedOutput: step.expectedOutput,
+          verification: step.verification ?? null,
+          contextSetId: step.plan.contextSetId,
+          assignedAgentId: workerAgentId,
+          lastFeedback: step.lastFeedback,
+          retryCount: step.retryCount,
+          retry: true,
+        } as Prisma.InputJsonValue,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        actorAgentId: params.actorAgentId ?? null,
+        entity: "execution-step",
+        entityId: step.id,
+        action: "retry",
+        before: { status: step.status },
+        after: { status: ExecutionStepStatus.READY, assignedAgentId: workerAgentId },
+      },
+    });
+
+    const { run } = await openOrTouchRun(tx, {
+      workspaceId: params.workspaceId,
+      issueId: runIssueId,
+      agentId: workerAgentId,
+      actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
+      assignmentEventId: event.id,
+      triggerEventId: event.id,
+      triggerKind: EventKind.EXECUTION_STEP_READY,
+      currentStep: step.title,
+      executionStepId: step.id,
+    });
+
+    const isRuntimeOnlyWorker = Boolean(worker.runtimeId && !worker.webhookUrl);
+    if (!isRuntimeOnlyWorker) {
+      await queueAgentDispatch(tx, {
+        workspaceId: params.workspaceId,
+        agentId: workerAgentId,
+        eventId: event.id,
+      });
+    }
+
+    return {
+      stepId: step.id,
+      planId: step.planId,
+      issueId: runIssueId,
+      runId: run.id,
+      agentId: workerAgentId,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------

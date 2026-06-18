@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
+import { AgentRunStatus, ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
 import { executionPlanRouter } from "@/server/routers/execution-plan";
 import {
   buildContext,
@@ -87,6 +87,65 @@ describe("executionPlanRouter", () => {
     expect(got.status).toBe(ExecutionPlanStatus.RUNNING);
     expect(got.steps[0].status).toBe(ExecutionStepStatus.READY);
     expect(got.steps[1].status).toBe(ExecutionStepStatus.TODO);
+  });
+
+  it("retries a stalled step with a fresh step-bound run", async () => {
+    const { fixture, caller } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Step issue" });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `retry-${Date.now().toString(36)}`,
+        name: "Retry Worker",
+      },
+    });
+    const plan = await caller.create({
+      title: "Retry plan",
+      issueId: issue.id,
+      steps: [{ title: "Run once", assignedAgentId: agent.id }],
+    });
+    await caller.activate({ id: plan.id });
+    const got = await caller.get({ id: plan.id });
+    const step = got.steps[0];
+    const firstRun = await prisma.agentRun.findFirstOrThrow({
+      where: { executionStepId: step.id },
+    });
+    await prisma.agentRun.update({
+      where: { id: firstRun.id },
+      data: {
+        status: AgentRunStatus.STALLED,
+        finishedAt: new Date(),
+        summary: "Credential expired.",
+      },
+    });
+
+    const retry = await caller.retryStep({ stepId: step.id });
+
+    expect(retry.stepId).toBe(step.id);
+    expect(retry.issueId).toBe(issue.id);
+    expect(retry.agentId).toBe(agent.id);
+    expect(retry.runId).not.toBe(firstRun.id);
+    const runs = await prisma.agentRun.findMany({
+      where: { executionStepId: step.id },
+      orderBy: { startedAt: "asc" },
+    });
+    expect(runs.map((r) => r.status)).toEqual([
+      AgentRunStatus.STALLED,
+      AgentRunStatus.ACTIVE,
+    ]);
+    expect(runs[1].issueId).toBe(issue.id);
+
+    const event = await prisma.activityEvent.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "execution-step",
+        subjectId: step.id,
+        kind: "EXECUTION_STEP_READY",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(event?.payload).toMatchObject({ retry: true, stepId: step.id });
   });
 
   it("transitions a step to DONE and records audit", async () => {

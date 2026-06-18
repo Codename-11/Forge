@@ -75,18 +75,52 @@ type GoalPlanRow = {
     status: string;
     assignedAgentId?: string | null;
     updatedAt?: string | Date | null;
-    runs?: {
+    issue?: {
       id: string;
-      status: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED" | "WAITING" | string;
-      summary?: string | null;
-      currentStep?: string | null;
-      triggerKind?: string | null;
-      externalRunId?: string | null;
-      lastEventAt?: string | Date | null;
-      lastWakeAt?: string | Date | null;
-    }[];
+      number: number;
+      title: string;
+      assignedAgentId?: string | null;
+      workspace?: { key: string; slug: string } | null;
+      agentRuns?: GoalStepRun[];
+    } | null;
+    runs?: GoalStepRun[];
   }[];
   _count?: { steps?: number } | null;
+};
+
+type GoalStepRun = {
+  id: string;
+  status: "ACTIVE" | "COMPLETED" | "ABANDONED" | "STALLED" | "WAITING" | string;
+  summary?: string | null;
+  currentStep?: string | null;
+  triggerKind?: string | null;
+  externalRunId?: string | null;
+  startedAt?: string | Date | null;
+  lastEventAt?: string | Date | null;
+  finishedAt?: string | Date | null;
+  lastWakeAt?: string | Date | null;
+  awaitingApprovalAt?: string | Date | null;
+  pendingApproval?: unknown;
+  controlState?: string | null;
+  engagementMode?: string | null;
+  clearedAt?: string | Date | null;
+  agentId?: string | null;
+  issueId?: string | null;
+  agent?: {
+    id: string;
+    name: string;
+    profileKey: string;
+    avatar?: string | null;
+    status?: string | null;
+    runtimeId?: string | null;
+  } | null;
+  issue?: {
+    id: string;
+    number: number;
+    title: string;
+    assignedAgentId?: string | null;
+    workspace?: { key: string; slug: string } | null;
+  } | null;
 };
 
 type QueryHook<TInput, TOutput> = {
@@ -176,4 +210,5 @@ export type {
   GoalPlannerInfo,
   GoalDecomposeResult,
   GoalGenerateResult,
+  GoalStepRun,
 };

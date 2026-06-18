@@ -2,6 +2,35 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-18 — Goal/Plan blocked-run recovery controls
+
+Audited the Goals/Plans/Crews auto-execution flow after the live Dev-Team goal
+"Enhance Issues to support Rich Rendering" showed as active/stalled without an
+obvious operator action. Live data showed the first plan step was still `READY`,
+its Codex AgentRun was terminal `STALLED`, and the run had already been cleared
+from an operational queue; clearing the run did not answer how the plan step
+should continue.
+
+Fixes:
+- Added `executionPlan.retryStep`, a step-aware recovery mutation that opens a
+  fresh AgentRun with `executionStepId`, materializes an issue if needed, and
+  reuses the runtime-only dispatch path so Codex retries stay visible on the
+  Goal/Plan cockpit instead of becoming detached issue wakes.
+- Hydrated latest step-bound runs and latest materialized-issue runs into
+  `goal.get` and `executionPlan.get`, including pending approvals, cleared
+  state, runtime ids, issue links, and agent identity.
+- Added a shared `RunAttentionPanel` for goal and plan detail pages. It ranks
+  pending approvals, WAITING runs, STALLED runs, uncleared ABANDONED runs, and
+  stale ACTIVE runs, then colocates the reason with actions: approve/reject,
+  retry step, kick, nudge, stop, clear, open issue, and open runtime.
+- The panel flags likely credential/auth failures from the run summary, which
+  matches the live Codex failure mode ("refresh token was revoked") and tells
+  the operator to reconnect before retrying.
+
+Verify:
+`pnpm vitest run src/server/routers/__tests__/execution-plan.test.ts`,
+`pnpm lint`, `pnpm typecheck`, `pnpm test`.
+
 ## 2026-06-18 — AXI-81 agent-request highlighting
 
 Followed up AXI-81’s first-class agent request composer with richer live token

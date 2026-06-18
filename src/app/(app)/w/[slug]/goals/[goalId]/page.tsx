@@ -38,6 +38,10 @@ import {
   type CrewRosterData,
 } from "@/components/orchestration/crew-roster-panel";
 import {
+  RunAttentionPanel,
+  pickAttentionRun,
+} from "@/components/orchestration/run-attention-panel";
+import {
   useGoalRouter,
   type GoalPlanRow,
   type GoalPlannerInfo,
@@ -218,6 +222,14 @@ export default function GoalDetailPage() {
   const canPlan = goal.status !== "ACHIEVED" && goal.status !== "ABANDONED";
   const activeStepCount =
     activePlan?.steps?.length ?? activePlan?._count?.steps ?? 0;
+  const attention = activePlan
+    ? pickAttentionRun(
+        (activePlan.steps ?? []).map((step) => ({
+          ...step,
+          title: step.title ?? "Step",
+        })),
+      )
+    : null;
   const activePlanEmpty =
     !!activePlan && activePlan.status === "DRAFT" && activeStepCount === 0;
   // Offer the planner actions whenever there's nothing to run yet: no active
@@ -321,6 +333,21 @@ export default function GoalDetailPage() {
                   : undefined
               }
               starting={activatePlanM.isPending}
+            />
+          ) : null}
+
+          {attention ? (
+            <RunAttentionPanel
+              run={attention.run}
+              step={{
+                id: attention.step.id,
+                title: attention.step.title,
+                status: attention.step.status,
+                issue: attention.step.issue ?? attention.run.issue ?? null,
+              }}
+              workspaceSlug={ws.slug}
+              workspaceKey={ws.key}
+              onChanged={invalidateGoal}
             />
           ) : null}
 

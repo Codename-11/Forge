@@ -47,6 +47,11 @@ import {
   type ActiveStepByAgent,
   type CrewRosterData,
 } from "@/components/orchestration/crew-roster-panel";
+import {
+  RunAttentionPanel,
+  pickAttentionRun,
+  type OrchestrationAttentionRun,
+} from "@/components/orchestration/run-attention-panel";
 import { ActionRequestCard } from "@/components/action-requests/action-request-card";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -138,8 +143,11 @@ type StepRow = {
     id: string;
     number: number;
     title: string;
+    assignedAgentId?: string | null;
     workspace: { key: string; slug: string };
+    agentRuns?: OrchestrationAttentionRun[];
   } | null;
+  runs?: OrchestrationAttentionRun[];
 };
 
 /** Lightweight agent presence map keyed by agent id. */
@@ -288,6 +296,7 @@ export default function PlanDetailPage() {
             childPlanId?: string | null;
             lastFeedback?: string | null;
             issue?: StepRow["issue"];
+            runs?: OrchestrationAttentionRun[];
           };
           return {
             id: s.id,
@@ -304,6 +313,7 @@ export default function PlanDetailPage() {
             childPlanId: x.childPlanId ?? null,
             lastFeedback: x.lastFeedback ?? null,
             issue: x.issue ?? null,
+            runs: x.runs ?? [],
           };
         }),
     [plan?.steps],
@@ -445,6 +455,11 @@ export default function PlanDetailPage() {
     }
     return m;
   }, [orderedSteps]);
+
+  const attention = useMemo(
+    () => pickAttentionRun(orderedSteps),
+    [orderedSteps],
+  );
 
   // DAG view inputs — the graph consumes the same step rows the page
   // already has, plus a presence-light agent map keyed by id.
@@ -604,6 +619,24 @@ export default function PlanDetailPage() {
             <PlanStartBanner
               busy={activate.isPending}
               onStart={() => activate.mutate({ id: plan.id })}
+            />
+          ) : null}
+
+          {attention ? (
+            <RunAttentionPanel
+              run={attention.run}
+              step={{
+                id: attention.step.id,
+                title: attention.step.title,
+                status: attention.step.status,
+                issue: attention.step.issue ?? attention.run.issue ?? null,
+              }}
+              workspaceSlug={ws.slug}
+              workspaceKey={ws.key}
+              onChanged={() => {
+                utils.executionPlan.get.invalidate({ id: plan.id });
+                utils.executionPlan.list.invalidate();
+              }}
             />
           ) : null}
 

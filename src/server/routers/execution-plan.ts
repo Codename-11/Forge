@@ -10,7 +10,7 @@ import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { agentIdSchema } from "@/server/validators";
 import { extractMentions } from "@/server/services/mentions";
-import { activatePlan } from "@/server/services/orchestration-service";
+import { activatePlan, retryExecutionStep } from "@/server/services/orchestration-service";
 import {
   addExecutionStep,
   createExecutionPlan,
@@ -110,6 +110,87 @@ export const executionPlanRouter = router({
                   number: true,
                   title: true,
                   workspace: { select: { key: true, slug: true } },
+                  assignedAgentId: true,
+                  agentRuns: {
+                    orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
+                    take: 1,
+                    select: {
+                      id: true,
+                      status: true,
+                      summary: true,
+                      currentStep: true,
+                      startedAt: true,
+                      lastEventAt: true,
+                      finishedAt: true,
+                      awaitingApprovalAt: true,
+                      pendingApproval: true,
+                      externalRunId: true,
+                      controlState: true,
+                      engagementMode: true,
+                      clearedAt: true,
+                      agentId: true,
+                      issueId: true,
+                      agent: {
+                        select: {
+                          id: true,
+                          name: true,
+                          profileKey: true,
+                          avatar: true,
+                          status: true,
+                          runtimeId: true,
+                        },
+                      },
+                      issue: {
+                        select: {
+                          id: true,
+                          number: true,
+                          title: true,
+                          assignedAgentId: true,
+                          workspace: { select: { key: true, slug: true } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              runs: {
+                orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
+                take: 1,
+                select: {
+                  id: true,
+                  status: true,
+                  summary: true,
+                  currentStep: true,
+                  startedAt: true,
+                  lastEventAt: true,
+                  finishedAt: true,
+                  awaitingApprovalAt: true,
+                  pendingApproval: true,
+                  externalRunId: true,
+                  controlState: true,
+                  engagementMode: true,
+                  clearedAt: true,
+                  agentId: true,
+                  issueId: true,
+                  agent: {
+                    select: {
+                      id: true,
+                      name: true,
+                      profileKey: true,
+                      avatar: true,
+                      status: true,
+                      runtimeId: true,
+                    },
+                  },
+                  issue: {
+                    select: {
+                      id: true,
+                      number: true,
+                      title: true,
+                      assignedAgentId: true,
+                      workspace: { select: { key: true, slug: true } },
+                    },
+                  },
                 },
               },
             },
@@ -229,6 +310,17 @@ export const executionPlanRouter = router({
         }),
       );
       return { ok: true };
+    }),
+
+  retryStep: workspaceProcedure
+    .input(z.object({ stepId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      return retryExecutionStep(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session?.user?.id ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        stepId: input.stepId,
+      });
     }),
 
   materializeStep: workspaceProcedure
