@@ -1,10 +1,12 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   ActionRequestStatus,
+  AgentProvider,
   ExecutionPlanStatus,
   ExecutionStepStatus,
   GoalStatus,
   ReviewGateStatus,
+  RuntimeKind,
 } from "@prisma/client";
 import {
   abandonGoal,
@@ -656,6 +658,78 @@ describe("orchestration: Goal loop opens observable runs (AXI-57)", () => {
     expect(run.agentId).toBe(worker.id);
     expect(run.status).toBe("ACTIVE");
     expect(run.currentStep).toBe("root");
+  });
+
+  it("auto-materializes freestanding steps for runtime-only workers", async () => {
+    const { fixture, prisma } = await setup();
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Codex runtime",
+        kind: RuntimeKind.LOCAL_DAEMON,
+        adapterKey: "mock-runs",
+        providersAvailable: [AgentProvider.HERMES],
+      },
+      select: { id: true },
+    });
+    const worker = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: "codex-worker",
+        name: "Codex Worker",
+        provider: AgentProvider.HERMES,
+        runtimeId: runtime.id,
+      },
+    });
+    const crew = await createAgentCrew(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      name: "Runtime crew",
+      members: [{ agentId: worker.id, role: "WORKER" }],
+    });
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Freestanding goal",
+      crewId: crew.id,
+    });
+    const { planId } = await decomposeGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: goal.id,
+    });
+    const { stepIds } = await addStepsToPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      planId,
+      steps: [{ title: "Root runtime step", body: "Do the work" }],
+    });
+
+    await prisma.$transaction((tx) =>
+      activatePlan(tx, { workspaceId: fixture.workspace.id, actorId: fixture.user.id, planId }),
+    );
+
+    const step = await prisma.executionStep.findUniqueOrThrow({ where: { id: stepIds[0] } });
+    expect(step.status).toBe(ExecutionStepStatus.READY);
+    expect(step.assignedAgentId).toBe(worker.id);
+    expect(step.issueId).toBeTruthy();
+
+    const issue = await prisma.issue.findUniqueOrThrow({ where: { id: step.issueId! } });
+    expect(issue.title).toBe("Root runtime step");
+    expect(issue.assignedAgentId).toBe(worker.id);
+
+    const run = await prisma.agentRun.findFirstOrThrow({
+      where: { executionStepId: step.id },
+    });
+    expect(run.issueId).toBe(issue.id);
+    expect(run.agentId).toBe(worker.id);
+    expect(run.triggerKind).toBe("EXECUTION_STEP_READY");
+    expect(run.triggerEventId).toBeTruthy();
+
+    const deadWebhook = await prisma.webhookDelivery.findFirst({
+      where: { webhook: { url: `agent:dispatch:${worker.id}` } },
+    });
+    expect(deadWebhook).toBeNull();
   });
 });
 

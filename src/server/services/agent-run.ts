@@ -109,6 +109,10 @@ export async function openOrTouchRun(
     engagementMode?: EngagementMode | null;
     /** Dispatch-time runtime/tool policy snapshot. */
     runtimePolicy?: Prisma.InputJsonValue | null;
+    /** Latest ActivityEvent that woke this run. */
+    triggerEventId?: string | null;
+    /** String mirror of ActivityEvent.kind for the latest wake. */
+    triggerKind?: string | null;
   },
 ): Promise<{ run: AgentRun; isNew: boolean }> {
   const existing = await findActiveRun(tx, {
@@ -136,6 +140,10 @@ export async function openOrTouchRun(
         ...(params.runtimePolicy && !existing.runtimePolicy
           ? { runtimePolicy: params.runtimePolicy }
           : {}),
+        ...(params.triggerEventId !== undefined
+          ? { triggerEventId: params.triggerEventId }
+          : {}),
+        ...(params.triggerKind !== undefined ? { triggerKind: params.triggerKind } : {}),
       },
     });
     return { run: updated, isNew: false };
@@ -150,6 +158,8 @@ export async function openOrTouchRun(
       assignmentEventId: params.assignmentEventId ?? null,
       currentStep: params.currentStep ?? null,
       executionStepId: params.executionStepId ?? null,
+      triggerEventId: params.triggerEventId ?? null,
+      triggerKind: params.triggerKind ?? null,
       ...(params.engagementMode ? { engagementMode: params.engagementMode } : {}),
       ...(params.runtimePolicy ? { runtimePolicy: params.runtimePolicy } : {}),
     },

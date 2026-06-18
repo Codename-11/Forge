@@ -18,6 +18,7 @@ import { createActionRequest } from "@/server/services/action-request-service";
 import { openOrTouchRun } from "@/server/services/agent-run";
 import { runPlanGeneration } from "@/server/services/ai";
 import { resolveWorkspaceProviderClient } from "@/server/services/ai-providers";
+import { materializeStepAsIssueTx } from "@/server/services/execution-step-issue-service";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
@@ -1263,13 +1264,25 @@ async function transitionStepToReady(
     },
   });
   if (workerAgentId) {
+    const worker = await tx.agent.findFirst({
+      where: { id: workerAgentId, workspaceId: params.workspaceId, archivedAt: null },
+      select: { webhookUrl: true, runtimeId: true },
+    });
+    const isRuntimeOnlyWorker = Boolean(worker?.runtimeId && !worker.webhookUrl);
     // Open an observable AgentRun for this step (AXI-57) so orchestrated turns
-    // show up in Mission Control / the watchdog / cost — instead of being
-    // fire-and-forget. Bind to the step's own issue when materialized,
-    // otherwise the plan's anchor issue; tag it with executionStepId so the
-    // run is traceable to the step either way. AgentRun.issueId is required,
-    // so skip the run (but keep the webhook dispatch) when no issue exists.
-    const runIssueId = step.issueId ?? step.plan.issueId ?? null;
+    // show up in Mission Control / the watchdog / cost. Bind to the step's own
+    // issue when materialized, otherwise the plan's anchor issue. Runtime-only
+    // agents (Codex app-server, Hermes runs without a webhook) need an issue
+    // to start a structured run, so auto-materialize only when no anchor exists.
+    let runIssueId = step.issueId ?? step.plan.issueId ?? null;
+    if (!runIssueId && isRuntimeOnlyWorker) {
+      const materialized = await materializeStepAsIssueTx(tx, {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        stepId: step.id,
+      });
+      runIssueId = materialized.issueId;
+    }
     if (runIssueId) {
       await openOrTouchRun(tx, {
         workspaceId: params.workspaceId,
@@ -1277,15 +1290,19 @@ async function transitionStepToReady(
         agentId: workerAgentId,
         actorId: params.actorId,
         assignmentEventId: event.id,
+        triggerEventId: event.id,
+        triggerKind: EventKind.EXECUTION_STEP_READY,
         currentStep: step.title,
         executionStepId: step.id,
       });
     }
-    await queueAgentDispatch(tx, {
-      workspaceId: params.workspaceId,
-      agentId: workerAgentId,
-      eventId: event.id,
-    });
+    if (!isRuntimeOnlyWorker) {
+      await queueAgentDispatch(tx, {
+        workspaceId: params.workspaceId,
+        agentId: workerAgentId,
+        eventId: event.id,
+      });
+    }
   }
 }
 

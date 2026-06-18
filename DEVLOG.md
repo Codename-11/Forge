@@ -30,11 +30,16 @@ Fixes:
   crew roster highlights include `READY` queued work, not just `RUNNING`.
   Crew detail also treats `READY` as queued active work so assigned crew members
   no longer appear idle immediately after dispatch.
+- Runtime-only workers (for example Codex app-server agents with no webhook)
+  now get a step issue auto-materialized when activating a freestanding goal
+  with no issue anchor, and the opened AgentRun is stamped with
+  `triggerKind=EXECUTION_STEP_READY` so the runs dispatcher starts it instead
+  of creating a dead-letter webhook delivery.
 
 Verify:
 `pnpm typecheck`, `pnpm lint`,
 `pnpm test src/server/services/__tests__/orchestration.test.ts src/server/routers/__tests__/execution-plan.test.ts`,
-`pnpm test`.
+`pnpm test`, `E2E_FORCE_BUILD=1 pnpm exec playwright test --workers=1`.
 
 ## 2026-06-18 — Landing Docker healthcheck
 
