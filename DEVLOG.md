@@ -10462,3 +10462,35 @@ the removed compact search UI.
 Verification: `pnpm exec tsc --noEmit --pretty false` clean; `pnpm lint`
 clean; full `pnpm test` clean (930 passed / 1 skipped); full `pnpm test:e2e`
 clean (34 passed).
+
+## 2026-06-18 — Runtime Docker bridge setup and version reporting
+
+Codex app-server's Docker bridge was documented only as an operator-local
+deployment detail, and Forge had no first-class place for runtimes to report
+what bridge/container/Codex version was actually running.
+
+- Added `Runtime.runtimeInfo` / `lastInfoAt` with a sanitized metadata service
+  that whitelists version, bridge, container, build, host, auth-mode, and
+  workspace-root fields while dropping secret-looking keys and redacting token
+  values.
+- Added MCP `runtimes.reportInfo` for agent-linked runtime bootstrap keys, plus
+  optional `info` on `runtimes.register` / `runtimes.heartbeat` for daemon-style
+  runtimes. `runtimes.list`, workspace/global/admin runtime APIs now include a
+  display summary.
+- Extended Codex WebSocket probe handling so `serverInfo` / `runtimeInfo` from
+  `initialize` responses is harvested during Test connection and scheduled
+  runtime health sweeps.
+- Added runtime Settings UI for environment/version metadata, a runtime-list
+  info badge, and Codex-specific Docker bridge setup guidance in the create
+  flow and runtime detail page.
+- Added `docs/agents/codex-app-server-docker.md` and linked it from provider,
+  runtime, credentials, adapter setup, and MCP reference docs.
+
+Verification: `pnpm prisma generate` clean; `pnpm typecheck` clean; focused
+runtime tests clean (`tests/unit/runtime-info.test.ts`,
+`src/server/services/__tests__/runtime-health.test.ts`,
+`src/server/services/__tests__/runtimes-provisioning.test.ts`,
+`src/server/routers/__tests__/runtime-dispatch-contract.test.ts`); `pnpm lint`
+clean; full `pnpm test` clean (936 passed / 1 skipped); full Playwright e2e
+clean (`E2E_FORCE_BUILD=1 pnpm exec playwright test --workers=1`, 34 passed);
+`pnpm build` clean.

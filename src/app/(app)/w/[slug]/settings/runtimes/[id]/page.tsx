@@ -365,6 +365,11 @@ export default function RuntimeDetailPage() {
                 </div>
               </Card>
 
+              <RuntimeEnvironmentSection
+                summary={runtime.runtimeInfoSummary}
+                adapterKey={runtime.adapterKey}
+              />
+
               <Section
                 title={
                   <span className="flex items-center gap-2">
@@ -459,6 +464,10 @@ export default function RuntimeDetailPage() {
               <RuntimeCredentials runtimeId={id} />
 
               <RuntimeProvisioning />
+
+              {runtime.adapterKey === "codex-app-server" && (
+                <CodexDockerBridgePanel endpoint={runtime.endpoint} />
+              )}
 
               {showConnectPane && (
                 <Section
@@ -624,6 +633,21 @@ type RuntimeDetailForFix = {
   agents: Array<{ name: string; profileKey: string }>;
 };
 
+type RuntimeInfoField = {
+  key: string;
+  label: string;
+  value: string;
+  kind: "version" | "host" | "path" | "auth" | "build" | "runtime";
+};
+
+type RuntimeInfoSummary = {
+  status: "missing" | "reported";
+  label: string;
+  detail: string;
+  lastReportedAt: Date | string | null;
+  fields: RuntimeInfoField[];
+};
+
 function runtimeSelfTestFixHref(slug: string, runtime: RuntimeDetailForFix): string {
   const params = new URLSearchParams();
   const agent = runtime.agents[0];
@@ -690,5 +714,124 @@ function RuntimeHealthBadge({
     >
       {health.label}
     </span>
+  );
+}
+
+function RuntimeEnvironmentSection({
+  summary,
+  adapterKey,
+}: {
+  summary: RuntimeInfoSummary;
+  adapterKey: string | null;
+}) {
+  const reported = summary.lastReportedAt
+    ? `reported ${relativeTime(summary.lastReportedAt)} ago`
+    : "not reported yet";
+  return (
+    <Section
+      title={
+        <span className="flex items-center gap-2">
+          <Server className="h-3.5 w-3.5 text-muted-foreground" />
+          Runtime environment
+        </span>
+      }
+      hint="Version and host metadata reported by the runtime or harvested from its handshake."
+    >
+      <Card as="div" className="space-y-3 divide-y-0 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-foreground">{summary.label}</div>
+            <div className="mt-0.5 text-meta text-muted-foreground">
+              {summary.detail} {reported}.
+            </div>
+          </div>
+          <span
+            className={cn(
+              "rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
+              summary.status === "reported"
+                ? "border-success/30 bg-success/10 text-success"
+                : "border-border bg-subtle/40 text-muted-foreground",
+            )}
+          >
+            {summary.status === "reported" ? "reported" : "missing"}
+          </span>
+        </div>
+        {summary.fields.length > 0 ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {summary.fields.map((field) => (
+              <div
+                key={field.key}
+                className="min-w-0 rounded-md border border-border/60 bg-background/40 px-3 py-2"
+              >
+                <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+                  {field.label}
+                </div>
+                <div
+                  className={cn(
+                    "mt-1 truncate text-[0.75rem] text-foreground/85",
+                    field.kind === "version" || field.kind === "build" || field.kind === "path"
+                      ? "font-mono"
+                      : "",
+                  )}
+                  title={field.value}
+                >
+                  {field.value}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-border bg-background/30 px-3 py-2 text-meta text-muted-foreground">
+            Run Test connection or restart the runtime with a bridge/daemon that calls{" "}
+            <span className="font-mono">runtimes.reportInfo</span>
+            {adapterKey === "codex-app-server"
+              ? " after Codex auth and provisioning complete."
+              : "."}
+          </div>
+        )}
+      </Card>
+    </Section>
+  );
+}
+
+function CodexDockerBridgePanel({ endpoint }: { endpoint: string | null }) {
+  const composeCommand = `cd ~/docker/codex-bridge
+docker compose up -d --build
+docker compose logs -f`;
+  return (
+    <Section
+      title="Codex Docker bridge"
+      hint="Recommended deployment for Codex app-server: Docker owns the filesystem boundary, Forge owns per-turn sandbox and approval policy."
+    >
+      <Card as="div" className="space-y-3 divide-y-0 p-4">
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="space-y-2 text-meta text-muted-foreground">
+            <div>
+              Bridge directory{" "}
+              <span className="font-mono text-foreground/80">~/docker/codex-bridge</span>
+            </div>
+            <div>
+              Endpoint{" "}
+              <span className="font-mono text-foreground/80">
+                {endpoint ?? "ws://<private-host>:4505"}
+              </span>
+            </div>
+            <div>
+              Mounts Codex auth read-only, writes token refreshes to a named volume, and
+              exposes only the scoped <span className="font-mono">/work</span> workspace.
+            </div>
+            <a
+              href="/docs/agents/codex-app-server-docker.html"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+            >
+              Open Docker bridge guide
+            </a>
+          </div>
+          <CodeBlock label="bridge host" code={composeCommand} />
+        </div>
+      </Card>
+    </Section>
   );
 }

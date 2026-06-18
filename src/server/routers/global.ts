@@ -3,6 +3,7 @@ import { router, globalProcedure } from "@/server/trpc";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { runtimeConfigStatus } from "@/server/services/runtime-config";
 import { summarizeRuntimeSelfTest } from "@/server/services/runtime-self-test";
+import { summarizeRuntimeInfo } from "@/server/services/runtime-info";
 
 /**
  * Cross-workspace, read-only aggregations for the global "concourse"
@@ -94,6 +95,8 @@ export const globalRouter = router({
           lastProbeAttempted: true,
           lastProbeReachable: true,
           lastProbeDetail: true,
+          runtimeInfo: true,
+          lastInfoAt: true,
         },
       }),
     ]);
@@ -170,6 +173,8 @@ export const globalRouter = router({
         lastProbeAttempted: true,
         lastProbeReachable: true,
         lastProbeDetail: true,
+        runtimeInfo: true,
+        lastInfoAt: true,
         lastSelfTestAt: true,
         lastSelfTestStatus: true,
         lastSelfTestDetail: true,
@@ -206,6 +211,9 @@ export const globalRouter = router({
         lastProbeAttempted: r.lastProbeAttempted,
         lastProbeReachable: r.lastProbeReachable,
         lastProbeDetail: r.lastProbeDetail,
+        runtimeInfo: r.runtimeInfo,
+        lastInfoAt: r.lastInfoAt,
+        runtimeInfoSummary: summarizeRuntimeInfo(r),
         health,
         selfTest: summarizeRuntimeSelfTest(r),
         configStatus: runtimeConfigStatus(r.adapterKey, r.config),

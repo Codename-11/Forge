@@ -1766,6 +1766,11 @@ model Runtime {
   lastProbeAttempted Boolean         @default(false)
   lastProbeReachable Boolean?
   lastProbeDetail    String?
+  /// Structured version/environment metadata reported by the runtime host or
+  /// harvested from a protocol initialize response. Sanitized/whitelisted in
+  /// `runtime-info.ts`; safe for operator display, not a raw env dump.
+  runtimeInfo        Json?
+  lastInfoAt         DateTime?
   /// Last operator-requested self-test turn. Unlike `lastProbe*`, this is a
   /// real minimal adapter run where supported, so it catches provider auth
   /// failures that only surface when starting a turn.

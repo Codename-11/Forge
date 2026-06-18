@@ -448,10 +448,11 @@ the broader Runtime primitive.
 
 | Tool | Summary |
 |---|---|
-| `register` | Create (or restore) a Runtime row. `{ name, kind, endpoint?, providersAvailable }`. `ownerId` is set from the calling key's `userId`; AGENT-kind keys leave it null. |
-| `heartbeat` | Bump `Runtime.heartbeatAt`. `{ runtimeId }`. |
+| `register` | Create (or restore) a Runtime row. `{ name, kind, endpoint?, providersAvailable, info? }`. `ownerId` is set from the calling key's `userId`; AGENT-kind keys leave it null. |
+| `heartbeat` | Bump `Runtime.heartbeatAt`. `{ runtimeId, info? }`. Optional `info` updates sanitized runtime version/environment metadata. |
 | `list` | List workspace runtimes. `{ kind?, includeArchived? = false }` → mirror of `trpc.runtime.list` shape, includes `_count: { agents }` + `owner` summary. Secrets are redacted to `hasSecret`. |
 | `configure` | Update adapter config. `{ runtimeId, config, merge? = true }`. Hermes accepts `localWorkspaceTools`, `toolCapabilities`, `workspaceRoot`, and `modeToolPolicyEnforced`; Codex app-server also accepts sandbox/approval config. |
+| `reportInfo` | Agent-linked runtime metadata report. `{ runtimeId?, info }`; omitted `runtimeId` resolves to the calling agent's attached Runtime. Stores a sanitized whitelist such as `runtimeVersion`, `bridgeVersion`, `codexVersion`, `containerImage`, `hostname`, `os`, `arch`, and `workspaceRoot`. |
 
 **`register`** is intentionally not deduping server-side — the CLI caches
 its `runtimeId` in `~/.config/forge/daemon.json` and only re-registers if

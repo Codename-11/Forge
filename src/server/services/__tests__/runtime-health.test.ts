@@ -71,7 +71,16 @@ describe("runtime-health — sweepRuntimeHealth", () => {
     const wss = new WebSocketServer({ port: 0 });
     wss.on("connection", (socket) => {
       socket.on("message", () =>
-        socket.send(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} })),
+        socket.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: {
+              protocolVersion: "2024-11-05",
+              serverInfo: { name: "codex-bridge", version: "1.0.0" },
+            },
+          }),
+        ),
       );
     });
     await new Promise<void>((r) => wss.once("listening", () => r()));
@@ -96,9 +105,16 @@ describe("runtime-health — sweepRuntimeHealth", () => {
 
       const runtime = await prisma.runtime.findUniqueOrThrow({
         where: { id: rt.id },
-        select: { heartbeatAt: true },
+        select: { heartbeatAt: true, runtimeInfo: true, lastInfoAt: true },
       });
       expect(runtime.heartbeatAt).not.toBeNull();
+      expect(runtime.lastInfoAt).not.toBeNull();
+      expect(runtime.runtimeInfo).toMatchObject({
+        adapterKey: "codex-app-server",
+        runtimeName: "codex-bridge",
+        runtimeVersion: "1.0.0",
+        protocolVersion: "2024-11-05",
+      });
     } finally {
       await new Promise<void>((r) => wss.close(() => r()));
     }

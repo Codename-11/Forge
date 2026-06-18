@@ -35,7 +35,7 @@ import {
 } from "@/components/settings/runtime-self-test";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
-import { cn } from "@/lib/utils";
+import { cn, relativeTime } from "@/lib/utils";
 
 /**
  * Runtimes index — workspace-scoped registry of compute environments
@@ -397,6 +397,7 @@ export default function RuntimesPage() {
                           config={rt.config}
                           configStatus={rt.configStatus}
                         />
+                        <RuntimeInfoBadge summary={rt.runtimeInfoSummary} />
                         <AdapterCapabilityBadges capabilities={adapter?.capabilities} />
                       </div>
                     </div>
@@ -712,6 +713,28 @@ function RuntimeHealthBadge({
       title={health.reason}
     >
       {health.label}
+    </span>
+  );
+}
+
+type RuntimeInfoSummary = {
+  status: "missing" | "reported";
+  label: string;
+  detail: string;
+  lastReportedAt: Date | string | null;
+  fields: Array<{ key: string; label: string; value: string }>;
+};
+
+function RuntimeInfoBadge({ summary }: { summary: RuntimeInfoSummary }) {
+  if (summary.status !== "reported") return null;
+  return (
+    <span
+      className="rounded-md border border-border bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+      title={`${summary.detail} ${
+        summary.lastReportedAt ? `Reported ${relativeTime(summary.lastReportedAt)} ago.` : ""
+      }`}
+    >
+      {summary.label}
     </span>
   );
 }
@@ -1274,10 +1297,34 @@ function CreateRuntimeModal({
             className="font-mono"
           />
         </label>
+        {isCodex && <CodexDockerBridgeHint />}
         {isCodex && <CodexPolicyFields value={codex} onChange={setCodex} />}
         {isHermes && <HermesRuntimeFields value={hermes} onChange={setHermes} />}
       </div>
     </QuickForm>
+  );
+}
+
+function CodexDockerBridgeHint() {
+  return (
+    <div className="rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-meta text-muted-foreground">
+      <div className="font-medium text-foreground">Recommended: Docker bridge</div>
+      <div className="mt-1">
+        Run the Codex stdio-to-WebSocket bridge in Docker, mount{" "}
+        <span className="font-mono">~/.codex/auth.json</span> read-only, mount a scoped{" "}
+        <span className="font-mono">/work</span> workspace, and point this endpoint at{" "}
+        <span className="font-mono">ws://&lt;private-host&gt;:4505</span>. The runtime secret gates
+        Forge-to-bridge traffic; Codex auth stays in the bridge/container.
+      </div>
+      <a
+        href="/docs/agents/codex-app-server-docker.html"
+        target="_blank"
+        rel="noreferrer"
+        className="mt-1.5 inline-flex text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+      >
+        Open Docker bridge guide
+      </a>
+    </div>
   );
 }
 

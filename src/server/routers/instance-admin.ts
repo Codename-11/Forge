@@ -6,6 +6,7 @@ import { ensureWorkspaceBucket } from "@/server/services/storage";
 import { runtimeConfigStatus } from "@/server/services/runtime-config";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { summarizeRuntimeSelfTest } from "@/server/services/runtime-self-test";
+import { summarizeRuntimeInfo } from "@/server/services/runtime-info";
 
 const slugSchema = z
   .string()
@@ -113,6 +114,8 @@ export const instanceAdminRouter = router({
         lastProbeAttempted: true,
         lastProbeReachable: true,
         lastProbeDetail: true,
+        runtimeInfo: true,
+        lastInfoAt: true,
         lastSelfTestAt: true,
         lastSelfTestStatus: true,
         lastSelfTestDetail: true,
@@ -134,6 +137,7 @@ export const instanceAdminRouter = router({
         ...r,
         health,
         selfTest: summarizeRuntimeSelfTest(r),
+        runtimeInfoSummary: summarizeRuntimeInfo(r),
         configStatus: runtimeConfigStatus(r.adapterKey, r.config),
         online: health.kind === "online",
         boundAgents: r._count.agents,

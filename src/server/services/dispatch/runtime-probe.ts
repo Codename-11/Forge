@@ -1,5 +1,7 @@
 import "server-only";
 import WebSocket from "ws";
+import type { Prisma } from "@prisma/client";
+import { extractRuntimeInfoFromInitializeResult } from "@/server/services/runtime-info";
 
 /**
  * Lightweight reachability probe for a managed runtime endpoint — used by
@@ -13,6 +15,7 @@ export type RuntimeProbeResult = {
   attempted: boolean;
   reachable: boolean | null;
   detail: string;
+  runtimeInfo?: Prisma.JsonObject | null;
 };
 
 const NOT_ATTEMPTED: RuntimeProbeResult = {
@@ -85,9 +88,14 @@ function probeCodexWs(
           /* send race */
         }
       });
-      ws.on("message", () =>
-        finish({ attempted: true, reachable: true, detail: "Codex app server responded to initialize." }),
-      );
+      ws.on("message", (raw) => {
+        finish({
+          attempted: true,
+          reachable: true,
+          detail: "Codex app server responded to initialize.",
+          runtimeInfo: runtimeInfoFromCodexMessage(raw),
+        });
+      });
       ws.on("error", (err: Error) =>
         finish({ attempted: true, reachable: false, detail: err.message }),
       );
@@ -99,6 +107,18 @@ function probeCodexWs(
       });
     }
   });
+}
+
+function runtimeInfoFromCodexMessage(raw: WebSocket.RawData): Prisma.JsonObject | null {
+  try {
+    const msg = JSON.parse(raw.toString()) as { result?: unknown };
+    return extractRuntimeInfoFromInitializeResult(msg.result, {
+      adapterKey: "codex-app-server",
+      transport: "app-server",
+    });
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -73,6 +73,12 @@ import { forgeEntityTypeSchema, type ForgeEntityType } from "@/lib/entity-ref";
 import { hydrateEntityRefs } from "@/server/services/entity-hydration";
 import { computeAlignment, type AlignItem } from "@/server/services/canvas-alignment";
 import { validateRuntimeConfig } from "@/server/services/runtime-config";
+import {
+  runtimeInfoCreateData,
+  runtimeInfoUpdateData,
+  sanitizeRuntimeInfo,
+  summarizeRuntimeInfo,
+} from "@/server/services/runtime-info";
 import { mcpServerInfo } from "@/server/build-info";
 import {
   engagementInstruction,
@@ -5686,13 +5692,19 @@ export const mcpTools = {
           disabledAt: true,
           config: true,
           heartbeatAt: true,
+          runtimeInfo: true,
+          lastInfoAt: true,
           createdAt: true,
           updatedAt: true,
           owner: { select: { id: true, name: true, image: true } },
           _count: { select: { agents: true } },
         },
       });
-      return rows.map(({ secret, ...row }) => ({ ...row, hasSecret: !!secret }));
+      return rows.map(({ secret, ...row }) => ({
+        ...row,
+        hasSecret: !!secret,
+        runtimeInfoSummary: summarizeRuntimeInfo(row),
+      }));
     },
   },
 
@@ -5722,6 +5734,12 @@ export const mcpTools = {
         .describe(
           "Provider CLIs the runtime can host. The daemon reports these from PATH detection; REMOTE_HTTP runtimes set whatever their integration supports.",
         ),
+      info: z
+        .record(z.unknown())
+        .optional()
+        .describe(
+          "Optional sanitized runtime metadata such as runtimeVersion, bridgeVersion, codexVersion, containerImage, hostname, os, arch, and workspaceRoot.",
+        ),
     }),
     async run(
       input: {
@@ -5729,6 +5747,7 @@ export const mcpTools = {
         kind: RuntimeKind;
         endpoint?: string;
         providersAvailable: AgentProvider[];
+        info?: Record<string, unknown>;
       },
       ctx: McpContext,
     ) {
@@ -5751,6 +5770,7 @@ export const mcpTools = {
           ownerKeyPrefix: null,
           connectedAt: input.kind === RuntimeKind.LOCAL_DAEMON ? now : null,
           heartbeatAt: input.kind === RuntimeKind.LOCAL_DAEMON ? now : null,
+          ...(input.info ? runtimeInfoCreateData(input.info, now) : {}),
         },
         select: {
           id: true,
@@ -5761,6 +5781,8 @@ export const mcpTools = {
           ownerId: true,
           connectedAt: true,
           heartbeatAt: true,
+          runtimeInfo: true,
+          lastInfoAt: true,
           createdAt: true,
         },
       });
@@ -5771,19 +5793,88 @@ export const mcpTools = {
     scopes: ["ADMIN"] as const,
     input: z.object({
       runtimeId: z.string().min(1).max(40).describe("Runtime.id returned from runtimes.register."),
+      info: z
+        .record(z.unknown())
+        .optional()
+        .describe("Optional sanitized runtime metadata reported with this heartbeat."),
     }),
-    async run(input: { runtimeId: string }, ctx: McpContext) {
+    async run(input: { runtimeId: string; info?: Record<string, unknown> }, ctx: McpContext) {
       const row = await db.runtime.findFirst({
         where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
         select: { id: true, archivedAt: true },
       });
       if (!row) throw new Error("Runtime not found in this workspace.");
       if (row.archivedAt) throw new Error("Runtime is archived; cannot heartbeat.");
+      const now = new Date();
       return db.runtime.update({
         where: { id: row.id },
-        data: { heartbeatAt: new Date() },
-        select: { id: true, heartbeatAt: true },
+        data: {
+          heartbeatAt: now,
+          ...(input.info ? runtimeInfoUpdateData(input.info, now) : {}),
+        },
+        select: { id: true, heartbeatAt: true, runtimeInfo: true, lastInfoAt: true },
       });
+    },
+  },
+
+  "runtimes.reportInfo": {
+    scopes: [] as const,
+    input: z.object({
+      runtimeId: z
+        .string()
+        .min(1)
+        .max(40)
+        .optional()
+        .describe("Optional Runtime.id. When omitted, Forge uses the calling linked agent's runtime."),
+      info: z
+        .record(z.unknown())
+        .describe(
+          "Runtime metadata. Forge stores a sanitized whitelist: versions, bridge/container/build/host fields, workspaceRoot, and details.",
+        ),
+    }),
+    async run(
+      input: { runtimeId?: string; info: Record<string, unknown> },
+      ctx: McpContext,
+    ) {
+      const agentId = ctx.apiKey?.linkedAgentId;
+      if (!agentId) {
+        throw new Error("runtimes.reportInfo requires an agent-linked API key.");
+      }
+      const agent = await db.agent.findFirst({
+        where: { id: agentId, workspaceId: ctx.workspaceId },
+        select: { id: true, runtimeId: true },
+      });
+      if (!agent?.runtimeId) {
+        throw new Error("The calling agent has no runtime attached; attach one before reporting info.");
+      }
+      if (input.runtimeId && input.runtimeId !== agent.runtimeId) {
+        throw new Error("A linked-agent key can only report info for its own runtime.");
+      }
+      const runtime = await db.runtime.findFirst({
+        where: { id: agent.runtimeId, workspaceId: ctx.workspaceId },
+        select: { id: true, archivedAt: true },
+      });
+      if (!runtime) throw new Error("Runtime not found in this workspace.");
+      if (runtime.archivedAt) throw new Error("Runtime is archived; restore it before reporting info.");
+
+      const sanitized = sanitizeRuntimeInfo(input.info);
+      if (!sanitized) {
+        throw new Error(
+          "No supported runtime info fields were provided. Include fields such as runtimeVersion, bridgeVersion, codexVersion, containerImage, hostname, os, arch, or workspaceRoot.",
+        );
+      }
+      const now = new Date();
+      const updated = await db.runtime.update({
+        where: { id: runtime.id },
+        data: { runtimeInfo: sanitized, lastInfoAt: now },
+        select: { id: true, runtimeInfo: true, lastInfoAt: true },
+      });
+      return {
+        runtimeId: updated.id,
+        recordedAt: updated.lastInfoAt,
+        runtimeInfo: updated.runtimeInfo,
+        runtimeInfoSummary: summarizeRuntimeInfo(updated),
+      };
     },
   },
 

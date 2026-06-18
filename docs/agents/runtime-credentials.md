@@ -117,6 +117,12 @@ before the bridge starts (`~/docker/codex-bridge/`). The single bootstrap secret
 (`FORGE_API_KEY`, the runtime's agent key) stays in the container env; everything
 else is managed in-app and fetched at startup.
 
+The same bootstrap key can call `runtimes.reportInfo` after provisioning to
+publish sanitized runtime metadata (bridge version, Codex version, container
+image, host, OS/arch, workspace root). Forge shows this on the runtime list and
+detail page so operators can tell what is actually running without shelling into
+the host.
+
 ## Running it on any runtime (Hermes, ephemeral agents)
 
 The provisioning logic is **provider-agnostic** — `runtimes.provisioning` gates

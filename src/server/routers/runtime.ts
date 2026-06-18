@@ -10,6 +10,7 @@ import {
 } from "@/server/runtimes/adapters";
 import { recordRuntimeHeartbeatPresence } from "@/server/services/heartbeat";
 import { probeRuntime, type RuntimeProbeResult } from "@/server/services/dispatch/runtime-probe";
+import { runtimeInfoUpdateData, summarizeRuntimeInfo } from "@/server/services/runtime-info";
 import {
   deriveRuntimeHealthStatus,
   sanitizeRuntimeProbeDetail,
@@ -84,6 +85,8 @@ type RuntimeForHealth = Pick<
   | "lastProbeAttempted"
   | "lastProbeReachable"
   | "lastProbeDetail"
+  | "runtimeInfo"
+  | "lastInfoAt"
 >;
 
 type RuntimeForSelfTest = Pick<
@@ -101,6 +104,7 @@ function withRuntimeHealth<T extends Partial<Runtime> & RuntimeForHealth & Runti
     health: deriveRuntimeHealthStatus(rt),
     configStatus: runtimeConfigStatus(rt.adapterKey, rt.config),
     selfTest: summarizeRuntimeSelfTest(rt),
+    runtimeInfoSummary: summarizeRuntimeInfo(rt),
   };
 }
 
@@ -110,6 +114,7 @@ function probeData(res: RuntimeProbeResult, at = new Date()) {
     lastProbeAttempted: res.attempted,
     lastProbeReachable: res.reachable,
     lastProbeDetail: sanitizeRuntimeProbeDetail(res.detail),
+    ...runtimeInfoUpdateData(res.runtimeInfo, at),
   };
 }
 

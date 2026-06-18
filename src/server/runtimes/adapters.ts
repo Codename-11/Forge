@@ -227,6 +227,7 @@ in Forge (owns the loop, streams, approvals), the OpenAI analogue to Hermes.
    that bridge in a container (\`~/docker/codex-bridge/\`) so the agent is
    sandboxed to a scoped \`/work\` and can't reach the host filesystem. Run the
    bridge (publishes \`ws://HOST:4505\`); external hosts MUST use \`wss://\` (TLS).
+   See \`docs/agents/codex-app-server-docker.md\` for the compose contract.
 2. Add a runtime here with this adapter; set **endpoint** to the
    \`ws(s)://HOST:PORT\` URL and (if your deployment gates the socket) a
    **secret** sent as a Bearer header.
@@ -239,6 +240,9 @@ in Forge (owns the loop, streams, approvals), the OpenAI analogue to Hermes.
 5. (Optional) Set **sandbox mode** + **approval policy** + **workspace root** on
    the runtime — the connector sends them per turn (defaults: full access, no
    prompts). Use **Disable** to pause the runtime without deleting it.
+6. Have the bridge call \`runtimes.reportInfo\` on boot so Forge can show the
+   bridge/Codex/container versions in Settings → Runtimes. Forge also harvests
+   \`serverInfo\` from the WebSocket initialize response when available.
 
 Pin exact method shapes with \`codex app-server generate-ts --out <dir>\`.`,
   },

@@ -4,6 +4,7 @@ import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { getRuntimeAdapter } from "@/server/runtimes/adapters";
 import { probeRuntime } from "@/server/services/dispatch/runtime-probe";
+import { runtimeInfoUpdateData } from "@/server/services/runtime-info";
 import { sanitizeRuntimeProbeDetail, supportsRuntimeProbe } from "@/server/services/runtime-status";
 import { recordRuntimeHeartbeatPresence } from "@/server/services/heartbeat";
 
@@ -64,6 +65,7 @@ export async function sweepRuntimeHealth(
           lastProbeAttempted: res.attempted,
           lastProbeReachable: res.reachable,
           lastProbeDetail: sanitizeRuntimeProbeDetail(res.detail),
+          ...runtimeInfoUpdateData(res.runtimeInfo, now),
         };
         if (!res.reachable) {
           await client.runtime.updateMany({

@@ -51,7 +51,8 @@ columns.
 - **`/settings/runtimes/[id]`** — detail. Lists agents on this runtime
   and surfaces a copy-pasteable `forge daemon start` recipe for empty
   `LOCAL_DAEMON` rows. The detail page also shows whether the runtime
-  declares `terminal`, `filesystem`, and `git` access.
+  declares `terminal`, `filesystem`, and `git` access, plus the latest
+  sanitized runtime version/environment metadata when the host reports it.
 - **Agent detail page** — small Runtime card that click-throughs to the
   runtime detail.
 - **Mission Control agents tab** — compact `RuntimeChip` next to the
@@ -128,11 +129,19 @@ Codex turn `cwd`, and the UI saves `localWorkspaceTools` plus
 cards and preflight match the actual scoped workspace (for example
 `/work/agent-forge` inside the bridge container).
 
+For containerised Codex app-server deployments, use the Docker bridge pattern in
+[Codex App-Server Docker Bridge](./codex-app-server-docker.md). The bridge
+should call `runtimes.reportInfo` on boot so operators can see the bridge,
+Codex, container, and workspace versions from the runtime detail page.
+
 ## MCP tools (for runtimes that auto-register)
 
 `runtimes.register`, `runtimes.heartbeat`, and `runtimes.configure` are
 `ADMIN`-scoped. The `forge` CLI's `daemon start` calls register/heartbeat;
 operators can call configure to set runtime config without direct DB access.
+`runtimes.reportInfo` is agent-linked rather than admin-scoped so a runtime
+bootstrap key can report its own sanitized metadata without broad operator
+permissions.
 
 See [/reference/mcp.html#runtimes](/reference/mcp.html#runtimes) for
 exact shapes.

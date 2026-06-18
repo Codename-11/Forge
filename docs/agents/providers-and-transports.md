@@ -35,7 +35,8 @@ the runtime runs the model; the agent answers *as itself*.
   (`~/docker/codex-bridge/` on docker-server) so the agent is sandboxed to a
   scoped workspace; add a runtime pointing at the bridge's `ws(s)://` URL
   (Settings → Runtimes). **Sandbox + approvals are configurable per runtime**
-  — see [Codex sandboxing](#codex-sandboxing--approvals) below.
+  — see [Codex sandboxing](#codex-sandboxing--approvals) below and the
+  [Docker bridge guide](./codex-app-server-docker.md).
 
 **Engine choice (per agent):**
 
@@ -102,7 +103,9 @@ controlled on **two layers**:
    (`~/docker/codex-bridge/`) mounts only the operator's Codex *auth*
    (read-only) and a single scoped workspace (`/work`). The host filesystem is
    unreachable from inside, so even a full-access Codex turn can't read host
-   secrets. This is fixed by the deployment, not a per-runtime setting.
+   secrets. This is fixed by the deployment, not a per-runtime setting. The
+   full compose/auth contract lives in
+   [Codex App-Server Docker Bridge](./codex-app-server-docker.md).
 2. **Per-turn sandbox + approval policy, set in Forge.** Each Codex runtime
    carries a config the connector sends with every turn (codex-cli's
    `sandboxPolicy` / `approvalPolicy` / `cwd` overrides). Edit it in

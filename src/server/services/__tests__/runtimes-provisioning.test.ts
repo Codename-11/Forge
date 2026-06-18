@@ -54,6 +54,12 @@ type ProvisioningResult = {
   githubAppTokenExpiresAt?: string | null;
 };
 
+type RuntimeInfoReportResult = {
+  runtimeId: string;
+  runtimeInfo: unknown;
+  runtimeInfoSummary: { status: string; label: string };
+};
+
 /** Stub GitHub's token-mint endpoint for the GitHub-App provisioning path. */
 function stubGithubMint(token: string, expiresAt = "2026-06-14T18:00:00Z") {
   vi.stubGlobal(
@@ -70,6 +76,15 @@ async function provision(ctx: McpContext): Promise<ProvisioningResult> {
   const def = mcpTools["runtimes.provisioning"];
   const parsed = def.input.parse({});
   return def.run(parsed as never, ctx) as Promise<ProvisioningResult>;
+}
+
+async function reportInfo(
+  input: unknown,
+  ctx: McpContext,
+): Promise<RuntimeInfoReportResult> {
+  const def = mcpTools["runtimes.reportInfo"];
+  const parsed = def.input.parse(input);
+  return def.run(parsed as never, ctx) as Promise<RuntimeInfoReportResult>;
 }
 
 describe("runtimes.provisioning", () => {
@@ -361,5 +376,101 @@ describe("runtimes.provisioning", () => {
     const res = await provision(ctxFor(f, agent.id));
     expect(res.githubAppTokenExpiresAt).toBeNull();
     expect(res.secrets.find((s) => s.key === "GH_TOKEN")).toBeUndefined();
+  });
+});
+
+describe("runtimes.reportInfo", () => {
+  it("lets an agent-linked runtime key report sanitized version metadata", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "INFO" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: f.workspace.id,
+        name: "codex bridge",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "codex-app-server",
+      },
+      select: { id: true },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        name: "codex",
+        profileKey: "codex-info",
+        provider: AgentProvider.CODEX,
+        runtimeId: runtime.id,
+      },
+      select: { id: true },
+    });
+
+    const res = await reportInfo(
+      {
+        info: {
+          adapterKey: "codex-app-server",
+          bridgeVersion: "1.0.0",
+          codexVersion: "0.133.0",
+          hostname: "codex-bridge",
+          apiKey: "must-not-store",
+        },
+      },
+      ctxFor(f, agent.id),
+    );
+
+    expect(res.runtimeId).toBe(runtime.id);
+    expect(res.runtimeInfoSummary.label).toBe("Codex 0.133.0");
+    expect(res.runtimeInfo).toMatchObject({
+      adapterKey: "codex-app-server",
+      bridgeVersion: "1.0.0",
+      codexVersion: "0.133.0",
+      hostname: "codex-bridge",
+    });
+    expect(res.runtimeInfo).not.toHaveProperty("apiKey");
+
+    const stored = await prisma.runtime.findUniqueOrThrow({
+      where: { id: runtime.id },
+      select: { runtimeInfo: true, lastInfoAt: true },
+    });
+    expect(stored.lastInfoAt).not.toBeNull();
+    expect(stored.runtimeInfo).toMatchObject({ codexVersion: "0.133.0" });
+  });
+
+  it("rejects runtime info reports from unlinked keys", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "INFN" });
+    fixtures.push(f);
+    await expect(
+      reportInfo({ info: { bridgeVersion: "1.0.0" } }, ctxFor(f, null)),
+    ).rejects.toThrow(/agent-linked/i);
+  });
+
+  it("prevents a linked key from reporting for another runtime", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "INFX" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const ownRuntime = await prisma.runtime.create({
+      data: { workspaceId: f.workspace.id, name: "own", kind: RuntimeKind.REMOTE_HTTP },
+      select: { id: true },
+    });
+    const otherRuntime = await prisma.runtime.create({
+      data: { workspaceId: f.workspace.id, name: "other", kind: RuntimeKind.REMOTE_HTTP },
+      select: { id: true },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: f.workspace.id,
+        name: "a",
+        profileKey: "info-agent",
+        provider: AgentProvider.CODEX,
+        runtimeId: ownRuntime.id,
+      },
+      select: { id: true },
+    });
+
+    await expect(
+      reportInfo(
+        { runtimeId: otherRuntime.id, info: { bridgeVersion: "1.0.0" } },
+        ctxFor(f, agent.id),
+      ),
+    ).rejects.toThrow(/own runtime/i);
   });
 });
