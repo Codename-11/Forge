@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { isSafeExternalUrl } from "@/lib/url-safety";
 import { useAttachmentLightbox } from "@/components/attachments/attachment-lightbox";
 
 /**
@@ -32,7 +33,7 @@ export function LinkFavicon({
   let origin = "";
   let host = "";
   try {
-    if (url) {
+    if (url && isSafeExternalUrl(url)) {
       const parsed = new URL(url);
       origin = parsed.origin;
       host = parsed.hostname.replace(/^www\./i, "").toLowerCase();
@@ -110,7 +111,7 @@ function isLinkAttachment(a: AttachmentChipData): boolean {
 
 /** Best-effort hostname extraction for LINK chips' trailing slot. */
 function safeHostname(url: string | null | undefined): string {
-  if (!url) return "";
+  if (!url || !isSafeExternalUrl(url)) return "";
   try {
     return new URL(url).hostname.replace(/^www\./i, "");
   } catch {
@@ -142,7 +143,7 @@ export function AttachmentChip({
       // is "open the page in a new tab". Lightbox would render an
       // iframe-via-presigned-url that doesn't apply here.
       const href = attachment.externalUrl ?? "";
-      if (href) {
+      if (href && isSafeExternalUrl(href)) {
         window.open(href, "_blank", "noopener,noreferrer");
       }
       return;

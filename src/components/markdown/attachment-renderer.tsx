@@ -31,6 +31,7 @@ import { YouTubeEmbed } from "@/components/embeds/youtube-embed";
 import { GithubEmbed } from "@/components/embeds/github-embed";
 import { LoomEmbed } from "@/components/embeds/loom-embed";
 import { FigmaEmbed } from "@/components/embeds/figma-embed";
+import { isSafeExternalUrl, toRenderableHref } from "@/lib/url-safety";
 
 /**
  * Rich body renderer for descriptions, comments, artifacts, and notes.
@@ -663,49 +664,47 @@ function renderInlineSegs(
           inlineList={inlineList}
         />
       );
-    if (s.type === "linkChip")
+    if (s.type === "linkChip") {
+      if (!isSafeExternalUrl(s.url)) {
+        return <Fragment key={key}>{s.label || s.url}</Fragment>;
+      }
       return <InlineForgeLink key={key} label={s.label} url={s.url} />;
+    }
     if (s.type === "issueRef")
       return <InlineIssueRef key={key} issueKey={s.key} />;
     if (s.type === "mention")
       return <InlineAgentMention key={key} profileKey={s.profileKey} />;
     if (s.type === "mdLink") {
-      // External markdown link — open in a new tab. Internal absolute
-      // paths (e.g. `/w/foo/issues/abc`) get an in-app Link.
-      if (/^https?:\/\//i.test(s.url)) {
+      // Explicit allowlist: http(s) links open in a new tab, and internal
+      // app paths (e.g. `/w/foo/issues/abc`) get an in-app Link. Everything
+      // else renders as inert text so `javascript:` / `data:` never become
+      // clickable browser-controlled hrefs.
+      const renderable = toRenderableHref(s.url);
+      if (renderable?.kind === "external") {
         return (
           <a
             key={key}
-            href={s.url}
+            href={renderable.href}
             target="_blank"
             rel="noopener noreferrer"
             className="text-ember underline-offset-2 hover:underline"
           >
-            {s.label || s.url}
+            {s.label || renderable.href}
           </a>
         );
       }
-      if (s.url.startsWith("/")) {
+      if (renderable?.kind === "internal") {
         return (
           <Link
             key={key}
-            href={s.url}
+            href={renderable.href}
             className="text-ember underline-offset-2 hover:underline"
           >
-            {s.label || s.url}
+            {s.label || renderable.href}
           </Link>
         );
       }
-      // Other schemes (mailto:, etc.) render as plain anchors.
-      return (
-        <a
-          key={key}
-          href={s.url}
-          className="text-ember underline-offset-2 hover:underline"
-        >
-          {s.label || s.url}
-        </a>
-      );
+      return <Fragment key={key}>{s.label || s.url}</Fragment>;
     }
     if (s.type === "url")
       return (

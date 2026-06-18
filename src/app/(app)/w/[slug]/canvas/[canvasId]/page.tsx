@@ -64,6 +64,7 @@ import {
   type InspectorSelection,
 } from "@/components/canvas/canvas-selection-inspector";
 import { computeSnap } from "@/lib/canvas-snap-guides";
+import { isSafeExternalUrl } from "@/lib/url-safety";
 import { useCanvasUndoStack } from "@/lib/canvas-undo";
 import {
   CanvasEntityCreator,
@@ -6014,7 +6015,9 @@ function AttachmentPreviewCardBody({ node }: { node: HydratedNode }) {
     },
   );
   const previewKind = canvasKindForAttachment(meta);
-  const url = isLink ? meta.externalUrl ?? null : dl.data?.url ?? null;
+  const safeExternalUrl =
+    meta.externalUrl && isSafeExternalUrl(meta.externalUrl) ? meta.externalUrl : null;
+  const url = isLink ? safeExternalUrl : dl.data?.url ?? null;
   // Header — filename + mime chip. Padding mirrors the legacy card body.
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
@@ -6039,8 +6042,8 @@ function AttachmentPreviewCardBody({ node }: { node: HydratedNode }) {
         height={Math.max(120, node.height - 60)}
         onExpand={() => {
           if (isLink) {
-            if (meta.externalUrl) {
-              window.open(meta.externalUrl, "_blank", "noopener,noreferrer");
+            if (safeExternalUrl) {
+              window.open(safeExternalUrl, "_blank", "noopener,noreferrer");
             }
             return;
           }

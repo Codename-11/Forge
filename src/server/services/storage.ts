@@ -16,6 +16,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "node:crypto";
+import { assertSafeExternalUrl } from "@/lib/url-safety";
 import { db } from "@/server/db";
 
 /**
@@ -758,9 +759,10 @@ export async function createLinkAttachment(
     input.targetType,
     input.targetId,
   );
-  // URL parsing is the only validation we do — caller supplies the
-  // workspace scope check.
-  const host = hostnameOf(input.url);
+  // Enforce browser-safe external links at storage time as a defense in depth
+  // for every caller (tRPC, MCP, future imports/backfills).
+  const url = assertSafeExternalUrl(input.url);
+  const host = hostnameOf(url);
   const linkTitle = (input.title ?? "").trim() || host;
   if (linkTitle.length > 255) {
     throw new Error("Link title must be 255 characters or less.");
@@ -775,8 +777,8 @@ export async function createLinkAttachment(
       filename: linkTitle,
       mimeType: LINK_ATTACHMENT_MIME,
       size: 0,
-      url: input.url,
-      externalUrl: input.url,
+      url,
+      externalUrl: url,
       linkTitle,
     },
   });
@@ -789,7 +791,7 @@ export async function createLinkAttachment(
     mimeType: row.mimeType,
     size: row.size,
     url: row.url,
-    externalUrl: row.externalUrl ?? input.url,
+    externalUrl: row.externalUrl ?? url,
     linkTitle: row.linkTitle ?? linkTitle,
     kind: "LINK",
     createdAt: row.createdAt,

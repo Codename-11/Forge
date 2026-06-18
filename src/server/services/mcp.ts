@@ -70,6 +70,11 @@ import {
   presignUploadUrl,
 } from "@/server/services/storage";
 import { forgeEntityTypeSchema, type ForgeEntityType } from "@/lib/entity-ref";
+import {
+  assertSafeExternalUrl,
+  isSafeExternalUrl,
+  safeExternalUrlMessage,
+} from "@/lib/url-safety";
 import { hydrateEntityRefs } from "@/server/services/entity-hydration";
 import { computeAlignment, type AlignItem } from "@/server/services/canvas-alignment";
 import { validateRuntimeConfig } from "@/server/services/runtime-config";
@@ -4628,9 +4633,9 @@ export const mcpTools = {
       targetId: z.string().describe("Cuid of the target row in this workspace."),
       url: z
         .string()
-        .url()
         .max(2048)
-        .describe("Absolute URL to attach. Must be parseable by URL(); typically https://… ."),
+        .refine(isSafeExternalUrl, { message: safeExternalUrlMessage() })
+        .describe("Absolute http(s) URL to attach."),
       title: z
         .string()
         .max(255)
@@ -4669,15 +4674,16 @@ export const mcpTools = {
       // soft — createLinkAttachment falls back to hostname when title is
       // null/undefined.
       let resolvedTitle = input.title;
+      const safeUrl = assertSafeExternalUrl(input.url);
       if (resolvedTitle === undefined) {
-        const meta = await fetchLinkMetadata(input.url);
+        const meta = await fetchLinkMetadata(safeUrl);
         resolvedTitle = meta.title;
       }
       return createLinkAttachment({
         workspaceId: ctx.workspaceId,
         targetType: input.targetType,
         targetId: input.targetId,
-        url: input.url,
+        url: safeUrl,
         title: resolvedTitle,
       });
     },

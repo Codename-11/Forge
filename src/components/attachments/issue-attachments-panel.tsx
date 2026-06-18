@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { isSafeExternalUrl } from "@/lib/url-safety";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useAttachmentLightbox } from "@/components/attachments/attachment-lightbox";
 import { LinkFavicon } from "@/components/attachments/attachment-chip";
@@ -494,7 +495,7 @@ function AttachmentTile({
   const openTile = () => {
     if (isLink) {
       const href = attachment.externalUrl ?? "";
-      if (href) window.open(href, "_blank", "noopener,noreferrer");
+      if (href && isSafeExternalUrl(href)) window.open(href, "_blank", "noopener,noreferrer");
       return;
     }
     lightbox.open({
@@ -633,7 +634,7 @@ function isPdf(mime: string): boolean {
 }
 
 function linkAttachmentMeta(url: string | null): { host: string; path: string } {
-  if (!url) return { host: "", path: "" };
+  if (!url || !isSafeExternalUrl(url)) return { host: "", path: "" };
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.replace(/^www\./i, "");

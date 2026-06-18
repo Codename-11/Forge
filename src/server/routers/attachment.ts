@@ -2,6 +2,11 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { EventKind } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
+import {
+  assertSafeExternalUrl,
+  isSafeExternalUrl,
+  safeExternalUrlMessage,
+} from "@/lib/url-safety";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import {
@@ -74,7 +79,9 @@ const finalizeInput = z.object({
 const attachLinkInput = z.object({
   targetType: targetTypeSchema,
   targetId: z.string().cuid(),
-  url: z.string().url().max(2048),
+  url: z.string().max(2048).refine(isSafeExternalUrl, {
+    message: safeExternalUrlMessage(),
+  }),
   title: z.string().max(255).optional(),
 });
 
@@ -175,13 +182,14 @@ export const attachmentRouter = router({
     .input(attachLinkInput)
     .mutation(async ({ ctx, input }) => {
       await assertTargetInWorkspace(ctx, input.targetType, input.targetId);
+      const safeUrl = assertSafeExternalUrl(input.url);
       // Caller didn't provide a label → try to scrape <title> off the
       // target page so the chip is meaningful. Fail soft: any error
       // leaves resolvedTitle null and createLinkAttachment falls back
       // to hostname.
       let resolvedTitle: string | null = input.title ?? null;
       if (resolvedTitle === null) {
-        const meta = await fetchLinkMetadata(input.url);
+        const meta = await fetchLinkMetadata(safeUrl);
         if (meta.title) resolvedTitle = meta.title;
       }
       let row: Awaited<ReturnType<typeof createLinkAttachment>>;
@@ -190,7 +198,7 @@ export const attachmentRouter = router({
           workspaceId: ctx.workspaceId,
           targetType: input.targetType,
           targetId: input.targetId,
-          url: input.url,
+          url: safeUrl,
           title: resolvedTitle,
         });
       } catch (err) {

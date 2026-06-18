@@ -61,6 +61,28 @@ async function putBytes(url: string, body: Buffer, mimeType: string) {
 }
 
 describe("attachmentRouter", () => {
+  it("rejects non-http(s) link attachment URLs", async () => {
+    const { caller, fixture } = await setup();
+    const issue = await createIssue(fixture);
+
+    await expect(
+      caller.attachLink({
+        targetType: "issue",
+        targetId: issue.id,
+        url: "javascript:alert(1)",
+        title: "Bad",
+      }),
+    ).rejects.toThrow(/http or https/i);
+    await expect(
+      caller.attachLink({
+        targetType: "issue",
+        targetId: issue.id,
+        url: "data:text/html,<h1>x</h1>",
+        title: "Bad",
+      }),
+    ).rejects.toThrow(/http or https/i);
+  });
+
   it("allows chat-message uploads for the owning human thread", async () => {
     const { caller, fixture } = await setup();
     const prisma = getPrisma();

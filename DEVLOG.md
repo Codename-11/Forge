@@ -2,6 +2,19 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-18 — Safe URL scheme handling for rich content links
+
+Fixed AXI-85 by centralizing renderable/external URL validation and applying it to rich markdown links, link attachments, and existing link-attachment open/preview surfaces.
+
+Fixes:
+- Added `src/lib/url-safety.ts` to allow only `http:`/`https:` external URLs and intentional internal app paths beginning with `/` for rendered markdown navigation.
+- Updated `MarkdownWithAttachments` so unsafe markdown link schemes such as `javascript:` and `data:` render as inert text, while `https://…`, internal `/w/...` links, and existing http(s)-only forge-link chips continue to work.
+- Enforced http(s)-only link attachment URLs in the tRPC attachment router, MCP `attachments.attachLink`, and storage helper; also guarded existing link attachment chip/lightbox/canvas open and iframe-preview paths against legacy unsafe values.
+- Added regression tests for shared URL safety, markdown rendering behavior, tRPC attachLink rejection, and MCP attachLink rejection.
+
+Verify:
+`env -u OPENAI_API_KEY pnpm exec vitest run tests/unit/url-safety.test.ts tests/unit/markdown-url-safety.test.ts src/server/services/__tests__/mcp.test.ts src/server/routers/__tests__/attachment.test.ts --reporter=verbose --testNamePattern "url safety|MarkdownWithAttachments URL safety|attachments.attachLink accepts only http\\(s\\) external URLs|rejects non-http"`, `pnpm typecheck`, `pnpm lint`, `env -u OPENAI_API_KEY pnpm test`.
+
 ## 2026-06-18 — Quick-access Mission Control and bounded Command Center
 
 Refined the floating activity dock after the live Command Center screenshots

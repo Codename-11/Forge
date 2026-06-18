@@ -103,6 +103,53 @@ function envelopeOf<T>(value: unknown): { data: T[]; nextCursor?: string } {
 }
 
 describe("mcp tool registry", () => {
+  it("attachments.attachLink accepts only http(s) external URLs", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "LNK" });
+    fixtures.push(f);
+    const issue = await createIssue(f, { title: "link target" });
+    const { ctx } = buildMcpCtx(f);
+
+    const link = (await call(
+      "attachments.attachLink",
+      {
+        targetType: "issue",
+        targetId: issue.id,
+        url: "https://example.com/runbook",
+        title: "Runbook",
+      },
+      ctx,
+    )) as { externalUrl: string; kind: string };
+    expect(link).toMatchObject({
+      externalUrl: "https://example.com/runbook",
+      kind: "LINK",
+    });
+
+    await expect(
+      call(
+        "attachments.attachLink",
+        {
+          targetType: "issue",
+          targetId: issue.id,
+          url: "javascript:alert(1)",
+          title: "Bad",
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/http or https/i);
+    await expect(
+      call(
+        "attachments.attachLink",
+        {
+          targetType: "issue",
+          targetId: issue.id,
+          url: "data:text/html,<h1>x</h1>",
+          title: "Bad",
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/http or https/i);
+  });
+
   it("registers >= 30 tools spanning the new primitives", () => {
     const names = Object.keys(mcpTools);
     expect(names.length).toBeGreaterThanOrEqual(30);

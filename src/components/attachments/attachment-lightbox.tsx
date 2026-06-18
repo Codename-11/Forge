@@ -23,6 +23,7 @@ import { useModalBehavior } from "@/components/ui/modal/use-modal-behavior";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { MOTION } from "@/lib/motion";
+import { isSafeExternalUrl } from "@/lib/url-safety";
 import { LinkFavicon } from "@/components/attachments/attachment-chip";
 
 /**
@@ -192,7 +193,11 @@ function Lightbox({
       retry: false,
     },
   );
-  const url = isLink ? (current?.externalUrl ?? "") : data?.url;
+  const url = isLink
+    ? current?.externalUrl && isSafeExternalUrl(current.externalUrl)
+      ? current.externalUrl
+      : ""
+    : data?.url;
 
   // Delete plumbing — confirm modal stacks on top of the lightbox.
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -499,7 +504,10 @@ function Preview({
 }
 
 function LinkPreview({ attachment }: { attachment: AttachmentLite }) {
-  const href = attachment.externalUrl ?? "";
+  const href =
+    attachment.externalUrl && isSafeExternalUrl(attachment.externalUrl)
+      ? attachment.externalUrl
+      : "";
   let host = "";
   try {
     if (href) host = new URL(href).hostname.replace(/^www\./i, "");
