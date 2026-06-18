@@ -2,6 +2,35 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-17 — Mobile/PWA fixes from the Orca-driven audit
+
+Implemented the mobile/PWA audit findings (audit ran read-only in an
+Orca-managed worktree `forge-mobile-audit`; see that worktree's
+`MOBILE-AUDIT.md`).
+
+Root cause of the "top-third nav" report: the **global "concourse" shell**
+(`src/components/global-shell/global-shell.tsx`) was never given the mobile
+rework the workspace shell (`sidebar.tsx`) already has. On mobile it was
+`flex-col` with a `w-full max-h-64` `<aside>` stacked above content, plus a
+redundant `GlobalTopBar` below.
+
+- **P0 rework** of `global-shell.tsx`: extracted the rail body into
+  `GlobalNavContent`; the desktop `<aside>` is now `hidden md:flex`; on mobile
+  a hamburger in `GlobalTopBar` (`md:hidden`) opens the same nav in a
+  bottom-sheet `Drawer` (the `@/components/ui/modal` primitive the workspace
+  shell uses), with `onNavigate` closing on selection. Outer is no longer
+  `flex-col`-stacked. Affects `/`, `/inbox`, `/activity`, `/whats-new`.
+- **Quick wins**: `app/layout.tsx` viewport now sets
+  `width/initialScale/viewportFit:"cover"/colorScheme` (cover unlocks the
+  workspace bottom-nav's existing `env(safe-area-inset-*)` padding on notched
+  iPhones) + `appleWebApp` metadata; bell/help/keyboard/activity icon buttons
+  bumped to ≥36–40px on mobile (`global-shell`, `top-bar`, `activity-drawer`);
+  Mission Control padding `px-8`→`px-4 sm:px-8`; rail `text-[10px]`→
+  `.text-meta`/`.text-id`; `⌘K`/`Kbd` hints `hidden md:inline`; watch popover
+  `w-64`→`w-[min(16rem,90vw)]`; board quick-add → 28px touch box.
+
+Verify: `pnpm typecheck` + `pnpm lint` clean. Visual/manual at 390px to follow.
+
 ## 2026-06-17 — MCP tool-list profiles + scope filtering (AXI-82)
 
 Forge MCP advertised **all ~205 tools** unconditionally — `tools/list`

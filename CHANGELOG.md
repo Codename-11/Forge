@@ -28,6 +28,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Fixed
 
+- **Mission Control finally fits a phone.** The cross-workspace pages (Mission Control, Inbox, Activity, What's New) used to stack the whole sidebar above the page on mobile — eating the top third of the screen before any content. The sidebar now lives behind a hamburger menu (a bottom sheet), tap targets on the top-bar buttons are bigger, the app extends correctly under the notch (safe-area), and desktop-only keyboard hints are hidden on mobile.
 - **Clicking "Plan" no longer leaves you with a silent empty plan.** If the crew's planner can't be reached (no planner assigned, offline, or not wired up), the goal now says so clearly and points you to generate the plan with Forge or add steps yourself — instead of a blank plan with no explanation. When a planner *is* reachable, you see it was dispatched and that steps are on the way.
 - **Unused dashboard widgets no longer show as blank tiles.** Widgets with nothing to show (no agents, no recent items, etc.) collapse and take no space; in Customize mode they stay visible, flagged "not in use," so you can hide them.
 - **Dashboard customize drag feels smoother.** You can now grab a tile anywhere (not just the small grip), reordering no longer jitters while tiles animate, and the resize edge is a larger, easier target.

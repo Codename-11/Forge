@@ -156,7 +156,7 @@ function WatcherChip({
         role="tooltip"
         aria-hidden
         className={cn(
-          "pointer-events-none absolute right-0 top-[calc(100%+6px)] z-50 w-64 rounded-md border border-border bg-popover p-2 opacity-0 shadow-md transition-opacity",
+          "pointer-events-none absolute right-0 top-[calc(100%+6px)] z-50 w-[min(16rem,90vw)] rounded-md border border-border bg-popover p-2 opacity-0 shadow-md transition-opacity",
           "group-focus-within/watchers:opacity-100 group-hover/watchers:opacity-100",
         )}
       >

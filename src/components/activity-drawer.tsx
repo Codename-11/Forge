@@ -295,7 +295,7 @@ export function ActivityBell() {
       onClick={toggle}
       title={tip}
       aria-label={tip}
-      className="focus-ring relative inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground"
+      className="focus-ring relative inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-7 sm:w-7"
     >
       <Bell className="h-3.5 w-3.5" />
       {unreadCount > 0 && (

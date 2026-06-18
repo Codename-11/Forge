@@ -98,7 +98,7 @@ export function TopBar({
           title="Keyboard shortcuts (?)"
           onClick={() => window.dispatchEvent(new Event("forge:open-keyboard-help"))}
           className={cn(
-            "focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground",
+            "focus-ring inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-7 sm:w-7",
             MOTION.fast,
           )}
         >

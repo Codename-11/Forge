@@ -138,7 +138,7 @@ export function MissionControlHome() {
   const runtimesOnline = runtimesList.filter((r) => r.online).length;
 
   return (
-    <div className="mx-auto w-full max-w-[1280px] px-8 py-6">
+    <div className="mx-auto w-full max-w-[1280px] px-4 py-4 sm:px-8 sm:py-6">
       {/* Top metric row */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <MetricTile

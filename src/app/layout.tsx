@@ -43,9 +43,23 @@ export const metadata: Metadata = {
     description: DESCRIPTION,
   },
   robots: { index: false, follow: false },
+  // PWA / iOS standalone: capable web-app with a translucent status bar so the
+  // app content can extend under the notch (paired with viewportFit below).
+  appleWebApp: {
+    capable: true,
+    title: "Forge",
+    statusBarStyle: "black-translucent",
+  },
 };
 
 export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  // `cover` is required for `env(safe-area-inset-*)` to resolve to real values
+  // — without it the bottom-nav / safe-area padding is silently inert on
+  // notched iPhones in standalone mode.
+  viewportFit: "cover",
+  colorScheme: "light dark",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#fef3e6" },
     { media: "(prefers-color-scheme: dark)", color: "#1c1917" },

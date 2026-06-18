@@ -164,7 +164,7 @@ function BoardColumn({
               }),
             )
           }
-          className="focus-ring -mr-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
+          className="focus-ring -mr-1 inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:text-foreground sm:h-6 sm:w-6"
         >
           <Plus className="h-3.5 w-3.5" />
         </button>

@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -14,10 +15,12 @@ import {
   Eye,
   Bell,
   HelpCircle,
+  Menu,
   type LucideIcon,
 } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { Kbd } from "@/components/ui/kbd";
+import { Drawer } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { workspaceColor } from "@/lib/workspace-color";
 import { VersionChip } from "./version-chip";
@@ -29,6 +32,11 @@ import { VersionChip } from "./version-chip";
  * breadcrumb crumb-chain in the top bar. Ports `global-shell.jsx` from the
  * design handoff. Data is passed from the server layout (no client fetches
  * for chrome). Part of the multi-workspace restructure.
+ *
+ * Mobile: the rail is `hidden md:flex` and surfaced via a hamburger →
+ * bottom-sheet `Drawer` (the same primitive the workspace shell uses), so the
+ * global pages (`/`, `/inbox`, `/activity`, `/whats-new`) no longer stack the
+ * full 256px sidebar above content on a phone.
  */
 
 export interface GlobalShellWorkspace {
@@ -127,22 +135,26 @@ function ActivityPill() {
         />
       </span>
       <span className="tracking-tight">Activity</span>
-      <Kbd>5</Kbd>
+      {/* keyboard hint is desktop-only */}
+      <span className="hidden md:inline-flex">
+        <Kbd>5</Kbd>
+      </span>
     </Link>
   );
 }
 
-function WorkspaceSwitcherCard({ ws }: { ws: GlobalShellWorkspace }) {
+function WorkspaceSwitcherCard({ ws, onNavigate }: { ws: GlobalShellWorkspace; onNavigate?: () => void }) {
   return (
     <Link
       href={`/w/${ws.slug}`}
       title={`Switch to ${ws.name}`}
+      onClick={onNavigate}
       className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.8125rem] text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground"
     >
       <WorkspaceBadge ws={ws} size={20} />
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium text-foreground">{ws.name}</span>
-        <span className="block truncate font-mono text-[10px] text-muted-foreground/70">{ws.key}</span>
+        <span className="block truncate text-id text-muted-foreground/70">{ws.key}</span>
       </span>
       {!!ws.mentions && ws.mentions > 0 && (
         <span className="inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-ember/15 px-1 text-[9px] font-medium text-ember">
@@ -156,14 +168,17 @@ function WorkspaceSwitcherCard({ ws }: { ws: GlobalShellWorkspace }) {
 function NavRow({
   item,
   active,
+  onNavigate,
 }: {
   item: { href: string; icon: LucideIcon; label: string; hint: string };
   active: boolean;
+  onNavigate?: () => void;
 }) {
   const Ico = item.icon;
   return (
     <Link
       href={item.href}
+      onClick={onNavigate}
       className={cn(
         "group flex items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] transition-colors",
         active ? "bg-subtle text-foreground" : "text-muted-foreground hover:bg-subtle hover:text-foreground",
@@ -172,69 +187,95 @@ function NavRow({
       <Ico size={14} className={active ? "text-ember" : ""} />
       <span className="min-w-0 flex-1">
         <span className="block font-medium leading-tight">{item.label}</span>
-        <span className="block text-[10px] leading-tight text-muted-foreground/70">{item.hint}</span>
+        <span className="block text-meta leading-tight text-muted-foreground/70">{item.hint}</span>
       </span>
     </Link>
   );
 }
 
-function GlobalSidebar({
+/**
+ * The rail's body — account header, search, global nav, workspace switcher,
+ * settings/admin, version chip. Rendered by the desktop `<aside>` and the
+ * mobile `Drawer` alike; `onNavigate` closes the drawer on selection.
+ */
+function GlobalNavContent({
   user,
   workspaces,
   activePath,
+  inDrawer = false,
+  onNavigate,
 }: {
   user: GlobalShellUser;
   workspaces: GlobalShellWorkspace[];
   activePath: string;
+  inDrawer?: boolean;
+  onNavigate?: () => void;
 }) {
   return (
-    <aside
-      className="flex max-h-64 min-h-0 w-full shrink-0 flex-col overflow-hidden border-b border-border md:h-full md:max-h-none md:w-60 md:border-b-0 md:border-r"
-      style={{
-        background: "linear-gradient(180deg, hsl(var(--card) / 0.6) 0%, hsl(var(--card) / 0.3) 100%)",
-
-      }}
-    >
-      <div className="px-3 pb-2 pt-3">
-        <Link href="/settings/account" className="flex h-10 w-full items-center gap-2 rounded-md px-1.5 hover:bg-subtle">
+    <>
+      <div className={cn("pb-2", inDrawer ? "pt-0" : "px-3 pt-3")}>
+        <Link
+          href="/settings/account"
+          onClick={onNavigate}
+          className="flex h-10 w-full items-center gap-2 rounded-md px-1.5 hover:bg-subtle"
+        >
           <Avatar name={user.name ?? user.email ?? "?"} image={user.image} size={26} />
           <span className="min-w-0 flex-1 text-left">
             <span className="block truncate text-sm font-semibold tracking-tight">{user.name ?? "You"}</span>
-            <span className="block truncate text-[10px] text-muted-foreground">{user.email}</span>
+            <span className="block truncate text-meta text-muted-foreground">{user.email}</span>
           </span>
           <ChevronDown size={12} className="text-muted-foreground" />
         </Link>
       </div>
 
-      <button className="mx-2 mt-1 flex h-7 items-center gap-2 rounded-md border border-border bg-background/70 px-2 text-xs text-muted-foreground hover:bg-subtle">
+      <button
+        type="button"
+        data-command-palette
+        onClick={onNavigate}
+        className={cn(
+          "mt-1 flex h-9 items-center gap-2 rounded-md border border-border bg-background/70 px-2 text-xs text-muted-foreground hover:bg-subtle",
+          inDrawer ? "" : "mx-2 h-7",
+        )}
+      >
         <Search size={13} />
         <span className="flex-1 truncate text-left">Search everywhere</span>
-        <span className="kbd">⌘K</span>
+        <span className="kbd hidden md:inline-flex">⌘K</span>
       </button>
 
-      <nav className="mt-3 flex flex-col gap-px px-2">
+      <nav className={cn("mt-3 flex flex-col gap-px", inDrawer ? "" : "px-2")}>
         {GLOBAL_NAV.map((it) => (
-          <NavRow key={it.href} item={it} active={activePath === it.href} />
+          <NavRow key={it.href} item={it} active={activePath === it.href} onNavigate={onNavigate} />
         ))}
       </nav>
 
-      <div className="mt-4 flex min-h-0 flex-1 flex-col px-2">
+      <div className={cn("mt-4 flex flex-col", inDrawer ? "" : "min-h-0 flex-1 px-2")}>
         <div className="flex items-center justify-between px-2 pb-1">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Workspaces</span>
-          <Link href="/settings/workspaces" className="text-muted-foreground hover:text-foreground" title="Manage workspaces">
+          <Link
+            href="/settings/workspaces"
+            onClick={onNavigate}
+            className="text-muted-foreground hover:text-foreground"
+            title="Manage workspaces"
+          >
             <Plus size={12} />
           </Link>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pr-1">
+        <div
+          className={cn(
+            "flex flex-col gap-px overflow-y-auto pr-1",
+            inDrawer ? "max-h-[40vh]" : "min-h-0 flex-1",
+          )}
+        >
           {workspaces.map((w) => (
-            <WorkspaceSwitcherCard key={w.id} ws={w} />
+            <WorkspaceSwitcherCard key={w.id} ws={w} onNavigate={onNavigate} />
           ))}
         </div>
       </div>
 
-      <div className="mx-2 mt-2 flex flex-col gap-px border-t border-border/60 pt-2">
+      <div className={cn("mt-2 flex flex-col gap-px border-t border-border/60 pt-2", inDrawer ? "" : "mx-2")}>
         <Link
           href="/settings/agents"
+          onClick={onNavigate}
           className={cn(
             "group flex items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] transition-colors",
             activePath.startsWith("/settings")
@@ -244,11 +285,14 @@ function GlobalSidebar({
         >
           <Settings size={13} />
           <span className="flex-1">Settings</span>
-          <Kbd>,</Kbd>
+          <span className="hidden md:inline-flex">
+            <Kbd>,</Kbd>
+          </span>
         </Link>
         {user.instanceRole === "INSTANCE_ADMIN" && (
           <Link
             href="/admin"
+            onClick={onNavigate}
             className={cn(
               "group flex items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] transition-colors",
               activePath.startsWith("/admin")
@@ -266,19 +310,48 @@ function GlobalSidebar({
       </div>
 
       {/* Build/version chip — at-a-glance "what's running" + What's New. */}
-      <div className="mx-2 mb-1 mt-1 border-t border-border/60 pt-1">
+      <div className={cn("mb-1 mt-1 border-t border-border/60 pt-1", inDrawer ? "" : "mx-2")}>
         <VersionChip />
       </div>
+    </>
+  );
+}
+
+function GlobalSidebar({
+  user,
+  workspaces,
+  activePath,
+}: {
+  user: GlobalShellUser;
+  workspaces: GlobalShellWorkspace[];
+  activePath: string;
+}) {
+  return (
+    <aside
+      className="hidden h-full w-60 min-h-0 shrink-0 flex-col overflow-hidden border-r border-border md:flex"
+      style={{
+        background: "linear-gradient(180deg, hsl(var(--card) / 0.6) 0%, hsl(var(--card) / 0.3) 100%)",
+      }}
+    >
+      <GlobalNavContent user={user} workspaces={workspaces} activePath={activePath} />
     </aside>
   );
 }
 
-function GlobalTopBar({ crumbs }: { crumbs: string[] }) {
+function GlobalTopBar({ crumbs, onOpenNav }: { crumbs: string[]; onOpenNav?: () => void }) {
   return (
     <header
       className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 sm:flex-nowrap sm:gap-3 sm:px-4 sm:py-0"
       style={{ background: "hsl(var(--card) / 0.3)" }}
     >
+      <button
+        type="button"
+        onClick={onOpenNav}
+        aria-label="Open menu"
+        className="focus-ring -ml-1 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground md:hidden"
+      >
+        <Menu size={18} />
+      </button>
       <nav className="flex min-w-0 items-center gap-1 text-meta text-muted-foreground">
         {crumbs.map((c, i) => (
           <span key={i} className="flex min-w-0 items-center gap-1">
@@ -287,17 +360,16 @@ function GlobalTopBar({ crumbs }: { crumbs: string[] }) {
           </span>
         ))}
       </nav>
-      <span className="inline-flex items-center gap-1 rounded-md border border-border/70 bg-card/40 px-1.5 py-0.5 text-meta text-muted-foreground sm:ml-2">
+      <span className="hidden items-center gap-1 rounded-md border border-border/70 bg-card/40 px-1.5 py-0.5 text-meta text-muted-foreground sm:ml-2 sm:inline-flex">
         <Eye size={10} />
-        <span className="hidden sm:inline">Read-only across workspaces</span>
-        <span className="sm:hidden">Read-only</span>
+        <span>Read-only across workspaces</span>
       </span>
-      <div className="ml-auto flex min-w-0 items-center gap-2">
+      <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
         <ActivityPill />
-        <button className="focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground">
+        <button className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-7 sm:w-7">
           <Bell size={14} />
         </button>
-        <button className="focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground">
+        <button className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-7 sm:w-7">
           <HelpCircle size={14} />
         </button>
       </div>
@@ -364,14 +436,26 @@ export function GlobalShell({
 }) {
   const pathname = usePathname();
   const active = activePath ?? pathname ?? "/";
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   return (
-    <div className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground md:flex-row">
+    <div className="flex h-svh w-full overflow-hidden bg-background text-foreground">
       <GlobalSidebar user={user} workspaces={workspaces} activePath={active} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-        <GlobalTopBar crumbs={crumbs} />
+        <GlobalTopBar crumbs={crumbs} onOpenNav={() => setMobileNavOpen(true)} />
         {title && <GlobalPageHeader title={title} subtitle={subtitle} eyebrow={eyebrow} actions={actions} big={big} />}
         <div className={cn("min-h-0 flex-1", contentClass)}>{children}</div>
       </main>
+
+      {/* Mobile nav — bottom-sheet Drawer (md:hidden trigger lives in the top bar). */}
+      <Drawer open={mobileNavOpen} onOpenChange={setMobileNavOpen} title="Menu" maxHeight="min(82vh, 42rem)">
+        <GlobalNavContent
+          user={user}
+          workspaces={workspaces}
+          activePath={active}
+          inDrawer
+          onNavigate={() => setMobileNavOpen(false)}
+        />
+      </Drawer>
     </div>
   );
 }
