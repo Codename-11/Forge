@@ -302,12 +302,27 @@ function failedSelfTest(raw: string, durationMs: number): RuntimeSelfTestResult 
 
 function diagnosticFailureDetail(raw: string): string {
   const detail = sanitizeDetail(raw);
+  if (looksLikeRuntimeEndpointAuthFailure(detail)) {
+    return sanitizeDetail(
+      `Authentication failed at the runtime endpoint: ${detail}. Check the runtime endpoint and saved Forge runtime secret/Bearer token, then retry. This is the transport gate between Forge and the app-server or bridge.`,
+    );
+  }
   if (looksLikeAuthFailure(detail)) {
     return sanitizeDetail(
-      `Authentication failed: ${detail}. Re-authenticate the runtime/provider credentials, refresh or replace the runtime token, then retry.`,
+      `Authentication failed inside the runtime/provider: ${detail}. For Codex app-server runtimes, Forge has reached the app server; refresh the Codex CLI/app-server auth on the host or bridge process, restart it, then retry.`,
     );
   }
   return detail;
+}
+
+function looksLikeRuntimeEndpointAuthFailure(detail: string): boolean {
+  const d = detail.toLowerCase();
+  return (
+    /unexpected server response:\s*(401|403)\b/.test(d) ||
+    /\bwebsocket\b.*\b(401|403|unauthorized|forbidden)\b/.test(d) ||
+    /\bhandshake\b.*\b(401|403|unauthorized|forbidden)\b/.test(d) ||
+    d.includes("bearer token")
+  );
 }
 
 function looksLikeAuthFailure(detail: string): boolean {

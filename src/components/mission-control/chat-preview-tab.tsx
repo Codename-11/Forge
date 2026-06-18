@@ -5,6 +5,20 @@ import { Bot, MessageSquare, SquareArrowOutUpRight } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
 
+function conversationTitle(thread: {
+  title?: string | null;
+  isDefault?: boolean | null;
+  agent: { name: string };
+  latestMessage?: { body: string | null } | null;
+}): string {
+  const title = thread.title?.trim();
+  if (title) return title;
+  if (thread.isDefault) return `Chat with ${thread.agent.name}`;
+  const body = thread.latestMessage?.body?.replace(/\s+/g, " ").trim();
+  if (body) return body.length > 64 ? `${body.slice(0, 61)}...` : body;
+  return "Untitled conversation";
+}
+
 export function ChatPreviewTab({ slug }: { slug: string }) {
   const { data: threads, isLoading } = trpc.chat.threads.useQuery(undefined, {
     staleTime: 30_000,
@@ -40,7 +54,7 @@ export function ChatPreviewTab({ slug }: { slug: string }) {
             return (
               <Link
                 key={thread.id}
-                href={`/w/${slug}/chat?agent=${encodeURIComponent(thread.agent.profileKey)}`}
+                href={`/w/${slug}/chat?thread=${encodeURIComponent(thread.id)}`}
                 className="group flex min-w-0 gap-2 rounded-md border border-border bg-card/40 px-2.5 py-2 hover:border-ember/40"
               >
                 <span
@@ -56,7 +70,7 @@ export function ChatPreviewTab({ slug }: { slug: string }) {
                 <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate text-[0.75rem] font-medium">
-                      {thread.agent.name}
+                      {conversationTitle(thread)}
                     </span>
                     <span className="text-id shrink-0 text-muted-foreground">
                       @{thread.agent.profileKey}

@@ -322,6 +322,8 @@ export function ChatWorkspaceSurface() {
   const searchParams = useSearchParams();
   const utils = trpc.useUtils();
   const threadParam = searchParams.get("thread");
+  const agentParam = searchParams.get("agent");
+  const draftParam = searchParams.get("draft");
   const [query, setQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<ThreadStateFilter>("all");
   const [archived, setArchived] = useState(false);
@@ -339,6 +341,8 @@ export function ChatWorkspaceSurface() {
   const [settingsTitle, setSettingsTitle] = useState("");
   const [settingsTopic, setSettingsTopic] = useState("");
   const [settingsContextMode, setSettingsContextMode] = useState<ChatContextModeValue>("SMART");
+  const [initialDraft, setInitialDraft] = useState<string | null>(null);
+  const consumedDraftRef = useRef<string | null>(null);
 
   // Conversations-pane geometry. Collapse + drag-resize are per-device view
   // state, so they live in localStorage (read once after mount to avoid an
@@ -459,6 +463,18 @@ export function ChatWorkspaceSurface() {
 
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
+  useEffect(() => {
+    const draft = draftParam?.trim();
+    if (!draft || consumedDraftRef.current === draft) return;
+    consumedDraftRef.current = draft;
+    setInitialDraft(draft.slice(0, 4000));
+
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("draft");
+    const suffix = next.toString();
+    router.replace(`/w/${ws.slug}/chat${suffix ? `?${suffix}` : ""}`);
+  }, [draftParam, router, searchParams, ws.slug]);
+
   const selectedThreadFromList = useMemo(
     () => (threadParam ? (threads ?? []).find((thread) => thread.id === threadParam) : null),
     [threadParam, threads],
@@ -503,11 +519,20 @@ export function ChatWorkspaceSurface() {
       setSelectedAgentId(null);
       return;
     }
+    if (agentParam && agents) {
+      const requestedAgent = agents.find(
+        (agent) => agent.profileKey === agentParam || agent.id === agentParam,
+      );
+      if (requestedAgent) {
+        if (selectedAgentId !== requestedAgent.id) setSelectedAgentId(requestedAgent.id);
+        return;
+      }
+    }
     if (!selectedAgentId) {
       const fallbackAgentId = threads?.[0]?.agent.id ?? agents?.[0]?.id ?? null;
       if (fallbackAgentId) setSelectedAgentId(fallbackAgentId);
     }
-  }, [agents, selectedAgentId, selectedThread, threadSelectionUnavailable, threads]);
+  }, [agentParam, agents, selectedAgentId, selectedThread, threadSelectionUnavailable, threads]);
 
   // First load with no ?thread → drop into the most-recently-active thread
   // (chat.threads is ordered lastMessageAt desc) instead of an empty pane.
@@ -519,12 +544,16 @@ export function ChatWorkspaceSurface() {
       autoOpenedRef.current = true;
       return;
     }
+    if (agentParam) {
+      autoOpenedRef.current = true;
+      return;
+    }
     if (!threads) return;
     autoOpenedRef.current = true;
     if (threads.length > 0) {
       router.replace(`/w/${ws.slug}/chat?thread=${encodeURIComponent(threads[0].id)}`);
     }
-  }, [threadParam, threads, router, ws.slug]);
+  }, [agentParam, threadParam, threads, router, ws.slug]);
 
   const threadAgentIds = useMemo(
     () =>
@@ -1212,6 +1241,7 @@ export function ChatWorkspaceSurface() {
               <ChatThreadView
                 agentId={selectedAgentId}
                 threadId={selectedThread?.id ?? threadParam ?? null}
+                initialDraft={initialDraft}
                 onThreadCreated={(threadId, agentId) => {
                   setSelectedAgentId(agentId);
                   router.replace(`/w/${ws.slug}/chat?thread=${encodeURIComponent(threadId)}`);

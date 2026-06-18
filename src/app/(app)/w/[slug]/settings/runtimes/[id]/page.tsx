@@ -26,6 +26,7 @@ import { RuntimeProvisioning } from "@/components/settings/runtime-provisioning"
 import {
   RuntimeSelfTestBadge,
   RuntimeSelfTestLine,
+  RuntimeSelfTestNotice,
 } from "@/components/settings/runtime-self-test";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
@@ -339,6 +340,14 @@ export default function RuntimeDetailPage() {
                         </div>
                       </div>
                     </div>
+                    <RuntimeSelfTestNotice
+                      selfTest={runtime.selfTest}
+                      adapterKey={runtime.adapterKey}
+                      fixHref={runtimeSelfTestFixHref(ws.slug, runtime)}
+                      onEdit={() => setEditOpen(true)}
+                      onRunSelfTest={() => runSelfTest.mutate({ id })}
+                      running={runSelfTest.isPending}
+                    />
                     {runtime.endpoint && (
                       <div className="text-meta text-muted-foreground">
                         endpoint{" "}
@@ -590,6 +599,56 @@ export default function RuntimeDetailPage() {
       />
     </>
   );
+}
+
+type RuntimeDetailForFix = {
+  id: string;
+  name: string;
+  adapterKey: string | null;
+  endpoint: string | null;
+  health: {
+    label: string;
+    reason: string;
+    lastSignal: string;
+    sweepExpectation: string;
+    adapter: string;
+  };
+  selfTest: {
+    status: string;
+    label: string;
+    detail: string;
+    expectation: string;
+    durationMs: number | null;
+    lastRunAt: Date | string | null;
+  };
+  agents: Array<{ name: string; profileKey: string }>;
+};
+
+function runtimeSelfTestFixHref(slug: string, runtime: RuntimeDetailForFix): string {
+  const params = new URLSearchParams();
+  const agent = runtime.agents[0];
+  if (agent) params.set("agent", agent.profileKey);
+  params.set("draft", runtimeSelfTestFixDraft(runtime));
+  return `/w/${slug}/chat?${params.toString()}`;
+}
+
+function runtimeSelfTestFixDraft(runtime: RuntimeDetailForFix): string {
+  const agent = runtime.agents[0];
+  return [
+    `Help me fix this Forge runtime self-test failure.`,
+    ``,
+    `Runtime: ${runtime.name} (${runtime.id})`,
+    `Adapter: ${runtime.adapterKey ?? "none"}`,
+    `Endpoint: ${runtime.endpoint ?? "none"}`,
+    `Bound agent: ${agent ? `${agent.name} @${agent.profileKey}` : "none"}`,
+    `Runtime health: ${runtime.health.label} - ${runtime.health.reason}`,
+    `Last signal: ${runtime.health.lastSignal}`,
+    `Probe/sweep: ${runtime.health.sweepExpectation}`,
+    `Self-test: ${runtime.selfTest.label}`,
+    `Self-test detail: ${runtime.selfTest.detail}`,
+    ``,
+    `Please identify whether this is Forge-to-runtime endpoint auth, Codex app-server host auth, runtime config, or transport. Give the exact next checks and do not ask me to paste secrets.`,
+  ].join("\n");
 }
 
 function KindBadge({ kind }: { kind: RuntimeKind }) {

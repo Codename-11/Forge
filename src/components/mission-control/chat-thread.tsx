@@ -711,11 +711,14 @@ function runtimeConfigYoloDefault(agent: unknown): boolean {
 export function ChatThreadView({
   agentId,
   threadId: selectedThreadId,
+  initialDraft,
   autoFocus = false,
   onThreadCreated,
 }: {
   agentId: string;
   threadId?: string | null;
+  /** Optional one-shot composer seed from a deep link. Never auto-sends. */
+  initialDraft?: string | null;
   /** Focus the composer textarea on mount (used when the Chat tab becomes active). */
   autoFocus?: boolean;
   /** Called when this surface creates a new conversation, e.g. `/new`. */
@@ -1908,6 +1911,13 @@ export function ChatThreadView({
   const fillComposer = useCallback((body: string) => {
     setFillRequest((prev) => ({ body, nonce: (prev?.nonce ?? 0) + 1 }));
   }, []);
+  const seededInitialDraftRef = useRef<string | null>(null);
+  useEffect(() => {
+    const body = initialDraft?.trim();
+    if (!body || seededInitialDraftRef.current === body) return;
+    seededInitialDraftRef.current = body;
+    fillComposer(body);
+  }, [fillComposer, initialDraft]);
 
   const findPreviousUserBody = useCallback(
     (messageId: string) => {

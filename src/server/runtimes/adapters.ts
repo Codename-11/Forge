@@ -230,9 +230,13 @@ in Forge (owns the loop, streams, approvals), the OpenAI analogue to Hermes.
 2. Add a runtime here with this adapter; set **endpoint** to the
    \`ws(s)://HOST:PORT\` URL and (if your deployment gates the socket) a
    **secret** sent as a Bearer header.
-3. Register a Codex Agent and **attach it to this runtime**. It defaults to the
+3. The app server uses the Codex auth configured on the host/bridge process
+   (the same account/token your \`codex\` CLI session uses). Forge's runtime
+   **secret** only authenticates Forge to the bridge/socket; it does not log
+   Codex into OpenAI.
+4. Register a Codex Agent and **attach it to this runtime**. It defaults to the
    Runs engine, so it chats as itself with its own tools + approvals.
-4. (Optional) Set **sandbox mode** + **approval policy** + **workspace root** on
+5. (Optional) Set **sandbox mode** + **approval policy** + **workspace root** on
    the runtime — the connector sends them per turn (defaults: full access, no
    prompts). Use **Disable** to pause the runtime without deleting it.
 

@@ -10435,3 +10435,27 @@ the visible page content.
 Verification: focused `pnpm exec playwright test
 tests/e2e/mobile-smoke.spec.ts --grep "global activity" --workers=1` clean;
 full `pnpm exec playwright test --workers=1` clean (34 passed).
+
+## 2026-06-18 — Runtime self-test repair flow + Mission Control CI fix
+
+Runtime self-test failures were technically recorded, but the runtime detail
+UI did not explain whether a Codex app-server failure was Forge endpoint auth
+or Codex host/provider auth, and the Mission Control chat e2e still expected
+the removed compact search UI.
+
+- Added an actionable failed self-test notice on runtime detail pages with
+  cause-specific checks, edit/retry controls, and a Fix in Chat deep link that
+  preloads the diagnostic context without sending it automatically.
+- Clarified Codex app-server setup copy: Forge's runtime secret authenticates
+  the bridge/socket; Codex app-server auth comes from the host/bridge Codex CLI
+  account or token.
+- Split endpoint Bearer/socket auth failures from provider/runtime auth
+  failures in the self-test diagnostic detail.
+- Updated Chat deep links to honor `agent=` and one-shot `draft=` parameters,
+  and made Mission Control chat previews link directly to the exact thread.
+- Updated stale Mission Control/chat read-state e2e coverage for the preview
+  model and suppressed the offline-pages prompt during those specs.
+
+Verification: `pnpm exec tsc --noEmit --pretty false` clean; `pnpm lint`
+clean; full `pnpm test` clean (930 passed / 1 skipped); full `pnpm test:e2e`
+clean (34 passed).

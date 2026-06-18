@@ -222,6 +222,8 @@ describe("runtime dispatch contract", () => {
       expect(res.result.attempted).toBe(true);
       expect(res.result.status).toBe("FAILED");
       expect(res.result.detail).toMatch(/Authentication failed/i);
+      expect(res.result.detail).toMatch(/inside the runtime\/provider/i);
+      expect(res.result.detail).toMatch(/Codex CLI\/app-server auth/i);
       expect(res.result.detail).toMatch(/refresh token revoked/i);
       expect(res.result.detail).not.toContain("super-secret-token");
 

@@ -14,6 +14,11 @@ function createdThreadIdFromResponse(payload: unknown): string {
 
 test.describe("Chat conversation settings and read state", () => {
   test.describe.configure({ mode: "serial" });
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("forge.pwa.offline-pages.prompted", "1");
+    });
+  });
 
   test("renames a conversation and persists context policy", async ({ page }) => {
     const title = `E2E settings ${Date.now()}`;
@@ -48,7 +53,9 @@ test.describe("Chat conversation settings and read state", () => {
     await modal.getByRole("button", { name: /save settings/i }).click();
 
     await expect(modal).toBeHidden();
-    await expect(page.getByText(renamed).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: new RegExp(renamed) })).toBeVisible({
+      timeout: 30_000,
+    });
 
     await page.getByRole("button", { name: /^conversation$/i }).click();
     await expect(modal.getByRole("textbox", { name: /^Title$/ })).toHaveValue(renamed);
@@ -109,8 +116,9 @@ test.describe("Chat conversation settings and read state", () => {
     );
     await page.goto("/w/forge/dashboard");
     await page.getByTestId("mission-control-pill-chat").click();
-    await expect(page.getByLabel("Search Mission Control chats")).toBeVisible();
-    await page.getByRole("button", { name: new RegExp(title) }).click();
+    await expect(page.getByRole("link", { name: /full chat/i })).toBeVisible();
+    await page.getByRole("link", { name: new RegExp(title) }).click();
+    await expect(page).toHaveURL(new RegExp(`/w/forge/chat\\?thread=${threadId}`));
 
     await expect
       .poll(async () =>
