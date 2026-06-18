@@ -29,6 +29,10 @@ import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
+import {
+  RuntimeSelfTestBadge,
+  RuntimeSelfTestLine,
+} from "@/components/settings/runtime-self-test";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -191,6 +195,7 @@ export default function RuntimesPage() {
     adapterKey: string | null;
     config: unknown;
   } | null>(null);
+  const [selfTestTargetId, setSelfTestTargetId] = useState<string | null>(null);
 
   const { data: adapters } = trpc.runtime.adapters.useQuery();
   const { data: plannedAdapters } = trpc.runtime.plannedAdapters.useQuery();
@@ -240,6 +245,21 @@ export default function RuntimesPage() {
       invalidate();
     },
     onError: (e) => toast.error(e.message),
+  });
+
+  const runSelfTest = trpc.runtime.runSelfTest.useMutation({
+    onSuccess: (res) => {
+      const ok = res.result.status === "PASSED";
+      const unsupported = res.result.status === "UNSUPPORTED";
+      const notify = ok ? toast.success : unsupported ? toast.info : toast.error;
+      notify(res.result.detail);
+      setSelfTestTargetId(null);
+      invalidate();
+    },
+    onError: (e) => {
+      setSelfTestTargetId(null);
+      toast.error(e.message);
+    },
   });
 
   const rows = runtimes ?? [];
@@ -327,6 +347,7 @@ export default function RuntimesPage() {
                           </span>
                         )}
                         <RuntimeHealthBadge health={rt.health} />
+                        <RuntimeSelfTestBadge selfTest={rt.selfTest} />
                         {rt.providersAvailable.length > 0 && (
                           <div className="flex flex-wrap items-center gap-1">
                             {rt.providersAvailable.map((p) => (
@@ -346,6 +367,8 @@ export default function RuntimesPage() {
                         <span>{rt.health.reason}</span>
                         <span>·</span>
                         <span>{rt.health.sweepExpectation}</span>
+                        <span>·</span>
+                        <RuntimeSelfTestLine selfTest={rt.selfTest} />
                         <span>·</span>
                         <span className="inline-flex items-center gap-1.5">
                           <UsersIcon className="h-3 w-3" />
@@ -385,6 +408,20 @@ export default function RuntimesPage() {
                           View
                         </Button>
                       </Link>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setSelfTestTargetId(rt.id);
+                          runSelfTest.mutate({ id: rt.id });
+                        }}
+                        disabled={runSelfTest.isPending || isArchived}
+                        title={rt.selfTest.expectation}
+                      >
+                        {runSelfTest.isPending && selfTestTargetId === rt.id
+                          ? "Testing…"
+                          : "Self-test"}
+                      </Button>
                       <Button
                         size="sm"
                         variant="ghost"

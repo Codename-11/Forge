@@ -3,7 +3,6 @@ import { useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
-  AlertTriangle,
   ArrowRight,
   Bot,
   CalendarClock,
@@ -14,7 +13,6 @@ import {
   FileText,
   Inbox,
   Loader2,
-  Shield,
   ShieldCheck,
   Sparkles,
   StopCircle,
@@ -27,6 +25,8 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Picker } from "@/components/ui/modal";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { AgentAttentionPanel } from "@/components/agent-attention-panel";
+import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timeline";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -137,6 +137,9 @@ export default function CommandCenterPage() {
       void utils.agentRun.list.invalidate();
     },
   });
+  const attentionCount = data
+    ? data.actionRequests.length + data.reviewGates.length + data.stalledRuns.length
+    : 0;
 
   return (
     <>
@@ -161,22 +164,65 @@ export default function CommandCenterPage() {
             description="The command center couldn't fetch its summary."
           />
         ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-            <Section
-              icon={<Inbox className="h-3.5 w-3.5" />}
-              title="Asks for you"
-              empty="Nothing waiting on you."
-              count={data.actionRequests.length}
-            >
-              {data.actionRequests.map((row) => (
-                <ActionRequestDecisionCard
-                  key={row.id}
-                  request={row}
-                  slug={ws.slug}
-                  onResolved={() => dropActionRequest(row.id)}
-                />
-              ))}
-            </Section>
+          <div className="mx-auto max-w-7xl space-y-4">
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+              <Section
+                icon={<Inbox className="h-3.5 w-3.5" />}
+                title="Attention queue"
+                empty="Nothing waiting on you."
+                count={attentionCount}
+                className="min-w-0"
+                action={
+                  data.stalledRuns.length > 0 && canRecoverRuns ? (
+                    <RunRecoveryBulkActions
+                      runs={data.stalledRuns}
+                      pending={recoverRuns.isPending}
+                      onRecover={(action, runIds) => recoverRuns.mutate({ action, runIds })}
+                    />
+                  ) : null
+                }
+              >
+                <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
+                  {data.actionRequests.map((row) => (
+                    <ActionRequestDecisionCard
+                      key={row.id}
+                      request={row}
+                      slug={ws.slug}
+                      onResolved={() => dropActionRequest(row.id)}
+                    />
+                  ))}
+                  {data.stalledRuns.map((row) => (
+                    <RunFailureCard
+                      key={row.id}
+                      run={row}
+                      slug={ws.slug}
+                      canRecover={canRecoverRuns}
+                      pending={recoverRuns.isPending}
+                      onRecover={(action) => recoverRuns.mutate({ action, runIds: [row.id] })}
+                    />
+                  ))}
+                  {data.reviewGates.map((row) => (
+                    <ReviewGateDecisionCard
+                      key={row.id}
+                      gate={row}
+                      slug={ws.slug}
+                      onResolved={() => dropReviewGate(row.id)}
+                    />
+                  ))}
+                </div>
+              </Section>
+
+            <WorkspaceActivityTimeline
+              limit={8}
+              defaultFilter="decisions"
+              className="min-w-0"
+            />
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className="lg:col-span-3">
+                <AgentAttentionPanel slug={ws.slug} showEmpty limit={6} itemLimit={2} />
+              </div>
 
             <Section
               icon={<Target className="h-3.5 w-3.5" />}
@@ -240,22 +286,6 @@ export default function CommandCenterPage() {
             </Section>
 
             <Section
-              icon={<Shield className="h-3.5 w-3.5" />}
-              title="Review gates"
-              empty="No pending gates."
-              count={data.reviewGates.length}
-            >
-              {data.reviewGates.map((row) => (
-                <ReviewGateDecisionCard
-                  key={row.id}
-                  gate={row}
-                  slug={ws.slug}
-                  onResolved={() => dropReviewGate(row.id)}
-                />
-              ))}
-            </Section>
-
-            <Section
               icon={<Workflow className="h-3.5 w-3.5" />}
               title="Active runs"
               empty="No agents running."
@@ -283,34 +313,6 @@ export default function CommandCenterPage() {
                     </span>
                   ) : null}
                 </Link>
-              ))}
-            </Section>
-
-            <Section
-              icon={<AlertTriangle className="h-3.5 w-3.5" />}
-              title="Run recovery"
-              empty="No run recovery needed."
-              count={data.stalledRuns.length}
-              tone="warning"
-              action={
-                data.stalledRuns.length > 0 && canRecoverRuns ? (
-                  <RunRecoveryBulkActions
-                    runs={data.stalledRuns}
-                    pending={recoverRuns.isPending}
-                    onRecover={(action, runIds) => recoverRuns.mutate({ action, runIds })}
-                  />
-                ) : null
-              }
-            >
-              {data.stalledRuns.map((row) => (
-                <RunFailureCard
-                  key={row.id}
-                  run={row}
-                  slug={ws.slug}
-                  canRecover={canRecoverRuns}
-                  pending={recoverRuns.isPending}
-                  onRecover={(action) => recoverRuns.mutate({ action, runIds: [row.id] })}
-                />
               ))}
             </Section>
 
@@ -377,6 +379,7 @@ export default function CommandCenterPage() {
                 </Link>
               </Section>
             ) : null}
+            </div>
           </div>
         )}
       </div>
@@ -850,6 +853,7 @@ function Section({
   count,
   tone,
   action,
+  className,
   children,
 }: {
   icon: React.ReactNode;
@@ -858,10 +862,11 @@ function Section({
   count: number;
   tone?: "warning";
   action?: React.ReactNode;
+  className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-2">
+    <section className={`flex flex-col gap-2 ${className ?? ""}`}>
       <header className="flex min-w-0 items-center justify-between gap-2 text-meta uppercase tracking-wide text-muted-foreground">
         <div className="flex min-w-0 items-center gap-1.5">
           {icon}

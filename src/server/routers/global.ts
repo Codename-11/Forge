@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { router, globalProcedure } from "@/server/trpc";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { runtimeConfigStatus } from "@/server/services/runtime-config";
+import { summarizeRuntimeSelfTest } from "@/server/services/runtime-self-test";
 
 /**
  * Cross-workspace, read-only aggregations for the global "concourse"
@@ -169,6 +170,10 @@ export const globalRouter = router({
         lastProbeAttempted: true,
         lastProbeReachable: true,
         lastProbeDetail: true,
+        lastSelfTestAt: true,
+        lastSelfTestStatus: true,
+        lastSelfTestDetail: true,
+        lastSelfTestDurationMs: true,
         connectedAt: true,
         disabledAt: true,
         archivedAt: true,
@@ -202,6 +207,7 @@ export const globalRouter = router({
         lastProbeReachable: r.lastProbeReachable,
         lastProbeDetail: r.lastProbeDetail,
         health,
+        selfTest: summarizeRuntimeSelfTest(r),
         configStatus: runtimeConfigStatus(r.adapterKey, r.config),
         connectedAt: r.connectedAt,
         registeredAt: r.createdAt,

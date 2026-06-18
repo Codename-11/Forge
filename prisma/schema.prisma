@@ -307,6 +307,12 @@ enum RuntimeKind {
   CLOUD
 }
 
+enum RuntimeSelfTestStatus {
+  PASSED
+  FAILED
+  UNSUPPORTED
+}
+
 /// Lifecycle of the AI triage suggestion attached to an issue at create
 /// time. Null = AI was disabled or skipped (agent-authored, etc.).
 enum AiTriageStatus {
@@ -1760,6 +1766,13 @@ model Runtime {
   lastProbeAttempted Boolean         @default(false)
   lastProbeReachable Boolean?
   lastProbeDetail    String?
+  /// Last operator-requested self-test turn. Unlike `lastProbe*`, this is a
+  /// real minimal adapter run where supported, so it catches provider auth
+  /// failures that only surface when starting a turn.
+  lastSelfTestAt         DateTime?
+  lastSelfTestStatus     RuntimeSelfTestStatus?
+  lastSelfTestDetail     String?
+  lastSelfTestDurationMs Int?
   /// Last connect time for LOCAL_DAEMON (when the SSE subscription
   /// opened). Null for REMOTE_HTTP.
   connectedAt        DateTime?

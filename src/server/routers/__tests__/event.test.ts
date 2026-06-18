@@ -1,8 +1,9 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { EventKind } from "@prisma/client";
+import { AgentRunStatus, EventKind, NotificationSeverity } from "@prisma/client";
 import { eventRouter } from "@/server/routers/event";
 import {
   buildContext,
+  createIssue,
   createWorkspaceFixture,
   disconnectPrisma,
   getPrisma,
@@ -113,5 +114,79 @@ describe("eventRouter", () => {
     await expect(secondCaller.unreadCount({ since: new Date(0) })).resolves.toMatchObject({
       count: 1,
     });
+  });
+
+  it("maps workspace activity into display-ready timeline rows", async () => {
+    const { fixture, prisma, agent, caller } = await setup();
+    const issue = await createIssue(fixture, { title: "Runtime auth blocker" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.STALLED,
+        summary: "Refresh token was revoked.",
+      },
+    });
+    const event = await prisma.activityEvent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_RUN_STALLED,
+        actorId: null,
+        subjectType: "agent-run",
+        subjectId: run.id,
+        payload: {
+          runId: run.id,
+          issueId: issue.id,
+          agentId: agent.id,
+          summary: "Refresh token was revoked.",
+        },
+      },
+    });
+
+    const result = await caller.timeline({ filter: "agents", limit: 5 });
+    const row = result.items.find((item) => item.id === event.id);
+
+    expect(row).toBeTruthy();
+    expect(row).toMatchObject({
+      category: "decision",
+      tone: "danger",
+      href: `/w/${fixture.workspace.slug}/i/${fixture.workspace.key}-${issue.number}`,
+    });
+    expect(row?.title).toContain("@event-bot");
+    expect(row?.detail).toContain("Refresh token");
+  });
+
+  it("rolls up agent attention by questions and blocked runs", async () => {
+    const { fixture, prisma, agent, caller } = await setup();
+    const issue = await createIssue(fixture, { title: "Review runtime access" });
+    await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Need repo access",
+        body: "Can I read /home/bailey/forge?",
+        severity: NotificationSeverity.WARNING,
+        requestedByAgentId: agent.id,
+        issueId: issue.id,
+      },
+    });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.STALLED,
+        summary: "The runtime cannot refresh its token.",
+      },
+    });
+
+    const result = await caller.agentAttention({ limit: 5, itemLimit: 5 });
+    const row = result.agents.find((item) => item.agent.id === agent.id);
+
+    expect(row?.counts.questions).toBe(1);
+    expect(row?.counts.blocked).toBe(1);
+    expect(row?.items.map((item) => item.kind)).toEqual(
+      expect.arrayContaining(["question", "blocked"]),
+    );
   });
 });

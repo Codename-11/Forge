@@ -41,6 +41,8 @@ import { AgentActivityTile } from "@/components/dashboard/agent-activity-tile";
 import { NeedsYouTile } from "@/components/dashboard/needs-you-tile";
 import { PulseTile } from "@/components/dashboard/pulse-tile";
 import { ResumeTile } from "@/components/dashboard/resume-tile";
+import { AgentAttentionPanel } from "@/components/agent-attention-panel";
+import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timeline";
 import {
   DashboardStack,
   type DashboardLayout,
@@ -103,7 +105,6 @@ export default function DashboardPage() {
   const stalledQ = trpc.dashboard.stalledInProgress.useQuery({ limit: 8 });
 
   const isAdmin = me?.role === "OWNER" || me?.role === "ADMIN";
-  const events = trpc.admin.events.useQuery({ limit: 8 }, { enabled: !!isAdmin, retry: false });
   const prefs = useTimePrefs();
 
   const workspaceKey = ws?.key ?? "—";
@@ -200,6 +201,18 @@ export default function DashboardPage() {
         title: "Agent activity",
         defaultWidth: "half",
         node: <AgentActivityTile slug={slug} />,
+      },
+      {
+        id: "agent-attention",
+        title: "Agent attention",
+        defaultWidth: "half",
+        node: <AgentAttentionPanel slug={slug} />,
+      },
+      {
+        id: "workspace-activity",
+        title: "Workspace activity",
+        defaultWidth: "full",
+        node: <WorkspaceActivityTimeline limit={8} />,
       },
       { id: "ideas", title: "Ideas", defaultWidth: "half", node: <IdeasTile slug={slug} /> },
       {
@@ -343,40 +356,22 @@ export default function DashboardPage() {
           />
 
           <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            {isAdmin && !events.isError ? (
-              <Column title="Recent activity" hint="Workspace events">
-                <Rows loading={events.isLoading} empty="No activity yet.">
-                  {(events.data?.items ?? []).slice(0, 8).map((e) => (
-                    <li key={e.id} className="flex items-center gap-2 text-xs">
-                      <span className="truncate text-id text-muted-foreground">
-                        {e.kind.replace(/_/g, " ").toLowerCase()}
-                      </span>
-                      <span className="ml-auto text-meta text-muted-foreground">
-                        {relativeTime(e.createdAt)}
-                      </span>
-                    </li>
-                  ))}
-                </Rows>
-              </Column>
-            ) : (
-              <Column title="Recent issues" hint="Most recently touched">
-                <Rows loading={active.isLoading} empty="No active issues.">
-                  {recent.map((i) => (
-                    <IssueRow
-                      key={i.id}
-                      id={i.id}
-                      number={i.number}
-                      title={i.title}
-                      priority={i.priority}
-                      trailing={relativeTime(i.updatedAt)}
-                      workspaceKey={workspaceKey}
-                      slug={slug}
-                    />
-                  ))}
-                </Rows>
-              </Column>
-            )}
-
+            <Column title="Recent issues" hint="Most recently touched">
+              <Rows loading={active.isLoading} empty="No active issues.">
+                {recent.map((i) => (
+                  <IssueRow
+                    key={i.id}
+                    id={i.id}
+                    number={i.number}
+                    title={i.title}
+                    priority={i.priority}
+                    trailing={relativeTime(i.updatedAt)}
+                    workspaceKey={workspaceKey}
+                    slug={slug}
+                  />
+                ))}
+              </Rows>
+            </Column>
             <Column title="By status" hint="Active work across the pipeline">
               <Rows loading={!statuses} empty="No statuses configured.">
                 {statusRows.map(({ status, count }) => (

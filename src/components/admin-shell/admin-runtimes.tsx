@@ -1,6 +1,7 @@
 "use client";
 import { trpc } from "@/lib/trpc";
 import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
+import { RuntimeSelfTestLine } from "@/components/settings/runtime-self-test";
 import { ADMIN, AdminPanel, AdminLoading, AdminEmpty } from "./admin-ui";
 
 /**
@@ -72,6 +73,10 @@ export function AdminRuntimes() {
                   <span className="block truncate text-[10px]" style={{ color: ADMIN.textDim }} title={r.health.reason}>
                     {r.health.reason}
                   </span>
+                  <RuntimeSelfTestLine
+                    selfTest={r.selfTest}
+                    className="block text-[10px]"
+                  />
                 </span>
                 <span className="truncate text-meta font-mono" style={{ color: ADMIN.textSoft }}>
                   {r.kind.toLowerCase()}

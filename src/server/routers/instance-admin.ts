@@ -5,6 +5,7 @@ import { router, instanceAdminProcedure } from "@/server/trpc";
 import { ensureWorkspaceBucket } from "@/server/services/storage";
 import { runtimeConfigStatus } from "@/server/services/runtime-config";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
+import { summarizeRuntimeSelfTest } from "@/server/services/runtime-self-test";
 
 const slugSchema = z
   .string()
@@ -112,6 +113,10 @@ export const instanceAdminRouter = router({
         lastProbeAttempted: true,
         lastProbeReachable: true,
         lastProbeDetail: true,
+        lastSelfTestAt: true,
+        lastSelfTestStatus: true,
+        lastSelfTestDetail: true,
+        lastSelfTestDurationMs: true,
         connectedAt: true,
         endpoint: true,
         config: true,
@@ -128,6 +133,7 @@ export const instanceAdminRouter = router({
       return {
         ...r,
         health,
+        selfTest: summarizeRuntimeSelfTest(r),
         configStatus: runtimeConfigStatus(r.adapterKey, r.config),
         online: health.kind === "online",
         boundAgents: r._count.agents,

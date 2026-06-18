@@ -5,6 +5,10 @@ import { Bot, Server, Settings, Sparkles } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Spinner, EmptyState } from "@/components/ui";
 import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
+import {
+  RuntimeSelfTestBadge,
+  RuntimeSelfTestLine,
+} from "@/components/settings/runtime-self-test";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
@@ -120,6 +124,7 @@ export default function RuntimesPage() {
                           <span className="text-meta text-muted-foreground">
                             {r.health.label}
                           </span>
+                          <RuntimeSelfTestBadge selfTest={r.selfTest} />
                         </div>
                         {r.endpoint && (
                           <div className="truncate text-meta text-muted-foreground">{r.endpoint}</div>
@@ -137,7 +142,7 @@ export default function RuntimesPage() {
                       )}
                     </header>
 
-                    <div className="grid grid-cols-3 gap-2 text-meta">
+                    <div className="grid grid-cols-2 gap-2 text-meta sm:grid-cols-4">
                       <div>
                         <div className="text-muted-foreground">Last signal</div>
                         <div className="mt-0.5">{r.health.lastSignal}</div>
@@ -150,6 +155,12 @@ export default function RuntimesPage() {
                         <div className="text-muted-foreground">Adapter</div>
                         <div className="mt-0.5 font-mono text-[11px]">
                           {r.health.adapter}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Self-test</div>
+                        <div className="mt-0.5">
+                          <RuntimeSelfTestLine selfTest={r.selfTest} />
                         </div>
                       </div>
                     </div>

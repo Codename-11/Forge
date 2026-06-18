@@ -15,6 +15,10 @@ import {
   sanitizeRuntimeProbeDetail,
 } from "@/server/services/runtime-status";
 import { runtimeConfigStatus, validateRuntimeConfig } from "@/server/services/runtime-config";
+import {
+  runRuntimeSelfTest,
+  summarizeRuntimeSelfTest,
+} from "@/server/services/runtime-self-test";
 
 /** Compute location a managed adapter's transport implies. */
 function kindForAdapterTransport(transport: string): RuntimeKind {
@@ -82,11 +86,21 @@ type RuntimeForHealth = Pick<
   | "lastProbeDetail"
 >;
 
-function withRuntimeHealth<T extends Partial<Runtime> & RuntimeForHealth>(rt: T) {
+type RuntimeForSelfTest = Pick<
+  Runtime,
+  | "adapterKey"
+  | "lastSelfTestAt"
+  | "lastSelfTestStatus"
+  | "lastSelfTestDetail"
+  | "lastSelfTestDurationMs"
+>;
+
+function withRuntimeHealth<T extends Partial<Runtime> & RuntimeForHealth & RuntimeForSelfTest>(rt: T) {
   return {
     ...redactRuntime(rt),
     health: deriveRuntimeHealthStatus(rt),
     configStatus: runtimeConfigStatus(rt.adapterKey, rt.config),
+    selfTest: summarizeRuntimeSelfTest(rt),
   };
 }
 
@@ -430,6 +444,37 @@ export const runtimeRouter = router({
           detail: data.lastProbeDetail ?? probe.detail,
         },
         health,
+      };
+    }),
+
+  runSelfTest: workspaceProcedure
+    .input(z.object({ id: runtimeId }))
+    .mutation(async ({ ctx, input }) => {
+      const runtime = await ctx.db.runtime.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+      });
+      if (!runtime) throw new TRPCError({ code: "NOT_FOUND" });
+      if (runtime.archivedAt) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Runtime is archived; restore it before running a self-test.",
+        });
+      }
+
+      const result = await runRuntimeSelfTest(runtime);
+      const updated = await ctx.db.runtime.update({
+        where: { id: runtime.id },
+        data: {
+          lastSelfTestAt: new Date(),
+          lastSelfTestStatus: result.status,
+          lastSelfTestDetail: result.detail,
+          lastSelfTestDurationMs: result.durationMs,
+        },
+      });
+      return {
+        runtime: withRuntimeHealth(updated),
+        selfTest: summarizeRuntimeSelfTest(updated),
+        result,
       };
     }),
 

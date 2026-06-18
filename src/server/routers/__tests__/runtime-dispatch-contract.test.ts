@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { RuntimeKind } from "@prisma/client";
+import type { AddressInfo } from "node:net";
+import { WebSocketServer } from "ws";
 import { runtimeRouter } from "@/server/routers/runtime";
 import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
 import type { RunEvent } from "@/server/services/dispatch/types";
@@ -30,6 +33,65 @@ describe("runtime dispatch contract", () => {
     name: "Codex",
     endpoint: "ws://127.0.0.1:4505",
   };
+
+  async function startCodexSelfTestServer(
+    complete: "pass" | "revoked-token",
+  ): Promise<{ endpoint: string; close: () => Promise<void> }> {
+    const wss = new WebSocketServer({ port: 0 });
+    wss.on("connection", (socket) => {
+      socket.on("message", (raw) => {
+        const msg = JSON.parse(raw.toString()) as {
+          id?: number;
+          method?: string;
+        };
+        if (msg.method === "initialize" && msg.id !== undefined) {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+          return;
+        }
+        if (msg.method === "thread/start" && msg.id !== undefined) {
+          socket.send(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-self-test" } } }));
+          return;
+        }
+        if (msg.method === "turn/start" && msg.id !== undefined) {
+          socket.send(JSON.stringify({ id: msg.id, result: { turn: { id: "turn-self-test" } } }));
+          setTimeout(() => {
+            if (complete === "pass") {
+              socket.send(
+                JSON.stringify({
+                  method: "item/agentMessage/delta",
+                  params: { delta: "FORGE_RUNTIME_SELF_TEST_OK" },
+                }),
+              );
+              socket.send(
+                JSON.stringify({
+                  method: "turn/completed",
+                  params: { turn: { status: "completed" } },
+                }),
+              );
+              return;
+            }
+            socket.send(
+              JSON.stringify({
+                method: "turn/completed",
+                params: {
+                  turn: {
+                    status: "failed",
+                    error: { message: "OpenAI refresh token revoked" },
+                  },
+                },
+              }),
+            );
+          }, 0);
+        }
+      });
+    });
+    await new Promise<void>((resolve) => wss.once("listening", resolve));
+    const port = (wss.address() as AddressInfo).port;
+    return {
+      endpoint: `ws://127.0.0.1:${port}`,
+      close: () => new Promise<void>((resolve) => wss.close(() => resolve())),
+    };
+  }
 
   it("validates + persists codex config and rejects unknown enum values", async () => {
     const rt = await caller.create({
@@ -103,6 +165,73 @@ describe("runtime dispatch contract", () => {
     expect(fromDetail.lastProbeReachable).toBe(false);
     expect(fromDetail.lastProbeDetail).toBe(verified.probe.detail);
     expect(fromDetail.health.kind).toBe("probe_failed");
+  });
+
+  it("runSelfTest persists unsupported state for runtimes without a self-test adapter", async () => {
+    const rt = await caller.register({
+      name: "Local daemon",
+      kind: RuntimeKind.LOCAL_DAEMON,
+      endpoint: "",
+      providersAvailable: ["CODEX"],
+    });
+
+    const res = await caller.runSelfTest({ id: rt.id });
+
+    expect(res.result.attempted).toBe(false);
+    expect(res.result.status).toBe("UNSUPPORTED");
+    expect(res.selfTest.label).toBe("self-test unsupported");
+
+    const fromDetail = await caller.byId({ id: rt.id });
+    expect(fromDetail.lastSelfTestStatus).toBe("UNSUPPORTED");
+    expect(fromDetail.selfTest.detail).toMatch(/does not support/i);
+  });
+
+  it("runSelfTest starts a real Codex turn and persists a passing result", async () => {
+    const server = await startCodexSelfTestServer("pass");
+    try {
+      const rt = await caller.create({ ...codexInput, endpoint: server.endpoint });
+
+      const res = await caller.runSelfTest({ id: rt.id });
+
+      expect(res.result.attempted).toBe(true);
+      expect(res.result.status).toBe("PASSED");
+      expect(res.result.detail).toContain("FORGE_RUNTIME_SELF_TEST_OK");
+      expect(res.selfTest.label).toBe("self-test passed");
+
+      const fromDetail = await caller.byId({ id: rt.id });
+      expect(fromDetail.lastSelfTestAt).not.toBeNull();
+      expect(fromDetail.lastSelfTestStatus).toBe("PASSED");
+      expect(fromDetail.lastSelfTestDurationMs).toBeGreaterThanOrEqual(0);
+      expect(fromDetail.selfTest.status).toBe("PASSED");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("runSelfTest turns Codex revoked-token failures into actionable diagnostics", async () => {
+    const server = await startCodexSelfTestServer("revoked-token");
+    try {
+      const rt = await caller.create({
+        ...codexInput,
+        endpoint: server.endpoint,
+        secret: "super-secret-token",
+      });
+
+      const res = await caller.runSelfTest({ id: rt.id });
+
+      expect(res.result.attempted).toBe(true);
+      expect(res.result.status).toBe("FAILED");
+      expect(res.result.detail).toMatch(/Authentication failed/i);
+      expect(res.result.detail).toMatch(/refresh token revoked/i);
+      expect(res.result.detail).not.toContain("super-secret-token");
+
+      const fromDetail = await caller.byId({ id: rt.id });
+      expect(fromDetail.lastSelfTestStatus).toBe("FAILED");
+      expect(fromDetail.selfTest.label).toBe("self-test failed");
+      expect(fromDetail.selfTest.detail).toBe(res.result.detail);
+    } finally {
+      await server.close();
+    }
   });
 
   it("setEnabled flips disabledAt, and a disabled runtime resolves to the refusing sentinel", async () => {

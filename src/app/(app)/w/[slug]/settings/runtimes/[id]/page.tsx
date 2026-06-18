@@ -23,6 +23,10 @@ import { CodeBlock } from "@/components/mcp-integration-blocks";
 import { RuntimeToolSurfacePanel } from "@/components/runtime-tool-surface";
 import { RuntimeCredentials } from "@/components/settings/runtime-credentials";
 import { RuntimeProvisioning } from "@/components/settings/runtime-provisioning";
+import {
+  RuntimeSelfTestBadge,
+  RuntimeSelfTestLine,
+} from "@/components/settings/runtime-self-test";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
@@ -102,6 +106,18 @@ export default function RuntimeDetailPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const runSelfTest = trpc.runtime.runSelfTest.useMutation({
+    onSuccess: (res) => {
+      const ok = res.result.status === "PASSED";
+      const unsupported = res.result.status === "UNSUPPORTED";
+      const notify = ok ? toast.success : unsupported ? toast.info : toast.error;
+      notify(res.result.detail);
+      void utils.runtime.byId.invalidate({ id });
+      void utils.runtime.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const setEnabled = trpc.runtime.setEnabled.useMutation({
     onSuccess: (rt) => {
       toast.success(rt.disabledAt ? "Runtime disabled." : "Runtime enabled.");
@@ -163,6 +179,15 @@ export default function RuntimeDetailPage() {
                 disabled={verify.isPending}
               >
                 {verify.isPending ? "Testing…" : "Test connection"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => runSelfTest.mutate({ id })}
+                disabled={runSelfTest.isPending}
+                title={runtime.selfTest.expectation}
+              >
+                {runSelfTest.isPending ? "Self-testing…" : "Run self-test"}
               </Button>
               <Button
                 size="sm"
@@ -234,6 +259,7 @@ export default function RuntimeDetailPage() {
                       <h2 className="text-sm font-semibold">{runtime.name}</h2>
                       <KindBadge kind={runtime.kind} />
                       <RuntimeHealthBadge health={runtime.health} />
+                      <RuntimeSelfTestBadge selfTest={runtime.selfTest} />
                       {runtime.providersAvailable.map((p) => (
                         <span
                           key={p}
@@ -289,6 +315,20 @@ export default function RuntimeDetailPage() {
                           Probe / sweep
                         </div>
                         <div className="mt-1">{runtime.health.sweepExpectation}</div>
+                      </div>
+                      <div>
+                        <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+                          Self-test
+                        </div>
+                        <div className="mt-1">
+                          <RuntimeSelfTestLine selfTest={runtime.selfTest} />
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
+                          Self-test detail
+                        </div>
+                        <div className="mt-1 text-foreground/80">{runtime.selfTest.detail}</div>
                       </div>
                       <div>
                         <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">

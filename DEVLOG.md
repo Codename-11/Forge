@@ -2,6 +2,40 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-18 — Workspace activity, agent attention, runtime self-tests
+
+Expanded the daily-driving operator surfaces after Dashboard and Command Center
+still made blocked agents and recent workspace change context too hard to read.
+
+Fixes:
+- Added `event.timeline`, a workspace-wide display-ready activity feed that
+  hydrates issues, agents, runs, goals, plans, and execution steps, then returns
+  actor labels, tone, category, detail copy, and canonical jump links for
+  Dashboard/Command Center rows.
+- Added `event.agentAttention`, a per-agent rollup of open questions, review
+  gates, pending runtime approvals, blocked/recoverable runs, and active work.
+- Added reusable `WorkspaceActivityTimeline` and `AgentAttentionPanel`
+  components, then mounted them on Dashboard and Command Center. Dashboard now
+  has a rich workspace activity widget and an agent attention widget; Command
+  Center now prioritizes a combined attention queue before live goals/runs and
+  context.
+- Added runtime self-test persistence (`lastSelfTest*`) and
+  `runtime.runSelfTest`. Hermes and Codex app-server runtimes now run a minimal
+  no-tool test turn through the real dispatch connector, persist pass/fail/
+  unsupported status, sanitize details, and turn auth/token failures into
+  actionable diagnostics.
+- Surfaced self-test status/detail on workspace runtime list/detail, global
+  runtimes, and instance admin runtime views, with actions to run self-tests
+  from the workspace runtime surfaces.
+
+Verify:
+`pnpm vitest run src/server/routers/__tests__/event.test.ts`,
+`pnpm vitest run src/server/routers/__tests__/runtime-dispatch-contract.test.ts`,
+`pnpm vitest run src/server/routers/__tests__/runtime-secrets.test.ts src/server/routers/__tests__/runtime-github-app.test.ts`,
+`pnpm prisma generate`, `pnpm prisma migrate deploy`, `pnpm lint`,
+`pnpm typecheck`, `pnpm test`,
+`E2E_FORCE_BUILD=1 pnpm exec playwright test --workers=1`.
+
 ## 2026-06-18 — Goal/Plan blocked-run recovery controls
 
 Audited the Goals/Plans/Crews auto-execution flow after the live Dev-Team goal
