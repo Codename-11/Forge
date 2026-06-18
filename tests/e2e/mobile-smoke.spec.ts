@@ -132,39 +132,45 @@ test.describe("Mobile smoke", () => {
       await page.setViewportSize({ width, height: HEIGHT });
 
       await page.goto("/");
-      await expect(page.getByText("Mission Control").first()).toBeVisible();
+      await expect(
+        page.getByRole("heading", { name: "Mission Control" }),
+      ).toBeVisible();
       const activityPill = page.getByTitle("Activity · live runs + chat (G 5)");
       await expect(activityPill).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `mission control activity pill at ${width}px`);
 
       await activityPill.click();
       await expect(page).toHaveURL(/\/activity$/);
-      await expect(page.getByText("Activity").first()).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `activity feed at ${width}px`);
 
       await page.goto("/settings/agents");
       await expect(page.getByPlaceholder("Search settings")).toBeVisible();
-      await expect(page.getByText("Agent profiles").first()).toBeVisible();
+      await expect(
+        page.locator("main").getByText("Profiles you've defined.").first(),
+      ).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `instance agent settings at ${width}px`);
 
       await page.goto("/settings/runtimes");
       await expect(page.getByPlaceholder("Search settings")).toBeVisible();
-      await expect(page.getByText("Runtimes").first()).toBeVisible();
+      await expect(page.locator("main").getByText("Runtimes").first()).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `instance runtimes settings at ${width}px`);
 
       await page.goto("/settings/appearance");
       await expect(page.getByPlaceholder("Search settings")).toBeVisible();
-      await expect(page.getByText("Appearance").first()).toBeVisible();
+      await expect(page.locator("main").getByText("Appearance").first()).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `instance appearance settings at ${width}px`);
 
       await page.goto("/admin");
       await expect(page.getByText("Instance scope", { exact: true })).toBeVisible();
-      await expect(page.getByText("Forge · self-hosted").first()).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Forge · self-hosted" })).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `admin overview at ${width}px`);
 
       await page.goto("/admin/runtimes");
       await expect(page.getByText("Instance scope", { exact: true })).toBeVisible();
-      await expect(page.getByText("Runtimes").first()).toBeVisible();
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Runtimes" }),
+      ).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `admin runtimes at ${width}px`);
     });
   }

@@ -10258,3 +10258,18 @@ tests/unit/runtime-adapters.test.ts
 src/server/routers/__tests__/action-request-accept.test.ts` clean;
 `pnpm typecheck` clean; `pnpm lint` clean; full `pnpm test` clean (916
 passed / 1 skipped).
+
+## 2026-06-18 — Mobile smoke selector hardening before live deploy
+
+The release e2e gate exposed brittle mobile smoke locators on the global
+Mission Control/settings/admin flow. The UI was rendering correctly, but
+`getByText(...).first()` could bind to hidden drawer/sidebar labels before
+the visible page content.
+
+- Switched the global mobile smoke assertions to page headings where semantic
+  headings exist and to `main`-scoped visible text for the settings Topbar
+  pages that do not render headings.
+
+Verification: focused `pnpm exec playwright test
+tests/e2e/mobile-smoke.spec.ts --grep "global activity" --workers=1` clean;
+full `pnpm exec playwright test --workers=1` clean (34 passed).
