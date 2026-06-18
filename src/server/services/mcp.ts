@@ -13212,6 +13212,98 @@ export const mcpTools = {
 
 export type McpToolName = keyof typeof mcpTools;
 
+// ---------------------------------------------------------------------------
+// Tool selection — profiles & scope filtering for `tools/list` (AXI-82)
+// ---------------------------------------------------------------------------
+//
+// The full registry advertises 200+ tools. Some providers cap the advertised
+// tool list (xAI/Grok rejects >200), and a client usually stacks several MCP
+// servers, so blasting the whole surface gets requests rejected. The
+// `/api/mcp/rpc` route narrows what `tools/list` advertises via a `?profile=`
+// preset or an explicit `?tools=ns1,ns2` namespace list, and — when a key is
+// presented — prunes to what that key can actually call. `tools/call` is
+// unaffected: full capability stays reachable for any tool the caller names
+// and is authorized for.
+
+/** Namespace = the segment before the first dot (e.g. "issues.list" → "issues"). */
+export function mcpToolNamespace(name: string): string {
+  const dot = name.indexOf(".");
+  return dot === -1 ? name : name.slice(0, dot);
+}
+
+/** Every registered tool name. */
+export const mcpToolNames = Object.keys(mcpTools) as McpToolName[];
+
+/** Sorted, de-duplicated list of namespaces present in the registry. */
+export const mcpNamespaces: string[] = Array.from(
+  new Set(mcpToolNames.map((n) => mcpToolNamespace(n))),
+).sort();
+
+/**
+ * Curated namespace bundles, selectable via `?profile=`. Each keeps the
+ * advertised count well under common provider caps. `full` (or no selector)
+ * advertises everything — the back-compat default.
+ */
+export const MCP_TOOL_PROFILES: Record<string, readonly string[]> = {
+  // Everyday issue tracking — the smallest useful working set.
+  core: [
+    "issues", "comments", "projects", "statuses", "labels", "relations",
+    "attachments", "agents", "workspace", "workspaces", "events", "pins",
+    "notes",
+  ],
+  // core + iteration / roadmap planning + the goal→plan orchestration surface.
+  planning: [
+    "issues", "comments", "projects", "statuses", "labels", "relations",
+    "cycles", "initiatives", "goals", "plans", "executionPlans", "reviewGates",
+    "contextSets", "attachments", "agents", "workspace", "workspaces", "events",
+  ],
+  // core + agent orchestration / runtime ops.
+  agents: [
+    "issues", "comments", "agents", "agentCrews", "runs", "runtimes",
+    "actionRequests", "chat", "reviewGates", "attachments", "workspace",
+    "workspaces", "events",
+  ],
+  // Visual canvas tooling (the largest single namespace).
+  canvas: ["canvases", "artifacts", "attachments", "notes", "workspace", "workspaces"],
+};
+
+/**
+ * Resolve which tools `tools/list` should advertise.
+ *
+ * - `namespaces` (explicit `?tools=`) wins over `profile`.
+ * - An unknown or "full" profile (and no namespace list) means "everything".
+ * - `scopes` (the calling key's grants, when present) prunes to tools the key
+ *   can actually call — mirrors `assertMcpScopes` in mcp-exec so the advertised
+ *   set never lies about what's callable. A FULL-scope key is unaffected.
+ */
+export function selectMcpToolNames(opts: {
+  profile?: string | null;
+  namespaces?: readonly string[] | null;
+  scopes?: readonly PluginScope[] | null;
+}): McpToolName[] {
+  let names: McpToolName[] = mcpToolNames;
+
+  const nsList =
+    opts.namespaces && opts.namespaces.length
+      ? opts.namespaces
+      : opts.profile && opts.profile !== "full"
+        ? (MCP_TOOL_PROFILES[opts.profile] ?? null)
+        : null;
+  if (nsList) {
+    const allow = new Set(nsList);
+    names = names.filter((n) => allow.has(mcpToolNamespace(n)));
+  }
+
+  if (opts.scopes) {
+    const granted = new Set<PluginScope>(opts.scopes);
+    names = names.filter((n) =>
+      (mcpTools[n].scopes as readonly PluginScope[]).every((s) => granted.has(s)),
+    );
+  }
+
+  return names;
+}
+
 /**
  * Lightweight descriptor — used by the legacy REST handler's `describe`
  * endpoint. The JSON-RPC route builds richer descriptors via

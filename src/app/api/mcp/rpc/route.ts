@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { mcpTools, type McpToolName } from "@/server/services/mcp";
+import { mcpTools, selectMcpToolNames, type McpToolName } from "@/server/services/mcp";
 import { executeMcpTool, type McpExecutionFailure } from "@/server/services/mcp-exec";
 import { mcpToolPolicy } from "@/server/services/mcp-policy";
 import { authenticateApiKey, ApiKeyError } from "@/server/services/api-key-auth";
@@ -85,10 +85,14 @@ function toolDescriptor(name: McpToolName) {
   };
 }
 
+/** `tools/list` narrowing parsed from the request URL query string. */
+type ListOptions = { profile: string | null; namespaces: string[] | null };
+
 async function handleRpc(
   msg: JsonRpcRequest,
   auth: Awaited<ReturnType<typeof authenticateApiKey>> | null,
   authError: ApiKeyError | null,
+  listOptions: ListOptions,
 ) {
   const { id, method, params } = msg;
 
@@ -109,8 +113,16 @@ async function handleRpc(
       return ok(id, {});
 
     case "tools/list": {
-      const tools = (Object.keys(mcpTools) as McpToolName[]).map(toolDescriptor);
-      return ok(id, { tools });
+      // Narrow the advertised surface so providers with tool-count caps (e.g.
+      // xAI/Grok at 200) aren't blown out by the full ~200-tool registry.
+      // `?profile=`/`?tools=` select a subset; a presented key further prunes
+      // to what it can actually call. `tools/call` stays unrestricted.
+      const names = selectMcpToolNames({
+        profile: listOptions.profile,
+        namespaces: listOptions.namespaces,
+        scopes: auth?.scopes ?? null,
+      });
+      return ok(id, { tools: names.map(toolDescriptor) });
     }
 
     case "tools/call": {
@@ -209,16 +221,28 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // `tools/list` narrowing (AXI-82): `?profile=core|planning|agents|canvas`
+  // or `?tools=issues,comments,…`. Configure it on the MCP server URL so
+  // capped providers get a slim, useful surface.
+  const profileParam = req.nextUrl.searchParams.get("profile");
+  const toolsParam = req.nextUrl.searchParams.get("tools");
+  const listOptions: ListOptions = {
+    profile: profileParam,
+    namespaces: toolsParam
+      ? toolsParam.split(",").map((s) => s.trim()).filter(Boolean)
+      : null,
+  };
+
   // Support both single requests and batched arrays (JSON-RPC 2.0 spec).
   if (Array.isArray(body)) {
     const responses = await Promise.all(
-      body.map((msg) => handleRpc(msg as JsonRpcRequest, auth, authError)),
+      body.map((msg) => handleRpc(msg as JsonRpcRequest, auth, authError, listOptions)),
     );
     const filtered = responses.filter((r) => r != null);
     return NextResponse.json(filtered);
   }
 
-  const result = await handleRpc(body as JsonRpcRequest, auth, authError);
+  const result = await handleRpc(body as JsonRpcRequest, auth, authError, listOptions);
   if (result == null) return new NextResponse(null, { status: 204 });
   return NextResponse.json(result);
 }

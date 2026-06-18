@@ -20,9 +20,11 @@ The endpoint speaks the standard MCP envelope. Two methods are exposed:
 - `initialize` — returns protocol capabilities and `serverInfo`. Forge includes
   `version`, `gitSha`, and `buildTime` in `serverInfo` so clients and operators
   can tell which deployed Forge build an MCP connection is talking to.
-- `tools/list` — returns the tool catalog, filtered to the calling key's
-  scopes.
-- `tools/call` — invokes a tool by `{ name, arguments }`.
+- `tools/list` — returns the tool catalog. Narrowable via `?profile=` / `?tools=`
+  on the endpoint URL, and pruned to the calling key's scopes (see
+  [Limiting the advertised tool surface](#limiting-the-advertised-tool-surface)).
+- `tools/call` — invokes a tool by `{ name, arguments }`. **Not** affected by the
+  list selectors — any tool the key is authorized for stays callable.
 
 ### REST aliases
 
@@ -59,6 +61,46 @@ pretended in the current UI.
 also accepted (used internally by the Next.js app for plugin-initiated
 calls). See [/automation/api-keys.html](/automation/api-keys.html) for the
 key contract.
+
+## Limiting the advertised tool surface
+
+Forge registers ~200 tools. Some providers cap the number of tools an LLM
+request may advertise (xAI/Grok rejects requests over **200**), and a client
+usually stacks several MCP servers under one provider, so advertising the whole
+Forge surface can blow the cap. `tools/list` can be narrowed two ways, set as
+query params on the MCP endpoint URL:
+
+- **`?profile=<name>`** — a curated namespace bundle:
+  - `core` — everyday issue tracking (issues, comments, projects, statuses,
+    labels, relations, attachments, agents, notes, …). The recommended default
+    for capped providers.
+  - `planning` — `core` + sprints, initiatives, goals, plans, review gates.
+  - `agents` — `core` + runs, crews, runtimes, action requests, chat.
+  - `canvas` — the visual canvas tools (the largest single namespace).
+  - `full` (or no param) — the entire catalog (back-compat default).
+- **`?tools=<ns1,ns2,…>`** — an explicit comma-separated namespace allowlist
+  (e.g. `?tools=issues,comments,statuses`). Wins over `profile`.
+
+Both compose with **scope pruning**: whenever a key is presented, `tools/list`
+drops any tool the key couldn't call anyway (same check as `tools/call`). A
+FULL-scope key sees everything within the selected profile; a narrowly-scoped
+key sees less. `tools/call` is never restricted by these selectors — they only
+shape what's *advertised*, so full capability stays reachable for any tool the
+caller names and is authorized for.
+
+```
+# Hermes / capped providers: point the MCP server URL at a slim profile
+https://forge.example/api/mcp/rpc?profile=core
+# or hand-pick namespaces
+https://forge.example/api/mcp/rpc?tools=issues,comments,statuses,projects
+```
+
+::: tip
+If a provider rejects a session with a "maximum tools" error, switch the Forge
+MCP URL to `?profile=core` (or `?tools=…`). It keeps issue/comment/status tools
+available while dropping the long tail (canvas, admin, orchestration) that a
+typical chat turn never needs.
+:::
 
 ## Tool catalog
 

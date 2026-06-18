@@ -13,6 +13,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Slimmer MCP tool list for providers with tool-count caps.** The MCP endpoint now accepts `?profile=core|planning|agents|canvas` (or `?tools=issues,comments,…`) to advertise a focused subset of Forge's ~200 tools — so models that cap the tool list (e.g. xAI/Grok at 200) stop rejecting sessions. `tools/list` is also pruned to the key's scopes. Full capability stays callable regardless. Point a capped runtime's Forge MCP URL at `?profile=core`.
 - **Generate a plan with Forge — no agent required.** A goal now offers two ways to draft its plan: **Generate with Forge** builds the steps directly using your workspace's AI model, and **Dispatch to crew planner** hands it to an agent as before. Pick whichever fits; Generate works even with no agents online.
 - **The dashboard Customize mode is now a fluid grid.** Tiles live on a 2-column grid you can drag to reorder — the board reflows with smooth motion as you drag instead of snapping. Drag a tile's right edge (or hit the size button) to snap it between half and full width, and the layout animates into place. Your order, widths, and hidden tiles save automatically. Respects reduced-motion.
 - **The issues list loads every issue, not just the first 50.** The list now pages in more as you scroll (with a "Load more" fallback); the board pages each column independently, so low-traffic columns like Backlog and Done are no longer starved by a shared cap.

@@ -2,6 +2,40 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-17 — MCP tool-list profiles + scope filtering (AXI-82)
+
+Forge MCP advertised **all ~205 tools** unconditionally — `tools/list`
+(`src/app/api/mcp/rpc/route.ts`) mapped `Object.keys(mcpTools)` with no filter,
+and per-tool `scopes` were used only at `tools/call` time. xAI/Grok caps the
+advertised list at 200; stacked with other MCP servers + runtime core tools,
+Hermes sessions hit ~290 and got rejected.
+
+Fix (Forge-side, no schema change):
+- **`selectMcpToolNames({ profile?, namespaces?, scopes? })`** + `MCP_TOOL_PROFILES`
+  (`core` / `planning` / `agents` / `canvas`) + `mcpToolNamespace` / `mcpToolNames`
+  / `mcpNamespaces` in `src/server/services/mcp.ts`. Namespace = segment before
+  the first dot.
+- **`tools/list`** now narrows via `?profile=` / `?tools=ns1,ns2` query params on
+  the endpoint URL (explicit `tools` wins over `profile`; unknown/`full` = whole
+  catalog, back-compat) and prunes to the key's scopes — mirrors
+  `assertMcpScopes` (literal subset, no FULL superset), so the advertised set
+  never lies about what's callable. **`tools/call` is untouched** — full
+  capability stays reachable for any authorized tool.
+- Namespace mix (why a selector, not just scopes): `canvases` alone is 48 tools;
+  the in-use Hermes keys are FULL scope, so scope-pruning is a no-op for them —
+  the profile/namespace selector is the lever that actually drops the count
+  (`core` ≈ 59, `planning` ≈ 89, `agents` ≈ 72, `canvas` ≈ 71, all < 150).
+
+Test: `tests/unit/mcp-tool-profiles.test.ts` (7) — profiles are valid non-empty
+subsets under a 150 budget, `core` < 100 and excludes canvas, explicit
+namespaces win, scope filter mirrors auth (READ_ISSUES key can't see
+`issues.create`; FULL key sees everything). Docs: `docs/reference/mcp.md` new
+"Limiting the advertised tool surface" section. `pnpm typecheck` clean.
+
+Ops: point a capped runtime's Forge MCP URL at `…/api/mcp/rpc?profile=core`.
+Still open in AXI-82 scope (not done here): Hermes-side config to actually set
+that URL per session, and whether to make a slim profile the *default*.
+
 ## 2026-06-17 — Built-in plan generation + planning UI refresh
 
 Fixed the "empty plan" dead end and modernized the planning surfaces against
