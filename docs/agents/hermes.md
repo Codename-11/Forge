@@ -142,6 +142,18 @@ Both transports authenticate the same way: an `Authorization: Bearer ...`
 header carrying either a Forge API key (`forge_sk_*`) or, optionally, a
 short-lived JWT.
 
+::: warning Provider tool caps
+Forge advertises ~190 tools. Some providers reject a request whose advertised
+tool list is too long (xAI/Grok caps at **200**), and Hermes stacks several MCP
+servers under one provider — so the full Forge surface can blow the cap. Add
+`?profile=core` (or an explicit `?tools=issues,comments,chat,…`) to the Forge
+`url` in `mcp_servers` so `tools/list` advertises a focused subset. Keep
+`chat` in the list — the Forge platform adapter streams chat replies through
+`chat.startDraft/appendDraftChunk/finalizeDraft`. `tools/call` is never
+restricted by the selector. See
+[/reference/mcp.html#limiting-the-advertised-tool-surface](/reference/mcp.html#limiting-the-advertised-tool-surface).
+:::
+
 ```http
 POST /api/mcp/issues.assigned HTTP/1.1
 Host: forge.example
