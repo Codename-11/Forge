@@ -1,6 +1,14 @@
+import { Buffer } from "node:buffer";
 import { NextResponse, type NextRequest } from "next/server";
+import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { mcpTools, selectMcpToolNames, type McpToolName } from "@/server/services/mcp";
+import {
+  mcpToolNamespace,
+  mcpTools,
+  selectMcpToolNames,
+  type McpContext,
+  type McpToolName,
+} from "@/server/services/mcp";
 import { executeMcpTool, type McpExecutionFailure } from "@/server/services/mcp-exec";
 import { mcpToolPolicy } from "@/server/services/mcp-policy";
 import { authenticateApiKey, ApiKeyError } from "@/server/services/api-key-auth";
@@ -29,6 +37,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const PROTOCOL_VERSION = "2025-03-26";
+const TOOL_LIST_PAGE_SIZE = 100;
+
+const catalogToolNames = ["catalog.search", "catalog.describe", "catalog.call"] as const;
+type CatalogToolName = (typeof catalogToolNames)[number];
+type ToolListName = McpToolName | CatalogToolName;
 
 type JsonRpcRequest = {
   jsonrpc: "2.0";
@@ -63,12 +76,16 @@ function rpcErrorCode(error: McpExecutionFailure): number {
   }
 }
 
-function toolDescriptor(name: McpToolName) {
-  const t = mcpTools[name];
-  const inputSchema = zodToJsonSchema(t.input, {
+function mcpJsonSchema(schema: z.ZodTypeAny) {
+  return zodToJsonSchema(schema, {
     target: "jsonSchema7",
     $refStrategy: "none",
   });
+}
+
+function toolDescriptor(name: McpToolName) {
+  const t = mcpTools[name];
+  const inputSchema = mcpJsonSchema(t.input);
   // Tools may optionally export a richer `description` field; fall back
   // to the auto-generated scope-only summary when one isn't supplied.
   const customDesc = (t as { description?: string }).description;
@@ -85,8 +102,197 @@ function toolDescriptor(name: McpToolName) {
   };
 }
 
+const catalogToolDefs = {
+  "catalog.search": {
+    input: z.object({
+      query: z.string().max(120).optional(),
+      namespace: z.string().max(80).optional(),
+      limit: z.number().int().min(1).max(50).default(20),
+    }),
+    description:
+      "Search the full authorized Forge MCP catalog without advertising every tool directly. Use this when the compact tool list does not expose the operation you need.",
+  },
+  "catalog.describe": {
+    input: z.object({
+      names: z.array(z.string().max(120)).min(1).max(20),
+    }),
+    description:
+      "Return full MCP descriptors, including input schemas, for authorized Forge tools by name.",
+  },
+  "catalog.call": {
+    input: z.object({
+      name: z.string().max(120),
+      arguments: z.record(z.unknown()).default({}),
+    }),
+    description:
+      "Invoke any authorized Forge MCP tool by name. Use catalog.search and catalog.describe first when the tool is not advertised directly.",
+  },
+} satisfies Record<CatalogToolName, { input: z.ZodTypeAny; description: string }>;
+
+function isCatalogToolName(name: string): name is CatalogToolName {
+  return (catalogToolNames as readonly string[]).includes(name);
+}
+
+function catalogToolDescriptor(name: CatalogToolName) {
+  const def = catalogToolDefs[name];
+  return {
+    name,
+    description: def.description,
+    annotations: {
+      forgePolicy: {
+        actor: "api-key",
+        allowedModes: "ANY",
+        notes: "Catalog helpers preserve the target tool's scopes and runtime policy.",
+      },
+    },
+    inputSchema: mcpJsonSchema(def.input),
+  };
+}
+
+function listToolDescriptor(name: ToolListName) {
+  return isCatalogToolName(name) ? catalogToolDescriptor(name) : toolDescriptor(name);
+}
+
 /** `tools/list` narrowing parsed from the request URL query string. */
 type ListOptions = { profile: string | null; namespaces: string[] | null };
+type CatalogToolRunResult =
+  | { ok: false; rpcError: JsonRpcError }
+  | { ok: true; result: unknown; isError?: boolean };
+
+function mcpContext(auth: NonNullable<Awaited<ReturnType<typeof authenticateApiKey>>>): McpContext {
+  return {
+    workspaceId: auth.workspaceId,
+    userId: auth.userId,
+    pluginId: auth.pluginId,
+    apiKey: auth,
+  };
+}
+
+function toolContent(result: unknown, isError = false) {
+  return {
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    isError,
+  };
+}
+
+function encodeCursor(offset: number): string {
+  return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
+}
+
+function decodeCursor(cursor: string): number | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+      offset?: unknown;
+    };
+    return typeof parsed.offset === "number" && parsed.offset >= 0 ? parsed.offset : null;
+  } catch {
+    return null;
+  }
+}
+
+function listCursor(params: unknown): { ok: true; offset: number } | { ok: false; message: string } {
+  if (params == null) return { ok: true, offset: 0 };
+  if (typeof params !== "object" || Array.isArray(params)) {
+    return { ok: false, message: "tools/list params must be an object." };
+  }
+  const cursor = (params as { cursor?: unknown }).cursor;
+  if (cursor == null) return { ok: true, offset: 0 };
+  if (typeof cursor !== "string") return { ok: false, message: "tools/list cursor must be a string." };
+  const offset = decodeCursor(cursor);
+  return offset == null ? { ok: false, message: "Invalid tools/list cursor." } : { ok: true, offset };
+}
+
+function allowedMcpToolNames(auth: Awaited<ReturnType<typeof authenticateApiKey>> | null): McpToolName[] {
+  return selectMcpToolNames({
+    profile: "full",
+    scopes: auth?.scopes ?? null,
+  });
+}
+
+function compactDescription(name: McpToolName): string {
+  const tool = mcpTools[name];
+  const customDesc = (tool as { description?: string }).description;
+  return (customDesc ?? "Forge tool.").split("\n")[0] ?? "Forge tool.";
+}
+
+async function handleCatalogTool(
+  name: CatalogToolName,
+  args: unknown,
+  auth: NonNullable<Awaited<ReturnType<typeof authenticateApiKey>>>,
+): Promise<CatalogToolRunResult> {
+  const parsed = catalogToolDefs[name].input.safeParse(args ?? {});
+  if (!parsed.success) {
+    return {
+      ok: false,
+      rpcError: {
+        code: -32602,
+        message: "Invalid tool arguments.",
+        data: parsed.error.flatten(),
+      },
+    };
+  }
+
+  const visible = allowedMcpToolNames(auth);
+
+  if (name === "catalog.search") {
+    const input = parsed.data as z.infer<(typeof catalogToolDefs)["catalog.search"]["input"]>;
+    const query = input.query?.trim().toLowerCase();
+    const namespace = input.namespace?.trim();
+    const matches = visible
+      .filter((toolName) => {
+        if (namespace && mcpToolNamespace(toolName) !== namespace) return false;
+        if (!query) return true;
+        const haystack = `${toolName} ${compactDescription(toolName)} ${mcpTools[toolName].scopes.join(" ")}`.toLowerCase();
+        return haystack.includes(query);
+      })
+      .slice(0, input.limit)
+      .map((toolName) => ({
+        name: toolName,
+        namespace: mcpToolNamespace(toolName),
+        description: compactDescription(toolName),
+        scopes: mcpTools[toolName].scopes,
+        policy: mcpToolPolicy(toolName, mcpTools[toolName].scopes),
+      }));
+    return { ok: true, result: { tools: matches, totalAuthorizedTools: visible.length } };
+  }
+
+  if (name === "catalog.describe") {
+    const input = parsed.data as z.infer<(typeof catalogToolDefs)["catalog.describe"]["input"]>;
+    const allowed = new Set<string>(visible);
+    const descriptors = input.names
+      .filter((toolName): toolName is McpToolName => allowed.has(toolName))
+      .map(toolDescriptor);
+    const missing = input.names.filter((toolName) => !allowed.has(toolName));
+    return { ok: true, result: { tools: descriptors, unavailable: missing } };
+  }
+
+  const input = parsed.data as z.infer<(typeof catalogToolDefs)["catalog.call"]["input"]>;
+  if (isCatalogToolName(input.name)) {
+    return {
+      ok: true,
+      result: { error: "catalog.call cannot invoke catalog helper tools." },
+      isError: true,
+    };
+  }
+
+  const exec = await executeMcpTool({
+    name: input.name,
+    input: input.arguments,
+    ctx: mcpContext(auth),
+    source: "json-rpc",
+  });
+  if (exec.ok) return { ok: true, result: { toolName: exec.toolName, result: exec.result } };
+  return {
+    ok: true,
+    result: {
+      toolName: input.name,
+      error: exec.error.message,
+      code: exec.error.code,
+      data: exec.error.data,
+    },
+    isError: true,
+  };
+}
 
 async function handleRpc(
   msg: JsonRpcRequest,
@@ -113,16 +319,24 @@ async function handleRpc(
       return ok(id, {});
 
     case "tools/list": {
-      // Narrow the advertised surface so providers with tool-count caps (e.g.
-      // xAI/Grok at 200) aren't blown out by the full ~200-tool registry.
-      // `?profile=`/`?tools=` select a subset; a presented key further prunes
-      // to what it can actually call. `tools/call` stays unrestricted.
+      const cursor = listCursor(params);
+      if (!cursor.ok) return fail(id, { code: -32602, message: cursor.message });
+
+      // Advertise a compact default surface so capped providers (e.g. xAI/Grok
+      // at 200) aren't blown out by the full registry. `?profile=full` opts in
+      // to the complete catalog; full/large lists are paginated per MCP.
       const names = selectMcpToolNames({
         profile: listOptions.profile,
         namespaces: listOptions.namespaces,
         scopes: auth?.scopes ?? null,
       });
-      return ok(id, { tools: names.map(toolDescriptor) });
+      const allNames: ToolListName[] = [...names, ...catalogToolNames];
+      const page = allNames.slice(cursor.offset, cursor.offset + TOOL_LIST_PAGE_SIZE);
+      const nextOffset = cursor.offset + TOOL_LIST_PAGE_SIZE;
+      return ok(id, {
+        tools: page.map(listToolDescriptor),
+        ...(nextOffset < allNames.length ? { nextCursor: encodeCursor(nextOffset) } : {}),
+      });
     }
 
     case "tools/call": {
@@ -135,15 +349,16 @@ async function handleRpc(
       const p = (params ?? {}) as { name?: string; arguments?: unknown };
       if (!p.name) return fail(id, { code: -32602, message: "Missing tool name." });
 
+      if (isCatalogToolName(p.name)) {
+        const catalog = await handleCatalogTool(p.name, p.arguments ?? {}, auth);
+        if (!catalog.ok) return fail(id, catalog.rpcError);
+        return ok(id, toolContent(catalog.result, catalog.isError ?? false));
+      }
+
       const exec = await executeMcpTool({
         name: p.name,
         input: p.arguments ?? {},
-        ctx: {
-          workspaceId: auth.workspaceId,
-          userId: auth.userId,
-          pluginId: auth.pluginId,
-          apiKey: auth,
-        },
+        ctx: mcpContext(auth),
         source: "json-rpc",
       });
 
@@ -221,9 +436,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // `tools/list` narrowing (AXI-82): `?profile=core|planning|agents|canvas`
-  // or `?tools=issues,comments,…`. Configure it on the MCP server URL so
-  // capped providers get a slim, useful surface.
+  // `tools/list` narrowing (AXI-82): default is the compact runtime profile.
+  // `?profile=full` opts into the full direct catalog; `?tools=issues,comments,…`
+  // hand-picks namespaces. Configure it on the MCP server URL when a client
+  // needs a different advertised surface.
   const profileParam = req.nextUrl.searchParams.get("profile");
   const toolsParam = req.nextUrl.searchParams.get("tools");
   const listOptions: ListOptions = {

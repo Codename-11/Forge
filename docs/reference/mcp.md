@@ -20,7 +20,8 @@ The endpoint speaks the standard MCP envelope. Two methods are exposed:
 - `initialize` — returns protocol capabilities and `serverInfo`. Forge includes
   `version`, `gitSha`, and `buildTime` in `serverInfo` so clients and operators
   can tell which deployed Forge build an MCP connection is talking to.
-- `tools/list` — returns the tool catalog. Narrowable via `?profile=` / `?tools=`
+- `tools/list` — returns the compact default tool catalog, with standard MCP
+  cursor pagination for larger catalogs. Narrowable via `?profile=` / `?tools=`
   on the endpoint URL, and pruned to the calling key's scopes (see
   [Limiting the advertised tool surface](#limiting-the-advertised-tool-surface)).
 - `tools/call` — invokes a tool by `{ name, arguments }`. **Not** affected by the
@@ -64,20 +65,26 @@ key contract.
 
 ## Limiting the advertised tool surface
 
-Forge registers ~200 tools. Some providers cap the number of tools an LLM
+Forge registers 200+ tools internally. Some providers cap the number of tools an LLM
 request may advertise (xAI/Grok rejects requests over **200**), and a client
 usually stacks several MCP servers under one provider, so advertising the whole
-Forge surface can blow the cap. `tools/list` can be narrowed two ways, set as
-query params on the MCP endpoint URL:
+Forge surface can blow the cap. The default `tools/list` response is therefore
+a compact runtime profile plus catalog helper tools, not the whole registry.
+Larger lists use standard MCP `nextCursor` pagination. You can change the
+advertised direct-tool set two ways, set as query params on the MCP endpoint URL:
 
 - **`?profile=<name>`** — a curated namespace bundle:
+  - `runtime` — default. Agent runtime essentials: issues, comments, chat,
+    runs, action requests, and workspace lookup. This is the safest default for
+    Hermes, Grok, and other capped providers.
   - `core` — everyday issue tracking (issues, comments, projects, statuses,
-    labels, relations, attachments, agents, notes, …). The recommended default
-    for capped providers.
+    labels, relations, attachments, agents, notes, …).
   - `planning` — `core` + sprints, initiatives, goals, plans, review gates.
   - `agents` — `core` + runs, crews, runtimes, action requests, chat.
   - `canvas` — the visual canvas tools (the largest single namespace).
-  - `full` (or no param) — the entire catalog (back-compat default).
+  - `full` — the entire direct catalog. Use only for clients that can handle
+    the count, or when the client handles MCP pagination and does not forward
+    every listed tool into one model request.
 - **`?tools=<ns1,ns2,…>`** — an explicit comma-separated namespace allowlist
   (e.g. `?tools=issues,comments,statuses`). Wins over `profile`.
 
@@ -89,18 +96,30 @@ shape what's *advertised*, so full capability stays reachable for any tool the
 caller names and is authorized for.
 
 ```
-# Hermes / capped providers: point the MCP server URL at a slim profile
-https://forge.example/api/mcp/rpc?profile=core
+# Hermes / capped providers: the plain URL now advertises the compact default
+https://forge.example/api/mcp/rpc
+# explicit full direct catalog, with MCP pagination
+https://forge.example/api/mcp/rpc?profile=full
 # or hand-pick namespaces
 https://forge.example/api/mcp/rpc?tools=issues,comments,statuses,projects
 ```
 
 ::: tip
-If a provider rejects a session with a "maximum tools" error, switch the Forge
-MCP URL to `?profile=core` (or `?tools=…`). It keeps issue/comment/status tools
-available while dropping the long tail (canvas, admin, orchestration) that a
-typical chat turn never needs.
+If a provider rejects a session with a "maximum tools" error even with the
+default Forge MCP URL, another MCP server or the host runtime's native tools are
+also contributing to the count. Keep Forge on the compact default and reduce
+the other advertised surfaces.
 :::
+
+### Catalog helper tools
+
+The compact default includes three normal MCP tools that preserve access to the
+long tail without advertising every direct tool:
+
+- `catalog.search` — search the full authorized Forge MCP catalog.
+- `catalog.describe` — fetch full descriptors and input schemas by tool name.
+- `catalog.call` — invoke any authorized Forge MCP tool by name. The target
+  tool's scopes and runtime policies are still enforced.
 
 ## Tool catalog
 

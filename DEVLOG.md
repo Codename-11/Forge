@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-18 — Compact Forge MCP catalog + catalog helpers
+
+Tightened Forge's MCP catalog behavior after Grok/xAI rejected Hermes turns
+with `Maximum tools limit reached` when Forge's direct tool list was stacked
+with Hermes native tools and other MCP servers.
+
+Fixes:
+- Changed `tools/list` default selection from the full Forge registry to a
+  compact `runtime` profile covering issues, comments, chat, runs, action
+  requests, and workspace lookup.
+- Kept full direct tool exposure explicit via `?profile=full`, and made unknown
+  profile names fall back to the compact default instead of accidentally
+  exposing the full catalog.
+- Added standard MCP `tools/list` cursor pagination for larger advertised
+  catalogs.
+- Added `catalog.search`, `catalog.describe`, and `catalog.call` helper tools
+  to the JSON-RPC MCP surface so agents can discover and invoke authorized
+  long-tail Forge tools without advertising 200+ direct tools in every model
+  request.
+- Updated MCP/Hermes docs to describe the compact default, explicit full mode,
+  pagination, and catalog helper flow.
+
+Verify:
+`pnpm vitest run tests/unit/mcp-tool-profiles.test.ts`, `pnpm typecheck`,
+`pnpm lint`, `pnpm test` (947 passed / 1 skipped).
+
 ## 2026-06-18 — App-flow agent client and runtime host cleanup
 
 Implemented the APP-FLOW-ENHANCEMENT-AUDIT follow-up in an Orca-managed

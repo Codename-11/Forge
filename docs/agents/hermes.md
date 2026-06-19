@@ -130,8 +130,9 @@ reflect that.
 
 ## The pull direction: MCP
 
-Agents call back into Forge over the MCP surface — 46 tools across 11
-namespaces. Two transports are available, both Bearer-authenticated:
+Agents call back into Forge over the MCP surface. The default JSON-RPC catalog
+is compact for provider compatibility, with catalog helper tools for the full
+authorized surface. Two transports are available, both Bearer-authenticated:
 
 - **JSON-RPC** — `POST /api/mcp/rpc` with a standard JSON-RPC 2.0 envelope.
   Best for clients that already speak MCP.
@@ -143,14 +144,15 @@ header carrying either a Forge API key (`forge_sk_*`) or, optionally, a
 short-lived JWT.
 
 ::: warning Provider tool caps
-Forge advertises ~190 tools. Some providers reject a request whose advertised
-tool list is too long (xAI/Grok caps at **200**), and Hermes stacks several MCP
-servers under one provider — so the full Forge surface can blow the cap. Add
-`?profile=core` (or an explicit `?tools=issues,comments,chat,…`) to the Forge
-`url` in `mcp_servers` so `tools/list` advertises a focused subset. Keep
-`chat` in the list — the Forge platform adapter streams chat replies through
-`chat.startDraft/appendDraftChunk/finalizeDraft`. `tools/call` is never
-restricted by the selector. See
+Forge has 200+ direct tools internally, but the plain `/api/mcp/rpc` URL now
+advertises the compact runtime profile plus `catalog.search`,
+`catalog.describe`, and `catalog.call`. Some providers reject a request whose
+advertised tool list is too long (xAI/Grok caps at **200**), and Hermes stacks
+several MCP servers under one provider — so only use `?profile=full` for
+clients that can handle the count or MCP pagination without forwarding every
+tool into one model request. Keep `chat` available when hand-picking
+namespaces, because the Forge platform adapter streams chat replies through
+`chat.startDraft/appendDraftChunk/finalizeDraft`. See
 [/reference/mcp.html#limiting-the-advertised-tool-surface](/reference/mcp.html#limiting-the-advertised-tool-surface).
 :::
 

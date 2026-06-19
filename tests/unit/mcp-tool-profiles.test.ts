@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PluginScope } from "@prisma/client";
 import {
+  MCP_DEFAULT_PROFILE,
   MCP_TOOL_PROFILES,
   mcpNamespaces,
   mcpToolNames,
@@ -24,11 +25,14 @@ const PROFILE_BUDGET = 150;
 describe("mcp tool profiles (AXI-82)", () => {
   it("the full registry is the large surface this issue is about", () => {
     expect(mcpToolNames.length).toBeGreaterThan(150);
-    // No selector → full surface (back-compat default).
-    expect(selectMcpToolNames({}).length).toBe(mcpToolNames.length);
-    // Explicit/unknown "full" profile is also the whole surface.
+    // Full is opt-in; the public/default catalog should be compact.
     expect(selectMcpToolNames({ profile: "full" }).length).toBe(mcpToolNames.length);
-    expect(selectMcpToolNames({ profile: "nope-typo" }).length).toBe(mcpToolNames.length);
+    expect(selectMcpToolNames({}).length).toBe(
+      selectMcpToolNames({ profile: MCP_DEFAULT_PROFILE }).length,
+    );
+    expect(selectMcpToolNames({ profile: "nope-typo" }).length).toBe(
+      selectMcpToolNames({ profile: MCP_DEFAULT_PROFILE }).length,
+    );
   });
 
   it("every named profile references only real namespaces", () => {
@@ -61,6 +65,18 @@ describe("mcp tool profiles (AXI-82)", () => {
     expect(core.some((n) => mcpToolNamespace(n) === "canvases")).toBe(false);
   });
 
+  it("the runtime default leaves room for native and third-party tools", () => {
+    const runtime = selectMcpToolNames({});
+    // JSON-RPC also advertises 3 catalog helpers; keep the combined Forge
+    // default under 50 so Hermes/native/other-MCP tools have real headroom.
+    expect(runtime.length + 3).toBeLessThan(50);
+    expect(runtime).toContain("issues.list");
+    expect(runtime).toContain("comments.create");
+    expect(runtime).toContain("runs.complete");
+    expect(runtime).toContain("actionRequests.list");
+    expect(runtime.some((n) => mcpToolNamespace(n) === "canvases")).toBe(false);
+  });
+
   it("explicit ?tools= namespaces win over profile and bound the result", () => {
     const names = selectMcpToolNames({
       namespaces: ["issues", "comments"],
@@ -80,10 +96,11 @@ describe("mcp tool profiles (AXI-82)", () => {
     expect(readOnly).not.toContain("issues.create"); // needs WRITE_ISSUES
     expect(readOnly.length).toBeLessThan(mcpToolNames.length);
 
-    // A FULL-scope key (all scopes) sees the whole surface — scope filtering
-    // is a no-op for it, which is why the namespace/profile selector is the
-    // lever for the reported failure.
-    const full = selectMcpToolNames({ scopes: Object.values(PluginScope) });
+    // A FULL-scope key (all scopes) does not widen the advertised profile by
+    // itself. Full catalog exposure must be requested explicitly.
+    const defaultFullScope = selectMcpToolNames({ scopes: Object.values(PluginScope) });
+    expect(defaultFullScope.length).toBeLessThan(mcpToolNames.length);
+    const full = selectMcpToolNames({ profile: "full", scopes: Object.values(PluginScope) });
     expect(full.length).toBe(mcpToolNames.length);
   });
 

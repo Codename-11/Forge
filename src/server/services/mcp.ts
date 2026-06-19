@@ -13324,11 +13324,11 @@ export type McpToolName = keyof typeof mcpTools;
 // The full registry advertises 200+ tools. Some providers cap the advertised
 // tool list (xAI/Grok rejects >200), and a client usually stacks several MCP
 // servers, so blasting the whole surface gets requests rejected. The
-// `/api/mcp/rpc` route narrows what `tools/list` advertises via a `?profile=`
-// preset or an explicit `?tools=ns1,ns2` namespace list, and — when a key is
-// presented — prunes to what that key can actually call. `tools/call` is
-// unaffected: full capability stays reachable for any tool the caller names
-// and is authorized for.
+// `/api/mcp/rpc` route advertises a compact default profile, can narrow further
+// via an explicit `?tools=ns1,ns2` namespace list, and can still expose the full
+// registry with `?profile=full`. When a key is presented, results are pruned to
+// what it can actually call. `tools/call` is unaffected: full capability stays
+// reachable for any tool the caller names and is authorized for.
 
 /** Namespace = the segment before the first dot (e.g. "issues.list" → "issues"). */
 export function mcpToolNamespace(name: string): string {
@@ -13344,12 +13344,18 @@ export const mcpNamespaces: string[] = Array.from(
   new Set(mcpToolNames.map((n) => mcpToolNamespace(n))),
 ).sort();
 
+export const MCP_DEFAULT_PROFILE = "runtime";
+
 /**
  * Curated namespace bundles, selectable via `?profile=`. Each keeps the
- * advertised count well under common provider caps. `full` (or no selector)
- * advertises everything — the back-compat default.
+ * advertised count well under common provider caps. `runtime` is the default
+ * because it leaves room for native client tools and other MCP servers.
+ * `full` is intentionally explicit.
  */
 export const MCP_TOOL_PROFILES: Record<string, readonly string[]> = {
+  // Agent runtime essentials: enough to read/act on issues, chat, runs, and
+  // human approval requests while leaving budget for other MCP/native tools.
+  runtime: ["issues", "comments", "chat", "runs", "actionRequests", "workspace"],
   // Everyday issue tracking — the smallest useful working set.
   core: [
     "issues", "comments", "projects", "statuses", "labels", "relations",
@@ -13376,10 +13382,12 @@ export const MCP_TOOL_PROFILES: Record<string, readonly string[]> = {
  * Resolve which tools `tools/list` should advertise.
  *
  * - `namespaces` (explicit `?tools=`) wins over `profile`.
- * - An unknown or "full" profile (and no namespace list) means "everything".
+ * - `"full"` means everything; omitted/unknown profiles fall back to the
+ *   compact default profile rather than exposing the full registry by typo.
  * - `scopes` (the calling key's grants, when present) prunes to tools the key
  *   can actually call — mirrors `assertMcpScopes` in mcp-exec so the advertised
- *   set never lies about what's callable. A FULL-scope key is unaffected.
+ *   set never lies about what's callable. A fully-scoped key still stays within
+ *   the selected advertised profile unless `profile: "full"` is requested.
  */
 export function selectMcpToolNames(opts: {
   profile?: string | null;
@@ -13391,9 +13399,10 @@ export function selectMcpToolNames(opts: {
   const nsList =
     opts.namespaces && opts.namespaces.length
       ? opts.namespaces
-      : opts.profile && opts.profile !== "full"
-        ? (MCP_TOOL_PROFILES[opts.profile] ?? null)
-        : null;
+      : opts.profile === "full"
+        ? null
+        : (MCP_TOOL_PROFILES[opts.profile || MCP_DEFAULT_PROFILE] ??
+          MCP_TOOL_PROFILES[MCP_DEFAULT_PROFILE]);
   if (nsList) {
     const allow = new Set(nsList);
     names = names.filter((n) => allow.has(mcpToolNamespace(n)));
