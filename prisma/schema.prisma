@@ -167,6 +167,10 @@ enum EventKind {
   ISSUE_NUDGED
   AGENT_RUN_CONTROL_REQUESTED
   AGENT_RUN_KICKED
+  /// Run crossed `runBudgetWarnPct` of a set budget (one-time, advisory).
+  AGENT_RUN_BUDGET_WARNING
+  /// Run breached a budget and was paused/stopped by the watchdog.
+  AGENT_RUN_BUDGET_BREACHED
   GOAL_CREATED
   GOAL_STATUS_CHANGED
   EXECUTION_STEP_READY
@@ -183,6 +187,18 @@ enum AgentRunControlState {
   NONE
   PAUSE_REQUESTED
   CANCEL_REQUESTED
+}
+
+/// What the run-budget watchdog does when a run breaches its workspace
+/// token / cost / wall-clock budget (added 2026-06-23). PAUSE is the
+/// safe default: the provider run is stopped (best-effort) and the
+/// AgentRun is parked in WAITING with a clear reason + an actionable
+/// notification, so the operator can raise the budget and resume or
+/// abandon — never a silently-dangling run. STOP closes the run as
+/// ABANDONED outright. Budgets are opt-in (null/0 = unlimited).
+enum RunBudgetAction {
+  PAUSE
+  STOP
 }
 
 enum ChatRole {
@@ -782,6 +798,24 @@ model Workspace {
   /// enough that a finished turn an agent didn't close via `runs.complete`
   /// stops lingering as a live run on the issue page. 0 disables the sweep.
   agentRunStaleMinutes          Int                      @default(30)
+  /// Per-run safety budgets (added 2026-06-23). Opt-in: null = no cap.
+  /// A run that exceeds any set cap triggers `runBudgetAction` (default
+  /// PAUSE → stop the provider + park WAITING + notify). Distinct from
+  /// `agentRunStaleMinutes`, which is *idle*-based — these catch a
+  /// busy-but-runaway loop (the AXI-75 run burned 21.1M tokens because
+  /// nothing capped it). Cumulative tokensIn+tokensOut for the run.
+  runTokenBudget                Int?
+  /// Per-run USD cost cap. Null = no cap. Matched against `costUsd`.
+  runCostBudgetUsd              Decimal?                 @db.Decimal(10, 4)
+  /// Per-run wall-clock cap (minutes since `startedAt`). Null = no cap.
+  runMaxMinutes                 Int?
+  /// Emit a one-time AGENT_RUN_BUDGET_WARNING when a run crosses this
+  /// percentage of any set budget (default 80). 0 disables the warning.
+  runBudgetWarnPct              Int                      @default(80)
+  /// What to do on breach. PAUSE (default) parks the run WAITING and
+  /// raises an actionable "raise budget & resume / abandon" request;
+  /// STOP closes it ABANDONED. Either way the provider run is stopped.
+  runBudgetAction               RunBudgetAction          @default(PAUSE)
   /// Optional Status row id to auto-transition into on AGENT_ASSIGNED.
   /// When set, the audit/event fan-out promotes assigned issues to this
   /// status (must be in IN_PROGRESS category, validated at write time).
@@ -1736,41 +1770,41 @@ model TimeEntry {
 /// REMOTE_HTTP runtimes are the existing Hermes-style webhook receivers
 /// — `endpoint` carries the URL, `secret` the HMAC signing key.
 model Runtime {
-  id                 String          @id @default(cuid())
-  workspaceId        String
-  name               String
-  kind               RuntimeKind
+  id                     String                 @id @default(cuid())
+  workspaceId            String
+  name                   String
+  kind                   RuntimeKind
   /// Which provider-agnostic RuntimeAdapter this runtime instances
   /// (`src/server/runtimes/adapters.ts`) — "hermes", "local-daemon",
   /// "custom-http", … Source of truth for "what manages this runtime,"
   /// replacing inference from `kind`. Nullable for back-compat; backfilled
   /// in migration 0059. See `docs/plans/runtime-adapter-refactor.md`.
-  adapterKey         String?
+  adapterKey             String?
   /// Webhook URL for REMOTE_HTTP. Null for LOCAL_DAEMON (the daemon
   /// polls Forge via SSE).
-  endpoint           String?
+  endpoint               String?
   /// HMAC secret for outbound webhook signing (REMOTE_HTTP only).
-  secret             String?
+  secret                 String?
   /// Providers this runtime can host. For REMOTE_HTTP it's whatever the
   /// operator declares; for LOCAL_DAEMON the daemon reports it from
   /// PATH detection on registration + reconnect.
-  providersAvailable AgentProvider[] @default([])
+  providersAvailable     AgentProvider[]        @default([])
   /// Last successful runtime-level heartbeat. Distinct from per-agent
   /// heartbeat: an idle runtime can be alive while no agent on it has
   /// done anything recently.
-  heartbeatAt        DateTime?
+  heartbeatAt            DateTime?
   /// Last handshake-only reachability probe. This is diagnostic, not a
   /// substitute for adapter-specific presence: Hermes can answer its gateway
   /// probe while still missing the forge-presence/agent heartbeat signal.
-  lastProbeAt        DateTime?
-  lastProbeAttempted Boolean         @default(false)
-  lastProbeReachable Boolean?
-  lastProbeDetail    String?
+  lastProbeAt            DateTime?
+  lastProbeAttempted     Boolean                @default(false)
+  lastProbeReachable     Boolean?
+  lastProbeDetail        String?
   /// Structured version/environment metadata reported by the runtime host or
   /// harvested from a protocol initialize response. Sanitized/whitelisted in
   /// `runtime-info.ts`; safe for operator display, not a raw env dump.
-  runtimeInfo        Json?
-  lastInfoAt         DateTime?
+  runtimeInfo            Json?
+  lastInfoAt             DateTime?
   /// Last operator-requested self-test turn. Unlike `lastProbe*`, this is a
   /// real minimal adapter run where supported, so it catches provider auth
   /// failures that only surface when starting a turn.
@@ -1780,22 +1814,22 @@ model Runtime {
   lastSelfTestDurationMs Int?
   /// Last connect time for LOCAL_DAEMON (when the SSE subscription
   /// opened). Null for REMOTE_HTTP.
-  connectedAt        DateTime?
+  connectedAt            DateTime?
   /// Optional auth-token-prefix for the daemon's `forge login` token.
   /// Stored only for ops display; the underlying ApiKey row is the
   /// source of truth.
-  ownerKeyPrefix     String?
+  ownerKeyPrefix         String?
   /// User who registered this runtime. The global owner — global runtime
   /// views (Mission Control, /settings/runtimes) key off this rather than
   /// `workspaceId`, so a host appears once across all the owner's
   /// workspaces. `workspaceId` is retained (where the daemon first
   /// registered) for back-compat; treat `ownerId` as the global identity.
-  ownerId            String?
+  ownerId                String?
   /// Instance admin can mark a runtime instance-shared so it appears in
   /// every workspace's runtime picker (not just the owner's). Mirrors
   /// {@link AgentProfile.instanceShared}.
-  instanceShared     Boolean         @default(false)
-  archivedAt         DateTime?
+  instanceShared         Boolean                @default(false)
+  archivedAt             DateTime?
   /// Soft kill-switch. When set, the runtime is "disabled": dispatch +
   /// chat refuse to dial it (the connector resolves to a sentinel that
   /// reports `[runtime disabled]` rather than opening a session). Distinct
@@ -1803,29 +1837,29 @@ model Runtime {
   /// reversible pause that keeps the row visible and configured. Added
   /// 2026-05-24 (migration 0062) for operator control of host-touching
   /// runtimes like the Codex app server.
-  disabledAt         DateTime?
+  disabledAt             DateTime?
   /// Adapter-specific runtime configuration (validated per `adapterKey` in
   /// the runtime router; opaque here). For `codex-app-server` this carries
   /// `{ sandboxMode, approvalPolicy, workspaceRoot }` — the connector sends
   /// them as per-turn `sandboxPolicy`/`approvalPolicy`/`cwd` overrides so an
   /// operator can flip a Codex runtime between full-access (today's default)
   /// and a sandboxed, approval-gated mode without restarting the bridge.
-  config             Json?
+  config                 Json?
   /// Optional link to a workspace-scoped {@link GithubApp} used for git auth.
   /// When set, provisioning mints a short-lived installation token from that
   /// app into `GH_TOKEN` (superseding a static GH_TOKEN secret). One app can
   /// be shared across many runtimes. SetNull so deleting the app just unlinks.
-  githubAppId        String?
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
+  githubAppId            String?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
 
-  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  owner         User?          @relation(fields: [ownerId], references: [id], onDelete: SetNull)
-  agents        Agent[]        @relation("AgentRuntime")
-  agentProfiles AgentProfile[] @relation("AgentProfileRuntime")
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  owner         User?           @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  agents        Agent[]         @relation("AgentRuntime")
+  agentProfiles AgentProfile[]  @relation("AgentProfileRuntime")
   secrets       RuntimeSecret[]
   repos         RuntimeRepo[]
-  githubApp     GithubApp?     @relation(fields: [githubAppId], references: [id], onDelete: SetNull)
+  githubApp     GithubApp?      @relation(fields: [githubAppId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, archivedAt])
   @@index([ownerId])
@@ -1903,30 +1937,30 @@ model RuntimeRepo {
 /// Distinct from the **instance** GitHub App (env-var creds) used for issue
 /// sync — see `src/server/services/github/app-auth.ts`.
 model GithubApp {
-  id               String    @id @default(cuid())
-  workspaceId      String
+  id                 String    @id @default(cuid())
+  workspaceId        String
   /// Operator-facing label (e.g. "Axiom Bot").
-  name             String
+  name               String
   /// Numeric GitHub App ID — the JWT issuer used to mint installation tokens.
-  appId            String
+  appId              String
   /// Installation ID (the app installed on an org/account). Null until the app
   /// is installed; tokens are scoped to whatever repos the installation grants.
-  installationId   String?
+  installationId     String?
   /// AES-256-GCM ciphertext of the app's PEM private key. Write-only.
-  privateKeyEnc    String
+  privateKeyEnc      String
   /// App slug (e.g. `forge-bot`) for deep-linking to GitHub's install/settings
   /// pages. From the manifest conversion, or the first successful test.
-  slug             String?
+  slug               String?
   /// OAuth client id from the manifest conversion (informational; nullable).
-  clientId         String?
+  clientId           String?
   /// Created via the manifest flow (vs. manual paste). UI hint only.
-  createdViaManifest Boolean @default(false)
+  createdViaManifest Boolean   @default(false)
   /// Last successful token mint, for at-a-glance health in the UI.
-  lastMintedAt     DateTime?
+  lastMintedAt       DateTime?
   /// Last mint/verify error message (cleared on success). UI surfaces it.
-  lastError        String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  lastError          String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   runtimes  Runtime[]
@@ -2470,6 +2504,19 @@ model AgentRun {
   /// User who cleared the terminal failure from operational surfaces.
   /// SetNull on user delete so the run row survives membership churn.
   clearedById          String?
+  /// Set when a newer run for the same (issue, agent) supersedes this
+  /// one (added 2026-06-23). A re-dispatch / kick / grant that opens a
+  /// fresh run links the prior STALLED/abandoned attempts here so
+  /// operator surfaces collapse the stack into one thread instead of
+  /// showing N repeated cards (the AXI-75 pathology). The run keeps its
+  /// own terminal status for history; surfaces filter on
+  /// `supersededByRunId IS NULL` to show only the head of each chain.
+  supersededByRunId    String?
+  /// Set only by clean completion via `runs.complete` (added
+  /// 2026-06-23). Distinct from `finishedAt`, which is stamped for ANY
+  /// terminal transition (including STALLED/ABANDONED). Rollups/surfaces
+  /// that mean "succeeded" key off `completedAt`, not `finishedAt`.
+  completedAt          DateTime?
 
   /// Optional ExecutionStep this run is executing (migration: AXI-57). Set
   /// when the Goal-orchestration loop opens a run for a step, so orchestrated
@@ -2488,6 +2535,8 @@ model AgentRun {
   executionStep      ExecutionStep?  @relation("AgentRunStep", fields: [executionStepId], references: [id], onDelete: SetNull)
   controlRequestedBy User?           @relation("AgentRunControlRequester", fields: [controlRequestedById], references: [id], onDelete: SetNull)
   clearedBy          User?           @relation("AgentRunClearer", fields: [clearedById], references: [id], onDelete: SetNull)
+  supersededBy       AgentRun?       @relation("AgentRunSupersede", fields: [supersededByRunId], references: [id], onDelete: SetNull)
+  supersedes         AgentRun[]      @relation("AgentRunSupersede")
   events             AgentRunEvent[]
   statusComment      Comment?        @relation("AgentRunStatusComment")
 
@@ -2501,6 +2550,9 @@ model AgentRun {
   /// Reverse lookup from an ActivityEvent to its canonical run.
   @@index([workspaceId, triggerEventId])
   @@index([executionStepId])
+  /// Collapse stacked runs: list heads with `supersededByRunId IS NULL`,
+  /// expand a thread by following the chain.
+  @@index([supersededByRunId])
 }
 
 /// Append-only timeline for an AgentRun. Drives the live pulse strip and
@@ -3222,6 +3274,11 @@ enum ActionRequestStatus {
   DISMISSED
   SNOOZED
   REJECTED
+  /// Replaced by a newer request for the same (issue, kind, requester,
+  /// scopePath) before it was resolved (added 2026-06-23). The newer
+  /// request points back via `supersededById`. Excluded from all
+  /// "waiting on you" surfaces — only the surviving request is shown.
+  SUPERSEDED
 }
 
 /// Typed action kinds carried by an ActionRequest (added 2026-05-20,
@@ -3316,6 +3373,11 @@ model ActionRequest {
   resolvedAt         DateTime?
   resolvedByUserId   String?
   resolution         String?              @db.Text
+  /// Set when a newer request for the same dedup key replaced this one
+  /// (added 2026-06-23). Points at the surviving request; this row's
+  /// `status` becomes SUPERSEDED. Lets the UI render "replaces #N" /
+  /// escalation lineage (e.g. read-only → full grant on AXI-26).
+  supersededById     String?
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
 
@@ -3326,6 +3388,8 @@ model ActionRequest {
   assignedAgent    Agent?              @relation("ActionRequestAssigneeAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
   resolvedByUser   User?               @relation("ActionRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
   issue            Issue?              @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  supersededBy     ActionRequest?      @relation("ActionRequestSupersede", fields: [supersededById], references: [id], onDelete: SetNull)
+  supersedes       ActionRequest[]     @relation("ActionRequestSupersede")
   votes            ActionRequestVote[]
 
   @@index([workspaceId, status, createdAt])
@@ -3333,6 +3397,7 @@ model ActionRequest {
   @@index([assignedAgentId, status])
   @@index([issueId])
   @@index([sourceType, sourceId])
+  @@index([supersededById])
 }
 
 /// Per-user vote on a poll-style ActionRequest (added 2026-05-20,

@@ -16,6 +16,11 @@ import {
   type RuntimePolicySnapshot,
 } from "@/lib/runtime-enforcement";
 import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from "./registry";
+import {
+  clearBudgetMarkers,
+  enforceRunBudget,
+  RUN_BUDGET_WORKSPACE_SELECT,
+} from "@/server/services/run-budget";
 
 /**
  * Dispatch-via-runs ingestion (worker-hosted, poll-based).
@@ -507,6 +512,7 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
       summary: true,
       lastEventAt: true,
       runtimePolicy: true,
+      completionMeta: true,
       issue: {
         select: {
           id: true,
@@ -621,6 +627,9 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
         contractVersion: FORGE_RUN_CONTRACT_VERSION,
         toolPolicy: runtimePolicy,
       });
+      // Re-arm run-budget enforcement on resume: clear any breach marker so a
+      // budget-paused run doesn't resume uncapped (no-op for normal waits).
+      const rearmedMeta = clearBudgetMarkers(run.completionMeta);
       await db.$transaction(async (tx) => {
         await tx.agentRun.update({
           where: { id: run.id },
@@ -630,6 +639,9 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
             currentStep: "resuming after reply",
             lastEventAt: new Date(),
             awaitingApprovalAt: null,
+            controlState: "NONE",
+            controlRequestedAt: null,
+            ...(rearmedMeta !== undefined ? { completionMeta: rearmedMeta } : {}),
             runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
           },
         });
@@ -676,6 +688,11 @@ async function pollActiveRuns(): Promise<number> {
       awaitingApprovalAt: true,
       summary: true,
       completionMeta: true,
+      startedAt: true,
+      tokensIn: true,
+      tokensOut: true,
+      costUsd: true,
+      workspace: { select: RUN_BUDGET_WORKSPACE_SELECT },
       agent: {
         select: {
           provider: true,
@@ -738,6 +755,32 @@ async function pollActiveRuns(): Promise<number> {
     }
 
     if (status.state === "running") {
+      // P0-2: cap a busy-but-runaway run before advancing it. The stale
+      // watchdog only catches idle runs; a looping agent keeps emitting
+      // events (AXI-75 burned 21.1M tokens this way). Prefer live usage
+      // from the connector poll, falling back to the last recorded usage.
+      const liveUsage = status.usage;
+      const verdict = await enforceRunBudget({
+        run: {
+          id: run.id,
+          workspaceId: run.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          status: AgentRunStatus.ACTIVE,
+          externalRunId: run.externalRunId,
+          completionMeta: run.completionMeta,
+          startedAt: run.startedAt,
+          tokensIn: liveUsage?.tokensIn ?? run.tokensIn,
+          tokensOut: liveUsage?.tokensOut ?? run.tokensOut,
+          costUsd: liveUsage?.costUsd ?? run.costUsd,
+        },
+        limits: run.workspace,
+        connector,
+      });
+      // On breach the run is now paused/stopped — skip the normal
+      // "advance step" update, which assumes the run is still ACTIVE.
+      if (verdict.state === "breach") continue;
+
       const step = status.lastEvent ?? "running";
       // Clear a prior approval block (operator approved → agent resumed)
       // or just advance the step label.

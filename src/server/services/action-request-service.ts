@@ -348,6 +348,16 @@ async function validatePayloadWorkspaceScope(
  * `assignedUserId` or `assignedAgentId` is recommended; the request
  * shows up on the inbox of whoever is targeted.
  */
+/**
+ * True when an error is a unique-violation on the OPEN-request dedup index
+ * (added 2026-06-23, migration 0088). ActionRequest carries no other unique
+ * constraint a create/transition can hit, so a P2002 here is always the
+ * scoped-dedup race between two concurrent writers.
+ */
+function isOpenDedupConflict(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+}
+
 export async function createActionRequest(
   db: PrismaClient,
   input: CreateActionRequestInput,
@@ -386,7 +396,57 @@ export async function createActionRequest(
     }
     parsedOptions = parsed.data;
   }
-  const { id } = await db.$transaction(async (tx) => {
+  // Dedup key (added 2026-06-23): at most one OPEN request per
+  // (workspace, issue, kind, requesting-agent, scopePath). A re-ask or an
+  // escalation (e.g. read-only → full grant on the same path) SUPERSEDES the
+  // prior open request instead of stacking a second card — the AXI-26
+  // duplicate-grant pathology. Dedup is scoped to requests that actually
+  // carry a `scopePath` (runtime-tool grants today) so that two *distinct*
+  // FREE_FORM asks from the same agent on one issue never collapse into each
+  // other. Mirrors the partial-unique index, which only covers scopePath rows.
+  const requesterAgentId = input.actorAgentId ?? null;
+  const dedupScopePath =
+    parsedPayload && typeof parsedPayload === "object" && "scopePath" in parsedPayload
+      ? (String((parsedPayload as { scopePath?: unknown }).scopePath ?? "") || null)
+      : null;
+  const dedupable = Boolean(input.issueId && requesterAgentId && dedupScopePath !== null);
+
+  const createOnce = () => db.$transaction(async (tx) => {
+    let supersededId: string | null = null;
+    if (dedupable) {
+      const opens = await tx.actionRequest.findMany({
+        where: {
+          workspaceId: input.workspaceId,
+          issueId: input.issueId!,
+          kind,
+          requestedByAgentId: requesterAgentId!,
+          status: ActionRequestStatus.OPEN,
+        },
+        select: { id: true, payload: true },
+      });
+      const match = opens.find((row) => {
+        const ps =
+          row.payload && typeof row.payload === "object" && "scopePath" in row.payload
+            ? String((row.payload as { scopePath?: unknown }).scopePath ?? "")
+            : "";
+        return ps === (dedupScopePath ?? "");
+      });
+      if (match) {
+        // Supersede FIRST: flip the prior row out of OPEN so it leaves the
+        // partial-unique index before the replacement is inserted.
+        // `supersededById` is backfilled once the new row id exists.
+        await tx.actionRequest.update({
+          where: { id: match.id },
+          data: {
+            status: ActionRequestStatus.SUPERSEDED,
+            resolvedAt: new Date(),
+            resolution: "Superseded by a newer request on the same issue.",
+          },
+        });
+        supersededId = match.id;
+      }
+    }
+
     const row = await tx.actionRequest.create({
       data: {
         workspaceId: input.workspaceId,
@@ -412,6 +472,14 @@ export async function createActionRequest(
         dueAt: input.dueAt ?? null,
       },
     });
+
+    if (supersededId) {
+      await tx.actionRequest.update({
+        where: { id: supersededId },
+        data: { supersededById: row.id },
+      });
+    }
+
     await recordChange(tx, {
       workspaceId: input.workspaceId,
       actorId: input.actorId,
@@ -432,11 +500,21 @@ export async function createActionRequest(
         sourceType: row.sourceType,
         sourceId: row.sourceId,
         issueId: row.issueId,
+        supersededId,
       } as Prisma.InputJsonValue,
     });
     return { id: row.id };
   });
-  return { id };
+
+  try {
+    return await createOnce();
+  } catch (err) {
+    // A concurrent create for the same scoped dedup key can race the partial
+    // unique index. Retry once: the supersede-first lookup now sees the
+    // committed sibling and supersedes it before inserting.
+    if (isOpenDedupConflict(err)) return await createOnce();
+    throw err;
+  }
 }
 
 /** Resolve / dismiss / snooze an action request. */
@@ -458,16 +536,30 @@ export async function transitionActionRequest(
     throw new TRPCError({ code: "NOT_FOUND", message: "Action request not found." });
   }
   await db.$transaction(async (tx) => {
-    await tx.actionRequest.update({
-      where: { id: row.id },
-      data: {
-        status: params.status,
-        resolvedAt: params.status === ActionRequestStatus.OPEN ? null : new Date(),
-        resolvedByUserId:
-          params.status === ActionRequestStatus.OPEN ? null : params.actorId,
-        resolution: params.resolution ?? undefined,
-      },
-    });
+    try {
+      await tx.actionRequest.update({
+        where: { id: row.id },
+        data: {
+          status: params.status,
+          resolvedAt: params.status === ActionRequestStatus.OPEN ? null : new Date(),
+          resolvedByUserId:
+            params.status === ActionRequestStatus.OPEN ? null : params.actorId,
+          resolution: params.resolution ?? undefined,
+        },
+      });
+    } catch (err) {
+      // Re-opening a scoped (grant) request can collide with another OPEN
+      // request for the same dedup key against the partial unique index.
+      // Surface a clean conflict rather than a raw Prisma error.
+      if (isOpenDedupConflict(err)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Another open request already exists for this issue and scope. Resolve it before re-opening this one.",
+        });
+      }
+      throw err;
+    }
     await recordChange(tx, {
       workspaceId: params.workspaceId,
       actorId: params.actorId,
@@ -828,6 +920,15 @@ async function dispatchActionRequestKind(
       engagementMode: p.mode,
       runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
     });
+    // Collapse the runs we just abandoned (above) under the fresh grant
+    // run so the stack reads as one thread. Prior STALLED attempts are
+    // already linked inside openOrTouchRun via linkSupersededRuns.
+    if (superseded.length > 0) {
+      await tx.agentRun.updateMany({
+        where: { id: { in: superseded.map((r) => r.id) } },
+        data: { supersededByRunId: run.id },
+      });
+    }
     await tx.agentRun.update({
       where: { id: run.id },
       data: {

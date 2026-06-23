@@ -85,6 +85,55 @@ export async function findActiveRun(
 }
 
 /**
+ * Collapse stacked attempts. When a *fresh* run opens for (issue, agent),
+ * link the prior STALLED attempts to it via `supersededByRunId` so operator
+ * surfaces render one thread (newest run, with an "N earlier attempts"
+ * affordance) instead of N repeated cards — the AXI-75 pathology where a
+ * re-dispatch kept creating new ACTIVE runs while dead STALLED ones piled up.
+ *
+ * The superseded runs keep their own terminal status for history; surfaces
+ * filter on `supersededByRunId: null` to show only the head of each chain.
+ * ACTIVE/WAITING runs are never touched here (there is at most one, and
+ * `openOrTouchRun` reuses it rather than opening a fresh run). Returns the
+ * count linked; cheap no-op when there are none.
+ */
+export async function linkSupersededRuns(
+  tx: Tx,
+  params: { workspaceId: string; issueId: string; agentId: string; newRunId: string },
+): Promise<number> {
+  const priors = await tx.agentRun.findMany({
+    where: {
+      workspaceId: params.workspaceId,
+      issueId: params.issueId,
+      agentId: params.agentId,
+      id: { not: params.newRunId },
+      supersededByRunId: null,
+      status: AgentRunStatus.STALLED,
+    },
+    select: { id: true },
+  });
+  if (priors.length === 0) return 0;
+
+  await tx.agentRun.updateMany({
+    where: { id: { in: priors.map((r) => r.id) } },
+    data: { supersededByRunId: params.newRunId },
+  });
+  // Quiet timeline markers only — no `lastEventAt` bump / SSE step on a
+  // dead run (it stays terminal); the chain link is the durable signal.
+  for (const prior of priors) {
+    await tx.agentRunEvent.create({
+      data: {
+        workspaceId: params.workspaceId,
+        runId: prior.id,
+        kind: "SUPERSEDED",
+        payload: { supersededByRunId: params.newRunId },
+      },
+    });
+  }
+  return priors.length;
+}
+
+/**
  * Open a new ACTIVE run for (issue, agent), or touch the existing one.
  * Opening emits AGENT_RUN_STARTED via `recordChange()` so the audit log
  * + SSE stream get a durable marker. Touching just bumps lastEventAt.
@@ -128,11 +177,39 @@ export async function openOrTouchRun(
     // triggering caller (comment.create, MCP write, etc.) already
     // records its own audit row.
     const resumeFromWaiting = existing.status === AgentRunStatus.WAITING;
+    // Re-arm run-budget enforcement when a paused run resumes. Inlined (not
+    // imported from run-budget.ts) to avoid a module cycle — run-budget
+    // already imports this file. No-op unless a budget breach/warn marker is
+    // present, so normal WAITING resumes are unaffected.
+    let rearmMeta: Prisma.InputJsonValue | undefined;
+    if (
+      resumeFromWaiting &&
+      existing.completionMeta &&
+      typeof existing.completionMeta === "object"
+    ) {
+      const m = { ...(existing.completionMeta as Record<string, unknown>) };
+      if (m.budget && typeof m.budget === "object") {
+        const b = { ...(m.budget as Record<string, unknown>) };
+        if (b.breachedAt !== undefined || b.warnedAt !== undefined) {
+          delete b.breachedAt;
+          delete b.breachedMetric;
+          delete b.warnedAt;
+          delete b.warnedMetric;
+          delete b.stopped;
+          b.rearmedAt = new Date().toISOString();
+          m.budget = b;
+          rearmMeta = m as Prisma.InputJsonValue;
+        }
+      }
+    }
     const updated = await tx.agentRun.update({
       where: { id: existing.id },
       data: {
         lastEventAt: new Date(),
-        ...(resumeFromWaiting ? { status: AgentRunStatus.ACTIVE } : {}),
+        ...(resumeFromWaiting
+          ? { status: AgentRunStatus.ACTIVE, controlState: "NONE", controlRequestedAt: null }
+          : {}),
+        ...(rearmMeta !== undefined ? { completionMeta: rearmMeta } : {}),
         ...(params.assignmentEventId && !existing.assignmentEventId
           ? { assignmentEventId: params.assignmentEventId }
           : {}),
@@ -193,6 +270,15 @@ export async function openOrTouchRun(
       agentId: params.agentId,
       assignmentEventId: params.assignmentEventId ?? null,
     },
+  });
+
+  // Collapse any prior STALLED attempts for this (issue, agent) under the
+  // freshly-opened run so the operator sees one thread, not a pile.
+  await linkSupersededRuns(tx, {
+    workspaceId: params.workspaceId,
+    issueId: params.issueId,
+    agentId: params.agentId,
+    newRunId: run.id,
   });
 
   return { run, isNew: true };
@@ -291,11 +377,16 @@ export async function finishRun(
     return existing;
   }
 
+  const now = new Date();
   const finished = await tx.agentRun.update({
     where: { id: params.runId },
     data: {
       status: AgentRunStatus[params.status],
-      finishedAt: new Date(),
+      finishedAt: now,
+      // `completedAt` marks a *clean* completion only — never set for
+      // STALLED/ABANDONED. Rollups that mean "succeeded" key off this,
+      // not `finishedAt` (which is stamped for any terminal transition).
+      ...(params.status === "COMPLETED" ? { completedAt: now } : {}),
       ...(params.summary !== undefined ? { summary: params.summary } : {}),
     },
   });

@@ -218,6 +218,11 @@ export async function listRunRecoveryItems(
     where: {
       workspaceId: input.workspaceId,
       ...(input.includeCleared ? {} : { clearedAt: null }),
+      // Collapse stacked attempts: a run that a newer one superseded is
+      // hidden here so the AXI-75 pattern (N STALLED rows for one piece of
+      // work) renders as a single card — the chain head. History is intact
+      // (the rows keep their status); the detail overlay walks the chain.
+      supersededByRunId: null,
       status: {
         in: [
           AgentRunStatus.ACTIVE,

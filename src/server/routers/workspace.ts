@@ -8,6 +8,7 @@ import {
   EventKind,
   MentionEngagementPolicy,
   Role,
+  RunBudgetAction,
 } from "@prisma/client";
 import { router, protectedProcedure, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -123,6 +124,11 @@ export const workspaceRouter = router({
         aiProvider: true,
         aiModel: true,
         agentRunStaleMinutes: true,
+        runTokenBudget: true,
+        runCostBudgetUsd: true,
+        runMaxMinutes: true,
+        runBudgetWarnPct: true,
+        runBudgetAction: true,
         startedStatusId: true,
         stalledThresholdDays: true,
         agentHeartbeatWarnMinutes: true,
@@ -235,6 +241,12 @@ export const workspaceRouter = router({
         agentIdleTimeoutMinutes: z.number().int().min(0).max(1440).optional(),
         assignmentSlaMinutes: z.number().int().min(0).max(10080).optional(),
         agentRunStaleMinutes: z.number().int().min(0).max(10080).optional(),
+        // Per-run safety budgets (null = unlimited; opt-in). See run-budget.ts.
+        runTokenBudget: z.number().int().min(0).max(1_000_000_000).nullable().optional(),
+        runCostBudgetUsd: z.number().min(0).max(100_000).nullable().optional(),
+        runMaxMinutes: z.number().int().min(0).max(10080).nullable().optional(),
+        runBudgetWarnPct: z.number().int().min(0).max(100).optional(),
+        runBudgetAction: z.nativeEnum(RunBudgetAction).optional(),
         autoRedispatchOnStall: z.boolean().optional(),
         requiredAckSeconds: z.number().int().min(0).max(3600).optional(),
         autoRedispatchOnNoack: z.boolean().optional(),

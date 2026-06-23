@@ -49,6 +49,14 @@ import {
   finishRunsForIssue,
 } from "@/server/services/agent-run";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
+import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
+import {
+  clearBudgetMarkers,
+  enforceRunBudget,
+  hasAnyBudget,
+  RUN_BUDGET_WORKSPACE_SELECT,
+} from "@/server/services/run-budget";
+import { logger } from "@/server/logger";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { buildChatContextBundle } from "@/server/services/chat-context";
 import { agentIdSchema } from "@/server/validators";
@@ -6097,7 +6105,33 @@ export const mcpTools = {
       }
       const run = await db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
-        select: { id: true, agentId: true, costUsd: true },
+        select: {
+          id: true,
+          agentId: true,
+          costUsd: true,
+          workspaceId: true,
+          issueId: true,
+          status: true,
+          externalRunId: true,
+          startedAt: true,
+          completionMeta: true,
+          workspace: { select: RUN_BUDGET_WORKSPACE_SELECT },
+          agent: {
+            select: {
+              provider: true,
+              runtime: {
+                select: {
+                  adapterKey: true,
+                  endpoint: true,
+                  secret: true,
+                  config: true,
+                  disabledAt: true,
+                  name: true,
+                },
+              },
+            },
+          },
+        },
       });
       if (!run) throw new Error("AgentRun not found in this workspace.");
       if (run.agentId !== linkedAgentId) {
@@ -6135,6 +6169,36 @@ export const mcpTools = {
             costDelta: delta,
           });
         }
+      }
+      // P0-2 run budget: after recording usage, pause/stop a runaway run
+      // cleanly. Best-effort — never fail the usage write the agent's loop
+      // depends on. The connector lets us actually stop provider spend.
+      try {
+        if (run.status === AgentRunStatus.ACTIVE && hasAnyBudget(run.workspace)) {
+          const connector = getRunsConnectorForAgent({
+            provider: run.agent.provider,
+            runtime: run.agent.runtime,
+          });
+          await enforceRunBudget({
+            run: {
+              id: run.id,
+              workspaceId: run.workspaceId,
+              issueId: run.issueId,
+              agentId: run.agentId,
+              status: AgentRunStatus.ACTIVE,
+              externalRunId: run.externalRunId,
+              completionMeta: run.completionMeta,
+              startedAt: run.startedAt,
+              tokensIn: updated.tokensIn,
+              tokensOut: updated.tokensOut,
+              costUsd: updated.costUsd,
+            },
+            limits: run.workspace,
+            connector,
+          });
+        }
+      } catch (err) {
+        logger.warn({ err, runId: run.id }, "runs.recordUsage: budget enforcement failed");
       }
       return updated;
     },
@@ -6472,7 +6536,7 @@ export const mcpTools = {
       }
       const run = await db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
-        select: { id: true, agentId: true, status: true },
+        select: { id: true, agentId: true, status: true, completionMeta: true },
       });
       if (!run) throw new Error("AgentRun not found in this workspace.");
       if (run.agentId !== linkedAgentId) {
@@ -6481,11 +6545,17 @@ export const mcpTools = {
       if (run.status !== AgentRunStatus.WAITING && run.status !== AgentRunStatus.ACTIVE) {
         throw new Error(`Run is ${run.status}; only WAITING / ACTIVE runs can be resumed.`);
       }
+      // Re-arm run-budget enforcement: clear any breach marker so a
+      // budget-paused run can't resume uncapped (no-op for normal waits).
+      const rearmedMeta = clearBudgetMarkers(run.completionMeta);
       return db.agentRun.update({
         where: { id: run.id },
         data: {
           status: AgentRunStatus.ACTIVE,
           lastEventAt: new Date(),
+          controlState: "NONE",
+          controlRequestedAt: null,
+          ...(rearmedMeta !== undefined ? { completionMeta: rearmedMeta } : {}),
           ...(input.currentStep !== undefined ? { currentStep: input.currentStep } : {}),
         },
         select: {

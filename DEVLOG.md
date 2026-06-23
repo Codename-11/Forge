@@ -2,6 +2,73 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-23 — Agentic runtime Phase 1: run supersede/collapse, action-request dedup, per-run budgets
+
+Audited the agentic-runtime + issue-management surface (parallel readers over
+run lifecycle / engagement+engine resolution / action-requests / command-center
+UI / watchdog). Headline finding: three orthogonal axes — **trigger** (assign /
+mention / auto-dispatch / chat / goal-step / grant-accept), **engagement mode**,
+**run engine** — are conflated across 8 entry points; mode is resolved in 4+
+places (the real one is the undocumented sticky waterfall in
+`agent-dispatch-inbox.ts:266`), engine is resolved but never persisted on
+`AgentRun`. Live prod confirmed the symptoms: AXI-75 had 4 stacked runs (3
+STALLED, one burned 21.1M input tokens), AXI-26 had two OPEN `RUNTIME_TOOL_GRANT`
+requests (read-only + full) coexisting.
+
+Shipped **Phase 1 ("stop the bleeding")** — correctness invariants only:
+
+- **P0-1 supersede/collapse.** `linkSupersededRuns()` (`agent-run.ts`) links prior
+  STALLED attempts for an (issue, agent) to the freshly-opened run via
+  `AgentRun.supersededByRunId` (self-FK). Called from the single chokepoint
+  `openOrTouchRun` create branch, so all entry points inherit it. The grant-accept
+  path links its abandoned runs too. `listRunRecoveryItems` filters
+  `supersededByRunId: null`, so command-center/recovery render one chain head
+  instead of N cards.
+- **P0-2 per-run budgets (`run-budget.ts`).** Opt-in `Workspace.runTokenBudget /
+  runCostBudgetUsd / runMaxMinutes / runBudgetWarnPct(=80) / runBudgetAction(PAUSE|
+  STOP)`. `evaluateRunBudget` (pure) + `enforceRunBudget` (effects). One-time warn;
+  on breach → `connector.stop()` (best-effort, tracked) → **PAUSE** (atomic
+  ACTIVE→WAITING + `PAUSE_REQUESTED` + honest "raise & resume / abandon"
+  notification) or **STOP** (atomic ACTIVE→ABANDONED). Wired into `pollActiveRuns`
+  (live usage + connector) and `runs.recordUsage`. Default unlimited (operator
+  chose opt-in + nudge). Settings → Workspace exposes the knobs with an uncapped
+  nudge.
+- **P0-3 action-request dedup.** `createActionRequest` supersedes-first then
+  creates, keyed on `(workspace, issue, kind, requestedByAgentId, scopePath)`;
+  partial unique index `ActionRequest_open_dedup_key` (migration). Scoped to
+  requests that carry a `scopePath` (runtime-tool grants) so distinct FREE_FORM
+  asks never collapse. New `ActionRequestStatus.SUPERSEDED` + `supersededById`.
+- **P0-4b `completedAt`** distinct from `finishedAt` (set only on clean COMPLETED).
+
+Migration `0088_agent_run_supersede_and_run_budget` (hand-written): columns/enums
++ backfills (collapse existing STALLED backlog under latest run per (issue,agent),
+dedup pre-existing OPEN grant dupes before creating the partial unique index).
+
+**Adversarial review (3-lens workflow) caught a BLOCKER**, now fixed: a
+budget-PAUSEd run (WAITING, `breachedAt` set) was auto-resumed by
+`resumeWaitingRuns` / `openOrTouchRun` and, because the marker was never cleared,
+`enforceRunBudget` short-circuited forever → the runaway resumed **uncapped**. Fix:
+`clearBudgetMarkers()` re-arms enforcement on every WAITING→ACTIVE resume (all
+three resume paths), so a resumed-but-still-over run re-pauses on the next tick.
+Also from review: narrowed dedup to scoped rows (FREE_FORM over-collapse could eat
+a pending operator question); race-guarded the breach with an atomic status-flip
+claim (worker poll vs web `recordUsage`); made the "provider stopped" notification
+honest (tracks whether `connector.stop` actually ran); one-retry on the
+create-dedup P2002 race + clean CONFLICT on `transitionActionRequest` re-open;
+0→null persistence for budget knobs; deterministic backfill tiebreaker.
+
+**Deferred (noted, not blockers):** P0-4a re-engageable-STALLED kick (P0-1's
+collapse neutralizes its UX); operator "Resume" button + don't-resume-on-
+discussion-comment (Phase 2 — re-arm makes auto-resume safe meanwhile); grant
+double-accept row-lock (pre-existing race); reconcile nulling `completedAt`;
+the Phase-2 visibility work (persist mode+engine on runs, chips, dispatch preview)
+and Phase-3 run/action detail overlay.
+
+Verify: `pnpm typecheck` ✓, `pnpm lint` ✓ (changed files), `vitest run
+run-budget.test.ts` ✓ (18). **Pending pre-deploy:** migration 0088 + DB-bound
+integration/e2e suites must run against the local stack (`pnpm dev:local`) — not
+run here because `.env` points at the deployed DB. Not committed/deployed.
+
 ## 2026-06-18 — Compact Forge MCP catalog + catalog helpers
 
 Tightened Forge's MCP catalog behavior after Grok/xAI rejected Hermes turns

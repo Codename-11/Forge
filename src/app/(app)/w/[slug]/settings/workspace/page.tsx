@@ -34,6 +34,12 @@ export default function WorkspaceSettingsPage() {
   const [agentIdleTimeoutMinutes, setAgentIdleTimeoutMinutes] = useState(0);
   const [assignmentSlaMinutes, setAssignmentSlaMinutes] = useState(0);
   const [agentRunStaleMinutes, setAgentRunStaleMinutes] = useState(0);
+  // Per-run safety budgets. 0 = unlimited (opt-in). See run-budget.ts.
+  const [runTokenBudget, setRunTokenBudget] = useState(0);
+  const [runCostBudgetUsd, setRunCostBudgetUsd] = useState(0);
+  const [runMaxMinutes, setRunMaxMinutes] = useState(0);
+  const [runBudgetWarnPct, setRunBudgetWarnPct] = useState(80);
+  const [runBudgetAction, setRunBudgetAction] = useState<"PAUSE" | "STOP">("PAUSE");
   const [autoRedispatchOnStall, setAutoRedispatchOnStall] = useState(false);
   const [requiredAckSeconds, setRequiredAckSeconds] = useState(0);
   const [autoRedispatchOnNoack, setAutoRedispatchOnNoack] = useState(false);
@@ -73,6 +79,11 @@ export default function WorkspaceSettingsPage() {
     setAgentIdleTimeoutMinutes(current.agentIdleTimeoutMinutes);
     setAssignmentSlaMinutes(current.assignmentSlaMinutes);
     setAgentRunStaleMinutes(current.agentRunStaleMinutes);
+    setRunTokenBudget(current.runTokenBudget ?? 0);
+    setRunCostBudgetUsd(Number(current.runCostBudgetUsd ?? 0));
+    setRunMaxMinutes(current.runMaxMinutes ?? 0);
+    setRunBudgetWarnPct(current.runBudgetWarnPct ?? 80);
+    setRunBudgetAction((current.runBudgetAction as "PAUSE" | "STOP") ?? "PAUSE");
     setAutoRedispatchOnStall(current.autoRedispatchOnStall);
     setRequiredAckSeconds(current.requiredAckSeconds);
     setAutoRedispatchOnNoack(current.autoRedispatchOnNoack);
@@ -146,6 +157,11 @@ export default function WorkspaceSettingsPage() {
       ["agentIdleTimeoutMinutes", agentIdleTimeoutMinutes !== current.agentIdleTimeoutMinutes],
       ["assignmentSlaMinutes", assignmentSlaMinutes !== current.assignmentSlaMinutes],
       ["agentRunStaleMinutes", agentRunStaleMinutes !== current.agentRunStaleMinutes],
+      ["runTokenBudget", runTokenBudget !== (current.runTokenBudget ?? 0)],
+      ["runCostBudgetUsd", runCostBudgetUsd !== Number(current.runCostBudgetUsd ?? 0)],
+      ["runMaxMinutes", runMaxMinutes !== (current.runMaxMinutes ?? 0)],
+      ["runBudgetWarnPct", runBudgetWarnPct !== (current.runBudgetWarnPct ?? 80)],
+      ["runBudgetAction", runBudgetAction !== ((current.runBudgetAction as "PAUSE" | "STOP") ?? "PAUSE")],
       ["autoRedispatchOnStall", autoRedispatchOnStall !== current.autoRedispatchOnStall],
       ["requiredAckSeconds", requiredAckSeconds !== current.requiredAckSeconds],
       ["autoRedispatchOnNoack", autoRedispatchOnNoack !== current.autoRedispatchOnNoack],
@@ -181,6 +197,11 @@ export default function WorkspaceSettingsPage() {
     agentIdleTimeoutMinutes,
     assignmentSlaMinutes,
     agentRunStaleMinutes,
+    runTokenBudget,
+    runCostBudgetUsd,
+    runMaxMinutes,
+    runBudgetWarnPct,
+    runBudgetAction,
     autoRedispatchOnStall,
     requiredAckSeconds,
     autoRedispatchOnNoack,
@@ -214,6 +235,13 @@ export default function WorkspaceSettingsPage() {
       agentIdleTimeoutMinutes,
       assignmentSlaMinutes,
       agentRunStaleMinutes,
+      // Persist unlimited as NULL (not 0) so the column matches its documented
+      // null = unlimited semantics; the form treats both as "no cap".
+      runTokenBudget: runTokenBudget > 0 ? runTokenBudget : null,
+      runCostBudgetUsd: runCostBudgetUsd > 0 ? runCostBudgetUsd : null,
+      runMaxMinutes: runMaxMinutes > 0 ? runMaxMinutes : null,
+      runBudgetWarnPct,
+      runBudgetAction,
       autoRedispatchOnStall,
       requiredAckSeconds,
       autoRedispatchOnNoack,
@@ -240,6 +268,11 @@ export default function WorkspaceSettingsPage() {
     agentIdleTimeoutMinutes,
     assignmentSlaMinutes,
     agentRunStaleMinutes,
+    runTokenBudget,
+    runCostBudgetUsd,
+    runMaxMinutes,
+    runBudgetWarnPct,
+    runBudgetAction,
     autoRedispatchOnStall,
     requiredAckSeconds,
     autoRedispatchOnNoack,
@@ -531,6 +564,96 @@ export default function WorkspaceSettingsPage() {
                   label="Enforce per-issue SLA"
                   hint="When on, scans for issues past their slaMinutes target and emits ISSUE_SLA_BREACH. Set per-issue slaMinutes from issue detail."
                 />
+              </div>
+            </FormCard>
+          </Section>
+
+          <Section
+            title="Run safety budgets"
+            hint="Hard caps per agent run. The idle watchdog above only catches quiet runs — these catch a busy-but-looping one before it burns unbounded tokens, cost, or time. 0 = no cap (opt-in)."
+          >
+            <FormCard className="space-y-5 p-5">
+              {runTokenBudget === 0 && runCostBudgetUsd === 0 && runMaxMinutes === 0 && (
+                <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-meta text-foreground/80">
+                  No per-run budget set — agent runs are uncapped. A single
+                  runaway run has burned 21M+ tokens here before. Set a token,
+                  cost, or time cap below to auto-
+                  {runBudgetAction === "STOP" ? "stop" : "pause"} a run that
+                  exceeds it.
+                </div>
+              )}
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+                <Field
+                  label="Token budget"
+                  hint="Cumulative tokensIn + tokensOut per run. 0 = unlimited."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1_000_000_000}
+                    value={runTokenBudget}
+                    onChange={(e) => setRunTokenBudget(Number(e.target.value) || 0)}
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="Cost budget (USD)"
+                  hint="Per-run cost cap, matched against the run's reported costUsd. 0 = unlimited."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    max={100000}
+                    value={runCostBudgetUsd}
+                    onChange={(e) => setRunCostBudgetUsd(Number(e.target.value) || 0)}
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="Max minutes"
+                  hint="Wall-clock cap since the run started. 0 = unlimited."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10080}
+                    value={runMaxMinutes}
+                    onChange={(e) => setRunMaxMinutes(Number(e.target.value) || 0)}
+                    disabled={!canEdit}
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                <Field
+                  label="Warn at (% of budget)"
+                  hint="Emit a one-time advisory warning when a run crosses this share of any cap. 0 disables the early warning."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={runBudgetWarnPct}
+                    onChange={(e) => setRunBudgetWarnPct(Number(e.target.value) || 0)}
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="On breach"
+                  hint="Pause stops the provider run and parks it WAITING with a 'raise budget & resume / abandon' notification — no dangling state. Stop closes it as abandoned."
+                >
+                  <select
+                    value={runBudgetAction}
+                    onChange={(e) =>
+                      setRunBudgetAction(e.target.value as "PAUSE" | "STOP")
+                    }
+                    disabled={!canEdit}
+                    className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+                  >
+                    <option value="PAUSE">Pause &amp; notify (recommended)</option>
+                    <option value="STOP">Stop (abandon the run)</option>
+                  </select>
+                </Field>
               </div>
             </FormCard>
           </Section>
