@@ -6,6 +6,7 @@ import {
   forgeRunInstruction,
   forgeRunProtocolInstruction,
   modeMayExecute,
+  engagementSourceToEnum,
   type WorkspaceEngagementConfig,
 } from "@/server/services/engagement-mode";
 
@@ -21,6 +22,81 @@ describe("resolveEngagementMode", () => {
       const r = resolveEngagementMode({ surface, explicit: EngagementMode.RESEARCH, workspace: ws });
       expect(r.mode).toBe(EngagementMode.RESEARCH);
       expect(r.source).toBe("explicit");
+    }
+  });
+
+  describe("waterfall tiers (Phase 2 — folded in from the dispatch inbox)", () => {
+    it("precedence is explicit > agent-request > payload > sticky-active-run > surface", () => {
+      // all tiers set → explicit wins
+      expect(
+        resolveEngagementMode({
+          surface: "assignment",
+          explicit: EngagementMode.RESEARCH,
+          agentRequestMode: EngagementMode.REVIEW,
+          payloadMode: EngagementMode.DISCUSS,
+          activeRunMode: EngagementMode.EXECUTE,
+          workspace: ws,
+        }),
+      ).toMatchObject({ mode: "RESEARCH", source: "explicit" });
+      // no explicit → agent-request wins
+      expect(
+        resolveEngagementMode({
+          surface: "assignment",
+          agentRequestMode: EngagementMode.REVIEW,
+          payloadMode: EngagementMode.DISCUSS,
+          activeRunMode: EngagementMode.EXECUTE,
+          workspace: ws,
+        }),
+      ).toMatchObject({ mode: "REVIEW", source: "agent-request" });
+      // payload beats sticky + surface
+      expect(
+        resolveEngagementMode({
+          surface: "assignment",
+          payloadMode: EngagementMode.DISCUSS,
+          activeRunMode: EngagementMode.EXECUTE,
+          workspace: ws,
+        }),
+      ).toMatchObject({ mode: "DISCUSS", source: "payload" });
+      // sticky beats surface (don't flip a running RESEARCH to EXECUTE)
+      expect(
+        resolveEngagementMode({
+          surface: "assignment",
+          activeRunMode: EngagementMode.RESEARCH,
+          workspace: ws,
+        }),
+      ).toMatchObject({ mode: "RESEARCH", source: "sticky-active-run" });
+      // none set → surface default
+      expect(
+        resolveEngagementMode({ surface: "assignment", workspace: ws }),
+      ).toMatchObject({ mode: "EXECUTE", source: "surface-default" });
+    });
+
+    it("null/undefined tiers are skipped (don't short-circuit)", () => {
+      expect(
+        resolveEngagementMode({
+          surface: "mention",
+          agentRequestMode: null,
+          payloadMode: undefined,
+          activeRunMode: null,
+          workspace: ws,
+        }).source,
+      ).toBe("policy-infer");
+    });
+  });
+
+  it("engagementSourceToEnum maps every kebab source to the Prisma enum", () => {
+    const pairs: Array<[Parameters<typeof engagementSourceToEnum>[0], string]> = [
+      ["explicit", "EXPLICIT"],
+      ["surface-default", "SURFACE_DEFAULT"],
+      ["policy-infer", "POLICY_INFER"],
+      ["policy-fixed", "POLICY_FIXED"],
+      ["policy-require-marker", "POLICY_REQUIRE_MARKER"],
+      ["sticky-active-run", "STICKY_ACTIVE_RUN"],
+      ["agent-request", "AGENT_REQUEST"],
+      ["payload", "PAYLOAD"],
+    ];
+    for (const [kebab, enumVal] of pairs) {
+      expect(engagementSourceToEnum(kebab)).toBe(enumVal);
     }
   });
 

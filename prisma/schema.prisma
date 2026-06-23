@@ -359,6 +359,24 @@ enum EngagementMode {
   DISCUSS
 }
 
+/// How an AgentRun's `engagementMode` was decided at dispatch (added
+/// 2026-06-23, Phase 2). Frozen on the run so the source tooltip shows
+/// *why* a mode applies without re-resolving against later config drift.
+/// Mirrors the `EngagementSource` TS union in `engagement-mode.ts` (the
+/// kebab-case wire shape on event payloads maps to these at the single
+/// persistence point). The first four mirror the pure resolver; the last
+/// three are the inbox waterfall tiers that previously discarded their source.
+enum EngagementSource {
+  EXPLICIT
+  SURFACE_DEFAULT
+  POLICY_INFER
+  POLICY_FIXED
+  POLICY_REQUIRE_MARKER
+  STICKY_ACTIVE_RUN
+  AGENT_REQUEST
+  PAYLOAD
+}
+
 /// How an @-mention with no explicit mode marker resolves. INFER = agent
 /// infers intent and asks before anything irreversible (default). FIXED =
 /// always use Workspace.mentionDefaultMode. REQUIRE_MARKER = no marker means
@@ -2522,12 +2540,28 @@ model AgentRun {
   /// when the Goal-orchestration loop opens a run for a step, so orchestrated
   /// turns are first-class observable runs (Mission Control / watchdog / cost)
   /// — not fire-and-forget webhooks. Null for direct-dispatch runs.
-  executionStepId String?
+  executionStepId  String?
   /// The engagement mode resolved for this run (AXI-53). Governs the
   /// completion contract: only EXECUTE auto-transitions the issue, is held to
   /// the SLA/watchdog "must move the issue" expectation, and enforces
   /// artifact/verification gates. See docs/agents/engagement-modes.md.
-  engagementMode  EngagementMode @default(EXECUTE)
+  engagementMode   EngagementMode    @default(EXECUTE)
+  /// How `engagementMode` was decided at dispatch (Phase 2, 2026-06-23). Frozen
+  /// for the source tooltip. Nullable: null = legacy/unstamped (distinct from a
+  /// stamped SURFACE_DEFAULT). Set at the single persistence point in
+  /// `openOrTouchRun`; on update only a fresh assignment re-stamps it (so the
+  /// sticky-active-run tier isn't clobbered by incidental touches).
+  engagementSource EngagementSource?
+  /// Effective run engine resolved at dispatch via `resolveRunEngineWithSource`
+  /// and frozen here so run-scoped consumers (kick, Mission Control) read the
+  /// stamped value instead of re-resolving against later Agent.runEngine /
+  /// Runtime changes. Null = legacy/unstamped. Distinct from `Agent.runEngine`
+  /// (the agent's *preference*); this is what actually ran.
+  runEngine        RunEngine?
+  /// Free-form resolution source for `runEngine` (display-only, never queried):
+  /// agent-explicit | runtime-adapter | provider-default | fallback. String,
+  /// not an enum, for the same anti-churn reason as `triggerKind`.
+  runEngineSource  String?
 
   workspace          Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue              Issue           @relation(fields: [issueId], references: [id], onDelete: Cascade)

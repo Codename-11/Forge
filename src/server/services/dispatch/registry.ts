@@ -58,15 +58,42 @@ function makeDisabledConnector(label: string): DispatchConnector {
  * (`src/server/runtimes/adapters.ts`); the legacy integrations manifest is
  * deprecated.
  */
+/** Free-form provenance for a resolved run engine (display-only, like triggerKind). */
+export type RunEngineSource =
+  | "agent-explicit"
+  | "runtime-adapter"
+  | "provider-default"
+  | "fallback";
+
+export interface ResolvedRunEngine {
+  engine: RunEngine;
+  source: RunEngineSource;
+}
+
+/**
+ * Resolve the effective engine AND why (Phase 2). The engine value is frozen
+ * onto `AgentRun.runEngine` at dispatch so run-scoped consumers don't re-resolve
+ * against later config drift. Precedence mirrors `resolveRunEngine` exactly.
+ */
+export function resolveRunEngineWithSource(agent: {
+  runEngine: RunEngine | null;
+  provider: AgentProvider;
+  runtime?: AgentRuntimeRef;
+}): ResolvedRunEngine {
+  if (agent.runEngine) return { engine: agent.runEngine, source: "agent-explicit" };
+  const attached = getRuntimeAdapter(agent.runtime?.adapterKey);
+  if (attached) return { engine: attached.defaultRunEngine, source: "runtime-adapter" };
+  const provider = defaultAdapterForProvider(agent.provider)?.defaultRunEngine;
+  if (provider) return { engine: provider, source: "provider-default" };
+  return { engine: "COMPLETIONS", source: "fallback" };
+}
+
 export function resolveRunEngine(agent: {
   runEngine: RunEngine | null;
   provider: AgentProvider;
   runtime?: AgentRuntimeRef;
 }): RunEngine {
-  if (agent.runEngine) return agent.runEngine;
-  const attached = getRuntimeAdapter(agent.runtime?.adapterKey);
-  if (attached) return attached.defaultRunEngine;
-  return defaultAdapterForProvider(agent.provider)?.defaultRunEngine ?? "COMPLETIONS";
+  return resolveRunEngineWithSource(agent).engine;
 }
 
 /**

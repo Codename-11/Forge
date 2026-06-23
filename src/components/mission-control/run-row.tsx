@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { ModeChip } from "@/components/ui/engagement-mode-glyph";
+import { ModeChip, MODE_LABEL } from "@/components/ui/engagement-mode-glyph";
 import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
 import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { RunTimeline } from "./run-timeline";
@@ -35,6 +35,12 @@ export type RunRowData = {
   currentStep: string | null;
   /** Engagement mode of this run — what kind of work is in flight. */
   engagementMode?: string | null;
+  /** How that mode was resolved at dispatch (Phase 2) — drives the chip tooltip. */
+  engagementSource?: string | null;
+  /** Effective run engine (RUNS / COMPLETIONS) frozen at dispatch (Phase 2). */
+  runEngine?: string | null;
+  /** Free-form provenance for the engine — shown in the engine-chip tooltip. */
+  runEngineSource?: string | null;
   agent: { id: string; name: string; profileKey: string };
   issue: {
     id: string;
@@ -66,6 +72,25 @@ export type RunRowData = {
 function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   return `${Math.round(n / 1000)}k`;
+}
+
+/** Plain-English label for a persisted EngagementSource enum value. */
+const ENGAGEMENT_SOURCE_LABEL: Record<string, string> = {
+  EXPLICIT: "explicit override",
+  SURFACE_DEFAULT: "surface default",
+  POLICY_INFER: "mention policy · infer",
+  POLICY_FIXED: "mention policy · fixed",
+  POLICY_REQUIRE_MARKER: "mention policy · marker required",
+  STICKY_ACTIVE_RUN: "carried from the active run",
+  AGENT_REQUEST: "agent request marker",
+  PAYLOAD: "dispatch payload",
+};
+
+/** Tooltip for the mode chip: "Research — mention policy · infer". */
+function modeTooltip(mode: string, source?: string | null): string {
+  const label = MODE_LABEL[mode.toUpperCase() as keyof typeof MODE_LABEL] ?? mode;
+  const src = source ? (ENGAGEMENT_SOURCE_LABEL[source] ?? source) : null;
+  return src ? `${label} — ${src}` : label;
 }
 
 const STALE_RUN_MS = 5 * 60_000;
@@ -179,8 +204,21 @@ export function RunRow({
         ) : (
           <span className="font-mono text-[0.6875rem] text-foreground/60">{issueKey}</span>
         )}
-        {run.engagementMode && run.engagementMode !== "EXECUTE" && (
-          <ModeChip mode={run.engagementMode} />
+        {run.engagementMode && (
+          <ModeChip
+            mode={run.engagementMode}
+            title={modeTooltip(run.engagementMode, run.engagementSource)}
+          />
+        )}
+        {run.runEngine && (
+          <span
+            className="rounded border border-border/60 bg-subtle/40 px-1 py-0 font-mono text-[0.625rem] text-muted-foreground"
+            title={
+              run.runEngineSource ? `engine · ${run.runEngineSource}` : "run engine"
+            }
+          >
+            {run.runEngine === "RUNS" ? "Runs" : "Streaming"}
+          </span>
         )}
         {isWaiting && (
           <span className="rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-warning">

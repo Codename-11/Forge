@@ -1,5 +1,9 @@
 import "server-only";
-import { EngagementMode, MentionEngagementPolicy } from "@prisma/client";
+import {
+  EngagementMode,
+  MentionEngagementPolicy,
+  EngagementSource as EngagementSourceEnum,
+} from "@prisma/client";
 
 /**
  * Engagement modes — the *intent* of a dispatched agent turn. See
@@ -24,7 +28,29 @@ export type EngagementSource =
   | "surface-default"
   | "policy-infer"
   | "policy-fixed"
-  | "policy-require-marker";
+  | "policy-require-marker"
+  // Waterfall tiers folded in from the dispatch inbox (Phase 2) — previously
+  // applied as `?? resolveEngagementMode(...)` fallbacks that discarded source.
+  | "sticky-active-run"
+  | "agent-request"
+  | "payload";
+
+/** Map the kebab-case wire/union source to the Prisma `EngagementSource` enum. */
+const SOURCE_TO_ENUM: Record<EngagementSource, EngagementSourceEnum> = {
+  explicit: EngagementSourceEnum.EXPLICIT,
+  "surface-default": EngagementSourceEnum.SURFACE_DEFAULT,
+  "policy-infer": EngagementSourceEnum.POLICY_INFER,
+  "policy-fixed": EngagementSourceEnum.POLICY_FIXED,
+  "policy-require-marker": EngagementSourceEnum.POLICY_REQUIRE_MARKER,
+  "sticky-active-run": EngagementSourceEnum.STICKY_ACTIVE_RUN,
+  "agent-request": EngagementSourceEnum.AGENT_REQUEST,
+  payload: EngagementSourceEnum.PAYLOAD,
+};
+
+/** Convert a resolved kebab source to the persisted Prisma enum value. */
+export function engagementSourceToEnum(source: EngagementSource): EngagementSourceEnum {
+  return SOURCE_TO_ENUM[source];
+}
 
 export interface ResolvedEngagement {
   mode: EngagementMode;
@@ -57,10 +83,30 @@ export interface WorkspaceEngagementConfig {
 export function resolveEngagementMode(input: {
   surface: EngagementSurface;
   explicit?: EngagementMode | null;
+  /**
+   * Dispatch-inbox waterfall tiers (Phase 2), folded in so this function is the
+   * single resolver and every winning tier carries a source. Precedence
+   * mirrors the prior inbox `??`-chain exactly: explicit > agent-request >
+   * payload > sticky-active-run > surface/policy default.
+   */
+  agentRequestMode?: EngagementMode | null;
+  payloadMode?: EngagementMode | null;
+  activeRunMode?: EngagementMode | null;
   workspace: WorkspaceEngagementConfig;
 }): ResolvedEngagement {
   if (input.explicit) {
     return { mode: input.explicit, source: "explicit", inferable: false };
+  }
+  if (input.agentRequestMode) {
+    return { mode: input.agentRequestMode, source: "agent-request", inferable: false };
+  }
+  if (input.payloadMode) {
+    return { mode: input.payloadMode, source: "payload", inferable: false };
+  }
+  if (input.activeRunMode) {
+    // Sticky: a re-mention inherits the still-running run's mode rather than
+    // re-resolving (don't flip a RESEARCH run to EXECUTE mid-flight).
+    return { mode: input.activeRunMode, source: "sticky-active-run", inferable: false };
   }
 
   switch (input.surface) {

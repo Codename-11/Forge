@@ -1,11 +1,18 @@
 import "server-only";
-import type { MentionEngagementPolicy, Prisma, PrismaClient } from "@prisma/client";
-import { AgentRunStatus, EngagementMode, EventKind } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
+import {
+  AgentRunStatus,
+  EngagementMode,
+  EventKind,
+  MentionEngagementPolicy,
+} from "@prisma/client";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
 import {
   FORGE_RUN_CONTRACT_VERSION,
   resolveEngagementMode,
+  type EngagementSurface,
 } from "@/server/services/engagement-mode";
+import { resolveRunEngineWithSource } from "@/server/services/dispatch/registry";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { publish } from "@/server/realtime";
 import { nanoid } from "nanoid";
@@ -31,16 +38,6 @@ import { nanoid } from "nanoid";
  */
 
 type Tx = PrismaClient | Prisma.TransactionClient;
-type DispatchAgent = {
-  id: string;
-  engagementMode: EngagementMode | null;
-  provider: string;
-  runtime: {
-    name: string | null;
-    adapterKey: string | null;
-    config: Prisma.JsonValue | null;
-  } | null;
-};
 
 const ENGAGEMENT_MODE_VALUES = new Set<string>(Object.values(EngagementMode));
 const COMMENT_WAKE_KINDS = new Set<EventKind>([
@@ -257,24 +254,78 @@ async function ensureIssueRuns(
       id: true,
       engagementMode: true,
       provider: true,
-      runtime: { select: { name: true, adapterKey: true, config: true } },
+      runEngine: true,
+      runtime: {
+        select: {
+          name: true,
+          adapterKey: true,
+          config: true,
+          endpoint: true,
+          secret: true,
+          disabledAt: true,
+        },
+      },
     },
   });
+  // Fallback workspace config when the issue/workspace can't be loaded — keeps
+  // the surface tier at the historical EXECUTE/DISCUSS defaults while the
+  // higher waterfall tiers (agent-request / payload / sticky) still apply.
+  const wsConfig = issue?.workspace ?? {
+    assignmentEngagementMode: EngagementMode.EXECUTE,
+    mentionEngagementPolicy: MentionEngagementPolicy.INFER,
+    mentionDefaultMode: EngagementMode.DISCUSS,
+  };
   const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+  const hasWorkspace = !!issue?.workspace;
+  const commentWake = COMMENT_WAKE_KINDS.has(params.eventKind);
   for (const agentId of agentIds) {
     const agent = agentById.get(agentId);
-    const engagementMode =
-      agentRequestModes.get(agentId) ??
-      payloadMode ??
-      activeRunModeByAgentId.get(agentId) ??
-      resolveIssueRunEngagementMode({
-        eventKind: params.eventKind,
-        issue,
-        issueAssignmentMode,
-        mentionedAgentIds,
-        agent: agent ?? null,
-        agentId,
-      });
+    const assigned = issue?.assignedAgentId === agentId;
+    // One resolver call — the single source of truth. Precedence (explicit >
+    // agent-request > payload > sticky-active-run > surface) mirrors the prior
+    // `??`-chain exactly.
+    //
+    // Behavioral equivalence with the deleted resolveIssueRunEngagementMode is
+    // exact, including its two EXECUTE fallbacks: (1) a non-assignee agent woken
+    // by a NON-comment event (watcher fan-out: ISSUE_STALLED / SLA / NUDGED /
+    // PRIORITY_CHANGED), and (2) a missing issue/workspace row. Both resolved to
+    // a bare EXECUTE before (after the upper tiers), regardless of agent binding
+    // or workspace default — so we force the surface default to EXECUTE for those
+    // cases here rather than letting the assignment surface read agent/ws config.
+    const forceExecuteDefault = !hasWorkspace || (!assigned && !commentWake);
+    const surface: EngagementSurface = assigned
+      ? "assignment"
+      : commentWake && mentionedAgentIds.has(agentId)
+        ? "mention"
+        : commentWake
+          ? "watcher"
+          : "assignment";
+    const resolved = resolveEngagementMode({
+      surface,
+      explicit: null,
+      agentRequestMode: agentRequestModes.get(agentId) ?? null,
+      payloadMode: payloadMode ?? null,
+      activeRunMode: activeRunModeByAgentId.get(agentId) ?? null,
+      workspace: {
+        assignmentEngagementMode: forceExecuteDefault
+          ? EngagementMode.EXECUTE
+          : wsConfig.assignmentEngagementMode,
+        assignmentAgentEngagementMode: forceExecuteDefault
+          ? null
+          : (assigned ? issueAssignmentMode : null) ?? agent?.engagementMode ?? null,
+        mentionEngagementPolicy: wsConfig.mentionEngagementPolicy,
+        mentionDefaultMode: wsConfig.mentionDefaultMode,
+      },
+    });
+    const engagementMode = resolved.mode;
+    // Resolve the effective engine once and freeze its provenance on the run.
+    const engine = agent
+      ? resolveRunEngineWithSource({
+          runEngine: agent.runEngine,
+          provider: agent.provider,
+          runtime: agent.runtime,
+        })
+      : null;
     const runtimePolicy = agent
       ? buildRuntimePolicySnapshot({
           contractVersion: FORGE_RUN_CONTRACT_VERSION,
@@ -292,6 +343,9 @@ async function ensureIssueRuns(
       actorAgentId: params.actorAgentId ?? null,
       assignmentEventId: isAssigned ? params.eventId : null,
       engagementMode,
+      engagementSource: resolved.source,
+      runEngine: engine?.engine ?? null,
+      runEngineSource: engine?.source ?? null,
       runtimePolicy: runtimePolicy as Prisma.InputJsonValue | null,
     });
     // Stamp the latest trigger on the run so the inbox can distinguish
@@ -310,69 +364,6 @@ async function ensureIssueRuns(
     runIds.push(run.id);
   }
   return { issueRunIds: runIds, chatMessageIds: [] };
-}
-
-function resolveIssueRunEngagementMode(input: {
-  eventKind: EventKind;
-  issue: {
-    assignedAgentId: string | null;
-    workspace: {
-      assignmentEngagementMode: EngagementMode;
-      mentionEngagementPolicy: MentionEngagementPolicy;
-      mentionDefaultMode: EngagementMode;
-    };
-  } | null;
-  issueAssignmentMode: EngagementMode | null;
-  mentionedAgentIds: Set<string>;
-  agent: DispatchAgent | null;
-  agentId: string;
-}): EngagementMode {
-  const workspace = input.issue?.workspace;
-  if (!workspace) return EngagementMode.EXECUTE;
-
-  if (input.issue?.assignedAgentId === input.agentId) {
-    return (
-      input.issueAssignmentMode ??
-      resolveEngagementMode({
-        surface: "assignment",
-        explicit: null,
-        workspace: {
-          assignmentEngagementMode: workspace.assignmentEngagementMode,
-          assignmentAgentEngagementMode: input.agent?.engagementMode ?? null,
-          mentionEngagementPolicy: workspace.mentionEngagementPolicy,
-          mentionDefaultMode: workspace.mentionDefaultMode,
-        },
-      }).mode
-    );
-  }
-
-  if (COMMENT_WAKE_KINDS.has(input.eventKind) && input.mentionedAgentIds.has(input.agentId)) {
-    return resolveEngagementMode({
-      surface: "mention",
-      explicit: null,
-      workspace: {
-        assignmentEngagementMode: workspace.assignmentEngagementMode,
-        assignmentAgentEngagementMode: input.agent?.engagementMode ?? null,
-        mentionEngagementPolicy: workspace.mentionEngagementPolicy,
-        mentionDefaultMode: workspace.mentionDefaultMode,
-      },
-    }).mode;
-  }
-
-  if (COMMENT_WAKE_KINDS.has(input.eventKind)) {
-    return resolveEngagementMode({
-      surface: "watcher",
-      explicit: null,
-      workspace: {
-        assignmentEngagementMode: workspace.assignmentEngagementMode,
-        assignmentAgentEngagementMode: input.agent?.engagementMode ?? null,
-        mentionEngagementPolicy: workspace.mentionEngagementPolicy,
-        mentionDefaultMode: workspace.mentionDefaultMode,
-      },
-    }).mode;
-  }
-
-  return EngagementMode.EXECUTE;
 }
 
 async function ensureChatMessage(

@@ -1,8 +1,12 @@
 import "server-only";
-import type { PrismaClient, AgentRun, EngagementMode } from "@prisma/client";
+import type { PrismaClient, AgentRun, EngagementMode, RunEngine } from "@prisma/client";
 import { AgentRunStatus, EventKind, Prisma } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
+import {
+  engagementSourceToEnum,
+  type EngagementSource,
+} from "@/server/services/engagement-mode";
 import { nanoid } from "nanoid";
 
 /**
@@ -156,6 +160,12 @@ export async function openOrTouchRun(
     executionStepId?: string | null;
     /** Engagement mode for this run (AXI-53). Defaults EXECUTE when unset. */
     engagementMode?: EngagementMode | null;
+    /** How `engagementMode` was resolved (Phase 2). Frozen for the tooltip. */
+    engagementSource?: EngagementSource | null;
+    /** Effective run engine resolved at dispatch (Phase 2). Frozen on the run. */
+    runEngine?: RunEngine | null;
+    /** Free-form provenance for `runEngine` (display-only). */
+    runEngineSource?: string | null;
     /** Dispatch-time runtime/tool policy snapshot. */
     runtimePolicy?: Prisma.InputJsonValue | null;
     /** Latest ActivityEvent that woke this run. */
@@ -213,6 +223,23 @@ export async function openOrTouchRun(
         ...(params.assignmentEventId && !existing.assignmentEventId
           ? { assignmentEventId: params.assignmentEventId }
           : {}),
+        // Re-stamp the engagement mode + source ONLY on a fresh assignment
+        // (the same gate as assignmentEventId backfill). Incidental touches
+        // (comment wake, MCP write) must NOT clobber it — that is exactly the
+        // sticky-active-run tier the inbox relies on. (Phase 2)
+        ...(params.assignmentEventId && !existing.assignmentEventId && params.engagementMode
+          ? {
+              engagementMode: params.engagementMode,
+              ...(params.engagementSource
+                ? { engagementSource: engagementSourceToEnum(params.engagementSource) }
+                : {}),
+            }
+          : {}),
+        // Engine is an agent/runtime fact, not a per-dispatch intent — backfill
+        // it the first time we know it and leave it stable thereafter.
+        ...(params.runEngine && !existing.runEngine
+          ? { runEngine: params.runEngine, runEngineSource: params.runEngineSource ?? null }
+          : {}),
         ...(params.currentStep !== undefined ? { currentStep: params.currentStep } : {}),
         ...(params.runtimePolicy && !existing.runtimePolicy
           ? { runtimePolicy: params.runtimePolicy }
@@ -238,6 +265,12 @@ export async function openOrTouchRun(
       triggerEventId: params.triggerEventId ?? null,
       triggerKind: params.triggerKind ?? null,
       ...(params.engagementMode ? { engagementMode: params.engagementMode } : {}),
+      ...(params.engagementSource
+        ? { engagementSource: engagementSourceToEnum(params.engagementSource) }
+        : {}),
+      ...(params.runEngine
+        ? { runEngine: params.runEngine, runEngineSource: params.runEngineSource ?? null }
+        : {}),
       ...(params.runtimePolicy ? { runtimePolicy: params.runtimePolicy } : {}),
     },
   });

@@ -108,7 +108,11 @@ describe("agent-run lifecycle", () => {
     expect(audit.every((row) => row.actorAgentId === agent.id)).toBe(true);
   });
 
-  it("touching an existing run preserves engagement mode and resumes WAITING", async () => {
+  it("a fresh assignment touch re-stamps mode + source and resumes WAITING (Phase 2)", async () => {
+    // A genuine AGENT_ASSIGNED (fresh assignmentEventId) is an authoritative
+    // (re)dispatch: the resolved mode the inbox passes in wins. Sticky-mode
+    // preservation now lives in the inbox's activeRunMode waterfall tier, which
+    // runs *before* this call — so openOrTouchRun honors what it's given.
     const fixture = await createWorkspaceFixture({ keyPrefix: "ARM" });
     fixtures.push(fixture);
     const prisma = getPrisma();
@@ -133,15 +137,56 @@ describe("agent-run lifecycle", () => {
         assignmentEventId: "event-restamp",
         currentStep: "starting run",
         engagementMode: EngagementMode.EXECUTE,
+        engagementSource: "payload",
       }),
     );
 
     expect(result.isNew).toBe(false);
     expect(result.run.id).toBe(existing.id);
     expect(result.run.status).toBe(AgentRunStatus.ACTIVE);
-    expect(result.run.engagementMode).toBe(EngagementMode.REVIEW);
+    expect(result.run.engagementMode).toBe(EngagementMode.EXECUTE);
+    expect(result.run.engagementSource).toBe("PAYLOAD");
     expect(result.run.currentStep).toBe("starting run");
     expect(result.run.assignmentEventId).toBe("event-restamp");
+  });
+
+  it("an incidental touch (no fresh assignment) preserves the sticky mode", async () => {
+    // A comment wake / MCP write touches the run with assignmentEventId=null, so
+    // it must NOT clobber a deliberately-set mode — the sticky guarantee the
+    // inbox's activeRunMode tier depends on.
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARMI" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "armi-a1");
+    const issue = await createIssue(fixture);
+    const existing = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        engagementMode: EngagementMode.REVIEW,
+        engagementSource: "POLICY_FIXED",
+        currentStep: "reviewing",
+      },
+    });
+
+    const result = await prisma.$transaction((tx) =>
+      openOrTouchRun(tx, {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        // no assignmentEventId — an incidental wake
+        currentStep: "still going",
+        engagementMode: EngagementMode.EXECUTE,
+        engagementSource: "payload",
+      }),
+    );
+
+    expect(result.run.id).toBe(existing.id);
+    expect(result.run.engagementMode).toBe(EngagementMode.REVIEW);
+    expect(result.run.engagementSource).toBe("POLICY_FIXED");
+    expect(result.run.currentStep).toBe("still going");
   });
 
   it("finishRun closes WAITING runs", async () => {

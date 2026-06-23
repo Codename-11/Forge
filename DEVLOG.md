@@ -2,6 +2,50 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-23 — Agentic runtime Phase 2: centralize + persist + show engagement mode / engine
+
+Built on Phase 1 (same day). Phase 2 = "centralize + visibility" for the
+engagement-mode and run-engine axes the audit found scattered.
+
+- **One resolver.** `resolveEngagementMode` (`engagement-mode.ts`) now absorbs the
+  full dispatch waterfall (new tiers: `agentRequestMode` > `payloadMode` >
+  `activeRunMode`, above the surface switch; precedence mirrors the old inbox
+  `??`-chain exactly). Deleted the duplicate `resolveIssueRunEngagementMode` in
+  `agent-dispatch-inbox.ts` — the inbox now makes ONE resolver call per agent and
+  captures `{mode, source}`. Added `resolveRunEngineWithSource` in `registry.ts`
+  (`resolveRunEngine` is now a thin wrapper).
+- **Persisted.** New `AgentRun.engagementSource` (enum `EngagementSource`),
+  `runEngine` (`RunEngine`), `runEngineSource` (String) — migration `0089`,
+  all nullable. Stamped at the single chokepoint `openOrTouchRun`: CREATE always;
+  UPDATE re-stamps mode+source only on a *fresh* assignment (gate:
+  `assignmentEventId && !existing.assignmentEventId`), backfills engine when null.
+  An incidental wake (comment/MCP write, `assignmentEventId=null`) never clobbers
+  the sticky mode. (The deliberate contract change: assignment now wins over an
+  earlier wake-opened mode on a previously-unassigned run.)
+- **Visible.** `run-row.tsx` un-suppresses the EXECUTE chip (was hidden), adds an
+  engine chip (Runs / Streaming) + a mode source tooltip. Data reaches it via
+  `runs.list`/`activeForIssue` (`include` + `enrichRun` spread) and the recovery
+  select (now carries the 3 fields → command-center `stalledRuns`).
+
+Adversarial review (3-lens workflow) flagged one real item: the refactor changed
+the non-assignee watcher-wake fallback (ISSUE_STALLED/SLA/NUDGED/PRIORITY_CHANGED)
+from a hardcoded EXECUTE to the assignment-surface default. Restored exact
+equivalence via a `forceExecuteDefault` branch (also covers the missing-workspace
+case). Updated one agent-run test to the intended new fresh-assignment-restamp
+semantics + added a complementary incidental-touch-preserves-mode test.
+
+Deferred (Phase 2 continuation, noted): `dispatchPreview` tRPC + assign-popover
+"will run as … on …" preview; per-issue grouping of command-center/inbox;
+source-on-payload provenance (assignment-opened runs currently persist
+`engagementSource=PAYLOAD` rather than SURFACE_DEFAULT/EXPLICIT — display-only,
+mode value is correct); the slash-`/assign` engagement-mode emission gap;
+orchestration-step + grant-accept runs stamp null engine/source (engine chip
+hidden for them); agent-detail engine row.
+
+Verify: `pnpm typecheck` ✓, `pnpm lint` ✓, `vitest run` ✓ (969 + new resolver/
+agent-run tests), migration 0089 `migrate deploy` clean + **zero drift**,
+production build ✓ — all against the local stack (PG :55432).
+
 ## 2026-06-23 — Agentic runtime Phase 1: run supersede/collapse, action-request dedup, per-run budgets
 
 Audited the agentic-runtime + issue-management surface (parallel readers over
