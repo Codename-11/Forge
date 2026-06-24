@@ -2,6 +2,45 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-23 — Agentic runtime Phase 2 continuation: provenance, dispatch preview, grouping
+
+Follow-ups on the Phase 2 commit (no schema change this round — all code):
+
+- **Accurate engagement provenance.** The assign paths (issue.ts main + bulk +
+  slash, mcp.ts issues.assign) now resolve `{mode, source}` and stamp BOTH onto
+  the AGENT_ASSIGNED payload; the inbox reads `engagementSourceFromPayload` and,
+  when the payload tier wins, persists that carried source instead of the generic
+  `PAYLOAD` — so a run's tooltip reads "surface default" / "explicit" correctly.
+  `asEngagementSource` validates the payload value (closed union, null on unknown).
+- **Slash-`/assign` auto-start fix.** The slash assign branch now resolves +
+  stamps the mode, so `maybeAutoTransitionOnAssign` (which reads
+  `payload.engagementMode`) no longer treats a non-EXECUTE slash assign as EXECUTE
+  and flips the issue in-progress.
+- **Grant runs get engine/source.** RUNTIME_TOOL_GRANT accept resolves engine via
+  `resolveRunEngineWithSource` and stamps `runEngine`/`runEngineSource` +
+  `engagementSource: "explicit"` on the opened run (engine chip now renders).
+- **`dispatchPreview` tRPC** (`agent.dispatchPreview`): resolves mode + source +
+  engine + connector label + ready for a (agent, surface) — reuses the dispatcher's
+  resolvers. Consumers: agent-detail Engine row shows the *resolved* engine
+  (`byProfileKey.resolvedEngine`); assign popover shows a current-assignee preview.
+  `ready` excludes the disabled-runtime sentinel.
+- **Per-issue grouping** of action requests (inbox.actionRequestsForMe +
+  command-center.summary) with `issueOpenCount`. Runs are intentionally NOT
+  grouped (distinct agents' concurrent runs are real; same-agent stalled repeats
+  already collapse via supersededByRunId).
+
+Adversarial review (2-lens) flagged one HIGH: the grouping applied the DB `take`
+BEFORE collapse, undercounting `issueOpenCount` and dropping distinct issues —
+fixed by over-fetching (200/500) then collapsing + slicing to the limit. Also
+pre-fixed a MEDIUM (disabled runtime reported `ready: true`).
+
+Deferred: orchestration-step runs still stamp null engine/source (goal-loop hot
+path — chip gracefully hidden); per-row preview in the assign popover (the Picker
+has no focused-row hook — preview is current-assignee only).
+
+Verify: `pnpm typecheck` ✓, `pnpm lint` ✓, `vitest run` ✓ (969), production build
+✓ — local stack (PG :55432). No migration.
+
 ## 2026-06-23 — Agentic runtime Phase 2: centralize + persist + show engagement mode / engine
 
 Built on Phase 1 (same day). Phase 2 = "centralize + visibility" for the

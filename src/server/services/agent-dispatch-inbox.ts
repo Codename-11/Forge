@@ -10,6 +10,7 @@ import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
 import {
   FORGE_RUN_CONTRACT_VERSION,
   resolveEngagementMode,
+  asEngagementSource,
   type EngagementSurface,
 } from "@/server/services/engagement-mode";
 import { resolveRunEngineWithSource } from "@/server/services/dispatch/registry";
@@ -59,6 +60,11 @@ function readEngagementMode(value: unknown): EngagementMode | null {
 
 function engagementModeFromPayload(payload: unknown): EngagementMode | null {
   return readEngagementMode(asRecord(payload)?.engagementMode);
+}
+
+/** The resolved engagement SOURCE an assign path stamped onto the payload, if any. */
+function engagementSourceFromPayload(payload: unknown) {
+  return asEngagementSource(asRecord(payload)?.engagementSource);
 }
 
 function mentionedAgentIdsFromPayload(payload: unknown): Set<string> {
@@ -212,6 +218,10 @@ async function ensureIssueRuns(
   // wakes without an explicit mode inherit the issue's current assignment
   // mode for the assigned agent; non-assigned @mentions use mention policy.
   const payloadMode = engagementModeFromPayload(params.payload);
+  // The assign paths resolve the mode and stamp BOTH it and its source onto the
+  // AGENT_ASSIGNED payload; prefer that source over the generic "payload" tier so
+  // the persisted provenance is accurate (surface-default / explicit).
+  const payloadSource = engagementSourceFromPayload(params.payload);
   const agentRequestModes = agentRequestModeByAgentId(params.payload);
   const mentionedAgentIds = mentionedAgentIdsFromPayload(params.payload);
   const activeRuns = await tx.agentRun.findMany({
@@ -318,6 +328,10 @@ async function ensureIssueRuns(
       },
     });
     const engagementMode = resolved.mode;
+    // When the payload tier won, the assign path's stamped source (if present)
+    // is the true provenance — use it instead of the generic "payload".
+    const engagementSource =
+      resolved.source === "payload" && payloadSource ? payloadSource : resolved.source;
     // Resolve the effective engine once and freeze its provenance on the run.
     const engine = agent
       ? resolveRunEngineWithSource({
@@ -343,7 +357,7 @@ async function ensureIssueRuns(
       actorAgentId: params.actorAgentId ?? null,
       assignmentEventId: isAssigned ? params.eventId : null,
       engagementMode,
-      engagementSource: resolved.source,
+      engagementSource,
       runEngine: engine?.engine ?? null,
       runEngineSource: engine?.source ?? null,
       runtimePolicy: runtimePolicy as Prisma.InputJsonValue | null,

@@ -22,6 +22,7 @@ import {
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { recordChange } from "@/server/audit";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
+import { resolveRunEngineWithSource } from "@/server/services/dispatch/registry";
 import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
 import { agentIdSchema } from "@/server/validators";
 
@@ -816,12 +817,15 @@ async function dispatchActionRequestKind(
         id: true,
         name: true,
         provider: true,
+        runEngine: true,
         runtime: {
           select: {
             name: true,
             adapterKey: true,
             config: true,
             disabledAt: true,
+            endpoint: true,
+            secret: true,
           },
         },
       },
@@ -911,6 +915,11 @@ async function dispatchActionRequestKind(
       );
     }
 
+    const grantEngine = resolveRunEngineWithSource({
+      runEngine: agent.runEngine,
+      provider: agent.provider,
+      runtime: agent.runtime,
+    });
     const { run } = await openOrTouchRun(tx, {
       workspaceId,
       issueId,
@@ -918,6 +927,10 @@ async function dispatchActionRequestKind(
       actorId,
       currentStep: "queued with one-time runtime tool grant",
       engagementMode: p.mode,
+      // The grant carries an explicit mode the operator approved.
+      engagementSource: "explicit",
+      runEngine: grantEngine.engine,
+      runEngineSource: grantEngine.source,
       runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
     });
     // Collapse the runs we just abandoned (above) under the fresh grant

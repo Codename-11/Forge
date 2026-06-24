@@ -548,7 +548,11 @@ export const inboxRouter = router({
           status: "OPEN",
         },
         orderBy: [{ severity: "desc" }, { createdAt: "desc" }],
-        take: input.limit,
+        // Over-fetch (a user's OPEN asks are few) so the per-issue collapse +
+        // issueOpenCount run over the full set, not a pre-truncated window —
+        // then slice to input.limit AFTER collapsing. A row-level take here
+        // would undercount the chip and silently drop distinct issues.
+        take: 500,
         include: {
           requestedByAgent: {
             select: { id: true, name: true, profileKey: true, avatar: true },
@@ -566,7 +570,29 @@ export const inboxRouter = router({
           },
         },
       });
-      return { items: rows };
+      // Collapse to one entry per issue — the first row for an issue is the
+      // most-severe/newest (the orderBy). Each surviving row carries
+      // `issueOpenCount` so the UI can show "+N more on this issue" instead of
+      // stacking near-duplicate cards. Workspace-level asks (null issueId) are
+      // never grouped. SUPERSEDED rows are already excluded by status:"OPEN".
+      const perIssue = new Map<string, number>();
+      for (const row of rows) {
+        if (row.issueId) perIssue.set(row.issueId, (perIssue.get(row.issueId) ?? 0) + 1);
+      }
+      const seen = new Set<string>();
+      const items = rows
+        .filter((row) => {
+          if (!row.issueId) return true;
+          if (seen.has(row.issueId)) return false;
+          seen.add(row.issueId);
+          return true;
+        })
+        .map((row) => ({
+          ...row,
+          issueOpenCount: row.issueId ? (perIssue.get(row.issueId) ?? 1) : 1,
+        }))
+        .slice(0, input.limit);
+      return { items };
     }),
 
   /**

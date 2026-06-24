@@ -1359,6 +1359,12 @@ function AgentPickerModal({
     { includeArchived: false },
     { enabled: open },
   );
+  // Preview how the *currently-assigned* agent would dispatch at the chosen
+  // mode (the Picker has no per-row focus hook, so we preview the known agent).
+  const { data: preview } = trpc.agent.dispatchPreview.useQuery(
+    { agentId: currentAgentId ?? "", surface: "assignment", explicitMode: mode },
+    { enabled: open && !!currentAgentId },
+  );
 
   const q = query.trim().toLowerCase();
   const filteredAgents = (agents ?? []).filter((a) => {
@@ -1431,6 +1437,13 @@ function AgentPickerModal({
               );
             })}
           </div>
+          {currentAgentId && preview && (
+            <span className="text-[0.625rem] text-muted-foreground">
+              {preview.ready
+                ? `Current agent runs as ${MODE_LABEL[mode]} on ${preview.connectorLabel}`
+                : `${preview.connectorLabel} — not ready to dispatch`}
+            </span>
+          )}
         </div>
       }
       renderItem={(it) => {

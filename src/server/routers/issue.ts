@@ -95,7 +95,7 @@ async function applySlashCommandsToIssue(opts: {
               profileKey: cmd.handle,
               archivedAt: null,
             },
-            select: { id: true, profileKey: true },
+            select: { id: true, profileKey: true, engagementMode: true },
           });
           if (!agent) {
             out.push({ kind: cmd.kind, status: "skipped", reason: "agent not found" });
@@ -110,6 +110,26 @@ async function applySlashCommandsToIssue(opts: {
               issueId: opts.issueId,
               agentProfileKey: agent.profileKey,
               actorId: opts.actorId,
+            });
+            // Resolve + stamp the engagement mode on the payload so the audit
+            // auto-transition gate (maybeAutoTransitionOnAssign) sees the real
+            // mode — otherwise a slash /assign to a non-EXECUTE agent silently
+            // auto-starts the issue.
+            const { resolveEngagementMode } = await import(
+              "@/server/services/engagement-mode"
+            );
+            const ws = await tx.workspace.findUniqueOrThrow({
+              where: { id: opts.workspaceId },
+              select: {
+                assignmentEngagementMode: true,
+                mentionEngagementPolicy: true,
+                mentionDefaultMode: true,
+              },
+            });
+            const resolved = resolveEngagementMode({
+              surface: "assignment",
+              explicit: null,
+              workspace: { ...ws, assignmentAgentEngagementMode: agent.engagementMode },
             });
             await recordChange(tx, {
               workspaceId: opts.workspaceId,
@@ -127,6 +147,8 @@ async function applySlashCommandsToIssue(opts: {
                 previousAgentId: null,
                 dispatchReason: reasonBlob,
                 via: "slash-command",
+                engagementMode: resolved.mode,
+                engagementSource: resolved.source,
               },
               ip: opts.ip,
               userAgent: opts.userAgent,
@@ -1180,6 +1202,7 @@ export const issueRouter = router({
           // assignment default. Only on assign (not unassign). Mirrors
           // the MCP `issues.assign` path.
           let engagementMode: EngagementMode | undefined;
+          let engagementSource: string | undefined;
           if (nextAgentId && agentRow) {
             const { resolveEngagementMode } = await import(
               "@/server/services/engagement-mode"
@@ -1192,14 +1215,16 @@ export const issueRouter = router({
                 mentionDefaultMode: true,
               },
             });
-            engagementMode = resolveEngagementMode({
+            const resolved = resolveEngagementMode({
               surface: "assignment",
               explicit: explicitMode ?? null,
               workspace: {
                 ...ws,
                 assignmentAgentEngagementMode: agentRow.engagementMode,
               },
-            }).mode;
+            });
+            engagementMode = resolved.mode;
+            engagementSource = resolved.source;
           }
           if (!assignmentChanged && nextAgentId && explicitModeProvided) {
             const activeRun = await tx.agentRun.findFirst({
@@ -1225,6 +1250,7 @@ export const issueRouter = router({
             ...(assignmentChanged ? {} : { modeUpdated: true }),
             ...(manualReason ? { dispatchReason: manualReason as Prisma.InputJsonObject } : {}),
             ...(engagementMode ? { engagementMode } : {}),
+            ...(engagementSource ? { engagementSource } : {}),
           };
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
@@ -1774,6 +1800,7 @@ export const issueRouter = router({
         }
 
         let engagementMode: EngagementMode | undefined;
+        let engagementSource: string | undefined;
         if (input.assignedAgentId && bulkAgent) {
           const { resolveEngagementMode } = await import(
             "@/server/services/engagement-mode"
@@ -1786,14 +1813,16 @@ export const issueRouter = router({
               mentionDefaultMode: true,
             },
           });
-          engagementMode = resolveEngagementMode({
+          const resolved = resolveEngagementMode({
             surface: "assignment",
             explicit: null,
             workspace: {
               ...ws,
               assignmentAgentEngagementMode: bulkAgent.engagementMode,
             },
-          }).mode;
+          });
+          engagementMode = resolved.mode;
+          engagementSource = resolved.source;
         }
 
         const CHUNK = 50;
@@ -1823,6 +1852,7 @@ export const issueRouter = router({
                 previousAgentId: row.assignedAgentId,
                 ...(manualReason ? { dispatchReason: manualReason } : {}),
                 ...(engagementMode ? { engagementMode } : {}),
+                ...(engagementSource ? { engagementSource } : {}),
               },
               ip: ctx.ip,
               userAgent: ctx.userAgent,

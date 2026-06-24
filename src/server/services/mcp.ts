@@ -2150,6 +2150,7 @@ export const mcpTools = {
           // binding override > workspace default. Stamped on the payload so
           // the auto-transition gate + the opened run pick it up.
           let engagementMode: string | undefined;
+          let engagementSource: string | undefined;
           if (targetAgentId && targetAgent) {
             const { resolveEngagementMode } = await import("@/server/services/engagement-mode");
             const ws = await tx.workspace.findUniqueOrThrow({
@@ -2160,14 +2161,16 @@ export const mcpTools = {
                 mentionDefaultMode: true,
               },
             });
-            engagementMode = resolveEngagementMode({
+            const resolved = resolveEngagementMode({
               surface: "assignment",
               explicit: (input.mode as EngagementMode | undefined) ?? null,
               workspace: {
                 ...ws,
                 assignmentAgentEngagementMode: targetAgent.engagementMode,
               },
-            }).mode;
+            });
+            engagementMode = resolved.mode;
+            engagementSource = resolved.source;
           }
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
@@ -2186,6 +2189,7 @@ export const mcpTools = {
               previousAgentId: before.assignedAgentId,
               ...(assignmentChanged ? {} : { modeUpdated: true }),
               ...(engagementMode ? { engagementMode } : {}),
+              ...(engagementSource ? { engagementSource } : {}),
             },
           });
           if (assignmentChanged && before.assignedAgentId) {

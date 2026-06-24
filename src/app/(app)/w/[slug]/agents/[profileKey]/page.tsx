@@ -1464,7 +1464,12 @@ function PromptConfigCard({ agent }: { agent: AgentRow }) {
     >
       <Card className="space-y-3 p-3 text-[0.75rem]">
         <ReadinessRow label="Provider">{agent.provider}</ReadinessRow>
-        <ReadinessRow label="Engine">{agent.runEngine ?? "integration default"}</ReadinessRow>
+        <ReadinessRow label="Engine">
+          <span title={`resolved from ${agent.resolvedEngine.source}`}>
+            {agent.resolvedEngine.engine === "RUNS" ? "Runs" : "Streaming"}
+            <span className="ml-1 text-muted-foreground">· {agent.resolvedEngine.source}</span>
+          </span>
+        </ReadinessRow>
         <ReadinessRow label="Runtime mode">
           {agent.runtimeMode.toLowerCase().replace("_", " ")}
         </ReadinessRow>

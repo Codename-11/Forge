@@ -5,6 +5,7 @@ import {
   AgentRunStatus,
   AgentRuntimeMode,
   AgentStatus,
+  EngagementMode,
   EventKind,
   RelationKind,
   RunEngine,
@@ -12,6 +13,11 @@ import {
   type PrismaClient,
 } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
+import { resolveEngagementMode } from "@/server/services/engagement-mode";
+import {
+  resolveRunEngineWithSource,
+  getRunsConnectorForAgent,
+} from "@/server/services/dispatch/registry";
 import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import type { db as PrismaDb } from "@/server/db";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
@@ -37,6 +43,14 @@ const profileKey = z
   .min(1)
   .max(40)
   .regex(/^[a-z0-9][a-z0-9-_]*$/, "Lowercase, digits, `-` or `_` only");
+
+/** Human label for a DispatchConnector.kind, used by dispatchPreview. */
+const CONNECTOR_LABEL: Record<string, string> = {
+  hermes: "Hermes Runs",
+  "codex-app-server": "Codex",
+  "mock-runs": "Mock runtime",
+  disabled: "Runtime disabled",
+};
 
 /**
  * Agent ids are *not* always cuids — some agents were seeded with
@@ -240,6 +254,81 @@ export const agentRouter = router({
     }),
 
   /**
+   * Preview how a dispatch to `agentId` on a given `surface` will resolve —
+   * the engagement mode (+ why), the run engine (+ why), and which connector
+   * would run it. Read-only; reuses the exact resolvers the dispatcher uses, so
+   * the assign popover shows "Research on Hermes Runs · surface default" before
+   * the operator commits. (Phase 2)
+   */
+  dispatchPreview: workspaceProcedure
+    .input(
+      z.object({
+        agentId: agentIdSchema,
+        issueId: z.string().min(1).max(40).optional(),
+        surface: z.enum(["assignment", "queue", "mention", "chat", "plan", "watcher"]),
+        explicitMode: z.nativeEnum(EngagementMode).nullable().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const agent = await ctx.db.agent.findFirst({
+        where: { id: input.agentId, workspaceId: ctx.workspaceId },
+        select: {
+          provider: true,
+          runEngine: true,
+          engagementMode: true,
+          runtime: {
+            select: {
+              adapterKey: true,
+              endpoint: true,
+              secret: true,
+              config: true,
+              disabledAt: true,
+              name: true,
+            },
+          },
+        },
+      });
+      if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found." });
+      const ws = await ctx.db.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: {
+          assignmentEngagementMode: true,
+          mentionEngagementPolicy: true,
+          mentionDefaultMode: true,
+        },
+      });
+      const mode = resolveEngagementMode({
+        surface: input.surface,
+        explicit: input.explicitMode ?? null,
+        workspace: { ...ws, assignmentAgentEngagementMode: agent.engagementMode },
+      });
+      const engine = resolveRunEngineWithSource({
+        runEngine: agent.runEngine,
+        provider: agent.provider,
+        runtime: agent.runtime,
+      });
+      const connector = getRunsConnectorForAgent({
+        provider: agent.provider,
+        runtime: agent.runtime,
+      });
+      const connectorLabel = connector
+        ? (CONNECTOR_LABEL[connector.kind] ?? connector.kind)
+        : "Streaming";
+      // A RUNS agent can only dispatch with a live connector — the "disabled"
+      // sentinel is non-null but cannot run, so it does not count as ready.
+      const hasLiveConnector = connector != null && connector.kind !== "disabled";
+      return {
+        mode: mode.mode,
+        modeSource: mode.source,
+        inferable: mode.inferable,
+        engine: engine.engine,
+        engineSource: engine.source,
+        connectorLabel,
+        ready: engine.engine !== "RUNS" || hasLiveConnector,
+      };
+    }),
+
+  /**
    * Verify an existing agent's chat connection: resolve readiness and, for a
    * runs runtime with an endpoint, probe reachability (handshake only — no
    * turn). Lets the operator confirm setup from the agent editor.
@@ -352,8 +441,18 @@ export const agentRouter = router({
         daemonLinked,
         providerAvailable,
       });
+      const resolvedEngine = resolveRunEngineWithSource({
+        runEngine: agent.runEngine,
+        provider: agent.provider,
+        runtime: agent.runtime
+          ? { adapterKey: agent.runtime.adapterKey, endpoint: agent.runtime.endpoint, secret: null }
+          : null,
+      });
       return {
         ...agent,
+        // Effective engine (honors an attached runs-runtime), not just the raw
+        // Agent.runEngine preference — drives the detail-page Engine row.
+        resolvedEngine,
         transport: { mode: r.mode, label: r.transportLabel, ready: r.ready },
         availability: agentAvailabilityModel({
           runtimeMode: agent.runtimeMode,

@@ -52,6 +52,20 @@ export function engagementSourceToEnum(source: EngagementSource): EngagementSour
   return SOURCE_TO_ENUM[source];
 }
 
+const VALID_SOURCES = new Set<string>(Object.keys(SOURCE_TO_ENUM));
+
+/**
+ * Validate an unknown value (e.g. off an AGENT_ASSIGNED payload) as a known
+ * EngagementSource, or null. Lets the assign paths carry the *resolved* source
+ * onto the dispatch payload so the inbox persists the true provenance
+ * (surface-default / explicit) instead of the generic "payload" tier.
+ */
+export function asEngagementSource(value: unknown): EngagementSource | null {
+  return typeof value === "string" && VALID_SOURCES.has(value)
+    ? (value as EngagementSource)
+    : null;
+}
+
 export interface ResolvedEngagement {
   mode: EngagementMode;
   source: EngagementSource;
