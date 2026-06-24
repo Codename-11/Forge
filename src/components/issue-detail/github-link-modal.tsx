@@ -374,10 +374,56 @@ function Remediation({
     },
     onError: (e) => toast.error(e.message),
   });
+  const connectAppM = trpc.github.connectApp.useMutation({
+    onSuccess: () => {
+      toast.success("GitHub App connected for linking.");
+      onResolved();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const [connectionId, setConnectionId] = useState<string>(
     state.status === "mappable" ? state.connections[0]?.connectionId ?? "" : "",
   );
+
+  if (state.status === "app_available") {
+    const app = state.apps[0];
+    return (
+      <RemediationCard
+        tone="info"
+        title="Use your GitHub App for linking"
+        body={
+          <>
+            <span className="font-medium text-foreground">{app?.name ?? "Your GitHub App"}</span> is
+            installed for this workspace. Connect it to link{" "}
+            <span className="font-mono">{state.repoFullName}</span> — no reinstall needed.
+          </>
+        }
+      >
+        {isAdmin ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ember"
+            disabled={connectAppM.isPending || !app}
+            onClick={() =>
+              app &&
+              connectAppM.mutate({ githubAppId: app.githubAppId, repoFullName: state.repoFullName })
+            }
+          >
+            {connectAppM.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <PlugZap className="h-3.5 w-3.5" />
+            )}
+            Use {app?.name ?? "GitHub App"}
+          </Button>
+        ) : (
+          <AskAdmin>connect the workspace GitHub App for linking in Settings → Connections</AskAdmin>
+        )}
+      </RemediationCard>
+    );
+  }
 
   if (state.status === "paused") {
     return (

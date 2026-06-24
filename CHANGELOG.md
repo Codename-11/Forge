@@ -13,6 +13,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Changed
 
+- **The GitHub App you set up now powers PR/issue linking too — one app, no env vars.** Linking used to need a *separate* global env app (`GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY`) plus a Connection, wholly disjoint from the GitHub App configured in Settings → GitHub Apps (which only did runtime `GH_TOKEN` auth) — so "Test connection" could be green while issue-page linking still said "install the app." Forge now mints linking tokens from that same `GithubApp`, and when no connection exists yet the link dialog offers a one-click **"Use your GitHub App"** that wires it up (and maps the repo) with no GitHub reinstall and no env config.
 - **Orchestrated runs now show their engine.** Runs opened by the Goal/plan loop (execution steps) now carry their engagement mode + run engine like assignment and grant runs, so the engine chip and "why" tooltip render on them too instead of staying blank.
 
 ### Added

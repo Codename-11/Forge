@@ -2,6 +2,38 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-24 — GithubApp ↔ Connection unification (linking works off one app)
+
+Prod diagnosis (read-only): `GITHUB_APP_ID`/`PRIVATE_KEY`/`SLUG` all **unset**;
+**zero** GitHub `Connection` rows; one installed `GithubApp` (`forge-axi`,
+appId 4126042, installation 142161082, manifest-created). So "Test connection"
+(per-row `GithubApp` key) was green while linking — which only ever spoke to the
+global env app via `app-auth.ts` — had no app + no Connection → "install the app"
+dead-end. The two GitHub-App credential sources were disjoint.
+
+Fix — unify so one `GithubApp` powers both runtime auth and linking:
+- `installation-token.ts::resolveInstallationToken(installationId)` — prefer a
+  `GithubApp` that owns the installation (mint with its key via
+  `getInstallationTokenForApp`), else fall back to the global env app. Wired into
+  `client.ts::githubRequest`, so `linkability`/`preview`/`search` all authenticate
+  off the workspace's `GithubApp`. Safe: `installationId` is globally unique and
+  minting requires the matching private key, so a forged row can't hijack tokens.
+- `github-app.ts::getInstallationAccountLogin` — read the installation's account
+  (app JWT) for the Connection label.
+- `linkability.ts::connectGithubAppAsConnection` — create (idempotent) a GITHUB
+  `Connection` straight from an installed `GithubApp` (no GitHub round-trip, no env
+  app), optionally mapping `repoFullName` in the same call. New `app_available`
+  linkability status when there's no Connection but an installed app exists
+  (admin-only; non-admins stay `not_ready`, no app leak).
+- `github.connectApp` (adminProcedure) + link-modal remediation: a one-click
+  **"Use your GitHub App"** button on the no-connection state.
+
+Tests: `github-app-connect.test.ts` (6) — app_available admin/non-admin,
+resolveInstallationToken prefer-app + env-fallback, connectApp create + idempotent.
+995 tests, lint, build green. Also fixed Victor's stalled run earlier: symlinked
+`~/hermes-relay → ~/.hermes/hermes-relay` (wrong grant scope path; repo lives under
+`.hermes`).
+
 ## 2026-06-24 — GitHub Connect-flow public-origin fix + branch cleanup + AXI-79 landed
 
 - **GitHub Connect flow fixed for proxied deploys.** `/api/connections/github/install`

@@ -1,7 +1,9 @@
 import "server-only";
 import { TRPCError } from "@trpc/server";
-import { ConnectionProvider, ConnectionStatus, type PrismaClient } from "@prisma/client";
+import { ConnectionProvider, ConnectionStatus, type Prisma, type PrismaClient } from "@prisma/client";
+import { decryptSecret } from "@/server/crypto";
 import { listGitHubInstallationRepos, type GitHubRepoResponse } from "@/server/services/github/client";
+import { getInstallationAccountLogin } from "@/server/services/github-app";
 import { githubInstallationId } from "@/server/services/github/mapping-policy";
 import { normalizeRepoFullName, sameRepo } from "@/server/services/github/url";
 
@@ -24,6 +26,13 @@ export type LinkConnectionRef = {
   label: string;
 };
 
+/** An installed GithubApp that can be wired up for linking in one click. */
+export type LinkableGithubApp = {
+  githubAppId: string;
+  name: string;
+  slug: string | null;
+};
+
 export type GitHubLinkability =
   /** An active mapping already covers this repo — link directly. */
   | { status: "ready"; repoFullName: string; mappingId: string; account: string | null }
@@ -35,6 +44,12 @@ export type GitHubLinkability =
   | { status: "needs_repo_access"; repoFullName: string; connections: LinkConnectionRef[] }
   /** No GitHub connection at all — install/connect the App first. */
   | { status: "no_connection"; repoFullName: string }
+  /**
+   * No GitHub connection yet, but the workspace has an installed `GithubApp`
+   * (e.g. set up in Settings → GitHub Apps) that can be wired up for linking
+   * in one click — no GitHub round-trip, no env app needed.
+   */
+  | { status: "app_available"; repoFullName: string; apps: LinkableGithubApp[] }
   /**
    * No active mapping, and the caller isn't an admin — so we deliberately do
    * NOT probe installations (that would leak a private-repo access oracle to
@@ -209,7 +224,31 @@ export async function resolveRepoLinkability(args: {
     }),
   );
 
-  return classifyLinkability({ repoFullName, mappings: mappingViews, connections: considered });
+  const decided = classifyLinkability({ repoFullName, mappings: mappingViews, connections: considered });
+
+  // No GitHub Connection at all, but the workspace already has an installed
+  // GithubApp? Offer the one-click "use this app for linking" path instead of
+  // sending the operator off to (re)install on GitHub.
+  if (decided.status === "no_connection") {
+    const apps = await listInstallableGithubApps(args.db, args.workspaceId);
+    if (apps.length > 0) {
+      return { status: "app_available", repoFullName, apps };
+    }
+  }
+  return decided;
+}
+
+/** Installed (installationId present) GithubApps in a workspace, newest-first. */
+async function listInstallableGithubApps(
+  db: PrismaClient,
+  workspaceId: string,
+): Promise<LinkableGithubApp[]> {
+  const rows = await db.githubApp.findMany({
+    where: { workspaceId, installationId: { not: null } },
+    orderBy: [{ lastMintedAt: "desc" }, { createdAt: "desc" }],
+    select: { id: true, name: true, slug: true },
+  });
+  return rows.map((r) => ({ githubAppId: r.id, name: r.name, slug: r.slug }));
 }
 
 /**
@@ -317,6 +356,108 @@ export async function mapGitHubRepo(args: {
     select: { id: true, target: true },
   });
   return { id: created.id, target: created.target, reactivated: false };
+}
+
+/**
+ * Wire an installed `GithubApp` up for issue/PR linking by creating (or
+ * refreshing) a GitHub `Connection` from it — no GitHub OAuth round-trip and
+ * no global env app required. The connection's `installationId` matches the
+ * app's, so {@link resolveInstallationToken} mints with the app's own key.
+ * Optionally maps `repoFullName` in the same call so linking is one step.
+ */
+export async function connectGithubAppAsConnection(args: {
+  db: PrismaClient;
+  workspaceId: string;
+  userId: string;
+  githubAppId?: string;
+  repoFullName?: string;
+  listRepos?: RepoLister;
+}): Promise<{ connectionId: string; account: string | null; mapped: boolean }> {
+  const app = await args.db.githubApp.findFirst({
+    where: {
+      workspaceId: args.workspaceId,
+      installationId: { not: null },
+      ...(args.githubAppId ? { id: args.githubAppId } : {}),
+    },
+    orderBy: [{ lastMintedAt: "desc" }, { createdAt: "desc" }],
+    select: { id: true, name: true, appId: true, installationId: true, privateKeyEnc: true },
+  });
+  if (!app?.installationId) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "No installed GitHub App found in this workspace. Install one in Settings → GitHub Apps.",
+    });
+  }
+
+  const accountLogin = await getInstallationAccountLogin({
+    appId: app.appId,
+    installationId: app.installationId,
+    privateKeyPem: decryptSecret(app.privateKeyEnc),
+  });
+
+  // Connections are user-owned. Reuse one already pointing at this installation
+  // if the caller has it; otherwise create it.
+  const ownerGithub = await args.db.connection.findMany({
+    where: { ownerId: args.userId, provider: ConnectionProvider.GITHUB },
+    select: { id: true, config: true },
+  });
+  const existing = ownerGithub.find(
+    (c) =>
+      String((c.config as { installationId?: unknown } | null)?.installationId ?? "") ===
+      app.installationId,
+  );
+
+  const config = {
+    authKind: "github_app_installation",
+    installationId: app.installationId,
+    ...(accountLogin ? { accountLogin } : {}),
+  } as Prisma.InputJsonObject;
+  const label = `GitHub App - ${accountLogin ?? app.name}`;
+  const account = accountLogin ? `github.com/${accountLogin}` : null;
+
+  const connectionId = existing
+    ? (
+        await args.db.connection.update({
+          where: { id: existing.id },
+          data: { status: ConnectionStatus.CONNECTED, error: null, label, account, config },
+          select: { id: true },
+        })
+      ).id
+    : (
+        await args.db.connection.create({
+          data: {
+            ownerId: args.userId,
+            provider: ConnectionProvider.GITHUB,
+            label,
+            account,
+            status: ConnectionStatus.CONNECTED,
+            config,
+          },
+          select: { id: true },
+        })
+      ).id;
+
+  // Map the repo straight away when we have one in context, so linking is a
+  // single step. Swallow failures (repo not in installation / transient) — the
+  // modal re-resolves and guides the next step.
+  let mapped = false;
+  if (args.repoFullName) {
+    try {
+      await mapGitHubRepo({
+        db: args.db,
+        workspaceId: args.workspaceId,
+        userId: args.userId,
+        connectionId,
+        repoFullName: args.repoFullName,
+        listRepos: args.listRepos,
+      });
+      mapped = true;
+    } catch {
+      mapped = false;
+    }
+  }
+
+  return { connectionId, account: accountLogin, mapped };
 }
 
 /** Active repo mappings in a workspace — for the browse picker + agent discovery. */

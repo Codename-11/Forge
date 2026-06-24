@@ -19,6 +19,7 @@ import {
   syncGitHubExternalResource,
 } from "@/server/services/github/resource-sync";
 import {
+  connectGithubAppAsConnection,
   listGitHubRepoMappings,
   mapGitHubRepo,
   resolveRepoLinkability,
@@ -153,6 +154,29 @@ export const githubRouter = router({
         connectionId: input.connectionId,
         repoFullName: input.repoFullName,
         labelIds: input.labelIds,
+      }),
+    ),
+
+  /**
+   * One-click "use the workspace's installed GitHub App for linking": creates a
+   * GitHub Connection from a `GithubApp` (the kind set up in Settings → GitHub
+   * Apps) so issue/PR linking works without a separate global env app or a
+   * GitHub re-install. Optionally maps `repoFullName` in the same call.
+   */
+  connectApp: adminProcedure
+    .input(
+      z.object({
+        githubAppId: z.string().cuid().optional(),
+        repoFullName: repoFullNameSchema.optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      connectGithubAppAsConnection({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+        githubAppId: input.githubAppId,
+        repoFullName: input.repoFullName,
       }),
     ),
 

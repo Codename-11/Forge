@@ -133,6 +133,26 @@ export function invalidateInstallationToken(appKey: string): void {
   tokenCache.delete(appKey);
 }
 
+/**
+ * Fetch the account login an installation belongs to (e.g. the org/user the
+ * app is installed on), signing as the app. Best-effort — returns null on any
+ * failure since the value is only used for a display label.
+ */
+export async function getInstallationAccountLogin(creds: GithubAppCreds): Promise<string | null> {
+  try {
+    const jwt = buildAppJwt(creds.appId, creds.privateKeyPem, Math.floor(Date.now() / 1000));
+    const res = await ghFetch(
+      `${GH_API}/app/installations/${encodeURIComponent(creds.installationId)}`,
+      jwt,
+    );
+    if (!res.ok) return null;
+    const json = (await res.json()) as { account?: { login?: string } | null };
+    return json.account?.login ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export type ManifestConversion = {
   appId: string;
   slug: string;

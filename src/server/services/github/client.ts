@@ -1,8 +1,6 @@
 import "server-only";
-import {
-  createGitHubAppJwt,
-  getInstallationAccessToken,
-} from "@/server/services/github/app-auth";
+import { createGitHubAppJwt } from "@/server/services/github/app-auth";
+import { resolveInstallationToken } from "@/server/services/github/installation-token";
 import type { GitHubResourceSnapshot } from "@/server/services/github/types";
 
 const GITHUB_API_BASE = "https://api.github.com";
@@ -94,7 +92,10 @@ async function githubRequest<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  const token = await getInstallationAccessToken(installationId);
+  // Prefer a configured GithubApp's credentials for this installation, falling
+  // back to the global env app — so linking works off the same app a workspace
+  // set up in Settings → GitHub Apps.
+  const token = await resolveInstallationToken(installationId);
   const res = await fetch(`${GITHUB_API_BASE}${path}`, {
     ...init,
     headers: {
