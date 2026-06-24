@@ -5,23 +5,16 @@ import { ConnectionProvider, ConnectionStatus, type Prisma } from "@prisma/clien
 import { auth } from "@/server/auth";
 import { db } from "@/server/db";
 import { getGitHubAppInstallation } from "@/server/services/github/client";
+import { publicOrigin } from "@/server/integrations/public-origin";
 
 const COOKIE = "forge_github_app_install";
-
-function baseUrl(req: NextRequest): string {
-  try {
-    return new URL(req.url).origin;
-  } catch {
-    return (process.env.AUTH_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/+$/, "");
-  }
-}
 
 function done(
   req: NextRequest,
   params: Record<string, string>,
   returnTo = "/settings/connections",
 ): NextResponse {
-  const url = new URL(returnTo, baseUrl(req));
+  const url = new URL(returnTo, publicOrigin(req));
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const res = NextResponse.redirect(url);
   res.cookies.set(COOKIE, "", { path: "/api/connections/github", maxAge: 0 });
@@ -57,7 +50,7 @@ function verifyState(cookieValue: string | undefined, returnedState: string | nu
 export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.redirect(new URL("/signin", baseUrl(req)));
+    return NextResponse.redirect(new URL("/signin", publicOrigin(req)));
   }
 
   const url = new URL(req.url);

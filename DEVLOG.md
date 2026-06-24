@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-24 — GitHub Connect-flow public-origin fix + branch cleanup + AXI-79 landed
+
+- **GitHub Connect flow fixed for proxied deploys.** `/api/connections/github/install`
+  + `/setup` derived redirect URLs from `new URL(req.url).origin`, which behind
+  Traefik is `https://0.0.0.0:3000` — so "Install GitHub App" bounced the operator
+  to an unreachable internal URL, and the install cookie's `secure` flag was derived
+  from the internal (http) protocol. Both now use `publicOrigin(req)` (the helper
+  from `1a1379f`, honoring `X-Forwarded-Host`/`-Proto`), and the cookie's `secure`
+  flag follows the public origin. Also: when `GITHUB_APP_SLUG` is unset, the install
+  route now falls back to a configured `GithubApp.slug` the caller can access
+  (preferring the workspace parsed from `returnTo`) instead of dead-ending with
+  "GITHUB_APP_SLUG is not configured" — so a single-tenant deploy that set up an app
+  via Settings → GitHub Apps works without also hand-setting the env var.
+- **Branch triage + cleanup.** Assessed the unmerged branches (parallel read-only
+  workflow `wf_af9b1d73`): `mobile-ui-ux-enhancement` and `axi-40-workspace-mcp` were
+  SUPERSEDED (content already on main byte-for-byte) → force-deleted; the merged
+  `checkout` branch was pruned earlier.
+- **AXI-79 issue filters landed (`1ed8f76`).** Cherry-picked `feat/axi-79-issue-filters-overlay`
+  (the one genuinely-unlanded, well-tested branch). Only real conflict was issue.ts:
+  main had refactored `issue.list`'s `where` into the shared `buildIssueListWhere`
+  helper, so the branch's `withoutProject` OR-clause + terminal-status-awareness
+  (explicit DONE/CANCELED filters bypass the default terminal exclusion) were folded
+  into the helper — which means the `count` procedure that shares it inherits the
+  terminal-awareness too. mcp.ts auto-merged (its issues.list also stops dropping
+  CANCELED). 989 tests + build green.
+
 ## 2026-06-24 — GitHub link modal + remediation (Workstream B)
 
 Merged the agentic-runtime branch (Phase 1 `7424762`, Phase 2 `26abd4c`,
