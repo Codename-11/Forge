@@ -18,49 +18,143 @@ import {
   resolveGitHubRepoMapping,
   syncGitHubExternalResource,
 } from "@/server/services/github/resource-sync";
+import {
+  listGitHubRepoMappings,
+  mapGitHubRepo,
+  resolveRepoLinkability,
+} from "@/server/services/github/linkability";
 import { parseGitHubUrl, splitRepoFullName } from "@/server/services/github/url";
-import { EXTERNAL_LINK_KINDS } from "@/server/services/github/types";
+import { EXTERNAL_LINK_KINDS, type GitHubResourceSnapshot } from "@/server/services/github/types";
 
 const linkKindSchema = z.enum(EXTERNAL_LINK_KINDS);
+
+/** `owner/repo` shape guard — keeps malformed input a clean 400, not a 500. */
+const repoFullNameSchema = z
+  .string()
+  .min(3)
+  .max(200)
+  .regex(/^[\w.-]+\/[\w.-]+$/, "Repository must be in owner/name format.");
 
 export const githubRouter = router({
   parseUrl: workspaceProcedure
     .input(z.object({ url: z.string().url().max(2048) }))
     .query(({ input }) => parseGitHubUrl(input.url)),
 
+  /**
+   * Preview a GitHub issue/PR before linking. Accepts either a full `url`
+   * or a `repoFullName` + `number` (so `owner/repo#123` works). When the
+   * number turns out to be a PR (the issues endpoint returns it with a
+   * `pull_request` marker), this auto-resolves it as a PR so the snapshot —
+   * and its canonical `url`/`resourceType` used by `link` — are correct.
+   */
   preview: workspaceProcedure
     .input(
-      z.object({
-        url: z.string().url().max(2048),
-        mappingId: z.string().cuid().optional(),
-      }),
+      z
+        .object({
+          url: z.string().url().max(2048).optional(),
+          repoFullName: repoFullNameSchema.optional(),
+          number: z.number().int().positive().optional(),
+          mappingId: z.string().cuid().optional(),
+        })
+        .refine((v) => !!v.url || (!!v.repoFullName && !!v.number), {
+          message: "Provide a url, or repoFullName + number.",
+        }),
     )
-    .query(async ({ ctx, input }) => {
-      const parsed = parseGitHubUrl(input.url);
+    .query(async ({ ctx, input }): Promise<GitHubResourceSnapshot> => {
+      const ref = input.url
+        ? parseGitHubUrl(input.url)
+        : (() => {
+            const repo = splitRepoFullName(input.repoFullName!);
+            return { ...repo, type: "ISSUE" as const, number: input.number! };
+          })();
       const mapping = await resolveGitHubRepoMapping({
         db: ctx.db,
         workspaceId: ctx.workspaceId,
         mappingId: input.mappingId,
-        repoFullName: parsed.repoFullName,
+        repoFullName: ref.repoFullName,
       });
       const installationId = githubInstallationId(mapping.connection);
-      if (parsed.type === "PULL_REQUEST") {
+      if (ref.type === "PULL_REQUEST") {
         const pr = await getGitHubPullRequest({
           installationId,
-          owner: parsed.owner,
-          repo: parsed.repo,
-          number: parsed.number,
+          owner: ref.owner,
+          repo: ref.repo,
+          number: ref.number,
         });
-        return pullRequestSnapshot(parsed.repoFullName, pr);
+        return pullRequestSnapshot(ref.repoFullName, pr);
       }
       const issue = await getGitHubIssue({
         installationId,
-        owner: parsed.owner,
-        repo: parsed.repo,
-        number: parsed.number,
+        owner: ref.owner,
+        repo: ref.repo,
+        number: ref.number,
       });
-      return issueSnapshot(parsed.repoFullName, issue);
+      // An "issue" number that's actually a PR — resolve it as one so the
+      // link carries the right resourceType + /pull/ url.
+      if (issue.pull_request) {
+        const pr = await getGitHubPullRequest({
+          installationId,
+          owner: ref.owner,
+          repo: ref.repo,
+          number: ref.number,
+        });
+        return pullRequestSnapshot(ref.repoFullName, pr);
+      }
+      return issueSnapshot(ref.repoFullName, issue);
     }),
+
+  /**
+   * "Can this workspace link `owner/repo` right now — and if not, what's the
+   * fix?" Drives the issue-page link modal's remediation states instead of a
+   * raw "No active GitHub mapping" error. The common ready/paused answers
+   * make no GitHub API call.
+   */
+  linkability: workspaceProcedure
+    .input(z.object({ repoFullName: repoFullNameSchema }))
+    .query(({ ctx, input }) =>
+      resolveRepoLinkability({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+        isAdmin: ctx.membership.role === "OWNER" || ctx.membership.role === "ADMIN",
+        repoFullName: input.repoFullName,
+      }),
+    ),
+
+  /** Active repo mappings — browse-mode repo picker + agent discovery. */
+  listMappings: workspaceProcedure
+    .input(z.object({ includePaused: z.boolean().default(false) }).default({ includePaused: false }))
+    .query(({ ctx, input }) =>
+      listGitHubRepoMappings({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        includePaused: input.includePaused,
+      }),
+    ),
+
+  /**
+   * Bind `owner/repo` to a GitHub connection so the issue page can link it —
+   * the one-click remediation behind the modal's "Map & link". Admin-gated;
+   * verifies the App can reach the repo before writing the mapping.
+   */
+  mapRepo: adminProcedure
+    .input(
+      z.object({
+        connectionId: z.string().cuid(),
+        repoFullName: repoFullNameSchema,
+        labelIds: z.array(z.string().cuid()).default([]),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      mapGitHubRepo({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+        connectionId: input.connectionId,
+        repoFullName: input.repoFullName,
+        labelIds: input.labelIds,
+      }),
+    ),
 
   listLinked: workspaceProcedure
     .input(z.object({ issueId: z.string().cuid() }))
@@ -107,7 +201,7 @@ export const githubRouter = router({
     .input(
       z.object({
         mappingId: z.string().cuid().optional(),
-        repoFullName: z.string().min(3).max(200).optional(),
+        repoFullName: repoFullNameSchema.optional(),
         number: z.number().int().positive(),
         projectId: z.string().cuid().nullable().optional(),
         labelIds: z.array(z.string().cuid()).default([]),

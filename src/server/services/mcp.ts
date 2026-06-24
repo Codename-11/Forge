@@ -122,6 +122,7 @@ import {
   syncGitHubExternalResource,
 } from "@/server/services/github/resource-sync";
 import { searchGitHubIssuesAndPulls } from "@/server/services/github/client";
+import { listGitHubRepoMappings } from "@/server/services/github/linkability";
 import { githubInstallationId } from "@/server/services/github/mapping-policy";
 import { parseGitHubUrl } from "@/server/services/github/url";
 import { EXTERNAL_LINK_KINDS } from "@/server/services/github/types";
@@ -7466,6 +7467,24 @@ export const mcpTools = {
           actorId,
           actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         },
+      });
+    },
+  },
+
+  "github.listMappings": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z
+      .object({ includePaused: z.boolean().default(false) })
+      .default({ includePaused: false }),
+    async run(input: { includePaused: boolean }, ctx: McpContext) {
+      // Active repo mappings the agent can link/search against. Pair with
+      // `github.search` (needs a mappingId) and `github.link` (resolves a
+      // mapping by repo from the URL) so agents can discover which repos are
+      // wired up before acting.
+      return listGitHubRepoMappings({
+        db,
+        workspaceId: ctx.workspaceId,
+        includePaused: input.includePaused,
       });
     },
   },

@@ -2,6 +2,21 @@
 
 > Living backlog. Triage order: P0 → P3. Strikethrough = shipped.
 
+## Misc findings
+
+- [~] GitHub PRs should be linked to an issue automatically (or by the
+      agent) when relevant. Agents should have proper access to manage
+      GitHub links + attachments in Forge.
+      - [x] Issue-page link modal (URL / `owner/repo#123` / browse) with
+            inline remediation (connect repo / resume / install) — shipped
+            2026-06-24.
+      - [x] Agents can discover linkable repos (`github.listMappings`) and
+            already have `github.link` / `search` / `sync` / `importIssue`
+            + attachment tools.
+      - [ ] *Auto*-link a PR to its issue when relevance is detectable
+            (e.g. PR title/body references the issue key, or a branch/issue
+            convention) — not yet built.
+
 ## P0 — Agent Integration (shipped 2026-04-20)
 
 ### Agent identity & assignment — ✅ done

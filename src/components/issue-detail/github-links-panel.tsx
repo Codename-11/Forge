@@ -1,15 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { ExternalLink, GitPullRequest, Github, LinkIcon, RefreshCw } from "lucide-react";
+import { ExternalLink, GitPullRequest, Github, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
-
-const LINK_KINDS = ["RELATES_TO", "IMPLEMENTS", "REVIEWS", "SOURCE"] as const;
-type LinkKind = (typeof LINK_KINDS)[number];
+import { GitHubLinkModal } from "@/components/issue-detail/github-link-modal";
 
 function kindLabel(kind: string): string {
   if (kind === "SOURCE") return "source";
@@ -26,21 +23,12 @@ function stateLabel(state: string): string {
 
 export function GitHubLinksPanel({ issueId }: { issueId: string }) {
   const utils = trpc.useUtils();
-  const [url, setUrl] = useState("");
-  const [kind, setKind] = useState<LinkKind>("RELATES_TO");
+  const [modalOpen, setModalOpen] = useState(false);
 
   const { data: links, isLoading } = trpc.github.listLinked.useQuery(
     { issueId },
     { staleTime: 30_000 },
   );
-  const linkM = trpc.github.link.useMutation({
-    onSuccess: () => {
-      toast.success("GitHub resource linked.");
-      setUrl("");
-      void utils.github.listLinked.invalidate({ issueId });
-    },
-    onError: (e) => toast.error(e.message),
-  });
   const syncM = trpc.github.sync.useMutation({
     onSuccess: () => {
       toast.success("GitHub state synced.");
@@ -57,9 +45,18 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
         <span className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
           GitHub
         </span>
-        <span className="ml-auto font-mono text-[0.625rem] text-muted-foreground">
+        <span className="font-mono text-[0.625rem] text-muted-foreground">
           {links?.length ?? 0}
         </span>
+        <button
+          type="button"
+          onClick={() => setModalOpen(true)}
+          className="focus-ring ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
+          title="Link a GitHub issue or PR"
+        >
+          <Plus className="h-3 w-3" />
+          Link
+        </button>
       </div>
 
       <div className="space-y-2 p-2.5">
@@ -128,52 +125,18 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
             })}
           </div>
         ) : (
-          <div className="rounded-md border border-dashed border-border bg-background/60 p-2 text-meta text-muted-foreground">
-            No linked GitHub issues or PRs.
-          </div>
+          <button
+            type="button"
+            onClick={() => setModalOpen(true)}
+            className="focus-ring flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border bg-background/60 p-2.5 text-meta text-muted-foreground hover:border-border hover:text-foreground"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Link a GitHub issue or PR
+          </button>
         )}
-
-        <form
-          className="space-y-2 border-t border-border/60 pt-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const nextUrl = url.trim();
-            if (!nextUrl) return;
-            linkM.mutate({ issueId, url: nextUrl, kind });
-          }}
-        >
-          <Input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://github.com/org/repo/issues/123"
-            className="h-8 font-mono text-xs"
-          />
-          <div className="flex items-center gap-2">
-            <select
-              value={kind}
-              onChange={(e) => setKind(e.target.value as LinkKind)}
-              className="focus-ring h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs"
-              aria-label="GitHub link kind"
-            >
-              {LINK_KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {kindLabel(k)}
-                </option>
-              ))}
-            </select>
-            <Button
-              type="submit"
-              size="sm"
-              variant="outline"
-              disabled={linkM.isPending || !url.trim()}
-              className="h-8 shrink-0"
-            >
-              <LinkIcon className="h-3.5 w-3.5" />
-              Link
-            </Button>
-          </div>
-        </form>
       </div>
+
+      <GitHubLinkModal issueId={issueId} open={modalOpen} onOpenChange={setModalOpen} />
     </div>
   );
 }

@@ -2,6 +2,62 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-24 — GitHub link modal + remediation (Workstream B)
+
+Merged the agentic-runtime branch (Phase 1 `7424762`, Phase 2 `26abd4c`,
+continuation `6dadaba`) to `main` (fast-forward, no schema change beyond the
+already-applied `0088`/`0089`). Then built the GitHub link-modal workstream on
+branch `github-link-modal`.
+
+**Root cause of "No active GitHub mapping for this repository":** PR/issue
+linking resolves through `Connection` + an **active repo `ConnectionMapping`**
+(`resolveGitHubRepoMapping`). Installing the App only creates the `Connection`
+(via `/api/connections/github/install`→`setup`); the per-repo `ConnectionMapping`
+is a separate admin-gated step surfaced **only** on `/settings/connections` —
+and the runtime-auth "GitHub Apps" page (the `GithubApp` model) is a *different*
+system that creates neither. So from the issue page the error was unavoidable
+with no remediation path.
+
+**Built (no schema change):**
+- `src/server/services/github/linkability.ts` — `classifyLinkability` (pure),
+  `resolveRepoLinkability` (mapping fast-path → admin-only installation probe),
+  `mapGitHubRepo` (idempotent, repo-in-installation verified), `listGitHubRepoMappings`.
+- `github.ts` router: `linkability` (workspaceProcedure; **admin-gated probe**),
+  `mapRepo` (adminProcedure), `listMappings`, and `preview` extended to accept
+  `url` **or** `repoFullName`+`number` and auto-resolve an issue-number-that-is-a-PR.
+  Shared `repoFullNameSchema` (regex) so malformed input is a 400, not a 500.
+- MCP: `github.listMappings` (READ_ISSUES) so agents can discover linkable repos.
+- `github-link-modal.tsx` (new, `CenterModal`): **By URL/number** tab (parse →
+  linkability → preview → link, with remediation cards) + **Browse repo** tab
+  (repo picker → `github.search` → per-row link). `github-links-panel.tsx`
+  refactored to list + open the modal (replaces the cramped inline form + raw
+  error toast).
+
+**Adversarial review (4 lenses → per-finding verify, 15 confirmed; workflow
+`wf_a0bbe85f`):** fixed the real ones —
+- **MEDIUM (security):** `github.linkability` was a plain `workspaceProcedure`,
+  so any member/guest could probe arbitrary `owner/repo` against the workspace's
+  installations → private-repo **access oracle** + connection enumeration. Now the
+  installation probe + `connections[]` payload are **admin-only**; non-admins get
+  an opaque `not_ready` (ready/paused still work for all — those are already
+  visible via `connectionMapping.list`). Workspace-trusted candidates filtered to
+  `CONNECTED`.
+- **MEDIUM:** pasted `/issues/N` URL where N is a PR showed a PR preview then
+  failed on link (sent the `/issues/` URL). Link now uses the **preview-resolved**
+  canonical url and gates on it (also kills a click-before-preview race).
+- **LOW:** `mapRepo` trust check now `kind:"repo"`-scoped; idempotency matches by
+  **repo** (findMany→`sameRepo`) not just connection (no duplicate/collision on a
+  multi-repo connection); `listRepos` wrapped → `BAD_GATEWAY` not opaque 500;
+  swallowed probe errors logged; linkability query no longer fires for a bare repo
+  (no number); input hint driven off debounced value; browse-tab per-row pending
+  (one in-flight link no longer freezes the list); `not_ready` remediation card.
+- Regression tests: `github-linkability.test.ts` (pure classifier, 10) +
+  `github-linkability-resolve.test.ts` (DB-backed: **non-admin never probes**,
+  admin probes, ready-without-probe, mapRepo idempotency/re-activate/reject, 6).
+
+Validated on the local isolated stack: typecheck ✓, lint ✓, **985 tests** ✓
+(+16), production build ✓.
+
 ## 2026-06-23 — Agentic runtime Phase 2 continuation: provenance, dispatch preview, grouping
 
 Follow-ups on the Phase 2 commit (no schema change this round — all code):
