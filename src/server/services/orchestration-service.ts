@@ -2,8 +2,10 @@ import "server-only";
 import type { PrismaClient } from "@prisma/client";
 import {
   ActionRequestKind,
+  type AgentProvider,
   AgentRunStatus,
   type AgentStatus,
+  EngagementMode,
   EventKind,
   ExecutionPlanStatus,
   ExecutionStepStatus,
@@ -17,11 +19,57 @@ import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import { openReviewGateTx } from "@/server/services/agent-crew-service";
 import { createActionRequest } from "@/server/services/action-request-service";
 import { openOrTouchRun } from "@/server/services/agent-run";
+import {
+  resolveRunEngineWithSource,
+  type AgentRuntimeRef,
+} from "@/server/services/dispatch/registry";
 import { runPlanGeneration } from "@/server/services/ai";
 import { resolveWorkspaceProviderClient } from "@/server/services/ai-providers";
 import { materializeStepAsIssueTx } from "@/server/services/execution-step-issue-service";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
+
+/**
+ * Worker fields needed to open an observable orchestration run with its
+ * engine/source stamped (so the run row shows the engine chip + a truthful
+ * tooltip, same as assignment/grant runs). Execution steps are concrete work,
+ * so the engagement mode is always EXECUTE, decided by the surface.
+ */
+const ORCH_WORKER_SELECT = {
+  webhookUrl: true,
+  runtimeId: true,
+  provider: true,
+  runEngine: true,
+  runtime: {
+    select: {
+      name: true,
+      adapterKey: true,
+      config: true,
+      disabledAt: true,
+      endpoint: true,
+      secret: true,
+    },
+  },
+} as const;
+
+/** Resolve the engine + the EXECUTE-mode stamp for an orchestration worker. */
+function orchestrationRunStamp(worker: {
+  provider: AgentProvider;
+  runEngine: RunEngine | null;
+  runtime: AgentRuntimeRef;
+}) {
+  const engine = resolveRunEngineWithSource({
+    runEngine: worker.runEngine,
+    provider: worker.provider,
+    runtime: worker.runtime,
+  });
+  return {
+    engagementMode: EngagementMode.EXECUTE,
+    engagementSource: "surface-default" as const,
+    runEngine: engine.engine,
+    runEngineSource: engine.source,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // judgeVerdict JSON shape — the contract the UI agents render against.
@@ -1358,7 +1406,7 @@ async function transitionStepToReady(
   if (workerAgentId) {
     const worker = await tx.agent.findFirst({
       where: { id: workerAgentId, workspaceId: params.workspaceId, archivedAt: null },
-      select: { webhookUrl: true, runtimeId: true },
+      select: ORCH_WORKER_SELECT,
     });
     const isRuntimeOnlyWorker = Boolean(worker?.runtimeId && !worker.webhookUrl);
     // Open an observable AgentRun for this step (AXI-57) so orchestrated turns
@@ -1375,7 +1423,7 @@ async function transitionStepToReady(
       });
       runIssueId = materialized.issueId;
     }
-    if (runIssueId) {
+    if (runIssueId && worker) {
       await openOrTouchRun(tx, {
         workspaceId: params.workspaceId,
         issueId: runIssueId,
@@ -1386,6 +1434,7 @@ async function transitionStepToReady(
         triggerKind: EventKind.EXECUTION_STEP_READY,
         currentStep: step.title,
         executionStepId: step.id,
+        ...orchestrationRunStamp(worker),
       });
     }
     if (!isRuntimeOnlyWorker) {
@@ -1488,7 +1537,7 @@ export async function retryExecutionStep(
     }
     const worker = await tx.agent.findFirst({
       where: { id: workerAgentId, workspaceId: params.workspaceId, archivedAt: null },
-      select: { webhookUrl: true, runtimeId: true },
+      select: ORCH_WORKER_SELECT,
     });
     if (!worker) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Assigned worker not found." });
@@ -1584,6 +1633,7 @@ export async function retryExecutionStep(
       triggerKind: EventKind.EXECUTION_STEP_READY,
       currentStep: step.title,
       executionStepId: step.id,
+      ...orchestrationRunStamp(worker),
     });
 
     const isRuntimeOnlyWorker = Boolean(worker.runtimeId && !worker.webhookUrl);

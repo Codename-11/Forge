@@ -58,6 +58,32 @@ with no remediation path.
 Validated on the local isolated stack: typecheck ✓, lint ✓, **985 tests** ✓
 (+16), production build ✓.
 
+**Deferrals pass (same day):**
+- **DONE — orchestration runs stamp engine/source.** The two
+  `openOrTouchRun` sites in `orchestration-service.ts` (markStepReady +
+  retry) now resolve the worker's engine via `resolveRunEngineWithSource`
+  and stamp `engagementMode: EXECUTE`, `engagementSource: "surface-default"`,
+  `runEngine`/`runEngineSource` (shared `ORCH_WORKER_SELECT` +
+  `orchestrationRunStamp` helper). Closes the Phase-2 "orchestration-step
+  runs stamp null engine/source" gap so the engine chip renders on
+  orchestrated runs. Additive; 985 tests + build green.
+- **Verified non-issue — reconcile `completedAt`.** `RECONCILE`
+  (agent-run-recovery) accepts a protocol-failed *completed* run and clears
+  the recovery flag; it does not re-open, so `completedAt` correctly
+  persists. No change.
+- **Deferred (with rationale) — operator Resume + don't-auto-resume-on-comment.**
+  Budget-paused (WAITING) runs already have an operator path:
+  `run-attention-panel` offers nudge ("please resume…") + abandon, and the
+  comment-driven `openOrTouchRun` resume branch re-arms the budget via
+  `clearBudgetMarkers` — so a paused run isn't left dangling. The genuinely
+  open piece is the *semantic* question of whether an ordinary discussion
+  comment should silently un-pause + re-grant budget; that's a hot-path
+  invariant change (the same resume invariant fixed in Phase 1) plus a
+  product decision, so it gets its own focused, live-runtime-validated pass
+  rather than a rushed edit. A dedicated labeled "Resume" affordance + the
+  per-row dispatch preview in the assign popover (needs a `Picker`
+  focused-row hook) remain low-priority polish.
+
 ## 2026-06-23 — Agentic runtime Phase 2 continuation: provenance, dispatch preview, grouping
 
 Follow-ups on the Phase 2 commit (no schema change this round — all code):

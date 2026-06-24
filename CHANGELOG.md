@@ -11,6 +11,10 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Orchestrated runs now show their engine.** Runs opened by the Goal/plan loop (execution steps) now carry their engagement mode + run engine like assignment and grant runs, so the engine chip and "why" tooltip render on them too instead of staying blank.
+
 ### Added
 
 - **Link GitHub issues & PRs from the issue page — with a way out of "no mapping".** The issue's GitHub panel now opens a proper dialog: paste a URL or `owner/repo#123` and see a live preview before linking (a PR pasted as an `/issues/` URL is recognized as a PR), or **browse a connected repo's** open issues and pull requests and link them in place. When a repository isn't wired up yet, the dialog explains exactly *why* and offers the one-click fix — **connect the repository** (admins), **resume a paused** connection, or **install the GitHub App** — instead of the old dead-end "No active GitHub mapping for this repository" error. Agents get a new `github.listMappings` tool so they can discover which repos are linkable before searching or linking.
