@@ -641,7 +641,7 @@ export const agentRunRouter = router({
         if (input.alsoUnassign) {
           await tx.issue.update({
             where: { id: run.issueId },
-            data: { assignedAgentId: null, claimedById: null, claimedAt: null },
+            data: { assignedAgentId: null, claimedById: null, claimedByAgentId: null, claimedAt: null },
           });
         }
         return { ok: true };
@@ -673,7 +673,7 @@ export const agentRunRouter = router({
         });
         await tx.issue.update({
           where: { id: run.issueId },
-          data: { assignedAgentId: null, claimedById: null, claimedAt: null, queued: true },
+          data: { assignedAgentId: null, claimedById: null, claimedByAgentId: null, claimedAt: null, queued: true },
         });
         // maybeAutoDispatch is imported at top of file.
         await maybeAutoDispatch(tx, run.issueId);

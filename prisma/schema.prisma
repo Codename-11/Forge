@@ -1076,6 +1076,11 @@ model Issue {
   queued                Boolean         @default(false)
   claimedAt             DateTime?
   claimedById           String?
+  /// When an agent (not a human) holds the claim, the agent that claimed it —
+  /// set from the api key's `linkedAgentId` on `issues.claim`. Independent of
+  /// `claimedById` (the api-key owner user); null for human claims. Lets the
+  /// UI attribute a claim to the agent rather than its owner account.
+  claimedByAgentId      String?
   claimExpiresAt        DateTime?
   /// Explicit agent assignment. Independent of `claimedById` (human claim).
   /// Set by users or the auto-dispatcher; cleared on unassign.
@@ -1125,6 +1130,7 @@ model Issue {
   status         Status                 @relation(fields: [statusId], references: [id])
   author         User                   @relation("IssueAuthor", fields: [authorId], references: [id])
   claimedBy      User?                  @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  claimedByAgent Agent?                 @relation("IssueClaimedByAgent", fields: [claimedByAgentId], references: [id], onDelete: SetNull)
   assignedAgent  Agent?                 @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
   assignees      IssueAssignee[]
   labels         IssueLabel[]
@@ -2337,6 +2343,7 @@ model Agent {
   profile                  AgentProfile?     @relation("AgentProfileBinding", fields: [profileId], references: [id], onDelete: SetNull)
   runtime                  Runtime?          @relation("AgentRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
   assignedIssues           Issue[]           @relation("IssueAssignedAgent")
+  claimedIssues            Issue[]           @relation("IssueClaimedByAgent")
   apiKeys                  ApiKey[]          @relation("AgentApiKeys")
   authoredComments         Comment[]         @relation("AgentAuthoredComments")
   dispatchRules            DispatchRule[]

@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/engagement-mode-glyph";
 import { EmptyState, Skeleton, SkeletonText } from "@/components/ui";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { presenceAvailability } from "@/lib/transport-display";
 import { trpc } from "@/lib/trpc";
 import { formatDate, formatIssueId, relativeTime } from "@/lib/utils";
@@ -639,6 +640,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                       <SidebarField label="Claimed by">
                         <ClaimHolderCard
                           claimedBy={issue.claimedBy ?? null}
+                          claimedByAgent={issue.claimedByAgent ?? null}
                           claimedById={issue.claimedById ?? null}
                           claimExpiresAt={issue.claimExpiresAt ?? null}
                           onRelease={() => setReleaseOpen(true)}
@@ -866,34 +868,40 @@ function SidebarField({ label, children }: { label: string; children: React.Reac
 }
 
 /**
- * The active claim holder, as a person badge (avatar + name) rather than a raw
- * id. Claims are tied to a workspace user — agents claim through their
- * api-key owner — so we show that identity, falling back to email then a short
- * id when the relation can't be resolved. The short id stays as mono subtext
- * for support/debugging.
+ * The active claim holder as a badge rather than a raw id. Prefers the
+ * **agent** that claimed (avatar + name + `@profileKey`) when an agent-linked
+ * key was used; otherwise shows the claiming **user** (name → email → short
+ * id). The short id stays as mono subtext for support/debugging.
  */
 function ClaimHolderCard({
   claimedBy,
+  claimedByAgent,
   claimedById,
   claimExpiresAt,
   onRelease,
 }: {
   claimedBy: { id: string; name: string | null; email: string | null; image: string | null } | null;
+  claimedByAgent: { id: string; name: string; profileKey: string; avatar: string | null } | null;
   claimedById: string | null;
   claimExpiresAt: Date | string | null;
   onRelease: () => void;
 }) {
-  const displayName = claimedBy?.name ?? claimedBy?.email ?? claimedById?.slice(0, 8) ?? "Unknown";
+  const userName = claimedBy?.name ?? claimedBy?.email ?? null;
+  const primary = claimedByAgent?.name ?? userName ?? claimedById?.slice(0, 8) ?? "Unknown";
+  // Agent → its handle; otherwise the short id, unless that's already primary.
   const shortId = claimedById ? claimedById.slice(0, 8) : null;
-  // Only show the id as subtext when it isn't already the primary label.
-  const showSubId = !!shortId && displayName !== shortId;
+  const sub = claimedByAgent ? `@${claimedByAgent.profileKey}` : shortId && shortId !== primary ? shortId : null;
   return (
     <div className="rounded-md border border-border bg-card/60 p-2">
       <div className="flex items-center gap-2">
-        <Avatar name={claimedBy?.name ?? claimedBy?.email ?? null} image={claimedBy?.image ?? null} size={22} />
+        {claimedByAgent ? (
+          <AgentAvatar agent={claimedByAgent} size="sm" />
+        ) : (
+          <Avatar name={userName} image={claimedBy?.image ?? null} size={22} />
+        )}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-medium">{displayName}</div>
-          {showSubId && <div className="text-id text-[0.625rem] text-muted-foreground">{shortId}</div>}
+          <div className="truncate text-xs font-medium">{primary}</div>
+          {sub && <div className="text-id text-[0.625rem] text-muted-foreground">{sub}</div>}
         </div>
         {claimExpiresAt && (
           <span className="text-meta shrink-0 text-muted-foreground">

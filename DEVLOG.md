@@ -49,8 +49,31 @@ Tests: +4 in `github-app-connect.test.ts` (browsable admin/non-admin gating;
 `ensureGitHubRepoLinkable` create + idempotent). Full suite 999 pass / 1 skip,
 lint + typecheck clean.
 
-Follow-up worth noting: true *agent* attribution on a claim would need a
-`claimedByAgentId` column (claims only record the User today).
+Follow-up (done, same day): true *agent* attribution on a claim — see below.
+
+### True agent attribution on claims (`claimedByAgentId`)
+
+Migration **0090_issue_claimed_by_agent**: `Issue.claimedByAgentId String?` +
+FK to `Agent` (SetNull, mirrors `assignedAgentId`); back-relation
+`Agent.claimedIssues @relation("IssueClaimedByAgent")`. `claimedById` (the
+api-key owner User) stays; the new column records the agent that actually
+claimed.
+
+Wired through **every** claim write:
+- Set on agent claim: `issue.ts::claim` (both targeted + queue-scan paths) and
+  `mcp.ts::issues.claim` (both paths), from `ctx.apiKey?.linkedAgentId`.
+- Cleared on release / unqueue-while-unclaimed / run abandon+redispatch:
+  `issue.ts` (release, setQueued, ×) + `mcp.ts` (release, setQueued) +
+  `agent-run.ts` (alsoUnassign, redispatch). Human bulk claim
+  (`issue.ts` `setClaimedBy`) sets it null (a human claim has no agent).
+- `issue.byId` selects `claimedByAgent {id,name,profileKey,avatar,status}`.
+- `ClaimHolderCard` prefers the agent badge (`AgentAvatar` + name + `@handle`),
+  falls back to the user person badge → short id.
+
+Test: `mcp.test.ts` — claiming via a `linkedAgentId` ctx sets
+`claimedByAgentId`; release clears it. Full suite 1000 pass / 1 skip; lint +
+typecheck clean. Local DB migrated (`prisma migrate deploy`); prod applies it
+on container start via the entrypoint.
 
 ## 2026-06-24 — GithubApp ↔ Connection unification (linking works off one app)
 

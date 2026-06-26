@@ -1887,6 +1887,9 @@ export const mcpTools = {
         await assertMcpWorkspaceMutationPolicy(ctx, "issues.claim");
       }
       const agentUserId = await resolveActorId(ctx);
+      // Attribute the claim to the agent behind the key (not just its owner
+      // user) so the UI can show the agent. Null if the key isn't agent-linked.
+      const claimedByAgentId = ctx.apiKey?.linkedAgentId ?? null;
       const expiresAt = new Date(Date.now() + input.claimTtlMinutes * 60_000);
 
       if (input.issueId) {
@@ -1905,6 +1908,7 @@ export const mcpTools = {
           where: { id: issue.id },
           data: {
             claimedById: agentUserId,
+            claimedByAgentId,
             claimedAt: new Date(),
             claimExpiresAt: expiresAt,
             assignees: {
@@ -1942,6 +1946,7 @@ export const mcpTools = {
         where: { id: candidate.id },
         data: {
           claimedById: agentUserId,
+          claimedByAgentId,
           claimedAt: new Date(),
           claimExpiresAt: expiresAt,
           assignees: {
@@ -1972,7 +1977,7 @@ export const mcpTools = {
       });
       return db.issue.update({
         where: { id: issue.id },
-        data: { claimedAt: null, claimedById: null, claimExpiresAt: null },
+        data: { claimedAt: null, claimedById: null, claimedByAgentId: null, claimExpiresAt: null },
       });
     },
   },
@@ -1997,7 +2002,7 @@ export const mcpTools = {
             queued: input.queued,
             // Mirrors issue.setQueued: unqueue does not steal/release an active claim.
             ...(!input.queued && issue.claimedAt == null
-              ? { claimedAt: null, claimedById: null, claimExpiresAt: null }
+              ? { claimedAt: null, claimedById: null, claimedByAgentId: null, claimExpiresAt: null }
               : {}),
           },
         });

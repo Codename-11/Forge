@@ -617,10 +617,14 @@ export const issueRouter = router({
           project: true,
           author: { select: { id: true, name: true, image: true } },
           assignees: { include: { user: { select: { id: true, name: true, image: true } } } },
-          // Who holds the active claim (a workspace user — agents claim via
-          // their api-key owner). Powers the sidebar's claim badge so it shows
-          // a name + avatar instead of a raw id.
+          // Who holds the active claim. `claimedBy` is the api-key owner user;
+          // `claimedByAgent` is the agent that actually claimed (when an
+          // agent-linked key was used). Powers the sidebar's claim badge so it
+          // shows a real name/avatar instead of a raw id — preferring the agent.
           claimedBy: { select: { id: true, name: true, email: true, image: true } },
+          claimedByAgent: {
+            select: { id: true, name: true, profileKey: true, avatar: true, status: true },
+          },
           assignedAgent: {
             select: {
               id: true,
@@ -1726,6 +1730,8 @@ export const issueRouter = router({
           where: { id: { in: validIds }, workspaceId: ctx.workspaceId },
           data: {
             claimedById: input.claimedById,
+            // Human (admin) claim assignment — always clears agent attribution.
+            claimedByAgentId: null,
             // Clearing the claim also clears timestamps; setting a new
             // owner refreshes the claim start time.
             claimedAt: input.claimedById ? new Date() : null,
@@ -1928,7 +1934,7 @@ export const issueRouter = router({
             queued: input.queued,
             // Releasing from queue while claimed leaves the claim intact (agent still owns it).
             ...(!input.queued && issue.claimedAt == null
-              ? { claimedAt: null, claimedById: null, claimExpiresAt: null }
+              ? { claimedAt: null, claimedById: null, claimedByAgentId: null, claimExpiresAt: null }
               : {}),
           },
         });
@@ -1969,7 +1975,7 @@ export const issueRouter = router({
       });
       return ctx.db.issue.update({
         where: { id: issue.id },
-        data: { claimedAt: null, claimedById: null, claimExpiresAt: null },
+        data: { claimedAt: null, claimedById: null, claimedByAgentId: null, claimExpiresAt: null },
       });
     }),
 
@@ -2035,6 +2041,10 @@ export const issueRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
+      // When the caller authenticates with an agent-linked key, attribute the
+      // claim to that agent (not just its owner user) so the UI can show the
+      // agent. Null for human/session claims.
+      const claimedByAgentId = ctx.apiKey?.linkedAgentId ?? null;
       const expiresAt = new Date(Date.now() + input.claimTtlMinutes * 60_000);
 
       if (input.issueId) {
@@ -2057,6 +2067,7 @@ export const issueRouter = router({
             where: { id: issue.id },
             data: {
               claimedById: userId,
+              claimedByAgentId,
               claimedAt: new Date(),
               claimExpiresAt: expiresAt,
             },
@@ -2086,6 +2097,7 @@ export const issueRouter = router({
         where: { id: candidate.id },
         data: {
           claimedById: userId,
+          claimedByAgentId,
           claimedAt: new Date(),
           claimExpiresAt: expiresAt,
         },

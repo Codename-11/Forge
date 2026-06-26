@@ -772,6 +772,39 @@ describe("mcp — issues.claim honors blocker skip + narrowing", () => {
     };
     expect(res.claimed?.id).toBe(onlyMine.id);
   });
+
+  it("attributes the claim to the agent behind the key", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCAG" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, profileKey: "claimer", name: "Claimer" },
+    });
+    const issue = await createIssue(fixture, { title: "to claim" });
+    await prisma.issue.update({ where: { id: issue.id }, data: { queued: true } });
+
+    const { ctx } = buildMcpCtx(fixture, { linkedAgentId: agent.id });
+    const res = (await call("issues.claim", { issueId: issue.id }, ctx)) as {
+      claimed: { id: string } | null;
+    };
+    expect(res.claimed?.id).toBe(issue.id);
+
+    const row = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+      select: { claimedByAgentId: true, claimedById: true },
+    });
+    expect(row.claimedByAgentId).toBe(agent.id);
+    expect(row.claimedById).not.toBeNull();
+
+    // Releasing clears agent attribution too.
+    await call("issues.release", { id: issue.id }, ctx);
+    const released = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+      select: { claimedByAgentId: true, claimedById: true, claimedAt: true },
+    });
+    expect(released.claimedByAgentId).toBeNull();
+    expect(released.claimedAt).toBeNull();
+  });
 });
 
 describe("mcp — project mutations and issue queue toggle", () => {
