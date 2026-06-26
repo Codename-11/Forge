@@ -642,20 +642,46 @@ function BrowseTab({
 }) {
   const utils = trpc.useUtils();
   const ws = useWorkspace();
-  const mappings = trpc.github.listMappings.useQuery(undefined, { staleTime: 30_000 });
-  const [mappingId, setMappingId] = useState<string>("");
+  const repos = trpc.github.browsableRepos.useQuery(undefined, { staleTime: 30_000 });
+  const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [query, setQuery] = useState("");
   const [type, setType] = useState<"" | "issue" | "pr">("");
   const debouncedQuery = useDebounced(query, 350);
   const [linked, setLinked] = useState<Set<string>>(new Set());
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  // Repos we've already kicked an auto-map for — so the effect fires once per
+  // repo and doesn't re-loop on a connect failure.
+  const [autoConnected, setAutoConnected] = useState<Set<string>>(new Set());
 
-  // Default the repo picker to the first mapping once loaded.
+  const current = repos.data?.find((r) => r.repoFullName === selectedRepo) ?? null;
+  const mappingId = current?.mappingId ?? "";
+
+  // Default the repo picker to the first repo (mapped repos sort first).
   useEffect(() => {
-    if (!mappingId && mappings.data && mappings.data.length > 0) {
-      setMappingId(mappings.data[0].id);
+    if (!selectedRepo && repos.data && repos.data.length > 0) {
+      setSelectedRepo(repos.data[0].repoFullName);
     }
-  }, [mappings.data, mappingId]);
+  }, [repos.data, selectedRepo]);
+
+  const connectRepoM = trpc.github.connectRepo.useMutation({
+    onSuccess: () => void utils.github.browsableRepos.invalidate(),
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Auto-map an unmapped repo the first time the admin searches it: picking a
+  // repo the App can reach and typing "just works" — no separate connect step.
+  // Once mapped, browsableRepos refetches and `mappingId` lights up the search.
+  useEffect(() => {
+    if (!current || current.mapped || !isAdmin) return;
+    if (!debouncedQuery.trim()) return;
+    if (autoConnected.has(current.repoFullName) || connectRepoM.isPending) return;
+    setAutoConnected((prev) => new Set(prev).add(current.repoFullName));
+    connectRepoM.mutate({ repoFullName: current.repoFullName });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.repoFullName, current?.mapped, debouncedQuery, isAdmin]);
+
+  const connecting =
+    !!current && !current.mapped && (connectRepoM.isPending || autoConnected.has(current.repoFullName));
 
   const search = trpc.github.search.useQuery(
     { mappingId, query: debouncedQuery, type: type || undefined },
@@ -673,15 +699,15 @@ function BrowseTab({
     onSettled: () => setPendingUrl(null),
   });
 
-  if (mappings.isLoading) {
-    return <StatusLine icon={Loader2} spin>Loading connected repositories…</StatusLine>;
+  if (repos.isLoading) {
+    return <StatusLine icon={Loader2} spin>Loading repositories…</StatusLine>;
   }
-  if (!mappings.data || mappings.data.length === 0) {
+  if (!repos.data || repos.data.length === 0) {
     return (
       <RemediationCard
         tone="info"
-        title="No repositories connected yet"
-        body="Connect a GitHub repository to browse its open issues and pull requests."
+        title="No repositories to browse yet"
+        body="Connect the GitHub App to browse a repository's open issues and pull requests."
       >
         {isAdmin ? (
           <a
@@ -702,14 +728,15 @@ function BrowseTab({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <select
-          value={mappingId}
-          onChange={(e) => setMappingId(e.target.value)}
+          value={selectedRepo}
+          onChange={(e) => setSelectedRepo(e.target.value)}
           className="focus-ring h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 font-mono text-xs"
           aria-label="Repository"
         >
-          {mappings.data.map((m) => (
-            <option key={m.id} value={m.id}>
+          {repos.data.map((m) => (
+            <option key={m.repoFullName} value={m.repoFullName}>
               {m.repoFullName}
+              {m.mapped ? "" : " · not connected"}
             </option>
           ))}
         </select>
@@ -735,6 +762,20 @@ function BrowseTab({
           autoFocus
         />
       </div>
+
+      {/* First-touch on an unmapped repo: surface the one-time connect step
+          instead of a silent "no results". */}
+      {connecting && debouncedQuery.trim() && (
+        <StatusLine icon={Loader2} spin>
+          Connecting <span className="font-mono">{current?.repoFullName}</span>…
+        </StatusLine>
+      )}
+      {current && !current.mapped && !connecting && !debouncedQuery.trim() && (
+        <p className="text-meta text-muted-foreground">
+          Type to search — <span className="font-mono">{current.repoFullName}</span> connects
+          automatically on first use.
+        </p>
+      )}
 
       {search.isLoading && debouncedQuery.trim() && (
         <StatusLine icon={Loader2} spin>Searching…</StatusLine>

@@ -4,6 +4,8 @@ import { ConnectionProvider, ConnectionStatus } from "@prisma/client";
 import { encryptSecret } from "@/server/crypto";
 import {
   connectGithubAppAsConnection,
+  ensureGitHubRepoLinkable,
+  listBrowsableGitHubRepos,
   resolveRepoLinkability,
 } from "@/server/services/github/linkability";
 import { resolveInstallationToken } from "@/server/services/github/installation-token";
@@ -181,6 +183,116 @@ describe("connectGithubAppAsConnection", () => {
     expect(b.connectionId).toBe(a.connectionId);
     const count = await getPrisma().connection.count({
       where: { ownerId: fixture.user.id, provider: ConnectionProvider.GITHUB },
+    });
+    expect(count).toBe(1);
+  });
+});
+
+describe("listBrowsableGitHubRepos — installation repos for admins", () => {
+  it("unions in the installed App's repos (admin), marked unmapped", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "GA" });
+    fixtures.push(fixture);
+    await installedApp(fixture.workspace.id);
+
+    const repos = await listBrowsableGitHubRepos({
+      db: getPrisma(),
+      workspaceId: fixture.workspace.id,
+      userId: fixture.user.id,
+      isAdmin: true,
+      listRepos: vi.fn(async () => [
+        { id: 1, full_name: "octo/hello", html_url: "https://github.com/octo/hello" },
+        { id: 2, full_name: "octo/world", html_url: "https://github.com/octo/world" },
+      ]),
+    });
+
+    expect(repos.map((r) => r.repoFullName).sort()).toEqual(["octo/hello", "octo/world"]);
+    expect(repos.every((r) => r.mapped === false && r.mappingId === null)).toBe(true);
+  });
+
+  it("returns only mapped repos for a non-admin (no installation probe)", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "GA" });
+    fixtures.push(fixture);
+    await installedApp(fixture.workspace.id);
+    const listRepos = vi.fn(async () => [
+      { id: 1, full_name: "octo/secret", html_url: "https://github.com/octo/secret" },
+    ]);
+
+    const repos = await listBrowsableGitHubRepos({
+      db: getPrisma(),
+      workspaceId: fixture.workspace.id,
+      userId: fixture.secondUser.id,
+      isAdmin: false,
+      listRepos,
+    });
+
+    expect(repos).toEqual([]);
+    expect(listRepos).not.toHaveBeenCalled();
+  });
+});
+
+describe("ensureGitHubRepoLinkable — auto-map a browsed repo", () => {
+  it("creates the connection + active mapping from the installed App", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "GA" });
+    fixtures.push(fixture);
+    await installedApp(fixture.workspace.id);
+    // getInstallationAccountLogin → GET /app/installations/{id}
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ account: { login: "octo-org" } }), { status: 200 })),
+    );
+    const listRepos = vi.fn(async () => [
+      { id: 1, full_name: "octo/hello", html_url: "https://github.com/octo/hello" },
+    ]);
+
+    const result = await ensureGitHubRepoLinkable({
+      db: getPrisma(),
+      workspaceId: fixture.workspace.id,
+      userId: fixture.user.id,
+      repoFullName: "octo/hello",
+      listRepos,
+    });
+
+    expect(result.created).toBe(true);
+    expect(result.repoFullName).toBe("octo/hello");
+    const mapping = await getPrisma().connectionMapping.findUniqueOrThrow({
+      where: { id: result.mappingId },
+      select: { kind: true, status: true, target: true },
+    });
+    expect(mapping.kind).toBe("repo");
+    expect(mapping.status).toBe("active");
+    expect(mapping.target).toBe("octo/hello");
+  });
+
+  it("is idempotent — a second call returns the same active mapping", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "GA" });
+    fixtures.push(fixture);
+    await installedApp(fixture.workspace.id);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ account: { login: "octo-org" } }), { status: 200 })),
+    );
+    const listRepos = vi.fn(async () => [
+      { id: 1, full_name: "octo/hello", html_url: "https://github.com/octo/hello" },
+    ]);
+
+    const a = await ensureGitHubRepoLinkable({
+      db: getPrisma(),
+      workspaceId: fixture.workspace.id,
+      userId: fixture.user.id,
+      repoFullName: "octo/hello",
+      listRepos,
+    });
+    const b = await ensureGitHubRepoLinkable({
+      db: getPrisma(),
+      workspaceId: fixture.workspace.id,
+      userId: fixture.user.id,
+      repoFullName: "octo/hello",
+      listRepos,
+    });
+    expect(b.mappingId).toBe(a.mappingId);
+    expect(b.created).toBe(false);
+    const count = await getPrisma().connectionMapping.count({
+      where: { workspaceId: fixture.workspace.id, kind: "repo" },
     });
     expect(count).toBe(1);
   });

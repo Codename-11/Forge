@@ -114,6 +114,52 @@ const MAX_PROBE_CONNECTIONS = 8;
 
 type RepoLister = (args: { installationId: string | number }) => Promise<GitHubRepoResponse[]>;
 
+/** A CONNECTED GitHub connection the workspace can map repos from. */
+type CandidateConnection = { id: string; account: string | null; label: string; config: unknown };
+
+/**
+ * The CONNECTED GitHub connections this workspace can act on: every connection
+ * already mapped into the workspace (any admin can extend repo coverage for an
+ * App a colleague introduced) plus the caller's own connected identities. Used
+ * by both the linkability probe and the Browse auto-map path so they agree on
+ * which installations are in scope.
+ */
+async function gatherCandidateGitHubConnections(
+  db: PrismaClient,
+  workspaceId: string,
+  userId: string | null,
+): Promise<CandidateConnection[]> {
+  const byId = new Map<string, Omit<CandidateConnection, "id">>();
+  const repoMappings = await db.connectionMapping.findMany({
+    where: { workspaceId, kind: "repo", connection: { provider: ConnectionProvider.GITHUB } },
+    select: {
+      connection: { select: { id: true, account: true, label: true, status: true, config: true } },
+    },
+  });
+  for (const m of repoMappings) {
+    if (m.connection.status !== ConnectionStatus.CONNECTED) continue;
+    byId.set(m.connection.id, {
+      account: m.connection.account,
+      label: m.connection.label,
+      config: m.connection.config,
+    });
+  }
+  if (userId) {
+    const owned = await db.connection.findMany({
+      where: {
+        ownerId: userId,
+        provider: ConnectionProvider.GITHUB,
+        status: ConnectionStatus.CONNECTED,
+      },
+      select: { id: true, account: true, label: true, config: true },
+    });
+    for (const c of owned) {
+      if (!byId.has(c.id)) byId.set(c.id, { account: c.account, label: c.label, config: c.config });
+    }
+  }
+  return [...byId.entries()].map(([id, c]) => ({ id, ...c }));
+}
+
 /**
  * Resolve {@link GitHubLinkability} for a repo: cheap mapping lookup first
  * (the common "ready" path makes no GitHub API calls), then probe candidate
@@ -178,32 +224,11 @@ export async function resolveRepoLinkability(args: {
   // Candidate connections (admins only): connected identities already trusted
   // into this workspace (via any mapping) plus the caller's own connected
   // GitHub identities. Only CONNECTED connections can be probed.
-  const candidates = new Map<string, { account: string | null; label: string; config: unknown }>();
-  for (const m of mappings) {
-    if (m.connection.status !== ConnectionStatus.CONNECTED) continue;
-    candidates.set(m.connection.id, {
-      account: m.connection.account,
-      label: m.connection.label,
-      config: m.connection.config,
-    });
-  }
-  if (args.userId) {
-    const owned = await args.db.connection.findMany({
-      where: {
-        ownerId: args.userId,
-        provider: ConnectionProvider.GITHUB,
-        status: ConnectionStatus.CONNECTED,
-      },
-      select: { id: true, account: true, label: true, config: true },
-    });
-    for (const c of owned) {
-      if (!candidates.has(c.id)) candidates.set(c.id, { account: c.account, label: c.label, config: c.config });
-    }
-  }
+  const candidates = await gatherCandidateGitHubConnections(args.db, args.workspaceId, args.userId);
 
-  const probeList = [...candidates.entries()].slice(0, MAX_PROBE_CONNECTIONS);
+  const probeList = candidates.slice(0, MAX_PROBE_CONNECTIONS);
   const considered = await Promise.all(
-    probeList.map(async ([connectionId, c]): Promise<ConnectionConsidered> => {
+    probeList.map(async (c): Promise<ConnectionConsidered> => {
       let hasRepo = false;
       try {
         const installationId = githubInstallationId({ config: c.config as never });
@@ -215,12 +240,12 @@ export async function resolveRepoLinkability(args: {
         // misconfig (missing App key, GitHub outage) isn't silently rendered
         // as a "grant repo access" dead-end.
         console.warn(
-          `[github] linkability probe failed for connection ${connectionId}:`,
+          `[github] linkability probe failed for connection ${c.id}:`,
           err instanceof Error ? err.message : err,
         );
         hasRepo = false;
       }
-      return { connectionId, account: c.account, label: c.label, hasRepo };
+      return { connectionId: c.id, account: c.account, label: c.label, hasRepo };
     }),
   );
 
@@ -458,6 +483,236 @@ export async function connectGithubAppAsConnection(args: {
   }
 
   return { connectionId, account: accountLogin, mapped };
+}
+
+/** A repo offered in the issue-link modal's Browse picker. */
+export type BrowsableRepo = {
+  repoFullName: string;
+  account: string | null;
+  /** True when an active repo mapping already covers it — ready to search/link. */
+  mapped: boolean;
+  /** The active mapping's id when mapped, else null (auto-mapped on first use). */
+  mappingId: string | null;
+};
+
+function sortBrowsable(repos: BrowsableRepo[]): BrowsableRepo[] {
+  // Mapped repos first (ready to use), then alphabetical by full name.
+  return repos.sort((a, b) =>
+    a.mapped === b.mapped ? a.repoFullName.localeCompare(b.repoFullName) : a.mapped ? -1 : 1,
+  );
+}
+
+/**
+ * Repos the workspace can browse in the issue-link modal: every active repo
+ * mapping, plus — for admins — every repo the workspace's installed GitHub
+ * App(s) / connections can reach. That lets an admin browse a repo *before*
+ * it's mapped (picking one auto-maps via {@link ensureGitHubRepoLinkable}), so
+ * "we installed the App, why can't I just browse?" stops being a dead-end.
+ *
+ * Non-admins get only already-mapped repos: enumerating an installation's repo
+ * list is a private-repo access oracle we keep admin-only (same rationale as
+ * {@link resolveRepoLinkability}).
+ */
+export async function listBrowsableGitHubRepos(args: {
+  db: PrismaClient;
+  workspaceId: string;
+  userId: string | null;
+  isAdmin: boolean;
+  listRepos?: RepoLister;
+}): Promise<BrowsableRepo[]> {
+  const listRepos = args.listRepos ?? listGitHubInstallationRepos;
+  const byRepo = new Map<string, BrowsableRepo>();
+
+  const mapped = await listGitHubRepoMappings({ db: args.db, workspaceId: args.workspaceId });
+  for (const m of mapped) {
+    byRepo.set(normalizeRepoFullName(m.repoFullName).toLowerCase(), {
+      repoFullName: m.repoFullName,
+      account: m.account,
+      mapped: true,
+      mappingId: m.id,
+    });
+  }
+  if (!args.isAdmin) {
+    return sortBrowsable([...byRepo.values()]);
+  }
+
+  // Admins: union in the repos every in-scope installation can reach. A
+  // GithubApp can mint a token with no Connection at all (see
+  // resolveInstallationToken), so this lights up Browse the moment an App is
+  // installed — no mapping or env app required.
+  const installations = new Set<string>();
+  for (const c of await gatherCandidateGitHubConnections(args.db, args.workspaceId, args.userId)) {
+    try {
+      installations.add(githubInstallationId({ config: c.config as never }));
+    } catch {
+      /* connection without an installation id — skip */
+    }
+  }
+  const apps = await args.db.githubApp.findMany({
+    where: { workspaceId: args.workspaceId, installationId: { not: null } },
+    select: { installationId: true },
+  });
+  for (const a of apps) if (a.installationId) installations.add(a.installationId);
+
+  await Promise.all(
+    [...installations].slice(0, MAX_PROBE_CONNECTIONS).map(async (installationId) => {
+      try {
+        const repos = await listRepos({ installationId });
+        for (const r of repos) {
+          if (!r.full_name) continue;
+          const key = r.full_name.toLowerCase();
+          if (byRepo.has(key)) continue; // an active mapping already represents it
+          byRepo.set(key, {
+            repoFullName: r.full_name,
+            account: r.full_name.split("/")[0] ?? null,
+            mapped: false,
+            mappingId: null,
+          });
+        }
+      } catch (err) {
+        console.warn(
+          `[github] browsable-repo probe failed for installation ${installationId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }),
+  );
+  return sortBrowsable([...byRepo.values()]);
+}
+
+/**
+ * Make `owner/repo` browsable/linkable and return its **active** mapping id —
+ * the backend behind Browse's "just pick a repo and go" flow. Tries, cheapest
+ * first: an existing mapping (reactivating if paused) → a connected GitHub
+ * connection whose installation includes the repo → the workspace's installed
+ * GitHub App (creating the connection from it). Each mapping write re-verifies
+ * the installation can actually reach the repo, so a stale picker entry fails
+ * cleanly. Admin-gated at the router (it probes installations + writes a
+ * mapping).
+ */
+export async function ensureGitHubRepoLinkable(args: {
+  db: PrismaClient;
+  workspaceId: string;
+  userId: string;
+  repoFullName: string;
+  listRepos?: RepoLister;
+}): Promise<{
+  mappingId: string;
+  repoFullName: string;
+  account: string | null;
+  created: boolean;
+  reactivated: boolean;
+}> {
+  const repoFullName = normalizeRepoFullName(args.repoFullName);
+  const listRepos = args.listRepos ?? listGitHubInstallationRepos;
+
+  // 1. A mapping for this repo already exists — reuse it (reactivate if paused).
+  const existing = await args.db.connectionMapping.findMany({
+    where: {
+      workspaceId: args.workspaceId,
+      kind: "repo",
+      connection: { provider: ConnectionProvider.GITHUB },
+    },
+    select: {
+      id: true,
+      target: true,
+      status: true,
+      connectionId: true,
+      connection: { select: { account: true } },
+    },
+  });
+  const match = existing.find((m) => sameRepo(m.target, repoFullName));
+  if (match && match.status === "active") {
+    return {
+      mappingId: match.id,
+      repoFullName: match.target,
+      account: match.connection.account,
+      created: false,
+      reactivated: false,
+    };
+  }
+  if (match) {
+    const m = await mapGitHubRepo({
+      db: args.db,
+      workspaceId: args.workspaceId,
+      userId: args.userId,
+      connectionId: match.connectionId,
+      repoFullName,
+      listRepos,
+    });
+    return {
+      mappingId: m.id,
+      repoFullName: m.target,
+      account: match.connection.account,
+      created: false,
+      reactivated: true,
+    };
+  }
+
+  // 2. A connected GitHub connection whose installation already includes the repo.
+  const candidates = await gatherCandidateGitHubConnections(
+    args.db,
+    args.workspaceId,
+    args.userId,
+  );
+  for (const c of candidates.slice(0, MAX_PROBE_CONNECTIONS)) {
+    let reachable = false;
+    try {
+      const repos = await listRepos({ installationId: githubInstallationId({ config: c.config as never }) });
+      reachable = repoInInstallation(repos, repoFullName);
+    } catch {
+      reachable = false;
+    }
+    if (reachable) {
+      const m = await mapGitHubRepo({
+        db: args.db,
+        workspaceId: args.workspaceId,
+        userId: args.userId,
+        connectionId: c.id,
+        repoFullName,
+        listRepos,
+      });
+      return {
+        mappingId: m.id,
+        repoFullName: m.target,
+        account: c.account,
+        created: true,
+        reactivated: m.reactivated,
+      };
+    }
+  }
+
+  // 3. No connection reaches it — wire up the workspace's installed GitHub App.
+  const apps = await listInstallableGithubApps(args.db, args.workspaceId);
+  if (apps.length > 0) {
+    const conn = await connectGithubAppAsConnection({
+      db: args.db,
+      workspaceId: args.workspaceId,
+      userId: args.userId,
+      listRepos,
+    });
+    const m = await mapGitHubRepo({
+      db: args.db,
+      workspaceId: args.workspaceId,
+      userId: args.userId,
+      connectionId: conn.connectionId,
+      repoFullName,
+      listRepos,
+    });
+    return {
+      mappingId: m.id,
+      repoFullName: m.target,
+      account: conn.account ? `github.com/${conn.account}` : null,
+      created: true,
+      reactivated: m.reactivated,
+    };
+  }
+
+  throw new TRPCError({
+    code: "NOT_FOUND",
+    message:
+      "No GitHub App or connection can reach this repository. Connect the GitHub App, then retry.",
+  });
 }
 
 /** Active repo mappings in a workspace — for the browse picker + agent discovery. */

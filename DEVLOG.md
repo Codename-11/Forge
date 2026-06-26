@@ -2,6 +2,56 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-25 — GitHub Browse "anything the App can reach" + claim-holder badge
+
+Follow-up to the GithubApp↔Connection unification. After that fix, the URL tab
+worked but **Browse a repo** still dead-ended: `BrowseTab` listed only active
+`ConnectionMapping`s (`github.listMappings`), and installing a `GithubApp`
+creates no mapping — so a workspace with a working app but zero mappings saw
+"No repositories connected yet → install the App". The URL tab was the only
+path that bootstrapped the first mapping (via `connectApp`).
+
+Browse rework — list installation repos, auto-map on first search:
+- `linkability.ts::listBrowsableGitHubRepos({db,workspaceId,userId,isAdmin})` —
+  active mappings ∪ (admins only) every repo the workspace's installed
+  `GithubApp`(s)/connections can reach. Mints via `resolveInstallationToken`, so
+  it lights up with **no Connection** the moment an App is installed. Non-admins
+  get only mapped repos (installation repo-list enumeration is a private-repo
+  oracle, kept admin-only — same rule as `resolveRepoLinkability`).
+- `linkability.ts::ensureGitHubRepoLinkable({...,repoFullName})` → active
+  `mappingId`. Tries: existing mapping (reactivate if paused) → connected
+  connection whose installation includes the repo → installed `GithubApp`
+  (creates the Connection via `connectGithubAppAsConnection`, then
+  `mapGitHubRepo` verifies + writes). Throws clean NOT_FOUND when nothing
+  reaches it.
+- Extracted `gatherCandidateGitHubConnections()` (CONNECTED connections mapped
+  into the workspace + caller-owned); `resolveRepoLinkability` now uses it too
+  (dedup, behavior unchanged — 16 linkability tests still green).
+- Router: `github.browsableRepos` (workspace, isAdmin-aware) + `github.connectRepo`
+  (admin). `listMappings`/`search` (mappingId-based, used by MCP) untouched.
+- `BrowseTab`: picker fed by `browsableRepos`; unmapped repos shown with
+  "· not connected"; an effect auto-fires `connectRepo` the first time an admin
+  searches an unmapped repo (once per repo via an `autoConnected` set), then
+  `browsableRepos` refetches and the existing mappingId-based `search`/`link`
+  path runs unchanged. So mapped-vs-unmapped is invisible to the operator.
+
+Claim-holder badge + sidebar tidy (`issues/[id]/page.tsx`):
+- `issue.byId` now selects `claimedBy {id,name,email,image}`. The sidebar's
+  "Claimed" block (which rendered `claimedById.slice(0,8)` — a raw cuid) is now
+  a `ClaimHolderCard`: `Avatar` + name (name → email → short id), short id as
+  mono subtext, expiry + Release. Claims are tied to a workspace User (agents
+  claim through their api-key owner), so this is the honest identity; degrades
+  gracefully if the relation can't resolve. Moved the card into its own
+  "Claimed by" `SidebarField` (was crammed under Agent queue) and dropped the
+  `issues.claim` MCP jargon from the queue helper copy.
+
+Tests: +4 in `github-app-connect.test.ts` (browsable admin/non-admin gating;
+`ensureGitHubRepoLinkable` create + idempotent). Full suite 999 pass / 1 skip,
+lint + typecheck clean.
+
+Follow-up worth noting: true *agent* attribution on a claim would need a
+`claimedByAgentId` column (claims only record the User today).
+
 ## 2026-06-24 — GithubApp ↔ Connection unification (linking works off one app)
 
 Prod diagnosis (read-only): `GITHUB_APP_ID`/`PRIVATE_KEY`/`SLUG` all **unset**;

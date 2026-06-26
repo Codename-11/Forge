@@ -631,30 +631,20 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                         </span>
                       </label>
                       <div className="text-[0.6875rem] text-muted-foreground">
-                        Queued issues are available to{" "}
-                        <span className="font-mono text-foreground">issues.claim</span>; assigned
-                        issues can still sit unclaimed until an agent starts.
+                        Queued issues can be picked up by an agent; assigned issues can still sit
+                        unclaimed until an agent starts.
                       </div>
-                      {issue.claimedAt && (
-                        <div className="mt-2 rounded-md border border-border bg-card/60 p-2 text-[0.6875rem]">
-                          <div className="text-muted-foreground">Claimed</div>
-                          <div className="mt-0.5">
-                            by <span className="font-mono">{issue.claimedById?.slice(0, 8)}</span>
-                            {issue.claimExpiresAt && (
-                              <> · expires {relativeTime(issue.claimExpiresAt)}</>
-                            )}
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="mt-1 w-full"
-                            onClick={() => setReleaseOpen(true)}
-                          >
-                            Release claim
-                          </Button>
-                        </div>
-                      )}
                     </SidebarField>
+                    {issue.claimedAt && (
+                      <SidebarField label="Claimed by">
+                        <ClaimHolderCard
+                          claimedBy={issue.claimedBy ?? null}
+                          claimedById={issue.claimedById ?? null}
+                          claimExpiresAt={issue.claimExpiresAt ?? null}
+                          onRelease={() => setReleaseOpen(true)}
+                        />
+                      </SidebarField>
+                    )}
                   </div>
                 }
               />
@@ -871,6 +861,49 @@ function SidebarField({ label, children }: { label: string; children: React.Reac
     <div className="flex flex-col gap-1">
       <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">{label}</div>
       {children}
+    </div>
+  );
+}
+
+/**
+ * The active claim holder, as a person badge (avatar + name) rather than a raw
+ * id. Claims are tied to a workspace user — agents claim through their
+ * api-key owner — so we show that identity, falling back to email then a short
+ * id when the relation can't be resolved. The short id stays as mono subtext
+ * for support/debugging.
+ */
+function ClaimHolderCard({
+  claimedBy,
+  claimedById,
+  claimExpiresAt,
+  onRelease,
+}: {
+  claimedBy: { id: string; name: string | null; email: string | null; image: string | null } | null;
+  claimedById: string | null;
+  claimExpiresAt: Date | string | null;
+  onRelease: () => void;
+}) {
+  const displayName = claimedBy?.name ?? claimedBy?.email ?? claimedById?.slice(0, 8) ?? "Unknown";
+  const shortId = claimedById ? claimedById.slice(0, 8) : null;
+  // Only show the id as subtext when it isn't already the primary label.
+  const showSubId = !!shortId && displayName !== shortId;
+  return (
+    <div className="rounded-md border border-border bg-card/60 p-2">
+      <div className="flex items-center gap-2">
+        <Avatar name={claimedBy?.name ?? claimedBy?.email ?? null} image={claimedBy?.image ?? null} size={22} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-medium">{displayName}</div>
+          {showSubId && <div className="text-id text-[0.625rem] text-muted-foreground">{shortId}</div>}
+        </div>
+        {claimExpiresAt && (
+          <span className="text-meta shrink-0 text-muted-foreground">
+            expires {relativeTime(claimExpiresAt)}
+          </span>
+        )}
+      </div>
+      <Button size="sm" variant="ghost" className="mt-1.5 w-full" onClick={onRelease}>
+        Release claim
+      </Button>
     </div>
   );
 }

@@ -20,6 +20,8 @@ import {
 } from "@/server/services/github/resource-sync";
 import {
   connectGithubAppAsConnection,
+  ensureGitHubRepoLinkable,
+  listBrowsableGitHubRepos,
   listGitHubRepoMappings,
   mapGitHubRepo,
   resolveRepoLinkability,
@@ -130,6 +132,38 @@ export const githubRouter = router({
         db: ctx.db,
         workspaceId: ctx.workspaceId,
         includePaused: input.includePaused,
+      }),
+    ),
+
+  /**
+   * Repos the issue-link modal's Browse tab can offer: mapped repos plus —
+   * for admins — every repo the workspace's installed GitHub App / connections
+   * can reach (so you can browse before mapping). Picking an unmapped repo
+   * auto-maps it via {@link connectRepo}. Non-admins get only mapped repos.
+   */
+  browsableRepos: workspaceProcedure.query(({ ctx }) =>
+    listBrowsableGitHubRepos({
+      db: ctx.db,
+      workspaceId: ctx.workspaceId,
+      userId: ctx.session.user.id,
+      isAdmin: ctx.membership.role === "OWNER" || ctx.membership.role === "ADMIN",
+    }),
+  ),
+
+  /**
+   * Make a repo browsable/linkable and return its active mapping id — Browse
+   * calls this the first time you search an unmapped repo, so "browse anything
+   * the App can reach" needs no separate connect step. Admin-gated (it probes
+   * installations + writes a mapping).
+   */
+  connectRepo: adminProcedure
+    .input(z.object({ repoFullName: repoFullNameSchema }))
+    .mutation(({ ctx, input }) =>
+      ensureGitHubRepoLinkable({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+        repoFullName: input.repoFullName,
       }),
     ),
 

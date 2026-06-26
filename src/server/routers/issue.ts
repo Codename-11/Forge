@@ -617,6 +617,10 @@ export const issueRouter = router({
           project: true,
           author: { select: { id: true, name: true, image: true } },
           assignees: { include: { user: { select: { id: true, name: true, image: true } } } },
+          // Who holds the active claim (a workspace user — agents claim via
+          // their api-key owner). Powers the sidebar's claim badge so it shows
+          // a name + avatar instead of a raw id.
+          claimedBy: { select: { id: true, name: true, email: true, image: true } },
           assignedAgent: {
             select: {
               id: true,
