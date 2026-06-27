@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-27 — Subject-label resolver (audit log + webhook deliveries)
+
+Closed the deferral from the gap sweep: raw `subjectId.slice(0,8)` on the
+instance audit log and webhook-delivery rows. New
+`src/server/services/subject-labels.ts` → `resolveSubjectLabels(db, refs,
+{workspaceId?})`: batches one query per `ActivityEvent.subjectType` and returns a
+`Map<subjectKey, {label, secondary}>`. Handled types: issue (title + `KEY-N`),
+agent (name + `@handle`), project/initiative/cycle/agent-crew/context-set/
+workspace-canvas (name), goal/execution-plan/execution-step/action-request/
+artifact/note (title, humanized-type fallback for null). Unhandled/transient
+types (comment, review-gate, chat-thread*, canvas-style/component, stream/ack/
+presence) are absent → caller falls back to humanized type + short id. Scoped by
+`workspaceId` when given; global (cuid-unique) for instance-admin.
+
+Wired into `instanceAdmin.audit` (global) and `admin.webhookDeliveries.list`
+(scoped to `ctx.workspaceId`, attached to each row's `event.subjectLabel`).
+Clients (`admin-shell/admin-audit.tsx`, `settings/deliveries/page.tsx`) render
+`type · Label (secondary)` with the full id on `title` hover, falling back to the
+old `type/shortid` when no label resolves. Test:
+`services/__tests__/subject-labels.test.ts` (issue/agent/project labels, unknown
+type absent, null id skipped, workspace scoping).
+
+Gates: typecheck + lint clean; `pnpm test` 1003 pass / 1 skip (+2). Files:
++subject-labels.ts, +subject-labels.test.ts; edited instance-admin.ts, admin.ts,
+admin-audit.tsx, deliveries/page.tsx.
+
 ## 2026-06-27 — UI/UX gap sweep (popover clipping, composer autocomplete, themed selects, gate labels)
 
 Follow-up to the QuickCreate redesign: swept for the same problem-classes it

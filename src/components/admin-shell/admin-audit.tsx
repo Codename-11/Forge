@@ -53,9 +53,21 @@ export function AdminAudit() {
                 <span className="truncate text-meta font-mono" style={{ color: "hsl(var(--admin-text-hi))" }}>
                   {e.kind.toLowerCase()}
                 </span>
-                <span className="truncate text-meta" style={{ color: ADMIN.textSoft }}>
+                <span
+                  className="truncate text-meta"
+                  style={{ color: ADMIN.textSoft }}
+                  title={e.subjectId ?? undefined}
+                >
                   {e.subjectType}
-                  {e.subjectId ? <span style={{ color: ADMIN.textDim }}> · {e.subjectId.slice(0, 8)}</span> : null}
+                  {e.subjectLabel ? (
+                    <span style={{ color: ADMIN.textDim }}>
+                      {" · "}
+                      {e.subjectLabel.label}
+                      {e.subjectLabel.secondary ? ` (${e.subjectLabel.secondary})` : ""}
+                    </span>
+                  ) : e.subjectId ? (
+                    <span style={{ color: ADMIN.textDim }}> · {e.subjectId.slice(0, 8)}</span>
+                  ) : null}
                 </span>
                 <span className="truncate text-meta" style={{ color: ADMIN.textSoft }}>
                   {e.actor?.name ?? "system"}

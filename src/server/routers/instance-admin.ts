@@ -7,6 +7,10 @@ import { runtimeConfigStatus } from "@/server/services/runtime-config";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { summarizeRuntimeSelfTest } from "@/server/services/runtime-self-test";
 import { summarizeRuntimeInfo } from "@/server/services/runtime-info";
+import {
+  resolveSubjectLabels,
+  subjectKey,
+} from "@/server/services/subject-labels";
 
 const slugSchema = z
   .string()
@@ -166,7 +170,17 @@ export const instanceAdminRouter = router({
       });
       let nextCursor: string | undefined;
       if (rows.length > input.limit) nextCursor = rows.pop()!.id;
-      return { items: rows, nextCursor };
+      // Resolve subject ids to names. Cross-tenant view → no workspace scope
+      // (cuids are globally unique).
+      const labels = await resolveSubjectLabels(
+        ctx.db,
+        rows.map((r) => ({ subjectType: r.subjectType, subjectId: r.subjectId })),
+      );
+      const items = rows.map((r) => ({
+        ...r,
+        subjectLabel: labels.get(subjectKey(r.subjectType, r.subjectId)) ?? null,
+      }));
+      return { items, nextCursor };
     }),
 
   /** System / build info + instance-wide counts for the admin overview. */

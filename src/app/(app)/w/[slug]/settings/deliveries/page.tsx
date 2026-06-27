@@ -269,8 +269,25 @@ export default function WebhookDeliveriesPage() {
                         <div className="font-mono text-[0.6875rem] text-foreground">
                           {d.event.kind}
                         </div>
-                        <div className="truncate text-[0.6875rem] text-muted-foreground">
-                          {d.event.subjectType}/{d.event.subjectId.slice(0, 8)}
+                        <div
+                          className="truncate text-[0.6875rem] text-muted-foreground"
+                          title={`${d.event.subjectType}/${d.event.subjectId}`}
+                        >
+                          {d.event.subjectLabel ? (
+                            <>
+                              {d.event.subjectType} ·{" "}
+                              <span className="text-foreground/80">
+                                {d.event.subjectLabel.label}
+                              </span>
+                              {d.event.subjectLabel.secondary
+                                ? ` (${d.event.subjectLabel.secondary})`
+                                : ""}
+                            </>
+                          ) : (
+                            <>
+                              {d.event.subjectType}/{d.event.subjectId.slice(0, 8)}
+                            </>
+                          )}
                         </div>
                       </div>
                       <div className="min-w-0">

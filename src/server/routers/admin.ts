@@ -7,6 +7,10 @@ import {
   AGENT_DISPATCH_WEBHOOK_URL,
   agentDispatchUrlFor,
 } from "@/server/audit";
+import {
+  resolveSubjectLabels,
+  subjectKey,
+} from "@/server/services/subject-labels";
 
 /**
  * Cap on `responseBody` length we ship to the client. The worker
@@ -233,11 +237,27 @@ export const adminRouter = router({
           });
           if (selected) rows.unshift(selected);
         }
+        // Resolve each event's subject id to a human label (scoped to this
+        // workspace).
+        const labels = await resolveSubjectLabels(
+          ctx.db,
+          rows.map((r) => ({
+            subjectType: r.event.subjectType,
+            subjectId: r.event.subjectId,
+          })),
+          { workspaceId: ctx.workspaceId },
+        );
         // Truncate response bodies before handing the payload back to
         // the caller so we never ship an 8KB blob per row in a table.
         const items = rows.map((r) => ({
           ...r,
           responseBody: truncateResponseBody(r.responseBody),
+          event: {
+            ...r.event,
+            subjectLabel:
+              labels.get(subjectKey(r.event.subjectType, r.event.subjectId)) ??
+              null,
+          },
         }));
         return { items, nextCursor };
       }),
